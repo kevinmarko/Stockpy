@@ -1,0 +1,535 @@
+/**
+ * ======================================================================
+ * INSTITUTIONAL STRATEGY ENGINE (v2026.3 - QUANTITATIVE LAYERS)
+ * ======================================================================
+ * * PURPOSE: 
+ * A fully automated "Robo-Advisor" that reads Technicals, Fundamentals, 
+ * Macro, and AI Forecasts to generate professional trading orders.
+ * * * UPGRADES IN THIS VERSION:
+ * - AROON TREND ENGINE: Replaced lagging 50/200 SMAs with Aroon Up/Down 
+ * for hyper-fast trend detection.
+ * - RELATIVE STRENGTH (RS): Engine now actively compares stock performance 
+ * against the S&P 500 to avoid "dead money" assets.
+ * - EDUCATIONAL OPTIONS LAYER & TAIL-RISK HEDGING (Maintained from 2026.2)
+ * ======================================================================
+ */
+
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('⚡ QUANT DESK')
+    .addItem('🔄 Run Strategy Engine', 'UPDATE_DASHBOARD_STRATEGIES')
+    .addItem('UPDATE FORECAST DASHBOARD', 'UPDATE_FORECAST_DASHBOARD')
+    .addItem('Update Macro Dashboard', 'updateMacroDashboard')
+    .addToUi();
+}
+
+/**
+ * MAIN FUNCTION: Reads the whole dashboard, applies the logic, and writes back 7 columns of data.
+ */
+function UPDATE_DASHBOARD_STRATEGIES() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 1. CONFIGURATION - Column Mapping
+  const dashboardSheetName = "Sheet2"; 
+  const dashboardSheet = ss.getSheetByName(dashboardSheetName);
+  
+  if (!dashboardSheet) { SpreadsheetApp.getUi().alert("Error: Dashboard sheet ('Sheet2') not found."); return; }
+  
+  // 2. PRE-FETCH EXTERNAL DATA
+  const forecastMap = getForecastMap_(); 
+  const macroData = getMacroData_(); 
+  
+  // 3. READ DASHBOARD DATA
+  const lastRow = dashboardSheet.getLastRow();
+  const lastCol = dashboardSheet.getLastColumn();
+  
+  if (lastRow < 2) return;
+
+  const headers = dashboardSheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const headerMap = mapHeaders_(headers);
+
+  const range = dashboardSheet.getRange(2, 1, lastRow - 1, lastCol); 
+  const data = range.getValues();
+  
+  let outputs = [];
+  
+  // 4. EXECUTION LOOP
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const ticker = row[0];
+    
+    if (!ticker || ticker === "") {
+      outputs.push(["", "", "", "", "", "", ""]);
+      continue;
+    }
+
+    const getVal = (key, defaultVal = 0) => {
+      const idx = headerMap[key.toLowerCase()];
+      return (idx !== undefined && row[idx] !== "") ? row[idx] : defaultVal;
+    };
+
+    const currentPrice = getVal('price') || getVal('current price') || 0;
+    
+    // --- INTEGRATED NEW TECHNICALS (AROON & RS) ---
+    const technicals = {
+      rsi: getVal('rsi', 50),
+      atr: getVal('atr', currentPrice * 0.02),
+      var95: getVal('value at risk', 0) || getVal('var', 0),
+      drawdown: getVal('max drawdown', 0) || getVal('drawdown', 0),
+      sortino: getVal('sortino', 0),
+      macdLine: getVal('macd line', 0),
+      macdSignal: getVal('macd signal', 0),
+      aroonUp: getVal('aroon up', 50),
+      aroonDown: getVal('aroon down', 50),
+      relativeStrength: getVal('relative strength', 0) || getVal('rs vs spy', 0)
+    };
+    
+    const fidelityData = {
+      pe: getVal('fidelity p/e', 0) || getVal('p/e', 0),
+      score: getVal('fidelity score', 50) || getVal('score', 50),
+      health: getVal('fin. health', "Neutral") || getVal('financial health', "Neutral"),
+      sector: getVal('sector', ""),
+      divGrowth: getVal('5y div growth', 0) || getVal('div growth', 0),
+      graham: getVal('graham number', 0) || getVal('graham', 0),
+      payout: getVal('payout ratio', 0) || getVal('payout', 0) 
+    };
+    
+    const portfolioData = {
+      shares: getVal('shares', 0),
+      avgCost: getVal('avg cost', 0)
+    };
+    
+    const forecast = forecastMap[ticker] || { day30: 0, trend: "NEUTRAL", lowerCI: 0, upperCI: 0 };
+
+    const result = generateStrategy(
+      ticker, 
+      currentPrice, 
+      technicals, 
+      fidelityData, 
+      macroData, 
+      portfolioData, 
+      forecast
+    );
+    
+    outputs.push([
+      result.signal,
+      result.details,
+      result.advice,
+      result.buyRange,
+      result.notes,
+      result.optionStrategy,
+      result.aristocratAlgo 
+    ]);
+  }
+  
+  // 5. WRITE RESULTS
+  if (outputs.length > 0) {
+    dashboardSheet.getRange(2, 3, outputs.length, 7).setValues(outputs);
+    SpreadsheetApp.getActive().toast(`Updated strategies + Aroon/RS Logic for ${outputs.length} tickers.`, "QUANT DESK", 5);
+  }
+}
+
+// ======================================================
+// 2. DATA SERVICE 
+// ======================================================
+
+function mapHeaders_(headers) {
+  let map = {};
+  headers.forEach((h, i) => {
+    const key = h.toString().toLowerCase().trim();
+    if (key.includes("rsi")) map['rsi'] = i;
+    else if (key.includes("atr")) map['atr'] = i;
+    else if (key.includes("value at risk") || key.includes("var 95")) map['value at risk'] = i;
+    else if (key.includes("drawdown")) map['max drawdown'] = i;
+    else if (key.includes("sortino")) map['sortino'] = i;
+    else if (key.includes("macd line")) map['macd line'] = i;
+    else if (key.includes("macd signal") || key.includes("signal line")) map['macd signal'] = i;
+    // --- ADDED NEW MAPPINGS HERE ---
+    else if (key.includes("aroon up")) map['aroon up'] = i;
+    else if (key.includes("aroon down")) map['aroon down'] = i;
+    else if (key.includes("relative strength") || key.includes("rs vs spy") || key.includes("rs vs sp500")) map['relative strength'] = i;
+    // -------------------------------
+    else if (key.includes("fidelity p/e") || key.includes("p/e")) map['p/e'] = i;
+    else if (key.includes("fidelity score") || key.includes("score")) map['score'] = i;
+    else if (key.includes("fin. health") || key.includes("health")) map['fin. health'] = i;
+    else if (key.includes("sector")) map['sector'] = i;
+    else if (key.includes("div growth")) map['5y div growth'] = i;
+    else if (key.includes("graham")) map['graham'] = i;
+    else if (key.includes("payout") || key.includes("payout ratio")) map['payout'] = i; 
+    else if (key.includes("shares")) map['shares'] = i;
+    else if (key.includes("avg cost")) map['avg cost'] = i;
+    else if (key.includes("price") && !key.includes("target")) map['price'] = i;
+    else map[key] = i; 
+  });
+  return map;
+}
+
+function getForecastMap_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("Forecasts"); 
+  if (!sheet) return {}; 
+  
+  const data = sheet.getDataRange().getValues();
+  let map = {};
+  
+  for (let i = 1; i < data.length; i++) {
+    const ticker = data[i][0];
+    map[ticker] = {
+      day30: data[i][2], 
+      trend: data[i][5], 
+      lowerCI: data[i][6],
+      upperCI: data[i][7]
+    };
+  }
+  return map;
+}
+
+function getMacroData_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName("Macro Dashboard");
+  
+  if (!sheet) return { 
+    values: { yieldCurve: 0.5, sahmRule: 0, realYield: 1.5 }, 
+    regime: "NEUTRAL",
+    allocations: { reits: "NEUTRAL", tech: "NEUTRAL", defensive: "NEUTRAL" }
+  };
+  
+  const yieldCurve = sheet.getRange("C5").getValue();
+  const sahmRule = sheet.getRange("C7").getValue();
+  const regime = sheet.getRange("C20").getValue() || sheet.getRange("B10").getValue(); // Fallback for old layout
+  
+  const realYieldRaw = sheet.getRange("C25").getValue(); 
+  const env = sheet.getRange("C26").getValue();
+  
+  const reitAction = sheet.getRange("C29").getValue();
+  const techAction = sheet.getRange("C30").getValue();
+  const defAction = sheet.getRange("C31").getValue();
+
+  return {
+    regime: regime,
+    environment: env || "NORMAL",
+    values: {
+      yieldCurve: typeof yieldCurve === 'number' ? yieldCurve : 0,
+      sahmRule: typeof sahmRule === 'number' ? sahmRule : 0,
+      realYield: typeof realYieldRaw === 'number' ? realYieldRaw : 1.5
+    },
+    allocations: {
+      reits: reitAction,
+      tech: techAction,
+      defensive: defAction
+    }
+  };
+}
+
+// ======================================================
+// 3. THE STRATEGY ENGINE
+// ======================================================
+
+function generateStrategy(ticker, currentPrice, technicals, fidelityData, macroData, portfolioData, forecastData) {
+
+  // --- 1. SANITIZATION ---
+  if (!macroData || typeof macroData !== 'object') macroData = { values: {}, regime: "NEUTRAL", allocations: {} };
+  if (!technicals || typeof technicals !== 'object') technicals = { aroonUp: 50, aroonDown: 50, relativeStrength: 0, rsi: 50, sortino: 0, drawdown: 0, var95: 0, atr: 0, macdLine: 0, macdSignal: 0 };
+  if (!fidelityData || typeof fidelityData !== 'object') fidelityData = { pe: 0, score: 50, health: "Neutral", sector: "", divGrowth: 0, graham: 0, payout: 0 };
+  if (!portfolioData || typeof portfolioData !== 'object') portfolioData = { shares: 0, avgCost: 0 };
+  if (!forecastData || typeof forecastData !== 'object') forecastData = { day30: 0, trend: "NEUTRAL", lowerCI: 0, upperCI: 0 };
+
+  const price = parseFloat(currentPrice) || 0;
+  const tech = {
+    rsi: technicals.rsi || 50,
+    aroonUp: parseFloat(technicals.aroonUp) || 50,
+    aroonDown: parseFloat(technicals.aroonDown) || 50,
+    relativeStrength: parseFloat(technicals.relativeStrength) || 0,
+    atr: technicals.atr || (price * 0.02),
+    var95: parseFloat(technicals.var95) || 0,
+    sortino: parseFloat(technicals.sortino) || 0,
+    drawdown: parseFloat(technicals.drawdown) || 0,
+    macdLine: parseFloat(technicals.macdLine) || 0,
+    macdSignal: parseFloat(technicals.macdSignal) || 0
+  };
+  const fund = fidelityData;
+  const port = portfolioData;
+  const fLower = parseFloat(forecastData.lowerCI) || 0;
+  const fUpper = parseFloat(forecastData.upperCI) || 0;
+  const f30 = parseFloat(forecastData.day30) || 0;
+
+  // --- 2. LOGIC & EXPLANATION ENGINE ---
+  let signal = "HOLD";
+  let details = [];
+  let scoreLog = []; 
+  let advice = "";
+  let buyRange = "";
+  let score = 50; 
+  let qualityFlag = "NEUTRAL";
+  const sharesOwned = parseFloat(port.shares) || 0;
+
+  // --- PHASE 1: MACRO-ECONOMIC VETO ---
+  const sahmRule = (macroData.values.sahmRule !== undefined) ? macroData.values.sahmRule : 0.0;
+  const realYield = (macroData.values.realYield !== undefined) ? macroData.values.realYield : 1.5;
+  const tightMoney = realYield > 2.0;
+  const isRecession = sahmRule >= 0.50 || (macroData.regime && macroData.regime.includes("RECESSION"));
+  
+  if (isRecession) {
+    scoreLog.push(`-30pts: Recession Imminent`);
+    score -= 30;
+    signal = "AVOID";
+    advice = "Recessionary Risk. Defend Capital.";
+  }
+
+  // --- PHASE 2: SECTOR ROTATION ---
+  const sector = fund.sector || "";
+  let macroStance = "NEUTRAL";
+
+  if (sector.includes("Real Estate")) macroStance = macroData.allocations.reits || "NEUTRAL";
+  if (sector.includes("Technology")) macroStance = macroData.allocations.tech || "NEUTRAL";
+  if (sector.includes("Health") || sector.includes("Staples") || sector.includes("Utilities")) macroStance = macroData.allocations.defensive || "NEUTRAL";
+
+  if (macroStance && macroStance.includes("OVERWEIGHT")) {
+    score += 15;
+    details.push("Macro Favored");
+    scoreLog.push(`+15pts: Macro Overweight`);
+  } else if (macroStance && macroStance.includes("UNDERWEIGHT")) {
+    score -= 15;
+    details.push("Macro Headwind");
+    scoreLog.push(`-15pts: Macro Underweight`);
+  }
+
+  // --- PHASE 3: RISK METRICS ---
+  if (tech.var95 < -0.05) {
+    score -= 15;
+    scoreLog.push(`-15pts: High VaR (${(tech.var95*100).toFixed(1)}%)`);
+  }
+  if (tech.drawdown < -0.25) {
+    score -= 10;
+    scoreLog.push(`-10pts: Steep Drawdown (${(tech.drawdown*100).toFixed(1)}%)`);
+  }
+  if (tech.sortino > 1.5) { 
+    score += 10;
+    scoreLog.push(`+10pts: High Sortino (${tech.sortino.toFixed(2)})`);
+  }
+
+  // --- PHASE 4: FUNDAMENTAL QUALITY ---
+  const divGrowth = parseFloat(fund.divGrowth) || 0;
+  const graham = parseFloat(fund.graham) || 0;
+  const pe = parseFloat(fund.pe) || 0;
+  const payout = parseFloat(fund.payout) || 0;
+
+  if (divGrowth < 0) {
+    score -= 20;
+    scoreLog.push("-20pts: Shrinking Divs");
+    qualityFlag = "POOR";
+  }
+  if (tightMoney && pe > 25) {
+    score -= 10;
+    scoreLog.push(`-10pts: High P/E (${pe}) in Tight Money`);
+  }
+  if (graham > 0) {
+    if (price < graham) { 
+        score += 10; 
+        scoreLog.push(`+10pts: Price < Graham ($${graham.toFixed(2)})`);
+    } else if (price > (graham * 1.2)) { 
+        score -= 15; 
+        scoreLog.push(`-15pts: Price > Graham`);
+    }
+  }
+
+  // --- PHASE 5: TECHNICALS (AROON & RS UPGRADES) ---
+  
+  // A. RSI Mean Reversion
+  if (tech.rsi < 30) { 
+      details.push("Oversold"); 
+      score += 20; 
+      scoreLog.push("+20pts: RSI < 30 (Mean Reversion)");
+  } else if (tech.rsi > 70) { 
+      details.push("Overbought"); 
+      score -= 20; 
+      scoreLog.push("-20pts: RSI > 70");
+  }
+
+  // B. MACD Momentum
+  if (tech.macdLine > tech.macdSignal) {
+      score += 10;
+      scoreLog.push("+10pts: MACD Bullish");
+  } else if (tech.macdLine < tech.macdSignal) {
+      score -= 15;
+      scoreLog.push("-15pts: MACD Bearish Crossover");
+  }
+
+  // C. AROON TREND ENGINE (Replaces SMA)
+  // Aroon Up > 70 means price is consistently hitting new recent highs.
+  let trend = "SIDEWAYS";
+  if (tech.aroonUp >= 70 && tech.aroonDown <= 30) {
+      trend = "UPTREND"; 
+      score += 15; // Powerful weight given to confirmed new highs
+      details.push("Aroon Uptrend");
+      scoreLog.push(`+15pts: Aroon Uptrend (Up: ${tech.aroonUp})`);
+  } else if (tech.aroonDown >= 70 && tech.aroonUp <= 30) { 
+      trend = "DOWNTREND"; 
+      score -= 15; 
+      details.push("Aroon Downtrend");
+      scoreLog.push(`-15pts: Aroon Downtrend (Down: ${tech.aroonDown})`);
+  } else {
+      details.push("Consolidating");
+  }
+
+  // D. RELATIVE STRENGTH vs S&P 500
+  // Filters out stocks that are moving up, but slower than the broader market
+  if (tech.relativeStrength > 0) {
+      score += 10;
+      details.push("Beating SPY");
+      scoreLog.push(`+10pts: Outperforming S&P 500 (RS: ${tech.relativeStrength})`);
+  } else if (tech.relativeStrength < 0) {
+      score -= 10;
+      details.push("Losing to SPY");
+      scoreLog.push(`-10pts: Underperforming S&P 500 (RS: ${tech.relativeStrength})`);
+  }
+
+  // --- PHASE 6: FORECAST INTEGRATION ---
+  if (f30 > 0) {
+    const forecastReturn = (f30 - price) / price;
+    if (forecastReturn > 0.05) { 
+        score += 15; 
+        scoreLog.push("+15pts: AI Forecast >5%");
+    } else if (forecastReturn < -0.05) { 
+        score -= 15; 
+        scoreLog.push("-15pts: AI Forecast Drop");
+    }
+    if (price < fLower) {
+       score += 20; 
+       scoreLog.push("+20pts: Below Stat Floor");
+    }
+  }
+
+  // --- PHASE 7: SIGNAL GENERATION ---
+  if (score >= 75) {
+    signal = "BUY";
+    advice = "Strong Conviction. " + advice;
+  } else if (score <= 35) {
+    signal = (sharesOwned > 0) ? "SELL" : "AVOID";
+    advice = "Preserve Capital. " + advice;
+  } else {
+    signal = (sharesOwned > 0) ? "HOLD" : "WATCH";
+    advice = "Wait for setup. " + advice;
+  }
+
+  // --- PHASE 8: ADVANCED OPTIONS & TAIL RISK HEDGING (EDUCATIONAL) ---
+  let optionTitle = "";
+  let optionBody = "";
+  
+  const highTailRisk = (tech.var95 < -0.06 || tech.drawdown < -0.25 || isRecession);
+  
+  if (highTailRisk && sharesOwned >= 100) {
+      const strike = Math.floor(price * 0.90).toFixed(2); 
+      optionTitle = `🛡️ TAIL RISK HEDGE: Buy Protective Put @ $${strike}`;
+      optionBody = `HOW IT WORKS: You pay a small premium (insurance cost) to buy a 'Put' option. This gives you the right to sell 100 of your shares at $${strike}, no matter how low the stock crashes.\n\nWHY $${strike}?: High downside risk detected (VaR: ${(tech.var95*100).toFixed(1)}%). The $${strike} strike represents a 10% stop-loss floor, insuring you against a total collapse while letting you keep the dividend income.`;
+  } 
+  else if (signal === "BUY" || signal === "HOLD") {
+      if (tech.rsi < 45 && trend !== "DOWNTREND") {
+          const strike = (fLower > 0 && fLower < price) ? fLower.toFixed(2) : Math.floor(price * 0.95).toFixed(2);
+          optionTitle = `💰 INCOME: Sell Cash-Secured Put @ $${strike}`;
+          optionBody = `HOW IT WORKS: You act like an insurance company. You collect cash premium upfront from another trader. In exchange, you agree to buy 100 shares at $${strike} if the price drops to that level by expiration.\n\nWHY $${strike}?: The stock is currently oversold (RSI: ${Math.round(tech.rsi)}). Selling a put at $${strike} means you are getting paid to wait, and if assigned, you buy the stock exactly at its statistical AI support floor.`;
+      } else if (tech.rsi > 60 && sharesOwned >= 100) {
+          const strike = (fUpper > price) ? fUpper.toFixed(2) : Math.ceil(price * 1.05).toFixed(2);
+          optionTitle = `📈 INCOME: Sell Covered Call @ $${strike}`;
+          optionBody = `HOW IT WORKS: You collect cash premium upfront. In exchange, you agree to sell 100 of your shares for $${strike} if the stock rallies above that price by expiration.\n\nWHY $${strike}?: The stock is getting 'hot' and overbought (RSI: ${Math.round(tech.rsi)}). The $${strike} strike sits at the statistical ceiling. It is highly unlikely to break past this price soon, so you collect premium while capping your upside at a mathematical peak.`;
+      } else {
+          optionTitle = `⏳ WAIT (No Option Edge)`;
+          optionBody = `HOW IT WORKS: Options trading requires a clear statistical advantage—either heavily oversold (to sell puts) or heavily overbought (to sell calls).\n\nWHY: The stock is currently in a 'neutral' zone right in the middle of its channel. Save your capital and wait for a better volatility setup.`;
+      }
+  } 
+  else {
+      optionTitle = `🛑 AVOID OPTIONS (Negative Trend)`;
+      optionBody = `HOW IT WORKS: We do not deploy bullish income strategies when the broader trend is moving downwards.\n\nWHY: The current Aroon trend is ${trend} and the signal is ${signal}. Attempting to "catch a falling knife" by selling puts right now is mathematically dangerous. Preserve capital.`;
+  }
+  
+  const finalOptionStrategyOutput = `${optionTitle}\n\n${optionBody}`;
+
+  // --- PHASE 9: BUY RANGE ---
+  let lowTarget, highTarget;
+  if (fLower > 0 && fLower < price) {
+      lowTarget = fLower.toFixed(2);
+      highTarget = (price * 0.99).toFixed(2);
+  } else {
+      const atrVal = tech.atr > 0 ? tech.atr : (price * 0.02);
+      lowTarget = (price - (1.5 * atrVal)).toFixed(2);
+      highTarget = (price - (0.5 * atrVal)).toFixed(2);
+  }
+  buyRange = (signal.includes("SELL") || signal === "AVOID") ? "N/A" : `$${lowTarget} - $${highTarget}`;
+
+  // --- PHASE 10: KELLY CRITERION ---
+  let p = 0.50; 
+  let probLog = [];
+
+  if (trend === "UPTREND") { p += 0.05; probLog.push("Aroon Trend"); }
+  if (tech.relativeStrength > 0) { p += 0.05; probLog.push("Beating SPY"); }
+  if (tech.rsi < 30) { p += 0.10; probLog.push("Oversold"); }
+  if (tech.macdLine > tech.macdSignal) { p += 0.05; probLog.push("MACD"); } 
+  if (tech.sortino > 1) { p += 0.05; probLog.push("Low Risk"); } 
+  if (macroStance && macroStance.includes("OVERWEIGHT")) { p += 0.10; probLog.push("Macro"); }
+  if (macroStance && macroStance.includes("UNDERWEIGHT")) { p -= 0.10; probLog.push("Headwind"); }
+  
+  p = Math.min(p, 0.90);
+  const b = 1.5; 
+  const q = 1 - p; 
+  const fullKelly = (b * p - q) / b;
+  const halfKelly = fullKelly / 2;
+  
+  let finalKelly = Math.max(0, halfKelly); 
+  if (tech.var95 < -0.05) finalKelly = finalKelly * 0.5; 
+  
+  const kellyPercent = (finalKelly * 100).toFixed(1) + "%";
+
+  // --- PHASE 11: DIVIDEND ARISTOCRAT MODULE ---
+  let aristocratAlgo = "NO MATCH";
+  const strongDivGrowth = divGrowth > 5;
+  const sustainablePayout = payout > 0 && payout < 60; 
+  const isUndervalued = (graham > 0 && price < graham);
+  const isOversold = tech.rsi < 40;
+  const isBubble = pe > 30;
+  const isDivCut = divGrowth < 0;
+
+  if (isDivCut) {
+      aristocratAlgo = "HARD SELL (Cut)";
+  } else if (isBubble) {
+      aristocratAlgo = "TRIM (Expensive)";
+  } else if (strongDivGrowth) {
+      if (isUndervalued && isOversold && sustainablePayout) {
+          aristocratAlgo = "ACCUMULATE (Perfect)";
+      } else if (isUndervalued) {
+          aristocratAlgo = "BUY (Value)";
+      } else if (sustainablePayout) {
+          aristocratAlgo = "HOLD (Compound)";
+      } else {
+          aristocratAlgo = "WATCH (Payout?)";
+      }
+  } else {
+      aristocratAlgo = "IGNORE (Low Growth)";
+  }
+
+  // --- PHASE 12: BUILD NOTES ---
+  const noteString = [
+    `SCORE ${score}/100: ${scoreLog.join(", ")}.`,
+    `ENV: ${macroData.environment}`,
+    `KELLY (${kellyPercent}): ${Math.round(p*100)}% Win Prob (${probLog.join(", ")}).`
+  ].join("\n");
+
+  return {
+    signal: signal,
+    details: details.join(", "),
+    advice: advice + ` [Kelly: ${kellyPercent}]`,
+    buyRange: buyRange,
+    optionStrategy: finalOptionStrategyOutput, 
+    kellySize: kellyPercent,
+    aristocratAlgo: aristocratAlgo, 
+    notes: noteString
+  };
+}
+
+function UPDATE_FORECAST_DASHBOARD() {
+  SpreadsheetApp.getUi().alert("Forecast Dashboard update not implemented in this snippet.");
+}
+
+function updateMacroDashboard() {
+  SpreadsheetApp.getUi().alert("Macro Dashboard update not implemented in this snippet.");
+}
+

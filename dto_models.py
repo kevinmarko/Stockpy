@@ -1,0 +1,265 @@
+# =============================================================================
+# MODULE: DATA TRANSFER OBJECTS (DTO) REGISTRY
+# File: dto_models.py
+# Description: Defines the structures used to safely transfer data between
+#              the data acquisition layer and the mathematical engines.
+# =============================================================================
+
+from typing import Optional, Dict, Any
+from datetime import datetime
+import math
+import logging
+
+logger = logging.getLogger("DTO_Validator")
+
+
+class BaseDTO:
+    """Base class providing safe data parsing and conversion utilities for all DTOs."""
+    
+    @staticmethod
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        """Coerces raw input into a safe float, handling formatting issues like '$' or '%'."""
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return float(value)
+        
+        # String cleansing
+        clean_str = str(value).strip().replace("$", "").replace(",", "")
+        if "N/A" in clean_str.upper() or not clean_str:
+            return default
+            
+        if "%" in clean_str:
+            try:
+                return float(clean_str.replace("%", "")) / 100.0
+            except ValueError:
+                return default
+                
+        try:
+            return float(clean_str)
+        except ValueError:
+            logger.warning(f"Could not convert '{value}' to float. Falling back to {default}.")
+            return default
+
+    @staticmethod
+    def _to_int(value: Any, default: int = 0) -> int:
+        """Coerces raw input into a safe integer."""
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return int(value)
+        try:
+            clean_str = str(value).strip().replace(",", "")
+            return int(float(clean_str))
+        except ValueError:
+            return default
+
+
+# =============================================================================
+# 1. MARKET DATA DTO
+# =============================================================================
+class MarketBarDTO(BaseDTO):
+    """
+    Represents a single pricing interval (bar) for an asset.
+    Enforces strict mathematical boundary validation upon initialization.
+    """
+    def __init__(self, date: datetime, ticker: str, open_price: float, 
+                 high_price: float, low_price: float, close_price: float, volume: int):
+        self.date: datetime = date
+        self.ticker: str = ticker.upper().strip()
+        self.open: float = self._to_float(open_price)
+        self.high: float = self._to_float(high_price)
+        self.low: float = self._to_float(low_price)
+        self.close: float = self._to_float(close_price)
+        self.volume: int = self._to_int(volume)
+
+        # Enforce physical pricing boundaries
+        if self.high < self.low:
+            logger.error(f"Malformed pricing for {self.ticker}: High ({self.high}) is lower than Low ({self.low}). Coercing High=Low.")
+            self.high = self.low
+
+        if not (self.low <= self.open <= self.high) or not (self.low <= self.close <= self.high):
+            logger.warning(f"Open/Close for {self.ticker} on {self.date} fell outside High-Low bounds. Normalizing boundaries.")
+            self.open = max(self.low, min(self.high, self.open))
+            self.close = max(self.low, min(self.high, self.close))
+
+    def __repr__(self) -> str:
+        return f"<MarketBarDTO {self.ticker} @ {self.date.strftime('%Y-%m-%d')} - C: ${self.close:.2f}>"
+
+
+# =============================================================================
+# 2. FUNDAMENTAL DATA DTO
+# =============================================================================
+class FundamentalDataDTO(BaseDTO):
+    """
+    Standardized, strictly typed representation of an asset's fundamental sheet.
+    Self-calculates intrinsic valuations like Graham numbers and payout health metrics.
+    """
+    def __init__(self, ticker: str, pe_ratio: Optional[float], pb_ratio: Optional[float],
+                 dividend_yield: float, book_value: float, eps_trailing: float,
+                 dividend_growth_rate: float, payout_ratio: float, sector: str, company_name: str,
+                 market_cap: float = 0.0, price: float = 0.0, beta: float = 1.0):
+        self.ticker: str = ticker.upper().strip()
+        self.company_name: str = company_name.strip() if company_name else "Unknown Asset"
+        self.sector: str = sector.strip() if sector else "N/A"
+        
+        # Valuation Metrics
+        self.pe_ratio: Optional[float] = self._to_float(pe_ratio, None) if pe_ratio is not None else None
+        self.pb_ratio: Optional[float] = self._to_float(pb_ratio, None) if pb_ratio is not None else None
+        self.book_value: float = self._to_float(book_value)
+        self.eps_trailing: float = self._to_float(eps_trailing)
+        
+        # Dividend & Dividend Growth Model Parameters
+        self.dividend_yield: float = self._to_float(dividend_yield)
+        self.dividend_growth_rate: float = self._to_float(dividend_growth_rate)
+        self.payout_ratio: float = self._to_float(payout_ratio)
+
+        # Identity & Price info
+        self.market_cap: float = self._to_float(market_cap)
+        self.price: float = self._to_float(price)
+        self.beta: float = self._to_float(beta, 1.0)
+
+    @classmethod
+    def from_raw_dict(cls, ticker: str, info: Dict[str, Any]) -> "FundamentalDataDTO":
+        """
+        Factory method to parse a raw yfinance/Fidelity dict safely.
+        Translates unpredictable API responses into a structured DTO.
+        """
+        price = info.get("currentPrice") or info.get("previousClose") or 0.0
+        return cls(
+            ticker=ticker,
+            company_name=info.get("shortName", info.get("longName", "N/A")),
+            sector=info.get("sector", "N/A"),
+            pe_ratio=info.get("trailingPE"),
+            pb_ratio=info.get("priceToBook"),
+            book_value=info.get("bookValue", 0.0),
+            eps_trailing=info.get("trailingEps", 0.0),
+            dividend_yield=info.get("dividendYield", 0.0),
+            dividend_growth_rate=info.get("dividendRate", 0.0),
+            payout_ratio=info.get("payoutRatio", 0.0),
+            market_cap=info.get("marketCap", 0.0),
+            price=price,
+            beta=info.get("beta", 1.0)
+        )
+
+
+    @property
+    def graham_number(self) -> float:
+        r"""
+        Calculates Benjamin Graham's Intrinsic Value limit.
+        Formula: $V_{Graham} = \sqrt{22.5 \cdot EPS \cdot BookValue}$
+        Returns 0.0 if calculations yield imaginary bounds (e.g. negative EPS).
+        """
+
+        if self.eps_trailing <= 0 or self.book_value <= 0:
+            return 0.0
+        return math.sqrt(22.5 * self.eps_trailing * self.book_value)
+
+    @property
+    def is_dividend_sustainable(self) -> bool:
+        """Evaluates whether the asset is funding dividends via earnings vs. diluting capital."""
+        if "REIT" in self.sector or "Financial" in self.sector:
+            # REITs/BDCs operate under structurally high payouts (90% statutory distributions)
+            return self.payout_ratio < 0.95
+        return self.payout_ratio < 0.75
+
+    def __repr__(self) -> str:
+        return f"<FundamentalDataDTO {self.ticker} - EPS: {self.eps_trailing}, Graham Num: ${self.graham_number:.2f}>"
+
+
+# =============================================================================
+# 3. MACRO ECONOMIC ENVIRONMENT DTO
+# =============================================================================
+class MacroEconomicDTO(BaseDTO):
+    """
+    Represents systemic macroeconomic risk indicators captured from raw economic databases.
+    Houses the top-down risk assessment models.
+    """
+    def __init__(self, yield_curve_10y_2y: float, high_yield_oas: float, 
+                 inflation_rate: float, nominal_10y: float = 4.0,
+                 date: Optional[datetime] = None, sahm_rule_indicator: float = 0.0):
+        self.date = date if date is not None else datetime.now()
+        self.sahm_rule_indicator = sahm_rule_indicator
+        self.yield_curve: float = self._to_float(yield_curve_10y_2y) # Yield spread (Negative = Inverted)
+        self.credit_spread: float = self._to_float(high_yield_oas)   # High-Yield OAS (Risk Indicator)
+        self.inflation: float = self._to_float(inflation_rate)
+        self.nominal_10y: float = self._to_float(nominal_10y)
+
+    @property
+    def real_yield(self) -> float:
+        return self.nominal_10y - self.inflation
+
+    @property
+    def market_regime(self) -> str:
+        """
+        Implements top-down regime classification.
+        - RECESSION: Triggered by yield curve inversions (< -0.1)
+        - CREDIT EVENT: Spread of corporate bonds over Treasuries spikes (> 5.5%).
+        - NEUTRAL: Standard operating environment.
+        - RISK ON: Favorable macroeconomic conditions.
+        """
+        if self.yield_curve < -0.1:
+            return "RECESSION"
+        elif self.credit_spread > 5.5:
+            return "CREDIT EVENT"
+        elif self.credit_spread > 3.5:
+            return "NEUTRAL"
+        else:
+            return "RISK ON"
+
+    def __repr__(self) -> str:
+        return f"<MacroEconomicDTO - Regime: {self.market_regime} (Spread: {self.credit_spread}%)>"
+
+
+def test_dto_pipeline():
+    """Validates type coercions, extreme bounds, and local logic parsing."""
+    print("--- Running DTO Registration Test Routine ---")
+
+    # 1. Test pricing bounds normalization
+    print("\n[Testing Market Data Normalization]")
+    bar = MarketBarDTO(
+        date=datetime.now(),
+        ticker="AAPL",
+        open_price="$180.50",
+        high_price=175.00,
+        low_price=178.00,
+        close_price=179.00,
+        volume="10,250,300"
+    )
+    print(f"Parsed Market Bar DTO: {bar}")
+    print(f"High Price Normalized: {bar.high} (Original invalid: 175.0)")
+    print(f"Volume Coerced: {bar.volume}")
+
+    # 2. Test Fundamental DTO logic
+    print("\n[Testing Fundamental Calculations & Cleansing]")
+    raw_info = {
+        "shortName": "Carlyle Secured Lending",
+        "sector": "Financial Services (BDC)",
+        "trailingPE": "11.2",
+        "priceToBook": "1.05",
+        "bookValue": "17.20",
+        "trailingEps": "1.54",
+        "dividendYield": "8.5%",
+        "payoutRatio": "0.85"
+    }
+
+    fund = FundamentalDataDTO.from_raw_dict("CGBD", raw_info)
+    print(f"Company: {fund.company_name}")
+    print(f"Dividend Yield Float: {fund.dividend_yield:.4f}")
+    print(f"Graham Number: ${fund.graham_number:.2f}")
+    print(f"Dividend Sustainable: {fund.is_dividend_sustainable}")
+
+    # 3. Test Macro Risk Regimes
+    print("\n[Testing Top-Down Regime Multiplier]")
+    macro_hostile = MacroEconomicDTO(
+        yield_curve_10y_2y=-0.25,
+        high_yield_oas=6.10,
+        inflation_rate=2.5,
+        nominal_10y=4.0
+    )
+    print(macro_hostile)
+    print(f"Real Yield: {macro_hostile.real_yield}%")
+
+
+if __name__ == "__main__":
+    test_dto_pipeline()

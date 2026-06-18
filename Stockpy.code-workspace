@@ -1,0 +1,10 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"geminicodeassist.outlines.automaticOutlineGeneration": true
+	}
+}
