@@ -15,6 +15,8 @@ if [ ! -f "$PYTHON_EXE" ]; then
 fi
 
 # 2. Clean up old environment if it exists
+# NOTE: The platform rejects the 'pgsqlite' library in favor of Python's native sqlite3 module 
+# alongside SQLAlchemy and psycopg2-binary. QuantFAA and arch are mandatory for risk evaluation.
 if [ -d ".venv" ] || [ -d "venv" ]; then
     echo "🧹 Removing old virtual environment..."
     rm -rf .venv venv

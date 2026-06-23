@@ -1,0 +1,267 @@
+1. Necessary Imports & Variable Declarations
+# --- SYSTEM & DATA IMPORTS ---
+import numpy as np
+import pandas as pd
+
+# --- STATISTICAL & MATHEMATICAL IMPORTS ---
+from scipy.stats import norm
+from scipy.optimize import brentq # Used for root-finding target Deltas
+
+# --- GLOBAL VARIABLE DECLARATIONS ---
+# Standard risk-free rate proxy (e.g., 10-Year Treasury Yield)
+RISK_FREE_RATE = 0.045 
+TRADING_DAYS_PER_YEAR = 252
+2. The Comprehensive Options Pricing & Recommendation Architecture
+This class encompasses the Black-Scholes pricing logic, the Delta-targeting algorithm, the theta decay haircut model, and the deterministic matrix that generates the final recommended strikes and prices.
+class OptionsPricingRecommender:
+    def __init__(self, stock_price: float, risk_free_rate: float = RISK_FREE_RATE):
+        """
+        Initializes the options pricing engine.
+        
+        Variables:
+        stock_price (float): The current spot price of the underlying asset.
+        risk_free_rate (float): The annualized risk-free interest rate.
+        """
+        self.S = float(stock_price)
+        self.r = float(risk_free_rate)
+
+    def black_scholes_pricing_and_greeks(self, K: float, T: float, sigma: float, option_type: str = 'call') -> dict:
+        """
+        Analytically computes the theoretical option price and Greeks using the Black-Scholes PDE.
+        
+        Variables:
+        K (float): Strike Price
+        T (float): Time to Expiration (in years)
+        sigma (float): Annualized Implied Volatility
+        option_type (str): 'call' or 'put'
+        """
+        # Prevent division by zero errors for expired options
+        if T <= 0:
+            return {'Price': max(0.0, self.S - K) if option_type == 'call' else max(0.0, K - self.S), 
+                    'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta': 0.0}
+
+        d1 = (np.log(self.S / K) + (self.r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+        
+        if option_type.lower() == 'call':
+            price = self.S * norm.cdf(d1) - K * np.exp(-self.r * T) * norm.cdf(d2)
+            delta = norm.cdf(d1)
+        elif option_type.lower() == 'put':
+            price = K * np.exp(-self.r * T) * norm.cdf(-d2) - self.S * norm.cdf(-d1)
+            delta = norm.cdf(d1) - 1.0
+        else:
+            raise ValueError("option_type must be 'call' or 'put'")
+
+        gamma = norm.pdf(d1) / (self.S * sigma * np.sqrt(T))
+        vega = self.S * norm.pdf(d1) * np.sqrt(T)
+        
+        # Theta calculated as annual decay, divided by 252 for daily representation
+        theta_annual = -(self.S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T))
+        if option_type.lower() == 'call':
+            theta_annual -= self.r * K * np.exp(-self.r * T) * norm.cdf(d2)
+        else:
+            theta_annual += self.r * K * np.exp(-self.r * T) * norm.cdf(-d2)
+            
+        theta_daily = theta_annual / TRADING_DAYS_PER_YEAR
+
+        return {
+            'Price': price, 
+            'Delta': delta, 
+            'Gamma': gamma, 
+            'Vega': vega, 
+            'Theta_Daily': theta_daily
+        }
+
+    def find_strike_for_delta(self, target_delta: float, T: float, sigma: float, option_type: str = 'call') -> float:
+        """
+        Uses SciPy's Brentq root-finding algorithm to find the exact strike price (K) 
+        that corresponds to the target Delta parameter.
+        """
+        def delta_difference(K_guess):
+            greeks = self.black_scholes_pricing_and_greeks(K_guess, T, sigma, option_type)
+            return greeks['Delta'] - target_delta
+
+        # Establish bracketing boundaries for the solver (10% of stock price to 300% of stock price)
+        lower_bound = self.S * 0.10
+        upper_bound = self.S * 3.00
+
+        try:
+            # Brentq finds the root (where delta_difference == 0)
+            optimal_strike = brentq(delta_difference, lower_bound, upper_bound)
+            # Round to the nearest $0.50 strike standard interval
+            return round(optimal_strike * 2) / 2
+        except ValueError:
+            # Fallback to current spot price if algorithm fails to converge
+            return round(self.S * 2) / 2
+
+    def calculate_realizable_theta(self, theoretical_theta: float, dte: int) -> float:
+        """
+        Applies empirical execution friction to theoretical theta.
+        Based on institutional decay hair-cuts varying inversely with DTE.
+        """
+        if dte <= 1:
+            haircut = 0.40 # 40% drag on 1 DTE
+        elif dte <= 7:
+            haircut = 0.22 # 22% drag on 7 DTE
+        elif dte <= 30:
+            haircut = 0.12 # 12% drag on 30 DTE
+        else:
+            haircut = 0.05 # 5% baseline drag
+
+        return theoretical_theta * (1.0 - haircut)
+
+    def generate_strategy_pricing_matrix(self, ivr: float, current_iv: float, trend_bias: str, target_dte: int = 30) -> dict:
+        """
+        Deterministic Options Matrix synthesizing Trend, IVR, and Target Deltas 
+        to output specific recommended Call and Put prices.
+        """
+        T = target_dte / 365.0
+        sigma = current_iv
+        
+        # The ultimate returned dictionary payload
+        directive = {
+            "Strategy": "",
+            "Action": "",
+            "Legs": [],
+            "Net_Premium": 0.0,
+            "Realizable_Daily_Theta": 0.0
+        }
+
+        # Defined Risk Parameters (Standard Target Deltas)
+        SHORT_DELTA_TARGET = 0.30
+        LONG_DELTA_TARGET = 0.15
+        CONDOR_SHORT_TARGET = 0.16
+        CONDOR_LONG_TARGET = 0.05
+        ATM_DELTA_TARGET = 0.50
+
+        if ivr > 70:
+            # HIGH IVR REGIME: Premium Selling Environment
+            if trend_bias == 'Bullish':
+                directive["Strategy"] = "Put Credit Spread"
+                directive["Action"] = "Sell to Open"
+                
+                # Leg 1: Short Put
+                k_short = self.find_strike_for_delta(-SHORT_DELTA_TARGET, T, sigma, 'put')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'put')
+                
+                # Leg 2: Long Put (Protection)
+                k_long = self.find_strike_for_delta(-LONG_DELTA_TARGET, T, sigma, 'put')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'put')
+
+                directive["Legs"] = [
+                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)},
+                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)}
+                ]
+                # Credit received: Short price - Long price
+                directive["Net_Premium"] = round(short_metrics['Price'] - long_metrics['Price'], 2)
+                raw_theta = short_metrics['Theta_Daily'] - long_metrics['Theta_Daily']
+                directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
+
+            elif trend_bias == 'Bearish':
+                directive["Strategy"] = "Call Credit Spread"
+                directive["Action"] = "Sell to Open"
+                
+                # Leg 1: Short Call
+                k_short = self.find_strike_for_delta(SHORT_DELTA_TARGET, T, sigma, 'call')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
+                
+                # Leg 2: Long Call (Protection)
+                k_long = self.find_strike_for_delta(LONG_DELTA_TARGET, T, sigma, 'call')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'call')
+
+                directive["Legs"] = [
+                    {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)},
+                    {"Side": "Long", "Type": "Call", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)}
+                ]
+                directive["Net_Premium"] = round(short_metrics['Price'] - long_metrics['Price'], 2)
+                raw_theta = short_metrics['Theta_Daily'] - long_metrics['Theta_Daily']
+                directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
+
+            else: # Neutral Trend Bias
+                directive["Strategy"] = "Iron Condor"
+                directive["Action"] = "Sell to Open"
+                
+                # Put Spread Side
+                k_short_put = self.find_strike_for_delta(-CONDOR_SHORT_TARGET, T, sigma, 'put')
+                short_put_metrics = self.black_scholes_pricing_and_greeks(k_short_put, T, sigma, 'put')
+                k_long_put = self.find_strike_for_delta(-CONDOR_LONG_TARGET, T, sigma, 'put')
+                long_put_metrics = self.black_scholes_pricing_and_greeks(k_long_put, T, sigma, 'put')
+                
+                # Call Spread Side
+                k_short_call = self.find_strike_for_delta(CONDOR_SHORT_TARGET, T, sigma, 'call')
+                short_call_metrics = self.black_scholes_pricing_and_greeks(k_short_call, T, sigma, 'call')
+                k_long_call = self.find_strike_for_delta(CONDOR_LONG_TARGET, T, sigma, 'call')
+                long_call_metrics = self.black_scholes_pricing_and_greeks(k_long_call, T, sigma, 'call')
+
+                directive["Legs"] = [
+                    {"Side": "Short", "Type": "Put", "Strike": k_short_put, "Price": round(short_put_metrics['Price'], 2)},
+                    {"Side": "Long", "Type": "Put", "Strike": k_long_put, "Price": round(long_put_metrics['Price'], 2)},
+                    {"Side": "Short", "Type": "Call", "Strike": k_short_call, "Price": round(short_call_metrics['Price'], 2)},
+                    {"Side": "Long", "Type": "Call", "Strike": k_long_call, "Price": round(long_call_metrics['Price'], 2)}
+                ]
+                
+                credit_put = short_put_metrics['Price'] - long_put_metrics['Price']
+                credit_call = short_call_metrics['Price'] - long_call_metrics['Price']
+                directive["Net_Premium"] = round(credit_put + credit_call, 2)
+                
+                raw_theta = (short_put_metrics['Theta_Daily'] - long_put_metrics['Theta_Daily']) + (short_call_metrics['Theta_Daily'] - long_call_metrics['Theta_Daily'])
+                directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
+
+        elif ivr < 30:
+            # LOW IVR REGIME: Premium Buying Environment
+            if trend_bias == 'Bullish':
+                directive["Strategy"] = "Call Debit Spread"
+                directive["Action"] = "Buy to Open"
+                
+                # Leg 1: Long Call (ATM)
+                k_long = self.find_strike_for_delta(ATM_DELTA_TARGET, T, sigma, 'call')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'call')
+                
+                # Leg 2: Short Call (Out of the Money to finance)
+                k_short = self.find_strike_for_delta(SHORT_DELTA_TARGET, T, sigma, 'call')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
+                
+                directive["Legs"] = [
+                    {"Side": "Long", "Type": "Call", "Strike": k_long, "Price": round(long_metrics['Price'], 2)},
+                    {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2)}
+                ]
+                # Debit paid: Long Price - Short Price
+                directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
+
+            elif trend_bias == 'Bearish':
+                directive["Strategy"] = "Put Debit Spread"
+                directive["Action"] = "Buy to Open"
+                
+                k_long = self.find_strike_for_delta(-ATM_DELTA_TARGET, T, sigma, 'put')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'put')
+                
+                k_short = self.find_strike_for_delta(-SHORT_DELTA_TARGET, T, sigma, 'put')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'put')
+                
+                directive["Legs"] = [
+                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2)},
+                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2)}
+                ]
+                directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
+            else:
+                directive["Strategy"] = "Cash"
+                directive["Action"] = "Wait"
+
+        else:
+            # NEUTRAL IVR REGIME
+            if trend_bias == 'Bullish':
+                directive["Strategy"] = "Covered Call"
+                directive["Action"] = "Sell to Open"
+                
+                k_short = self.find_strike_for_delta(SHORT_DELTA_TARGET, T, sigma, 'call')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
+                
+                directive["Legs"] = [
+                    {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
+                ]
+                directive["Net_Premium"] = round(short_metrics['Price'], 2)
+            else:
+                directive["Strategy"] = "Cash"
+                directive["Action"] = "Wait"
+
+        return directive

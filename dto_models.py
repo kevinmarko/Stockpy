@@ -118,15 +118,50 @@ class FundamentalDataDTO(BaseDTO):
         self.market_cap: float = self._to_float(market_cap)
         self.price: float = self._to_float(price)
         self.beta: float = self._to_float(beta, 1.0)
+        
+        # New default attributes for research engine
+        self.held_percent_institutions: float = 0.0
+        self.institutional_change: float = 0.0
+        self.debt_to_equity: float = 0.0
+
+    @staticmethod
+    def _calculate_dividend_growth_rate(info: Dict[str, Any], dividends: Optional[Any] = None) -> float:
+        # EXPLANATION: We calculate the actual historical compounded annual dividend growth rate
+        # (CAGR) from the dividends Series. If history is unavailable, we fallback to a standard 2%.
+        if dividends is not None and hasattr(dividends, "empty") and not dividends.empty:
+            try:
+                yearly_divs = dividends.groupby(dividends.index.year).sum()
+                current_year = datetime.now().year
+                yearly_divs = yearly_divs[yearly_divs.index < current_year]
+                if len(yearly_divs) >= 2:
+                    latest_year = yearly_divs.index.max()
+                    # Filter index to years within the last 5 years (excluding current/latest year itself for the start point)
+                    possible_starts = [y for y in yearly_divs.index if latest_year - 5 <= y < latest_year]
+                    if not possible_starts:
+                        possible_starts = [y for y in yearly_divs.index if y < latest_year]
+                    
+                    if possible_starts:
+                        start_year = min(possible_starts)
+                        n_years = latest_year - start_year
+                        if n_years > 0:
+                            div_latest = yearly_divs.loc[latest_year]
+                            div_start = yearly_divs.loc[start_year]
+                            if div_start > 0 and div_latest > 0:
+                                cagr = (div_latest / div_start) ** (1.0 / n_years) - 1.0
+                                return max(-0.2, min(0.15, cagr))
+            except Exception as e:
+                logger.warning(f"Failed to calculate historical dividend growth: {e}")
+        return 0.02
 
     @classmethod
-    def from_raw_dict(cls, ticker: str, info: Dict[str, Any]) -> "FundamentalDataDTO":
+    def from_raw_dict(cls, ticker: str, info: Dict[str, Any], dividends: Optional[Any] = None) -> "FundamentalDataDTO":
         """
         Factory method to parse a raw yfinance/Fidelity dict safely.
         Translates unpredictable API responses into a structured DTO.
         """
         price = info.get("currentPrice") or info.get("previousClose") or 0.0
-        return cls(
+        calculated_dgr = cls._calculate_dividend_growth_rate(info, dividends)
+        dto = cls(
             ticker=ticker,
             company_name=info.get("shortName", info.get("longName", "N/A")),
             sector=info.get("sector", "N/A"),
@@ -135,12 +170,18 @@ class FundamentalDataDTO(BaseDTO):
             book_value=info.get("bookValue", 0.0),
             eps_trailing=info.get("trailingEps", 0.0),
             dividend_yield=info.get("dividendYield", 0.0),
-            dividend_growth_rate=info.get("dividendRate", 0.0),
+            dividend_growth_rate=calculated_dgr,
             payout_ratio=info.get("payoutRatio", 0.0),
             market_cap=info.get("marketCap", 0.0),
             price=price,
             beta=info.get("beta", 1.0)
         )
+        dto.held_percent_institutions = info.get("heldPercentInstitutions", 0.0)
+        dto.institutional_change = info.get("netPercentInstitutionsSharesOut", 0.0)
+        dto.debt_to_equity = info.get("debtToEquity", 0.0)
+        # EXPLANATION: Store the raw info dictionary for down-stream access to unstructured metrics.
+        dto.raw_info = info
+        return dto
 
 
     @property
@@ -158,7 +199,7 @@ class FundamentalDataDTO(BaseDTO):
     @property
     def is_dividend_sustainable(self) -> bool:
         """Evaluates whether the asset is funding dividends via earnings vs. diluting capital."""
-        if "REIT" in self.sector or "Financial" in self.sector:
+        if "REIT" in self.sector or "Real Estate" in self.sector or "Financial" in self.sector:
             # REITs/BDCs operate under structurally high payouts (90% statutory distributions)
             return self.payout_ratio < 0.95
         return self.payout_ratio < 0.75
@@ -177,13 +218,24 @@ class MacroEconomicDTO(BaseDTO):
     """
     def __init__(self, yield_curve_10y_2y: float, high_yield_oas: float, 
                  inflation_rate: float, nominal_10y: float = 4.0,
-                 date: Optional[datetime] = None, sahm_rule_indicator: float = 0.0):
+                 date: Optional[datetime] = None, sahm_rule_indicator: float = 0.0,
+                 vix_value: float = 15.0):
         self.date = date if date is not None else datetime.now()
         self.sahm_rule_indicator = sahm_rule_indicator
         self.yield_curve: float = self._to_float(yield_curve_10y_2y) # Yield spread (Negative = Inverted)
         self.credit_spread: float = self._to_float(high_yield_oas)   # High-Yield OAS (Risk Indicator)
         self.inflation: float = self._to_float(inflation_rate)
         self.nominal_10y: float = self._to_float(nominal_10y)
+        self.vix: float = self._to_float(vix_value)
+
+    @property
+    def killSwitch(self) -> bool:
+        """
+        Triggers True (halting all new long equity deployments) if:
+        - Sahm rule indicator threshold is breached (>= 0.5) OR
+        - VIX spikes above 30
+        """
+        return self.sahm_rule_indicator >= 0.5 or self.vix > 30.0
 
     @property
     def real_yield(self) -> float:
@@ -193,16 +245,16 @@ class MacroEconomicDTO(BaseDTO):
     def market_regime(self) -> str:
         """
         Implements top-down regime classification.
-        - RECESSION: Triggered by yield curve inversions (< -0.1)
-        - CREDIT EVENT: Spread of corporate bonds over Treasuries spikes (> 5.5%).
+        - RECESSION: Triggered by yield curve inversions (< -0.25) AND Credit Spread (> 6.0) or Sahm Rule >= 0.6
+        - CREDIT EVENT: Spread of corporate bonds over Treasuries spikes (> 6.0%).
         - NEUTRAL: Standard operating environment.
         - RISK ON: Favorable macroeconomic conditions.
         """
-        if self.yield_curve < -0.1:
+        if (self.yield_curve < -0.25 and self.credit_spread > 6.0) or self.sahm_rule_indicator >= 0.6:
             return "RECESSION"
-        elif self.credit_spread > 5.5:
+        elif self.credit_spread > 6.0:
             return "CREDIT EVENT"
-        elif self.credit_spread > 3.5:
+        elif self.credit_spread > 4.5:
             return "NEUTRAL"
         else:
             return "RISK ON"

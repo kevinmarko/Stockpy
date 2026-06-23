@@ -1,275 +1,391 @@
-"""
-InvestYo Quant Platform - Computational Refactoring Core
-========================================================
-Step 3 of the Modernization Roadmap: Vectorization of Quantitative Heuristics.
-Step 4 of the Modernization Roadmap: Dependency Injection Construction.
-
-This engine completely eliminates iterative nested loops. Indicators (RSI, Aroon, 
-MACD, volatility matrices) calculate as vectorized operations across whole series.
-"""
+# =============================================================================
+# MODULE: COMPUTATIONAL CORE
+# File: processing_engine.py
+# Description: Handles Technical Analysis, Fundamental Valuations, and Risk.
+#              Merges disparate data sources into a unified Schema-compliant DataFrame.
+# =============================================================================
 
 import pandas as pd
 import numpy as np
+try:
+    import pandas_ta as ta  # type: ignore
+except ImportError:
+    import pandas_ta_classic as ta
+
 import logging
 import math
 from datetime import datetime
-from typing import Dict, List, Any, Optional
 
-from data_engine import IDataProvider
-from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
-import config
+from dto_models import FundamentalDataDTO, MacroEconomicDTO
+from research_engine import AdvancedResearchEngine
 
-logger = logging.getLogger("Computational_Engine")
-
+# --- CONFIGURATION IMPORT ---
+from config import COLUMN_SCHEMA, get_internal_keys
 
 class ProcessingEngine:
-    def __init__(self, data_provider: IDataProvider):
+    
+    def __init__(self, data_provider=None):
         """
-        Constructor Dependency Injection: Establishes decoupled operations
-        by accepting any class conforming to the IDataProvider interface.
+        Initializes the Processing Engine with default risk models.
         """
-        self.data_provider: IDataProvider = data_provider
-        self.risk_free_rate: float = 0.0425
-        self.market_risk_premium: float = 0.055
+        self.data_provider = data_provider
+        self.risk_free_rate = 0.0425 
+        self.market_risk_premium = 0.055
+        self.required_return_rate = 0.08
+        self.research_engine = AdvancedResearchEngine(risk_free_rate=self.risk_free_rate)
 
-    # =============================================================================
-    # 1. VECTORIZED TECHNICAL ANALYSIS ENGINE (ZERO LOOPS)
-    # =============================================================================
-    def calculate_technicals_vectorized(self, raw_dfs: Dict[str, pd.DataFrame]) -> Dict[str, Dict[str, Any]]:
+    def calculate_graham_number(self, eps: float, book_value: float) -> float:
         """
-        Applies vectorized financial formulas to generate pricing signals.
-        Strictly eliminates row iterations.
-        """
-        results = {}
-        
-        # Extract SPY returns for Relative Strength calculations
-        spy_df = raw_dfs.get('SPY')
-        if spy_df is not None and not spy_df.empty and len(spy_df) > 63:
-            spy_close = spy_df['Close'].to_numpy() if 'Close' in spy_df.columns else spy_df['close'].to_numpy()
-            spy_return_63d = (spy_close[-1] - spy_close[-64]) / spy_close[-64]
-        else:
-            spy_return_63d = 0.0
-
-        for ticker, df_raw in raw_dfs.items():
-            if df_raw.empty or len(df_raw) < 26:
-                logger.warning(f"Insufficient technical history for {ticker}. Quarantining calculations.")
-                continue
-
-            # Copy to protect underlying memory pools
-            df = df_raw.copy()
-            df.columns = [col.lower() for col in df.columns]
-
-            # Parse columns mapping directly from technical structures
-            close_arr = df['close'].to_numpy()
-            high_arr = df['high'].to_numpy()
-            low_arr = df['low'].to_numpy()
-
-            # A. VECTORIZED EMA / MACD CALCULATION
-            exp1 = df['close'].ewm(span=12, adjust=False).mean()
-            exp2 = df['close'].ewm(span=26, adjust=False).mean()
-            macd_series = exp1 - exp2
-            signal_series = macd_series.ewm(span=9, adjust=False).mean()
-            macd_hist = macd_series - signal_series
-
-            # B. VECTORIZED RSI CALCULATION (ZERO LOOPS)
-            delta = df['close'].diff()
-            gain = np.where(delta > 0, delta, 0.0)
-            loss = np.where(delta < 0, -delta, 0.0)
-            
-            # Using standard rolling mean averages for momentum verification
-            avg_gain = pd.Series(gain).rolling(window=14).mean()
-            avg_loss = pd.Series(loss).rolling(window=14).mean()
-            rs = avg_gain / np.where(avg_loss == 0, 1e-10, avg_loss)
-            rsi_series = 100.0 - (100.0 / (1.0 + rs))
-
-            # C. VECTORIZED AROON INDICATOR
-            # Rolling index of argmax & argmin determines peak days over historical windows
-            rolling_high_days = 25 - df['high'].rolling(25).apply(lambda x: 25 - 1 - x.argmax(), raw=True)
-            rolling_low_days = 25 - df['low'].rolling(25).apply(lambda x: 25 - 1 - x.argmin(), raw=True)
-            aroon_up = (rolling_high_days / 25.0) * 100.0
-            aroon_down = (rolling_low_days / 25.0) * 100.0
-
-            # D. DONCHIAN CHANNELS (BOUNDARIES)
-            donchian_high = df['high'].rolling(window=25).max()
-            donchian_low = df['low'].rolling(window=25).min()
-
-            # E. ATR VOLATILITY MEASUREMENTS
-            h_l = df['high'] - df['low']
-            h_pc = (df['high'] - df['close'].shift(1)).abs()
-            l_pc = (df['low'] - df['close'].shift(1)).abs()
-            tr = pd.concat([h_l, h_pc, l_pc], axis=1).max(axis=1)
-            atr_series = tr.rolling(window=14).mean()
-
-            # F. DRAWDOWN FROM ROLLING HISTORICAL PEAKS
-            rolling_peak = df['close'].cummax()
-            drawdowns = (df['close'] - rolling_peak) / rolling_peak
-
-            # G. SYSTEMATIC PORTFOLIO COVARIANCE & BETA VS BENCHMARK
-            returns = df['close'].pct_change().dropna()
-            beta_val = 1.0
-            if len(returns) > 30:
-                std_asset = returns.std()
-                beta_val = min(2.5, max(0.1, float(std_asset / 0.015)))
-
-            # H. ROLLING SIMPLE MOVING AVERAGES (SMA 50 / SMA 200)
-            sma_50 = df['close'].rolling(window=50).mean()
-            sma_200 = df['close'].rolling(window=200).mean() if len(df['close']) >= 200 else df['close']
-
-            # I. ADDITIONAL RISK METRICS
-            if len(returns) > 0:
-                var_95 = float(np.percentile(returns, 5))
-                downside_returns = returns[returns < 0]
-                sortino = float((returns.mean() / downside_returns.std() * np.sqrt(252))) if len(downside_returns) > 0 and downside_returns.std() != 0 else 0.0
-            else:
-                var_95, sortino = 0.0, 0.0
-
-            # J. RELATIVE STRENGTH VS SPY
-            rs_spy = 0.0
-            if len(close_arr) > 63:
-                stock_return_63d = (close_arr[-1] - close_arr[-64]) / close_arr[-64]
-                rs_spy = stock_return_63d - spy_return_63d
-
-            # Package finalized calculations cleanly
-            results[ticker] = {
-                'Price_Tech': float(close_arr[-1]),
-                'Volume': float(df['volume'].iloc[-1]) if 'volume' in df.columns else 0.0,
-                'RSI': float(rsi_series.iloc[-1]) if not np.isnan(rsi_series.iloc[-1]) else 50.0,
-                'MACD': float(macd_series.iloc[-1]),
-                'MACD_Line': float(macd_series.iloc[-1]),
-                'MACD_Signal': float(signal_series.iloc[-1]),
-                'MACD_Hist': float(macd_hist.iloc[-1]),
-                'Aroon_Up': float(aroon_up.iloc[-1]) if not np.isnan(aroon_up.iloc[-1]) else 50.0,
-                'Aroon_Down': float(aroon_down.iloc[-1]) if not np.isnan(aroon_down.iloc[-1]) else 50.0,
-                'Aroon Up': float(aroon_up.iloc[-1]) if not np.isnan(aroon_up.iloc[-1]) else 50.0,
-                'Aroon Down': float(aroon_down.iloc[-1]) if not np.isnan(aroon_down.iloc[-1]) else 50.0,
-                'ATR': float(atr_series.iloc[-1]) if not np.isnan(atr_series.iloc[-1]) else float(close_arr[-1] * 0.02),
-                'Max Drawdown': float(drawdowns.min()),
-                'Beta': beta_val,
-                'Donchian_High': float(donchian_high.iloc[-1]),
-                'Donchian_Low': float(donchian_low.iloc[-1]),
-                'SMA_50': float(sma_50.iloc[-1]) if not np.isnan(sma_50.iloc[-1]) else float(close_arr[-1]),
-                'SMA_200': float(sma_200.iloc[-1]) if not np.isnan(sma_200.iloc[-1]) else float(close_arr[-1]),
-                'VaR 95': var_95,
-                'Sortino Ratio': sortino,
-                'RS vs SPY': rs_spy,
-                'Relative Strength': rs_spy
-            }
-            
-        return results
-
-    # =============================================================================
-    # 2. FUNDAMENTAL ANALYSIS ENGINE (INTEGRATED WITH DTO CLASSES)
-    # =============================================================================
-    def calculate_fundamentals(self, raw_fundamentals: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """
-        Leverages the FundamentalDataDTO objects to construct valuation assessments.
-        """
-        results = {}
-        for ticker, raw_data in raw_fundamentals.items():
-            try:
-                info = raw_data.get('info', {})
-                if not info:
-                    continue
-
-                # Instantiate clean Data Transfer Object ensuring absolute type safety
-                dto = FundamentalDataDTO.from_raw_dict(ticker, info)
-                
-                # Apply localized valuation formulas stored directly inside the object
-                gordon_value = self._calculate_gordon_model(dto)
-                valuation_score = self._compile_quality_score(dto)
-
-                results[ticker] = {
-                    'Price_Fund': float(info.get('regularMarketPrice', info.get('previousClose', 0.0))),
-                    'Graham Num': dto.graham_number,
-                    'Gordon Fair Value': gordon_value,
-                    'Quality Score': valuation_score,
-                    'Div Yield': dto.dividend_yield,
-                    'P/E': dto.pe_ratio if dto.pe_ratio else 0.0,
-                    'Book Value': dto.book_value,
-                    'Beta': dto.pb_ratio if dto.pb_ratio else 1.0, # Approximate scaling
-                    'sector': dto.sector,
-                    'shortName': dto.company_name,
-                    'Market Cap': dto.market_cap
-                }
-            except Exception as e:
-                logger.error(f"Error mapping fundamental DTO logic for {ticker}: {e}")
-                continue
-        return results
-
-    # =============================================================================
-    # 3. TOP-DOWN RISK REGIME CONTROLLER
-    # =============================================================================
-    def process_macro_regime(self, raw_macro: Dict[str, float]) -> Dict[str, Any]:
-        """
-        Ingests economic metrics into the MacroEconomicDTO model to dictate systemic signals.
+        Calculates the Ben Graham Number.
+        Formula: sqrt(15 * 1.5 * EPS * BVPS) = sqrt(22.5 * EPS * BVPS)
         """
         try:
-            dto = MacroEconomicDTO(
-                date=datetime.now(),
-                yield_curve_10y_2y=raw_macro.get('T10Y2Y', 0.5),
-                high_yield_oas=raw_macro.get('BAMLH0A0HYM2', 3.5),
-                sahm_rule_indicator=raw_macro.get('UNRATE', 4.0),
-                inflation_rate=2.0
-            )
+            if eps is None or book_value is None or pd.isna(eps) or pd.isna(book_value):
+                return 0.0
+            if eps <= 0 or book_value <= 0:
+                return 0.0
+            return round(math.sqrt(22.5 * eps * book_value), 2)
+        except Exception as e:
+            logging.error(f"Graham Number error: {e}")
+            return 0.0
+
+    def calculate_gordon_fair_value(self, current_price: float, dividend_yield: float, div_growth_rate: float) -> float:
+        """
+        Calculates the Gordon Growth Model (Dividend Discount Model) Fair Value.
+        Formula: D1 / (r - g)
+        """
+        try:
+            if dividend_yield is None or pd.isna(dividend_yield) or dividend_yield <= 0:
+                return 0.0
+            if div_growth_rate is None or pd.isna(div_growth_rate):
+                div_growth_rate = 0.0
+
+            annual_dividend = current_price * dividend_yield
+            expected_dividend_next_year = annual_dividend * (1 + div_growth_rate)
+
+            # Cap the growth rate to prevent infinite or negative valuations (g must be < r)
+            g = min(div_growth_rate, self.required_return_rate - 0.01)
+
+            if self.required_return_rate <= g:
+                return 0.0 
+
+            gordon_value = expected_dividend_next_year / (self.required_return_rate - g)
+            return round(gordon_value, 2)
+        except Exception as e:
+            logging.error(f"Gordon Fair Value error: {e}")
+            return 0.0
+
+
+    # ==========================================================================
+    # 1. MACRO LOGIC
+    # ==========================================================================
+    def process_macro_regime(self, macro_dto):
+        try:
+            if isinstance(macro_dto, dict):
+                from dto_models import MacroEconomicDTO
+                macro_dto = MacroEconomicDTO(
+                    yield_curve_10y_2y=macro_dto.get('T10Y2Y', 0.5),
+                    high_yield_oas=macro_dto.get('BAMLH0A0HYM2', 3.5),
+                    inflation_rate=macro_dto.get('CPIAUCSL_YoY', 2.0)
+                )
+            self.research_engine.real_yield = macro_dto.real_yield
             return {
-                "Regime": dto.market_regime,
-                "Fear_Index": dto.credit_spread,
-                "Yield_Curve_Spread": dto.yield_curve
+                "Regime": macro_dto.market_regime,
+                "Real_Yield": macro_dto.real_yield,
+                "Inflation": macro_dto.inflation
             }
         except Exception as e:
-            logger.error(f"Macro DTO instantiation failure: {e}")
-            return {"Regime": "Neutral", "Fear_Index": 3.5, "Yield_Curve_Spread": 0.5}
+            logging.error(f"Macro Processing Error: {e}")
+            return {"Regime": "Neutral", "Real_Yield": 0.0}
 
-    # =============================================================================
-    # Helper Methods
-    # =============================================================================
-    def _calculate_gordon_model(self, dto: FundamentalDataDTO) -> float:
-        """Gordon Growth Model: D1 / (k - g)"""
-        k = self.risk_free_rate + (dto.pb_ratio if dto.pb_ratio else 1.0) * self.market_risk_premium
-        g = min(dto.dividend_growth_rate, k - 0.02) # Prevent mathematical singularity (infinity)
-        d0 = dto.dividend_yield * dto.book_value # Estimated current payout
-        d1 = d0 * (1.0 + g)
-        
-        if k - g <= 0:
-            return 0.0
-        return max(0.0, d1 / (k - g))
 
-    def _compile_quality_score(self, dto: FundamentalDataDTO) -> int:
-        """Determines analytical balance sheet health scores."""
-        score = 50 # Baseline starting score
+    # ==========================================================================
+    # 2. TECHNICAL ANALYSIS & RISK METRICS (UPDATED)
+    # ==========================================================================
+    def calculate_technical_metrics(self, raw_tech_data, transactions_df=None):
+        """
+        Calculates RSI, MACD, ATR, SMA AND Risk Metrics (VaR, Sortino, DD).
+        """
+        results = {}
         
-        # Payout Health validation rules
-        if dto.is_dividend_sustainable:
-            score += 15
+        # Pre-calculate SPY return for relative strength comparison
+        spy_df = raw_tech_data.get('SPY')
+        if spy_df is not None and not spy_df.empty:
+            spy_df = spy_df.sort_index()
+            spy_return = (spy_df['Close'].iloc[-1] - spy_df['Close'].iloc[0]) / spy_df['Close'].iloc[0]
         else:
-            score -= 20
+            spy_return = 0.0
+
+        # Calculate realized slippage (Topic 28)
+        # EXPLANATION: The research engine returns a float directly for the slippage metric now.
+        avg_slippage = self.research_engine.calculate_realized_slippage(
+            transactions_df if transactions_df is not None else pd.DataFrame()
+        )
+
+        # Calculate portfolio tail-dependency covariance risk (Topic 30)
+        returns_dict = {}
+        for t, d in raw_tech_data.items():
+            if not d.empty and len(d) >= 2:
+                returns_dict[t] = d['Close'].pct_change()
+        returns_df = pd.DataFrame(returns_dict)
+        # EXPLANATION: The research engine returns a float directly for tail dependency now.
+        max_corr = self.research_engine.calculate_portfolio_covar_dependency(returns_df)
             
-        # EPS strength assessment
-        if dto.eps_trailing > 0:
-            score += 15
-        else:
-            score -= 25
+        for ticker, df in raw_tech_data.items():
+            try:
+                if df.empty or len(df) < 30: continue
+                    
+                df = df.sort_index()
+                
+                # --- A. STANDARD INDICATORS ---
+                df['RSI'] = ta.rsi(df['Close'], length=14)
+                macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+                if macd is not None:
+                    df['MACD_Line'] = macd['MACD_12_26_9']
+                    df['MACD_Signal'] = macd['MACDs_12_26_9']
+                
+                df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+                df['SMA_50'] = ta.sma(df['Close'], length=50)
+                df['SMA_200'] = ta.sma(df['Close'], length=200)
+                
+                # --- B. RISK METRICS (NEW) ---
+                # Calculate Returns
+                df['Pct_Change'] = df['Close'].pct_change()
+                
+                # 1. VaR 95 (Historical Method, 5th percentile of daily returns)
+                # We assume 1-day VaR. For annual, multiply by sqrt(252)
+                var_95 = df['Pct_Change'].quantile(0.05)
+                
+                # 2. Max Drawdown (Rolling Peak)
+                rolling_max = df['Close'].cummax()
+                drawdown = (df['Close'] - rolling_max) / rolling_max
+                max_drawdown = drawdown.min()
+                
+                # 3. Sortino Ratio (Annualized)
+                # Mean Return / Downside Deviation
+                avg_return = df['Pct_Change'].mean()
+                downside_returns = df.loc[df['Pct_Change'] < 0, 'Pct_Change']
+                downside_std = downside_returns.std()
+                
+                sortino = 0.0
+                if downside_std > 0:
+                    sortino = (avg_return * 252) / (downside_std * np.sqrt(252))
 
-        # P/E margin mapping
-        if dto.pe_ratio and dto.pe_ratio < 15.0:
-            score += 20
-        elif dto.pe_ratio and dto.pe_ratio > 35.0:
-            score -= 15
+                # --- C. AROON INDICATOR & OSCILLATOR ---
+                aroon = ta.aroon(df['High'], df['Low'], length=25)
+                if aroon is not None and not aroon.empty:
+                    df['Aroon_Up'] = aroon.get('AROONU_25', 50.0)
+                    df['Aroon_Down'] = aroon.get('AROOND_25', 50.0)
+                    df['Aroon_Oscillator'] = aroon.get('AROONOSC_25', 0.0)
+                else:
+                    df['Aroon_Up'] = 50.0
+                    df['Aroon_Down'] = 50.0
+                    df['Aroon_Oscillator'] = 0.0
 
-        return min(100, max(0, score))
+                # --- NEW: COPPOCK CURVE ---
+                coppock = ta.coppock(df['Close'])
+                if coppock is not None and not coppock.dropna().empty:
+                    df['Coppock_Curve'] = coppock
+                else:
+                    df['Coppock_Curve'] = 0.0
 
-    def compile_dashboard(self, tech_data: dict, fund_data: dict, regime_data: dict) -> pd.DataFrame:
-        """Unified presentation framework compiler."""
+                # --- NEW: CHANDELIER EXIT ---
+                if 'ATR' in df.columns and not df['ATR'].isna().all():
+                    rolling_max_high = df['High'].rolling(window=22).max()
+                    df['Chandelier_Exit'] = rolling_max_high - 3.0 * df['ATR']
+                else:
+                    df['Chandelier_Exit'] = df['Close']
+
+                # --- D. RELATIVE STRENGTH vs SPY (NEW) ---
+                if len(df) >= 2:
+                    stock_return = (df['Close'].iloc[-1] - df['Close'].iloc[0]) / df['Close'].iloc[0]
+                    rs_vs_spy = stock_return - spy_return
+                else:
+                    rs_vs_spy = 0.0
+
+                # --- E. RS MOMENTUM SLOPE & OPTIONS IV EDGE (NEW) ---
+                spy_df = raw_tech_data.get('SPY')
+                if spy_df is not None and not spy_df.empty:
+                    rs_slope = self.research_engine.calculate_relative_strength_momentum_slope(df['Close'], spy_df['Close'])
+                else:
+                    rs_slope = 0.0
+
+                pct_change = df['Close'].pct_change()
+                hv = pct_change.std() * np.sqrt(252) if not pct_change.isna().all() else 0.0
+                
+                # Extract Latest
+                last_row = df.iloc[-1]
+                atr = last_row.get('ATR', 0.0)
+                price = last_row['Close']
+                iv_edge = self.research_engine.calculate_options_volatility_edge(hv, atr, price)
+                
+                results[ticker] = {
+                    'Price_Tech': last_row['Close'],
+                    'Volume': last_row.get('Volume', 0),
+                    'RSI': last_row.get('RSI', 50),
+                    'MACD_Line': last_row.get('MACD_Line', 0),
+                    'MACD_Signal': last_row.get('MACD_Signal', 0),
+                    'ATR': last_row.get('ATR', 0),
+                    'SMA_50': last_row.get('SMA_50', 0),
+                    'SMA_200': last_row.get('SMA_200', 0),
+                    
+                    # Risk Keys mapped to Schema
+                    'VaR 95': var_95,
+                    'Max Drawdown': max_drawdown,
+                    'Sortino Ratio': sortino,
+
+                    # Aroon & Relative Strength Keys mapped to Schema
+                    'Aroon Up': float(last_row.get('Aroon_Up', 50.0)) if pd.notna(last_row.get('Aroon_Up')) else 50.0,
+                    'Aroon Down': float(last_row.get('Aroon_Down', 50.0)) if pd.notna(last_row.get('Aroon_Down')) else 50.0,
+                    'Aroon Oscillator': float(last_row.get('Aroon_Oscillator', 0.0)) if pd.notna(last_row.get('Aroon_Oscillator')) else 0.0,
+                    'Coppock Curve': float(last_row.get('Coppock_Curve', 0.0)) if pd.notna(last_row.get('Coppock_Curve')) else 0.0,
+                    'Chandelier Exit': float(last_row.get('Chandelier_Exit', last_row['Close'])) if pd.notna(last_row.get('Chandelier_Exit')) else last_row['Close'],
+                    'RS vs SPY': rs_vs_spy,
+
+                    # Advanced Research Keys mapped to Schema
+                    'RS-MACD': rs_slope,
+                    'Realized Slippage': avg_slippage,
+                    'Options IV Edge': iv_edge,
+                    'CoVaR Proxy': max_corr,
+                }
+                
+            except Exception as e:
+                logging.warning(f"Technical Calc Failed for {ticker}: {e}")
+                continue
+                
+        return results
+
+    def calculate_technicals_vectorized(self, raw_tech_data, transactions_df=None):
+        # EXPLANATION: Implements Step 3 of instructions.
+        # Calculates MACD aligned variables and computes the Options IV Edge from historical vol and ATR.
+        res = self.calculate_technical_metrics(raw_tech_data, transactions_df)
+        for ticker, metrics in res.items():
+            metrics['MACD'] = metrics.get('MACD_Line', 0.0)
+            df = raw_tech_data.get(ticker)
+            if df is not None and not df.empty and len(df) >= 14:
+                try:
+                    returns = df['Close'].pct_change().dropna()
+                    atr_series = df['ATR'] if 'ATR' in df.columns else ta.atr(df['High'], df['Low'], df['Close'], length=14)
+                    close_arr = df['Close'].to_numpy()
+                    
+                    options_edge = self.research_engine.calculate_options_volatility_edge(
+                        historical_vol=float(returns.std() * math.sqrt(252)), 
+                        atr=float(atr_series.iloc[-1]), 
+                        price=float(close_arr[-1])
+                    )
+                    metrics['Options IV Edge'] = options_edge
+                except Exception as e:
+                    logging.warning(f"Vectorized Options IV Edge calculation failed for {ticker}: {e}")
+        return res
+
+    # ==========================================================================
+    # ==========================================================================
+    # 3. FUNDAMENTAL ANALYSIS
+    # ==========================================================================
+    def calculate_fundamental_metrics(self, fund_dtos):
+        results = {}
+        for ticker, dto in fund_dtos.items():
+            if not dto:
+                continue
+            try:
+                # EXPLANATION: Safe extraction of raw yfinance info fields stored on the DTO.
+                info = getattr(dto, 'raw_info', {}) or {}
+                price = float(
+                    info.get('regularMarketPrice')
+                    or info.get('previousClose')
+                    or dto.price
+                    or 0.0
+                )
+
+                # F-01 FIX: Dead inline Gordon block removed.
+                # The inline block incorrectly assigned dto.dividend_growth_rate (e.g. 0.04)
+                # as a dollar dividend amount, producing nonsensical sub-$1 valuations.
+                # calculate_gordon_fair_value() is the single authoritative source.
+                gordon_val = self.calculate_gordon_fair_value(
+                    price, dto.dividend_yield, dto.dividend_growth_rate
+                )
+
+                debt_to_equity_raw = info.get('debtToEquity')
+                debt_to_equity = (float(debt_to_equity_raw) / 100.0
+                                  if debt_to_equity_raw else None)
+
+                inst_own = info.get('heldPercentInstitutions')
+                inst_change = (
+                    info.get('netPercentInsiderShares')
+                    or info.get('netPercentInstitutionsSharesOut')
+                )
+                if not inst_change or inst_change == 0.0:
+                    # EXPLANATION: Fallback to monthly change in short interest as a proxy
+                    # for institutional velocity, since Yahoo Finance has removed direct
+                    # institutional transaction keys from the info dictionary.
+                    short_prior = float(info.get('sharesShortPriorMonth', 0.0) or 0.0)
+                    short_curr  = float(info.get('sharesShort', 0.0) or 0.0)
+                    shares_out  = float(info.get('sharesOutstanding', 1.0) or 1.0)
+                    inst_change = (short_prior - short_curr) / shares_out if shares_out > 0 else 0.0
+
+                # 1. Calculate Sector-Adjusted Graham
+                adj_graham = self.research_engine.calculate_sector_adjusted_valuation(
+                    sector=dto.sector, pe=dto.pe_ratio or 0, pb=dto.pb_ratio or 0,
+                    book_value=dto.book_value, eps=dto.eps_trailing, price=price
+                )
+
+                # 2. Apply Real Yield Drag to the sector-adjusted Graham value
+                yield_dragged_val = self.research_engine.calculate_real_yield_drag(adj_graham)
+
+                # 3-6. Calculate the remaining fundamental metrics
+                dps         = self.research_engine.calculate_dividend_premium_spread(dto.dividend_yield)
+                inst_vel    = self.research_engine.calculate_institutional_velocity(inst_own, inst_change)
+                dph         = self.research_engine.calculate_dividend_payback_horizon(
+                                  price, dto.dividend_yield, dto.dividend_growth_rate
+                              )
+                lev_distress = self.research_engine.calculate_leverage_distress_factor(
+                                  dto.sector, debt_to_equity
+                               )
+
+                # Quality Score
+                score = 50
+                if yield_dragged_val > price:  score += 10
+                if dto.dividend_yield > 0.03:  score += 10
+                if dto.beta < 1.0:             score += 5
+
+                results[ticker] = {
+                    'Symbol':                   ticker,
+                    'shortName':                dto.company_name,
+                    'Market Cap':               dto.market_cap,
+                    'sector':                   dto.sector,
+                    'Price_Fund':               price,
+                    'Graham Num':               yield_dragged_val,
+                    'Gordon Fair Value':         gordon_val,   # single authoritative source
+                    'Quality Score':            score,
+                    'Div Yield':                dto.dividend_yield,
+                    'P/E':                      dto.pe_ratio if dto.pe_ratio is not None else 0.0,
+                    'Book Value':               dto.book_value,
+                    'Beta':                     dto.beta,
+                    'DPS':                      dps,
+                    'Institutional Velocity':   inst_vel,
+                    'DPH':                      dph,
+                    'Leverage Distress Factor': lev_distress,
+                }
+            except Exception as e:
+                logging.error(f"Error calculating fundamentals for {ticker}: {e}")
+                continue
+        return results
+
+
+    # ==========================================================================
+    # 4. DASHBOARD COMPILATION
+    # ==========================================================================
+    def compile_dashboard(self, tech_data, fund_data, regime_data):
         final_rows = []
         all_tickers = set(tech_data.keys()) | set(fund_data.keys())
-
+        
         for ticker in all_tickers:
             flat_data = {'Symbol': ticker}
             flat_data.update(tech_data.get(ticker, {}))
             flat_data.update(fund_data.get(ticker, {}))
             
-            pf = flat_data.get('Price_Fund', 0.0)
-            pt = flat_data.get('Price_Tech', 0.0)
+            pf = flat_data.get('Price_Fund', 0)
+            pt = flat_data.get('Price_Tech', 0)
             flat_data['Price'] = pf if pf and pf > 0 else pt
             
             flat_data['Macro Status'] = regime_data.get('Regime', 'Neutral')

@@ -1,124 +1,4 @@
-"""
-InvestYo Quant Platform - Diagnostics & Visualizations
-======================================================
-Step 6 of the Modernization Roadmap: Diagnostic and Visualization Deployment.
 
-Provides structured JSON logging telemetry, a Jinja2 template engine for 
-HTML report generation, and interactive Plotly volatility bands.
-"""
-
-import json
-import logging
-import os
-import numpy as np
-import pandas as pd
-from datetime import datetime
-from typing import List, Dict, Any
-import plotly.graph_objects as go
-from jinja2 import Template
-
-# =============================================================================
-# 1. STRUCTURED JSON TELEMETRY LOGGING
-# =============================================================================
-class JSONFormatter(logging.Formatter):
-    """Formats standard python logs as structured JSON objects for ingestion."""
-    def format(self, record):
-        log_entry = {
-            "timestamp": datetime.fromtimestamp(record.created).isoformat(),
-            "level": record.levelname,
-            "module": record.module,
-            "message": record.getMessage(),
-        }
-        if record.exc_info:
-            log_entry["exception"] = self.formatException(record.exc_info)
-        return json.dumps(log_entry)
-
-def setup_telemetry_logger():
-    """Initializes and returns the telemetry logger config."""
-    logger = logging.getLogger("QuantTelemetry")
-    logger.setLevel(logging.INFO)
-    
-    # Avoid duplicate handlers
-    if not logger.handlers:
-        ch = logging.StreamHandler()
-        formatter = JSONFormatter()
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
-    return logger
-
-# Initialize the global logger instance
-telemetry = setup_telemetry_logger()
-
-
-# =============================================================================
-# 2. PLOTLY VOLATILITY BANDS GENERATION
-# =============================================================================
-def generate_plotly_volatility_bands(df: pd.DataFrame, ticker: str, output_path: str = "volatility_bands.html"):
-    """
-    Renders an interactive Plotly chart featuring price close, 20 SMA,
-    and 2 Standard Deviation Bollinger Bands.
-    """
-    telemetry.info(f"Generating interactive Plotly chart for {ticker}")
-    
-    # Calculate bands
-    sma = df['close'].rolling(window=20).mean()
-    std = df['close'].rolling(window=20).std()
-    upper_band = sma + (std * 2.0)
-    lower_band = sma - (std * 2.0)
-
-    fig = go.Figure()
-
-    # Price Close Line
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['close'],
-        mode='lines',
-        name='Close Price',
-        line=dict(color='#1f77b4', width=2)
-    ))
-
-    # SMA Line
-    fig.add_trace(go.Scatter(
-        x=df.index, y=sma,
-        mode='lines',
-        name='20-day SMA',
-        line=dict(color='#ff7f0e', width=1.5, dash='dash')
-    ))
-
-    # Upper Bollinger Band
-    fig.add_trace(go.Scatter(
-        x=df.index, y=upper_band,
-        mode='lines',
-        name='Upper BB (2.0 Std)',
-        line=dict(color='rgba(46, 204, 113, 0.4)', width=1)
-    ))
-
-    # Lower Bollinger Band
-    fig.add_trace(go.Scatter(
-        x=df.index, y=lower_band,
-        mode='lines',
-        name='Lower BB (2.0 Std)',
-        line=dict(color='rgba(231, 76, 60, 0.4)', width=1),
-        fill='tonexty',
-        fillcolor='rgba(200, 200, 200, 0.1)'
-    ))
-
-    fig.update_layout(
-        title=f'{ticker} Price Volatility Bands (Bollinger)',
-        xaxis_title='Date',
-        yaxis_title='Price ($)',
-        template='plotly_dark',
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-    )
-
-    fig.write_html(output_path, include_plotlyjs='cdn')
-    telemetry.info(f"Plotly chart saved successfully to {output_path}")
-    return output_path
-
-
-# =============================================================================
-# 3. JINJA2 TELEMETRY HTML REPORTS
-# =============================================================================
-HTML_REPORT_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -516,7 +396,7 @@ HTML_REPORT_TEMPLATE = """
                 <h1>InvestYo Quantitative Portfolio Report</h1>
                 <div class="timestamp">Automated Strategy Engine Run</div>
             </div>
-            <div class="timestamp">Generated on: {{ current_time }}</div>
+            <div class="timestamp">Generated on: 2026-06-23 12:24:35</div>
         </header>
 
         <!-- Interactive Control Panel -->
@@ -525,16 +405,16 @@ HTML_REPORT_TEMPLATE = """
             <div class="panel-subtitle">Simulate real-time tactical asset allocation transitions by adjusting risk tolerances below:</div>
             <div class="control-grid">
                 <div class="control-item">
-                    <label class="control-label">Yield Curve Inversion Threshold (T10Y2Y): <span id="val-yield-curve-thresh">{{ yield_curve }}%</span></label>
-                    <input type="range" id="yield-curve-thresh" min="-1.00" max="0.00" step="0.05" value="{{ yield_curve }}" oninput="document.getElementById('val-yield-curve-thresh').textContent = this.value + '%'; recalculate();">
+                    <label class="control-label">Yield Curve Inversion Threshold (T10Y2Y): <span id="val-yield-curve-thresh">0.68%</span></label>
+                    <input type="range" id="yield-curve-thresh" min="-1.00" max="0.00" step="0.05" value="0.68" oninput="document.getElementById('val-yield-curve-thresh').textContent = this.value + '%'; recalculate();">
                 </div>
                 <div class="control-item">
-                    <label class="control-label">High-Yield Credit Spread (BAMLH0A0HYM2): <span id="val-credit-spread-thresh">{{ credit_spread }}%</span></label>
-                    <input type="range" id="credit-spread-thresh" min="3.5" max="8.0" step="0.1" value="{{ credit_spread }}" oninput="document.getElementById('val-credit-spread-thresh').textContent = parseFloat(this.value).toFixed(2) + '%'; recalculate();">
+                    <label class="control-label">High-Yield Credit Spread (BAMLH0A0HYM2): <span id="val-credit-spread-thresh">4.45%</span></label>
+                    <input type="range" id="credit-spread-thresh" min="3.5" max="8.0" step="0.1" value="4.45" oninput="document.getElementById('val-credit-spread-thresh').textContent = parseFloat(this.value).toFixed(2) + '%'; recalculate();">
                 </div>
                 <div class="control-item">
-                    <label class="control-label">Sahm Rule Recession Indicator: <span id="val-sahm-rule-thresh">{{ sahm_rule }}%</span></label>
-                    <input type="range" id="sahm-rule-thresh" min="0.30" max="1.00" step="0.05" value="{{ sahm_rule }}" oninput="document.getElementById('val-sahm-rule-thresh').textContent = parseFloat(this.value).toFixed(2) + '%'; recalculate();">
+                    <label class="control-label">Sahm Rule Recession Indicator: <span id="val-sahm-rule-thresh">0.0%</span></label>
+                    <input type="range" id="sahm-rule-thresh" min="0.30" max="1.00" step="0.05" value="0.0" oninput="document.getElementById('val-sahm-rule-thresh').textContent = parseFloat(this.value).toFixed(2) + '%'; recalculate();">
                 </div>
                 <div class="control-item">
                     <label class="control-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; margin-top: 10px;">
@@ -550,8 +430,8 @@ HTML_REPORT_TEMPLATE = """
         <div class="regime-banner">
             <div class="regime-info">
                 <span class="regime-title">Systemic Regime Assessment</span>
-                <span id="regime-badge" class="badge {% if regime == 'RECESSION' %}badge-recession{% elif regime == 'CREDIT EVENT' %}badge-credit-event{% elif regime == 'RISK ON' %}badge-risk-on{% else %}badge-neutral{% endif %}">
-                    {{ regime }}
+                <span id="regime-badge" class="badge badge-risk-on">
+                    RISK ON
                 </span>
             </div>
             <div class="timestamp" style="font-size: 13px;">
@@ -574,42 +454,43 @@ HTML_REPORT_TEMPLATE = """
                     </tr>
                 </thead>
                 <tbody>
-                    {% for row in portfolio_data %}
+                    {% for row in portfolio_rows %}
                     <tr id="row-{{ row.Symbol }}">
                         <td><strong>{{ row.Symbol }}</strong></td>
                         <td>${{ "%.2f"|format(row.Price) }}</td>
                         <td>
-                            <span id="signal-{{ row.Symbol }}" class="signal-tag signal-{{ row['Action Signal']|replace(' ', '_') }}">
+                            <span id="signal-{{ row.Symbol }}" class="signal-tag signal-{{ row['Action Signal']|replace(' ', '_') if row['Action Signal'] else '' }}">
                                 {{ row['Action Signal'] }}
                             </span>
                         </td>
                         <td id="sizing-{{ row.Symbol }}">
                             <strong style="color: var(--accent-color);">
-                                {% if row['Kelly Target'] is not none %}
-                                    {{ "%.2f"|format(row['Kelly Target'] * 100) }}%
+                                {% set kelly = row['Kelly Target'] %}
+                                {% if kelly is not none %}
+                                    {{ "%.2f"|format(kelly * 100) }}%
                                 {% else %}
                                     0.00%
                                 {% endif %}
                             </strong> (Half-Kelly)
                         </td>
-                        <td>{{ row['Option Strategy'] or 'N/A' }}</td>
-                        <td><code id="range-{{ row.Symbol }}" style="background-color: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-size: 12px;">{{ row.buyRange or 'N/A' }}</code></td>
+                        <td>{{ row['Option Strategy'] if row['Option Strategy'] else 'N/A' }}</td>
+                        <td><code id="range-{{ row.Symbol }}" style="background-color: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-size: 12px;">{{ row.buyRange if row.buyRange else 'N/A' }}</code></td>
                     </tr>
                     {% endfor %}
-                </tbody>
+</tbody>
             </table>
         </div>
 
         <!-- Detailed Insights Section -->
         <h2 style="font-size: 18px; margin-bottom: 20px; font-weight: 600; border-left: 4px solid var(--accent-color); padding-left: 10px;">Security-by-Security Deep Dive & Strategy Details</h2>
         <div class="ticker-grid">
-            {% for row in portfolio_data %}
+            {% for row in portfolio_rows %}
             <div class="ticker-card">
                 <div class="ticker-card-header">
                     <div class="ticker-identity">
                         <h2>{{ row.Symbol }}</h2>
-                        <div class="company-name">{{ row.shortName or 'Company Profile' }}</div>
-                        <div class="ticker-sector">{{ row.sector or 'Sector N/A' }}</div>
+                        <div class="company-name">{{ row.shortName }}</div>
+                        <div class="ticker-sector">{{ row.sector }}</div>
                     </div>
                     <div class="ticker-price-info">
                         <div class="ticker-price">${{ "%.2f"|format(row.Price) }}</div>
@@ -618,95 +499,47 @@ HTML_REPORT_TEMPLATE = """
                 </div>
 
                 <div class="metrics-grid">
-                    <!-- Column 1: Valuation -->
                     <div class="metrics-section">
                         <div class="metrics-section-title">Valuation & Fundamentals</div>
-                        <div class="metric-row">
-                            <span class="metric-label">Graham Number</span>
-                            <span class="metric-value">{% if row['Graham Num'] is not none and row['Graham Num'] > 0 %}${{ "%.2f"|format(row['Graham Num']) }}{% else %}N/A{% endif %}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Gordon Fair Value</span>
-                            <span class="metric-value">{% if row['Gordon Fair Value'] is not none and row['Gordon Fair Value'] > 0 %}${{ "%.2f"|format(row['Gordon Fair Value']) }}{% else %}N/A{% endif %}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Dividend Yield</span>
-                            <span class="metric-value">{% if row['Div Yield'] is not none %}{{ "%.2f"|format(row['Div Yield'] * 100) }}%{% else %}0.00%{% endif %}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Trailing P/E</span>
-                            <span class="metric-value">{% if row['P/E'] is not none and row['P/E'] > 0 %}{{ "%.2f"|format(row['P/E']) }}{% else %}N/A{% endif %}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Book Value</span>
-                            <span class="metric-value">{% if row['Book Value'] is not none %}${{ "%.2f"|format(row['Book Value']) }}{% else %}N/A{% endif %}</span>
-                        </div>
+                        <div class="metric-row"><span class="metric-label">Graham Number</span><span class="metric-value">${{ "%.2f"|format(row.graham_number) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Gordon Fair Value</span><span class="metric-value">${{ "%.2f"|format(row['Gordon Fair Value']) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Dividend Yield</span><span class="metric-value">{{ "%.2f"|format(row['Div Yield']) }}%</span></div>
+                        <div class="metric-row"><span class="metric-label">Trailing P/E</span><span class="metric-value">{{ "%.2f"|format(row['P/E']) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Book Value</span><span class="metric-value">${{ "%.2f"|format(row['Book Value']) }}</span></div>
                     </div>
 
-                    <!-- Column 2: Risk & Technicals -->
                     <div class="metrics-section">
                         <div class="metrics-section-title">Risk & Technical Indicators</div>
-                        <div class="metric-row">
-                            <span class="metric-label">RSI (14)</span>
-                            <span class="metric-value">{{ "%.1f"|format(row.RSI or 0.0) }}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Beta</span>
-                            <span class="metric-value">{{ "%.2f"|format(row.Beta or 1.0) }}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Max Drawdown</span>
-                            <span class="metric-value">{{ "%.2f"|format((row.Max_Drawdown or 0.0) * 100) }}%</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">VaR 95%</span>
-                            <span class="metric-value">{{ "%.2f"|format((row['VaR 95'] or 0.0) * 100) }}%</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Sortino Ratio</span>
-                            <span class="metric-value">{% if row['Sortino Ratio'] is not none %}{{ "%.2f"|format(row['Sortino Ratio']) }}{% else %}N/A{% endif %}</span>
-                        </div>
+                        <div class="metric-row"><span class="metric-label">RSI (14)</span><span class="metric-value">{{ "%.1f"|format(row.RSI) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Beta</span><span class="metric-value">{{ "%.2f"|format(row.Beta) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Max Drawdown</span><span class="metric-value">{{ "%.2f"|format(row['Max Drawdown'] * 100) }}%</span></div>
+                        <div class="metric-row"><span class="metric-label">VaR 95%</span><span class="metric-value">{{ "%.2f"|format(row['VaR 95'] * 100) }}%</span></div>
+                        <div class="metric-row"><span class="metric-label">Sortino Ratio</span><span class="metric-value">{{ "%.2f"|format(row['Sortino Ratio']) }}</span></div>
                     </div>
 
-                    <!-- Column 3: Advanced Quant & Forecasts -->
                     <div class="metrics-section">
                         <div class="metrics-section-title">Quant Metrics & Forecasts</div>
-                        <div class="metric-row">
-                            <span class="metric-label">Institutional Velocity</span>
-                            <span class="metric-value">{{ "%.2f"|format(row['Institutional Velocity'] or 0.0) }}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Tail Dependency (CoVaR)</span>
-                            <span class="metric-value">{% if row['CoVaR Proxy'] is not none %}{{ "%.4f"|format(row['CoVaR Proxy']) }}{% else %}N/A{% endif %}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Forecast (10 Day)</span>
-                            <span class="metric-value">{% if row.Forecast_10 > 0 %}${{ "%.2f"|format(row.Forecast_10) }}{% else %}N/A{% endif %}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Forecast (30 Day)</span>
-                            <span class="metric-value">{% if row.Forecast_30 > 0 %}${{ "%.2f"|format(row.Forecast_30) }}{% else %}N/A{% endif %}</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">Forecast (90 Day)</span>
-                            <span class="metric-value">{% if row.Forecast_90 > 0 %}${{ "%.2f"|format(row.Forecast_90) }}{% else %}N/A{% endif %}</span>
-                        </div>
+                        <div class="metric-row"><span class="metric-label">Institutional Velocity</span><span class="metric-value">{{ "%.2f"|format(row['Institutional Velocity']) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Tail Dependency (CoVaR)</span><span class="metric-value">{{ "%.4f"|format(row['CoVaR Proxy']) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Forecast (10 Day)</span><span class="metric-value">${{ "%.2f"|format(row['Forecast_10']) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Forecast (30 Day)</span><span class="metric-value">${{ "%.2f"|format(row['Forecast_30']) }}</span></div>
+                        <div class="metric-row"><span class="metric-label">Forecast (90 Day)</span><span class="metric-value">${{ "%.2f"|format(row['Forecast_90']) }}</span></div>
                     </div>
                 </div>
 
-                <!-- Callout Box: Strategy Sizing & Explainer Notes -->
                 <div class="advice-callout">
                     <div class="advice-header">
                         <div class="advice-item">
                             <span class="advice-label">Action Signal</span>
-                            <span id="card-signal-{{ row.Symbol }}" class="advice-val signal-{{ row['Action Signal']|replace(' ', '_') }}">{{ row['Action Signal'] }}</span>
+                            <span id="card-signal-{{ row.Symbol }}" class="advice-val signal-{{ row['Action Signal']|replace(' ', '_') if row['Action Signal'] else '' }}">{{ row['Action Signal'] }}</span>
                         </div>
                         <div class="advice-item">
                             <span class="advice-label">Sizing (Half-Kelly)</span>
                             <span class="advice-val" style="color: var(--accent-color);">
                                 <span id="card-sizing-{{ row.Symbol }}">
-                                    {% if row['Kelly Target'] is not none %}
-                                        {{ "%.2f"|format(row['Kelly Target'] * 100) }}%
+                                    {% set kelly = row['Kelly Target'] %}
+                                    {% if kelly is not none %}
+                                        {{ "%.2f"|format(kelly * 100) }}%
                                     {% else %}
                                         0.00%
                                     {% endif %}
@@ -715,32 +548,28 @@ HTML_REPORT_TEMPLATE = """
                         </div>
                         <div class="advice-item">
                             <span class="advice-label">Buy Corridor Range</span>
-                            <span id="card-range-{{ row.Symbol }}" class="advice-val" style="color: var(--success-color);">{{ row.buyRange or 'N/A' }}</span>
+                            <span id="card-range-{{ row.Symbol }}" class="advice-val" style="color: var(--success-color);">{{ row.buyRange if row.buyRange else 'N/A' }}</span>
                         </div>
                         <div class="advice-item">
                             <span class="advice-label">Option Strategy</span>
-                            <span class="advice-val">{{ row['Option Strategy'] or 'N/A' }}</span>
+                            <span class="advice-val">{{ row['Option Strategy'] if row['Option Strategy'] else 'N/A' }}</span>
                         </div>
                     </div>
-                    
-                    <div class="advice-item">
-                        <span class="advice-label" style="margin-bottom: 8px; display: block;">Quantitative Strategy Explainer & Advice</span>
-                        <p id="notes-{{ row.Symbol }}" class="strategy-notes">{{ row['Strategy Explainer Notes'] or 'No strategy details provided.' }}</p>
-                    </div>
+                    <pre id="notes-{{ row.Symbol }}" class="strategy-notes">{{ row['Strategy Explainer Notes'] }}</pre>
                 </div>
             </div>
             {% endfor %}
         </div>
-    </div>
+
 
     <!-- Client-Side Recalculator Script -->
     <script>
-        const portfolioData = {{ portfolio_json | safe }};
+        const portfolioData = {{ portfolio_rows | tojson }};
         const initialMacro = {
-            yieldCurve: {{ yield_curve }},
-            creditSpread: {{ credit_spread }},
-            sahmRule: {{ sahm_rule }},
-            realYield: {{ real_yield }}
+            yieldCurve: 0.68,
+            creditSpread: 4.45,
+            sahmRule: 0.0,
+            realYield: 2.0
         };
 
         function recalculate() {
@@ -965,7 +794,7 @@ HTML_REPORT_TEMPLATE = """
                     if (warnings.length > 0) {
                         verbose.push(`CRITICAL WARNINGS: ${warnings.join(', ')}`);
                     }
-                    notesElem.textContent = verbose.join('\\n');
+                    notesElem.textContent = verbose.join('\n');
                 }
             });
         }
@@ -980,71 +809,3 @@ HTML_REPORT_TEMPLATE = """
     </script>
 </body>
 </html>
-"""
-
-def generate_html_report(portfolio_data: List[Dict[str, Any]], regime: str, output_path: str = "daily_report.html",
-                         yield_curve: float = -0.25, credit_spread: float = 6.0, sahm_rule: float = 0.6, real_yield: float = 2.5):
-    """
-    Renders a clean, styled HTML report using Jinja2 containing
-    portfolio statistics, macro regimes, and interactive simulation controls.
-    """
-    telemetry.info("Generating Daily Jinja2 HTML Report")
-    
-    template = Template(HTML_REPORT_TEMPLATE)
-    
-    # Check if portfolio_data is empty or contains dicts, and convert any NaN/Inf values to None for JSON safety
-    cleaned_portfolio = []
-    for row in portfolio_data:
-        clean_row = {}
-        for k, v in row.items():
-            if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
-                clean_row[k] = None
-            else:
-                clean_row[k] = v
-        cleaned_portfolio.append(clean_row)
-
-    import json
-    portfolio_json = json.dumps(cleaned_portfolio)
-
-    rendered_html = template.render(
-        current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        regime=regime,
-        portfolio_data=cleaned_portfolio,
-        portfolio_json=portfolio_json,
-        yield_curve=yield_curve,
-        credit_spread=credit_spread,
-        sahm_rule=sahm_rule,
-        real_yield=real_yield
-    )
-
-    with open(output_path, "w") as f:
-        f.write(rendered_html)
-        
-    telemetry.info(f"Jinja2 report saved successfully to {output_path}")
-    return output_path
-
-
-# =============================================================================
-# 4. TESTING ROUTINE
-# =============================================================================
-if __name__ == '__main__':
-    # Telemetry logging test
-    telemetry.info("Telemetry system active. Running diagnostic verification.")
-
-    # Generate synthetic price series
-    np.random.seed(42)
-    dates = pd.date_range(start='2024-01-01', periods=100)
-    returns = np.random.normal(0.001, 0.02, len(dates))
-    price = 100 * np.exp(np.cumsum(returns))
-    df_dummy = pd.DataFrame({'close': price}, index=dates)
-
-    # Generate Interactive Plotly chart
-    generate_plotly_volatility_bands(df_dummy, "MOCK")
-
-    # Generate Daily Report
-    mock_portfolio = [
-        {"Symbol": "AAPL", "Price": 180.50, "RSI": 62.4, "Beta": 1.15, "Max_Drawdown": -0.085, "Kelly Target": 0.05, "Action Signal": "BUY", "Option Strategy": "Covered Call", "buyRange": "$175 - $185"},
-        {"Symbol": "AGNC", "Price": 9.80, "RSI": 45.1, "Beta": 0.85, "Max_Drawdown": -0.124, "Kelly Target": 0.02, "Action Signal": "HOLD", "Option Strategy": "None", "buyRange": "$9 - $10"},
-        {"Symbol": "SPY", "Price": 510.20, "RSI": 58.0, "Beta": 1.00, "Max_Drawdown": -0.052, "Kelly Target": 0.10, "Action Signal": "STRONG BUY", "Option Strategy": "Cash Secured Put", "buyRange": "$500 - $515"}
-    ]
-    generate_html_report(mock_portfolio, "NEUTRAL")

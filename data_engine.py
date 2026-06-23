@@ -75,21 +75,26 @@ class DataEngine(IDataProvider):
         """
         if not self.fred:
             logger.warning("FRED API not initialized. Returning baseline defaults.")
-            return {'T10Y2Y': 0.5, 'BAMLH0A0HYM2': 3.5, 'UNRATE': 3.8}
+            return {'T10Y2Y': 0.5, 'BAMLH0A0HYM2': 3.5, 'UNRATE': 3.8, 'VIXCLS': 15.0}
             
         try:
-            # Yield Curve, OAS Corporate Spread, Unemployment
+            # Yield Curve, OAS Corporate Spread, Unemployment, VIX
             t10y2y = self.fred.get_series('T10Y2Y', limit=1).iloc[-1]
             oas = self.fred.get_series('BAMLH0A0HYM2', limit=1).iloc[-1]
             unrate = self.fred.get_series('UNRATE', limit=1).iloc[-1]
+            try:
+                vix = self.fred.get_series('VIXCLS', limit=5).dropna().iloc[-1]
+            except Exception:
+                vix = 15.0
             return {
                 'T10Y2Y': float(t10y2y),
                 'BAMLH0A0HYM2': float(oas),
-                'UNRATE': float(unrate)
+                'UNRATE': float(unrate),
+                'VIXCLS': float(vix)
             }
         except Exception as e:
             logger.error(f"Error fetching economic data from FRED: {e}")
-            return {'T10Y2Y': 0.5, 'BAMLH0A0HYM2': 3.5, 'UNRATE': 3.8}
+            return {'T10Y2Y': 0.5, 'BAMLH0A0HYM2': 3.5, 'UNRATE': 3.8, 'VIXCLS': 15.0}
 
     def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
         """

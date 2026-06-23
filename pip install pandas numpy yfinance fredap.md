@@ -1,9 +1,14 @@
-pip install pandas numpy yfinance fredapi gspread gspread-dataframe pytest
+```bash
+# IMPORTANT: The platform explicitly rejects pgsqlite in favor of Python's native sqlite3 module
+# alongside SQLAlchemy and psycopg2-binary. 'QuantFAA' and 'arch' are strictly required.
+pip install pandas numpy yfinance fredapi gspread gspread-dataframe pytest scikit-learn statsmodels scipy SQLAlchemy psycopg2-binary openai anthropic arch prophet google-cloud-language QuantFAA pandas-datareader pandas-ta
+```
 
 #### 2. Verify Your Decoupled Architecture Locally
-Run the test suite using `pytest` to verify the mathematical convergence of your vectorized indicators:
+Run the test suite using `python3 -m pytest` to verify the mathematical convergence of your vectorized indicators:
 ```bash
-pytest -v tests/test_quantitative_models.py
+python3 -m pytest tests/test_quantitative_models.py
+```
 This runs the isolated, high-precision mathematical tests without touching external network connections or API end-points.
 
 ---
@@ -23,8 +28,10 @@ You are operating on the "InvestYo Quant Platform", a highly modular, decoupled 
 2. SYSTEM DECOUPLING (data_engine.py): Decoupling is enforced via the 'IDataProvider' abstract interface. Any modification to data acquisition or parsing patterns must implement 'IDataProvider'.
 3. VECTORIZATION (processing_engine.py): Iterative 'for' loops or '.iterrows()' calculations over price series are strictly banned. All technical indicators, moving averages, and momentum parameters MUST be computed as vector expressions over whole Pandas series.
 4. SYSTEM INTEGRITY (tests/test_quantitative_models.py): Any code alteration MUST be accompanied by a corresponding validation suite addition. Algorithmic drift of indicators is bounded strictly below 0.00001.
+5. GRAVITY AI VERIFICATION (ai_verification_prompts.py): You MUST utilize the 6-step Gravity AI Auditor rules prior to any strategy deployment. The 6 steps must be executed via the `ai_verification_prompts.py` script to ensure that strategies are rigorously validated for edge cases, mathematical correctness, architectural integrity, and robust scaling.
 
 When adding features, optimize first for mathematical accuracy, then computational scale, and strictly respect this decoupled design.
+```
 
 ---
 
@@ -34,7 +41,8 @@ You can connect **NotebookLM** directly to your newly modernized system as an el
 #### Step 1: Export Your System Corpus
 Compile your entire modernized modular architecture into a clean, comprehensive Markdown document:
 ```bash
-cat config.py schema_registry.py dto_models.py data_engine.py processing_engine.py tests/test_quantitative_models.py > quant_platform_corpus.md
+cat config.py dto_models.py data_engine.py processing_engine.py research_engine.py strategy_engine.py forecasting_engine.py diagnostics_and_visuals.py database_setup.py AI_Verification_Prompts.py "Gravity AI Review Suite.py"evaluation_engine.py technical_options_engine.py macro_engine.py simulation_engine.py reporting_engine.py main.py main_orchestrator.py data_ingestion.py tests/test_quantitative_models.py > quant_platform_corpus.md
+```
 
 #### Step 2: Ingest the Corpus into NotebookLM
 1. Open [NotebookLM](https://notebooklm.google.com/).
