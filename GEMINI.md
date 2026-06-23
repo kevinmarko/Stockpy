@@ -24,7 +24,7 @@ Advanced Research Metrics (New): Computes realized portfolio slippage from histo
 
 Fundamental Processing: The ProcessingEngine strictly maps Graham Number and Gordon Fair Value valuations independently to prevent dictionary key collisions.
 
-AI Verification Suite (New): A 6-step static analysis and simulation sandbox managed by ai_verification_prompts.py to ensure rigorous auditing of strategies prior to deployment. Uses openai/anthropic for LLM agent integration.
+AI Verification Suite (New): A 6-step static analysis and simulation sandbox managed by AI_Verification_Prompts.py to ensure rigorous auditing of strategies prior to deployment. Uses openai/anthropic for LLM agent integration.
 
 2. Tech Stack
 
@@ -64,7 +64,7 @@ dto_models.py (Structures: Object-oriented Data Transfer Objects)
 
 config.py (Schema Definition & SSOT config)
 
-ai_verification_prompts.py (Auditor: 6-step static analysis and simulation sandbox for AI agents)
+AI_Verification_Prompts.py (Auditor: 6-step static analysis and simulation sandbox for AI agents)
 
 Preferred Patterns (Strictly Enforced):
 
@@ -92,4 +92,4 @@ CALIBRATED STRATEGY CORRIDORS (strategy_engine.py): Sizing recommendations and a
 
 SIMULATION BEFORE DEPLOYMENT (simulation_engine.py): Any new trading rule or strategy must be optimized via vectorbt and run through backtrader with a standard 0.1% commission and 0.05% slippage model to prove viability.
 
-GRAVITY AI VERIFICATION (ai_verification_prompts.py): You MUST utilize the ai_verification_prompts.py script and its 6-step Gravity AI Auditor rules prior to any strategy deployment. The AI Verification Suite acts as a static analysis and simulation sandbox to ensure mathematical correctness, edge case handling, and architectural integrity before strategies are permitted to run.
+GRAVITY AI VERIFICATION (AI_Verification_Prompts.py): You MUST utilize the AI_Verification_Prompts.py script and its 6-step Gravity AI Auditor rules prior to any strategy deployment. The AI Verification Suite acts as a static analysis and simulation sandbox to ensure mathematical correctness, edge case handling, and architectural integrity before strategies are permitted to run.
