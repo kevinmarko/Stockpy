@@ -14,8 +14,10 @@ from typing import Dict, Any, Optional
 from scipy.stats import norm
 from scipy.optimize import brentq
 
+from settings import settings
+
 # --- GLOBAL CONSTANTS ---
-RISK_FREE_RATE = 0.045
+RISK_FREE_RATE = settings.RISK_FREE_RATE
 TRADING_DAYS_PER_YEAR = 252
 
 

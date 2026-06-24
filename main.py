@@ -35,11 +35,11 @@ from evaluation_engine import EvaluationEngine
 from technical_options_engine import TechnicalOptionsEngine
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
 import config
+from settings import settings
 
 SHEET_NAME = "Stock Dashboard Py"
 TAB_NAME_INPUT = "Sheet2"
 TAB_NAME_OUTPUT = "FidelityData_Automated"
-FRED_KEY = "38e72b904fd5fbd3a3a40805c4e6086d"
 CREDENTIALS_FILE = "credentials.json"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -53,7 +53,9 @@ def main():
              logging.critical(f"❌ Missing {CREDENTIALS_FILE}")
              return
 
-        de = DataEngine(FRED_KEY)
+        settings.warn_if_fred_key_leaked(logging.getLogger(__name__))
+        settings.ensure_fred_configured()
+        de = DataEngine(settings.FRED_API_KEY)
         pe = ProcessingEngine()
         fe = ForecastingEngine()
         se = StrategyEngine()

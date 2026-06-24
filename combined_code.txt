@@ -4590,7 +4590,7 @@ import config
 SHEET_NAME = "Stock Dashboard Py"
 TAB_NAME_INPUT = "Sheet2"
 TAB_NAME_OUTPUT = "FidelityData_Automated"
-FRED_KEY = "38e72b904fd5fbd3a3a40805c4e6086d"
+FRED_KEY = "<REDACTED_LEAKED_FRED_KEY_ROTATE_ME>"
 CREDENTIALS_FILE = "credentials.json"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -5138,7 +5138,7 @@ from diagnostics_and_visuals import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("MasterOrchestrator")
 
-FRED_KEY = "38e72b904fd5fbd3a3a40805c4e6086d"
+FRED_KEY = "<REDACTED_LEAKED_FRED_KEY_ROTATE_ME>"
 DEFAULT_TICKERS = ["AAPL", "MSFT", "JNJ", "AGNC"]
 
 

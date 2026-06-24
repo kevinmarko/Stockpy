@@ -21,6 +21,7 @@ from research_engine import AdvancedResearchEngine
 
 # --- CONFIGURATION IMPORT ---
 from config import COLUMN_SCHEMA, get_internal_keys
+from settings import settings
 
 class ProcessingEngine:
     
@@ -29,9 +30,9 @@ class ProcessingEngine:
         Initializes the Processing Engine with default risk models.
         """
         self.data_provider = data_provider
-        self.risk_free_rate = 0.0425 
-        self.market_risk_premium = 0.055
-        self.required_return_rate = 0.08
+        self.risk_free_rate = settings.RISK_FREE_RATE
+        self.market_risk_premium = settings.MARKET_RISK_PREMIUM
+        self.required_return_rate = settings.REQUIRED_RETURN_RATE
         self.research_engine = AdvancedResearchEngine(risk_free_rate=self.risk_free_rate)
 
     def calculate_graham_number(self, eps: float, book_value: float) -> float:
