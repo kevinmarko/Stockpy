@@ -2013,6 +2013,170 @@ class GravityAIAuditor:
             audit["error"] = str(e)
         self.report["step_23_qlib_arch_model_registry_audit"] = audit
 
+    def run_pre_trade_risk_gate_audit(self) -> None:
+        """Step 24 — Pre-trade risk gate and kill-switch audit.
+
+        Verifies:
+        (a) GlobalKillSwitch activate/deactivate lifecycle is correct.
+        (b) KillSwitchActiveError is raised by OrderManager before any broker call.
+        (c) PreTradeRiskGate.run_all() short-circuits at first failure.
+        (d) max_correlation_check blocks |r| > 0.85 (positive and negative).
+        (e) market_hours_check respects NYSE RTH (09:30–16:00 ET).
+        (f) RiskCheckResult never fabricates a value on missing context — always passes
+            conservatively (never raises, never returns a non-bool passed field).
+        """
+        audit = {"status": "RUNNING", "checks": {}}
+        try:
+            import pathlib, tempfile, numpy as np, pandas as pd
+            from datetime import datetime, timezone, timedelta
+            from zoneinfo import ZoneInfo
+            from execution.kill_switch import GlobalKillSwitch, KillSwitchActiveError
+            from execution.risk_gate import PreTradeRiskGate, RiskContext
+            from execution.broker_base import (
+                OrderIntent, OrderSide, OrderType, AccountSnapshot, PositionSnapshot,
+            )
+
+            # ── (a) Kill-switch lifecycle ──────────────────────────────────────
+            with tempfile.TemporaryDirectory() as tmp:
+                sentinel = pathlib.Path(tmp) / "KILL_SWITCH"
+                ks = GlobalKillSwitch(sentinel_file=sentinel)
+                is_inactive_before = not ks.is_active()
+                ks.activate(reason="gravity_audit")
+                is_active_after = ks.is_active()
+                stored_reason = "gravity_audit" in ks.reason()
+                ks.deactivate()
+                is_inactive_after = not ks.is_active()
+                audit["checks"]["kill_switch_lifecycle"] = {
+                    "status": "PASSED" if all([
+                        is_inactive_before, is_active_after,
+                        stored_reason, is_inactive_after,
+                    ]) else "FAILED",
+                }
+
+            # ── (b) OrderManager raises KillSwitchActiveError ──────────────────
+            import asyncio, pathlib as pl
+            with tempfile.TemporaryDirectory() as tmp2:
+                sentinel2 = pl.Path(tmp2) / "KILL_SWITCH"
+                ks2 = GlobalKillSwitch(sentinel_file=sentinel2)
+                ks2.activate(reason="audit_block")
+
+                class _MockBroker:
+                    submitted = []
+                    async def submit_order(self, intent): ...
+                    async def cancel_order(self, *a): return True
+                    async def get_open_positions(self): return []
+                    async def get_account(self):
+                        return AccountSnapshot(100_000, 100_000, 200_000)
+                    async def get_orders(self, **kw): return []
+                    async def stream_trade_updates(self): return; yield
+
+                from execution.order_manager import OrderManager
+                mock_broker = _MockBroker()
+                om = OrderManager(mock_broker, kill_switch=ks2)
+                intent = OrderIntent(
+                    strategy_id="gravity", symbol="SPY",
+                    side=OrderSide.BUY, qty=1.0, order_type=OrderType.MARKET,
+                )
+                raised = False
+                try:
+                    asyncio.get_event_loop().run_until_complete(
+                        om.submit_order_with_idempotency(intent)
+                    )
+                except KillSwitchActiveError:
+                    raised = True
+                audit["checks"]["order_manager_raises_on_active_kill_switch"] = {
+                    "status": "PASSED" if raised else "FAILED",
+                }
+
+            # ── (c) run_all() short-circuits at first failure ──────────────────
+            gate = PreTradeRiskGate(
+                max_position_size_pct=0.0001,
+                enforce_market_hours=False,
+            )
+            _intent = OrderIntent(
+                strategy_id="t", symbol="AAPL", side=OrderSide.BUY,
+                qty=1000.0, order_type=OrderType.MARKET,
+            )
+            _ctx = RiskContext(
+                account=AccountSnapshot(100_000, 100_000, 200_000),
+                current_prices={"AAPL": 100.0},
+            )
+            passed_gate, results = gate.run_all(_intent, _ctx)
+            audit["checks"]["run_all_short_circuits"] = {
+                "status": "PASSED" if (
+                    not passed_gate and
+                    results[-1].check_name == "max_position_size" and
+                    len(results) == 1
+                ) else "FAILED",
+            }
+
+            # ── (d) max_correlation_check blocks |r| > 0.85 ───────────────────
+            n = 200
+            rng = np.random.default_rng(42)
+            idx = pd.date_range("2022-01-01", periods=n, freq="B")
+            base = rng.standard_normal(n)
+            df = pd.DataFrame({
+                "SPY": pd.Series(base, index=idx),
+                "AAPL_POS": pd.Series(base + rng.standard_normal(n)*0.01, index=idx),
+                "AAPL_NEG": pd.Series(-base + rng.standard_normal(n)*0.01, index=idx),
+                "GLD": pd.Series(rng.standard_normal(n), index=idx),
+            })
+            gate2 = PreTradeRiskGate(max_correlation=0.85, enforce_market_hours=False)
+            pos_spy = [PositionSnapshot("SPY", 10, 100, 1000, 0)]
+
+            high_pos_blocked = not gate2.max_correlation_check(
+                OrderIntent("t","AAPL_POS",OrderSide.BUY,1.0), RiskContext(returns_df=df,open_positions=pos_spy)
+            ).passed
+            high_neg_blocked = not gate2.max_correlation_check(
+                OrderIntent("t","AAPL_NEG",OrderSide.BUY,1.0), RiskContext(returns_df=df,open_positions=pos_spy)
+            ).passed
+            low_passes = gate2.max_correlation_check(
+                OrderIntent("t","GLD",OrderSide.BUY,1.0), RiskContext(returns_df=df,open_positions=pos_spy)
+            ).passed
+            audit["checks"]["correlation_check_blocks_and_passes"] = {
+                "status": "PASSED" if (high_pos_blocked and high_neg_blocked and low_passes) else "FAILED",
+                "high_positive_blocked": high_pos_blocked,
+                "high_negative_blocked": high_neg_blocked,
+                "low_corr_passes": low_passes,
+            }
+
+            # ── (e) market_hours_check enforces RTH ───────────────────────────
+            et = ZoneInfo("America/New_York")
+            now_et = datetime.now(et)
+            in_rth = now_et.replace(hour=11, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            after_rth = now_et.replace(hour=17, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            gate3 = PreTradeRiskGate(enforce_market_hours=True)
+            _buy = OrderIntent("t","SPY",OrderSide.BUY,1.0)
+            rth_passes = gate3.market_hours_check(_buy, RiskContext(timestamp=in_rth)).passed
+            after_blocked = not gate3.market_hours_check(_buy, RiskContext(timestamp=after_rth)).passed
+            audit["checks"]["market_hours_check"] = {
+                "status": "PASSED" if (rth_passes and after_blocked) else "FAILED",
+            }
+
+            # ── (f) Conservative pass on empty RiskContext ─────────────────────
+            gate4 = PreTradeRiskGate(enforce_market_hours=False)
+            empty_ctx = RiskContext()
+            checks_all_pass = []
+            for fn in [
+                gate4.max_position_size_check, gate4.portfolio_heat_check,
+                gate4.max_correlation_check, gate4.daily_loss_limit_check,
+                gate4.macro_kill_switch_check, gate4.hmm_regime_check,
+                gate4.stress_scenario_check, gate4.minimum_validation_check,
+                gate4.max_order_rate_check,
+            ]:
+                r = fn(_buy, empty_ctx)
+                checks_all_pass.append(r.passed and isinstance(r.passed, bool))
+            audit["checks"]["conservative_pass_on_empty_context"] = {
+                "status": "PASSED" if all(checks_all_pass) else "FAILED",
+            }
+
+            all_passed = all(v["status"] == "PASSED" for v in audit["checks"].values())
+            audit["status"] = "PASSED" if all_passed else "FAILED"
+        except Exception as e:
+            audit["status"] = "ERROR"
+            audit["error"] = str(e)
+        self.report["step_24_pre_trade_risk_gate_audit"] = audit
+
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
         self.run_schema_audit()
@@ -2035,6 +2199,7 @@ class GravityAIAuditor:
         self.run_stress_scenario_audit()
         self.run_triple_barrier_meta_label_audit()
         self.run_qlib_arch_model_registry_audit()
+        self.run_pre_trade_risk_gate_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================

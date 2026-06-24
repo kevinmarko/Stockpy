@@ -57,6 +57,44 @@ class Settings(BaseSettings):
     ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
     ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
     ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
+    # --- Order management (execution/order_manager.py) ---
+    # When True the orchestrator logs intended orders but never submits them.
+    # Override via CLI --dry-run flag or DRY_RUN=true in .env.
+    DRY_RUN: bool = Field(default=False, description="Log orders but do not submit to broker.")
+    # Slack / Discord incoming-webhook URL for reconciliation drift alerts.
+    ALERT_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Webhook URL for CRITICAL drift alerts (Slack/Discord incoming webhook).",
+    )
+
+    # --- Pre-trade risk gate (execution/risk_gate.py) ---
+    MAX_CORRELATION: float = Field(
+        default=0.85,
+        description="Max pairwise return correlation allowed between a new position and any existing position.",
+    )
+    DAILY_LOSS_LIMIT_PCT: float = Field(
+        default=0.02,
+        description="Halt new BUY orders when intraday P&L drops below this fraction of start-of-day equity.",
+    )
+    MAX_ORDER_RATE_PER_MIN: int = Field(
+        default=10,
+        description="Maximum order submissions in any 60-second rolling window.",
+    )
+    HMM_RISK_OFF_BLOCK_THRESHOLD: float = Field(
+        default=0.80,
+        description="Block new long orders when HMM risk-off probability exceeds this value.",
+    )
+    RISK_GATE_ENFORCE_MARKET_HOURS: bool = Field(
+        default=True,
+        description="When True, block orders outside NYSE regular trading hours (09:30–16:00 ET).",
+    )
+    # --- Global kill switch (execution/kill_switch.py) ---
+    # When KILL_SWITCH_FILE exists (OUTPUT_DIR/KILL_SWITCH), all order submission
+    # is blocked.  FLATTEN_ON_KILL (future extension) would auto-close positions.
+    FLATTEN_ON_KILL: bool = Field(
+        default=False,
+        description="If True, activate a position-flattening routine when the kill switch fires.",
+    )
 
     # --- Financial constants ---
     RISK_FREE_RATE: float = 0.045
