@@ -104,6 +104,9 @@ class Settings(BaseSettings):
             # but the explicit 0.0 here documents and lets Gravity audit the
             # "no directional alpha" invariant structurally.
             "regime_multiplier": 0.0,
+            # LightGBM cross-sectional ranker (one ensemble member — modest weight
+            # until the model accumulates enough history to earn a larger share).
+            "lgbm_ranker": 0.10,
         },
         description="Weights for individual quantitative signal modules."
     )
@@ -116,6 +119,21 @@ class Settings(BaseSettings):
             "cross-sectional z-scoring population in signals/multifactor.py "
             "and receive a neutral (0.0) score rather than fabricated factor "
             "exposure."
+        ),
+    )
+
+    # --- Meta-labeling (ml/meta_labeling.py) ---
+    # Hard gate: if any primary signal's MetaLabeler returns P(correct) below
+    # this threshold, SignalAggregator sets meta_label_composite = 0.0, which
+    # zeroes the Kelly Target for that cycle. Only applies when a MetaLabeler
+    # is registered for that signal in global_meta_registry; default is 1.0
+    # (no-op) when no MetaLabeler is registered.
+    META_LABEL_MIN_CONFIDENCE: float = Field(
+        default=0.4,
+        description=(
+            "Minimum meta-label probability for a primary signal to contribute "
+            "to sizing. If predict_proba < META_LABEL_MIN_CONFIDENCE, the "
+            "meta_label_composite is forced to 0.0 (position zeroed for the cycle)."
         ),
     )
 

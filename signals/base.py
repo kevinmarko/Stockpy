@@ -46,6 +46,9 @@ class SignalContext:
     macro: MacroEconomicDTO
     xsec_percentile_ranks: Dict[str, float] = field(default_factory=dict)
     multifactor_scores: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    # Per-ticker LGBM cross-sectional rank percentiles (populated by
+    # LGBMRankerSignal.pre_compute; empty dict = module did not run this cycle).
+    lgbm_scores: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

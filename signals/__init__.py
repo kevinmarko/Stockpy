@@ -24,3 +24,4 @@ import signals.cross_sectional_momentum
 import signals.rsi2_mean_reversion
 import signals.multifactor
 import signals.regime_multiplier
+import signals.lgbm_ranker
