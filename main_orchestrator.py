@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 
 # Core imports
 import config
+from settings import settings
 from data_engine import DataEngine, MockDataEngine
 from processing_engine import ProcessingEngine
 from macro_engine import MacroEngine
@@ -48,9 +49,6 @@ from diagnostics_and_visuals import (
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("MasterOrchestrator")
-
-FRED_KEY = "38e72b904fd5fbd3a3a40805c4e6086d"
-DEFAULT_TICKERS = ["AAPL", "MSFT", "JNJ", "AGNC"]
 
 
 async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
@@ -387,11 +385,15 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
 async def main():
     telemetry.info("🚀 Launching Master Orchestration Routing Hub...")
     
+    # Surface a CRITICAL alert if the previously leaked FRED key is still in use.
+    settings.warn_if_fred_key_leaked(telemetry)
+
     # Initialize real or mock data engine based on credentials
     creds_exist = os.path.exists("credentials.json")
     if creds_exist:
-        de = DataEngine(FRED_KEY)
-        tickers = DEFAULT_TICKERS
+        settings.ensure_fred_configured()
+        de = DataEngine(settings.FRED_API_KEY)
+        tickers = settings.DEFAULT_TICKERS
     else:
         telemetry.warning("credentials.json not found. Operating with deterministic MockDataEngine.")
         de = MockDataEngine()
@@ -428,10 +430,8 @@ async def main():
             telemetry.error(f"❌ Final compiled DataFrame failed DashboardSchema validation: {schema_err}")
 
     # 4. Reporting & Visualization Output
-        # Determine sandbox-compliant output directory
-        out_dir = "/Users/kevinlee/.gemini/antigravity-ide/brain/838d8722-86ff-4060-b1f4-a8547d2cde16"
-        if not os.path.exists(out_dir):
-            out_dir = "."
+        # Output directory is centrally configured (created on settings load).
+        out_dir = str(settings.OUTPUT_DIR)
 
         primary_ticker = tickers[0]
         primary_hist = tech_raw.get(primary_ticker)
