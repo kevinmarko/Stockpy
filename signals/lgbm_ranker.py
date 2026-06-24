@@ -1,0 +1,106 @@
+"""
+InvestYo Quant Platform - LightGBM Cross-Sectional Ranker SignalModule
+=======================================================================
+Thin wrapper around ml/lgbm_ranker.LGBMCrossSectionalRanker that plugs into
+the two-phase hook pattern used by all cross-sectional signals.
+
+Two-phase:
+  pre_compute(universe_df, context)  — scores today's cross-section and stores
+                                       per-ticker rank in context.lgbm_scores.
+  compute(row, context)              — maps stored rank to [-1, +1] signal score.
+
+Weight: 0.10 (one ensemble member — see settings.SIGNAL_WEIGHTS).
+This module NEVER overrides the rules-based signal stack; it is one input among
+many to SignalAggregator.aggregate().
+
+Monthly retraining is the *caller's* responsibility (main_orchestrator.py or a
+scheduled job); this module just loads the latest persisted model.  If no model
+has been trained yet, it returns 0.0 for every ticker and logs a warning.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict
+
+import numpy as np
+import pandas as pd
+
+from signals.base import SignalContext, SignalModule, SignalOutput
+
+logger = logging.getLogger("Signals.LGBMRanker")
+
+_NAME = "lgbm_ranker"
+
+
+class LGBMRankerSignal(SignalModule):
+    """Cross-sectional LightGBM ranker signal module (weight=0.10)."""
+
+    name = _NAME
+    default_weight = 0.10   # deliberately modest — see CLAUDE.md
+
+    def pre_compute(self, universe_df: pd.DataFrame, context: SignalContext) -> None:
+        """Score the full cross-section using the latest persisted LGBMRanker.
+
+        Stores results in context.lgbm_scores: {ticker -> rank_pct ∈ [0,1]}.
+        Silently returns neutral (0.5) for all tickers if no model is available.
+        """
+        from ml.lgbm_ranker import LGBMCrossSectionalRanker
+        from ml.feature_engineering import build_pit_feature_matrix
+
+        context.lgbm_scores = {}
+
+        if universe_df.empty:
+            return
+
+        try:
+            ranker = LGBMCrossSectionalRanker.load_latest()
+        except Exception as exc:
+            logger.warning("LGBMRankerSignal.pre_compute: could not load model: %s. Neutral.", exc)
+            ranker = None
+
+        vix = getattr(getattr(context, "macro", None), "vix", None)
+
+        try:
+            feat_df = build_pit_feature_matrix(
+                universe_df,
+                as_of_date=getattr(context, "as_of_date", None),
+                macro_vix=vix,
+            )
+        except Exception as exc:
+            logger.warning("LGBMRankerSignal.pre_compute: feature build failed: %s. Neutral.", exc)
+            context.lgbm_scores = {t: 0.5 for t in universe_df.index}
+            return
+
+        if ranker is None:
+            context.lgbm_scores = {t: 0.5 for t in feat_df.index}
+            return
+
+        try:
+            scores = ranker.predict_score(feat_df)
+            context.lgbm_scores = scores.to_dict()
+        except Exception as exc:
+            logger.warning("LGBMRankerSignal.pre_compute: predict_score failed: %s. Neutral.", exc)
+            context.lgbm_scores = {t: 0.5 for t in feat_df.index}
+
+    def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
+        """Map pre-computed rank percentile to [-1, +1] signal score."""
+        ticker = str(row.get("Symbol", row.name if hasattr(row, "name") else ""))
+        lgbm_scores: dict = getattr(context, "lgbm_scores", {})
+        rank = lgbm_scores.get(ticker, 0.5)
+
+        if rank != rank:  # NaN guard
+            rank = 0.5
+
+        # Linear map: rank 1.0 -> +1.0, rank 0.0 -> -1.0
+        score = 2.0 * (float(rank) - 0.5)
+        score = float(np.clip(score, -1.0, 1.0))
+
+        return SignalOutput(
+            name=_NAME,
+            score=score,
+            weight=self.default_weight,
+            explanation=f"LGBM cross-sectional rank={rank:.3f}",
+            confidence=1.0,
+        )

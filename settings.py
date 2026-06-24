@@ -104,6 +104,9 @@ class Settings(BaseSettings):
             # but the explicit 0.0 here documents and lets Gravity audit the
             # "no directional alpha" invariant structurally.
             "regime_multiplier": 0.0,
+            # LightGBM cross-sectional ranker (one ensemble member — modest weight
+            # until the model accumulates enough history to earn a larger share).
+            "lgbm_ranker": 0.10,
         },
         description="Weights for individual quantitative signal modules."
     )
