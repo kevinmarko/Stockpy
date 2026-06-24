@@ -36,6 +36,7 @@ from technical_options_engine import TechnicalOptionsEngine
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
 import config
 from settings import settings
+from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
 
 SHEET_NAME = "Stock Dashboard Py"
 TAB_NAME_INPUT = "Sheet2"
@@ -159,8 +160,12 @@ def main():
                 logging.warning(f"Could not load Transactions.csv: {e}")
 
     # Process technical metrics and fundamental metrics
-    tech_metrics = pe.calculate_technical_metrics(tech_raw, transactions_df=transactions_df) 
-    fund_metrics = pe.calculate_fundamental_metrics(fund_dtos)
+    tech_metrics = pe.calculate_technical_metrics(tech_raw, transactions_df=transactions_df)
+    realized_vol_60d_map = {
+        ticker: metrics.get('Realized_Vol_60D', float('nan'))
+        for ticker, metrics in tech_metrics.items()
+    }
+    fund_metrics = pe.calculate_fundamental_metrics(fund_dtos, realized_vol_60d_map=realized_vol_60d_map)
     
     dashboard_df = pe.compile_dashboard(tech_metrics, fund_metrics, regime_data)
     # EXPLANATION: Inject portfolio-wide slippage and tail dependency risk (CoVaR Proxy) for all rows.
@@ -171,13 +176,16 @@ def main():
     # Instantiate TechnicalOptionsEngine and calculate advanced indicators
     toe = TechnicalOptionsEngine()
     dashboard_df['GARCH_Vol'] = 0.0
-    dashboard_df['IVR'] = 0.0
+    dashboard_df['Realized_Vol_Rank'] = 0.0
+    dashboard_df['True_IVR'] = 0.0
+    dashboard_df['VRP'] = 0.0
     dashboard_df['Aroon Oscillator'] = 0.0
     dashboard_df['Coppock Curve'] = 0.0
     dashboard_df['Chandelier Exit'] = 0.0
     
     tech_opt_strategies = {}
     tech_opt_indicators = {}
+    iv_store = IVHistoryStore()
     
     for index, row in dashboard_df.iterrows():
         ticker = row.get('Symbol')
@@ -186,14 +194,35 @@ def main():
             try:
                 indicators = toe.calculate_indicators(df_hist)
                 vol = toe.estimate_gjr_garch_volatility(df_hist)
-                ivr = toe.calculate_ivr(df_hist, vol)
+                realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
+                
+                # Fetch options chain / compute true 30d ATM IV
+                as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
+                price_val = float(row.get('Price', 100.0))
+                
+                current_iv = float('nan')
+                if de is not None:
+                    current_iv = get_30d_atm_iv(de, ticker, as_of_date, spot_price=price_val)
+                    if not np.isnan(current_iv):
+                        iv_store.record_iv(ticker, as_of_date, current_iv)
+                
+                true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
+                vrp = get_vrp(ticker, current_iv, vol)
+                
                 opt_strat = toe.generate_option_strategy_matrix(
-                    ivr, indicators["Aroon_Oscillator"], indicators["Coppock_Curve"],
-                    stock_price=row.get('Price', 100.0), current_iv=vol
+                    true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
+                    aroon_osc=indicators["Aroon_Oscillator"],
+                    coppock_val=indicators["Coppock_Curve"],
+                    stock_price=price_val,
+                    current_iv=current_iv if not np.isnan(current_iv) else vol,
+                    vrp=vrp,
+                    macro_dto=macro_dto
                 )
                 
                 dashboard_df.at[index, 'GARCH_Vol'] = vol
-                dashboard_df.at[index, 'IVR'] = ivr
+                dashboard_df.at[index, 'Realized_Vol_Rank'] = realized_vol_rank
+                dashboard_df.at[index, 'True_IVR'] = true_ivr
+                dashboard_df.at[index, 'VRP'] = vrp
                 dashboard_df.at[index, 'Aroon Oscillator'] = indicators["Aroon_Oscillator"]
                 dashboard_df.at[index, 'Coppock Curve'] = indicators["Coppock_Curve"]
                 dashboard_df.at[index, 'Chandelier Exit'] = indicators["Chandelier_Long"]
@@ -291,6 +320,8 @@ def main():
             rs_val = float(row.get('Relative_Strength', row.get('RS vs SPY', row.get('Relative Strength', 0.0))))
             garch_val = float(row.get('GARCH_Vol', 0.0))
             edge_val = float(row.get('Edge Ratio', row.get('Edge_Ratio', 0.0)))
+            rsi_2_val = float(row.get('RSI_2', 50.0)) if pd.notna(row.get('RSI_2', 50.0)) else 50.0
+            sma_5_val = float(row.get('SMA_5')) if pd.notna(row.get('SMA_5')) else None
             chan_long = 0.0
             chan_short = 0.0
             if ticker in tech_opt_indicators:
@@ -314,7 +345,11 @@ def main():
                 garch_vol=garch_val,
                 edge_ratio=edge_val,
                 chandelier_long=chan_long,
-                chandelier_short=chan_short
+                chandelier_short=chan_short,
+                roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
+                sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
+                rsi_2=rsi_2_val,
+                sma_5=sma_5_val
             )
 
             # Map strategy fields
@@ -349,18 +384,11 @@ def main():
         except Exception as e:
             logging.error(f"Strategy evaluation failed for {ticker}: {e}")
 
-    # CRITICAL FIX 1: Map 'Avg Cost' to 'Entry_Price' for MFE/MAE
-    if 'Avg Cost' in dashboard_df.columns and 'Entry_Price' not in dashboard_df.columns:
+    # Map 'Avg Cost' to 'Entry_Price' if present
+    if 'Avg Cost' in dashboard_df.columns:
         dashboard_df['Entry_Price'] = dashboard_df['Avg Cost']
-    elif 'Entry_Price' not in dashboard_df.columns:
-        dashboard_df['Entry_Price'] = dashboard_df['Price'] # Fallback proxy to prevent NaNs
 
-    # Ensure High/Low exist for excursion calculations
-    if 'Price' in dashboard_df.columns:
-        if 'High' not in dashboard_df.columns: dashboard_df['High'] = dashboard_df['Price'] * 1.05
-        if 'Low' not in dashboard_df.columns: dashboard_df['Low'] = dashboard_df['Price'] * 0.95
-
-    # CRITICAL FIX 2: Map 'Shares' to 'position_size' for Portfolio Heat
+    # Map 'Shares' to 'position_size' for Portfolio Heat
     if 'Shares' in dashboard_df.columns and 'Price' in dashboard_df.columns:
         dashboard_df['position_size'] = dashboard_df['Shares'] * dashboard_df['Price']
     elif 'position_size' not in dashboard_df.columns:
@@ -400,15 +428,19 @@ def main():
         benchmark_df = pd.DataFrame()
 
     if not dashboard_df.empty:
-        dashboard_df = ee.evaluate_portfolio(dashboard_df, benchmark_df)
+        dashboard_df = ee.evaluate_portfolio(dashboard_df, benchmark_df, data_provider=tech_raw)
 
-    # CRITICAL FIX 4: Eradicate NaNs before Google Sheets Export
-    export_keys = ['MAE', 'MFE', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection']
+    # CRITICAL FIX 4: Handle NaNs/values before Google Sheets Export
+    export_keys = ['MAE', 'MFE', 'Edge Ratio', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection']
     for key in export_keys:
         if key in dashboard_df.columns:
-            dashboard_df[key] = dashboard_df[key].fillna(0.0)
+            if key not in ['MAE', 'MFE', 'Edge Ratio']:
+                dashboard_df[key] = dashboard_df[key].fillna(0.0)
         else:
-            dashboard_df[key] = 0.0
+            if key not in ['MAE', 'MFE', 'Edge Ratio']:
+                dashboard_df[key] = 0.0
+            else:
+                dashboard_df[key] = np.nan
 
     # Validate compile dashboard dataframe structure
     if not dashboard_df.empty:
@@ -428,7 +460,9 @@ def main():
         if h not in export_df.columns: export_df[h] = 0
             
     export_df = export_df[final_headers]
-    export_df = export_df.replace([np.inf, -np.inf], 0).fillna(0)
+    export_df = export_df.replace([np.inf, -np.inf], np.nan)
+    cols_to_fill = [c for c in export_df.columns if c not in ["Max Adverse Excursion (MAE)", "Max Favorable Excursion (MFE)", "Edge Ratio"]]
+    export_df[cols_to_fill] = export_df[cols_to_fill].fillna(0)
     
     # DEBUG DUMPS
     dashboard_df.to_csv("dashboard_df_debug.csv", index=False)

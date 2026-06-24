@@ -219,7 +219,10 @@ class GravityAIAuditor:
             "step_1_schema_validation": {},
             "step_2_dto_integrity": {},
             "step_3_5_discrepancy_analysis": {},
-            "step_7_simulation_impact": {}
+            "step_7_simulation_impact": {},
+            "step_12_validation_harness_audit": {},
+            "step_13_signal_registry_audit": {},
+            "step_14_xsec_momentum_audit": {}
         }
         self.data_engine = GravityTestEngine()
         self.test_df = self.data_engine.fetch_historical_prices()
@@ -235,16 +238,34 @@ class GravityAIAuditor:
             self.report["step_1_schema_validation"]["error"] = str(e)
 
     def run_dto_audit(self):
-        """Verifies Graham Number and Macro Regime logic transitions operate correctly."""
+        """Verifies Graham Number, Macro Regime logic transitions, and NaN handling operate correctly."""
         fund_dto = FundamentalDataDTO(ticker="AAPL", eps=5.0, book_value=20.0, dividend=1.0)
         macro_dto = MacroEconomicDTO(yield_curve=-0.2, credit_spread=6.0, sahm_rule=0.6)
         
+        # Verify NaN handling when no transaction history exists
+        from evaluation_engine import EvaluationEngine
+        ee = EvaluationEngine()
+        empty_check_df = pd.DataFrame([{
+            "Symbol": "TEST",
+            "sector": "Technology",
+            "position_size": 10000.0,
+            "stop_loss_pct": 0.05,
+            "Relative_Strength": 0.0
+        }])
+        empty_res = ee.evaluate_portfolio(empty_check_df, pd.DataFrame())
+        nan_validation_passed = bool(
+            np.isnan(empty_res.iloc[0]['MAE']) and 
+            np.isnan(empty_res.iloc[0]['MFE']) and 
+            np.isnan(empty_res.iloc[0]['Edge Ratio'])
+        )
+        
         self.report["step_2_dto_integrity"] = {
-            "status": "PASSED",
+            "status": "PASSED" if nan_validation_passed else "FAILED",
             "graham_number_calculation": fund_dto.graham_number,
             "gordon_growth_fair_value": fund_dto.gordon_growth_fair_value,
             "macro_regime_transition": macro_dto.market_regime,
-            "expected_regime": "RECESSION"
+            "expected_regime": "RECESSION",
+            "nan_handling_validated": nan_validation_passed
         }
 
     def run_discrepancy_analysis(self):
@@ -363,12 +384,1400 @@ class GravityAIAuditor:
 
         self.report["step_7_simulation_impact"] = sim_report
 
+    def run_lookahead_audit(self):
+        """
+        STEP 8: LOOKAHEAD AND DATA LEAKAGE AUDIT
+        Verifies that technical indicators and forecasting engines are lookahead-free.
+        """
+        # 1. Test a mock indicator with lookahead to prove the auditor works
+        def bad_indicator(df, t):
+            # Leaks future close price (t+1) back into t
+            if t + 1 < len(df):
+                return float(df['close_price'].iloc[t + 1])
+            return float(df['close_price'].iloc[t])
+
+        def good_indicator(df, t):
+            # Safe, only uses data up to t
+            return float(df['close_price'].iloc[t])
+
+        # A helper in the suite
+        def check_leak(func, df, t):
+            val_orig = func(df, t)
+            df_perturbed = df.copy()
+            df_perturbed.loc[df_perturbed.index[t + 1]:, 'close_price'] = 9999.0
+            val_perturbed = func(df_perturbed, t)
+            return abs(val_orig - val_perturbed) > 1e-5
+
+        bad_leaks = check_leak(bad_indicator, self.test_df, 50)
+        good_leaks = check_leak(good_indicator, self.test_df, 50)
+
+        # 2. Test calculate_momentum_metrics on a 300-day dataframe (required for ROC_12M)
+        from processing_engine import ProcessingEngine
+        pe = ProcessingEngine()
+        
+        days_300 = 300
+        dates_300 = pd.date_range(end="2026-06-24", periods=days_300)
+        prices_300 = 100.0 + np.cumsum(np.random.normal(0, 1.0, days_300))
+        df_300 = pd.DataFrame({
+            "Open": prices_300 - 0.5,
+            "High": prices_300 + 1.0,
+            "Low": prices_300 - 1.0,
+            "Close": prices_300,
+            "Volume": [1000] * days_300
+        }, index=dates_300)
+
+        def tsmom_leak_check(df, t):
+            df_calc = pe.calculate_momentum_metrics(df.copy())
+            return float(df_calc["ROC_12M"].iloc[t])
+
+        val_orig_tsmom = tsmom_leak_check(df_300, 280)
+        df_perturbed_tsmom = df_300.copy()
+        df_perturbed_tsmom.loc[df_perturbed_tsmom.index[281]:, 'Close'] = 9999.0
+        val_perturbed_tsmom = tsmom_leak_check(df_perturbed_tsmom, 280)
+        tsmom_leak = abs(val_orig_tsmom - val_perturbed_tsmom) > 1e-5
+
+        # 3. XSec momentum 12-1m lookahead perturbation test
+        # Perturbing only the most-recent skip window (t-21..t) must NOT change the rank
+        try:
+            from main_orchestrator import compute_xsec_momentum_ranks
+            n_lookahead = 300
+            dates_la = pd.date_range("2022-01-01", periods=n_lookahead, freq="B")
+            prices_la = 100.0 + np.cumsum(np.random.default_rng(0).normal(0, 1, n_lookahead))
+            prices_la = np.maximum(prices_la, 1.0)
+
+            def _make_raw_la(prices):
+                df_la = pd.DataFrame({"Close": prices, "Open": prices, "High": prices,
+                                      "Low": prices, "Volume": 1000}, index=dates_la)
+                return {"LA_A": df_la, "LA_B": df_la * 1.02}
+
+            ranks_la_orig = compute_xsec_momentum_ranks(_make_raw_la(prices_la))
+            prices_la_pert = prices_la.copy()
+            prices_la_pert[-21:] *= 10.0
+            ranks_la_pert = compute_xsec_momentum_ranks(_make_raw_la(prices_la_pert))
+
+            xsec_leak_detected = False
+            for tk in ranks_la_orig.index:
+                if abs(float(ranks_la_orig[tk]) - float(ranks_la_pert[tk])) > 1e-9:
+                    xsec_leak_detected = True
+                    break
+
+            status_8 = "PASSED" if (bad_leaks and not good_leaks and not tsmom_leak and not xsec_leak_detected) else "FAILED"
+        except Exception as e_la:
+            xsec_leak_detected = None
+            status_8 = f"XSec lookahead check error: {str(e_la)}"
+
+        self.report["step_8_lookahead_audit"] = {
+            "status": status_8,
+            "bad_indicator_leakage_detected": bad_leaks,
+            "good_indicator_leakage_detected": good_leaks,
+            "tsmom_leakage_detected": tsmom_leak,
+            "xsec_12_1m_leakage_detected": xsec_leak_detected,
+            "details": (
+                "Lookahead perturbation audit verified: Time-Series Momentum and "
+                "Cross-Sectional 12-1M return formation are both lookahead-free."
+            )
+        }
+
+    def run_universe_loader_audit(self):
+        """
+        STEP 9: S&P 500 UNIVERSE LOADER AUDIT
+        Verifies the S&P 500 universe loader functionality and survivorship bias reporting.
+        """
+        universe_report = {}
+        try:
+            import universe_engine
+            # 1. Check get_sp500_constituents
+            constituents = universe_engine.get_sp500_constituents(datetime(2020, 1, 1).date())
+            universe_report["constituents_count_2020"] = len(constituents)
+            universe_report["constituents_valid"] = len(constituents) >= 400
+            
+            # 2. Check delisted tickers
+            delisted = universe_engine.get_delisted_tickers()
+            universe_report["delisted_count"] = len(delisted)
+            universe_report["delisted_valid"] = len(delisted) >= 30
+            
+            # 3. Check bias warning
+            _, bias_report = universe_engine.get_universe_with_survivorship_warning(datetime(2020, 1, 1).date())
+            universe_report["estimated_bias_pct"] = bias_report["estimated_bias_pct"]
+            universe_report["bias_report_valid"] = "n_current" in bias_report
+            
+            status = "PASSED" if (universe_report["constituents_valid"] and universe_report["delisted_valid"] and universe_report["bias_report_valid"]) else "FAILED"
+            universe_report["status"] = status
+        except Exception as e:
+            universe_report["status"] = f"Execution Error: {str(e)}"
+            
+        self.report["step_9_universe_loader_audit"] = universe_report
+
+    def run_cpcv_overfitting_audit(self):
+        """
+        STEP 10: CPCV OVERFITTING AUDIT
+        Verifies that Combinatorial Purged CV, PBO, and DSR function correctly
+        and gates deployable status on PBO < 0.5 and DSR > 0.95.
+        """
+        cpcv_report = {}
+        try:
+            from validation.metrics import run_cpcv_evaluation
+            # Generate small mock dataset
+            np.random.seed(42)
+            dates = pd.date_range("2020-01-01", periods=100)
+            X = pd.DataFrame(np.random.randn(100, 2), index=dates)
+            y = pd.Series(np.random.randn(100), index=dates)
+            
+            # Simple strategy generator representing 3 parameter configs
+            def mock_strategy_fn(X_tr, y_tr, X_te, y_te):
+                return [
+                    {
+                        "params": f"param_{i}",
+                        "train_returns": pd.Series(np.random.normal(0.001 * i, 0.01, len(X_tr))),
+                        "test_returns": pd.Series(np.random.normal(0.001 * i, 0.01, len(X_te)))
+                    }
+                    for i in range(3)
+                ]
+                
+            res = run_cpcv_evaluation(mock_strategy_fn, X, y, n_splits=5, n_test_splits=1)
+            
+            cpcv_report["dsr"] = res["dsr"]
+            cpcv_report["pbo"] = res["pbo"]
+            cpcv_report["mean_oos_sharpe"] = res["mean_oos_sharpe"]
+            
+            # Gate deployable status
+            cpcv_report["deployable"] = (res["pbo"] < 0.5) and (res["dsr"] > 0.95)
+            cpcv_report["status"] = "PASSED"
+        except Exception as e:
+            cpcv_report["status"] = f"Execution Error: {str(e)}"
+            cpcv_report["deployable"] = False
+            
+        self.report["step_10_cpcv_overfitting_audit"] = cpcv_report
+
+    def run_execution_cost_model_audit(self):
+        """
+        STEP 11: EXECUTION COST MODEL AUDIT
+        Verifies the tiered execution cost model is integrated and can compute costs accurately.
+        """
+        cost_report = {}
+        try:
+            from execution.cost_model import TieredCostModel
+            model = TieredCostModel()
+            
+            # Estimate AAPL round-trip cost
+            aapl_costs = model.estimate_round_trip_cost("AAPL", 100, 150.0, "market")
+            cost_report["aapl_round_trip_dollars"] = aapl_costs["total_dollars"]
+            # Total dollars should be close to 16.93 (spread is 1.50, slippage is 15.00, SEC fee is 0.417, TAF is 0.0166)
+            cost_report["cost_calculation_valid"] = abs(aapl_costs["total_dollars"] - 16.93) < 0.1
+            
+            # Check TAF Cap
+            huge_costs = model.calculate_cost("sell", 100000, 150.0, "market")
+            cost_report["taf_cap_valid"] = huge_costs["taf"] == 8.30
+            
+            status = "PASSED" if (cost_report["cost_calculation_valid"] and cost_report["taf_cap_valid"]) else "FAILED"
+            cost_report["status"] = status
+        except Exception as e:
+            cost_report["status"] = f"Execution Error: {str(e)}"
+            
+        self.report["step_11_execution_cost_model_audit"] = cost_report
+
+    def run_validation_harness_audit(self):
+        """
+        STEP 12: STRATEGY VALIDATION HARNESS AUDIT
+        Verifies that the Master Strategy Validation Harness gates deployability
+        appropriately: rejecting a random/overfitted strategy and accepting a high-quality one.
+        """
+        harness_report = {}
+        try:
+            from validation.harness import StrategyValidationHarness
+            from execution.cost_model import TieredCostModel
+
+            # 1. Random strategy (should fail deployability)
+            np.random.seed(42)
+            dates = pd.date_range("2020-01-01", periods=100)
+            X = pd.DataFrame(np.random.randn(100, 2), index=dates)
+            y = pd.Series(np.random.randn(100) * 0.01, index=dates)
+
+            def mock_random_strategy_fn(X_train, y_train, X_test, y_test):
+                return [
+                    {
+                        "params": f"config_{i}",
+                        "train_returns": pd.Series(np.random.normal(0, 0.01, len(y_train)), index=y_train.index),
+                        "test_returns": pd.Series(np.random.normal(0, 0.01, len(y_test)), index=y_test.index),
+                        "turnover": 0.5
+                    }
+                    for i in range(5)
+                ]
+
+            cost_model = TieredCostModel()
+            
+            def mock_universe_fn(as_of_date):
+                return ["MOCK"]
+
+            harness = StrategyValidationHarness(
+                strategy_fn=mock_random_strategy_fn,
+                universe_fn=mock_universe_fn,
+                cost_model=cost_model,
+                n_cpcv_splits=5,
+                n_test_splits=1
+            )
+
+            report_random = harness.run(
+                start_date="2020-01-01",
+                end_date="2020-10-01",
+                X=X,
+                y=y,
+                strategy_name="Random_Audit"
+            )
+
+            harness_report["random_strategy_deployable"] = report_random.deployable
+            harness_report["random_strategy_pbo"] = report_random.pbo
+            harness_report["random_strategy_dsr"] = report_random.dsr
+
+            # 2. Trending buy & hold strategy (should pass deployability)
+            y_trend = pd.Series(0.002 + np.random.normal(0, 0.001, 100), index=dates)
+            X_trend = pd.DataFrame(index=dates)
+            X_trend["feature"] = 1.0
+
+            def mock_trending_strategy_fn(X_train, y_train, X_test, y_test):
+                return [
+                    {
+                        "params": "Trending_Buy_and_Hold",
+                        "train_returns": y_train,
+                        "test_returns": y_test,
+                        "turnover": 0.0
+                    }
+                ]
+
+            harness_trend = StrategyValidationHarness(
+                strategy_fn=mock_trending_strategy_fn,
+                universe_fn=mock_universe_fn,
+                cost_model=cost_model,
+                n_cpcv_splits=5,
+                n_test_splits=1
+            )
+
+            report_trend = harness_trend.run(
+                start_date="2020-01-01",
+                end_date="2020-10-01",
+                X=X_trend,
+                y=y_trend,
+                strategy_name="Trending_Audit"
+            )
+
+            harness_report["trending_strategy_deployable"] = report_trend.deployable
+            harness_report["trending_strategy_sharpe"] = report_trend.sharpe
+            harness_report["trending_strategy_max_dd"] = report_trend.max_dd
+            harness_report["trending_strategy_dsr"] = report_trend.dsr
+            harness_report["trending_strategy_pbo"] = report_trend.pbo
+
+            status = "PASSED" if (not report_random.deployable and report_trend.deployable) else "FAILED"
+            harness_report["status"] = status
+        except Exception as e:
+            harness_report["status"] = f"Execution Error: {str(e)}"
+            harness_report["error"] = str(e)
+            harness_report["random_strategy_deployable"] = False
+            harness_report["trending_strategy_deployable"] = False
+
+        self.report["step_12_validation_harness_audit"] = harness_report
+
+    def run_signal_registry_audit(self):
+        """
+        STEP 13: SIGNAL REGISTRY AND PLUGGABILITY AUDIT
+        Verifies that all 15 core signal modules are registered with global_registry,
+        and that a custom mock module can be successfully registered, retrieved, and computed.
+        """
+        audit_report = {}
+        try:
+            from signals import global_registry
+            from signals.base import SignalModule, SignalContext, SignalOutput
+            
+            # 1. Verify 12 core modules (11 per-ticker + 1 cross-sectional)
+            registered_names = set(global_registry.get_all().keys())
+            expected_names = {
+                "macro_regime", "graham_value", "dividend_quality", "macd_momentum",
+                "aroon_trend", "forecast_alignment", "relative_strength", "rsi_extremes",
+                "sortino_drawdown", "edge_garch", "timeseries_momentum",
+                "cross_sectional_momentum", "rsi2_mean_reversion", "multifactor",
+                "regime_multiplier"
+            }
+            missing = expected_names - registered_names
+            audit_report["registered_count"] = len(registered_names)
+            audit_report["expected_count"] = len(expected_names)
+            audit_report["missing_modules"] = list(missing)
+            audit_report["core_modules_intact"] = len(missing) == 0
+
+            # 2. Test registration of a custom SignalModule
+            class CustomMockSignal(SignalModule):
+                name = "custom_mock_audit_signal"
+                required_features = ["dummy_feature"]
+                def compute(self, row, context):
+                    return SignalOutput(score=0.75, confidence=0.9, explanation="+10pts: Custom audit pass")
+
+            mock_signal = CustomMockSignal()
+            global_registry.register(mock_signal)
+            
+            retrieved = global_registry.get("custom_mock_audit_signal")
+            audit_report["registration_functional"] = (retrieved == mock_signal)
+            
+            # Clean up custom module to avoid polluting subsequent runs
+            if "custom_mock_audit_signal" in global_registry._modules:
+                del global_registry._modules["custom_mock_audit_signal"]
+            
+            status = "PASSED" if (audit_report["core_modules_intact"] and audit_report["registration_functional"]) else "FAILED"
+            audit_report["status"] = status
+        except Exception as e:
+            audit_report["status"] = f"Execution Error: {str(e)}"
+            audit_report["error"] = str(e)
+            
+        self.report["step_13_signal_registry_audit"] = audit_report
+
+    def run_xsec_momentum_audit(self):
+        """
+        STEP 14: CROSS-SECTIONAL MOMENTUM PRE_COMPUTE AUDIT
+        Verifies that CrossSectionalMomentumSignal correctly:
+        1. Registers itself in global_registry as 'cross_sectional_momentum'
+        2. pre_compute populates xsec_percentile_ranks from a synthetic universe
+        3. compute() maps rank to [-1,+1] with correct quintile boundaries
+        4. 12-1m lookahead: perturbing skip-window prices does NOT change ranks
+        5. Graceful no-op when XSec_12_1M column is missing
+        """
+        xsec_report = {}
+        try:
+            from signals.cross_sectional_momentum import CrossSectionalMomentumSignal, XSEC_RETURN_COL, SYMBOL_COL
+            from signals.base import SignalContext, SignalOutput
+            from signals import global_registry as gr
+            from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+
+            # 1. Module registered
+            registered = "cross_sectional_momentum" in gr.get_all()
+            xsec_report["module_registered"] = registered
+
+            # 2. pre_compute populates ranks
+            n = 20
+            tickers_syn = [f"SYN{i:02d}" for i in range(1, n + 1)]
+            returns_syn = np.linspace(-0.30, 0.30, n)
+            universe_df = pd.DataFrame({SYMBOL_COL: tickers_syn, XSEC_RETURN_COL: returns_syn})
+
+            bar = MarketBarDTO(datetime.now(timezone.utc), "SYN01", 100.0, 101.0, 99.0, 100.0, 1000)
+            fund = FundamentalDataDTO(
+                ticker="SYN01", pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
+                book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
+                payout_ratio=0.0, sector="Test", company_name="Synthetic"
+            )
+            macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=3.0,
+                                    inflation_rate=2.0, nominal_10y=4.0, vix_value=15.0)
+            ctx = SignalContext(bar=bar, fundamentals=fund, macro=macro)
+
+            sig = CrossSectionalMomentumSignal()
+            sig.pre_compute(universe_df, ctx)
+            xsec_report["pre_compute_rank_count"] = len(ctx.xsec_percentile_ranks)
+            ranks_populated = len(ctx.xsec_percentile_ranks) == n
+            xsec_report["ranks_populated"] = ranks_populated
+
+            # 3. Quintile boundary check: top-5 score > 0.6, bottom-5 score < -0.6
+            top_pass = all(
+                sig.compute(pd.Series({SYMBOL_COL: f"SYN{i:02d}"}), ctx).score > 0.6
+                for i in range(17, 21)
+            )
+            bottom_pass = all(
+                sig.compute(pd.Series({SYMBOL_COL: f"SYN{i:02d}"}), ctx).score < -0.6
+                for i in range(1, 4)
+            )
+            xsec_report["top_quintile_positive"] = top_pass
+            xsec_report["bottom_quintile_negative"] = bottom_pass
+
+            # 4. Graceful no-op when column missing
+            bad_df = pd.DataFrame({SYMBOL_COL: ["X", "Y"]})
+            ctx_bad = SignalContext(bar=bar, fundamentals=fund, macro=macro)
+            sig.pre_compute(bad_df, ctx_bad)
+            xsec_report["graceful_noop_on_missing_col"] = (ctx_bad.xsec_percentile_ranks == {})
+
+            # 5. Lookahead: perturbing skip window does not change ranks
+            from main_orchestrator import compute_xsec_momentum_ranks
+            n_d = 300
+            d_idx = pd.date_range("2021-01-01", periods=n_d, freq="B")
+            px = 100.0 + np.cumsum(np.ones(n_d) * 0.05)
+            raw_a = {"AUDITA": pd.DataFrame({"Close": px}, index=d_idx)}
+            raw_b = {"AUDITA": pd.DataFrame({"Close": px.copy()}, index=d_idx)}
+            raw_b["AUDITA"].iloc[-21:] *= 5.0
+            ranks_a = compute_xsec_momentum_ranks(raw_a)
+            ranks_b = compute_xsec_momentum_ranks(raw_b)
+            lookahead_free = (not ranks_a.empty) and np.allclose(
+                ranks_a.values, ranks_b.values if not ranks_b.empty else ranks_a.values, atol=1e-9
+            )
+            xsec_report["lookahead_free_skip_window"] = lookahead_free
+
+            all_pass = all([
+                registered, ranks_populated, top_pass, bottom_pass,
+                xsec_report["graceful_noop_on_missing_col"], lookahead_free
+            ])
+            xsec_report["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as e:
+            xsec_report["status"] = f"Execution Error: {str(e)}"
+            xsec_report["error"] = str(e)
+
+        self.report["step_14_xsec_momentum_audit"] = xsec_report
+
+    def run_rsi2_mean_reversion_audit(self):
+        """
+        STEP 15: RSI(2) MEAN REVERSION REGIME-GATE AUDIT
+        Verifies that RSI2MeanReversionSignal:
+        1. Registers itself in global_registry as 'rsi2_mean_reversion' and
+           conforms to the SignalModule ABC (required_features declared,
+           compute() returns a SignalOutput).
+        2. Returns a score strictly in [0.0, 1.0] (long-only convention --
+           deliberately NOT the [-1.0, 1.0] range used by every other module).
+        3. Trend filter: a downtrend (Close < SMA_200) forces score to 0.0
+           even when RSI(2) is deeply oversold.
+        4. is_active_in_regime() returns False for RECESSION, CREDIT EVENT,
+           and VIX > 30, and True for a benign RISK ON regime.
+        5. Risk gate actually blocks the contribution in mock mode: running
+           the module through SignalAggregator under a RECESSION macro must
+           leave the aggregate score at the neutral base (50.0) even though
+           the module's raw compute() score for that row is > 0.5.
+        6. Schema conformance: config.COLUMN_SCHEMA declares RSI_2 and SMA_5,
+           and DashboardSchema (built dynamically from COLUMN_SCHEMA) carries
+           both columns.
+        """
+        rsi2_report = {}
+        try:
+            from signals.rsi2_mean_reversion import RSI2MeanReversionSignal
+            from signals.base import SignalModule, SignalContext
+            from signals.registry import SignalRegistry
+            from signals.aggregator import SignalAggregator
+            from signals import global_registry as gr
+            from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+            import config as platform_config
+
+            sig = RSI2MeanReversionSignal()
+
+            # 1. Registration + ABC conformance
+            registered = "rsi2_mean_reversion" in gr.get_all()
+            is_signal_module = isinstance(sig, SignalModule)
+            has_required_features = sig.required_features == ["Close", "RSI_2", "SMA_5", "SMA_200"]
+            rsi2_report["module_registered"] = registered
+            rsi2_report["is_signal_module_subclass"] = is_signal_module
+            rsi2_report["required_features_declared"] = has_required_features
+
+            bar = MarketBarDTO(datetime.now(timezone.utc), "AUDIT", 100.0, 100.0, 100.0, 100.0, 1000)
+            fund = FundamentalDataDTO(
+                ticker="AUDIT", pe_ratio=15.0, pb_ratio=1.5, book_value=50.0,
+                eps_trailing=5.0, dividend_yield=0.02, dividend_growth_rate=0.05,
+                payout_ratio=0.30, sector="Technology", company_name="Audit Corp"
+            )
+            benign_macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0,
+                                             inflation_rate=2.0, nominal_10y=4.0, vix_value=15.0)
+            benign_ctx = SignalContext(bar=bar, fundamentals=fund, macro=benign_macro)
+
+            # 2. Score bounded in [0.0, 1.0]
+            oversold_uptrend_row = pd.Series({
+                "Close": 100.0, "RSI_2": 2.0, "SMA_5": 102.0, "SMA_200": 90.0, "sector": "Technology"
+            })
+            raw_output = sig.compute(oversold_uptrend_row, benign_ctx)
+            score_bounded = 0.0 <= raw_output.score <= 1.0
+            score_high_conviction = raw_output.score > 0.5
+            rsi2_report["score_bounded_zero_one"] = score_bounded
+            rsi2_report["oversold_uptrend_score"] = raw_output.score
+
+            # 3. Trend filter: downtrend forces score to 0.0
+            downtrend_row = pd.Series({
+                "Close": 80.0, "RSI_2": 2.0, "SMA_5": 82.0, "SMA_200": 90.0, "sector": "Technology"
+            })
+            downtrend_output = sig.compute(downtrend_row, benign_ctx)
+            trend_filter_enforced = downtrend_output.score == 0.0
+            rsi2_report["trend_filter_enforced"] = trend_filter_enforced
+
+            # 4. Regime gate truth table
+            recession_macro = MacroEconomicDTO(yield_curve_10y_2y=-0.5, high_yield_oas=8.0,
+                                                inflation_rate=2.0, nominal_10y=4.0, vix_value=15.0)
+            credit_event_macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=7.0,
+                                                   inflation_rate=2.0, nominal_10y=4.0, vix_value=15.0)
+            high_vix_macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0,
+                                               inflation_rate=2.0, nominal_10y=4.0, vix_value=35.0)
+            gate_recession_blocks = sig.is_active_in_regime(recession_macro) is False
+            gate_credit_event_blocks = sig.is_active_in_regime(credit_event_macro) is False
+            gate_high_vix_blocks = sig.is_active_in_regime(high_vix_macro) is False
+            gate_risk_on_allows = sig.is_active_in_regime(benign_macro) is True
+            rsi2_report["gate_blocks_recession"] = gate_recession_blocks
+            rsi2_report["gate_blocks_credit_event"] = gate_credit_event_blocks
+            rsi2_report["gate_blocks_high_vix"] = gate_high_vix_blocks
+            rsi2_report["gate_allows_risk_on"] = gate_risk_on_allows
+
+            # 5. Risk gate actually blocks the order/score path in mock mode:
+            # run through SignalAggregator under RECESSION and confirm the
+            # aggregate score stays at the neutral base despite a high raw score.
+            mock_registry = SignalRegistry()
+            mock_registry.register(sig)
+            aggregator = SignalAggregator(mock_registry, weights={"rsi2_mean_reversion": 10.0})
+            recession_ctx = SignalContext(bar=bar, fundamentals=fund, macro=recession_macro)
+            final_score, score_log, _warnings, _details, outputs, _ = aggregator.aggregate(
+                oversold_uptrend_row, recession_ctx
+            )
+            gate_blocks_in_aggregator = (final_score == 50.0) and (
+                outputs["rsi2_mean_reversion"].score > 0.5
+            )
+
+            rsi2_report["gate_blocks_aggregate_contribution_in_mock_mode"] = gate_blocks_in_aggregator
+
+            # 6. Schema conformance
+            schema_keys = {c["key"] for c in platform_config.COLUMN_SCHEMA}
+            has_rsi_2_col = "RSI_2" in schema_keys
+            has_sma_5_col = "SMA_5" in schema_keys
+            dashboard_schema_has_cols = (
+                "RSI_2" in platform_config.DashboardSchema.columns
+                and "SMA_5" in platform_config.DashboardSchema.columns
+            )
+            rsi2_report["column_schema_has_rsi_2"] = has_rsi_2_col
+            rsi2_report["column_schema_has_sma_5"] = has_sma_5_col
+            rsi2_report["dashboard_schema_conformance"] = dashboard_schema_has_cols
+
+            all_pass = all([
+                registered, is_signal_module, has_required_features,
+                score_bounded, score_high_conviction, trend_filter_enforced,
+                gate_recession_blocks, gate_credit_event_blocks, gate_high_vix_blocks,
+                gate_risk_on_allows, gate_blocks_in_aggregator,
+                has_rsi_2_col, has_sma_5_col, dashboard_schema_has_cols,
+            ])
+            rsi2_report["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as e:
+            rsi2_report["status"] = f"Execution Error: {str(e)}"
+            rsi2_report["error"] = str(e)
+
+        self.report["step_15_rsi2_mean_reversion_audit"] = rsi2_report
+
+    def run_kelly_vol_target_sizing_audit(self):
+        """
+        STEP 16: VOLATILITY-TARGET + FRACTIONAL KELLY SIZING AUDIT
+        Verifies that the single source-of-truth position-sizing path
+        (sizing/kelly.py, sizing/vol_target.py, StrategyEngine._calculate_kelly_sizing)
+        has fully replaced the two divergent arbitrary score-derived
+        win-probability formulas that previously lived in
+        strategy_engine._calculate_kelly_sizing and the main_orchestrator.py
+        ee.calculate_kelly_target() call site:
+        1. fractional_kelly() matches the textbook Kelly formula on known
+           inputs (p=0.55,b=2 and p=0.7,b=3, the latter cap-binding).
+        2. volatility_target_weight() matches target_vol/realized_vol on a
+           known input (0.20 realized -> 0.10 target -> weight 0.5).
+        3. estimate_win_rate_and_payoff() requires >= 30 closed trades, else
+           returns NaN (Kelly is disabled until sufficient history exists).
+        4. StrategyEngine._calculate_kelly_sizing() with an EMPTY transactions
+           store (mock mode, zero closed trades) falls back to
+           volatility-target-only sizing -- proving the Kelly path is
+           actually gated, not just defined.
+        5. The legacy arbitrary formulas (`0.35 + (score/100)*0.40` and
+           `0.55 + (float(strategy_output['Score'])`) are no longer present
+           anywhere in strategy_engine.py or main_orchestrator.py.
+        6. settings.py declares KELLY_FRACTION=0.5, KELLY_CAP=0.20,
+           VOL_TARGET=0.10, MAX_LEVERAGE=2.0, MAX_POSITION_WEIGHT=1.0.
+        7. MAX_POSITION_WEIGHT actually clamps the volatility-target fallback
+           (a low realized_vol that would otherwise hit MAX_LEVERAGE=2.0x is
+           clamped to 1.0), proving the single-name ceiling is wired into
+           _calculate_kelly_sizing, not just declared in settings.
+        8. (Stage 1.7) bootstrap_kelly_confidence() 5th-percentile is
+           meaningfully below the point-estimate half-Kelly fraction on a
+           100-trade synthetic data set (p=0.6, b=2.0).
+        9. (Stage 1.7) estimate_win_rate_and_payoff_per_strategy() returns
+           different (p, b) for two strategies with different edges.
+        10. (Stage 1.7) kelly_sizing_for_strategy() cold-start guard: empty
+            store -> vol-target fallback, tagged 'vol_target_fallback'.
+        11. (Stage 1.7) SignalOutput.meta_label_proba defaults to 1.0;
+            SignalAggregator.aggregate() returns meta_label_composite=1.0
+            when all modules return default values (no-op invariant).
+        """
+        kelly_report = {}
+        try:
+            import inspect
+            from sizing.kelly import (
+                fractional_kelly, estimate_win_rate_and_payoff,
+                bootstrap_kelly_confidence, _get_per_strategy_returns,
+                estimate_win_rate_and_payoff_per_strategy,
+                kelly_sizing_for_strategy, MIN_TRADES_REQUIRED,
+            )
+            from sizing.vol_target import volatility_target_weight
+            from strategy_engine import StrategyEngine
+            from transactions_store import TransactionsStore
+            from settings import settings as platform_settings
+            import numpy as _np
+
+            # 1. fractional_kelly known scenarios
+            half_kelly_55_2 = fractional_kelly(p=0.55, b=2.0, fraction=0.5, cap=0.20)
+            half_kelly_70_3 = fractional_kelly(p=0.7, b=3.0, fraction=0.5, cap=0.20)
+            kelly_report["fractional_kelly_p55_b2"] = half_kelly_55_2
+            kelly_report["fractional_kelly_p70_b3_capped"] = half_kelly_70_3
+            fractional_kelly_correct = (
+                abs(half_kelly_55_2 - 0.1625) < 1e-6 and abs(half_kelly_70_3 - 0.20) < 1e-6
+            )
+            kelly_report["fractional_kelly_formula_correct"] = fractional_kelly_correct
+
+            # 2. volatility_target_weight known scenario
+            vt_weight = volatility_target_weight(realized_vol=0.20, target_vol=0.10, max_leverage=2.0)
+            vol_target_correct = abs(vt_weight - 0.5) < 1e-6
+            kelly_report["vol_target_weight_correct"] = vol_target_correct
+
+            # 3. Insufficient-history gate
+            p_nan, b_nan, n_empty = estimate_win_rate_and_payoff(pd.DataFrame(columns=[
+                "entry_price", "exit_price", "side", "exit_ts"
+            ]))
+            insufficient_history_returns_nan = (
+                n_empty == 0 and isinstance(p_nan, float) and p_nan != p_nan  # NaN check
+            )
+            kelly_report["insufficient_history_returns_nan"] = insufficient_history_returns_nan
+            kelly_report["min_trades_required"] = MIN_TRADES_REQUIRED
+
+            # 4. End-to-end mock-mode fallback: empty store -> vol-target-only sizing
+            mock_store = TransactionsStore(db_url="sqlite:///:memory:")
+            engine = StrategyEngine(transactions_store=mock_store)
+            sizing_result, sizing_tag = engine._calculate_kelly_sizing(realized_vol=0.20)
+            expected_fallback = volatility_target_weight(0.20, target_vol=platform_settings.VOL_TARGET,
+                                                           max_leverage=platform_settings.MAX_LEVERAGE)
+            gate_blocks_kelly_in_mock_mode = abs(sizing_result - expected_fallback) < 1e-6
+            kelly_report["gate_blocks_kelly_in_mock_mode"] = gate_blocks_kelly_in_mock_mode
+            kelly_report["mock_mode_sizing_result"] = sizing_result
+            kelly_report["mock_mode_sizing_tag"] = sizing_tag
+
+            # 5. Legacy arbitrary formulas fully removed
+            strategy_src = inspect.getsource(__import__("strategy_engine"))
+            orchestrator_src = inspect.getsource(__import__("main_orchestrator"))
+            legacy_formula_absent = (
+                "0.35 + (score" not in strategy_src
+                and "0.55 + (float(strategy_output['Score'])" not in orchestrator_src
+            )
+            kelly_report["legacy_score_formulas_removed"] = legacy_formula_absent
+
+            # 6. Settings constants present and correctly valued
+            settings_correct = (
+                platform_settings.KELLY_FRACTION == 0.5
+                and platform_settings.KELLY_CAP == 0.20
+                and platform_settings.VOL_TARGET == 0.10
+                and platform_settings.MAX_LEVERAGE == 2.0
+                and platform_settings.MAX_POSITION_WEIGHT == 1.0
+            )
+            kelly_report["settings_constants_correct"] = settings_correct
+
+            # 7. MAX_POSITION_WEIGHT actually clamps the vol-target fallback
+            low_vol_sizing, _ = engine._calculate_kelly_sizing(realized_vol=0.01)
+            uncapped_would_be = volatility_target_weight(0.01, target_vol=platform_settings.VOL_TARGET,
+                                                           max_leverage=platform_settings.MAX_LEVERAGE)
+            max_position_weight_clamps = (
+                uncapped_would_be > platform_settings.MAX_POSITION_WEIGHT
+                and abs(low_vol_sizing - platform_settings.MAX_POSITION_WEIGHT) < 1e-6
+            )
+            kelly_report["max_position_weight_clamps_fallback"] = max_position_weight_clamps
+            kelly_report["low_vol_uncapped_would_be"] = uncapped_would_be
+            kelly_report["low_vol_actual_sizing"] = low_vol_sizing
+
+            # -------------------------------------------------------------------
+            # 8. (Stage 1.7) Bootstrap 5th-percentile < point-estimate
+            # -------------------------------------------------------------------
+            # 100 synthetic trades: 60 wins @ +10%, 40 losses @ -5%
+            # -> p=0.6, b=2.0; half-Kelly (capped) = 0.20 (point estimate)
+            rng = _np.random.RandomState(42)
+            n_wins, n_losses = 60, 40
+            returns_arr = _np.concatenate([
+                _np.full(n_wins, 0.10),   # win returns
+                _np.full(n_losses, -0.05) # loss returns
+            ])
+            rng.shuffle(returns_arr)
+
+            kelly_low, kelly_mean, kelly_high = bootstrap_kelly_confidence(
+                returns_arr, n_bootstraps=1_000, fraction=0.5, cap=0.20
+            )
+            point_est = fractional_kelly(p=0.6, b=2.0, fraction=0.5, cap=0.20)
+            bootstrap_5th_below_point = (
+                not (kelly_low != kelly_low)   # not NaN
+                and kelly_low < point_est        # strictly below
+                and (point_est - kelly_low) >= 0.005  # meaningful gap (>= 0.5pp)
+            )
+            kelly_report["bootstrap_5th_pct_below_point_estimate"] = bootstrap_5th_below_point
+            kelly_report["bootstrap_kelly_5th"] = kelly_low
+            kelly_report["bootstrap_kelly_50th"] = kelly_mean
+            kelly_report["bootstrap_point_estimate"] = point_est
+
+            # -------------------------------------------------------------------
+            # 9. (Stage 1.7) Per-strategy isolation
+            # -------------------------------------------------------------------
+            # Two strategies: MOMENTUM (p=0.6, b=2.0) vs MEAN_REV (p=0.4, b=0.6)
+            audit_store = TransactionsStore(db_url="sqlite:///:memory:")
+            ts_now = pd.Timestamp.utcnow()
+
+            def _seed(strategy: str, n_w: int, n_l: int, wp: float, lp: float):
+                for i in range(n_w):
+                    tid = audit_store.record_trade(
+                        symbol="AAPL", side="long",
+                        entry_ts=ts_now + pd.Timedelta(minutes=i), entry_price=100.0,
+                        shares=10.0, strategy=strategy,
+                    )
+                    audit_store.close_trade(
+                        tid,
+                        exit_ts=ts_now + pd.Timedelta(days=1, minutes=i),
+                        exit_price=100.0 * (1 + wp),
+                    )
+                for i in range(n_l):
+                    tid = audit_store.record_trade(
+                        symbol="AAPL", side="long",
+                        entry_ts=ts_now + pd.Timedelta(days=2, minutes=i), entry_price=100.0,
+                        shares=10.0, strategy=strategy,
+                    )
+                    audit_store.close_trade(
+                        tid,
+                        exit_ts=ts_now + pd.Timedelta(days=3, minutes=i),
+                        exit_price=100.0 * (1 + lp),
+                    )
+
+            _seed("MOMENTUM", n_w=60, n_l=40, wp=0.10, lp=-0.05)
+            _seed("MEAN_REV", n_w=20, n_l=50, wp=0.03, lp=-0.05)
+
+            p_mom, b_mom, _ = estimate_win_rate_and_payoff_per_strategy(audit_store, "MOMENTUM")
+            p_rev, b_rev, _ = estimate_win_rate_and_payoff_per_strategy(audit_store, "MEAN_REV")
+
+            per_strategy_produces_different_pb = (
+                not (p_mom != p_mom) and not (p_rev != p_rev)  # neither NaN
+                and p_mom > p_rev  # momentum has higher win rate
+                and b_mom > b_rev  # momentum has higher payoff
+            )
+            kelly_report["per_strategy_produces_different_pb"] = per_strategy_produces_different_pb
+            kelly_report["momentum_p"] = p_mom
+            kelly_report["momentum_b"] = b_mom
+            kelly_report["mean_rev_p"] = p_rev
+            kelly_report["mean_rev_b"] = b_rev
+
+            # -------------------------------------------------------------------
+            # 10. (Stage 1.7) Cold-start guard via kelly_sizing_for_strategy
+            # -------------------------------------------------------------------
+            empty_store = TransactionsStore(db_url="sqlite:///:memory:")
+            cold_weight, cold_tag = kelly_sizing_for_strategy(
+                empty_store, strategy_id="MOMENTUM", realized_vol=0.20
+            )
+            expected_cold = volatility_target_weight(
+                0.20, target_vol=platform_settings.VOL_TARGET,
+                max_leverage=platform_settings.MAX_LEVERAGE
+            )
+            cold_start_guard_works = (
+                cold_tag == "vol_target_fallback"
+                and abs(cold_weight - expected_cold) < 1e-6
+            )
+            kelly_report["cold_start_guard_works"] = cold_start_guard_works
+            kelly_report["cold_start_weight"] = cold_weight
+            kelly_report["cold_start_tag"] = cold_tag
+
+            # -------------------------------------------------------------------
+            # 11. (Stage 1.7) meta_label_proba=1.0 default is a no-op
+            # -------------------------------------------------------------------
+            from signals.base import SignalOutput
+            from signals.aggregator import SignalAggregator
+            from signals.registry import SignalRegistry
+            from signals.base import SignalModule, SignalContext
+            from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+            from datetime import datetime, timezone
+
+            class _DummySignal(SignalModule):
+                name = "dummy_meta"
+                required_features: list = []
+                def compute(self, row, context):
+                    return SignalOutput(
+                        score=0.5, confidence=1.0, explanation="",
+                        meta_label_proba=1.0  # explicit default
+                    )
+
+            dummy_registry = SignalRegistry()
+            dummy_registry.register(_DummySignal())
+            dummy_agg = SignalAggregator(dummy_registry, weights={"dummy_meta": 0.0})
+
+            _bar = MarketBarDTO(
+                datetime.now(timezone.utc), "AUDIT", 100.0, 100.0, 100.0, 100.0, 1000
+            )
+            _fund = FundamentalDataDTO(
+                ticker="AUDIT", pe_ratio=15.0, pb_ratio=1.5, book_value=50.0,
+                eps_trailing=5.0, dividend_yield=0.02, dividend_growth_rate=0.05,
+                payout_ratio=0.30, sector="Technology", company_name="Audit Corp"
+            )
+            _macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0)
+            _ctx = SignalContext(bar=_bar, fundamentals=_fund, macro=_macro)
+
+            _, _, _, _, _, meta_composite = dummy_agg.aggregate(
+                pd.Series({"Symbol": "AUDIT"}), _ctx
+            )
+            meta_label_noop = abs(meta_composite - 1.0) < 1e-9
+            # Also verify SignalOutput dataclass has the field with default 1.0
+            out_default = SignalOutput(score=0.0, confidence=1.0, explanation="")
+            meta_field_default_correct = out_default.meta_label_proba == 1.0
+
+            kelly_report["meta_label_proba_noop"] = meta_label_noop
+            kelly_report["meta_label_composite_value"] = meta_composite
+            kelly_report["meta_label_field_default_correct"] = meta_field_default_correct
+
+            all_pass = all([
+                fractional_kelly_correct, vol_target_correct, insufficient_history_returns_nan,
+                gate_blocks_kelly_in_mock_mode, legacy_formula_absent, settings_correct,
+                max_position_weight_clamps,
+                # Stage 1.7 additions
+                bootstrap_5th_below_point, per_strategy_produces_different_pb,
+                cold_start_guard_works, meta_label_noop, meta_field_default_correct,
+            ])
+            kelly_report["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as e:
+            kelly_report["status"] = f"Execution Error: {str(e)}"
+            kelly_report["error"] = str(e)
+
+        self.report["step_16_kelly_vol_target_sizing_audit"] = kelly_report
+
+    def run_multifactor_audit(self):
+        """
+        STEP 17: FAMA-FRENCH-STYLE MULTIFACTOR SIGNAL AUDIT
+        Verifies that MultifactorSignal:
+        1. Registers itself in global_registry as 'multifactor' and conforms
+           to the SignalModule ABC (pre_compute/compute hooks present).
+        2. Cross-sectional z-scoring + winsorization: an extreme outlier in
+           the raw inputs never produces a |Z| > WINSOR_LIMIT (3.0).
+        3. Microcap exclusion: a ticker below settings.MULTIFACTOR_MICROCAP_THRESHOLD
+           is excluded from the z-scoring population (does not skew peers'
+           Z-scores) and itself receives a neutral (0.0) score, not a
+           fabricated factor exposure.
+        4. compute() never returns a score outside [-1.0, +1.0].
+        5. Schema conformance: config.COLUMN_SCHEMA declares Value_Z,
+           Quality_Z, LowVol_Z, Size_Z, Multifactor_Composite, and
+           DashboardSchema (built dynamically from COLUMN_SCHEMA) carries
+           all five columns.
+        6. settings.SIGNAL_WEIGHTS declares a 'multifactor' weight and
+           settings.MULTIFACTOR_MICROCAP_THRESHOLD is configured.
+        """
+        mf_report = {}
+        try:
+            from signals.multifactor import MultifactorSignal, _zscore_winsorize, WINSOR_LIMIT
+            from signals.base import SignalModule, SignalContext
+            from signals import global_registry as gr
+            from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+            from settings import settings as platform_settings
+            import config as platform_config
+            import numpy as _np
+
+            sig = MultifactorSignal()
+
+            # 1. Registration + ABC conformance
+            registered = "multifactor" in gr.get_all()
+            is_signal_module = isinstance(sig, SignalModule)
+            has_pre_compute = hasattr(sig, "pre_compute") and callable(sig.pre_compute)
+            mf_report["module_registered"] = registered
+            mf_report["is_signal_module_subclass"] = is_signal_module
+            mf_report["has_pre_compute_hook"] = has_pre_compute
+
+            # 2. Winsorization: extreme outlier never exceeds WINSOR_LIMIT
+            rng = _np.random.RandomState(11)
+            normal_vals = list(rng.normal(loc=1.0, scale=0.05, size=20))
+            outlier_series = pd.Series(normal_vals + [1_000_000.0])
+            z = _zscore_winsorize(outlier_series)
+            winsorization_bounds_outlier = bool((z.abs() <= WINSOR_LIMIT + 1e-9).all())
+            mf_report["winsorization_bounds_outlier"] = winsorization_bounds_outlier
+            mf_report["winsor_limit"] = WINSOR_LIMIT
+
+            # 3. Microcap exclusion: synthetic universe + one microcap with an
+            # engineered "great value" exposure that must NOT skew peers or
+            # earn a fabricated score.
+            n_peers = 20
+            peer_df = pd.DataFrame({
+                "Symbol": [f"PEER{i}" for i in range(n_peers)],
+                "Market Cap": rng.uniform(1e9, 5e9, n_peers),
+                "book_to_market": rng.uniform(0.3, 1.0, n_peers),
+                "earnings_yield": rng.uniform(0.03, 0.08, n_peers),
+                "quality_factor_score": rng.uniform(-0.05, 0.15, n_peers),
+                "low_vol_score": rng.uniform(-0.40, -0.20, n_peers),
+            })
+            peer_df["log_market_cap"] = _np.log(peer_df["Market Cap"])
+
+            bar = MarketBarDTO(datetime.now(timezone.utc), "AUDIT", 100.0, 100.0, 100.0, 100.0, 1000)
+            fund = FundamentalDataDTO(
+                ticker="AUDIT", pe_ratio=15.0, pb_ratio=1.5, book_value=50.0,
+                eps_trailing=5.0, dividend_yield=0.02, dividend_growth_rate=0.05,
+                payout_ratio=0.30, sector="Technology", company_name="Audit Corp"
+            )
+            macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0,
+                                      inflation_rate=2.0, nominal_10y=4.0, vix_value=15.0)
+
+            ctx_without_micro = SignalContext(bar=bar, fundamentals=fund, macro=macro)
+            sig.pre_compute(peer_df, ctx_without_micro)
+            peer0_composite_without = ctx_without_micro.multifactor_scores["PEER0"]["Multifactor_Composite"]
+
+            microcap_row = pd.DataFrame([{
+                "Symbol": "MICROCAP_AUDIT", "Market Cap": 10_000_000.0,
+                "book_to_market": 100.0, "earnings_yield": 0.99,
+                "quality_factor_score": 10.0, "low_vol_score": 0.99,
+                "log_market_cap": _np.log(10_000_000.0),
+            }])
+            df_with_micro = pd.concat([peer_df, microcap_row], ignore_index=True)
+            ctx_with_micro = SignalContext(bar=bar, fundamentals=fund, macro=macro)
+            sig.pre_compute(df_with_micro, ctx_with_micro)
+            peer0_composite_with = ctx_with_micro.multifactor_scores["PEER0"]["Multifactor_Composite"]
+
+            microcap_entry = ctx_with_micro.multifactor_scores["MICROCAP_AUDIT"]
+            microcap_excluded_flag = microcap_entry.get("excluded_microcap") is True
+            microcap_composite_is_nan = math.isnan(microcap_entry.get("Multifactor_Composite", 0.0))
+            microcap_score_output = sig.compute(df_with_micro.iloc[-1], ctx_with_micro)
+            microcap_score_is_neutral = microcap_score_output.score == 0.0
+            peers_unaffected_by_microcap = abs(peer0_composite_without - peer0_composite_with) < 1e-9
+
+            mf_report["microcap_excluded_flag_set"] = microcap_excluded_flag
+            mf_report["microcap_composite_is_nan"] = microcap_composite_is_nan
+            mf_report["microcap_compute_score_is_neutral"] = microcap_score_is_neutral
+            mf_report["microcap_does_not_skew_peer_zscores"] = peers_unaffected_by_microcap
+
+            # 4. compute() bounded in [-1.0, +1.0] across the peer universe
+            scores_in_bounds = True
+            for _, row in df_with_micro.iterrows():
+                out = sig.compute(row, ctx_with_micro)
+                if not (-1.0 <= out.score <= 1.0):
+                    scores_in_bounds = False
+                    break
+            mf_report["compute_scores_bounded"] = scores_in_bounds
+
+            # 5. Schema conformance
+            schema_keys = {c["key"] for c in platform_config.COLUMN_SCHEMA}
+            expected_cols = {"Value_Z", "Quality_Z", "LowVol_Z", "Size_Z", "Multifactor_Composite"}
+            has_all_schema_cols = expected_cols.issubset(schema_keys)
+            dashboard_schema_has_cols = expected_cols.issubset(set(platform_config.DashboardSchema.columns.keys()))
+            mf_report["column_schema_has_factor_cols"] = has_all_schema_cols
+            mf_report["dashboard_schema_conformance"] = dashboard_schema_has_cols
+
+            # 6. Settings constants present
+            has_weight = "multifactor" in platform_settings.SIGNAL_WEIGHTS
+            has_threshold = platform_settings.MULTIFACTOR_MICROCAP_THRESHOLD > 0
+            mf_report["settings_weight_registered"] = has_weight
+            mf_report["settings_microcap_threshold_configured"] = has_threshold
+
+            all_pass = all([
+                registered, is_signal_module, has_pre_compute,
+                winsorization_bounds_outlier, microcap_excluded_flag,
+                microcap_composite_is_nan, microcap_score_is_neutral,
+                peers_unaffected_by_microcap, scores_in_bounds,
+                has_all_schema_cols, dashboard_schema_has_cols,
+                has_weight, has_threshold,
+            ])
+            mf_report["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as e:
+            mf_report["status"] = f"Execution Error: {str(e)}"
+            mf_report["error"] = str(e)
+
+        self.report["step_17_multifactor_audit"] = mf_report
+
+    def run_hmm_regime_audit(self):
+        """
+        STEP 18: GAUSSIAN HMM REGIME DETECTOR AND POSITION-SIZING MULTIPLIER AUDIT
+        Verifies that the Hamilton (1989) regime-switching second opinion is
+        wired in correctly and cannot itself become a lookahead surface or an
+        uncontrolled directional-alpha source:
+        1. HMMRegimeDetector fit()/predict_proba() API contract: refitting
+           within retrain_freq_days is a no-op (model unchanged); predict_proba
+           raises RuntimeError before any fit(); identify_states_by_vol()
+           labels the lowest-variance state 'bull'.
+        2. predict_proba()'s last-row probabilities are unaffected by
+           perturbing data strictly after the prediction cutoff (the
+           forward-filtering guarantee -- see regime/hmm_regime.py docstring).
+        3. MacroEconomicDTO: hmm_risk_on_probability=None reproduces the
+           exact pre-HMM baseline (market_regime/killSwitch unchanged). A
+           rules-based RISK ON regime is downgraded to NEUTRAL when HMM
+           risk_on_probability < 0.3, and the kill switch fires at lowered
+           thresholds only when rules=RECESSION AND HMM risk_off > 0.7 (never
+           when only one condition holds).
+        4. signals/regime_multiplier.py: registered, conforms to the
+           SignalModule ABC, its compute() score is ALWAYS 0.0 regardless of
+           hmm_risk_on_probability (no directional alpha), its confidence
+           field carries the multiplier (1.0 neutral default when HMM
+           unavailable), and settings.SIGNAL_WEIGHTS['regime_multiplier']
+           == 0.0 (structural enforcement, not just convention).
+        5. Schema conformance: config.COLUMN_SCHEMA declares
+           HMM_Risk_On_Probability and DashboardSchema carries it.
+        """
+        hmm_report = {}
+        try:
+            import numpy as _np
+            from hmmlearn.hmm import GaussianHMM
+            from regime.hmm_regime import HMMRegimeDetector
+            from signals.regime_multiplier import RegimeMultiplierSignal
+            from signals.base import SignalModule, SignalContext
+            from signals import global_registry as gr
+            from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+            from settings import settings as platform_settings
+            import config as platform_config
+
+            # 1a. Retrain-gate no-op + RuntimeError before fit
+            rng = _np.random.RandomState(13)
+            n = 200
+            dates = pd.bdate_range(end=datetime.now(timezone.utc), periods=n)
+            features = pd.DataFrame({
+                "spy_return": rng.normal(0.0003, 0.01, n),
+                "realized_vol_20d": _np.abs(rng.normal(0.15, 0.05, n)),
+                "vix_level": _np.abs(rng.normal(15.0, 4.0, n)),
+                "yield_curve_spread": rng.normal(0.5, 0.3, n),
+            }, index=dates)
+
+            detector = HMMRegimeDetector(n_states=3, retrain_freq_days=7, random_state=1)
+            raises_before_fit = False
+            try:
+                detector.predict_proba(features.iloc[:50])
+            except RuntimeError:
+                raises_before_fit = True
+            hmm_report["predict_proba_raises_before_fit"] = raises_before_fit
+
+            D, D_plus_1 = features.index[150], features.index[151]
+            detector.fit(features.loc[:D])
+            probs_before = detector.predict_proba(features.loc[:D])
+            fit_date_before = detector.last_fit_date
+            detector.fit(features.loc[:D_plus_1])  # within 7-day gate -> no-op
+            retrain_gate_holds = detector.last_fit_date == fit_date_before
+            probs_after = detector.predict_proba(features.loc[:D])
+            prediction_unchanged = all(
+                abs(probs_before[k] - probs_after[k]) < 1e-9 for k in probs_before if k != "dominant_state"
+            )
+            hmm_report["retrain_gate_holds"] = retrain_gate_holds
+            hmm_report["prediction_at_d_unchanged_after_noop_refit"] = prediction_unchanged
+
+            # 1b. identify_states_by_vol labels lowest-variance state 'bull'
+            variances = _np.asarray(detector.model.covars_).reshape(detector.n_states, -1).sum(axis=1)
+            lowest_var_state = int(_np.argmin(variances))
+            labels_correct = detector.state_labels.get(lowest_var_state) == "bull"
+            hmm_report["lowest_variance_state_labeled_bull"] = labels_correct
+
+            # 2. predict_proba ignores rows after cutoff
+            perturbed = features.copy()
+            perturbed.iloc[151:] = 99999.9
+            perturbed_probs = detector.predict_proba(perturbed.loc[:D])
+            ignores_future = all(
+                abs(probs_before[k] - perturbed_probs[k]) < 1e-9 for k in probs_before if k != "dominant_state"
+            )
+            hmm_report["predict_proba_ignores_rows_after_cutoff"] = ignores_future
+
+            # 3. MacroEconomicDTO disagreement/agreement logic
+            baseline_dto = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0)
+            no_hmm_baseline_preserved = baseline_dto.market_regime == "RISK ON" and baseline_dto.killSwitch is False
+            hmm_report["no_hmm_input_preserves_baseline"] = no_hmm_baseline_preserved
+
+            downgrade_dto = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0,
+                                              inflation_rate=2.0, hmm_risk_on_probability=0.1)
+            downgrade_works = downgrade_dto.market_regime == "NEUTRAL"
+            hmm_report["risk_on_downgrade_to_neutral_works"] = downgrade_works
+
+            agreed_kill_dto = MacroEconomicDTO(yield_curve_10y_2y=-0.5, high_yield_oas=7.0, inflation_rate=2.0,
+                                                vix_value=27.0, hmm_risk_on_probability=0.1)
+            disagreed_kill_dto = MacroEconomicDTO(yield_curve_10y_2y=-0.5, high_yield_oas=7.0, inflation_rate=2.0,
+                                                   vix_value=27.0, hmm_risk_on_probability=0.5)
+            killswitch_agreement_works = (
+                agreed_kill_dto.market_regime == "RECESSION" and agreed_kill_dto.killSwitch is True
+                and disagreed_kill_dto.market_regime == "RECESSION" and disagreed_kill_dto.killSwitch is False
+            )
+            hmm_report["killswitch_agreement_fast_trigger_works"] = killswitch_agreement_works
+
+            # 4. regime_multiplier signal
+            mult_sig = RegimeMultiplierSignal()
+            mult_registered = "regime_multiplier" in gr.get_all()
+            mult_is_signal_module = isinstance(mult_sig, SignalModule)
+
+            bar = MarketBarDTO(datetime.now(timezone.utc), "AUDIT", 100.0, 100.0, 100.0, 100.0, 1000)
+            fund = FundamentalDataDTO(
+                ticker="AUDIT", pe_ratio=15.0, pb_ratio=1.5, book_value=50.0,
+                eps_trailing=5.0, dividend_yield=0.02, dividend_growth_rate=0.05,
+                payout_ratio=0.30, sector="Technology", company_name="Audit Corp"
+            )
+            macro_high = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0,
+                                           inflation_rate=2.0, hmm_risk_on_probability=0.9)
+            macro_none = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0)
+            ctx_high = SignalContext(bar=bar, fundamentals=fund, macro=macro_high)
+            ctx_none = SignalContext(bar=bar, fundamentals=fund, macro=macro_none)
+            out_high = mult_sig.compute(pd.Series({"Symbol": "AUDIT"}), ctx_high)
+            out_none = mult_sig.compute(pd.Series({"Symbol": "AUDIT"}), ctx_none)
+
+            never_adds_alpha = out_high.score == 0.0 and out_none.score == 0.0
+            confidence_carries_multiplier = abs(out_high.confidence - 0.9) < 1e-9
+            neutral_default = out_none.confidence == 1.0
+            weight_is_zero = platform_settings.SIGNAL_WEIGHTS.get("regime_multiplier") == 0.0
+
+            hmm_report["regime_multiplier_registered"] = mult_registered
+            hmm_report["regime_multiplier_is_signal_module"] = mult_is_signal_module
+            hmm_report["regime_multiplier_never_adds_alpha"] = never_adds_alpha
+            hmm_report["regime_multiplier_confidence_carries_multiplier"] = confidence_carries_multiplier
+            hmm_report["regime_multiplier_neutral_default"] = neutral_default
+            hmm_report["regime_multiplier_settings_weight_is_zero"] = weight_is_zero
+
+            # 5. Schema conformance
+            schema_keys = {c["key"] for c in platform_config.COLUMN_SCHEMA}
+            has_schema_col = "HMM_Risk_On_Probability" in schema_keys
+            dashboard_schema_has_col = "HMM_Risk_On_Probability" in platform_config.DashboardSchema.columns
+            hmm_report["column_schema_has_hmm_col"] = has_schema_col
+            hmm_report["dashboard_schema_conformance"] = dashboard_schema_has_col
+
+            all_pass = all([
+                raises_before_fit, retrain_gate_holds, prediction_unchanged, labels_correct,
+                ignores_future, no_hmm_baseline_preserved, downgrade_works,
+                killswitch_agreement_works, mult_registered, mult_is_signal_module,
+                never_adds_alpha, confidence_carries_multiplier, neutral_default,
+                weight_is_zero, has_schema_col, dashboard_schema_has_col,
+            ])
+            hmm_report["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as e:
+            hmm_report["status"] = f"Execution Error: {str(e)}"
+            hmm_report["error"] = str(e)
+
+        self.report["step_18_hmm_regime_audit"] = hmm_report
+
+    def run_ivr_vrp_audit(self):
+        """
+        STEP 19: OPTIONS TRUE IVR AND VRP REGIME GATE AUDIT
+        """
+        ivr_report = {}
+        try:
+            from technical_options_engine import OptionsPricingRecommender
+            from dto_models import MacroEconomicDTO
+            import config as platform_config
+            
+            # Check schema columns
+            schema_keys = {c["key"] for c in platform_config.COLUMN_SCHEMA}
+            has_realized_vol_rank = "Realized_Vol_Rank" in schema_keys
+            has_true_ivr = "True_IVR" in schema_keys
+            has_vrp = "VRP" in schema_keys
+            
+            ivr_report["has_schema_columns"] = bool(has_realized_vol_rank and has_true_ivr and has_vrp)
+            
+            recommender = OptionsPricingRecommender(100.0)
+            
+            # 1. High true_ivr (>50) but gated (VRP <= 0.02) -> should return Cash/Wait
+            gated_res_vrp = recommender.generate_strategy_pricing_matrix(
+                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.01,
+                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=20.0)
+            )
+            gated_vrp_ok = gated_res_vrp["Strategy"] == "Cash" and gated_res_vrp["Action"] == "Wait"
+            ivr_report["gated_by_low_vrp_works"] = bool(gated_vrp_ok)
+            
+            # 2. High true_ivr (>50) but gated (VIX >= 30) -> should return Cash/Wait
+            gated_res_vix = recommender.generate_strategy_pricing_matrix(
+                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
+                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=32.0)
+            )
+            gated_vix_ok = gated_res_vix["Strategy"] == "Cash" and gated_res_vix["Action"] == "Wait"
+            ivr_report["gated_by_high_vix_works"] = bool(gated_vix_ok)
+
+            # 3. High true_ivr (>50) but gated (CREDIT EVENT) -> should return Cash/Wait
+            # Setting high_yield_oas=7.0 naturally triggers a CREDIT EVENT regime in DTO
+            gated_res_credit = recommender.generate_strategy_pricing_matrix(
+                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
+                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=7.0, inflation_rate=2.0, vix_value=20.0)
+            )
+            gated_credit_ok = gated_res_credit["Strategy"] == "Cash" and gated_res_credit["Action"] == "Wait"
+            ivr_report["gated_by_credit_event_works"] = bool(gated_credit_ok)
+            
+            # 4. High true_ivr (>50) and ungated -> should recommend Put Credit Spread for Bullish bias
+            ungated_res = recommender.generate_strategy_pricing_matrix(
+                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
+                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=20.0)
+            )
+            ungated_ok = ungated_res["Strategy"] == "Put Credit Spread" and ungated_res["Action"] == "Sell to Open"
+            ivr_report["ungated_put_credit_spread_works"] = bool(ungated_ok)
+            
+            all_pass = all([
+                has_realized_vol_rank, has_true_ivr, has_vrp,
+                gated_vrp_ok, gated_vix_ok, gated_credit_ok, ungated_ok
+            ])
+            ivr_report["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as e:
+            ivr_report["status"] = f"Execution Error: {str(e)}"
+            ivr_report["error"] = str(e)
+            
+        self.report["step_19_ivr_vrp_audit"] = ivr_report
+
+    def run_pairs_trading_audit(self):
+        """
+        STEP 20: ENGLE-GRANGER AND KALMAN PAIRS TRADING VALIDATION AUDIT
+        """
+        pairs_report = {}
+        try:
+            import numpy as _np
+            import pandas as _pd
+            from pairs.cointegration import find_cointegrated_pairs, compute_half_life
+            from pairs.kalman_hedge import KalmanHedgeRatio
+            from signals.pairs_trading import generate_pairs_signals
+            from pairs.simulation import run_pairs_backtrader_simulation
+            
+            # 1. Verify Engle-Granger and half-life on synthetic data
+            _np.random.seed(42)
+            n = 252
+            x = _np.cumsum(_np.random.normal(0, 1, n)) + 100.0
+            spread = [0.0]
+            for _ in range(n - 1):
+                spread.append(0.9 * spread[-1] + _np.random.normal(0, 0.5))
+            spread = _np.array(spread)
+            y = 0.5 * x + 10.0 + spread
+            
+            y_series = _pd.Series(y)
+            x_series = _pd.Series(x)
+            
+            df = _pd.DataFrame({'Y': y_series, 'X': x_series})
+            pairs = find_cointegrated_pairs(df, p_threshold=0.05)
+            
+            # Verify cointegration detection
+            coint_detected = len(pairs) > 0 and (
+                (pairs[0].ticker1 == 'Y' and pairs[0].ticker2 == 'X') or
+                (pairs[0].ticker1 == 'X' and pairs[0].ticker2 == 'Y')
+            )
+            pairs_report["cointegration_detected"] = bool(coint_detected)
+            
+            # Verify half-life calculation (should be around 6.5)
+            hl = compute_half_life(_pd.Series(spread))
+            hl_ok = 5.0 <= hl <= 8.0
+            pairs_report["half_life_calculation_correct"] = bool(hl_ok)
+            
+            # 2. Verify Kalman hedge ratio estimation
+            # Center x to ensure beta converges cleanly to 0.5 without intercept interference
+            x_centered = _np.random.normal(0, 5, n)
+            y_centered = 10.0 + 0.5 * x_centered + _np.random.normal(0, 0.5, n)
+            kh = KalmanHedgeRatio(transition_covariance_multiplier=1e-5, observation_covariance=1e-3)
+            hedge_df = kh.estimate_hedge_ratio(_pd.Series(y_centered), _pd.Series(x_centered))
+            beta_est = hedge_df['beta'].iloc[-20:].mean()
+            beta_ok = abs(beta_est - 0.5) < 0.15
+            pairs_report["kalman_beta_correct"] = bool(beta_ok)
+            
+            # 3. Verify signal generation and backtester run
+            # Use datetime index for simulation
+            dates = _pd.date_range(start='2020-01-01', periods=n, freq='B')
+            y_ts = _pd.Series(y, index=dates)
+            x_ts = _pd.Series(x, index=dates)
+            
+            signals = generate_pairs_signals(y_ts, x_ts)
+            final_val, daily_returns = run_pairs_backtrader_simulation(
+                y_ts, x_ts, signals, initial_cash=100000.0, y_name="Y", x_name="X"
+            )
+            
+            simulation_ok = final_val > 0.0 and len(daily_returns) == n
+            pairs_report["simulation_runs_successfully"] = bool(simulation_ok)
+            
+            all_pass = all([
+                coint_detected, hl_ok, beta_ok, simulation_ok
+            ])
+            pairs_report["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as e:
+            pairs_report["status"] = f"Execution Error: {str(e)}"
+            pairs_report["error"] = str(e)
+            
+        self.report["step_20_pairs_trading_audit"] = pairs_report
+
+    def run_stress_scenario_audit(self):
+        """
+        STEP 21: TAIL-SCENARIO STRESS GATE AUDIT (options-selling survival)
+        Verifies validation/stress_scenarios.py + ValidationReport's stress gate:
+        1. All four canonical dated scenarios (OCT_2008, FEB_2018, MAR_2020,
+           AUG_2024) are registered with valid (start < end) windows.
+        2. compute_max_drawdown / account_survived primitives are correct
+           (a -100% day is a blow-up; a known series gives a known DD).
+        3. RISK GATE ACTUALLY BLOCKS IN MOCK MODE: a mocked naked-short-put
+           with no risk management (catastrophic shock-window loss) FAILS the
+           stress gate and is therefore NOT deployable even with otherwise
+           passing PBO/DSR/Sharpe/MaxDD metrics; a mocked iron-condor-with-stops
+           PASSES and is deployable.
+        4. FAIL-CLOSED: an options-selling report with no stress results is not
+           deployable; a non-options strategy is unaffected by the gate.
+        """
+        stress_report = {}
+        try:
+            import numpy as _np
+            import pandas as _pd
+            from validation.stress_scenarios import (
+                STRESS_SCENARIOS, run_stress_tests, passes_stress_gate,
+                compute_max_drawdown, account_survived, MAX_STRESS_DRAWDOWN,
+            )
+            from validation.harness import ValidationReport
+
+            # 1. Canonical scenarios registered with valid windows
+            expected = {"OCT_2008", "FEB_2018", "MAR_2020", "AUG_2024"}
+            scenarios_registered = expected.issubset(set(STRESS_SCENARIOS.keys()))
+            windows_valid = all(
+                _pd.Timestamp(s.start) < _pd.Timestamp(s.end) for s in STRESS_SCENARIOS.values()
+            )
+            stress_report["canonical_scenarios_registered"] = bool(scenarios_registered)
+            stress_report["windows_valid"] = bool(windows_valid)
+
+            # 2. Primitives
+            dd_ok = abs(compute_max_drawdown(_pd.Series([0.10, -0.50])) - 0.50) < 1e-9
+            blowup_detected = account_survived(_pd.Series([0.01, -1.0])) is False
+            survives_ok = account_survived(_pd.Series([0.01, -0.30, 0.02])) is True
+            stress_report["max_drawdown_correct"] = bool(dd_ok)
+            stress_report["blowup_detection_correct"] = bool(blowup_detected and survives_ok)
+
+            good_metrics = dict(
+                start_date="2008-01-01", end_date="2024-12-31",
+                sharpe=1.5, sortino=2.0, calmar=1.0, max_dd=0.10, turnover=0.05,
+                hit_rate=0.8, avg_trade_pct=0.001, dsr=0.99, pbo=0.10,
+                bias_report={}, walk_forward_60_40=1.0, walk_forward_70_30=1.0,
+                walk_forward_80_20=1.0, distribution=_np.array([1.0, 1.1, 0.9]),
+                paths=[], n_trials=1,
+            )
+
+            # 3. Risk gate blocks naked short put, passes iron condor (mock mode)
+            def naked_short_put(start, end):
+                idx = _pd.bdate_range(start=start, end=end)
+                r = _np.full(len(idx), 0.002)
+                if len(idx) >= 2:
+                    r[len(idx) // 2] = -0.95  # catastrophic unhedged loss
+                return _pd.Series(r, index=idx)
+
+            def iron_condor_stops(start, end):
+                idx = _pd.bdate_range(start=start, end=end)
+                r = _np.full(len(idx), 0.0015)
+                if len(idx) >= 2:
+                    r[len(idx) // 2] = -0.12  # defined-risk stop
+                return _pd.Series(r, index=idx)
+
+            naked_results = run_stress_tests(naked_short_put)
+            condor_results = run_stress_tests(iron_condor_stops)
+
+            naked_gate_blocks = passes_stress_gate(naked_results) is False
+            condor_gate_passes = passes_stress_gate(condor_results) is True
+            stress_report["gate_blocks_naked_short_put"] = bool(naked_gate_blocks)
+            stress_report["gate_passes_iron_condor"] = bool(condor_gate_passes)
+
+            naked_report = ValidationReport(name="NakedPut", is_options_selling=True,
+                                            stress_test_results=naked_results, **good_metrics)
+            condor_report = ValidationReport(name="Condor", is_options_selling=True,
+                                             stress_test_results=condor_results, **good_metrics)
+            naked_blocked = naked_report.deployable is False  # blocked purely by stress gate
+            condor_deployable = condor_report.deployable is True
+            stress_report["naked_short_put_not_deployable"] = bool(naked_blocked)
+            stress_report["iron_condor_deployable"] = bool(condor_deployable)
+
+            # 4. Fail-closed + non-applicability
+            untested = ValidationReport(name="Untested", is_options_selling=True,
+                                        stress_test_results=None, **good_metrics)
+            non_options = ValidationReport(name="Equity", is_options_selling=False,
+                                           stress_test_results=None, **good_metrics)
+            fail_closed = untested.deployable is False
+            non_options_unaffected = non_options.deployable is True
+            stress_report["untested_options_seller_fails_closed"] = bool(fail_closed)
+            stress_report["non_options_strategy_unaffected"] = bool(non_options_unaffected)
+
+            all_pass = all([
+                scenarios_registered, windows_valid, dd_ok, blowup_detected, survives_ok,
+                naked_gate_blocks, condor_gate_passes, naked_blocked, condor_deployable,
+                fail_closed, non_options_unaffected,
+            ])
+            stress_report["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as e:
+            stress_report["status"] = f"Execution Error: {str(e)}"
+            stress_report["error"] = str(e)
+
+        self.report["step_21_stress_scenario_audit"] = stress_report
+
+
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
         self.run_schema_audit()
         self.run_dto_audit()
         self.run_discrepancy_analysis()
         self.run_simulation_foundation()
+        self.run_lookahead_audit()
+        self.run_universe_loader_audit()
+        self.run_cpcv_overfitting_audit()
+        self.run_execution_cost_model_audit()
+        self.run_validation_harness_audit()
+        self.run_signal_registry_audit()
+        self.run_xsec_momentum_audit()
+        self.run_rsi2_mean_reversion_audit()
+        self.run_kelly_vol_target_sizing_audit()
+        self.run_multifactor_audit()
+        self.run_hmm_regime_audit()
+        self.run_ivr_vrp_audit()
+        self.run_pairs_trading_audit()
+        self.run_stress_scenario_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================

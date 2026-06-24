@@ -15,6 +15,7 @@ except ImportError:
 import logging
 import math
 from datetime import datetime
+from typing import Dict, Optional
 
 from dto_models import FundamentalDataDTO, MacroEconomicDTO
 from research_engine import AdvancedResearchEngine
@@ -93,11 +94,14 @@ class ProcessingEngine:
             return {
                 "Regime": macro_dto.market_regime,
                 "Real_Yield": macro_dto.real_yield,
-                "Inflation": macro_dto.inflation
+                "Inflation": macro_dto.inflation,
+                # HMM second opinion (regime/hmm_regime.py); None when unavailable,
+                # never fabricated -- compile_dashboard() below maps None to NaN.
+                "HMM_Risk_On_Probability": getattr(macro_dto, "hmm_risk_on_probability", None),
             }
         except Exception as e:
             logging.error(f"Macro Processing Error: {e}")
-            return {"Regime": "Neutral", "Real_Yield": 0.0}
+            return {"Regime": "Neutral", "Real_Yield": 0.0, "HMM_Risk_On_Probability": None}
 
 
     # ==========================================================================
@@ -140,12 +144,17 @@ class ProcessingEngine:
                 
                 # --- A. STANDARD INDICATORS ---
                 df['RSI'] = ta.rsi(df['Close'], length=14)
+                # Connors RSI(2): short-lookback RSI used for mean-reversion entries
+                # (signals/rsi2_mean_reversion.py). Causal — ta.rsi(length=2) at row t
+                # only consumes Close[<=t].
+                df['RSI_2'] = ta.rsi(df['Close'], length=2)
                 macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
                 if macd is not None:
                     df['MACD_Line'] = macd['MACD_12_26_9']
                     df['MACD_Signal'] = macd['MACDs_12_26_9']
-                
+
                 df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+                df['SMA_5'] = ta.sma(df['Close'], length=5)
                 df['SMA_50'] = ta.sma(df['Close'], length=50)
                 df['SMA_200'] = ta.sma(df['Close'], length=200)
                 
@@ -211,6 +220,9 @@ class ProcessingEngine:
                 else:
                     rs_slope = 0.0
 
+                # Compute time-series momentum metrics
+                df = self.calculate_momentum_metrics(df)
+
                 pct_change = df['Close'].pct_change()
                 hv = pct_change.std() * np.sqrt(252) if not pct_change.isna().all() else 0.0
                 
@@ -224,11 +236,20 @@ class ProcessingEngine:
                     'Price_Tech': last_row['Close'],
                     'Volume': last_row.get('Volume', 0),
                     'RSI': last_row.get('RSI', 50),
+                    'RSI_2': float(last_row.get('RSI_2', 50.0)) if pd.notna(last_row.get('RSI_2')) else 50.0,
                     'MACD_Line': last_row.get('MACD_Line', 0),
                     'MACD_Signal': last_row.get('MACD_Signal', 0),
                     'ATR': last_row.get('ATR', 0),
+                    'SMA_5': float(last_row.get('SMA_5', 0.0)) if pd.notna(last_row.get('SMA_5')) else last_row['Close'],
                     'SMA_50': last_row.get('SMA_50', 0),
                     'SMA_200': last_row.get('SMA_200', 0),
+                    'ROC_12M': float(last_row.get('ROC_12M', 0.0)) if pd.notna(last_row.get('ROC_12M')) else 0.0,
+                    'ROC_6M': float(last_row.get('ROC_6M', 0.0)) if pd.notna(last_row.get('ROC_6M')) else 0.0,
+                    'Momentum_Vol_Scaled': float(last_row.get('Momentum_Vol_Scaled', 0.0)) if pd.notna(last_row.get('Momentum_Vol_Scaled')) else 0.0,
+                    # NaN (not 0.0) when <60 valid daily returns are available -- this
+                    # feeds signals/multifactor.py's low-volatility factor input and
+                    # must never be fabricated as a fake "low vol" reading.
+                    'Realized_Vol_60D': float(last_row['Realized_Vol_60D']) if pd.notna(last_row.get('Realized_Vol_60D')) else float('nan'),
                     
                     # Risk Keys mapped to Schema
                     'VaR 95': var_95,
@@ -283,7 +304,24 @@ class ProcessingEngine:
     # ==========================================================================
     # 3. FUNDAMENTAL ANALYSIS
     # ==========================================================================
-    def calculate_fundamental_metrics(self, fund_dtos):
+    def calculate_fundamental_metrics(
+        self,
+        fund_dtos,
+        realized_vol_60d_map: Optional[Dict[str, float]] = None,
+    ):
+        """
+        Parameters
+        ----------
+        fund_dtos : dict[str, FundamentalDataDTO]
+        realized_vol_60d_map : dict[str, float], optional
+            Per-ticker 60-day annualized realized volatility, sourced from
+            calculate_technical_metrics()'s 'Realized_Vol_60D' (itself from
+            calculate_momentum_metrics() -- lookahead-free, shift(1)-based).
+            Required to compute the low-volatility factor input
+            (low_vol_score); absent/missing tickers get NaN, never a
+            fabricated default.
+        """
+        realized_vol_60d_map = realized_vol_60d_map or {}
         results = {}
         for ticker, dto in fund_dtos.items():
             if not dto:
@@ -343,11 +381,46 @@ class ProcessingEngine:
                                   dto.sector, debt_to_equity
                                )
 
-                # Quality Score
+                # Quality Score (heuristic dividend/valuation score -- distinct
+                # from the 'quality_factor_score' multifactor input below).
                 score = 50
                 if yield_dragged_val > price:  score += 10
                 if dto.dividend_yield > 0.03:  score += 10
                 if dto.beta < 1.0:             score += 5
+
+                # ==========================================================
+                # MULTIFACTOR FACTOR INPUTS (signals/multifactor.py)
+                # Reference: Hou-Xue-Zhang (2020) -- only factors with strong
+                # economic priors (value, quality, low-vol, size; momentum is
+                # signals/cross_sectional_momentum.py). NaN (never fabricated)
+                # when the underlying yfinance field is unavailable.
+                # ==========================================================
+                book_to_market = (
+                    1.0 / dto.pb_ratio if dto.pb_ratio and dto.pb_ratio > 0 else float('nan')
+                )
+                earnings_yield = (
+                    1.0 / dto.pe_ratio if dto.pe_ratio and dto.pe_ratio > 0 else float('nan')
+                )
+
+                roe = info.get('returnOnEquity')
+                operating_margin = info.get('operatingMargins')
+                if roe is not None and operating_margin is not None:
+                    quality_factor_score = float(roe) + float(operating_margin)
+                else:
+                    # Fallback proxy: lower leverage = higher quality. debt_to_equity
+                    # is already parsed above (None when yfinance omits the field).
+                    quality_factor_score = (
+                        -float(debt_to_equity) if debt_to_equity is not None else float('nan')
+                    )
+
+                vol_60d = realized_vol_60d_map.get(ticker)
+                low_vol_score = (
+                    -float(vol_60d) if vol_60d is not None and not math.isnan(vol_60d) else float('nan')
+                )
+
+                log_market_cap = (
+                    math.log(dto.market_cap) if dto.market_cap and dto.market_cap > 0 else float('nan')
+                )
 
                 results[ticker] = {
                     'Symbol':                   ticker,
@@ -362,6 +435,11 @@ class ProcessingEngine:
                     'P/E':                      dto.pe_ratio if dto.pe_ratio is not None else 0.0,
                     'Book Value':               dto.book_value,
                     'Beta':                     dto.beta,
+                    'book_to_market':           book_to_market,
+                    'earnings_yield':           earnings_yield,
+                    'quality_factor_score':     quality_factor_score,
+                    'low_vol_score':            low_vol_score,
+                    'log_market_cap':           log_market_cap,
                     'DPS':                      dps,
                     'Institutional Velocity':   inst_vel,
                     'DPH':                      dph,
@@ -390,6 +468,61 @@ class ProcessingEngine:
             flat_data['Price'] = pf if pf and pf > 0 else pt
             
             flat_data['Macro Status'] = regime_data.get('Regime', 'Neutral')
+            hmm_p = regime_data.get('HMM_Risk_On_Probability')
+            flat_data['HMM_Risk_On_Probability'] = float(hmm_p) if hmm_p is not None else float('nan')
             final_rows.append(flat_data)
             
         return pd.DataFrame(final_rows)
+
+    def calculate_momentum_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Computes ROC_12M, ROC_6M, ROC_3M, ROC_1M (and skip-1m versions for cross-sectional later).
+        All use .shift(1) (or further) to guarantee no lookahead.
+        Also computes realized 60-day volatility and Momentum_Vol_Scaled.
+        """
+        if df.empty or len(df) < 253:
+            df['ROC_12M'] = 0.0
+            df['ROC_6M'] = 0.0
+            df['ROC_3M'] = 0.0
+            df['ROC_1M'] = 0.0
+            df['ROC_12M_skip'] = 0.0
+            df['ROC_6M_skip'] = 0.0
+            df['ROC_3M_skip'] = 0.0
+            df['ROC_1M_skip'] = 0.0
+            df['Momentum_Vol_Scaled'] = 0.0
+            return df
+
+        df = df.sort_index()
+
+        # 1. Trailing returns (without skip) shifted by 1 to guarantee no lookahead
+        # Close[t-1] / Close[t-253] - 1.0 (252 trading days)
+        df['ROC_12M'] = df['Close'].shift(1) / df['Close'].shift(253) - 1.0
+        df['ROC_6M'] = df['Close'].shift(1) / df['Close'].shift(127) - 1.0
+        df['ROC_3M'] = df['Close'].shift(1) / df['Close'].shift(64) - 1.0
+        df['ROC_1M'] = df['Close'].shift(1) / df['Close'].shift(22) - 1.0
+
+        # 2. Skip-1m versions (skip the last 21 trading days, i.e. 1 month)
+        # Shifted by 22 to guarantee no lookahead of the last month at time t
+        df['ROC_12M_skip'] = df['Close'].shift(22) / df['Close'].shift(253) - 1.0
+        df['ROC_6M_skip'] = df['Close'].shift(22) / df['Close'].shift(127) - 1.0
+        df['ROC_3M_skip'] = df['Close'].shift(22) / df['Close'].shift(64) - 1.0
+        df['ROC_1M_skip'] = df['Close'].shift(22) / df['Close'].shift(43) - 1.0
+
+        # 3. Volatility scaling: 60-day realized vol of daily returns (annualized)
+        # Use daily returns shifted by 1 to prevent lookahead
+        daily_returns = df['Close'].pct_change().shift(1)
+        realized_vol_60d = daily_returns.rolling(window=60).std() * np.sqrt(252)
+        # Exposed as a standalone column (in addition to feeding Momentum_Vol_Scaled
+        # below) so calculate_technical_metrics can surface it for the low-volatility
+        # factor input consumed by signals/multifactor.py.
+        df['Realized_Vol_60D'] = realized_vol_60d
+
+        # Momentum Vol Scaled = ROC_12M * (0.10 / realized_vol_60d)
+        # Handle zero or NaN volatility safely
+        df['Momentum_Vol_Scaled'] = np.where(
+            (realized_vol_60d > 0) & (df['ROC_12M'].notna()) & (realized_vol_60d.notna()),
+            df['ROC_12M'] * (0.10 / realized_vol_60d),
+            0.0
+        )
+
+        return df

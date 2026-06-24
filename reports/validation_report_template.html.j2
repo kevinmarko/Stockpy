@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InvestYo Quant Platform - Strategy Validation Report</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0d0f12;
+            --card-bg: rgba(22, 28, 36, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary-glow: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+            --accent-glow: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --success-color: #00ff87;
+            --danger-color: #ff007f;
+            --text-main: #f5f6f8;
+            --text-muted: #8a99ad;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(0, 242, 254, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 80% 80%, rgba(245, 87, 108, 0.05) 0%, transparent 40%);
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1.5rem;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 800;
+            background: var(--primary-glow);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+            font-size: 1.1rem;
+        }
+
+        .badge {
+            padding: 0.6rem 1.8rem;
+            border-radius: 50px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-size: 0.95rem;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+            animation: pulse 2.5s infinite;
+        }
+
+        .badge-success {
+            background-color: rgba(0, 255, 135, 0.1);
+            color: var(--success-color);
+            border: 1px solid var(--success-color);
+        }
+
+        .badge-danger {
+            background-color: rgba(255, 0, 127, 0.1);
+            color: var(--danger-color);
+            border: 1px solid var(--danger-color);
+        }
+
+        .grid-4 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 1.8rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .card-header {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 0.8rem;
+        }
+
+        .card-value {
+            font-size: 2.5rem;
+            font-weight: 800;
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+
+        .card-value.highlight-blue {
+            background: var(--primary-glow);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .card-value.highlight-pink {
+            background: var(--accent-glow);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .card-value.success {
+            color: var(--success-color);
+        }
+
+        .card-value.danger {
+            color: var(--danger-color);
+        }
+
+        .card-footer {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .section-box {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+            background: linear-gradient(to right, #f5f6f8, #8a99ad);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th, td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        td {
+            font-size: 0.95rem;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .split-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .split-row:last-child {
+            border-bottom: none;
+        }
+
+        .split-name {
+            font-weight: 600;
+        }
+
+        .split-value {
+            font-family: monospace;
+            font-size: 1rem;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(0, 255, 135, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(0, 255, 135, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(0, 255, 135, 0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>Validation Report: {{ name }}</h1>
+                <div class="subtitle">Backtest Horizon: {{ start_date }} to {{ end_date }}</div>
+            </div>
+            <div class="badge {% if deployable %}badge-success{% else %}badge-danger{% endif %}">
+                {% if deployable %}DEPLOYABLE (PASS){% else %}REJECTED (FAIL){% endif %}
+            </div>
+        </header>
+
+        {% if is_options_selling %}
+        <!-- TAIL-SCENARIO STRESS TEST: printed at the TOP for options-selling strategies. -->
+        <section class="card" style="margin-bottom: 1.5rem;">
+            <div class="card-header">
+                Tail-Scenario Stress Test
+                <span class="badge {% if stress_gate_passed %}badge-success{% else %}badge-danger{% endif %}">
+                    {% if stress_gate_passed %}STRESS GATE: PASS{% else %}STRESS GATE: FAIL{% endif %}
+                </span>
+            </div>
+            <div class="card-footer">Options-selling survival check: max drawdown &lt; 50% AND account survives in EVERY dated shock window.</div>
+            <table style="width:100%; border-collapse: collapse; margin-top: 1rem;">
+                <thead>
+                    <tr style="text-align:left; color: var(--text-muted);">
+                        <th>Scenario</th><th>Window</th><th>Max DD</th><th>Final</th><th>Survived</th><th>Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for s in stress_results %}
+                    <tr>
+                        <td>{{ s.scenario }}</td>
+                        <td>{{ s.start }} → {{ s.end }}</td>
+                        {% if s.error %}
+                        <td colspan="3" class="danger">{{ s.error }}</td>
+                        <td class="danger">FAIL</td>
+                        {% else %}
+                        <td class="{% if s.max_drawdown < 0.50 %}success{% else %}danger{% endif %}">{{ "%.1f"|format(s.max_drawdown * 100) }}%</td>
+                        <td>{{ "%.1f"|format(s.final_return * 100) }}%</td>
+                        <td class="{% if s.survived %}success{% else %}danger{% endif %}">{{ "YES" if s.survived else "NO" }}</td>
+                        <td class="{% if s.passed %}success{% else %}danger{% endif %}">{{ "PASS" if s.passed else "FAIL" }}</td>
+                        {% endif %}
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </section>
+        {% endif %}
+
+        <section class="grid-4">
+            <!-- DSR -->
+            <div class="card">
+                <div>
+                    <div class="card-header">Deflated Sharpe Ratio (DSR)</div>
+                    <div class="card-value {% if dsr > 0.95 %}success{% else %}danger{% endif %}">
+                        {{ "%.2f"|format(dsr * 100) }}%
+                    </div>
+                </div>
+                <div class="card-footer">
+                    Gated on selection bias. Target: &gt; 95%.
+                </div>
+            </div>
+
+            <!-- PBO -->
+            <div class="card">
+                <div>
+                    <div class="card-header">Probability of Overfitting (PBO)</div>
+                    <div class="card-value {% if pbo < 0.5 %}success{% else %}danger{% endif %}">
+                        {{ "%.2f"|format(pbo * 100) }}%
+                    </div>
+                </div>
+                <div class="card-footer">
+                    Gated on backtest overfitting. Target: &lt; 50%.
+                </div>
+            </div>
+
+            <!-- Sharpe -->
+            <div class="card">
+                <div>
+                    <div class="card-header">Net Sharpe Ratio</div>
+                    <div class="card-value {% if sharpe > 0.5 %}success{% else %}danger{% endif %}">
+                        {{ "%.2f"|format(sharpe) }}
+                    </div>
+                </div>
+                <div class="card-footer">
+                    Annualized net-of-cost Sharpe ratio. Target: &gt; 0.5.
+                </div>
+            </div>
+
+            <!-- Max DD -->
+            <div class="card">
+                <div>
+                    <div class="card-header">Max Drawdown</div>
+                    <div class="card-value {% if max_dd < 0.30 %}success{% else %}danger{% endif %}">
+                        {{ "%.2f"|format(max_dd * 100) }}%
+                    </div>
+                </div>
+                <div class="card-footer">
+                    Maximum peak-to-trough decline. Target: &lt; 30%.
+                </div>
+            </div>
+        </section>
+
+        <section class="grid-4">
+            <!-- Sortino -->
+            <div class="card">
+                <div>
+                    <div class="card-header">Sortino Ratio</div>
+                    <div class="card-value highlight-blue">
+                        {{ "%.2f"|format(sortino) if sortino is not none and sortino == sortino else "N/A" }}
+                    </div>
+                </div>
+                <div class="card-footer">
+                    Annualized downside risk adjusted return.
+                </div>
+            </div>
+
+            <!-- Calmar -->
+            <div class="card">
+                <div>
+                    <div class="card-header">Calmar Ratio</div>
+                    <div class="card-value highlight-blue">
+                        {{ "%.2f"|format(calmar) if calmar is not none and calmar == calmar else "N/A" }}
+                    </div>
+                </div>
+                <div class="card-footer">
+                    Ratio of annualized return to Max Drawdown.
+                </div>
+            </div>
+
+            <!-- Hit Rate -->
+            <div class="card">
+                <div>
+                    <div class="card-header">Hit Rate</div>
+                    <div class="card-value highlight-pink">
+                        {{ "%.2f"|format(hit_rate * 100) }}%
+                    </div>
+                </div>
+                <div class="card-footer">
+                    Percentage of positive trade days.
+                </div>
+            </div>
+
+            <!-- Turnover -->
+            <div class="card">
+                <div>
+                    <div class="card-header">Daily Turnover</div>
+                    <div class="card-value highlight-pink">
+                        {{ "%.2f"|format(turnover * 100) }}%
+                    </div>
+                </div>
+                <div class="card-footer">
+                    Daily portfolio volume turned over.
+                </div>
+            </div>
+        </section>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem;">
+            <!-- Walk-Forward Parameter Stability -->
+            <section class="section-box">
+                <h2>Walk-Forward Parameter Stability</h2>
+                <div class="split-row">
+                    <span class="split-name">60/40 Split Out-of-Sample Sharpe</span>
+                    <span class="split-value {% if walk_forward_60_40 >= 0.5 %}success{% else %}danger{% endif %}">
+                        {{ "%.2f"|format(walk_forward_60_40) }}
+                    </span>
+                </div>
+                <div class="split-row">
+                    <span class="split-name">70/30 Split Out-of-Sample Sharpe</span>
+                    <span class="split-value {% if walk_forward_70_30 >= 0.5 %}success{% else %}danger{% endif %}">
+                        {{ "%.2f"|format(walk_forward_70_30) }}
+                    </span>
+                </div>
+                <div class="split-row">
+                    <span class="split-name">80/20 Split Out-of-Sample Sharpe</span>
+                    <span class="split-value {% if walk_forward_80_20 >= 0.5 %}success{% else %}danger{% endif %}">
+                        {{ "%.2f"|format(walk_forward_80_20) }}
+                    </span>
+                </div>
+            </section>
+
+            <!-- Survivorship Bias Report -->
+            <section class="section-box">
+                <h2>Survivorship Bias Audit</h2>
+                <div class="split-row">
+                    <span class="split-name">Current constituents count</span>
+                    <span class="split-value">{{ bias_report.n_current }}</span>
+                </div>
+                <div class="split-row">
+                    <span class="split-name"> constituents count at start date</span>
+                    <span class="split-value">{{ bias_report.n_at_date }}</span>
+                </div>
+                <div class="split-row">
+                    <span class="split-name">Delisted S&P 500 stocks in period</span>
+                    <span class="split-value">{{ bias_report.n_delisted_in_period }}</span>
+                </div>
+                <div class="split-row">
+                    <span class="split-name">Estimated annualized bias</span>
+                    <span class="split-value" style="color: #ff007f;">{{ bias_report.estimated_bias_pct }}%</span>
+                </div>
+            </section>
+        </div>
+
+        <section class="section-box">
+            <h2>Average Trade Details</h2>
+            <div class="split-row">
+                <span class="split-name">Average Trade Return</span>
+                <span class="split-value">{{ "%.2f"|format(avg_trade_pct * 100) }}%</span>
+            </div>
+        </section>
+    </div>
+</body>
+</html>

@@ -28,6 +28,7 @@ import asyncio
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
+from typing import Optional, Any
 
 # Core imports
 import config
@@ -40,6 +41,10 @@ from forecasting_engine import ForecastingEngine
 from strategy_engine import StrategyEngine
 from evaluation_engine import EvaluationEngine
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+from allocators.dual_momentum import DualMomentumAllocator
+from signals import global_registry
+from signals.base import SignalContext
+from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
 from diagnostics_and_visuals import (
     telemetry, 
     generate_plotly_volatility_bands, 
@@ -49,6 +54,60 @@ from diagnostics_and_visuals import (
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("MasterOrchestrator")
+
+
+# =============================================================================
+# CROSS-SECTIONAL MOMENTUM HELPER (Jegadeesh-Titman 1993)
+# =============================================================================
+
+def compute_xsec_momentum_ranks(
+    tech_raw: dict,
+    skip_days: int = 22,
+    lookback_days: int = 252,
+) -> pd.Series:
+    """Compute cross-sectional 12-1m momentum returns and percentile ranks.
+
+    Fully vectorized — no iterrows().  For each ticker in tech_raw:
+        r = close[t - skip_days] / close[t - lookback_days] - 1
+    where t is the last available row.
+
+    Parameters
+    ----------
+    tech_raw : dict[str, pd.DataFrame]
+        OHLCV DataFrames keyed by ticker (output of DataEngine.fetch_technical_raw).
+    skip_days : int
+        Number of trading days to skip at the end (default 22 ≈ 1 month).
+    lookback_days : int
+        Total lookback window in trading days (default 252 ≈ 12 months).
+
+    Returns
+    -------
+    pd.Series
+        Index: ticker str, values: percentile rank in [0, 1].
+        NaN rank for tickers with insufficient history.
+    """
+    returns: dict = {}
+    required = lookback_days + skip_days + 1
+
+    for ticker, df in tech_raw.items():
+        if df is None or df.empty or "Close" not in df.columns:
+            continue
+        close = df["Close"].dropna()
+        if len(close) < required:
+            continue
+        # All indexing is on the sorted series; both references are strictly < t
+        p_recent = close.iloc[-(skip_days + 1)].item()   # price at t - skip_days
+        p_old = close.iloc[-(lookback_days + 1)].item()  # price at t - lookback_days
+        if p_old <= 0:
+            continue
+        returns[ticker] = p_recent / p_old - 1.0
+
+    if not returns:
+        return pd.Series(dtype=float)
+
+    ret_series = pd.Series(returns)
+    # Cross-sectional rank: ascending so high returns → high rank
+    return ret_series.rank(pct=True, ascending=True)
 
 
 async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
@@ -67,40 +126,75 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
     return macro_raw, fund_raw, tech_raw
 
 
-def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict) -> pd.DataFrame:
+def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
+                  data_engine: Optional[Any] = None) -> pd.DataFrame:
     """
     Synchronous execution of the quantitative engines:
     Macro -> Technical Options -> Processing -> Forecasting -> Strategy & Evaluation.
+
+    Parameters
+    ----------
+    data_engine : IDataProvider, optional
+        Used by MacroEngine.compute_hmm_risk_on_probability() to fetch
+        historical VIX/yield-curve series (regime/hmm_regime.py's second
+        opinion). None (the default) disables the HMM second opinion --
+        market_regime/killSwitch then behave exactly as before this feature
+        existed (no fabricated probability).
     """
     # 1. Macro Economic Regime Analysis
     telemetry.info("Routing data through Macro Engine...")
-    me = MacroEngine(data_engine=None)  # Pass None to prevent redundant calls
+    me = MacroEngine(data_engine=data_engine)
     sahm_val = me._fallback_sentiment("")  # Default sahm value proxy
     macro_data = me.run_macro_killswitch(macro_raw, sahm_val)
     market_regime = macro_data["market_regime"].iloc[0]
+
+    # HMM second opinion (regime/hmm_regime.py): uses real SPY price history
+    # already fetched into tech_raw -- never fabricated, None if unavailable.
+    hmm_risk_on_probability = me.compute_hmm_risk_on_probability(tech_raw.get('SPY'))
 
     macro_dto = MacroEconomicDTO(
         yield_curve_10y_2y=float(macro_raw.get('T10Y2Y', 0.5)),
         high_yield_oas=float(macro_raw.get('BAMLH0A0HYM2', 3.5)),
         inflation_rate=float(macro_raw.get('CPIAUCSL_YoY', 2.0)),
         nominal_10y=float(macro_raw.get('DGS10', 4.0)),
-        vix_value=float(macro_raw.get('VIXCLS', 15.0))
+        vix_value=float(macro_raw.get('VIXCLS', 15.0)),
+        hmm_risk_on_probability=hmm_risk_on_probability,
     )
 
     # 2. Technical Options Analysis
     telemetry.info("Routing data through Technical Options Engine...")
     toe = TechnicalOptionsEngine()
     tech_opt_indicators = {}
+    iv_store = IVHistoryStore()
     for ticker in tickers:
         df_hist = tech_raw.get(ticker)
         if df_hist is not None and not df_hist.empty:
             indicators = toe.calculate_indicators(df_hist)
             vol = toe.estimate_gjr_garch_volatility(df_hist)
-            ivr = toe.calculate_ivr(df_hist, vol)
-            price_val = float(df_hist['Close'].iloc[-1]) if df_hist is not None and not df_hist.empty else 100.0
+            realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
+            
+            # Fetch options chain / compute true 30d ATM IV
+            as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
+            price_val = float(df_hist['Close'].iloc[-1])
+            
+            current_iv = float('nan')
+            if data_engine is not None:
+                current_iv = get_30d_atm_iv(data_engine, ticker, as_of_date, spot_price=price_val)
+                if not np.isnan(current_iv):
+                    iv_store.record_iv(ticker, as_of_date, current_iv)
+            
+            true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
+            vrp = get_vrp(ticker, current_iv, vol)
+            
+            # Call strategy matrix with true_ivr, vrp, and macro_dto
             opt_strategy = toe.generate_option_strategy_matrix(
-                ivr, indicators["Aroon_Oscillator"], indicators["Coppock_Curve"],
-                stock_price=price_val, current_iv=vol
+                true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
+                aroon_osc=indicators["Aroon_Oscillator"],
+                coppock_val=indicators["Coppock_Curve"],
+                stock_price=price_val,
+                current_iv=current_iv if not np.isnan(current_iv) else vol,
+                vrp=vrp,
+                macro_dto=macro_dto
             )
             tech_opt_indicators[ticker] = {
                 "Aroon_Oscillator": indicators["Aroon_Oscillator"],
@@ -108,7 +202,9 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
                 "Chandelier_Long": indicators["Chandelier_Long"],
                 "Chandelier_Short": indicators["Chandelier_Short"],
                 "GARCH_Vol": vol,
-                "IVR": ivr,
+                "Realized_Vol_Rank": realized_vol_rank,
+                "True_IVR": true_ivr,
+                "VRP": vrp,
                 "Option_Strategy_Matrix": opt_strategy
             }
 
@@ -124,12 +220,20 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
         if data and 'info' in data:
             fund_dtos[ticker] = FundamentalDataDTO.from_raw_dict(ticker, data['info'], dividends=data.get('dividends'))
 
-    fund_metrics = pe.calculate_fundamental_metrics(fund_dtos)
+    # Realized_Vol_60D feeds the multifactor low-volatility factor input
+    # (signals/multifactor.py); sourced from tech_metrics, not fabricated.
+    realized_vol_60d_map = {
+        ticker: metrics.get('Realized_Vol_60D', float('nan'))
+        for ticker, metrics in tech_metrics.items()
+    }
+    fund_metrics = pe.calculate_fundamental_metrics(fund_dtos, realized_vol_60d_map=realized_vol_60d_map)
     dashboard_df = pe.compile_dashboard(tech_metrics, fund_metrics, regime_metrics)
 
-    # Explicitly map GARCH_Vol, IVR, and advanced indicators from tech_opt_indicators to dashboard_df
+    # Explicitly map GARCH_Vol, Realized_Vol_Rank, True_IVR, VRP, and advanced indicators from tech_opt_indicators to dashboard_df
     dashboard_df['GARCH_Vol'] = 0.0
-    dashboard_df['IVR'] = 0.0
+    dashboard_df['Realized_Vol_Rank'] = 0.0
+    dashboard_df['True_IVR'] = 0.0
+    dashboard_df['VRP'] = 0.0
     dashboard_df['Aroon Oscillator'] = 0.0
     dashboard_df['Coppock Curve'] = 0.0
     dashboard_df['Chandelier Exit'] = 0.0
@@ -137,7 +241,9 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
         ticker = row['Symbol']
         if ticker in tech_opt_indicators:
             dashboard_df.at[idx, 'GARCH_Vol'] = tech_opt_indicators[ticker].get('GARCH_Vol', 0.0)
-            dashboard_df.at[idx, 'IVR'] = tech_opt_indicators[ticker].get('IVR', 0.0)
+            dashboard_df.at[idx, 'Realized_Vol_Rank'] = tech_opt_indicators[ticker].get('Realized_Vol_Rank', 0.0)
+            dashboard_df.at[idx, 'True_IVR'] = tech_opt_indicators[ticker].get('True_IVR', 0.0)
+            dashboard_df.at[idx, 'VRP'] = tech_opt_indicators[ticker].get('VRP', 0.0)
             dashboard_df.at[idx, 'Aroon Oscillator'] = tech_opt_indicators[ticker].get('Aroon_Oscillator', 0.0)
             dashboard_df.at[idx, 'Coppock Curve'] = tech_opt_indicators[ticker].get('Coppock_Curve', 0.0)
             dashboard_df.at[idx, 'Chandelier Exit'] = tech_opt_indicators[ticker].get('Chandelier_Long', 0.0)
@@ -185,7 +291,72 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
             dashboard_df.at[idx, 'Forecast_60'] = price * (1.0 + mu * 60)
             dashboard_df.at[idx, 'Forecast_90'] = price * (1.0 + mu * 90)
 
-    # 5. Strategy & Sizing Evaluations
+    # 5. Cross-Sectional Momentum Pre-Compute (Jegadeesh-Titman 1993)
+    # Must run BEFORE the per-ticker strategy loop so pre_compute populates
+    # context.xsec_percentile_ranks for all tickers at once.
+    telemetry.info("Computing cross-sectional momentum ranks (Jegadeesh-Titman)...")
+    dashboard_df['XSec_12_1M'] = float('nan')
+    dashboard_df['XSec_Momentum_Rank'] = float('nan')
+
+    # Compute vectorized 12-1m returns for the full universe
+    xsec_rank_series = compute_xsec_momentum_ranks(tech_raw)
+
+    # Write 12-1m returns and ranks back to dashboard_df before pre_compute
+    xsec_return_dict: dict = {}
+    for ticker_i, df_i in tech_raw.items():
+        if df_i is None or df_i.empty or 'Close' not in df_i.columns:
+            continue
+        close_i = df_i['Close'].dropna()
+        required_i = 252 + 22 + 1
+        if len(close_i) < required_i:
+            continue
+        p_recent_i = float(close_i.iloc[-23])   # t - 22
+        p_old_i = float(close_i.iloc[-253])      # t - 252
+        if p_old_i > 0:
+            xsec_return_dict[ticker_i] = p_recent_i / p_old_i - 1.0
+
+    for idx_x, row_x in dashboard_df.iterrows():
+        tk = row_x['Symbol']
+        if tk in xsec_return_dict:
+            dashboard_df.at[idx_x, 'XSec_12_1M'] = xsec_return_dict[tk]
+        if tk in xsec_rank_series.index:
+            dashboard_df.at[idx_x, 'XSec_Momentum_Rank'] = float(xsec_rank_series[tk])
+
+    # Build a shared SignalContext stub (bar/fundamentals populated per-ticker below)
+    # The xsec_percentile_ranks dict lives in the shared context and is read-only per ticker
+    _shared_macro_dto = macro_dto  # already built above
+    _stub_bar = MarketBarDTO(datetime.now(), "__UNIVERSE__", 100.0, 100.0, 100.0, 100.0, 0)
+    _stub_fund = FundamentalDataDTO(
+        ticker="__UNIVERSE__", pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
+        book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
+        payout_ratio=0.0, sector="Unknown", company_name="Unknown"
+    )
+    shared_context = SignalContext(
+        bar=_stub_bar,
+        fundamentals=_stub_fund,
+        macro=_shared_macro_dto,
+    )
+    # Trigger pre_compute on all signal modules (most are no-ops; XSec fills rank
+    # dict; MultifactorSignal fills multifactor_scores -- see signals/multifactor.py)
+    global_registry.run_pre_compute(dashboard_df, shared_context)
+    telemetry.info(
+        "Cross-sectional pre_compute complete. %d tickers ranked.",
+        len(shared_context.xsec_percentile_ranks),
+    )
+
+    # Write multifactor Z-scores back into dashboard_df (computed by
+    # MultifactorSignal.pre_compute above; not available before this point).
+    for col in ('Value_Z', 'Quality_Z', 'LowVol_Z', 'Size_Z', 'Multifactor_Composite'):
+        dashboard_df[col] = float('nan')
+    for idx_m, row_m in dashboard_df.iterrows():
+        tk_m = row_m['Symbol']
+        entry_m = shared_context.multifactor_scores.get(tk_m)
+        if entry_m is None:
+            continue
+        for col in ('Value_Z', 'Quality_Z', 'LowVol_Z', 'Size_Z', 'Multifactor_Composite'):
+            dashboard_df.at[idx_m, col] = entry_m.get(col, float('nan'))
+
+    # 6. Strategy & Sizing Evaluations
     telemetry.info("Routing data through Strategy and Evaluation Engines...")
     se = StrategyEngine()
     ee = EvaluationEngine()
@@ -239,7 +410,9 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
         rs_val = float(row.get('Relative_Strength', row.get('RS vs SPY', row.get('Relative Strength', 0.0))))
         garch_val = float(row.get('GARCH_Vol', 0.0))
         edge_val = float(row.get('Edge Ratio', row.get('Edge_Ratio', 0.0)))
-        
+        rsi_2_val = float(row.get('RSI_2', 50.0)) if pd.notna(row.get('RSI_2', 50.0)) else 50.0
+        sma_5_val = float(row.get('SMA_5')) if pd.notna(row.get('SMA_5')) else None
+
         chan_long = 0.0
         chan_short = 0.0
         if ticker in tech_opt_indicators:
@@ -263,7 +436,11 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
             garch_vol=garch_val,
             edge_ratio=edge_val,
             chandelier_long=chan_long,
-            chandelier_short=chan_short
+            chandelier_short=chan_short,
+            roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
+            sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
+            rsi_2=rsi_2_val,
+            sma_5=sma_5_val
         )
 
         # Calculate Edge Ratio (Post-trade evaluation)
@@ -290,28 +467,11 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
         dashboard_df.at[idx, 'book_value'] = fund_dto.book_value
         dashboard_df.at[idx, 'graham_number'] = fund_dto.graham_number
         
-        # Win-probability Kelly calculation
-        kelly_dict = ee.calculate_kelly_target(
-            expected_return=0.0, variance=0.0,
-            win_probability=0.55 + (float(strategy_output['Score']) / 100.0) * 0.35,
-            win_loss_ratio=2.0, half_kelly=True
-        )
-        kelly_val = kelly_dict["Kelly Target"]
-        
-        # Enforce maximum allocation limits based on score, trend, and edge ratio
-        final_score_val = float(strategy_output['Score'])
-        is_uptrend_val = (aroon_osc_val >= 50.0) if aroon_osc_val is not None else (aroon_val >= 50.0)
-        
-        if final_score_val >= 75.0 and sortino_val > 1.0 and edge_ratio_val >= 1.0:
-            max_allocation_limit = 0.25
-        elif final_score_val >= 55.0:
-            max_allocation_limit = 0.15 if is_uptrend_val else 0.05
-        elif final_score_val >= 35.0:
-            max_allocation_limit = 0.05
-        else:
-            max_allocation_limit = 0.00
-            
-        dashboard_df.at[idx, 'Kelly Target'] = float(max(0.0, min(kelly_val, max_allocation_limit)))
+        # Kelly Target: single source of truth is StrategyEngine._calculate_kelly_sizing
+        # (sizing.kelly.fractional_kelly / sizing.vol_target.volatility_target_weight),
+        # already computed inside se.evaluate_security() above. No second, divergent
+        # win-probability formula or score-bracket override here anymore.
+        dashboard_df.at[idx, 'Kelly Target'] = float(strategy_output['Kelly Target'])
         if ticker in tech_opt_indicators:
             dashboard_df.at[idx, 'Option Strategy'] = tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '')
         else:
@@ -319,18 +479,11 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
         dashboard_df.at[idx, 'buyRange'] = strategy_output['buyRange']
         dashboard_df.at[idx, 'Strategy Explainer Notes'] = strategy_output['Strategy Explainer Notes']
 
-    # CRITICAL FIX 1: Map 'Avg Cost' to 'Entry_Price' for MFE/MAE
-    if 'Avg Cost' in dashboard_df.columns and 'Entry_Price' not in dashboard_df.columns:
+    # Map 'Avg Cost' to 'Entry_Price' if present
+    if 'Avg Cost' in dashboard_df.columns:
         dashboard_df['Entry_Price'] = dashboard_df['Avg Cost']
-    elif 'Entry_Price' not in dashboard_df.columns:
-        dashboard_df['Entry_Price'] = dashboard_df['Price'] # Fallback proxy to prevent NaNs
 
-    # Ensure High/Low exist for excursion calculations
-    if 'Price' in dashboard_df.columns:
-        if 'High' not in dashboard_df.columns: dashboard_df['High'] = dashboard_df['Price'] * 1.05
-        if 'Low' not in dashboard_df.columns: dashboard_df['Low'] = dashboard_df['Price'] * 0.95
-
-    # CRITICAL FIX 2: Map 'Shares' to 'position_size' for Portfolio Heat
+    # Map 'Shares' to 'position_size' for Portfolio Heat
     if 'Shares' in dashboard_df.columns and 'Price' in dashboard_df.columns:
         dashboard_df['position_size'] = dashboard_df['Shares'] * dashboard_df['Price']
     elif 'position_size' not in dashboard_df.columns:
@@ -369,15 +522,51 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict)
     else:
         benchmark_df = pd.DataFrame()
 
-    dashboard_df = ee.evaluate_portfolio(dashboard_df, benchmark_df)
+    dashboard_df = ee.evaluate_portfolio(dashboard_df, benchmark_df, data_provider=tech_raw)
 
-    # CRITICAL FIX 4: Eradicate NaNs before Google Sheets Export
-    export_keys = ['MAE', 'MFE', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection']
+    # CRITICAL FIX 4: Handle NaNs/values before Google Sheets Export
+    export_keys = ['MAE', 'MFE', 'Edge Ratio', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection']
     for key in export_keys:
         if key in dashboard_df.columns:
-            dashboard_df[key] = dashboard_df[key].fillna(0.0)
+            if key not in ['MAE', 'MFE', 'Edge Ratio']:
+                dashboard_df[key] = dashboard_df[key].fillna(0.0)
         else:
-            dashboard_df[key] = 0.0
+            if key not in ['MAE', 'MFE', 'Edge Ratio']:
+                dashboard_df[key] = 0.0
+            else:
+                dashboard_df[key] = np.nan
+
+    # ---- Dual Momentum Overlay (optional, gated by settings flag) ----
+    if settings.USE_DUAL_MOMENTUM_OVERLAY:
+        telemetry.info("Running Dual Momentum Overlay...")
+        try:
+            dm = DualMomentumAllocator(
+                risky_assets=list(settings.DUAL_MOMENTUM_RISKY_ASSETS),
+                safe_asset=settings.DUAL_MOMENTUM_SAFE_ASSET,
+            )
+            dm_alloc = dm.decide(
+                as_of_date=datetime.now(timezone.utc).date(),
+                price_data=tech_raw,
+            )
+            dm_winner = next(iter(dm_alloc))  # Single-asset allocation
+            telemetry.info(f"Dual Momentum decision: {dm_winner} ({dm_alloc})"
+                           )
+            # If safe asset selected, zero out Kelly for all risky universe tickers
+            if dm_winner == settings.DUAL_MOMENTUM_SAFE_ASSET:
+                risky_set = set(settings.DUAL_MOMENTUM_RISKY_ASSETS)
+                mask = dashboard_df["Symbol"].isin(risky_set)
+                dashboard_df.loc[mask, "Kelly Target"] = 0.0
+                telemetry.info(
+                    f"Dual Momentum: safe-asset regime. Kelly Target zeroed for "
+                    f"{list(risky_set & set(dashboard_df['Symbol'].tolist()))}"
+                )
+            # Record the DM decision in a new column for reporting
+            dashboard_df["DualMomentum_Signal"] = dm_winner
+        except Exception as dm_err:
+            telemetry.warning(f"Dual Momentum Overlay failed (non-critical): {dm_err}")
+            dashboard_df["DualMomentum_Signal"] = "N/A"
+    else:
+        dashboard_df["DualMomentum_Signal"] = "disabled"
 
     return dashboard_df
 
@@ -409,14 +598,14 @@ async def main():
     # Fail-safe check: If offline or data is empty, fall back to MockDataEngine for verification
     if not tech_raw or all(df.empty for df in tech_raw.values()):
         telemetry.warning("Fetched pricing data is empty (likely due to network offline). Falling back to MockDataEngine for verification.")
-        mock_de = MockDataEngine()
-        macro_raw = mock_de.fetch_macro_raw()
-        fund_raw = mock_de.fetch_fundamentals_raw(tickers)
-        tech_raw = mock_de.fetch_technical_raw(tickers)
+        de = MockDataEngine()
+        macro_raw = de.fetch_macro_raw()
+        fund_raw = de.fetch_fundamentals_raw(tickers)
+        tech_raw = de.fetch_technical_raw(tickers)
 
     # 2. Run Pipeline
     try:
-        final_df = run_pipeline(tickers, macro_raw, fund_raw, tech_raw)
+        final_df = run_pipeline(tickers, macro_raw, fund_raw, tech_raw, data_engine=de)
     except Exception as pipe_err:
         telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}")
         sys.exit(1)
@@ -469,7 +658,7 @@ async def main():
 
     # 5. Export Final JSON Payload Representation
     if not final_df.empty:
-        output_payload = final_df[["Symbol", "Price", "Action Signal", "buyRange", "Kelly Target", "Option Strategy", "GARCH_Vol", "IVR"]].to_dict(orient="records")
+        output_payload = final_df[["Symbol", "Price", "Action Signal", "buyRange", "Kelly Target", "Option Strategy", "GARCH_Vol", "True_IVR"]].to_dict(orient="records")
         print("\n=== FINAL ACTIONABLE PAYLOAD REPRESENTATION ===")
         print(json.dumps(output_payload, indent=4))
         print("================================================\n")
