@@ -19,6 +19,7 @@ from pandera.typing import Series, DateTime
 # Core project imports
 from data_engine import DataEngine
 from dto_models import MacroEconomicDTO
+from regime.hmm_regime import HMMRegimeDetector, build_feature_matrix
 
 # Try importing pandas_datareader for Fama-French factor loading
 try:
@@ -65,6 +66,66 @@ class MacroEngine:
         Initializes the MacroEngine with a DataEngine instance for raw FRED data fetching.
         """
         self.data_engine = data_engine
+        # Persists across calls within this MacroEngine instance's lifetime so the
+        # retrain_freq_days gate (HMMRegimeDetector.fit) is meaningful for a
+        # long-lived process. main_orchestrator.py constructs a fresh MacroEngine
+        # per run, so in that batch context this effectively refits every run --
+        # expected for a one-shot script, not a bug (see regime/hmm_regime.py).
+        self._hmm_detector = HMMRegimeDetector(n_states=3, retrain_freq_days=7)
+
+    # Minimum rows required for a numerically stable 3-state Gaussian HMM fit.
+    HMM_MIN_FIT_ROWS = 100
+
+    def compute_hmm_risk_on_probability(self, spy_price_df: Optional[pd.DataFrame]) -> Optional[float]:
+        """
+        Computes the HMM second opinion's risk_on_probability at the latest
+        available date, for use as MacroEconomicDTO.hmm_risk_on_probability.
+
+        Returns None (never a fabricated probability) if:
+        - spy_price_df is unavailable/empty,
+        - DataEngine.fetch_macro_history() returns no usable VIX/yield-curve
+          history (e.g. FRED unavailable),
+        - the aligned feature matrix has fewer than HMM_MIN_FIT_ROWS rows, or
+        - the HMM fit/predict raises (logged, not propagated -- a statistical
+          second opinion failing must never crash the primary rules-based
+          pipeline).
+        """
+        if spy_price_df is None or spy_price_df.empty or 'Close' not in spy_price_df.columns:
+            logger.warning("HMM regime: no SPY price history available; skipping (hmm_risk_on_probability=None).")
+            return None
+
+        try:
+            macro_history = self.data_engine.fetch_macro_history() if self.data_engine else pd.DataFrame()
+        except Exception as e:
+            logger.warning(f"HMM regime: fetch_macro_history() failed: {e}; skipping.")
+            return None
+
+        if macro_history is None or macro_history.empty or 'VIXCLS' not in macro_history.columns:
+            logger.warning("HMM regime: no usable VIX/yield-curve history; skipping (hmm_risk_on_probability=None).")
+            return None
+
+        try:
+            features = build_feature_matrix(
+                spy_price_df, macro_history['VIXCLS'], macro_history['T10Y2Y']
+            )
+        except Exception as e:
+            logger.warning(f"HMM regime: feature matrix construction failed: {e}; skipping.")
+            return None
+
+        if len(features) < self.HMM_MIN_FIT_ROWS:
+            logger.warning(
+                f"HMM regime: only {len(features)} aligned feature rows "
+                f"(< {self.HMM_MIN_FIT_ROWS} required); skipping."
+            )
+            return None
+
+        try:
+            self._hmm_detector.fit(features)
+            result = self._hmm_detector.predict_proba(features)
+            return float(result["risk_on_probability"])
+        except Exception as e:
+            logger.error(f"HMM regime: fit/predict failed: {e}. Falling back to None (rules-based stays primary).")
+            return None
 
     def calculate_sahm_rule(self, fallback_val: float = 0.0) -> float:
         """

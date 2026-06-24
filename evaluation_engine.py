@@ -44,10 +44,11 @@ class EvaluationEngine:
         Calculates Maximum Favorable Excursion (MFE) and Maximum Adverse Excursion (MAE),
         normalizing MFE against MAE to output the Edge Ratio.
         Logs standard deviation of returns alongside the Edge Ratio as structured JSON.
+        MAE is always reported as a POSITIVE number representing the magnitude of adverse move.
         """
         if history_df is None or history_df.empty:
             telemetry.warning("Empty history DataFrame provided for Edge Ratio calculation.")
-            return {"MFE": 0.0, "MAE": 0.0, "Edge Ratio": 0.0, "Return Std Dev": 0.0}
+            return {"MFE": np.nan, "MAE": np.nan, "Edge Ratio": np.nan, "Return Std Dev": np.nan}
 
         try:
             # Ensure index is datetime-like
@@ -68,7 +69,7 @@ class EvaluationEngine:
 
             if hold_period.empty:
                 telemetry.warning(f"No pricing data found between {entry_ts} and {exit_ts}.")
-                return {"MFE": 0.0, "MAE": 0.0, "Edge Ratio": 0.0, "Return Std Dev": 0.0}
+                return {"MFE": np.nan, "MAE": np.nan, "Edge Ratio": np.nan, "Return Std Dev": np.nan}
 
             # Localized high and low extreme prices
             max_high = float(hold_period["High"].max())
@@ -76,11 +77,11 @@ class EvaluationEngine:
 
             # MFE and MAE relative to the trade entry price
             if trade_entry_price > 0:
-                mfe = (max_high - trade_entry_price) / trade_entry_price
-                mae = (trade_entry_price - min_low) / trade_entry_price
+                mfe = max(0.0, (max_high - trade_entry_price) / trade_entry_price)
+                mae = max(0.0, (trade_entry_price - min_low) / trade_entry_price)
             else:
-                mfe = 0.0
-                mae = 0.0
+                mfe = np.nan
+                mae = np.nan
 
             # Normalize MFE by MAE to calculate Edge Ratio
             if mae > 0:
@@ -96,20 +97,20 @@ class EvaluationEngine:
             # Log metrics as structured JSON telemetry
             log_payload = {
                 "metric": "post_trade_evaluation",
-                "trade_entry_price": float(trade_entry_price),
+                "trade_entry_price": float(trade_entry_price) if not pd.isna(trade_entry_price) else None,
                 "entry_date": str(entry_ts.date()),
                 "exit_date": str(exit_ts.date()),
-                "mfe": float(mfe),
-                "mae": float(mae),
-                "edge_ratio": float(edge_ratio),
+                "mfe": float(mfe) if not pd.isna(mfe) else None,
+                "mae": float(mae) if not pd.isna(mae) else None,
+                "edge_ratio": float(edge_ratio) if not pd.isna(edge_ratio) else None,
                 "std_dev_returns": float(std_dev)
             }
             telemetry.info(json.dumps(log_payload))
 
             return {
-                "MFE": float(mfe),
-                "MAE": float(mae),
-                "Edge Ratio": float(edge_ratio),
+                "MFE": float(mfe) if not pd.isna(mfe) else np.nan,
+                "MAE": float(mae) if not pd.isna(mae) else np.nan,
+                "Edge Ratio": float(edge_ratio) if not pd.isna(edge_ratio) else np.nan,
                 "Return Std Dev": float(std_dev)
             }
 
@@ -118,7 +119,7 @@ class EvaluationEngine:
                 "event": "edge_ratio_failed",
                 "error": str(e)
             }))
-            return {"MFE": 0.0, "MAE": 0.0, "Edge Ratio": 0.0, "Return Std Dev": 0.0}
+            return {"MFE": np.nan, "MAE": np.nan, "Edge Ratio": np.nan, "Return Std Dev": np.nan}
 
     def calculate_kelly_target(
         self, 
@@ -424,26 +425,121 @@ class EvaluationEngine:
             logger.error(f"Error calculating portfolio heat: {e}")
             return 0.0
 
-    def evaluate_portfolio(self, df: pd.DataFrame, benchmark_df: pd.DataFrame = pd.DataFrame()) -> pd.DataFrame:
+    def evaluate_portfolio(
+        self, 
+        df: pd.DataFrame, 
+        benchmark_df: pd.DataFrame = pd.DataFrame(),
+        data_provider = None
+    ) -> pd.DataFrame:
         """
         Main execution method mapping MAE, MFE, Portfolio Heat, and Brinson-Fachler 
         metrics identically to internal DTO keys requested by config.py.
+        Uses transactions_store to pull actual entry prices/timestamps and fetches
+        actual historical OHLC of the hold period from data_provider.
         """
         logger.info("Running post-trade execution analytics...")
-
+        from transactions_store import TransactionsStore
+        
         df = df.copy()
+        
+        # Ensure target columns exist in the DataFrame
+        for col in ['Entry_Price', 'MAE', 'MFE', 'Edge Ratio', 'Realized Slippage']:
+            if col not in df.columns:
+                df[col] = np.nan
+        
+        store = TransactionsStore()
+        
+        # 1. Evaluate MAE / MFE / Edge Ratio / Slippage against real trade history
+        for idx, row in df.iterrows():
+            symbol = row['Symbol']
+            # Find trade history for this symbol
+            trade_df = store.get_trade_history(symbol)
+            
+            entry_price = np.nan
+            mae = np.nan
+            mfe = np.nan
+            edge_ratio = np.nan
+            slippage = np.nan
+            
+            if not trade_df.empty:
+                # Get the most recent trade (open or closed)
+                # Sort by entry_ts descending
+                trade_df['entry_ts'] = pd.to_datetime(trade_df['entry_ts'])
+                trade_df = trade_df.sort_values(by='entry_ts', ascending=False)
+                latest_trade = trade_df.iloc[0]
+                
+                entry_price = float(latest_trade['entry_price'])
+                entry_ts = latest_trade['entry_ts']
+                exit_ts = latest_trade['exit_ts']
+                if pd.isna(exit_ts) or exit_ts is None:
+                    from datetime import datetime, timezone
+                    exit_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+                else:
+                    exit_ts = pd.to_datetime(exit_ts)
+                
+                # Fetch actual OHLC history from data provider to get actual High and Low of the hold period
+                if data_provider is not None:
+                    try:
+                        if hasattr(data_provider, 'fetch_technical_raw'):
+                            raw_tech = data_provider.fetch_technical_raw([symbol])
+                            history_df = raw_tech.get(symbol) if raw_tech else None
+                        elif isinstance(data_provider, dict):
+                            history_df = data_provider.get(symbol)
+                        else:
+                            history_df = None
 
-        # 1. Evaluate MAE / MFE Excursions
-        if 'Entry_Price' in df.columns and 'High' in df.columns and 'Low' in df.columns:
-            excursions = df.apply(
-                lambda row: self.calculate_excursion_metrics(row['Entry_Price'], row['High'], row['Low']), axis=1
-            )
-            df['MAE'] = [x[0] for x in excursions]
-            df['MFE'] = [x[1] for x in excursions]
-        else:
-            logger.warning("Missing OHLC/Entry execution data. Defaulting MFE/MAE to 0.")
-            df['MAE'] = 0.0
-            df['MFE'] = 0.0
+                        if history_df is not None and not history_df.empty:
+                            history_df = history_df.copy()
+                            if not isinstance(history_df.index, pd.DatetimeIndex):
+                                history_df.index = pd.to_datetime(history_df.index)
+                            
+                            # Naive datetimes comparison
+                            history_df.index = history_df.index.tz_localize(None)
+                            naive_entry = entry_ts.tz_localize(None) if entry_ts.tzinfo else entry_ts
+                            naive_exit = exit_ts.tz_localize(None) if exit_ts.tzinfo else exit_ts
+                            
+                            hold_period = history_df.loc[naive_entry:naive_exit]
+                            if not hold_period.empty:
+                                max_high = float(hold_period['High'].max())
+                                min_low = float(hold_period['Low'].min())
+                                position_type = str(latest_trade['side']).lower().strip()
+                                
+                                mae, mfe = self.calculate_excursion_metrics(
+                                    entry_price, max_high, min_low, position_type
+                                )
+                                
+                                # Edge Ratio calculation
+                                if mae > 0:
+                                    edge_ratio = mfe / mae
+                                else:
+                                    edge_ratio = mfe / 1e-6 if mfe > 0 else 0.0
+                                
+                                # Realized Slippage
+                                arrival_price = float(row.get('Price', entry_price))
+                                slippage = self.calculate_realized_slippage(entry_price, arrival_price)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch actual hold period history for {symbol}: {e}")
+            
+            # If no transaction history was found but Entry_Price exists in the input df, we can fall back
+            if np.isnan(entry_price) and 'Entry_Price' in row and not pd.isna(row['Entry_Price']):
+                entry_price = float(row['Entry_Price'])
+                if 'High' in row and not pd.isna(row['High']) and 'Low' in row and not pd.isna(row['Low']):
+                    max_high = float(row['High'])
+                    min_low = float(row['Low'])
+                    mae, mfe = self.calculate_excursion_metrics(
+                        entry_price, max_high, min_low, 'long'
+                    )
+                    if mae > 0:
+                        edge_ratio = mfe / mae
+                    else:
+                        edge_ratio = mfe / 1e-6 if mfe > 0 else 0.0
+            
+                
+            df.at[idx, 'Entry_Price'] = entry_price
+            df.at[idx, 'MAE'] = mae
+            df.at[idx, 'MFE'] = mfe
+            df.at[idx, 'Edge Ratio'] = edge_ratio
+            df.at[idx, 'Realized Slippage'] = slippage
 
         # 2. Evaluate Portfolio Heat against Max Thresholds
         if 'position_size' not in df.columns:
@@ -484,15 +580,7 @@ class EvaluationEngine:
             df['BF_Allocation'] = 0.0
             df['BF_Selection'] = 0.0
 
-        # 4. NEW: Evaluate Realized Slippage
-        if 'Entry_Price' in df.columns and 'Price' in df.columns:
-            df['Realized Slippage'] = df.apply(
-                lambda row: self.calculate_realized_slippage(row['Entry_Price'], row['Price']), axis=1
-            )
-        else:
-            df['Realized Slippage'] = 0.0
-
-        # 5. NEW: Evaluate Tail Dependency Risk (CoVaR Proxy)
+        # 5. Evaluate Tail Dependency Risk (CoVaR Proxy)
         var_key = 'VaR 95' if 'VaR 95' in df.columns else 'VaR_95' if 'VaR_95' in df.columns else None
         if var_key and 'Beta' in df.columns:
             df['CoVaR Proxy'] = df.apply(

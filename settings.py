@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +64,78 @@ class Settings(BaseSettings):
     REQUIRED_RETURN_RATE: float = 0.08
     MAX_PORTFOLIO_HEAT: float = 0.06
 
+    # --- Position sizing (sizing/kelly.py, sizing/vol_target.py) ---
+    KELLY_FRACTION: float = 0.5   # half-Kelly
+    KELLY_CAP: float = 0.20
+    VOL_TARGET: float = 0.10
+    MAX_LEVERAGE: float = 2.0
+    # Hard ceiling on any single-name position weight, applied as a final clamp
+    # in StrategyEngine._calculate_kelly_sizing regardless of sizing path (Kelly
+    # or volatility-target fallback). Chosen as the middle ground between the
+    # old score-bracket system's hard 25% cap and the new vol-target fallback's
+    # uncapped-up-to-MAX_LEVERAGE (2.0x) behavior: 1.0 = up to 100% of capital
+    # in one name, but no added leverage on top of full allocation.
+    MAX_POSITION_WEIGHT: float = 1.0
+
     # --- Runtime / IO ---
     OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
     LOG_LEVEL: str = "INFO"
+    SIGNAL_WEIGHTS: dict[str, float] = Field(
+        default_factory=lambda: {
+            "macro_regime": 45.0,
+            "graham_value": 15.0,
+            "dividend_quality": 25.0,
+            "macd_momentum": 15.0,
+            "aroon_trend": 15.0,
+            "forecast_alignment": 10.0,
+            "relative_strength": 10.0,
+            "rsi_extremes": 20.0,
+            "sortino_drawdown": 10.0,
+            "edge_garch": 35.0,
+            "timeseries_momentum": 15.0,
+            "cross_sectional_momentum": 15.0,
+            "rsi2_mean_reversion": 10.0,
+            "multifactor": 15.0,
+            # MUST stay 0.0: regime_multiplier carries the HMM second opinion
+            # as a position-sizing multiplier (StrategyEngine reads its
+            # confidence field directly), not a score contribution -- its
+            # compute() always returns score=0.0 regardless of this weight,
+            # but the explicit 0.0 here documents and lets Gravity audit the
+            # "no directional alpha" invariant structurally.
+            "regime_multiplier": 0.0,
+        },
+        description="Weights for individual quantitative signal modules."
+    )
+
+    # --- Multifactor signal (signals/multifactor.py) ---
+    MULTIFACTOR_MICROCAP_THRESHOLD: float = Field(
+        default=300_000_000.0,
+        description=(
+            "Tickers with Market Cap below this (USD) are excluded from the "
+            "cross-sectional z-scoring population in signals/multifactor.py "
+            "and receive a neutral (0.0) score rather than fabricated factor "
+            "exposure."
+        ),
+    )
+
+    # --- Dual Momentum allocator overlay ---
+    USE_DUAL_MOMENTUM_OVERLAY: bool = Field(
+        default=False,
+        description=(
+            "When True, the Dual Momentum allocator pre-screens the ticker list each "
+            "run. If the allocator selects the safe asset (BIL), tickers in the risky "
+            "universes (SPY, VEU) have their Kelly Target set to 0.0."
+        ),
+    )
+    DUAL_MOMENTUM_SAFE_ASSET: str = Field(
+        default="BIL",
+        description="Ticker used as the safe/defensive asset in the Dual Momentum overlay.",
+    )
+    DUAL_MOMENTUM_RISKY_ASSETS: list[str] = Field(
+        default_factory=lambda: ["SPY", "VEU"],
+        description="Risky ETFs compared in the Dual Momentum cross-sectional filter.",
+    )
 
     @field_validator("OUTPUT_DIR")
     @classmethod

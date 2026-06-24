@@ -51,3 +51,26 @@ To rotate:
 > Note: rotating the key stops it from being *used*, but it still exists in git
 > history. If this repository is or ever becomes public, scrub the secret from
 > history (e.g. with `git filter-repo`) in addition to rotating.
+
+## Strategy Validation Harness
+
+To prevent overfitting, selection bias, and unviable strategy deployment, the platform includes a master strategy validation harness.
+
+### Running Validation
+
+Execute the harness from the command line:
+
+```bash
+python3 -m validation.harness --strategy <name> --start YYYY-MM-DD --end YYYY-MM-DD
+```
+
+For custom strategies, instantiate the `StrategyValidationHarness` class and pass your strategy function, universe constituent provider, and cost model.
+
+### Deployability Gates
+
+A strategy is marked as `deployable=True` (eligible for deployment) if and only if it satisfies all of the following criteria:
+1. **Probability of Backtest Overfitting (PBO)**: `< 50%` (PBO < 0.5)
+2. **Deflated Sharpe Ratio (DSR)**: `> 95%` (DSR > 0.95)
+3. **Net-of-Cost Sharpe Ratio**: `> 0.5`
+4. **Max Drawdown**: `< 30%` (Max DD < 0.30)
+

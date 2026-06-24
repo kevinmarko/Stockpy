@@ -13,7 +13,7 @@ import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.preprocessing import MinMaxScaler
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Union
 
 # Suppress harmless warnings from statsmodels optimization
 warnings.filterwarnings("ignore")
@@ -233,134 +233,234 @@ class ForecastingEngine:
             y_seq.append(y_data[i])
         return np.array(X_seq), np.array(y_seq)
 
-    def run_cnn_lstm_forecast(self, history_df: pd.DataFrame, days_forward: int) -> float:
-        """
-        Fits a Hybrid CNN-LSTM neural network architecture on historical technical factors
-        and forecasts the price at days_forward.
-        Uses MinMaxScaler for inputs/targets, 60-day sequence windowing, and inverse-transforms predictions.
-        """
-        if not TENSORFLOW_AVAILABLE:
-            return 0.0
+    # Canonical feature ordering for the CNN-LSTM. 'Close' MUST stay at index 0
+    # (it is the prediction target column the y-scaler is fit on).
+    LSTM_FEATURE_COLS = [
+        'Close', 'Open', 'High', 'Low', 'Volume',
+        'Aroon_Oscillator', 'Coppock_Curve',
+        'Chandelier_Long', 'Chandelier_Short', 'Volatility_20_Annual'
+    ]
+    LSTM_LOOKBACK = 60
 
-        # Require a minimum history to construct sequences
+    def build_lstm_features(self, history_df: pd.DataFrame) -> pd.DataFrame:
+        """Engineer the CNN-LSTM feature frame from raw OHLCV.
+
+        Every feature is causal (rolling / backward-looking via pandas_ta), so a
+        row at time t depends only on data with timestamp <= t. This is verified
+        by tests/test_indicators_lookahead.py via the perturbation detector.
+        Returns a frame containing at least ``LSTM_FEATURE_COLS`` with NaN rows
+        (warm-up window) dropped.
+        """
+        from technical_options_engine import TechnicalOptionsEngine
+        tech_engine = TechnicalOptionsEngine()
+        df_features = tech_engine.sanitize_ohlcv(history_df).copy()
+
+        # Aroon Oscillator (causal)
+        aroon_df = df_features.ta.aroon(length=14)
+        if aroon_df is not None and not aroon_df.empty:
+            osc_col = [col for col in aroon_df.columns if "AROONOSC" in col]
+            df_features['Aroon_Oscillator'] = aroon_df[osc_col[0]] if osc_col else 0.0
+        else:
+            df_features['Aroon_Oscillator'] = 0.0
+
+        # Coppock Curve (causal)
+        coppock_series = df_features.ta.coppock()
+        df_features['Coppock_Curve'] = coppock_series if coppock_series is not None else 0.0
+
+        # Chandelier Exit (22-day rolling extreme, 3.0 ATR multiplier — causal)
+        atr_series = df_features.ta.atr(length=22)
+        if atr_series is not None and not atr_series.empty:
+            highest_high = df_features['High'].rolling(window=22).max()
+            lowest_low = df_features['Low'].rolling(window=22).min()
+            df_features['Chandelier_Long'] = highest_high - (3.0 * atr_series)
+            df_features['Chandelier_Short'] = lowest_low + (3.0 * atr_series)
+        else:
+            df_features['Chandelier_Long'] = 0.0
+            df_features['Chandelier_Short'] = 0.0
+
+        # 20-day historical annualized volatility (causal rolling std)
+        returns = df_features['Close'].pct_change()
+        df_features['Volatility_20_Annual'] = returns.rolling(20).std() * np.sqrt(252)
+
+        # Fill indicator warm-up gaps WITHOUT using future data:
+        # forward-fill / zero only — never bfill price-derived bands (bfill leaks
+        # a future value backward into earlier rows).
+        df_features['Aroon_Oscillator'] = df_features['Aroon_Oscillator'].fillna(0.0)
+        df_features['Coppock_Curve'] = df_features['Coppock_Curve'].fillna(0.0)
+        df_features['Chandelier_Long'] = df_features['Chandelier_Long'].ffill()
+        df_features['Chandelier_Short'] = df_features['Chandelier_Short'].ffill()
+        df_features['Volatility_20_Annual'] = df_features['Volatility_20_Annual'].fillna(0.0)
+
+        return df_features.dropna(subset=self.LSTM_FEATURE_COLS)
+
+    @staticmethod
+    def fit_scalers_on_train(
+        df_features: pd.DataFrame,
+        feature_cols: list,
+        n_reserve: int,
+    ) -> Tuple[MinMaxScaler, MinMaxScaler, pd.DataFrame]:
+        """Fit MinMax scalers on the TRAINING span only (everything except the
+        last ``n_reserve`` rows = lookback + max_horizon).
+
+        F-06 FIX (lookahead/leakage): the previous implementation called
+        ``fit_transform`` on the entire history, so the scaler's min/max — and
+        therefore every scaled input the model saw — were contaminated by the
+        very rows we then forecast. Fitting on train only makes the transform a
+        function of past data exclusively. The reserved tail is transformed with
+        these train-derived parameters (``.transform``, never ``.fit``).
+
+        Returns (scaler_X, scaler_y, train_df).
+        """
+        if n_reserve <= 0:
+            raise ValueError(f"n_reserve must be positive, got {n_reserve}")
+        if n_reserve >= len(df_features):
+            raise ValueError(
+                f"Not enough history ({len(df_features)} rows) to reserve "
+                f"{n_reserve} inference rows and still fit a scaler on train."
+            )
+        train_df = df_features.iloc[:-n_reserve]
+        scaler_X = MinMaxScaler(feature_range=(0, 1)).fit(train_df[feature_cols].values)
+        scaler_y = MinMaxScaler(feature_range=(0, 1)).fit(train_df[['Close']].values)
+        return scaler_X, scaler_y, train_df
+
+    @staticmethod
+    def make_direct_multistep_windows(
+        scaled_X: np.ndarray,
+        scaled_close: np.ndarray,
+        lookback: int,
+        horizons: list,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Build supervised windows for DIRECT multi-step forecasting.
+
+        For each window ending at index ``end-1`` (rows ``end-lookback .. end-1``)
+        the target is the vector ``[close[end-1+h] for h in horizons]`` — i.e. we
+        predict every horizon directly from one model output head. This replaces
+        the old recursive loop that froze 9/10 features at their last value while
+        only feeding Close back in (a self-inconsistent trajectory); direct
+        multi-step needs no feature recursion at all.
+
+        Returns X of shape (samples, lookback, n_features) and Y of shape
+        (samples, len(horizons)).
+        """
+        max_h = max(horizons)
+        X_seq, Y_seq = [], []
+        for end in range(lookback, len(scaled_X) - max_h + 1):
+            last = end - 1
+            X_seq.append(scaled_X[end - lookback:end])
+            Y_seq.append([scaled_close[last + h, 0] for h in horizons])
+        if not X_seq:
+            return np.empty((0, lookback, scaled_X.shape[1])), np.empty((0, len(horizons)))
+        return np.array(X_seq), np.array(Y_seq)
+
+    def run_cnn_lstm_forecast(
+        self,
+        history_df: pd.DataFrame,
+        horizons: Tuple[int, ...] = (10, 30, 60, 90),
+        days_forward: Optional[int] = None,
+    ) -> Union[float, Dict[int, float]]:
+        """Hybrid CNN-LSTM multi-horizon price forecaster.
+
+        Architecture decisions:
+        * Trained ONCE per ticker (not once per horizon) for >= 20 epochs with an
+          EarlyStopping(patience=5) callback on a validation split.
+        * DIRECT multi-step: a single Dense head of width ``len(horizons)`` emits
+          all horizon prices at once. Chosen over recursive single-step rollout
+          because recursion required freezing non-Close features at stale values,
+          producing a Close path inconsistent with its own indicators.
+        * Scalers are fit on the training span only (see ``fit_scalers_on_train``)
+          to eliminate train/inference leakage.
+
+        Returns a dict ``{horizon: predicted_price}``, or a float if days_forward
+        is specified. When TensorFlow is absent the engine degrades gracefully
+        to zeros (never fabricated values).
+
+        TODO(Stage 4): Move to a single cross-ticker model. Per-ticker retraining
+        is acceptable for ~4 tickers but will not scale.
+        """
+        if days_forward is not None:
+            horizons = (int(days_forward),)
+            zero_result: Union[float, Dict[int, float]] = 0.0
+        else:
+            horizons = tuple(int(h) for h in horizons)
+            zero_result = {h: 0.0 for h in horizons}
+
+        if not TENSORFLOW_AVAILABLE:
+            return zero_result
         if history_df is None or len(history_df) < 70:
-            return 0.0
+            return zero_result
 
         try:
-            # 1. Feature Engineering
-            from technical_options_engine import TechnicalOptionsEngine
-            tech_engine = TechnicalOptionsEngine()
-            
-            # Sanitize input using the technical options engine method
-            df_features = tech_engine.sanitize_ohlcv(history_df).copy()
-            if len(df_features) < 70:
-                return 0.0
-                
-            # Aroon Oscillator
-            aroon_df = df_features.ta.aroon(length=14)
-            if aroon_df is not None and not aroon_df.empty:
-                osc_col = [col for col in aroon_df.columns if "AROONOSC" in col]
-                df_features['Aroon_Oscillator'] = aroon_df[osc_col[0]] if osc_col else 0.0
-            else:
-                df_features['Aroon_Oscillator'] = 0.0
-                
-            # Coppock Curve
-            coppock_series = df_features.ta.coppock()
-            df_features['Coppock_Curve'] = coppock_series if coppock_series is not None else 0.0
-            
-            # Chandelier Exit (22-day lookback, 3.0 ATR multiplier)
-            atr_series = df_features.ta.atr(length=22)
-            if atr_series is not None and not atr_series.empty:
-                highest_high = df_features['High'].rolling(window=22).max()
-                lowest_low = df_features['Low'].rolling(window=22).min()
-                df_features['Chandelier_Long'] = highest_high - (3.0 * atr_series)
-                df_features['Chandelier_Short'] = lowest_low + (3.0 * atr_series)
-            else:
-                df_features['Chandelier_Long'] = 0.0
-                df_features['Chandelier_Short'] = 0.0
-                
-            # 20-day historical annualized volatility
-            returns = df_features['Close'].pct_change()
-            df_features['Volatility_20_Annual'] = returns.rolling(20).std() * np.sqrt(252)
-            
-            # Fill missing lookback values to prevent sequence shortening
-            df_features['Aroon_Oscillator'] = df_features['Aroon_Oscillator'].fillna(0.0)
-            df_features['Coppock_Curve'] = df_features['Coppock_Curve'].fillna(0.0)
-            df_features['Chandelier_Long'] = df_features['Chandelier_Long'].bfill().fillna(0.0)
-            df_features['Chandelier_Short'] = df_features['Chandelier_Short'].bfill().fillna(0.0)
-            df_features['Volatility_20_Annual'] = df_features['Volatility_20_Annual'].fillna(0.0)
-            
-            feature_cols = [
-                'Close', 'Open', 'High', 'Low', 'Volume', 
-                'Aroon_Oscillator', 'Coppock_Curve', 
-                'Chandelier_Long', 'Chandelier_Short', 'Volatility_20_Annual'
-            ]
-            
-            # Sanitize inputs for NaNs
-            df_features = df_features.dropna(subset=feature_cols)
-            
-            if len(df_features) < 65:
-                return 0.0
+            from tensorflow.keras.callbacks import EarlyStopping
 
-            
-            # 2. Scaling
-            scaler_X = MinMaxScaler(feature_range=(0, 1))
-            scaler_y = MinMaxScaler(feature_range=(0, 1))
-            
-            scaled_X = scaler_X.fit_transform(df_features[feature_cols])
-            scaled_y = scaler_y.fit_transform(df_features[['Close']])
-            
-            # 3. Create Sequences
-            lookback = 60
-            X_seq, y_seq = self.slice_sequences(scaled_X, scaled_y, lookback=lookback)
-            
+            df_features = self.build_lstm_features(history_df)
+            feature_cols = self.LSTM_FEATURE_COLS
+            lookback = self.LSTM_LOOKBACK
+            max_h = max(horizons)
+            n_reserve = lookback + max_h
+
+            # Need the reserved inference tail PLUS enough train rows to build
+            # at least a handful of supervised windows.
+            if len(df_features) < n_reserve + lookback + 10:
+                logger.debug(
+                    "CNN-LSTM: insufficient history (%d rows) for lookback=%d, "
+                    "max_horizon=%d. Skipping.", len(df_features), lookback, max_h
+                )
+                return zero_result
+
+            # 1. Train-only scaler fit (no leakage), then transform everything.
+            scaler_X, scaler_y, _train_df = self.fit_scalers_on_train(
+                df_features, feature_cols, n_reserve
+            )
+            scaled_X_all = scaler_X.transform(df_features[feature_cols].values)
+            scaled_close_all = scaler_y.transform(df_features[['Close']].values)
+
+            # Split into train sets for supervised sequence building
+            scaled_X_train = scaled_X_all[:-n_reserve]
+            scaled_close_train = scaled_close_all[:-n_reserve]
+
+            # 2. Direct multi-step supervised windows built strictly from train data.
+            X_seq, Y_seq = self.make_direct_multistep_windows(
+                scaled_X_train, scaled_close_train, lookback, list(horizons)
+            )
             if len(X_seq) == 0:
-                return 0.0
+                return zero_result
 
-            # Shape of X_seq: (samples, time_steps, features)
-            num_samples, time_steps, num_features = X_seq.shape
-            
-            # 4. Build Model
+            _, time_steps, num_features = X_seq.shape
+
+            # 3. Build & train ONCE with early stopping on a validation split.
             model = Sequential([
-                Conv1D(filters=32, kernel_size=3, activation='relu', input_shape=(time_steps, num_features)),
+                Conv1D(filters=32, kernel_size=3, activation='relu',
+                       input_shape=(time_steps, num_features)),
                 MaxPooling1D(pool_size=2),
                 LSTM(units=30, activation='tanh', return_sequences=False),
-                Dense(units=1)
+                Dense(units=len(horizons)),
             ])
             model.compile(optimizer='adam', loss='mse')
-            
-            # Fit model with minimal epochs for rapid execution
-            model.fit(X_seq, y_seq, epochs=2, batch_size=16, verbose=0)
-            
-            # 5. Iterative / Recursive Forecast Loop
-            # Start with the last lookback sequence of scaled data
-            current_sequence = scaled_X[-lookback:].copy()
-            
-            predicted_scale_price = 0.0
-            for step in range(days_forward):
-                # Shape input to 3D tensor: (1, lookback, num_features)
-                input_tensor = np.expand_dims(current_sequence, axis=0)
-                pred_scaled = model.predict(input_tensor, verbose=0)[0][0]
-                
-                # Update current sequence: shift left and append predicted Close
-                # (We hold other features constant or rolled forward for proxy future steps)
-                next_row = current_sequence[-1].copy()
-                next_row[0] = pred_scaled  # Close price is index 0
-                
-                current_sequence = np.vstack([current_sequence[1:], next_row])
-                
-                if step == days_forward - 1:
-                    predicted_scale_price = pred_scaled
+            early_stop = EarlyStopping(
+                monitor='val_loss', patience=5, restore_best_weights=True
+            )
+            model.fit(
+                X_seq, Y_seq,
+                epochs=50, batch_size=16, verbose=0,
+                validation_split=0.2, callbacks=[early_stop],
+            )
 
-            # 6. Inverse Transform output back to standard price values
-            prediction_array = np.array([[predicted_scale_price]])
-            inverse_pred = scaler_y.inverse_transform(prediction_array)[0][0]
-            
-            return float(inverse_pred)
+            # 4. Forecast from the most recent lookback window (all real data).
+            last_window = scaled_X_all[-lookback:][np.newaxis, ...]
+            pred_scaled = model.predict(last_window, verbose=0)[0]  # (n_horizons,)
+
+            out: Dict[int, float] = {}
+            for i, h in enumerate(horizons):
+                inv = scaler_y.inverse_transform([[float(pred_scaled[i])]])[0][0]
+                out[h] = float(inv)
+
+            if days_forward is not None:
+                return out.get(int(days_forward), 0.0)
+            return out
 
         except Exception as e:
             logger.warning(f"Hybrid CNN-LSTM forecast execution failed: {e}.")
-            return 0.0
+            return zero_result
 
     # =========================================================================
     # ORCHESTRATOR
@@ -429,23 +529,25 @@ class ForecastingEngine:
             
             # 2. Multi-Horizon Forecasts
             horizons = [10, 30, 60, 90]
-            
+
+            # Train the CNN-LSTM ONCE (direct multi-step) and reuse its per-horizon
+            # outputs below, instead of retraining a fresh model per horizon.
+            lstm_multi: Dict[int, float] = {h: 0.0 for h in horizons}
+            if TENSORFLOW_AVAILABLE and history_df is not None and len(history_df) >= 70:
+                lstm_multi = self.run_cnn_lstm_forecast(history_df, horizons=tuple(horizons))
+
             for h in horizons:
                 a_res = 0.0
                 h_res = 0.0
-                lstm_res = 0.0
-                
+                lstm_res = lstm_multi.get(h, 0.0)
+
                 # Run statistical time-series models
                 if len(close_prices) > 30:
                     a_res = self.run_arima(close_prices, days_forward=h)
                     h_res = self.run_holt_winters_grid_search(close_prices, days_forward=h)
-                
+
                 m_res, _, _ = self.run_monte_carlo(current_price, mu, sigma, days_forward=h)
 
-                # Run Hybrid CNN-LSTM if tensorflow is active and history is sufficient
-                if TENSORFLOW_AVAILABLE and history_df is not None and len(history_df) >= 70:
-                    lstm_res = self.run_cnn_lstm_forecast(history_df, days_forward=h)
-                
                 # Blend forecasts based on sector configurations
                 blended = 0.0
                 if preferred_model == "HW" and h_res > 0:
