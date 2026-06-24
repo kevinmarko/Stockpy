@@ -28,7 +28,7 @@ You are operating on the "InvestYo Quant Platform", a highly modular, decoupled 
 2. SYSTEM DECOUPLING (data_engine.py): Decoupling is enforced via the 'IDataProvider' abstract interface. Any modification to data acquisition or parsing patterns must implement 'IDataProvider'.
 3. VECTORIZATION (processing_engine.py): Iterative 'for' loops or '.iterrows()' calculations over price series are strictly banned. All technical indicators, moving averages, and momentum parameters MUST be computed as vector expressions over whole Pandas series.
 4. SYSTEM INTEGRITY (tests/test_quantitative_models.py): Any code alteration MUST be accompanied by a corresponding validation suite addition. Algorithmic drift of indicators is bounded strictly below 0.00001.
-5. GRAVITY AI VERIFICATION (ai_verification_prompts.py): You MUST utilize the 6-step Gravity AI Auditor rules prior to any strategy deployment. The 6 steps must be executed via the `ai_verification_prompts.py` script to ensure that strategies are rigorously validated for edge cases, mathematical correctness, architectural integrity, and robust scaling.
+5. GRAVITY AI VERIFICATION (AI_Verification_Prompts.py): You MUST utilize the 6-step Gravity AI Auditor rules prior to any strategy deployment. The 6 steps must be executed via the `AI_Verification_Prompts.py` script to ensure that strategies are rigorously validated for edge cases, mathematical correctness, architectural integrity, and robust scaling.
 
 When adding features, optimize first for mathematical accuracy, then computational scale, and strictly respect this decoupled design.
 ```

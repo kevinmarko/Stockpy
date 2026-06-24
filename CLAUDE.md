@@ -38,7 +38,7 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 - **evaluation_engine.py** — strategy performance evaluation.
 - **database_setup.py** — builds the SQLite schema (`DailySignals`, `ExecutionLogs`) dynamically from `config.COLUMN_SCHEMA`; never hardcode SQL column lists.
 - **reporting_engine.py** / **diagnostics_and_visuals.py** / **daily_report_template.html** — HTML report generation/rendering.
-- **ai_verification_prompts.py** ("Gravity AI Auditor") — 6-step static-analysis + simulation sandbox (via OpenAI/Anthropic) that strategies must pass before deployment.
+- **AI_Verification_Prompts.py** ("Gravity AI Auditor") — 6-step static-analysis + simulation sandbox (via OpenAI/Anthropic) that strategies must pass before deployment.
 - **main.py** — legacy synchronous orchestrator: Data → Processing → Forecasting → Strategy → Google Sheets (via `gspread`/`gspread_dataframe`).
 - **main_orchestrator.py** — newer async master orchestrator: routes data through the math engines, validates schemas, compiles the HTML report.
 
