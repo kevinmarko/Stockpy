@@ -66,16 +66,6 @@ universe_engine.py (Universe Loader: Scrapes Wikipedia current/changes tables to
 
 database_setup.py (Schema Builder: SQLite database and dynamic mapping creator)
 
-execution/broker_base.py (Broker ABC: OrderSide/OrderType/OrderStatus enums; OrderIntent/OrderResult/AccountSnapshot/PositionSnapshot/TradeUpdateEvent dataclasses; abstract BrokerBase with 6 async methods)
-
-execution/alpaca_broker.py (Alpaca Adapter: AlpacaBroker(BrokerBase) via alpaca-py; paper/live toggle via settings.ALPACA_PAPER; equity market/limit + multi-leg options; TradingStream trade-update subscription)
-
-execution/kill_switch.py (Kill Switch: file-based sentinel at settings.OUTPUT_DIR/KILL_SWITCH; GlobalKillSwitch.is_active/activate/deactivate/reason; KillSwitchActiveError raised by OrderManager; CLI --activate/--deactivate/--status)
-
-execution/risk_gate.py (Pre-trade Risk Gate: 10-check pipeline — max_position_size, portfolio_heat, max_correlation |r|>0.85, daily_loss_limit -2%, macro_kill_switch, hmm_regime risk-off>0.80, stress_scenario VIX>30 for premium-sell, market_hours NYSE RTH, minimum_validation, max_order_rate 60s rolling; rate counter only incremented when all prior checks pass; conservative pass on missing context)
-
-execution/order_manager.py (Order Manager: GlobalKillSwitch gate before dedup; SHA-256 deterministic client_order_id; PreTradeRiskGate.run_all(); linear retry on transient errors; reconcile_state vs. TransactionsStore; webhook alert on drift)
-
 execution/cost_model.py (Execution: Tiered execution cost model and Backtrader CommissionInfo)
 
 validation/purged_cv.py (CPCV partitioner: generates combinatorics train/test splits, applying purging and embargoes)
