@@ -122,6 +122,21 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Meta-labeling (ml/meta_labeling.py) ---
+    # Hard gate: if any primary signal's MetaLabeler returns P(correct) below
+    # this threshold, SignalAggregator sets meta_label_composite = 0.0, which
+    # zeroes the Kelly Target for that cycle. Only applies when a MetaLabeler
+    # is registered for that signal in global_meta_registry; default is 1.0
+    # (no-op) when no MetaLabeler is registered.
+    META_LABEL_MIN_CONFIDENCE: float = Field(
+        default=0.4,
+        description=(
+            "Minimum meta-label probability for a primary signal to contribute "
+            "to sizing. If predict_proba < META_LABEL_MIN_CONFIDENCE, the "
+            "meta_label_composite is forced to 0.0 (position zeroed for the cycle)."
+        ),
+    )
+
     # --- Dual Momentum allocator overlay ---
     USE_DUAL_MOMENTUM_OVERLAY: bool = Field(
         default=False,

@@ -27,6 +27,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from ml.models.base import Model
+
 logger = logging.getLogger("ML.LGBMRanker")
 
 _MODELS_DIR = Path(__file__).parent / "models"
@@ -50,7 +52,7 @@ _DEFAULT_PARAMS: dict = {
 }
 
 
-class LGBMCrossSectionalRanker:
+class LGBMCrossSectionalRanker(Model):
     """LightGBM LambdaRank model trained inside purged k-fold CV.
 
     Usage
@@ -216,6 +218,25 @@ class LGBMCrossSectionalRanker:
         # Normalise to [0, 1] percentile rank within this cross-section
         ranks = pd.Series(raw_scores, index=X_today.index).rank(pct=True)
         return ranks
+
+    # ── Model ABC conformance wrappers ────────────────────────────────────────
+    # ``train()`` is the primary method; fit/predict satisfy the abstract base.
+
+    def fit(
+        self,
+        X: "pd.DataFrame",
+        y: "pd.Series",
+        t1: "Optional[pd.Series]" = None,
+    ) -> "LGBMCrossSectionalRanker":
+        """Model ABC: delegates to ``train(X, y, t1)``."""
+        return self.train(X, y, t1)
+
+    def predict(self, X: "pd.DataFrame") -> "np.ndarray":
+        """Model ABC: returns raw ranker scores (not normalised rank percentiles)."""
+        if self._model is None:
+            return np.full(len(X), 0.5)
+        X_arr = X[self._feature_names].fillna(0.0).values if self._feature_names else X.fillna(0.0).values
+        return self._model.predict(X_arr)
 
     # ── persistence ───────────────────────────────────────────────────────────
 
