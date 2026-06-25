@@ -4,9 +4,36 @@ InvestYo Quant Platform - Diagnostics & Visualizations
 Step 6 of the Modernization Roadmap: Diagnostic and Visualization Deployment.
 
 Provides structured JSON logging telemetry, a Jinja2 template engine for
-HTML report generation (with Traffic Lights, Anomaly Tooltips, Executive
-Summary Blocks, Dynamic Formatting, Confidence Intervals, and Gravity AI
-Audit Log), and interactive Plotly volatility bands.
+HTML report generation, and interactive Plotly volatility bands.
+
+Report redesign (2026-06)
+-------------------------
+The daily HTML report was rebuilt to lead with **Holdings & P&L** and
+**Action & Rationale** — the two information classes the operator most wants
+to see at a glance.  Previously the embedded template was hard-wired to the
+*orchestrator's* wide dashboard schema (CoVaR / IV Rank / Monte-Carlo bands)
+and silently discarded the advisory fields that ``main.py`` actually computes
+(holdings, cost basis, unrealized P&L, conviction, plain-English rationale,
+suggested position size).  The new template:
+
+  • Renders an optional **portfolio summary band** (equity, buying power,
+    unrealized P&L, dividends, position count, BUY/HOLD/SELL tally) driven by
+    the new ``account_summary`` keyword argument.
+  • Surfaces per-symbol **holdings** (shares, average cost, current price,
+    market value, unrealized P&L $ / %) sourced from the Robinhood
+    ``AccountSnapshot`` — the source of truth for account state (CONSTRAINT #4).
+  • Surfaces the **action, conviction, suggested size and full rationale** for
+    every symbol, with a click-to-expand detail row.
+  • Provides a dependency-free **client-side search + column sort** so the
+    operator can find / order rows without a page reload.
+  • Remains **backward compatible** with ``main_orchestrator.py``: when the
+    advisory / holdings / ``account_summary`` fields are absent the same rows
+    degrade gracefully to "—" placeholders and the summary band is hidden.
+
+All field normalization happens in Python (``generate_html_report``) so the
+Jinja template stays declarative; both the spaced pipeline keys
+(``"Action Signal"``) and the underscored advisory keys (``"Action_Signal"``)
+are accepted.
 """
 
 import json
@@ -15,7 +42,7 @@ import os
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import plotly.graph_objects as go
 from jinja2 import Template
 
@@ -132,7 +159,7 @@ def generate_plotly_volatility_bands(df: pd.DataFrame, ticker: str, output_path:
 
 
 # =============================================================================
-# 3. JINJA2 TELEMETRY HTML REPORTS (WITH AI AUDIT INJECTIONS)
+# 3. JINJA2 HTML REPORT TEMPLATE (HOLDINGS & P&L + ACTION & RATIONALE LEAD)
 # =============================================================================
 HTML_REPORT_TEMPLATE = """
 <!DOCTYPE html>
@@ -140,7 +167,7 @@ HTML_REPORT_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="InvestYo Quant Platform - Daily Analytical Report with traffic light indicators, anomaly tooltips, and Gravity AI audit log.">
+    <meta name="description" content="InvestYo Quant Platform - Daily Advisory Report. Holdings, unrealized P&L, action signals, conviction and plain-English rationale.">
     <title>InvestYo Quant Platform - Daily Report</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -148,6 +175,7 @@ HTML_REPORT_TEMPLATE = """
         :root {
             --bg-dark: #0b0f19;
             --card-bg: #111827;
+            --card-bg-soft: #161e2e;
             --text-main: #f3f4f6;
             --text-muted: #9ca3af;
             --accent: #3b82f6;
@@ -165,10 +193,10 @@ HTML_REPORT_TEMPLATE = """
             font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: var(--bg-dark);
             color: var(--text-main);
-            padding: 40px 20px;
-            line-height: 1.6;
+            padding: 32px 20px;
+            line-height: 1.55;
         }
-        .container { max-width: 1280px; margin: 0 auto; }
+        .container { max-width: 1440px; margin: 0 auto; }
 
         /* Header */
         header {
@@ -176,8 +204,10 @@ HTML_REPORT_TEMPLATE = """
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid var(--border);
-            padding-bottom: 20px;
-            margin-bottom: 30px;
+            padding-bottom: 18px;
+            margin-bottom: 26px;
+            flex-wrap: wrap;
+            gap: 12px;
         }
         h1 {
             font-size: 24px; font-weight: 700; letter-spacing: -0.025em;
@@ -185,75 +215,99 @@ HTML_REPORT_TEMPLATE = """
             -webkit-background-clip: text; background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        .timestamp { color: var(--text-muted); font-size: 14px; }
+        .timestamp { color: var(--text-muted); font-size: 13px; }
+        .freshness-pill {
+            display: inline-block; padding: 3px 10px; border-radius: 9999px;
+            font-size: 11px; font-weight: 600; margin-left: 8px;
+        }
+        .fresh-ok    { background: var(--success-glow); color: var(--success); border: 1px solid var(--success); }
+        .fresh-stale { background: var(--warning-glow); color: var(--warning); border: 1px solid var(--warning); }
 
-        /* ======== EXECUTIVE SUMMARY GRID ======== */
+        /* ======== PORTFOLIO SUMMARY BAND ======== */
+        .summary-band {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 14px;
+            margin-bottom: 22px;
+        }
+        .summary-tile {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 18px;
+            position: relative;
+            overflow: hidden;
+        }
+        .summary-tile::before {
+            content: ''; position: absolute; top: 0; left: 0;
+            width: 100%; height: 2px;
+            background: linear-gradient(to right, #60a5fa, #3b82f6);
+        }
+        .summary-tile .label {
+            color: var(--text-muted); font-size: 11px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;
+        }
+        .summary-tile .value { font-size: 22px; font-weight: 700; }
+        .summary-tile .sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+        .pos { color: var(--success); }
+        .neg { color: var(--danger); }
+
+        /* ======== MACRO / REGIME CARDS ======== */
         .exec-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            gap: 18px;
+            margin-bottom: 26px;
         }
         .exec-card {
             background: var(--card-bg);
             border: 1px solid var(--border);
             border-radius: 12px;
-            padding: 24px;
+            padding: 22px;
             text-align: center;
             position: relative;
             overflow: hidden;
             box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
         }
         .exec-card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0;
+            content: ''; position: absolute; top: 0; left: 0;
             width: 100%; height: 3px;
             background: linear-gradient(to right, #60a5fa, #3b82f6);
         }
         .exec-card h3 {
-            color: var(--text-muted);
-            font-size: 13px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 12px;
+            color: var(--text-muted); font-size: 13px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px;
         }
-        .exec-card h2 {
-            font-size: 28px;
-            font-weight: 700;
-            margin-bottom: 8px;
-        }
-        .exec-card .subtext {
-            font-size: 12px;
-            color: var(--text-muted);
-        }
+        .exec-card h2 { font-size: 26px; font-weight: 700; margin-bottom: 8px; }
+        .exec-card .subtext { font-size: 12px; color: var(--text-muted); }
 
         /* ======== TABS ======== */
         .tab {
-            overflow: hidden;
-            border-bottom: 1px solid var(--border);
-            margin-bottom: 24px;
+            overflow: hidden; border-bottom: 1px solid var(--border); margin-bottom: 22px;
         }
         .tab button {
-            background-color: inherit;
-            color: var(--text-muted);
-            float: left;
-            border: none;
-            outline: none;
-            cursor: pointer;
-            padding: 14px 20px;
+            background-color: inherit; color: var(--text-muted); float: left;
+            border: none; outline: none; cursor: pointer; padding: 14px 20px;
             transition: color 0.3s, border-bottom 0.3s;
-            font-size: 15px;
-            font-weight: 600;
-            font-family: inherit;
+            font-size: 15px; font-weight: 600; font-family: inherit;
         }
         .tab button:hover { color: var(--accent); }
-        .tab button.active {
-            border-bottom: 3px solid var(--accent);
-            color: var(--accent);
-        }
+        .tab button.active { border-bottom: 3px solid var(--accent); color: var(--accent); }
         .tabcontent { display: none; }
+
+        /* ======== TOOLBAR (SEARCH) ======== */
+        .toolbar {
+            display: flex; align-items: center; gap: 12px;
+            margin-bottom: 14px; flex-wrap: wrap;
+        }
+        .toolbar input[type="search"] {
+            flex: 1; min-width: 220px;
+            background: var(--card-bg-soft); border: 1px solid var(--border);
+            color: var(--text-main); border-radius: 8px; padding: 10px 14px;
+            font-size: 14px; font-family: inherit; outline: none;
+        }
+        .toolbar input[type="search"]:focus { border-color: var(--accent); }
+        .toolbar .hint { font-size: 12px; color: var(--text-muted); }
 
         /* ======== DATA TABLE ======== */
         .data-card {
@@ -264,87 +318,66 @@ HTML_REPORT_TEMPLATE = """
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
         .card-header {
-            padding: 20px;
-            border-bottom: 1px solid var(--border);
-            font-weight: 600;
-            font-size: 16px;
-            color: var(--text-main);
+            padding: 18px 20px; border-bottom: 1px solid var(--border);
+            font-weight: 600; font-size: 16px; color: var(--text-main);
         }
         table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        th, td { padding: 14px 20px; text-align: left; border-bottom: 1px solid var(--border); }
+        th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
         th {
             background-color: rgba(255, 255, 255, 0.02);
-            color: var(--text-muted);
-            font-weight: 500;
-            text-transform: uppercase;
-            font-size: 11px;
-            letter-spacing: 0.05em;
+            color: var(--text-muted); font-weight: 500;
+            text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em;
+            cursor: pointer; user-select: none; position: relative;
         }
-        tr:last-child td { border-bottom: none; }
-        tr:hover td { background-color: rgba(255, 255, 255, 0.01); }
+        th.sortable:hover { color: var(--accent); }
+        th .arrow { font-size: 9px; opacity: 0.5; margin-left: 4px; }
+        td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        tr.data-row:hover td { background-color: rgba(255, 255, 255, 0.025); cursor: pointer; }
+        tr.detail-row td {
+            background: var(--card-bg-soft); white-space: normal;
+            font-size: 13px; color: var(--text-main);
+        }
+        .detail-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px 24px; margin-bottom: 12px;
+        }
+        .detail-grid .di-label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .detail-grid .di-val { font-weight: 600; }
+        .rationale {
+            background: rgba(0,0,0,0.25); border-left: 3px solid var(--accent);
+            border-radius: 6px; padding: 12px 14px; margin-top: 6px;
+            white-space: pre-line; line-height: 1.6;
+        }
 
-        /* ======== TRAFFIC LIGHT BADGES ======== */
+        /* ======== BADGES ======== */
         .badge {
-            padding: 4px 10px;
-            border-radius: 9999px;
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-            display: inline-block;
-            margin-left: 6px;
-            transition: all 0.3s ease;
+            padding: 4px 10px; border-radius: 9999px;
+            font-size: 11px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.03em; display: inline-block;
         }
         .badge-green  { background-color: var(--success-glow); color: var(--success); border: 1px solid var(--success); }
         .badge-yellow { background-color: var(--warning-glow); color: var(--warning); border: 1px solid var(--warning); }
         .badge-red    { background-color: var(--danger-glow);  color: var(--danger);  border: 1px solid var(--danger);  }
+        .badge-gray   { background-color: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); }
 
-        /* ======== ANOMALY TOOLTIPS ======== */
-        .anomaly-tooltip {
-            position: relative;
-            display: inline-block;
-            cursor: help;
-            border-bottom: 1px dotted var(--warning);
+        /* Action signal colouring */
+        .sig-STRONG_BUY, .sig-BUY  { color: var(--success); font-weight: 700; }
+        .sig-HOLD                  { color: var(--warning); font-weight: 700; }
+        .sig-SELL, .sig-STRONG_SELL, .sig-RISK_REDUCE { color: var(--danger); font-weight: 700; }
+
+        /* Conviction meter */
+        .conv-meter {
+            display: inline-block; width: 54px; height: 6px; border-radius: 3px;
+            background: var(--border); vertical-align: middle; margin-left: 6px; overflow: hidden;
         }
-        .anomaly-tooltip .tooltiptext {
-            visibility: hidden;
-            width: 240px;
-            background-color: #1f2937;
-            color: #fff;
-            text-align: center;
-            border-radius: 8px;
-            padding: 10px;
-            position: absolute;
-            z-index: 10;
-            bottom: 130%;
-            left: 50%;
-            margin-left: -120px;
-            opacity: 0;
-            transition: opacity 0.3s;
-            font-size: 12px;
-            border: 1px solid var(--warning);
-            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
-        }
-        .anomaly-tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }
+        .conv-fill { display: block; height: 100%; background: var(--accent); }
 
         /* ======== AUDIT LOG ======== */
         pre {
-            background: #000;
-            padding: 20px;
-            border-radius: 8px;
-            overflow-x: auto;
-            color: #a5d6ff;
-            border: 1px solid var(--border);
-            font-size: 13px;
-            line-height: 1.5;
+            background: #000; padding: 20px; border-radius: 8px; overflow-x: auto;
+            color: #a5d6ff; border: 1px solid var(--border); font-size: 13px; line-height: 1.5;
         }
-
-        /* ======== SIGNAL TAGS ======== */
-        .signal-STRONG_BUY   { color: var(--success); text-shadow: 0 0 8px var(--success-glow); }
-        .signal-BUY           { color: var(--success); }
-        .signal-HOLD          { color: var(--warning); }
-        .signal-RISK_REDUCE   { color: var(--danger); }
-        .signal-STRONG_SELL   { color: var(--danger); text-shadow: 0 0 8px var(--danger-glow); }
+        .empty-note { padding: 28px 20px; color: var(--text-muted); font-size: 14px; text-align: center; }
     </style>
 </head>
 <body>
@@ -352,161 +385,185 @@ HTML_REPORT_TEMPLATE = """
         <header>
             <div>
                 <h1>InvestYo Quantitative Portfolio Report</h1>
-                <div class="timestamp">Automated Strategy Engine Run</div>
+                <div class="timestamp">Holdings-aware advisory engine
+                    {% if account_summary %}
+                        {% if account_summary.is_stale %}
+                            <span class="freshness-pill fresh-stale">ACCOUNT DATA STALE</span>
+                        {% else %}
+                            <span class="freshness-pill fresh-ok">ACCOUNT DATA FRESH</span>
+                        {% endif %}
+                    {% endif %}
+                </div>
             </div>
-            <div class="timestamp">Generated on: {{ current_time }}</div>
+            <div class="timestamp">Generated: {{ current_time }}
+                {% if account_summary and account_summary.fetched_at %}
+                    <br>Account snapshot: {{ account_summary.fetched_at }}
+                    ({{ "%.1f"|format(account_summary.age_hours) }}h old)
+                {% endif %}
+            </div>
         </header>
 
-        <!-- ======== EXECUTIVE SUMMARY BLOCKS ======== -->
+        {% if account_summary %}
+        <!-- ======== PORTFOLIO SUMMARY BAND ======== -->
+        <div class="summary-band">
+            <div class="summary-tile">
+                <div class="label">Total Equity</div>
+                <div class="value">${{ "{:,.0f}".format(account_summary.total_equity) }}</div>
+                <div class="sub">{{ account_summary.num_positions }} position(s) held</div>
+            </div>
+            <div class="summary-tile">
+                <div class="label">Buying Power</div>
+                <div class="value">${{ "{:,.0f}".format(account_summary.buying_power) }}</div>
+                <div class="sub">Unallocated cash</div>
+            </div>
+            <div class="summary-tile">
+                <div class="label">Unrealized P&amp;L</div>
+                <div class="value {{ 'pos' if account_summary.total_unrealized_pl >= 0 else 'neg' }}">
+                    {{ '+' if account_summary.total_unrealized_pl >= 0 else '-' }}${{ "{:,.0f}".format(account_summary.total_unrealized_pl|abs) }}
+                </div>
+                <div class="sub">Across held positions</div>
+            </div>
+            <div class="summary-tile">
+                <div class="label">Dividends Received</div>
+                <div class="value">${{ "{:,.0f}".format(account_summary.total_dividends) }}</div>
+                <div class="sub">Paid + reinvested</div>
+            </div>
+            <div class="summary-tile">
+                <div class="label">Signals</div>
+                <div class="value" style="font-size:18px;">
+                    <span class="pos">{{ account_summary.n_buy }} BUY</span> /
+                    <span style="color:var(--warning)">{{ account_summary.n_hold }} HOLD</span> /
+                    <span class="neg">{{ account_summary.n_sell }} SELL</span>
+                </div>
+                <div class="sub">{{ account_summary.n_total }} symbols analysed</div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- ======== MACRO / REGIME CARDS ======== -->
         <div class="exec-grid">
-            <!-- Card 1: Market Regime -->
             <div class="exec-card">
-                <h3>🌐 Market Regime Overview</h3>
+                <h3>🌐 Market Regime</h3>
                 <h2 style="color: {% if regime == 'RISK ON' %}var(--success){% elif regime == 'NEUTRAL' %}var(--warning){% else %}var(--danger){% endif %};">
                     {{ regime }}
                 </h2>
                 <p class="subtext">
-                    10Y-2Y: {{ yield_curve }}% | HY OAS: {{ credit_spread }}% | Sahm: {{ sahm_rule }}
+                    10Y-2Y: {{ "%.2f"|format(yield_curve) }}% | HY OAS: {{ "%.2f"|format(credit_spread) }}% | Sahm: {{ "%.2f"|format(sahm_rule) }}
                 </p>
             </div>
-
-            <!-- Card 2: Portfolio Heat Gauge -->
             <div class="exec-card">
-                <h3>🔥 Portfolio Heat Snapshot</h3>
+                <h3>🔥 Portfolio Heat</h3>
                 <h2 style="color: {% if avg_portfolio_heat > 0.06 %}var(--danger){% elif avg_portfolio_heat > 0.04 %}var(--warning){% else %}var(--success){% endif %};">
                     {{ "%.2f"|format(avg_portfolio_heat * 100) }}%
                 </h2>
                 <p class="subtext">Max Institutional Limit: 6.00%</p>
                 {% if avg_portfolio_heat > 0.06 %}
-                    <div class="badge badge-red" style="margin-top: 8px;">SYSTEM HALT THRESHOLD BREACHED</div>
+                    <div class="badge badge-red" style="margin-top: 8px;">HALT THRESHOLD BREACHED</div>
                 {% else %}
                     <div class="badge badge-green" style="margin-top: 8px;">WITHIN SAFE BOUNDS</div>
                 {% endif %}
             </div>
-
-            <!-- Card 3: Risk Attribution Summary -->
             <div class="exec-card">
-                <h3>📊 Risk Attribution Summary</h3>
+                <h3>📊 Signal Distribution</h3>
                 <div style="height: 120px;">
-                    <canvas id="attributionChart"></canvas>
+                    <canvas id="signalChart"></canvas>
                 </div>
-                <p class="subtext" style="margin-top: 10px;">Brinson-Fachler: Allocation vs Selection</p>
+                <p class="subtext" style="margin-top: 10px;">BUY / HOLD / SELL across analysed universe</p>
             </div>
         </div>
 
         <!-- ======== TAB NAVIGATION ======== -->
         <div class="tab">
-            <button class="tablinks active" onclick="openTab(event, 'Dashboard')">Quantitative Dashboard</button>
+            <button class="tablinks active" onclick="openTab(event, 'Holdings')">Holdings &amp; Signals</button>
             <button class="tablinks" onclick="openTab(event, 'AuditLog')">Gravity AI Audit Log</button>
         </div>
 
-        <!-- ======== TAB 1: QUANTITATIVE DASHBOARD ======== -->
-        <div id="Dashboard" class="tabcontent" style="display: block;">
+        <!-- ======== TAB 1: HOLDINGS & SIGNALS ======== -->
+        <div id="Holdings" class="tabcontent" style="display: block;">
+            <div class="toolbar">
+                <input type="search" id="tableSearch" placeholder="🔎 Filter by symbol, action or rationale…" oninput="filterTable()">
+                <span class="hint">Click a row to expand rationale · click a column header to sort</span>
+            </div>
             <div class="data-card">
-                <div class="card-header">Portfolio Signals & Dynamic Validation</div>
+                <div class="card-header">Holdings, Action Signals &amp; Advisory Rationale</div>
                 <div style="overflow-x: auto; padding: 0;">
-                    <table>
+                    <table id="mainTable">
                         <thead>
                             <tr>
-                                <th>Asset & Action</th>
-                                <th>Format Type</th>
-                                <th>Technical Validation (RSI/MACD)</th>
-                                <th>Systemic Risk (CoVaR)</th>
-                                <th>Forecast / Pricing Edge</th>
+                                <th class="sortable" data-type="str"   onclick="sortTable(0,'str')">Symbol <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="str"   onclick="sortTable(1,'str')">Action <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="num"   onclick="sortTable(2,'num')">Shares <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="num"   onclick="sortTable(3,'num')">Avg Cost <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="num"   onclick="sortTable(4,'num')">Price <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="num"   onclick="sortTable(5,'num')">Mkt Value <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="num"   onclick="sortTable(6,'num')">Unreal. P&amp;L <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="num"   onclick="sortTable(7,'num')">P&amp;L % <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="num"   onclick="sortTable(8,'num')">Suggest % <span class="arrow">▲▼</span></th>
+                                <th class="sortable" data-type="num"   onclick="sortTable(9,'num')">30D Fcst <span class="arrow">▲▼</span></th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for row in portfolio_rows %}
-                            <tr>
-                                <!-- Column 1: Asset & Action -->
-                                <td>
-                                    <strong>{{ row.Symbol }}</strong><br>
-                                    <span class="signal-{{ row.Action_Signal|default(row.get('Action Signal', 'HOLD'), true)|replace(' ', '_') }}"
-                                          style="font-size: 12px; font-weight: 600;">
-                                        {{ row.Action_Signal|default(row.get('Action Signal', 'N/A'), true) }}
-                                    </span>
-                                    <span style="font-size: 11px; color: var(--text-muted);">
-                                        (Kelly: {{ "%.1f"|format(row.Kelly_Size * 100 if row.Kelly_Size else 0) }}%)
-                                    </span>
+                            <tr class="data-row" onclick="toggleDetail('detail-{{ loop.index }}')"
+                                data-search="{{ (row.Symbol ~ ' ' ~ row.Action_Signal ~ ' ' ~ row.Rationale)|lower }}">
+                                <td><strong>{{ row.Symbol }}</strong>
+                                    {% if row.DataQuality and row.DataQuality != 'OK' %}
+                                        <span class="badge badge-yellow" style="margin-left:4px;">{{ row.DataQuality }}</span>
+                                    {% endif %}
+                                    {% if row.CompanyName %}<br><span style="font-size:11px;color:var(--text-muted);">{{ row.CompanyName }}</span>{% endif %}
                                 </td>
-
-                                <!-- Column 2: Dynamic Format Type Badge -->
                                 <td>
-                                    {% set opt_strat = row.Option_Strategy|default('None', true) %}
-                                    {% if 'Spread' in opt_strat or 'Call' in opt_strat or 'Condor' in opt_strat or 'Put' in opt_strat %}
-                                        <span class="badge badge-yellow">Derivatives</span>
-                                    {% elif row.sector|default('N/A', true) in ['Index', 'N/A'] %}
-                                        <span class="badge badge-red">Macro Proxy</span>
-                                    {% else %}
-                                        <span class="badge badge-green">Equities</span>
+                                    <span class="sig-{{ row.Action_Signal|replace(' ', '_') }}">{{ row.Action_Signal }}</span>
+                                    {% if row.Conviction is not none and row.Conviction > 0 %}
+                                        <span class="conv-meter" title="Conviction {{ "%.0f"|format(row.Conviction * 100) }}%">
+                                            <span class="conv-fill" style="width: {{ "%.0f"|format(row.Conviction * 100) }}%;"></span>
+                                        </span>
                                     {% endif %}
                                 </td>
-
-                                <!-- Column 3: Traffic Lights & Contextual Anomaly Tooltips -->
-                                <td>
-                                    <div style="margin-bottom: 4px;">
-                                        RSI:
-                                        {% if row.Recent_Anomaly %}
-                                            <div class="anomaly-tooltip" style="color: var(--warning); font-weight: bold;">
-                                                {{ "%.1f"|format(row.RSI|default(50.0, true)) }}
-                                                <span class="tooltiptext">⚠️ Indicator influenced by recent {{ row.Recent_Anomaly }} event. Treat standard signals with caution.</span>
-                                            </div>
-                                        {% else %}
-                                            {{ "%.1f"|format(row.RSI|default(50.0, true)) }}
-                                        {% endif %}
-                                        {% if row.Audit_RSI_Status|default('', true) == 'FAILED' %}
-                                            <span class="badge badge-red">FAIL</span>
-                                        {% elif row.Recent_Anomaly %}
-                                            <span class="badge badge-yellow">WARN</span>
-                                        {% else %}
-                                            <span class="badge badge-green">PASS</span>
-                                        {% endif %}
+                                <td class="num" data-sort="{{ row.Shares }}">{{ "%.2f"|format(row.Shares) if row.Shares else '—' }}</td>
+                                <td class="num" data-sort="{{ row.AvgCost }}">{{ "$%.2f"|format(row.AvgCost) if row.AvgCost else '—' }}</td>
+                                <td class="num" data-sort="{{ row.Price }}">{{ "$%.2f"|format(row.Price) if row.Price else '—' }}</td>
+                                <td class="num" data-sort="{{ row.MarketValue }}">{{ "${:,.0f}".format(row.MarketValue) if row.MarketValue else '—' }}</td>
+                                <td class="num" data-sort="{{ row.UnrealizedPL }}">
+                                    {% if row.Shares and row.Shares > 0 %}
+                                        <span class="{{ 'pos' if row.UnrealizedPL >= 0 else 'neg' }}">
+                                            {{ '+' if row.UnrealizedPL >= 0 else '-' }}${{ "{:,.0f}".format(row.UnrealizedPL|abs) }}
+                                        </span>
+                                    {% else %}—{% endif %}
+                                </td>
+                                <td class="num" data-sort="{{ row.UnrealizedPLPct }}">
+                                    {% if row.Shares and row.Shares > 0 %}
+                                        <span class="{{ 'pos' if row.UnrealizedPLPct >= 0 else 'neg' }}">
+                                            {{ '+' if row.UnrealizedPLPct >= 0 else '' }}{{ "%.1f"|format(row.UnrealizedPLPct * 100) }}%
+                                        </span>
+                                    {% else %}—{% endif %}
+                                </td>
+                                <td class="num" data-sort="{{ row.SuggestedPct }}">
+                                    {{ "%.1f"|format(row.SuggestedPct * 100) }}%
+                                </td>
+                                <td class="num" data-sort="{{ row.Forecast_30D }}">
+                                    {{ "$%.2f"|format(row.Forecast_30D) if row.Forecast_30D else '—' }}
+                                </td>
+                            </tr>
+                            <tr class="detail-row" id="detail-{{ loop.index }}" style="display:none;">
+                                <td colspan="10">
+                                    <div class="detail-grid">
+                                        <div><div class="di-label">Strategy</div><div class="di-val">{{ row.Strategy|default('—', true) }}</div></div>
+                                        <div><div class="di-label">Conviction</div><div class="di-val">{{ "%.0f"|format((row.Conviction or 0) * 100) }}%</div></div>
+                                        <div><div class="di-label">Suggested Size</div><div class="di-val">{{ "%.2f"|format((row.SuggestedPct or 0) * 100) }}%</div></div>
+                                        <div><div class="di-label">Dividends</div><div class="di-val">${{ "{:,.2f}".format(row.Dividends or 0) }}</div></div>
+                                        <div><div class="di-label">RSI (14)</div><div class="di-val">{{ "%.1f"|format(row.RSI) if row.RSI else '—' }}</div></div>
+                                        <div><div class="di-label">GARCH Vol</div><div class="di-val">{{ "%.1f"|format((row.GARCH_Vol or 0) * 100) }}%</div></div>
+                                        <div><div class="di-label">Max Drawdown</div><div class="di-val">{{ "%.1f"|format((row.Max_Drawdown or 0) * 100) }}%</div></div>
+                                        <div><div class="di-label">Data Quality</div><div class="di-val">{{ row.DataQuality|default('OK', true) }}</div></div>
                                     </div>
-                                    <div>
-                                        MACD: {{ "%.2f"|format(row.MACD_Line|default(0.0, true)) }}
-                                        {% if row.Audit_MACD_Status|default('', true) == 'FAILED' %}
-                                            <span class="badge badge-red">FAIL</span>
-                                        {% else %}
-                                            <span class="badge badge-green">PASS</span>
-                                        {% endif %}
-                                    </div>
-                                </td>
-
-                                <!-- Column 4: Risk Indicators with Traffic Lights -->
-                                <td>
-                                    CoVaR: {{ "%.2f"|format(row.CoVaR_Proxy|default(0.0, true)) }}
-                                    {% if row.CoVaR_Proxy|default(0.0, true) > 0.15 %}
-                                        <span class="badge badge-red">HIGH TAIL RISK</span>
-                                    {% elif row.CoVaR_Proxy|default(0.0, true) > 0.08 %}
-                                        <span class="badge badge-yellow">ELEVATED</span>
-                                    {% else %}
-                                        <span class="badge badge-green">SAFE</span>
-                                    {% endif %}
-                                </td>
-
-                                <!-- Column 5: Dynamic Forecasting / Options Formatting -->
-                                <td>
-                                    {% set opt_strat = row.Option_Strategy|default('None', true) %}
-                                    {% if 'Spread' in opt_strat or 'Call' in opt_strat or 'Condor' in opt_strat or 'Put' in opt_strat %}
-                                        <!-- Black-Scholes Output Format for Options -->
-                                        <div style="font-size: 12px;">
-                                            <strong>Strategy:</strong> {{ opt_strat }}<br>
-                                            <strong>IV Rank:</strong> {{ "%.1f"|format(row.IV_Rank|default(0.0, true)) }} |
-                                            <strong>IV Edge:</strong> {{ "%.2f"|format(row.Options_IV_Edge|default(0.0, true) * 100) }}%
-                                        </div>
-                                    {% else %}
-                                        <!-- Monte Carlo Confidence Intervals for Equities -->
-                                        <div style="font-size: 13px;">
-                                            <strong>30D Target:</strong> ${{ "%.2f"|format(row.Forecast_30D|default(0.0, true)) }}<br>
-                                            <span style="color: var(--accent); font-size: 11px;">
-                                                95% MC Confidence Band:
-                                                [${{ "%.2f"|format(row.MC_Lower_95|default(0.0, true)) }} - ${{ "%.2f"|format(row.MC_Upper_95|default(0.0, true)) }}]
-                                            </span>
-                                        </div>
-                                    {% endif %}
+                                    <div class="rationale">{{ row.Rationale|default('No rationale available.', true) }}</div>
                                 </td>
                             </tr>
                             {% endfor %}
+                            {% if not portfolio_rows %}
+                            <tr><td colspan="10" class="empty-note">No symbols were analysed this cycle.</td></tr>
+                            {% endif %}
                         </tbody>
                     </table>
                 </div>
@@ -518,8 +575,7 @@ HTML_REPORT_TEMPLATE = """
             <div class="data-card" style="padding: 24px;">
                 <h3 style="color: var(--accent); margin-bottom: 8px;">🤖 Gravity AI Auditor — Live Exception Log</h3>
                 <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-                    Displays the raw JSON validation findings from the daily AI Verification Suite run.
-                    Identifies risk-management overrides and calculation failures.
+                    Raw JSON validation findings from the daily AI Verification Suite run.
                 </p>
                 <pre>{{ audit_log | tojson(indent=4) }}</pre>
             </div>
@@ -527,58 +583,93 @@ HTML_REPORT_TEMPLATE = """
     </div>
 
     <script>
-        // Tab switching logic
+        // ---- Tab switching ----
         function openTab(evt, tabName) {
             var i, tabcontent, tablinks;
             tabcontent = document.getElementsByClassName("tabcontent");
-            for (i = 0; i < tabcontent.length; i++) {
-                tabcontent[i].style.display = "none";
-            }
+            for (i = 0; i < tabcontent.length; i++) { tabcontent[i].style.display = "none"; }
             tablinks = document.getElementsByClassName("tablinks");
-            for (i = 0; i < tablinks.length; i++) {
-                tablinks[i].className = tablinks[i].className.replace(" active", "");
-            }
+            for (i = 0; i < tablinks.length; i++) { tablinks[i].className = tablinks[i].className.replace(" active", ""); }
             document.getElementById(tabName).style.display = "block";
             evt.currentTarget.className += " active";
         }
 
-        // Render Brinson-Fachler Attribution Chart (Chart.js)
-        document.addEventListener("DOMContentLoaded", function() {
-            var ctx = document.getElementById('attributionChart');
+        // ---- Expand/collapse rationale detail rows ----
+        function toggleDetail(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.style.display = (el.style.display === "none" || el.style.display === "") ? "table-row" : "none";
+        }
+
+        // ---- Client-side search filter ----
+        function filterTable() {
+            var q = document.getElementById("tableSearch").value.toLowerCase();
+            var rows = document.querySelectorAll("#mainTable tbody tr.data-row");
+            rows.forEach(function (r) {
+                var hay = r.getAttribute("data-search") || "";
+                var match = hay.indexOf(q) !== -1;
+                r.style.display = match ? "" : "none";
+                // Hide any expanded detail row belonging to a filtered-out data row.
+                var detail = r.nextElementSibling;
+                if (detail && detail.classList.contains("detail-row")) {
+                    if (!match) detail.style.display = "none";
+                }
+            });
+        }
+
+        // ---- Column sort (data rows keep their detail row adjacency) ----
+        var sortState = {};
+        function sortTable(col, type) {
+            var table = document.getElementById("mainTable");
+            var tbody = table.tBodies[0];
+            // Pair each data row with its following detail row.
+            var pairs = [];
+            var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr.data-row"));
+            rows.forEach(function (dr) {
+                var detail = dr.nextElementSibling;
+                if (detail && !detail.classList.contains("detail-row")) detail = null;
+                pairs.push([dr, detail]);
+            });
+            var asc = !sortState[col];
+            sortState = {}; sortState[col] = asc;
+            pairs.sort(function (a, b) {
+                var ca = a[0].cells[col], cb = b[0].cells[col];
+                var va, vb;
+                if (type === "num") {
+                    va = parseFloat(ca.getAttribute("data-sort"));
+                    vb = parseFloat(cb.getAttribute("data-sort"));
+                    if (isNaN(va)) va = -Infinity; if (isNaN(vb)) vb = -Infinity;
+                    return asc ? va - vb : vb - va;
+                } else {
+                    va = (ca.textContent || "").trim().toLowerCase();
+                    vb = (cb.textContent || "").trim().toLowerCase();
+                    return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+                }
+            });
+            pairs.forEach(function (p) {
+                tbody.appendChild(p[0]);
+                if (p[1]) tbody.appendChild(p[1]);
+            });
+        }
+
+        // ---- Signal distribution doughnut ----
+        document.addEventListener("DOMContentLoaded", function () {
+            var ctx = document.getElementById('signalChart');
             if (ctx) {
                 new Chart(ctx.getContext('2d'), {
-                    type: 'bar',
+                    type: 'doughnut',
                     data: {
-                        labels: ['Allocation Effect', 'Selection Effect'],
+                        labels: ['BUY', 'HOLD', 'SELL'],
                         datasets: [{
-                            label: 'Alpha Contribution',
-                            data: [{{ avg_bf_allocation }}, {{ avg_bf_selection }}],
-                            backgroundColor: [
-                                'rgba(59, 130, 246, 0.6)',
-                                'rgba(16, 185, 129, 0.6)'
-                            ],
-                            borderColor: [
-                                'rgba(59, 130, 246, 1)',
-                                'rgba(16, 185, 129, 1)'
-                            ],
+                            data: [{{ n_buy }}, {{ n_hold }}, {{ n_sell }}],
+                            backgroundColor: ['rgba(16,185,129,0.7)', 'rgba(245,158,11,0.7)', 'rgba(239,68,68,0.7)'],
+                            borderColor: ['#10b981', '#f59e0b', '#ef4444'],
                             borderWidth: 1
                         }]
                     },
                     options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                grid: { color: '#1f2937' },
-                                ticks: { color: '#9ca3af', font: { size: 10 } }
-                            },
-                            x: {
-                                grid: { display: false },
-                                ticks: { color: '#9ca3af', font: { size: 10 } }
-                            }
-                        }
+                        responsive: true, maintainAspectRatio: false,
+                        plugins: { legend: { position: 'bottom', labels: { color: '#9ca3af', font: { size: 10 } } } }
                     }
                 });
             }
@@ -597,24 +688,48 @@ def generate_html_report(
     credit_spread: float = 6.0,
     sahm_rule: float = 0.6,
     real_yield: float = 2.5,
-    audit_log: Dict[str, Any] = None
+    audit_log: Dict[str, Any] = None,
+    account_summary: Optional[Dict[str, Any]] = None,
 ):
     """
-    Renders a clean, styled HTML report using Jinja2 containing portfolio
-    statistics, macro regimes, Gravity AI audit JSON, Traffic Light Indicators,
-    Contextual Anomaly Tooltips, Executive Summary Blocks, Dynamic Formatting,
-    Monte Carlo Confidence Intervals, and Options Greeks formatting.
+    Render the daily advisory HTML report.
 
-    IMPORTANT: output_path remains the 3rd positional parameter to preserve
-    backward compatibility with main.py and main_orchestrator.py callers.
-    audit_log is keyword-only at the end.
+    Leads with Holdings & P&L (shares, average cost, current price, market
+    value, unrealized P&L $ / %) and Action & Rationale (action signal,
+    conviction, suggested position size, plain-English rationale).
+
+    Parameters
+    ----------
+    portfolio_data:
+        One dict per analysed symbol.  Accepts both the advisory schema
+        (``main.py``) and the wide pipeline schema (``main_orchestrator.py``).
+        All field access is defensive — missing keys degrade to "—".
+    regime:
+        Macro regime string (e.g. ``"RISK ON"``, ``"RECESSION"``).
+    output_path:
+        Destination HTML file.  Remains the 3rd positional parameter to
+        preserve backward compatibility with existing callers.
+    yield_curve, credit_spread, sahm_rule, real_yield:
+        Macro context for the regime card.
+    audit_log:
+        Gravity AI verification JSON.  Falls back to the on-disk
+        ``Gravity_Verification_Report.json`` then to a warning stub.
+    account_summary:
+        Optional portfolio-level totals dict.  When provided (``main.py``
+        advisory path) the report renders a summary band; when ``None``
+        (``main_orchestrator.py``) the band is hidden.  Expected keys:
+        ``total_equity``, ``buying_power``, ``total_unrealized_pl``,
+        ``total_dividends``, ``num_positions``, ``n_buy``, ``n_hold``,
+        ``n_sell``, ``n_total``, ``fetched_at`` (str), ``age_hours`` (float),
+        ``is_stale`` (bool).  Never contains secrets.
     """
-    telemetry.info("Generating Daily Jinja2 HTML Report with AI Auditor overlays...")
+    telemetry.info("Generating Daily Jinja2 HTML Report (holdings + rationale layout)...")
 
-    # 1. Fallback for the Gravity AI JSON payload
-    #    Priority: caller-supplied -> Gravity_Verification_Report.json on disk -> warning stub
+    # 1. Gravity AI audit-log fallback chain
     if not audit_log:
-        gravity_report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Gravity_Verification_Report.json")
+        gravity_report_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "Gravity_Verification_Report.json"
+        )
         if os.path.exists(gravity_report_path):
             try:
                 with open(gravity_report_path, "r", encoding="utf-8") as _f:
@@ -625,17 +740,17 @@ def generate_html_report(
                 audit_log = {
                     "status": "WARNING",
                     "message": f"Could not parse Gravity_Verification_Report.json: {_e}",
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
         else:
             audit_log = {
                 "status": "WARNING",
                 "message": "GravityAIAuditor payload missing for this execution cycle. Run ai_verification_prompts.py to generate.",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
-    # 2. Sanitize NaN/Inf values for JSON and Jinja2 safety
-    cleaned_portfolio = []
+    # 2. Sanitize NaN/Inf for JSON + Jinja safety
+    cleaned_portfolio: List[Dict[str, Any]] = []
     for row in portfolio_data:
         clean_row = {}
         for k, v in row.items():
@@ -645,61 +760,90 @@ def generate_html_report(
                 clean_row[k] = v
         cleaned_portfolio.append(clean_row)
 
-    # 3. Standardize missing field names for Jinja template compatibility
-    #    Maps between spaced keys (from pipeline) and underscored keys (for template)
-    total_heat, total_alloc, total_select, count = 0.0, 0.0, 0.0, 0
+    # 3. Field normalization — accept advisory (underscored) AND pipeline
+    #    (spaced) keys; source holdings/P&L from the Robinhood snapshot fields
+    #    when present, else fall back to a derived computation.
+    def _num(row: Dict[str, Any], *keys, default: float = 0.0) -> float:
+        """Return the first present, finite numeric value among ``keys``."""
+        for key in keys:
+            if key in row and row[key] is not None:
+                try:
+                    val = float(row[key])
+                    if not (np.isnan(val) or np.isinf(val)):
+                        return val
+                except (TypeError, ValueError):
+                    continue
+        return default
 
+    n_buy = n_hold = n_sell = 0
     for row in cleaned_portfolio:
-        # Field normalization: pipeline uses spaced keys, template uses underscored
-        row['Action_Signal']    = row.get('Action_Signal')    or row.get('Action Signal')    or 'HOLD'
-        row['Kelly_Size']       = row.get('Kelly_Size')       or row.get('Kelly Target')     or 0.0
-        # Forecast_30D: pipeline outputs as 'Forecast_30' (no suffix D)
-        row['Forecast_30D']     = (row.get('Forecast_30D')
-                                   or row.get('Forecast_30')
-                                   or row.get('MC_Target')
-                                   or 0.0)
-        # CoVaR_Proxy: pipeline stores as 'CoVaR Proxy' (spaced) from main.py
-        row['CoVaR_Proxy']      = (row.get('CoVaR_Proxy')
-                                   or row.get('CoVaR Proxy')
-                                   or 0.0)
-        row['Option_Strategy']  = row.get('Option_Strategy')  or row.get('Option Strategy')  or 'None'
-        row['RSI']              = row.get('RSI', 50.0)        or 50.0
-        row['MACD_Line']        = (row.get('MACD_Line')
-                                   or row.get('MACD Line')
-                                   or 0.0)
-        row['IV_Rank']          = row.get('IV_Rank')          or row.get('IVR')              or 0.0
-        row['Options_IV_Edge']  = row.get('Options_IV_Edge')  or row.get('Options IV Edge')  or 0.0
+        action = (row.get("Action_Signal") or row.get("Action Signal") or "HOLD")
+        row["Action_Signal"] = action
+        au = action.upper()
+        if "SELL" in au or "RISK REDUCE" in au:
+            n_sell += 1
+        elif "BUY" in au:
+            n_buy += 1
+        else:
+            n_hold += 1
 
-        # Ensure sector fallback
-        if 'sector' not in row or not row['sector']:
-            row['sector'] = row.get('Sector', 'N/A')
+        # Holdings (source of truth: Robinhood snapshot fields injected by main.py)
+        row["Shares"]   = _num(row, "Shares", "Robinhood Shares")
+        row["AvgCost"]  = _num(row, "AvgCost", "Robinhood Avg Cost")
+        row["Price"]    = _num(row, "Price", "Robinhood Current Price")
+        row["Dividends"] = _num(row, "Dividends", "Robinhood Dividends")
+        row["CompanyName"] = (row.get("CompanyName") or row.get("Company Name")
+                              or row.get("shortName") or "")
 
-        # Ensure anomaly / audit status fields exist (default to None / PASSED)
-        row.setdefault('Recent_Anomaly', None)
-        row.setdefault('Audit_RSI_Status', 'PASSED')
-        row.setdefault('Audit_MACD_Status', 'PASSED')
+        # Market value: prefer snapshot value, else shares × price
+        mv = _num(row, "MarketValue", "Robinhood Market Value", default=float("nan"))
+        if np.isnan(mv):
+            mv = row["Shares"] * row["Price"]
+        row["MarketValue"] = mv
 
-        # Calculate Monte Carlo 95% Confidence Intervals if not passed explicitly
-        # Pipeline stores as 'MC_Lower' and 'MC_Upper' (no _95 suffix)
-        forecast_30d = row['Forecast_30D']
-        if not row.get('MC_Lower_95'):
-            row['MC_Lower_95'] = (row.get('MC_Lower')
-                                  or (forecast_30d * 0.92 if forecast_30d else 0.0))
-        if not row.get('MC_Upper_95'):
-            row['MC_Upper_95'] = (row.get('MC_Upper')
-                                  or (forecast_30d * 1.08 if forecast_30d else 0.0))
+        # Unrealized P&L: prefer snapshot value, else (price - avg cost) × shares
+        upl = _num(row, "UnrealizedPL", "Robinhood Unrealized PL", default=float("nan"))
+        if np.isnan(upl):
+            upl = (row["Price"] - row["AvgCost"]) * row["Shares"]
+        row["UnrealizedPL"] = upl
 
-        # Accumulate Executive Summary metrics
-        total_heat  += float(row.get('Portfolio_Heat', row.get('Portfolio Heat', 0.0)) or 0.0)
-        total_alloc += float(row.get('BF_Allocation', row.get('BF Allocation', 0.0)) or 0.0)
-        total_select += float(row.get('BF_Selection', row.get('BF Selection', 0.0)) or 0.0)
+        uplp = _num(row, "UnrealizedPLPct", "Robinhood Unrealized PL Pct", default=float("nan"))
+        if np.isnan(uplp):
+            cost_basis = row["AvgCost"] * row["Shares"]
+            uplp = (upl / cost_basis) if cost_basis > 0 else 0.0
+        row["UnrealizedPLPct"] = uplp
+
+        # Action & rationale
+        row["Conviction"] = _num(row, "Conviction", "Advisory_Conviction")
+        row["SuggestedPct"] = _num(row, "SuggestedPct", "Advisory_Position_Pct", "Kelly Target", "Kelly_Size")
+        row["Rationale"] = (row.get("Rationale") or row.get("Advisory_Rationale")
+                            or row.get("Advice") or "")
+        row["Strategy"] = row.get("Strategy") or row.get("strategy") or ""
+        row["DataQuality"] = row.get("DataQuality") or row.get("data_quality") or "OK"
+
+        # Forecast / risk detail
+        row["Forecast_30D"] = _num(row, "Forecast_30D", "Forecast_30", "MC_Target")
+        row["RSI"] = _num(row, "RSI", default=float("nan"))
+        if np.isnan(row["RSI"]):
+            row["RSI"] = None
+        row["GARCH_Vol"] = _num(row, "GARCH_Vol", "GARCH Vol")
+        row["Max_Drawdown"] = _num(row, "Max_Drawdown", "Max Drawdown")
+
+    # 4. Portfolio heat (for the regime card) — averaged when supplied
+    total_heat, count = 0.0, 0
+    for row in cleaned_portfolio:
+        total_heat += float(row.get("Portfolio_Heat", row.get("Portfolio Heat", 0.0)) or 0.0)
         count += 1
+    avg_heat = total_heat / count if count > 0 else 0.0
 
-    avg_heat   = total_heat   / count if count > 0 else 0.0
-    avg_alloc  = total_alloc  / count if count > 0 else 0.0
-    avg_select = total_select / count if count > 0 else 0.0
+    # 5. Enrich account_summary with derived signal tallies when present
+    if account_summary is not None:
+        account_summary.setdefault("n_buy", n_buy)
+        account_summary.setdefault("n_hold", n_hold)
+        account_summary.setdefault("n_sell", n_sell)
+        account_summary.setdefault("n_total", len(cleaned_portfolio))
 
-    # 4. Render HTML Template
+    # 6. Render
     template = Template(HTML_REPORT_TEMPLATE)
     html_content = template.render(
         current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -711,11 +855,13 @@ def generate_html_report(
         real_yield=real_yield,
         audit_log=audit_log,
         avg_portfolio_heat=avg_heat,
-        avg_bf_allocation=round(avg_alloc, 6),
-        avg_bf_selection=round(avg_select, 6)
+        account_summary=account_summary,
+        n_buy=n_buy,
+        n_hold=n_hold,
+        n_sell=n_sell,
     )
 
-    # 5. Save to Disk
+    # 7. Persist
     try:
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
@@ -740,32 +886,60 @@ if __name__ == '__main__':
     df_dummy = pd.DataFrame({'Close': price}, index=dates)
     generate_plotly_volatility_bands(df_dummy, "MOCK")
 
-    # Mock Data to simulate pipeline output and verify the full HTML layout
+    # Mock advisory-schema portfolio (mirrors main.py's _write_html_report output)
     test_portfolio = [
         {
-            "Symbol": "AGNC", "Action_Signal": "RISK REDUCE", "Kelly_Size": 0.0,
-            "Option_Strategy": "Sell to Open Call Credit Spread", "IV_Rank": 85.2, "Options_IV_Edge": 0.04,
-            "RSI": 28.5, "MACD_Line": -0.85, "CoVaR_Proxy": 0.22, "Forecast_30D": 9.50,
-            "Audit_RSI_Status": "PASSED", "Audit_MACD_Status": "PASSED", "Recent_Anomaly": None,
-            "Portfolio_Heat": 0.08, "BF_Allocation": -0.015, "BF_Selection": -0.02,
-            "sector": "Real Estate"
+            "Symbol": "AAPL", "Action Signal": "BUY", "Advisory_Conviction": 0.72,
+            "Advisory_Rationale": "Held above effective cost basis with a constructive 30-day forecast; "
+                                  "RSI neutral and GARCH volatility contained. Suggested partial add.",
+            "Advisory_Position_Pct": 0.043, "Forecast_30": 232.50,
+            "Robinhood Shares": 12.0, "Robinhood Avg Cost": 180.25,
+            "Robinhood Current Price": 214.10, "Robinhood Market Value": 2569.20,
+            "Robinhood Unrealized PL": 406.20, "Robinhood Unrealized PL Pct": 0.1878,
+            "Robinhood Dividends": 8.40, "Company Name": "Apple Inc.",
+            "RSI": 54.2, "GARCH_Vol": 0.21, "Max Drawdown": -0.14,
+            "data_quality": "OK", "strategy": "momentum_trend",
         },
         {
-            "Symbol": "AAPL", "Action_Signal": "STRONG BUY", "Kelly_Size": 0.15,
-            "Option_Strategy": "None", "sector": "Technology",
-            "RSI": 58.2, "MACD_Line": 1.25, "CoVaR_Proxy": 0.05, "Forecast_30D": 155.0,
-            "MC_Lower_95": 145.5, "MC_Upper_95": 165.2,
-            "Audit_RSI_Status": "PASSED", "Audit_MACD_Status": "PASSED", "Recent_Anomaly": "Stock Split",
-            "Portfolio_Heat": 0.02, "BF_Allocation": 0.04, "BF_Selection": 0.03
-        }
+            "Symbol": "AGNC", "Action Signal": "SELL", "Advisory_Conviction": 0.81,
+            "Advisory_Rationale": "Below effective cost basis with a bearish forecast and a credit-sensitive "
+                                  "sector exposure; dividend cushion insufficient. Escalated to SELL.",
+            "Advisory_Position_Pct": 0.0, "Forecast_30": 8.95,
+            "Robinhood Shares": 300.0, "Robinhood Avg Cost": 11.40,
+            "Robinhood Current Price": 9.62, "Robinhood Market Value": 2886.0,
+            "Robinhood Unrealized PL": -534.0, "Robinhood Unrealized PL Pct": -0.1561,
+            "Robinhood Dividends": 142.0, "Company Name": "AGNC Investment Corp.",
+            "RSI": 31.0, "GARCH_Vol": 0.34, "Max Drawdown": -0.41,
+            "data_quality": "OK", "strategy": "mean_reversion",
+        },
+        {
+            "Symbol": "NVDA", "Action Signal": "HOLD", "Advisory_Conviction": 0.40,
+            "Advisory_Rationale": "Not currently held; signal score neutral. No entry edge this cycle.",
+            "Advisory_Position_Pct": 0.0, "Forecast_30": 131.0,
+            "RSI": 61.5, "GARCH_Vol": 0.29, "Max Drawdown": -0.22,
+            "data_quality": "STALE", "strategy": "neutral",
+        },
     ]
+
+    test_account_summary = {
+        "total_equity": 41250.0, "buying_power": 5120.0,
+        "total_unrealized_pl": -127.80, "total_dividends": 150.40,
+        "num_positions": 2, "fetched_at": "2026-06-25T13:02:11+00:00",
+        "age_hours": 1.4, "is_stale": False,
+    }
 
     test_audit_log = {
         "status": "PASSED_WITH_WARNINGS",
         "findings": [
-            "AGNC breached 6% portfolio heat threshold (0.08 detected). Halting execution.",
-            "AAPL indicator arrays heavily influenced by recent 4:1 Stock Split. Adjusting boundaries."
-        ]
+            "AGNC breached cost-basis SELL escalation rule. Advisory action confirmed.",
+            "NVDA quote flagged STALE — sourced from delayed yfinance feed.",
+        ],
     }
 
-    generate_html_report(test_portfolio, regime="CREDIT EVENT", audit_log=test_audit_log)
+    generate_html_report(
+        test_portfolio,
+        regime="NEUTRAL",
+        audit_log=test_audit_log,
+        account_summary=test_account_summary,
+    )
+    telemetry.info("Diagnostic HTML report written to daily_report.html")
