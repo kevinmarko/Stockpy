@@ -48,6 +48,12 @@ data/robinhood_portfolio.py (READ-ONLY portfolio snapshot — ADVISORY ONLY, NO 
 
 data_engine.py (Fetcher: Ingests external API data, implements IDataProvider abstract interface. IDataProvider now also declares fetch_macro_history() -> pd.DataFrame -- full historical VIX/yield-curve series for regime/hmm_regime.py's expanding-window fit, distinct from fetch_macro_raw()'s single current-snapshot dict. DataEngine.fetch_macro_history() pulls unbounded FRED series via self.fred.get_series('VIXCLS'/'T10Y2Y'); returns an empty DataFrame, never fabricated rows, if FRED is unavailable. MockDataEngine.fetch_macro_history() returns a deterministic seeded 500-row synthetic series for offline tests.)
 
+data/market_data.py (Swappable market-data layer. MarketDataProvider ABC with three concrete implementations: AlpacaProvider (real-time IEX via alpaca-py, StockHistoricalDataClient + StockLatestQuoteRequest + StockBarsRequest, is_stale=True when quote age > 60 s); YFinanceProvider (Ticker.fast_info for quotes, Ticker.history() for bars, is_stale=True ALWAYS by design — treat as delayed); FinnhubProvider (fundamentals-only, company_basic_financials, maps Finnhub metric keys to yfinance .info key names so FundamentalDataDTO.from_raw_dict is unchanged, degrades gracefully to empty dict when FINNHUB_API_KEY absent). CompositeProvider auto-selects provider: MARKET_DATA_PROVIDER=alpaca or keys present → Alpaca; otherwise yfinance. Fundamentals: Finnhub first (when FINNHUB_API_KEY set) → yfinance .info fallback. In-process TTL quote cache (dict + monotonic timestamp, default 30 s, NEVER persisted to disk). Bar shape contract: get_intraday_bars returns Open/High/Low/Close/Volume columns, timezone-naive DatetimeIndex, sorted ascending — identical to DataEngine.fetch_technical_raw shape so no downstream changes. MarketDataError is the typed exception (orchestrator catches per-symbol). Module-level singleton: get_provider() / reset_provider(). New env vars: MARKET_DATA_PROVIDER, FINNHUB_API_KEY, MARKET_DATA_QUOTE_TTL_SECONDS.)
+
+data/robinhood_client.py (RobinhoodClient API wrapper (robin_stocks). Logs in, fetches positions, unzips average costs and shares, and merges them into main.py and main_orchestrator.py universes seamlessly. Handles 2FA flow.)
+
+data/robinhood_portfolio.py (ADVISORY ONLY — no order code. Read-only Robinhood account snapshot via TOTP MFA (pyotp). Public API: fetch_account_snapshot(max_age_hours=20.0, force=False) -> AccountSnapshot, logout(). Frozen dataclasses: PortfolioPosition (symbol, qty, avg cost, current price, market value, unrealized P/L, dividends received, name) and AccountSnapshot (positions dict, buying_power, total_equity, total_dividends, UTC-aware fetched_at). Daily JSON cache at cache/account_snapshot.json (atomic write-then-rename). Stale cache returned on live-fail; raises only when live fails and no cache exists. Env vars: RH_USERNAME, RH_PASSWORD, RH_MFA_SECRET. No secrets in cache payload.)
+
 processing_engine.py (Calculator: Vectorized mathematical indicators and fundamental calculations)
 
 macro_engine.py (Top-down macro risk assessment: rules-based "MACRO FREEZE" regime classification via MacroEngine.run_macro_killswitch(), Fama-French 3-factor alpha isolation, and Google Cloud NL sentiment. MacroEngine.__init__ now constructs a persistent regime.hmm_regime.HMMRegimeDetector(n_states=3, retrain_freq_days=7) instance. compute_hmm_risk_on_probability(spy_price_df) builds the 4-feature matrix via regime.hmm_regime.build_feature_matrix() (using self.data_engine.fetch_macro_history() for VIX/yield-curve history), fits/refits, and returns the HMM's risk_on_probability second opinion -- or None (never fabricated) if SPY history, macro history, or the aligned feature matrix (<HMM_MIN_FIT_ROWS=100 rows) is insufficient, or if fit/predict raises -- logged, never propagated, since a statistical second opinion failing must never crash the primary rules-based pipeline.)
@@ -88,7 +94,7 @@ transactions_store.py (Transaction Store: SQLite-backed database using SQLAlchem
 
 schema_registry.py (Gatekeeper: Pandera validation for incoming data)
 
-dto_models.py (Structures: Object-oriented Data Transfer Objects)
+dto_models.py (Structures: Object-oriented Data Transfer Objects, including RobinhoodPositionDTO)
 
 config.py (Schema Definition & SSOT config)
 

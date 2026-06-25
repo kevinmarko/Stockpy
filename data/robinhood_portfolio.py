@@ -26,7 +26,7 @@
 #
 # Dependencies:
 #   pyotp>=2.9.0   (generates the 6-digit TOTP code)
-#   robin_stocks==3.1.1  (already in requirements.txt)
+#   robin_stocks>=3.1.0  (already in requirements.txt)
 # =============================================================================
 
 from __future__ import annotations
@@ -286,7 +286,7 @@ def _fetch_live_snapshot() -> AccountSnapshot:
     # ------------------------------------------------------------------ #
     # Portfolio profile (equity) and account profile (buying power).
     #
-    # robin_stocks 3.1.1 exposes these via the top-level namespace:
+    # robin_stocks 3.x exposes these at the top-level namespace:
     #   r.load_portfolio_profile() → {"equity": "...", ...}
     #   r.load_account_profile()   → {"buying_power": "...", ...}
     # Fall back to allied fields when the primary field is absent

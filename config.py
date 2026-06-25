@@ -110,6 +110,14 @@ COLUMN_SCHEMA = [
     {"header": "Strategy Notes", "key": "Strategy Explainer Notes", "format": "string"},
 
     # ==========================================================
+    # --- ROBINHOOD INTEGRATION ---
+    # ==========================================================
+    {"header": "Robinhood Shares", "key": "Robinhood Shares", "format": "number"},
+    {"header": "Robinhood Avg Cost", "key": "Robinhood Avg Cost", "format": "currency"},
+    {"header": "Robinhood Dividends", "key": "Robinhood Dividends", "format": "currency"},
+    {"header": "Robinhood Advice", "key": "Robinhood Advice", "format": "string"},
+
+    # ==========================================================
     # --- NEW POST-TRADE EVALUATION & SYSTEM HEAT METRICS ---
     # ==========================================================
     {"header": "Max Favorable Excursion", "key": "MFE", "format": "percent"},
