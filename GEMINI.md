@@ -28,7 +28,9 @@ AI Verification Suite (New): A 6-step static analysis and simulation sandbox man
 
 2. Tech Stack
 
-Language: Python 3.12 (Enforced via setup.sh)
+Language: Python 3.12 (Enforced via setup.sh AND via launch.command's runtime version check)
+
+Launcher: launch.command (macOS double-click entry point). Set REFRESH_INTERVAL_SECONDS at the top (default 60; 0 = single run). Verifies .venv exists and python --version == 3.12.x before starting; pauses on exit so errors are visible. One-time chmod +x launch.command required. Drag to Dock for easy access.
 
 Core Libraries: pandas, numpy, yfinance, fredapi, statsmodels, pandas_ta, vectorbt, backtrader, pandera, pydantic, arch, prophet, google-cloud-language, QuantFAA, scikit-learn, scipy, openai, anthropic.
 
@@ -42,7 +44,23 @@ Authentication: Google Service Account (credentials.json).
 
 Folder Structure: Flat, modular "Engine" architecture designed for Dependency Injection:
 
-main.py (Orchestrator: Coordinates engines and database / Google Sheets I/O)
+main.py (CLEAN ADVISORY ORCHESTRATOR — Two-tier refresh cadence:
+  Account tier: Robinhood snapshot via data.robinhood_portfolio.fetch_account_snapshot(); fetched at most once/day (daily JSON cache). Force re-fetch with --refresh-account CLI flag.
+  Market tier: prices, bars, indicators, forecasts refreshed on every run_once() call via engine.advisory.evaluate().
+  Key components:
+    RunResult (frozen dataclass): snapshot: AccountSnapshot, recommendations: list[Recommendation], errors: list[dict], started_at, finished_at, duration_seconds. Errors carry keys: symbol, stage, error_type, message, timestamp. Never raises — per-symbol failures go to errors.
+    run_once(force_account=False) -> RunResult: stages A(account) B(universe) C(macro) D(pre-compute) E(per-symbol advisory) → RunResult.
+    _build_universe(snapshot) -> list[str]: held symbols ∪ WATCHLIST env var (comma-separated) ∪ watchlist.txt (one-per-line, '#' = comment).
+    _build_macro_dto() -> MacroEconomicDTO: FRED fetch (DataEngine + MacroEngine) with neutral-defaults fallback when FRED_API_KEY absent. Never raises.
+    _fetch_bars_for_universe(symbols, market) -> dict[str, DataFrame]: 252-day bars pre-fetched for all symbols before the per-symbol loop.
+    _build_context_extras(symbols, bars_dict, macro_dto) -> dict: computes 12-1m xsec ranks + multifactor composites via global_registry.run_pre_compute() so advisory signals see real universe-wide data instead of 0-fallback. Returns {} on failure (graceful degradation).
+    _write_to_sheet(result, market): maps list[Recommendation] to config.COLUMN_SCHEMA columns; writes error rows for dead-lettered symbols; applies full conditional formatting (Action Signal, Dividend Payback Horizon, Leverage Distress Factor, Options IV Edge). Skipped when credentials.json absent.
+    _write_html_report(result, macro_dto): calls diagnostics_and_visuals.generate_html_report.
+    main(): argparse — no args = run once; --interval N = loop every N seconds (account still ≤ once/day); --refresh-account = force Robinhood login this launch.
+  NOTE — Double-fetch: _fetch_bars_for_universe fetches bars upfront for pre-compute; engine.advisory.evaluate() then re-fetches bars internally per symbol (market provider does not cache bars). Accepted tradeoff for correctness.
+  New env var: WATCHLIST (comma-separated ticker list; file alternative: watchlist.txt).
+  Replaces: the old monolith that called DataEngine/ProcessingEngine/ForecastingEngine/StrategyEngine/TechnicalOptionsEngine directly, read tickers from Google Sheets Sheet2, and used the old RobinhoodClient (robin_stocks) module.
+  main_orchestrator.py continues to exist as the full async pipeline with broker execution, Pandera validation, and all 50+ dashboard columns for production runs.)
 
 data/robinhood_portfolio.py (READ-ONLY portfolio snapshot — ADVISORY ONLY, NO ORDER CODE. TOTP authentication via pyotp.TOTP(RH_MFA_SECRET).now() + robin_stocks.login(store_session=True, mfa_code=..., by_sms=False). Daily cache at cache/account_snapshot.json: fetch_account_snapshot(max_age_hours=20.0, force=False) returns cached snapshot instantly when fresh (no login), triggers live fetch when stale or absent, falls back to stale cache on live-fetch failure, raises only if live fails AND no cache exists. PortfolioPosition (frozen dataclass): symbol, quantity, average_cost, current_price, market_value, unrealized_pl, unrealized_pl_pct, dividends_received, name — with to_dict()/from_dict() JSON round-trip. AccountSnapshot (frozen dataclass): positions dict[str,PortfolioPosition], buying_power, total_equity, total_dividends, fetched_at (UTC-aware) — plus age_hours()/is_stale(max_age_hours) helpers. Dividend correlation: only "paid" and "reinvested" states counted; UUID extracted from instrument URL path. Per-symbol failures are logged and skipped — never abort the snapshot. Credentials from os.environ: RH_USERNAME, RH_PASSWORD, RH_MFA_SECRET.)
 
@@ -201,3 +219,25 @@ get_default_cache() / _inject_cache(): thread-safe module-level singleton (the p
 Serialisation: custom JSON encoder/decoder supports pd.DataFrame (orient="split"), pd.Series (orient="split"), and datetime (ISO). OHLCV DataFrames stored as gzip-compressed JSON blobs (no pyarrow). Cache keys > 128 chars are SHA-256-hashed. SECRETS MUST NEVER BE PASSED AS CACHE VALUES — callers are responsible; the cache stores no credentials.
 
 Gravity Step 25 (cache system audit): Checks Cache API completeness, all Cadence enum values present in CADENCE_TTL with non-zero TTLs, CADENCE_REGISTRY has all required keys, @cached second call is a hit (network called once), TTL expiry triggers refresh, force=True bypasses cache, and no known secret-pattern strings appear in cache values.
+
+HOLDING-AWARE ADVISORY ENGINE (engine/advisory.py — Stage 6):
+New engine/ package providing per-symbol BUY/SELL/HOLD recommendations tailored to actual Robinhood holdings. Public API: evaluate(symbol, position, market, snapshot, macro_dto=None, transactions_store=None) -> Recommendation.
+
+Recommendation (frozen dataclass): symbol, action: Literal["BUY","SELL","HOLD"], strategy: str, conviction: float [0,1], rationale: str, suggested_position_pct: float, forecast: float|None, key_indicators: dict[str,float], data_quality: Literal["OK","STALE","PARTIAL"].
+
+CONFIG dict (module top): 16 named thresholds — score gates (strong_buy=75, buy=55, sell=35), P&L thresholds (gain_hold_bias=10%, loss_sell_threshold=-10%), dividend bias thresholds (yield≥4% or cumulative≥$50), max_single_position_pct=5%, Kelly params (fraction=0.5, cap=0.20), conviction levels (strong_buy=0.85, buy=0.70, hold=0.55, sell=0.65, strong_sell=0.80), bearish_forecast_pct_threshold=-3%. No magic numbers in the decision logic.
+
+Pipeline (13 stages, each wrapped in try/except for dead-letter resilience): (1) quote + OHLCV bars via MarketDataProvider; (2) MarketBarDTO construction; (3) FundamentalDataDTO via market.get_fundamentals(); (4) ProcessingEngine technical indicators; (5) TechnicalOptionsEngine GJR-GARCH vol; (6) ForecastingEngine 30-day blended forecast; (7) neutral MacroEconomicDTO default when not injected (NOT added to partial_flags — intentional fallback, not a data failure); (8) StrategyEngine.evaluate_security() for raw signal + score + Kelly fraction; (9) holding-aware overlay (three mutually-exclusive cases below); (10) fractional-Kelly sizing clamped to max_single_position_pct; (11) one-paragraph plain-English rationale citing top 2-3 drivers; (12) key_indicators dict (NaN for unavailable values, never omitted); (13) data_quality: PARTIAL > STALE > OK.
+
+Holding-aware overlay — three mutually-exclusive cases evaluated only when position is not None and quantity > 0:
+• Case A (SELL escalation): unrealized_pl_pct ≤ -10% (effective cost = avg_cost − divs_per_share) AND 30-day forecast is bearish (< -3% change) → override final_action to SELL, raise conviction to max(current, 0.80).
+• Case B (DIVIDEND HOLD BIAS RULE): forward_dividend_yield ≥ 4% OR dividends_received ≥ $50, AND base action is BUY/HOLD, AND raw score < buy_score_threshold → override to HOLD. Rationale explicitly cites forward yield, cumulative dividends, and ongoing income compounding. Fires ONLY on weak-signal readings — a genuinely strong BUY (score ≥ 55) is preserved.
+• Case C (gain protection): unrealized_pl_pct ≥ 10% AND base action == BUY AND forecast not bearish → override to HOLD. Avoids piling into a winner already past the gain threshold.
+
+Source-of-truth rules (CONSTRAINT #4 — enforced in evaluate()): PortfolioPosition / AccountSnapshot (Robinhood) are the ONLY source for cost_basis, quantity, dividends_received, buying_power, equity. MarketDataProvider is the ONLY source for prices, OHLCV bars, fundamentals, indicators, forecasts. These roles never cross.
+
+Module-level engine imports: ProcessingEngine, ForecastingEngine, TechnicalOptionsEngine, StrategyEngine, TransactionsStore are imported at module level (not lazily inside the function body) so mock.patch("engine.advisory.<ClassName>") resolves correctly in tests.
+
+Tests (tests/test_advisory.py — 16 fully offline tests): All engines patched. Three acceptance criteria tested: AC1 (held + dividends + gain + neutral → HOLD, rationale cites dividends and gain); AC2 (held + below cost + bearish → SELL, elevated conviction); AC3 (non-held + strong bullish + positive Kelly → BUY, suggested_position_pct in (0, 0.05]). Data-quality mechanics tested independently. Uses TransactionsStore(db_url="sqlite:///:memory:") for DB isolation.
+
+Gravity Step 27 (advisory audit): Checks module importable, Recommendation dataclass fields and frozen status, evaluate() accepts correct parameters, CONFIG has all 16 required keys, three acceptance criteria end-to-end (AC1/AC2/AC3 with patched engines), data_quality STALE/PARTIAL/OK mechanics, suggested_position_pct bounded by max_single_position_pct on BUY and 0.0 on SELL/HOLD, no magic numbers in logic section (all decision literals match CONFIG values).
