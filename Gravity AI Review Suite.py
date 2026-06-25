@@ -3711,6 +3711,107 @@ class GravityAIAuditor:
 
         self.report["step_30_pipeline_smoke_audit"] = audit
 
+    # Step 31 — .env loading convention
+    # ──────────────────────────────────
+    def run_env_loading_audit(self) -> None:
+        """Step 31 — Validates the .env → os.environ loading convention.
+
+        pydantic-settings reads .env into Settings() but does NOT propagate to
+        os.environ.  data/robinhood_portfolio.py reads RH_USERNAME via
+        os.environ.get() directly, so without an explicit load_dotenv() call
+        in the entry-point modules, the runtime sees empty credentials even
+        when .env is fully populated.
+
+        Checks:
+          1. main.py imports load_dotenv from dotenv.
+          2. main.py calls load_dotenv() at module top (AST walk).
+          3. main_orchestrator.py imports load_dotenv from dotenv.
+          4. main_orchestrator.py calls load_dotenv() at module top.
+          5. tests/test_env_loading.py exists (regression coverage).
+          6. python-dotenv is in requirements.txt.
+        """
+        import ast as _ast
+        from pathlib import Path
+
+        audit: dict = {"checks": [], "status": "PENDING"}
+        checks: list[bool] = []
+
+        def _chk(name: str, ok: bool, detail: str = "") -> None:
+            entry: dict = {"check": name, "status": "PASS" if ok else "FAIL"}
+            if detail:
+                entry["detail"] = detail
+            audit["checks"].append(entry)
+            checks.append(ok)
+
+        def _has_load_dotenv(path: Path) -> tuple[bool, bool]:
+            """(imports_load_dotenv, calls_load_dotenv_anywhere).
+
+            The call may be at module top OR inside any function body — both
+            placements are acceptable.  Module-top placement was the original
+            implementation but caused pytest pollution (importing main loaded
+            .env into os.environ, breaking Settings()-default tests).  The
+            current convention is to call inside main() / run_once() bodies.
+            """
+            try:
+                src = path.read_text(encoding="utf-8")
+                tree = _ast.parse(src, filename=str(path))
+            except Exception:
+                return (False, False)
+            aliases: dict[str, str] = {}
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.ImportFrom) and node.module == "dotenv":
+                    for alias in node.names:
+                        if alias.name == "load_dotenv":
+                            aliases[alias.asname or alias.name] = "load_dotenv"
+            imports_ok = bool(aliases)
+            called_ok = False
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Call):
+                    func = node.func
+                    if isinstance(func, _ast.Name) and func.id in aliases:
+                        called_ok = True
+                        break
+            return (imports_ok, called_ok)
+
+        try:
+            repo_root = Path(__file__).parent
+
+            for entry in ("main.py", "main_orchestrator.py"):
+                path = repo_root / entry
+                if not path.exists():
+                    _chk(f"{entry}_exists", False, "file not found")
+                    _chk(f"{entry}_imports_load_dotenv", False, "file not found")
+                    _chk(f"{entry}_calls_load_dotenv", False, "file not found")
+                    continue
+                imp_ok, call_ok = _has_load_dotenv(path)
+                _chk(f"{entry}_imports_load_dotenv", imp_ok,
+                     "" if imp_ok else "missing 'from dotenv import load_dotenv'")
+                _chk(f"{entry}_calls_load_dotenv", call_ok,
+                     "" if call_ok else "load_dotenv() must be invoked at module top, before project imports")
+
+            # 5. Regression test exists
+            regression_test = repo_root / "tests" / "test_env_loading.py"
+            _chk("regression_test_exists", regression_test.exists(),
+                 "tests/test_env_loading.py is the canonical regression coverage for this contract")
+
+            # 6. python-dotenv pinned in requirements
+            req = repo_root / "requirements.txt"
+            if req.exists():
+                req_text = req.read_text(encoding="utf-8")
+                _chk("python_dotenv_in_requirements",
+                     "python-dotenv" in req_text,
+                     "add `python-dotenv` to requirements.txt")
+            else:
+                _chk("python_dotenv_in_requirements", False, "requirements.txt missing")
+
+            audit["status"] = "PASSED" if all(checks) else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = "ERROR"
+            audit["error"] = str(exc)
+
+        self.report["step_31_env_loading_audit"] = audit
+
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
         self.run_schema_audit()
@@ -3742,6 +3843,7 @@ class GravityAIAuditor:
         self.run_run_once_orchestrator_audit()
         self.run_alerting_module_audit()
         self.run_pipeline_smoke_audit()
+        self.run_env_loading_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================

@@ -31,6 +31,17 @@ import numpy as np
 from datetime import datetime, timezone
 from typing import Optional, Any
 
+# ---------------------------------------------------------------------------
+# python-dotenv import (loader is INVOKED inside main(), NOT at module top)
+# ---------------------------------------------------------------------------
+# Module-top invocation pollutes the pytest session: importing this module
+# loads every .env value into os.environ, which then breaks Settings()-default
+# tests that assert specific keys are unset.  Invoking inside main() runs the
+# loader on every production launch (`python main_orchestrator.py`) while
+# leaving tests' os.environ pristine.  override=False so explicit shell
+# exports continue to win over the .env file.
+from dotenv import load_dotenv as _load_dotenv
+
 # Core imports
 import config
 from settings import settings
@@ -996,6 +1007,11 @@ async def _main_body(effective_dry_run: bool) -> None:
 async def main(dry_run: bool = False):  # --dry-run flag propagated from CLI
     """Master async entry point.  Starts a heartbeat background task and
     always cancels it (even on crash) via try/finally."""
+    # Load .env into os.environ.  See module-top comment on python-dotenv:
+    # the loader is deliberately invoked here (not at import) so the test
+    # suite's Settings()-default assertions aren't polluted by .env values
+    # leaking into os.environ at module import time.  Idempotent.
+    _load_dotenv(override=False)
     telemetry.info("🚀 Launching Master Orchestration Routing Hub...")
 
     # --dry-run: merge CLI arg with settings; either source can enable it.
