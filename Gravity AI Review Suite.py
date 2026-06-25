@@ -2908,9 +2908,14 @@ class GravityAIAuditor:
             violations = []
             for lit in threshold_literals:
                 # Flag bare integer comparisons like "< 75" or "> 55" not inside CONFIG[...]
-                pattern = rf'(?<!CONFIG\[.{{0,40}})[<>!]=?\s*{re.escape(lit)}(?!\s*,)'
+                pattern = rf'[<>!]=?\s*{re.escape(lit)}(?!\s*,)'
                 for match in re.finditer(pattern, logic_src):
-                    ctx = logic_src[max(0, match.start()-40):match.end()+20].strip()
+                    start = match.start()
+                    # Check if 'CONFIG[' is within the 40 characters preceding the match
+                    preceding = logic_src[max(0, start-40):start]
+                    if "CONFIG[" in preceding:
+                        continue
+                    ctx = logic_src[max(0, start-40):match.end()+20].strip()
                     # Allow if it's inside a string literal / comment
                     if 'CONFIG' not in ctx and '"' not in ctx and '#' not in ctx:
                         violations.append(ctx[:60])
