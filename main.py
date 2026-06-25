@@ -249,7 +249,7 @@ def _build_macro_dto() -> MacroEconomicDTO:
         logger.info(
             "Macro DTO built — regime=%s  VIX=%.1f  HMM=%.2f.",
             dto.market_regime,
-            dto.vix_value,
+            dto.vix,
             hmm_prob if hmm_prob is not None else float("nan"),
         )
         return dto
@@ -274,7 +274,14 @@ def _fetch_bars_for_universe(
     symbols: List[str],
     market: MarketDataProvider,
 ) -> Dict[str, pd.DataFrame]:
-    """Fetch 252-day OHLCV history for all symbols via the market provider.
+    """Fetch ~450-day OHLCV history for all symbols via the market provider.
+
+    The 12-1m cross-sectional momentum in ``_build_context_extras`` needs
+    ``252 + 22 + 1 = 275`` *trading* days; fetching only 252 leaves every
+    symbol below that floor, so the xsec rank pass silently yields nothing.
+    Request 450 calendar days (~310 trading days) to clear the floor with
+    headroom (this also maps yfinance to its "2y" period, avoiding a short
+    "1y" pull that tops out near 252 rows).
 
     Returns a dict symbol → DataFrame.  Failures are dead-lettered per symbol
     so one bad ticker never aborts the pre-compute pass.
@@ -282,7 +289,7 @@ def _fetch_bars_for_universe(
     bars: Dict[str, pd.DataFrame] = {}
     for sym in symbols:
         try:
-            df = market.get_intraday_bars(sym, lookback_days=252)
+            df = market.get_intraday_bars(sym, lookback_days=450)
             if df is not None and not df.empty:
                 bars[sym] = df
         except Exception as exc:
