@@ -66,6 +66,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# ---------------------------------------------------------------------------
+# python-dotenv import (loader is INVOKED inside main() and run_once(), NOT
+# at module top)
+# ---------------------------------------------------------------------------
+# Why not at module top?
+#   Module-top invocation would copy every .env value into os.environ on first
+#   import, which pollutes the test session: tests/test_settings.py asserts
+#   that constructing Settings() with no env returns the documented defaults,
+#   and that assertion fails as soon as another test (e.g. test_run_once)
+#   imports main and triggers the loader.
+#
+# Why call it inside both main() AND run_once()?
+#   Production launchers (launch.command → `python main.py`) enter through
+#   main(), so the loader fires there.  `make verify` and `verify.command`
+#   import main and call `main.run_once()` directly without going through
+#   main() — so run_once() must also call the loader as a defensive backstop.
+#   load_dotenv() is idempotent and fast; the duplicate call is harmless.
+#
+# Why override=False?
+#   So an explicit shell export ALWAYS wins over the .env file.
+from dotenv import load_dotenv as _load_dotenv
+
 import numpy as np
 import pandas as pd
 
@@ -776,6 +798,24 @@ def run_once(force_account: bool = False) -> RunResult:
     RunResult
         Always returned.  Never raises.  Per-symbol failures are collected in
         ``RunResult.errors`` rather than being propagated.
+
+    .env loading contract
+    ---------------------
+    This function does NOT call load_dotenv() itself — doing so would pollute
+    the pytest session (test_run_once.py invokes run_once() many times and
+    each call would copy every .env value into os.environ, breaking
+    test_settings_defaults).  The caller is responsible for ensuring
+    os.environ contains the secrets that downstream modules read via
+    os.environ.get(), notably data/robinhood_portfolio.py.
+
+    Standard call sites:
+      • main() invokes _load_dotenv() before run_once() — production launch.
+      • Makefile target `verify` invokes load_dotenv() in its python -c block
+        before calling main.run_once().
+      • verify.command invokes load_dotenv() in its python heredoc before
+        calling main.run_once().
+      • Tests use mock.patch on fetch_account_snapshot etc., so they don't
+        need real env vars.
     """
     started_at = datetime.now(timezone.utc)
     recommendations: List[Recommendation] = []
@@ -815,9 +855,15 @@ def run_once(force_account: bool = False) -> RunResult:
     # ── Stage B: Universe ─────────────────────────────────────────────────────
     symbols = _build_universe(snapshot)
     if not symbols:
+        # Held positions are empty AND WATCHLIST is unset AND watchlist.txt is
+        # absent / empty.  Spell out every possible fix so the user can act
+        # without spelunking through the source.
         logger.warning(
             "Empty symbol universe — nothing to evaluate. "
-            "Check WATCHLIST env var or add tickers to %s.",
+            "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET in "
+            ".env so Robinhood positions populate the universe, (2) set the "
+            "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), or (3) "
+            "create %s with one ticker per line.",
             WATCHLIST_FILE,
         )
         finished_at = datetime.now(timezone.utc)
@@ -926,6 +972,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Load .env into os.environ before any runtime os.environ.get() call.
+    # This is the primary load point when launched as `python main.py`; the
+    # call inside run_once() is the defensive backstop for direct imports.
+    _load_dotenv(override=False)
     setup_logging()   # configure root logger (file + console, rotating, structured)
     logger.info("InvestYo Quant Platform starting.")
     settings.warn_if_fred_key_leaked(logger)

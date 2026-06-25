@@ -99,6 +99,12 @@ echo ""
 # ── Step 3: Live one-cycle run ───────────────────────────────────────────────
 echo "=== Step 3 / 3  Live one-cycle run ==="
 "$PYTHON" - <<'PYEOF'
+# load_dotenv() here is mandatory: run_once() deliberately does NOT call it
+# (would pollute pytest) so the verify script must populate os.environ itself
+# before invoking the pipeline.
+from dotenv import load_dotenv
+load_dotenv(override=False)
+
 from alerting import setup_logging, summarize_run
 import main
 

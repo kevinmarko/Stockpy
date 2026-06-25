@@ -44,6 +44,7 @@ _live_run:
 	@echo ""
 	@echo "=== Step 3 / 3  Live one-cycle run ==="
 	@$(PYTHON) -c "\
+from dotenv import load_dotenv; load_dotenv(override=False); \
 from alerting import setup_logging, summarize_run; \
 import main; \
 setup_logging(); \

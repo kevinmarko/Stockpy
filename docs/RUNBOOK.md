@@ -185,6 +185,31 @@ Dashboard shows heat > 6%.
 
 ---
 
+### 3.5b "RH_USERNAME is missing" but .env has it set
+
+**Symptom**: Log shows `ERROR - Live Robinhood fetch failed: Required environment variable 'RH_USERNAME' (or 'ROBINHOOD_USERNAME') is missing or empty` — yet your `.env` clearly contains `RH_USERNAME=...`.
+
+**Root cause**: An entry-point module (`main.py` or `main_orchestrator.py`) is missing `load_dotenv()` at module top. `pydantic-settings` reads `.env` into the `Settings()` object but never copies values into `os.environ`. Any module that reads credentials via `os.environ.get(...)` directly — `data/robinhood_portfolio.py` does this — sees empty strings.
+
+**Verify**:
+```bash
+.venv/bin/python3 -m pytest tests/test_env_loading.py -v
+```
+Both tests must PASS. If either fails, the regression has returned.
+
+**Fix**: Confirm both `main.py` and `main_orchestrator.py` contain, near the top before any project imports:
+```python
+from dotenv import load_dotenv as _load_dotenv
+_load_dotenv(override=False)
+```
+
+**Companion symptoms to check at the same time**:
+- `RH_MFA_SECRET` empty in `.env` → the new portfolio module requires TOTP MFA. Enable Authenticator-app MFA in the Robinhood app (Settings → Security → Two-Factor Authentication → Authenticator App), copy the Base32 secret, paste into `RH_MFA_SECRET=`.
+- `WATCHLIST` unset AND no `watchlist.txt` → even after Robinhood works, an empty held-positions set produces an empty universe. Either set `WATCHLIST=SPY,QQQ,AAPL,MSFT,JNJ` in `.env` or create `watchlist.txt` (one ticker per line, `#` = comment).
+- First line of `.env` is a free-text comment without `#` prefix → produces `python-dotenv could not parse statement starting at line 1` warning. Harmless but ugly; prefix with `#`.
+
+---
+
 ### 3.6 HMM Says High Risk-Off
 
 **Symptom**: Risk gate blocks BUY orders with `"hmm_regime"` reason;
