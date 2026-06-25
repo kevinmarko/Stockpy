@@ -27,6 +27,8 @@ Then double-click `launch.command` again.
 
 **If the wrong Python version is detected**: the launcher tells you which version was found and how to recreate `.venv` with Python 3.12.
 
+**Prefer a visual control panel?** Double-click **`launch_gui.command`** (or run `streamlit run gui/app.py`) to open the **Command Center** — a 9-tab GUI that launches the orchestrator, shows live pipeline-stage status, edits non-secret `.env` tunables (secrets stay masked/read-only), toggles signal modules and the kill switch, and surfaces the Gravity audit. It is read-only / file-backed: it launches `main_orchestrator.py` as a subprocess and reads the files it writes, so it never touches the broker directly. The kill switch toggled from the Strategy Matrix tab writes the same `output/KILL_SWITCH` sentinel as `python -m execution.kill_switch --activate`, so the two are interchangeable. Disabling a module in that tab writes `DISABLED_SIGNAL_MODULES` to `.env` and takes effect on the **next** orchestrator launch.
+
 ---
 
 ## 1. Switching from Paper to Live

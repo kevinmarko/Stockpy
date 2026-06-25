@@ -99,6 +99,14 @@ class SignalAggregator:
             # does NOT contribute to meta_label_composite (an inactive strategy
             # should not reduce the composite probability for a cycle it's
             # suppressed in).
+            # Operator override: a module explicitly disabled via the GUI
+            # Strategy Matrix (settings.DISABLED_SIGNAL_MODULES) is dropped here
+            # just like a regime-gated module — no score contribution, no
+            # meta_label_composite effect, and its explanation lines are not
+            # surfaced. An empty disabled list reproduces the legacy behavior.
+            if name in settings.DISABLED_SIGNAL_MODULES:
+                continue
+
             module = self.registry.get(name)
             if not module.is_active_in_regime(context.macro):
                 continue

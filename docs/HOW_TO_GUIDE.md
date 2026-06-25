@@ -193,6 +193,30 @@ REFRESH_INTERVAL_SECONDS=60   # change to 0 for a single run
 
 ---
 
+### The Command Center — visual control panel (recommended)
+
+The **Command Center** is a graphical front-end over the same pipeline, ideal if you prefer clicking to typing. Launch it by double-clicking **`launch_gui.command`** (macOS) or running:
+
+```bash
+streamlit run gui/app.py
+```
+
+It opens in your browser with nine tabs:
+
+1. **🚀 Launcher** — a Launch button that runs `main_orchestrator.py` as a background subprocess, with live stage indicators (Data Acquisition → Processing → Forecasting → Execution), a heartbeat freshness gauge, and a tail of the run log. Optional **Dry run** and **Refresh Robinhood account** toggles.
+2. **📈 Reports** — portfolio heat, edge/MFE/MAE on the latest signals, and one-click download of the generated HTML report / signals CSV.
+3. **⚙️ Settings** — edit **non-secret** tunables (`RISK_FREE_RATE`, `KELLY_FRACTION`, `DEFAULT_TICKERS`, thresholds, …) and save them to `.env`. **Secrets (API keys, passwords, TOTP) are shown masked and are read-only here** — edit those directly in `.env`. Changes take effect on the **next** launch.
+4. **🧩 Strategy Matrix** — enable/disable individual signal modules (writes `DISABLED_SIGNAL_MODULES`), adjust their weights (writes `SIGNAL_WEIGHTS`), and manually activate/deactivate the **Macro Kill Switch**.
+5. **📒 Paper Monitor** — your Robinhood account snapshot (account state only) side-by-side with the pipeline's market-data projection, reconciled by ticker.
+6. **🛡️ Gravity Audit** — runs the Gravity AI Review Suite and shows pass/fail per step; review this before authorizing a live run.
+7. **🧮 Options** — Black-Scholes Greeks and an IV-Rank proxy per active symbol.
+8. **🛰️ Market Data** — which provider is active (Alpaca real-time vs. yfinance delayed), quote freshness, and a cache-reset control.
+9. **📊 Observability** — a compact macro-regime / VIX / HMM / P&L summary (the full standalone dashboard remains at `streamlit run observability/dashboard.py`).
+
+The Command Center is **read-only and file-backed**: it never talks to the broker directly — it launches the orchestrator and reads the files the orchestrator writes, so it stays usable even when the broker API is down. One-time setup: `chmod +x launch_gui.command`.
+
+---
+
 ### From Terminal — primary async orchestrator
 
 ```bash

@@ -239,6 +239,23 @@ class Settings(BaseSettings):
         description="Weights for individual quantitative signal modules."
     )
 
+    # --- Signal module enable/disable (gui/ command center, signals/aggregator.py) ---
+    # Names of signal modules that the operator has disabled (e.g. via the GUI
+    # Strategy Matrix tab). SignalAggregator.aggregate() skips any module whose
+    # name appears here — its weighted contribution is dropped from final_score
+    # exactly like a regime-gated module, and it does not affect the
+    # meta_label_composite. An empty list (the default) reproduces the legacy
+    # behavior where every registered module contributes. Persisted to .env as a
+    # JSON array (e.g. DISABLED_SIGNAL_MODULES=["rsi2_mean_reversion"]) so the
+    # choice survives across launches and is honored by BOTH orchestrators.
+    DISABLED_SIGNAL_MODULES: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Signal module names to exclude from SignalAggregator.aggregate(). "
+            "JSON array in .env, e.g. [\"rsi2_mean_reversion\"]. Empty = all active."
+        ),
+    )
+
     # --- Multifactor signal (signals/multifactor.py) ---
     MULTIFACTOR_MICROCAP_THRESHOLD: float = Field(
         default=300_000_000.0,

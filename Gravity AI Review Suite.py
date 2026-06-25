@@ -225,6 +225,7 @@ class GravityAIAuditor:
             "step_14_xsec_momentum_audit": {},
             "step_22_triple_barrier_meta_label_audit": {},
             "step_23_qlib_arch_model_registry_audit": {},
+            "step_32_gui_command_center_audit": {},
         }
         self.data_engine = GravityTestEngine()
         self.test_df = self.data_engine.fetch_historical_prices()
@@ -3947,7 +3948,7 @@ class GravityAIAuditor:
             audit["status"] = "ERROR"
             audit["error"] = str(exc)
 
-        self.report["step_32_html_report_audit"] = audit
+        self.report["step_32_gui_command_center_audit"] = audit
 
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
