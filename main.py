@@ -37,6 +37,7 @@ from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
 import config
 from settings import settings
 from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
+from data.robinhood_client import RobinhoodClient
 
 SHEET_NAME = "Stock Dashboard Py"
 TAB_NAME_INPUT = "Sheet2"
@@ -66,6 +67,15 @@ def main():
         sh = gc.open(SHEET_NAME)
         input_ws = sh.worksheet(TAB_NAME_INPUT)
         tickers = [t for t in input_ws.col_values(1)[1:] if t]
+        
+        rh_client = RobinhoodClient()
+        rh_positions = {}
+        if rh_client.login():
+            rh_positions = rh_client.fetch_positions()
+            for tk in rh_positions.keys():
+                if tk not in tickers:
+                    tickers.append(tk)
+                    
         print(f"✅ Found {len(tickers)} tickers.")
         
     except Exception as e:
@@ -353,7 +363,8 @@ def main():
                 roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
                 sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
                 rsi_2=rsi_2_val,
-                sma_5=sma_5_val
+                sma_5=sma_5_val,
+                robinhood_position=rh_positions.get(ticker)
             )
 
             # Map strategy fields
@@ -374,6 +385,11 @@ def main():
             # "Sell Range" column (config.COLUMN_SCHEMA) is populated.
             dashboard_df.at[index, 'sellRange'] = strategy_output['sellRange']
             dashboard_df.at[index, 'Strategy Explainer Notes'] = strategy_output['Strategy Explainer Notes']
+            
+            dashboard_df.at[index, 'Robinhood Shares'] = strategy_output.get('Robinhood Shares', 0.0)
+            dashboard_df.at[index, 'Robinhood Avg Cost'] = strategy_output.get('Robinhood Avg Cost', 0.0)
+            dashboard_df.at[index, 'Robinhood Dividends'] = strategy_output.get('Robinhood Dividends', 0.0)
+            dashboard_df.at[index, 'Robinhood Advice'] = strategy_output.get('Robinhood Advice', 'N/A')
 
             # Calculate Edge Ratio on historical holding segment of last 15 active trading days
             edge_ratio_val = 0.0

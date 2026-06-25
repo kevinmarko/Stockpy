@@ -57,6 +57,40 @@ class Settings(BaseSettings):
     ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
     ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
     ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
+
+    # --- Market-data layer (data/market_data.py) ---
+    # Explicit provider override.  When absent the platform auto-selects:
+    # Alpaca (if keys present) → yfinance (zero config, ~15-min delayed).
+    MARKET_DATA_PROVIDER: Optional[str] = Field(
+        default=None,
+        description=(
+            "Force a specific market-data backend: 'alpaca' or 'yfinance'. "
+            "When unset the platform auto-selects based on key availability."
+        ),
+    )
+    FINNHUB_API_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Finnhub API key for fundamental data (company_basic_financials). "
+            "Free tier available at https://finnhub.io. "
+            "When absent, fundamentals fall back to yfinance .info (no crash)."
+        ),
+    )
+    # TTL (seconds) for the in-process quote cache in CompositeProvider.
+    # Prevents redundant network calls within a single refresh cycle.
+    # Quotes must NOT be persisted to disk — cache is in-process only.
+    MARKET_DATA_QUOTE_TTL_SECONDS: int = Field(
+        default=30,
+        description="In-process quote cache TTL in seconds (never persisted to disk).",
+    )
+    # --- Robinhood Integration (legacy data/robinhood_client.py — SMS login) ---
+    ROBINHOOD_USERNAME: Optional[str] = Field(default=None, description="Robinhood username (email).")
+    ROBINHOOD_PASSWORD: Optional[str] = Field(default=None, description="Robinhood password.")
+    # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py — TOTP login) ---
+    # Read-only; used for account state only. No order functions anywhere in that module.
+    RH_USERNAME: Optional[str] = Field(default=None, description="Robinhood account email for TOTP-authenticated read-only portfolio snapshot.")
+    RH_PASSWORD: Optional[str] = Field(default=None, description="Robinhood account password for TOTP-authenticated read-only portfolio snapshot.")
+    RH_MFA_SECRET: Optional[str] = Field(default=None, description="Base32 TOTP secret from the Robinhood MFA setup page. Never logged or cached.")
     # --- Order management (execution/order_manager.py) ---
     # When True the orchestrator logs intended orders but never submits them.
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.

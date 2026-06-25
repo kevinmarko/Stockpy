@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime
 
 # Import type-safe data transfer containers
-from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO, RobinhoodPositionDTO
 from settings import settings
 from sizing.kelly import (
     estimate_win_rate_and_payoff,
@@ -208,7 +208,8 @@ class StrategyEngine:
                           sma_200: float = 0.0,
                           rsi_2: float = 50.0,
                           sma_5: Optional[float] = None,
-                          strategy_id: Optional[str] = None) -> Dict[str, Any]:
+                          strategy_id: Optional[str] = None,
+                          robinhood_position: Optional[RobinhoodPositionDTO] = None) -> Dict[str, Any]:
         """
         Executes multi-phase quantitative scoring across the security.
         Synthesizes technical, fundamental, macro, and volatility factors to produce
@@ -386,8 +387,27 @@ class StrategyEngine:
             # NEW: first-class sell-side range surfaced alongside buyRange.
             # See ``apply_sell_side_range`` docstring for construction details.
             "sellRange": sell_side_range,
+            "Robinhood Shares": robinhood_position.shares if robinhood_position else 0.0,
+            "Robinhood Avg Cost": robinhood_position.average_cost if robinhood_position else 0.0,
+            "Robinhood Dividends": robinhood_position.total_dividends if robinhood_position else 0.0,
+            "Robinhood Advice": self._generate_robinhood_advice(actionable_advice_signal, current_price, robinhood_position) if robinhood_position else "N/A",
             "Strategy Explainer Notes": "\n".join(verbose_notes)
         }
+
+    def _generate_robinhood_advice(self, signal: str, current_price: float, position: RobinhoodPositionDTO) -> str:
+        """Generates contextual advice based on actual holdings."""
+        if position.shares <= 0:
+            return "No current position. Follow system signal for entry."
+            
+        unrealized_return = (current_price / position.true_break_even) - 1.0 if position.true_break_even > 0 else 0.0
+        pct_str = f"{unrealized_return * 100:.2f}%"
+        
+        if signal in ["STRONG BUY", "BUY"]:
+            return f"Accumulate more. Current position up {pct_str} (adj. for divs)."
+        elif signal == "HOLD":
+            return f"Maintain existing {position.shares} shares. Up {pct_str}."
+        else:
+            return f"Consider trimming {position.shares} shares to lock in {pct_str}."
 
     # =============================================================================
     # OPTION STRATEGY OVERLAY SELECTION MATRIX

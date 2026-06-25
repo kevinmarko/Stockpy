@@ -335,6 +335,32 @@ class MacroEconomicDTO(BaseDTO):
         return f"<MacroEconomicDTO - Regime: {self.market_regime} (Spread: {self.credit_spread}%)>"
 
 
+# =============================================================================
+# 4. ROBINHOOD POSITION DTO
+# ==========================================================
+class RobinhoodPositionDTO(BaseDTO):
+    """
+    Represents an open position and its accumulated dividend history from Robinhood.
+    Used to adjust true break-even costs and provide holding-aware advice.
+    """
+    def __init__(self, ticker: str, shares: float, average_cost: float, total_dividends: float = 0.0):
+        self.ticker: str = ticker.upper().strip()
+        self.shares: float = self._to_float(shares)
+        self.average_cost: float = self._to_float(average_cost)
+        self.total_dividends: float = self._to_float(total_dividends)
+        
+    @property
+    def true_break_even(self) -> float:
+        """Returns the effective average cost after factoring in dividends received per share."""
+        if self.shares <= 0:
+            return self.average_cost
+        divs_per_share = self.total_dividends / self.shares
+        return max(0.0, self.average_cost - divs_per_share)
+
+    def __repr__(self) -> str:
+        return f"<RobinhoodPositionDTO {self.ticker} - {self.shares} shares @ ${self.average_cost:.2f} (Divs: ${self.total_dividends:.2f})>"
+
+
 def test_dto_pipeline():
     """Validates type coercions, extreme bounds, and local logic parsing."""
     print("--- Running DTO Registration Test Routine ---")

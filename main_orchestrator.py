@@ -42,6 +42,7 @@ from forecasting_engine import ForecastingEngine
 from strategy_engine import StrategyEngine
 from evaluation_engine import EvaluationEngine
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+from data.robinhood_client import RobinhoodClient
 from allocators.dual_momentum import DualMomentumAllocator
 from signals import global_registry
 from signals.base import SignalContext
@@ -128,7 +129,8 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
 
 
 def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
-                  data_engine: Optional[Any] = None) -> pd.DataFrame:
+                  data_engine: Optional[Any] = None,
+                  robinhood_positions: Optional[dict] = None) -> pd.DataFrame:
     """
     Synchronous execution of the quantitative engines:
     Macro -> Technical Options -> Processing -> Forecasting -> Strategy & Evaluation.
@@ -402,6 +404,9 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                 payout_ratio=0.0, sector="Unknown", company_name="Unknown"
             )
 
+        # Robinhood Position DTO
+        rh_position = robinhood_positions.get(ticker) if robinhood_positions else None
+
         # Generate action signal
         atr_val = float(row.get('ATR', 0.0))
         aroon_val = float(row.get('Aroon Up', 50.0))
@@ -444,7 +449,8 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
             roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
             sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
             rsi_2=rsi_2_val,
-            sma_5=sma_5_val
+            sma_5=sma_5_val,
+            robinhood_position=rh_position
         )
 
         # Calculate Edge Ratio (Post-trade evaluation)
@@ -776,6 +782,16 @@ async def _main_body(effective_dry_run: bool) -> None:
         de = MockDataEngine()
         tickers = ["AAPL"]  # Use mock ticker
 
+    # Integrate Robinhood Holdings
+    rh_client = RobinhoodClient()
+    rh_positions = {}
+    if rh_client.login():
+        rh_positions = rh_client.fetch_positions()
+        # Merge unique tickers
+        for tk in rh_positions.keys():
+            if tk not in tickers:
+                tickers.append(tk)
+
     # 1. Asynchronous concurrent data fetching
     try:
         macro_raw, fund_raw, tech_raw = await fetch_all_data_async(de, tickers)
@@ -793,7 +809,7 @@ async def _main_body(effective_dry_run: bool) -> None:
 
     # 2. Run Pipeline
     try:
-        final_df = run_pipeline(tickers, macro_raw, fund_raw, tech_raw, data_engine=de)
+        final_df = run_pipeline(tickers, macro_raw, fund_raw, tech_raw, data_engine=de, robinhood_positions=rh_positions)
     except Exception as pipe_err:
         telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}")
         sys.exit(1)
