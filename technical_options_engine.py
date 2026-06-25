@@ -449,7 +449,8 @@ class TechnicalOptionsEngine:
                 
                 # GJR-GARCH(1,1): p=1, o=1, q=1. Use Student's t-distribution for fat tails
                 model = arch_model(scaled_returns, vol='GARCH', p=1, o=1, q=1, dist='t')
-                res = model.fit(update_freq=0, disp='off', method='L-BFGS-B')
+                # arch ≥ 8.0 removed the `method` kwarg; default optimizer (SLSQP) works correctly
+                res = model.fit(update_freq=0, disp='off')
                 
                 # Forecast the next day ahead variance
                 forecast = res.forecast(horizon=1)

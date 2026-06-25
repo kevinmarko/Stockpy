@@ -181,19 +181,57 @@ def _load_watchlist() -> List[str]:
     return []
 
 
+def _load_tickers_from_sheet2() -> List[str]:
+    """Return tickers from Sheet2 column A of the Google Sheet.
+
+    Used as a last-resort fallback when Robinhood is unavailable and no
+    WATCHLIST / watchlist.txt is configured.  Silently returns [] when
+    credentials.json is absent, Sheet2 doesn't exist, or any error occurs.
+    """
+    if not Path(CREDENTIALS_FILE).exists():
+        return []
+    try:
+        import gspread  # type: ignore[import]
+
+        gc = gspread.service_account(filename=CREDENTIALS_FILE)
+        sh = gc.open(SHEET_NAME)
+        ws = sh.worksheet("Sheet2")
+        col_a = ws.col_values(1)  # 1-indexed; returns list of strings
+        tickers = [v.strip().upper() for v in col_a if v.strip() and not v.strip().startswith("#")]
+        logger.info("Loaded %d tickers from Google Sheet Sheet2 column A.", len(tickers))
+        return tickers
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read Sheet2 ticker list: %s", exc)
+        return []
+
+
 def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
 
-    Held symbols are always included regardless of the watchlist.
+    Priority order when building the universe:
+      1. Robinhood held positions (always included when available).
+      2. WATCHLIST env var or watchlist.txt (always merged in when present).
+      3. Google Sheet → Sheet2 column A (fallback only when 1 + 2 are both empty).
     """
     held = set(snapshot.positions.keys())
     watchlist = set(_load_watchlist())
-    universe = sorted(held | watchlist)
+    combined = held | watchlist
+
+    if not combined:
+        sheet2 = set(_load_tickers_from_sheet2())
+        if sheet2:
+            logger.info(
+                "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
+                len(sheet2),
+            )
+        combined = sheet2
+
+    universe = sorted(combined)
     logger.info(
         "Universe: %d symbols (%d held, %d watchlist-only).",
         len(universe),
         len(held),
-        len(watchlist - held),
+        len(combined - held),
     )
     return universe
 
@@ -249,7 +287,7 @@ def _build_macro_dto() -> MacroEconomicDTO:
         logger.info(
             "Macro DTO built — regime=%s  VIX=%.1f  HMM=%.2f.",
             dto.market_regime,
-            dto.vix_value,
+            dto.vix,
             hmm_prob if hmm_prob is not None else float("nan"),
         )
         return dto
@@ -274,7 +312,14 @@ def _fetch_bars_for_universe(
     symbols: List[str],
     market: MarketDataProvider,
 ) -> Dict[str, pd.DataFrame]:
-    """Fetch 252-day OHLCV history for all symbols via the market provider.
+    """Fetch ~450-day OHLCV history for all symbols via the market provider.
+
+    The 12-1m cross-sectional momentum in ``_build_context_extras`` needs
+    ``252 + 22 + 1 = 275`` *trading* days; fetching only 252 leaves every
+    symbol below that floor, so the xsec rank pass silently yields nothing.
+    Request 450 calendar days (~310 trading days) to clear the floor with
+    headroom (this also maps yfinance to its "2y" period, avoiding a short
+    "1y" pull that tops out near 252 rows).
 
     Returns a dict symbol → DataFrame.  Failures are dead-lettered per symbol
     so one bad ticker never aborts the pre-compute pass.
@@ -282,7 +327,7 @@ def _fetch_bars_for_universe(
     bars: Dict[str, pd.DataFrame] = {}
     for sym in symbols:
         try:
-            df = market.get_intraday_bars(sym, lookback_days=252)
+            df = market.get_intraday_bars(sym, lookback_days=450)
             if df is not None and not df.empty:
                 bars[sym] = df
         except Exception as exc:
@@ -862,9 +907,11 @@ def run_once(force_account: bool = False) -> RunResult:
             "Empty symbol universe — nothing to evaluate. "
             "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET in "
             ".env so Robinhood positions populate the universe, (2) set the "
-            "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), or (3) "
-            "create %s with one ticker per line.",
+            "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), (3) "
+            "create %s with one ticker per line, or (4) add tickers to "
+            "Sheet2 column A in the '%s' Google Sheet (requires credentials.json).",
             WATCHLIST_FILE,
+            SHEET_NAME,
         )
         finished_at = datetime.now(timezone.utc)
         return RunResult(
