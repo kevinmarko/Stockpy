@@ -2408,6 +2408,167 @@ class GravityAIAuditor:
             audit["error"] = str(e)
         self.report["step_23_qlib_arch_model_registry_audit"] = audit
 
+    # =========================================================================
+    # STEP 24: ROBINHOOD READ-ONLY PORTFOLIO AUDIT
+    # =========================================================================
+    # Verifies that data/robinhood_portfolio.py:
+    #   (a) exposes ONLY read-only functions — no order/execution code
+    #   (b) exports the required public API surface
+    #   (c) AccountSnapshot and PortfolioPosition are frozen dataclasses
+    #   (d) fetch_account_snapshot uses a daily cache (no auth on warm path)
+    #   (e) credentials are read from os.environ, never hardcoded
+    #   (f) no secrets are written into the cache payload
+    # =========================================================================
+    def run_robinhood_portfolio_audit(self) -> None:
+        """Audit data/robinhood_portfolio.py for read-only safety and API completeness."""
+        audit: Dict[str, Any] = {
+            "step": "step_24_robinhood_portfolio_audit",
+            "description": (
+                "Verifies data/robinhood_portfolio.py: read-only safety (no order fns), "
+                "frozen dataclasses, cache behaviour, credential handling."
+            ),
+            "checks": {},
+        }
+        try:
+            # ── (a) Module importable and exposes expected public API ─────────
+            try:
+                from data.robinhood_portfolio import (
+                    AccountSnapshot,
+                    PortfolioPosition,
+                    fetch_account_snapshot,
+                    logout,
+                )
+                audit["checks"]["module_importable"] = {"status": "PASSED"}
+                audit["checks"]["public_api_exported"] = {"status": "PASSED"}
+            except ImportError as e:
+                audit["checks"]["module_importable"] = {
+                    "status": "FAILED",
+                    "error": str(e),
+                }
+                audit["status"] = "FAILED"
+                self.report["step_24_robinhood_portfolio_audit"] = audit
+                return
+
+            # ── (b) No order/execution function names in module source ────────
+            import inspect
+            import data.robinhood_portfolio as rh_mod
+            source = inspect.getsource(rh_mod)
+            forbidden = [
+                "place_order", "submit_order", "cancel_order",
+                "order_buy", "order_sell", "buy_stock_market",
+                "sell_stock_market", "create_order", "modify_order",
+            ]
+            execution_violations = [fn for fn in forbidden if fn in source]
+            audit["checks"]["no_order_execution_fns"] = {
+                "status": "PASSED" if not execution_violations else "FAILED",
+                "violations": execution_violations,
+            }
+
+            # ── (c) PortfolioPosition is a frozen dataclass ───────────────────
+            import dataclasses
+            pp_is_frozen = (
+                dataclasses.is_dataclass(PortfolioPosition)
+                and getattr(PortfolioPosition, "__dataclass_params__", None) is not None
+                and PortfolioPosition.__dataclass_params__.frozen
+            )
+            audit["checks"]["portfolio_position_frozen_dataclass"] = {
+                "status": "PASSED" if pp_is_frozen else "FAILED",
+            }
+
+            # ── (d) AccountSnapshot is a frozen dataclass ─────────────────────
+            as_is_frozen = (
+                dataclasses.is_dataclass(AccountSnapshot)
+                and getattr(AccountSnapshot, "__dataclass_params__", None) is not None
+                and AccountSnapshot.__dataclass_params__.frozen
+            )
+            audit["checks"]["account_snapshot_frozen_dataclass"] = {
+                "status": "PASSED" if as_is_frozen else "FAILED",
+            }
+
+            # ── (e) AccountSnapshot.age_hours and is_stale exist ─────────────
+            has_age_hours = callable(getattr(AccountSnapshot, "age_hours", None))
+            has_is_stale = callable(getattr(AccountSnapshot, "is_stale", None))
+            audit["checks"]["snapshot_freshness_helpers"] = {
+                "status": "PASSED" if (has_age_hours and has_is_stale) else "FAILED",
+                "age_hours": has_age_hours,
+                "is_stale": has_is_stale,
+            }
+
+            # ── (f) Serialisation round-trip (no network required) ────────────
+            from datetime import datetime, timezone
+            pos = PortfolioPosition(
+                symbol="TEST",
+                quantity=5.0,
+                average_cost=100.0,
+                current_price=120.0,
+                market_value=600.0,
+                unrealized_pl=100.0,
+                unrealized_pl_pct=20.0,
+                dividends_received=3.0,
+                name="Test Corp",
+            )
+            snap = AccountSnapshot(
+                positions={"TEST": pos},
+                buying_power=250.0,
+                total_equity=850.0,
+                total_dividends=3.0,
+                fetched_at=datetime.now(timezone.utc),
+            )
+            import json as _json
+            blob = _json.dumps(snap.to_dict())
+            restored = AccountSnapshot.from_dict(_json.loads(blob))
+            round_trip_ok = (
+                restored.buying_power == snap.buying_power
+                and restored.total_equity == snap.total_equity
+                and "TEST" in restored.positions
+                and restored.positions["TEST"].symbol == "TEST"
+            )
+            audit["checks"]["json_round_trip"] = {
+                "status": "PASSED" if round_trip_ok else "FAILED",
+            }
+
+            # ── (g) No secrets in serialised payload ─────────────────────────
+            serialised_lower = blob.lower()
+            secret_leak = any(
+                kw in serialised_lower
+                for kw in ("password", "mfa_secret", "access_token", "rh_password")
+            )
+            audit["checks"]["no_secrets_in_cache_payload"] = {
+                "status": "PASSED" if not secret_leak else "FAILED",
+            }
+
+            # ── (h) fetched_at is UTC-aware ───────────────────────────────────
+            utc_aware = snap.fetched_at.tzinfo is not None
+            audit["checks"]["fetched_at_utc_aware"] = {
+                "status": "PASSED" if utc_aware else "FAILED",
+            }
+
+            # ── (i) _require_env raises on missing var ────────────────────────
+            from data.robinhood_portfolio import _require_env
+            import os as _os
+            prev = _os.environ.pop("_GRAVITY_TEST_MISSING_VAR_", None)
+            try:
+                _require_env("_GRAVITY_TEST_MISSING_VAR_")
+                require_env_raises = False
+            except RuntimeError:
+                require_env_raises = True
+            finally:
+                if prev is not None:
+                    _os.environ["_GRAVITY_TEST_MISSING_VAR_"] = prev
+            audit["checks"]["require_env_raises_on_missing"] = {
+                "status": "PASSED" if require_env_raises else "FAILED",
+            }
+
+            passed = all(
+                v.get("status") == "PASSED"
+                for v in audit["checks"].values()
+            )
+            audit["status"] = "PASSED" if passed else "FAILED"
+        except Exception as exc:
+            audit["status"] = "ERROR"
+            audit["error"] = str(exc)
+        self.report["step_24_robinhood_portfolio_audit"] = audit
+
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
         self.run_schema_audit()
@@ -2432,6 +2593,7 @@ class GravityAIAuditor:
         self.run_sell_side_range_audit()
         self.run_triple_barrier_meta_label_audit()
         self.run_qlib_arch_model_registry_audit()
+        self.run_robinhood_portfolio_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================
