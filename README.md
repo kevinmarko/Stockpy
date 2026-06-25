@@ -43,12 +43,28 @@ Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never co
 | `ALPACA_PAPER` | Optional | `true` (default) = paper trading |
 | `FINNHUB_API_KEY` | Optional | Better fundamental data; degrades to yfinance when absent |
 | `NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app |
-| `WATCHLIST` | Optional | Comma-separated tickers (alternative: `watchlist.txt`, one per line) |
+| `WATCHLIST` | Optional | Comma-separated tickers (alternatives: `watchlist.txt` one per line, or Sheet2 column A — see "Ticker universe" below) |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord channel alerts |
 | `SLACK_WEBHOOK_URL` | Optional | Slack channel alerts |
 
 All other keys (sizing parameters, risk-gate thresholds, financial constants) have
 safe defaults — see the full list in [`.env.example`](.env.example).
+
+---
+
+## Ticker universe
+
+`main.py` builds its evaluation universe from up to three sources, in priority order:
+
+1. **Robinhood held positions** — always included when the snapshot is available.
+2. **`WATCHLIST` env var or `watchlist.txt`** — merged in whenever present.
+3. **Google Sheet → "Sheet2" column A** — consulted **only as a last-resort fallback**
+   when sources 1 and 2 are both empty (e.g. Robinhood is unreachable and no
+   watchlist is configured). Requires `credentials.json`; silently skipped if the
+   sheet, tab, or credential is missing.
+
+If all three are empty, the run logs a warning naming every remediation path and
+exits cleanly without evaluating anything.
 
 ---
 

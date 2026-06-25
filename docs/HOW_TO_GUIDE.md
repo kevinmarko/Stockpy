@@ -150,9 +150,17 @@ Or override programmatically in `settings.py` by changing the `DEFAULT_TICKERS` 
 - The multifactor signal (`multifactor`) excludes tickers with market cap below $300M (`MULTIFACTOR_MICROCAP_THRESHOLD`) from cross-sectional z-scoring — microcaps still get analyzed but receive a neutral 0.0 multifactor score
 - SPY is always fetched automatically (it's needed for the HMM regime detector), even if it's not in your ticker list
 
-### Legacy: reading tickers from Google Sheets
+### How `main.py` builds its universe (held ∪ watchlist ∪ Sheet2 fallback)
 
-If you use `main.py` (the legacy orchestrator), tickers are read from column A of a tab named "Sheet2" in your Google Sheet named "Stock Dashboard Py". See [Section 18](#18-google-sheets-integration-legacy).
+The advisory orchestrator `main.py` does **not** use `DEFAULT_TICKERS`. It assembles its universe from up to three sources, in strict priority order (`_build_universe()`):
+
+1. **Robinhood held positions** — every symbol in your account snapshot is always included when the snapshot is available.
+2. **`WATCHLIST` env var or `watchlist.txt`** — merged in whenever present. The env var (comma-separated) takes precedence over the file; the file is one ticker per line with `#` for comments.
+3. **Google Sheet → "Sheet2" column A** — consulted **only as a last-resort fallback** when sources 1 and 2 are both empty (e.g. Robinhood is unreachable and you have no watchlist configured). This reads column A of the "Sheet2" tab via `credentials.json`. If the credential, spreadsheet, or tab is missing — or any API error occurs — it logs a warning and returns an empty list rather than crashing.
+
+If all three are empty, `main.py` logs a warning that names all four remediation paths (RH_* env vars, `WATCHLIST`, `watchlist.txt`, Sheet2 column A) and exits the cycle cleanly. SPY is still fetched automatically by the macro/HMM layer regardless.
+
+See [Section 18](#18-google-sheets-integration-legacy) for the Sheet setup.
 
 ---
 
@@ -767,7 +775,7 @@ You must include all modules in the dict (or it falls back to the defaults). The
 
 ### Sheet structure expected
 
-- Tab named **"Sheet2"**: Column A = ticker symbols (one per row, header in row 1)
+- Tab named **"Sheet2"**: Column A = ticker symbols (one per row). Blank cells and any cell starting with `#` are ignored. **This tab is now wired as the last-resort universe fallback** — `main.py` reads it via `_load_tickers_from_sheet2()` only when Robinhood positions AND `WATCHLIST`/`watchlist.txt` are all empty (see [Section 4](#4-choosing-your-ticker-universe)). It is read defensively: a missing `credentials.json`, missing tab, or any API error degrades silently to "no fallback tickers", never a crash.
 - Tab named **"FidelityData_Automated"**: output destination (created/overwritten each run)
 - Tab named **"Transactions"**: optional, for realized slippage calculation
 
@@ -871,6 +879,26 @@ The HMM needs at least 100 aligned rows of SPY price + VIX + yield curve history
 MacroEngine: HMM fit failed — [reason] — returning None
 ```
 
+### "GJR-GARCH failed to converge ... Falling back to 20-day historical standard deviation"
+
+**This is almost never a "not enough data yet" problem.** If the warning text contains a Python error like `got an unexpected keyword argument 'method'`, it is an **`arch` library API mismatch**, not a model failure — and it means *every* ticker is silently using the cruder 20-day historical-vol fallback instead of the real GJR-GARCH estimate, no matter how much price history you have.
+
+The fix is already applied in `technical_options_engine.py`: `estimate_gjr_garch_volatility()` calls `model.fit(update_freq=0, disp='off')` with no `method=` kwarg (`arch ≥ 8.0` removed it; the default SLSQP optimizer converges fine). If you see this warning again after a dependency upgrade, check the `arch` version (`.venv/bin/python3 -c "import arch; print(arch.__version__)"`) and re-inspect the `fit()` signature — do not re-add `method=` or `options={"method": ...}`. Verify with:
+
+```bash
+.venv/bin/python3 -m pytest tests/test_quantitative_models.py -k garch -v
+```
+
+A *genuine* convergence failure (rare) names a numerical reason rather than a Python `TypeError`, and self-heals as more daily returns accumulate.
+
+### "python-dotenv could not parse statement starting at line 1"
+
+The first line of your `.env` is a free-text comment without a leading `#`. python-dotenv treats any non-`KEY=VALUE`, non-`#`, non-blank line as unparseable and warns (harmlessly). Prefix the line with `#`. To find any other offending lines:
+
+```bash
+grep -nP "^[^#=\s]" .env   # lists lines that aren't comments, key=value, or blank
+```
+
 ### Signal is HOLD even though the score is high
 
 Check if the macro kill switch is active: the pipeline forces BUY/STRONG BUY → HOLD when `killSwitch` fires. Also check if `USE_DUAL_MOMENTUM_OVERLAY=true` and the Dual Momentum allocator selected the safe asset (BIL) — this zeros out all Kelly Targets for SPY and VEU, which can cause HOLD behavior.
@@ -887,4 +915,4 @@ This creates `reports/main_pipeline_validation_summary.json`. The preflight chec
 
 ---
 
-*Last updated: 2026-06-24. Reflects platform branch `feature/hmm-multifactor-kelly`.*
+*Last updated: 2026-06-25. Reflects: Sheet2 column-A universe fallback in `main.py`, the `.env`→`os.environ` `load_dotenv()` fix, and the `arch ≥ 8.0` GJR-GARCH `fit()` API fix.*

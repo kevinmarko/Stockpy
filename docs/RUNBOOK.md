@@ -189,7 +189,7 @@ Dashboard shows heat > 6%.
 
 **Symptom**: Log shows `ERROR - Live Robinhood fetch failed: Required environment variable 'RH_USERNAME' (or 'ROBINHOOD_USERNAME') is missing or empty` — yet your `.env` clearly contains `RH_USERNAME=...`.
 
-**Root cause**: An entry-point module (`main.py` or `main_orchestrator.py`) is missing `load_dotenv()` at module top. `pydantic-settings` reads `.env` into the `Settings()` object but never copies values into `os.environ`. Any module that reads credentials via `os.environ.get(...)` directly — `data/robinhood_portfolio.py` does this — sees empty strings.
+**Root cause**: An entry-point module (`main.py` or `main_orchestrator.py`) is not calling `load_dotenv()`. `pydantic-settings` reads `.env` into the `Settings()` object but never copies values into `os.environ`. Any module that reads credentials via `os.environ.get(...)` directly — `data/robinhood_portfolio.py` does this — sees empty strings.
 
 **Verify**:
 ```bash
@@ -197,16 +197,17 @@ Dashboard shows heat > 6%.
 ```
 Both tests must PASS. If either fails, the regression has returned.
 
-**Fix**: Confirm both `main.py` and `main_orchestrator.py` contain, near the top before any project imports:
-```python
-from dotenv import load_dotenv as _load_dotenv
-_load_dotenv(override=False)
-```
+**Fix**: The canonical pattern is to **import** `load_dotenv` at module top but **call** it inside the entry-point function — NOT at module top. Module-top invocation pollutes the pytest session (importing `main` would load every `.env` value into `os.environ` and break `tests/test_settings.py::test_settings_defaults`). Confirm:
+
+- `main.py` — imports `from dotenv import load_dotenv as _load_dotenv` at module top and calls `_load_dotenv(override=False)` **inside `main()`** (the first line, before `setup_logging()`). `run_once()` deliberately does NOT call it — direct callers (`make verify`, `verify.command`, ad-hoc REPL) are responsible for calling `load_dotenv()` themselves before invoking `run_once()`, and both already do so in their respective wrappers.
+- `main_orchestrator.py` — same import at module top; calls `_load_dotenv(override=False)` **inside `async def main()`**.
+
+`override=False` so an explicit shell `export` always wins over `.env`.
 
 **Companion symptoms to check at the same time**:
 - `RH_MFA_SECRET` empty in `.env` → the new portfolio module requires TOTP MFA. Enable Authenticator-app MFA in the Robinhood app (Settings → Security → Two-Factor Authentication → Authenticator App), copy the Base32 secret, paste into `RH_MFA_SECRET=`.
-- `WATCHLIST` unset AND no `watchlist.txt` → even after Robinhood works, an empty held-positions set produces an empty universe. Either set `WATCHLIST=SPY,QQQ,AAPL,MSFT,JNJ` in `.env` or create `watchlist.txt` (one ticker per line, `#` = comment).
-- First line of `.env` is a free-text comment without `#` prefix → produces `python-dotenv could not parse statement starting at line 1` warning. Harmless but ugly; prefix with `#`.
+- `WATCHLIST` unset AND no `watchlist.txt` AND no Sheet2 tickers → even after Robinhood works, an empty held-positions set produces an empty universe. Fix with any of: (1) set `WATCHLIST=SPY,QQQ,AAPL,MSFT,JNJ` in `.env`, (2) create `watchlist.txt` (one ticker per line, `#` = comment), or (3) add tickers to **column A of the "Sheet2" tab** in the "Stock Dashboard Py" Google Sheet (the last-resort fallback — requires `credentials.json`).
+- First line of `.env` is a free-text comment without `#` prefix → produces `python-dotenv could not parse statement starting at line 1` warning. Harmless but ugly; prefix the line with `#`. (Fixed in this repo's `.env` on 2026-06-25.)
 
 ---
 
@@ -220,6 +221,22 @@ HMM risk-on probability < `1 - HMM_RISK_OFF_BLOCK_THRESHOLD` (default 0.80).
 - The gate clears automatically as the HMM model updates in subsequent pipeline runs.
 - Do not override unless you have high conviction the HMM is wrong AND you have
   documented reasoning.
+
+---
+
+### 3.7 "GJR-GARCH failed to converge" Warning
+
+**Symptom**: Log shows `WARNING - GJR-GARCH failed to converge: ... Falling back to 20-day historical standard deviation.`
+
+**This is NOT a data-quantity problem.** A genuine convergence failure (too few returns, degenerate variance) is rare and self-heals as history accumulates. If the message text contains a Python error such as `got an unexpected keyword argument 'method'`, it is an **API mismatch**, not a model failure: the `arch` library dropped/changed a `fit()` keyword between versions, so every ticker silently falls through to the cruder 20-day historical-vol fallback regardless of how much data exists.
+
+**Verify which case you have**: read the full warning. A real convergence failure names a numerical reason; an API break names a Python `TypeError` / `unexpected keyword argument`.
+
+**Fix (API break)**: `technical_options_engine.py` → `estimate_gjr_garch_volatility()` calls `model.fit(update_freq=0, disp='off')`. `arch ≥ 8.0` removed the top-level `method=` kwarg — do NOT pass `method=...` (it errors) and do NOT pass `options={"method": ...}` (scipy ignores it with an `OptimizeWarning`). The library's default optimizer (SLSQP) converges correctly for GJR-GARCH(1,1). Confirm with:
+```bash
+.venv/bin/python3 -m pytest tests/test_quantitative_models.py -k garch -v
+```
+Both GARCH tests must PASS with no `arch` warning.
 
 ---
 
