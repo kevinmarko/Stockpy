@@ -129,6 +129,29 @@ class Settings(BaseSettings):
         description="ISO date (YYYY-MM-DD) when paper trading began. Required by preflight check.",
     )
 
+    # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py) ---
+    # These three variables feed the TOTP-based read-only portfolio fetch.
+    # data/robinhood_portfolio.py reads them directly from os.environ so that
+    # they are never stored in a Settings object (avoiding accidental logging).
+    # They are declared here for .env documentation and pydantic-settings
+    # auto-loading consistency only.
+    RH_USERNAME: Optional[str] = Field(
+        default=None,
+        description="Robinhood account email for read-only portfolio snapshot.",
+    )
+    RH_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="Robinhood account password for read-only portfolio snapshot.",
+    )
+    RH_MFA_SECRET: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base32 TOTP secret from the Robinhood MFA setup page. "
+            "Used by data/robinhood_portfolio.py to generate the 6-digit code "
+            "via pyotp.TOTP(RH_MFA_SECRET).now() — never logged or cached."
+        ),
+    )
+
     # --- Financial constants ---
     RISK_FREE_RATE: float = 0.045
     MARKET_RISK_PREMIUM: float = 0.055

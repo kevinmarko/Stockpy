@@ -120,3 +120,5 @@ pykalman==0.11.2
 alpaca-py>=0.40.0
 streamlit>=1.35.0
 PyYAML>=6.0.0
+robin_stocks>=3.1.0
+pyotp>=2.9.0
