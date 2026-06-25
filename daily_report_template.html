@@ -451,6 +451,7 @@
                         <th>Target Sizing</th>
                         <th>Option Strategy</th>
                         <th>Suggested Buy Range</th>
+                        <th>Suggested Sell Range</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -475,6 +476,9 @@
                         </td>
                         <td>{{ row['Option Strategy'] if row['Option Strategy'] else 'N/A' }}</td>
                         <td><code id="range-{{ row.Symbol }}" style="background-color: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-size: 12px;">{{ row.buyRange if row.buyRange else 'N/A' }}</code></td>
+                        {# Dedicated sell-side range (strategy_engine.apply_sell_side_range).
+                           Always populated when Action Signal is non-empty. #}
+                        <td><code id="sell-range-{{ row.Symbol }}" style="background-color: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-size: 12px;">{{ row.sellRange if row.sellRange else 'N/A' }}</code></td>
                     </tr>
                     {% endfor %}
 </tbody>
@@ -549,6 +553,14 @@
                         <div class="advice-item">
                             <span class="advice-label">Buy Corridor Range</span>
                             <span id="card-range-{{ row.Symbol }}" class="advice-val" style="color: var(--success-color);">{{ row.buyRange if row.buyRange else 'N/A' }}</span>
+                        </div>
+                        {# Dedicated sell-side range — distinct from the buy/hold/trim
+                           corridor above. Rendered in the warning color to visually
+                           separate take-profit / trailing-stop instructions from
+                           accumulation guidance. Source: strategy_engine.apply_sell_side_range. #}
+                        <div class="advice-item">
+                            <span class="advice-label">Sell Corridor Range</span>
+                            <span id="card-sell-range-{{ row.Symbol }}" class="advice-val" style="color: var(--warning-color);">{{ row.sellRange if row.sellRange else 'N/A' }}</span>
                         </div>
                         <div class="advice-item">
                             <span class="advice-label">Option Strategy</span>

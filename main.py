@@ -267,7 +267,11 @@ def main():
 
     # 5. STRATEGY EVALUATION
     print("--- 5. EXECUTING STRATEGY ENGINE ---")
-    strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target', 'Option Strategy', 'buyRange', 'Strategy Explainer Notes']
+    # 'sellRange' is the dedicated sell-side execution band. It must be
+    # pre-allocated here so the Google Sheets "Sell Range" column (config.
+    # COLUMN_SCHEMA) is populated for every ticker — including rows whose
+    # per-symbol evaluation later raises an exception and falls through.
+    strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target', 'Option Strategy', 'buyRange', 'sellRange', 'Strategy Explainer Notes']
     for col in strategy_cols:
         dashboard_df[col] = ""
     dashboard_df['Kelly Target'] = 0.0
@@ -366,6 +370,9 @@ def main():
             else:
                 dashboard_df.at[index, 'Option Strategy'] = strategy_output['Option Strategy']
             dashboard_df.at[index, 'buyRange'] = strategy_output['buyRange']
+            # Propagate the sell-side range into the Sheets sink so the
+            # "Sell Range" column (config.COLUMN_SCHEMA) is populated.
+            dashboard_df.at[index, 'sellRange'] = strategy_output['sellRange']
             dashboard_df.at[index, 'Strategy Explainer Notes'] = strategy_output['Strategy Explainer Notes']
 
             # Calculate Edge Ratio on historical holding segment of last 15 active trading days
