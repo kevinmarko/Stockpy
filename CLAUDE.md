@@ -101,6 +101,18 @@ Flat, modular "Engine" architecture using dependency injection — no package di
   - **pairs/kalman_hedge.py** — dynamic hedge ratio tracker/filter (batch Kalman Filter and step-by-step Kalman tracking) using `pykalman`.
   - **pairs/simulation.py** — event-driven Backtrader backtest runner for pairs.
   - **signals/pairs_trading.py** — pairs trading signal generator.
+- **ml/** — Machine learning pipeline in a three-tier qlib-style architecture (no qlib dependency). Three sub-packages:
+  - **ml/data/** — Point-in-time feature store and label construction. `PITFeatureStore` caches daily cross-sectional snapshots as Parquet files under `ml/data/cache/`. `build_meta_features(base_df, primary_score)` extends the base PIT feature matrix with the primary signal's own score for MetaLabeler training.
+  - **ml/models/** — Model ABC (`ml/models/base.py`) with abstract `fit(X, y, t1)/predict(X)/save/load` interface. Both `LGBMCrossSectionalRanker` and `MetaLabeler` implement this ABC so the strategy layer can consume them uniformly.
+  - **ml/strategies/** — `StrategySpec` data container linking a Model to a `signal_id` and flagging whether it is a meta-labeler.
+  - **ml/registry.yaml** — Production model registry: model role, path, `trained_date`, `cpcv_dsr`, `pbo`, `deployable` flag. Updated by the monthly retraining job.
+  - **ml/triple_barrier.py** — Lopez de Prado (AFML Ch. 3) triple-barrier labeling. Three functions:
+    - `get_volatility(close, span=100) -> pd.Series` — Daily EWMA vol from log-returns (strictly PIT: `adjust=False`, causal).
+    - `cusum_filter(close, threshold) -> pd.DatetimeIndex` — Sequential CUSUM event sampler (inherently sequential; scalar loop is correct here). Returns timestamps where cumulative log-return drift first crosses ±threshold. Raises `ValueError` for empty series or threshold ≤ 0.
+    - `apply_triple_barrier(events, close, pt_sl_multiples=(2.0,1.0), vertical_barrier_days=5) -> pd.DataFrame` — For each event at t₀: sigma is computed from `get_volatility(close[:t₀])` (PIT), upper/lower barriers are price-based (`entry * (1 ± mult * sigma)`), vertical = t₀ + N business days. Label: +1 (upper), -1 (lower), 0 (vertical). Returns DataFrame indexed by t₀ with columns `[t1, barrier_hit, label, entry, upper_level, lower_level]`. Perturbing `close[t₀+1:]` never changes barriers for event at t₀.
+  - **ml/meta_labeling.py** — `MetaLabeler(signal_id, lgbm_params)` binary LightGBM classifier predicting P(primary_signal_correct). Implements Model ABC. Key methods: `fit_from_primary(X, y_primary, y_barrier)` builds meta-label target (1 = direction correct, 0 = wrong/vertical), filters neutral-signal events, trains. `predict_proba_scalar(X_today) -> float` returns the mean P(correct). Returns 1.0 (neutral/no-op) before training. Monthly retraining: `needs_retrain(retrain_freq_days=30) -> bool`. Saved as `ml/models/meta_<signal_id>_<YYYYMMDD>.pkl`. `MetaLabelerRegistry` (global singleton `global_meta_registry`) maps `signal_id -> MetaLabeler`; imported by `signals/aggregator.py`.
+  - **`SignalAggregator` Stage 4 wiring (signals/aggregator.py)**: For each active signal module, the aggregator now checks `global_meta_registry.has(name)`. If a MetaLabeler is registered, it calls `get_proba(name, feature_row)` where `feature_row` is the current `row` Series as a DataFrame plus `primary_score = output.score`. If `proba < settings.META_LABEL_MIN_CONFIDENCE` (default 0.4), a `meta_hard_gate` flag is set and `meta_label_composite` is forced to exactly `0.0` (which zeroes the Kelly Target for this cycle). When no MetaLabelers are registered (the default), behavior is identical to pre-Stage-4 (all `meta_label_proba = 1.0`, composite = 1.0).
+  - **`settings.META_LABEL_MIN_CONFIDENCE`** — New setting (default 0.4). The P(correct) threshold below which the meta hard gate fires. Controlled via `.env`.
 - **reports/cpcv_report.html.j2** — Plotly/Jinja template for CPCV and overfitting validation reports.
 - **reports/validation_report_template.html.j2** — Jinja2 template for rendering validation reports.
 - **ai_verification_prompts.py** ("Gravity AI Auditor") — 6-step static-analysis + simulation sandbox (via OpenAI/Anthropic) that strategies must pass before deployment.
@@ -120,6 +132,12 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 - **tests/test_validation_rsi2.py** — backtests the RSI(2) strategy (gated vs. ungated) over real SPY history (2000–2023) via `validation.harness`. Reconstructs an equivalent RISK-OFF condition from price data alone (5-day return < -6% as a fast VIX-spike proxy, plus >20% drawdown from a trailing 1-year high) since replaying the live FRED-based regime gate over 23 years needs a live `FRED_API_KEY`. Documents an empirical finding: the strategy's own long-only trend filter already fully excludes 2008 exposure, so the regime-gate-mitigation assertion is load-bearing only for 2020.
 - **tests/test_multifactor.py** — unit tests for `signals/multifactor.py`: a synthetic 50-stock universe with engineered high-value/high-quality/low-vol exposures recovers those names in the top quintile of `Multifactor_Composite`; winsorization tests confirm an extreme outlier is clipped to ±3 and does not dominate the cross-section; microcap-exclusion tests confirm an excluded ticker neither skews peers' z-scores nor receives a fabricated score; ABC-conformance and registry checks.
 - **tests/test_validation_multifactor.py** — runs a Low-Vol + Size multifactor proxy through `validation.harness` over real historical prices (2005–2023) for a 10-ticker representative cross-section. **Documented scope limitation**: Value and Quality (book-to-market, earnings yield, ROE) require point-in-time historical fundamentals, which yfinance's `.info` does not provide (current-snapshot only) and no free vendor supplies — faking 18 years of that history would violate the "no fabricated metrics" constraint, so this harness test is restricted to the two factors honestly derivable from real price/share-count data; Value/Quality correctness is instead covered exactly by the engineered synthetic universe in `tests/test_multifactor.py`.
+- **tests/test_triple_barrier_lookahead.py** — two no-lookahead proofs for `ml/triple_barrier.py`: (1) barriers at event t are identical whether sigma is computed from `close[:t]` or the full series at index t; (2) perturbing prices strictly after t does not change any barrier level or the entry price at t.
+- **tests/test_triple_barrier_labels.py** — hand-crafted price paths with known outcomes: upper hit (label=+1), lower hit (label=-1), vertical timeout (label=0), first-touch-wins ordering, and output schema conformance.
+- **tests/test_cusum_filter.py** — CUSUM filter: monotonic event ordering, threshold control, flat-price no-events, all events within close index, ValueError on invalid inputs.
+- **tests/test_meta_labeler_uplift.py** — MetaLabeler: documented precision@50 uplift over a 60% base-rate synthetic signal (≥+0.05), proba in [0,1], neutral (1.0) before training, `fit_from_primary` neutral-event filtering, `build_meta_label_target` correctness, and end-to-end `meta_hard_gate` zeroing of `meta_label_composite` in `SignalAggregator`.
+- **tests/test_model_interface.py** — (Prompt 4.3) both `LGBMCrossSectionalRanker` and `MetaLabeler` conform to `ml.models.base.Model` ABC; fit/predict/save/load round-trips; `StrategySpec` wraps models correctly; Model ABC cannot be instantiated directly.
+- **tests/test_registry_load.py** — (Prompt 4.3) `ml/registry.yaml` is parseable with required schema and valid metric ranges; `PITFeatureStore` Parquet write/read round-trip; `MetaLabelerRegistry` register/has/get_proba.
 - **tests/test_hmm_no_lookahead.py** — verifies two distinct no-lookahead properties of `regime/hmm_regime.py`: (1) the `retrain_freq_days` gate makes a `fit()` call 1 day later a no-op (model unchanged), so a prediction at date D is byte-identical before/after that no-op refit; (2) `predict_proba()`'s last-row probability is unaffected by perturbing data strictly after the prediction cutoff to extreme values, then re-slicing to the same cutoff.
 - **tests/test_hmm_state_persistence.py** — on synthetic data with genuine, persistent (sticky) regime structure and a `retrain_freq_days` large enough to avoid mid-window refits, asserts day-over-day `dominant_state` flips occur in <15% of consecutive bars, and that `identify_states_by_vol()`'s labeling doesn't drift across repeated `predict_proba()` calls without a refit.
 - **tests/test_hmm_synthetic.py** — generates data from a KNOWN 2-state `GaussianHMM` (via `.sample()`, exact ground truth) and verifies `HMMRegimeDetector` recovers the hidden states with >80% accuracy after resolving label-permutation ambiguity (tries all state-index remappings, keeps the best). Also verifies `identify_states_by_vol()` labels the lower-variance generating state `"bull"`, and that a window drawn entirely from the calm state yields a higher `risk_on_probability` than one drawn entirely from the turbulent state.
@@ -171,6 +189,28 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 - **Dry-run is enforced at manager level**: `OrderManager._submit_with_retry` checks `intent.dry_run` before calling any broker — this means MockBroker tests in the test suite also correctly see the dry-run guard without implementing it themselves. AlpacaBroker also has its own redundant guard as a belt-and-suspenders, but the manager-level check is the authoritative one.
 - **Reconciliation alerts**: set `ALERT_WEBHOOK_URL` in `.env` to a Slack/Discord incoming-webhook URL; `reconcile_state` fires it on any position drift. The webhook call uses `urllib.request` (no extra dependency). Failures in the alert path are logged but never swallowed silently in a bare except.
 - **New settings for broker**: `DRY_RUN` (default `false`), `ALERT_WEBHOOK_URL` (default `None`). Both are optional; the orchestrator degrades gracefully when either is absent.
+
+## ML Package Architecture (Stage 4 — Triple Barrier + Meta-Labeling)
+
+**qlib-style three-layer architecture (ml/ package)**:
+- `ml/data/` — PIT feature store (PITFeatureStore, Parquet cache), label construction (`build_meta_label_target`, `build_meta_features`). Re-exports `build_pit_feature_matrix` / `build_forward_return_ranks` from `ml/feature_engineering.py`.
+- `ml/models/` — `Model` ABC (`fit/predict/save/load`) that ALL ML models must implement. `LGBMCrossSectionalRanker` and `MetaLabeler` both inherit from it.
+- `ml/strategies/` — `StrategySpec` links a Model to a SignalModule by `signal_id`. Used by Gravity audits.
+- `ml/registry.yaml` — Human-readable model registry with `cpcv_dsr`, `pbo`, `deployable` fields. Parse with PyYAML.
+
+**Triple-barrier no-lookahead invariants**:
+- `get_volatility(close, span)` uses `ewm(adjust=False)` (causal) — vol at t uses only returns ≤ t.
+- `apply_triple_barrier` pre-computes vol on the FULL series then indexes at event time — this is correct (vol[t] IS the prefix vol because ewm is causal). The perturbation test in `test_triple_barrier_lookahead.py` proves this empirically.
+- `cusum_filter` is inherently sequential (scalar loop over dates, not iterrows). This is intentional and correct.
+
+**Meta-labeling hard gate**:
+- `MetaLabelerRegistry.global_meta_registry` is a module-level singleton in `ml/meta_labeling.py`.
+- `SignalAggregator.aggregate()` imports it lazily via `_get_meta_registry()` to avoid circular imports.
+- When a MetaLabeler is registered for a signal AND `predict_proba_scalar` returns P < `settings.META_LABEL_MIN_CONFIDENCE` (0.4), `meta_label_composite` is set to EXACTLY 0.0 (not near-zero via log-space — a hard flag `meta_hard_gate` ensures this).
+- Hard gate affects position sizing ONLY (Kelly Target × composite = 0), not the signal score/recommendation (BUY/HOLD/etc.).
+- Default state (empty registry) is identical to pre-Stage-4 behavior: composite = 1.0.
+
+**PyYAML** added to `requirements.txt` (needed for `ml/registry.yaml` round-trip tests).
 
 
 
