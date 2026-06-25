@@ -59,6 +59,30 @@ Then double-click `launch.command` again.
 
 ---
 
+## 1.1 Phone Push Alerts (ntfy.sh)
+
+`main.py` sends push notifications to your phone via ntfy.sh (`alerting.py`). Configure once; no account required.
+
+**Setup**:
+1. Install the **ntfy** app (iOS / Android).
+2. In `.env`: set `NTFY_TOPIC` to a long random string (e.g. `investyo-abc123xyz`).
+3. In the ntfy app: subscribe to that exact topic name.
+
+**What you will receive**:
+| Notification | Priority | When |
+|---|---|---|
+| ⚠ Errors Detected | HIGH (audible, bypasses DND on some devices) | Any symbol-level pipeline failure |
+| ✓ Refresh Complete | Default | Once per launch |
+
+The error alert lists the failing symbol and pipeline stage so you can triage without opening the log. In `--interval` mode, the "refresh complete" alert fires only on the first clean cycle to avoid spam.
+
+**If you get an error alert**:
+1. Check `logs/investyo.log` for the ERROR line — it will name the symbol, stage, and exception.
+2. If the problem is a single bad ticker (data gap, API timeout), it is automatically dead-lettered — the run continues and other symbols are unaffected. No action required unless it persists.
+3. If ALL symbols are failing, check network connectivity, FRED API key, and market data provider keys.
+
+---
+
 ## 2. Pre-Market Checklist (First 5 Live Days)
 
 Run this EVERY trading morning before 09:00 ET:

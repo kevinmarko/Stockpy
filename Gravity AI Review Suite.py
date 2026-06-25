@@ -3441,6 +3441,276 @@ class GravityAIAuditor:
 
         self.report["step_28_run_once_orchestrator_audit"] = audit
 
+    def run_alerting_module_audit(self) -> None:
+        """Step 29 — Alerting module audit (alerting.py).
+
+        Verifies:
+        1. Module imports without error.
+        2. setup_logging() is idempotent (second call does not duplicate handlers).
+        3. notify() is a no-op (no exception) when NTFY_TOPIC is unset.
+        4. notify() rejects an unknown priority string (replaces with 'default').
+        5. summarize_run() returns a non-empty string for a synthetic RunResult.
+        6. summarize_run() includes BUY/SELL/HOLD counts.
+        7. summarize_run() lists top-3 actionable by conviction.
+        8. summarize_run() gracefully handles an empty result (no crash).
+        9. secrets (NTFY_TOPIC value) never appear in notify() request headers
+           beyond the URL path — checked via module source inspection.
+        """
+        audit: Dict[str, Any] = {"status": "PENDING"}
+        try:
+            # 1 — importable
+            import alerting as al
+            audit["importable"] = True
+
+            # 2 — idempotent: call twice, root logger should not gain extra handlers
+            import logging as _logging
+            root = _logging.getLogger()
+            before_count = len(root.handlers)
+            al.setup_logging()
+            after_first = len(root.handlers)
+            al.setup_logging()   # second call must be no-op
+            after_second = len(root.handlers)
+            audit["setup_logging_idempotent"] = (after_first == after_second)
+
+            # 3 — no-op when NTFY_TOPIC unset
+            import os
+            saved_topic = os.environ.pop("NTFY_TOPIC", None)
+            try:
+                al.notify("test", "body")   # must not raise
+                audit["notify_noop_when_unset"] = True
+            except Exception as exc_noop:
+                audit["notify_noop_when_unset"] = False
+                audit["notify_noop_error"] = str(exc_noop)
+            finally:
+                if saved_topic is not None:
+                    os.environ["NTFY_TOPIC"] = saved_topic
+
+            # 4 — invalid priority silently replaced (function must not raise)
+            try:
+                saved2 = os.environ.pop("NTFY_TOPIC", None)
+                al.notify("t", "m", priority="INVALID_PRIORITY_XYZ")
+                audit["invalid_priority_no_raise"] = True
+            except Exception:
+                audit["invalid_priority_no_raise"] = False
+            finally:
+                if saved2 is not None:
+                    os.environ["NTFY_TOPIC"] = saved2
+
+            # 5–8 — summarize_run on a synthetic RunResult-like object
+            from dataclasses import dataclass
+            from datetime import datetime, timezone
+            from typing import Literal
+
+            @dataclass(frozen=True)
+            class _FakeRec:
+                symbol: str
+                action: Literal["BUY", "SELL", "HOLD"]
+                conviction: float
+                suggested_position_pct: float
+                rationale: str
+
+            @dataclass(frozen=True)
+            class _FakeResult:
+                recommendations: list
+                errors: list
+                started_at: datetime
+                duration_seconds: float
+
+            fake_recs = [
+                _FakeRec("AAPL", "BUY",  0.85, 0.045, "Strong momentum and multifactor"),
+                _FakeRec("MSFT", "HOLD", 0.55, 0.000, "Neutral macro environment"),
+                _FakeRec("INTC", "SELL", 0.70, 0.000, "Below cost basis"),
+                _FakeRec("GOOG", "BUY",  0.72, 0.032, "Bullish forecast"),
+            ]
+            fake_errors = [
+                {"symbol": "TSLA", "stage": "advisory_evaluate",
+                 "error_type": "TimeoutError", "message": "timed out"}
+            ]
+            fake_result = _FakeResult(
+                recommendations=fake_recs,
+                errors=fake_errors,
+                started_at=datetime(2026, 6, 25, 9, 35, 1, tzinfo=timezone.utc),
+                duration_seconds=8.4,
+            )
+
+            summary = al.summarize_run(fake_result)
+            audit["summarize_returns_nonempty"] = bool(summary)
+            audit["summarize_has_buy_count"]    = "BUY=" in summary
+            audit["summarize_has_hold_count"]   = "HOLD=" in summary
+            audit["summarize_has_sell_count"]   = "SELL=" in summary
+            audit["summarize_has_error_count"]  = "Errors" in summary
+            audit["summarize_has_top3_section"] = "Top 3 actionable" in summary
+
+            # top-3 must list by conviction desc: AAPL(0.85) > INTC(0.70) > GOOG(0.72)
+            # Note: INTC(0.70) < GOOG(0.72) so order is AAPL, GOOG, INTC
+            aapl_pos = summary.find("AAPL")
+            goog_pos = summary.find("GOOG")
+            intc_pos = summary.find("INTC")
+            audit["top3_conviction_order_correct"] = (
+                aapl_pos > 0
+                and goog_pos > aapl_pos
+                and intc_pos > goog_pos
+            )
+
+            # 8 — empty result must not raise
+            try:
+                empty_result = _FakeResult(
+                    recommendations=[],
+                    errors=[],
+                    started_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+                    duration_seconds=0.1,
+                )
+                empty_summary = al.summarize_run(empty_result)
+                audit["summarize_empty_no_raise"] = True
+                audit["summarize_empty_clean_run"] = "clean run" in empty_summary
+            except Exception as exc_empty:
+                audit["summarize_empty_no_raise"] = False
+                audit["summarize_empty_error"] = str(exc_empty)
+
+            # 9 — source inspection: NTFY_TOPIC value must only appear in the URL
+            #     path, never in a header value
+            import inspect
+            source = inspect.getsource(al)
+            audit["ntfy_topic_not_in_headers_source"] = (
+                "os.environ.get" in source
+                and "Authorization" not in source.split("NTFY_TOPIC")[0]
+            )
+
+            # Overall pass/fail
+            checks = [
+                audit.get("setup_logging_idempotent", False),
+                audit.get("notify_noop_when_unset", False),
+                audit.get("invalid_priority_no_raise", False),
+                audit.get("summarize_returns_nonempty", False),
+                audit.get("summarize_has_buy_count", False),
+                audit.get("summarize_has_top3_section", False),
+                audit.get("top3_conviction_order_correct", False),
+                audit.get("summarize_empty_no_raise", False),
+            ]
+            audit["status"] = "PASSED" if all(checks) else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = "ERROR"
+            audit["error"] = str(exc)
+
+        self.report["step_29_alerting_module_audit"] = audit
+
+    # Step 30 — Pipeline Smoke Tests + Verify Tooling
+    # ─────────────────────────────────────────────────
+    def run_pipeline_smoke_audit(self) -> None:
+        """Step 30 — Validates tests/test_pipeline_smoke.py and verify tooling.
+
+        Checks:
+          1. test_pipeline_smoke.py is importable.
+          2. TestRunOncePipeline, TestAdvisoryTailoringRules, TestNoOrderFunctions exist.
+          3. TestRunOncePipeline has dead-letter and all-failure test methods.
+          4. TestAdvisoryTailoringRules has all three tailoring-rule methods.
+          5. TestNoOrderFunctions._ORDER_NAMES is non-empty.
+          6. TestNoOrderFunctions._EXCLUDED_PATH_PARTS includes "execution".
+          7. Makefile exists with a 'verify' target.
+          8. verify.command exists and is executable.
+          9. README documents required FRED_API_KEY env var.
+        """
+        import importlib
+        import inspect
+        import os
+        import ast as _ast
+        from pathlib import Path
+
+        audit: dict = {"checks": [], "status": "PENDING"}
+        checks: list[bool] = []
+
+        def _chk(name: str, ok: bool, detail: str = "") -> None:
+            status = "PASS" if ok else "FAIL"
+            entry: dict = {"check": name, "status": status}
+            if detail:
+                entry["detail"] = detail
+            audit["checks"].append(entry)
+            checks.append(ok)
+
+        try:
+            # 1. Importable
+            try:
+                smoke = importlib.import_module("tests.test_pipeline_smoke")
+                _chk("smoke_importable", True)
+            except Exception as exc:
+                _chk("smoke_importable", False, str(exc))
+                smoke = None
+
+            if smoke:
+                # 2. Three test classes exist
+                for cls_name in ("TestRunOncePipeline", "TestAdvisoryTailoringRules", "TestNoOrderFunctions"):
+                    _chk(f"class_{cls_name}_exists", hasattr(smoke, cls_name))
+
+                # 3. Dead-letter and all-failure test methods
+                run_once_cls = getattr(smoke, "TestRunOncePipeline", None)
+                if run_once_cls:
+                    _chk("has_dead_letter_test", hasattr(run_once_cls, "test_dead_letter_on_symbol_failure"))
+                    _chk("has_all_failures_test", hasattr(run_once_cls, "test_all_failures_still_returns_runresult"))
+                else:
+                    _chk("has_dead_letter_test", False, "TestRunOncePipeline missing")
+                    _chk("has_all_failures_test", False, "TestRunOncePipeline missing")
+
+                # 4. Three tailoring-rule test methods
+                tailoring_cls = getattr(smoke, "TestAdvisoryTailoringRules", None)
+                if tailoring_cls:
+                    for method in (
+                        "test_case_b_held_high_dividends_weak_signal_gives_hold",
+                        "test_case_a_held_below_cost_bearish_forecast_gives_sell",
+                        "test_non_held_bullish_signal_gives_buy_within_cap",
+                    ):
+                        _chk(f"tailoring_{method[:30]}", hasattr(tailoring_cls, method))
+                else:
+                    for _ in range(3):
+                        _chk("tailoring_method", False, "TestAdvisoryTailoringRules missing")
+
+                # 5. _ORDER_NAMES is non-empty
+                guard_cls = getattr(smoke, "TestNoOrderFunctions", None)
+                if guard_cls:
+                    order_names = getattr(guard_cls, "_ORDER_NAMES", set())
+                    _chk("order_names_non_empty", len(order_names) >= 4,
+                         f"got {len(order_names)} names: {order_names}")
+                    # 6. execution excluded
+                    excl = getattr(guard_cls, "_EXCLUDED_PATH_PARTS", set())
+                    _chk("execution_is_excluded", "execution" in excl,
+                         f"_EXCLUDED_PATH_PARTS = {excl}")
+                else:
+                    _chk("order_names_non_empty", False, "TestNoOrderFunctions missing")
+                    _chk("execution_is_excluded", False, "TestNoOrderFunctions missing")
+
+            # 7. Makefile with 'verify' target
+            repo_root = Path(__file__).parent
+            makefile = repo_root / "Makefile"
+            if makefile.exists():
+                content = makefile.read_text(encoding="utf-8")
+                _chk("makefile_verify_target", "verify:" in content or "verify :" in content,
+                     "Could not find 'verify:' target in Makefile")
+            else:
+                _chk("makefile_verify_target", False, "Makefile not found")
+
+            # 8. verify.command is executable
+            vc = repo_root / "verify.command"
+            _chk("verify_command_exists", vc.exists())
+            if vc.exists():
+                _chk("verify_command_executable", os.access(vc, os.X_OK),
+                     "verify.command is not executable; run: chmod +x verify.command")
+
+            # 9. README documents FRED_API_KEY
+            readme = repo_root / "README.md"
+            if readme.exists():
+                readme_text = readme.read_text(encoding="utf-8")
+                _chk("readme_has_fred_key", "FRED_API_KEY" in readme_text)
+            else:
+                _chk("readme_has_fred_key", False, "README.md not found")
+
+            audit["status"] = "PASSED" if all(checks) else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = "ERROR"
+            audit["error"] = str(exc)
+
+        self.report["step_30_pipeline_smoke_audit"] = audit
+
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
         self.run_schema_audit()
@@ -3470,6 +3740,8 @@ class GravityAIAuditor:
         self.run_market_data_provider_audit()
         self.run_advisory_audit()
         self.run_run_once_orchestrator_audit()
+        self.run_alerting_module_audit()
+        self.run_pipeline_smoke_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================

@@ -86,12 +86,11 @@ from signals import global_registry
 from signals.base import SignalContext
 
 # ---------------------------------------------------------------------------
-# Module-level logger
+# Module-level logger (root logger is configured at runtime by setup_logging()
+# inside main() — do NOT call logging.basicConfig() at module level here).
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-)
+from alerting import notify, setup_logging, summarize_run
+
 logger = logging.getLogger("InvestYo.main")
 
 # ---------------------------------------------------------------------------
@@ -927,17 +926,56 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    setup_logging()   # configure root logger (file + console, rotating, structured)
     logger.info("InvestYo Quant Platform starting.")
     settings.warn_if_fred_key_leaked(logger)
 
     # Force-account flag applies only to the FIRST cycle; subsequent iterations
     # use the daily cache regardless.
     _force_next = args.refresh_account
+    # Tracks whether a "clean run" push notification has been sent this launch.
+    # At most one per launch in --interval mode to avoid notification spam.
+    _clean_notified = False
 
     def _run_cycle() -> None:
-        nonlocal _force_next
+        nonlocal _force_next, _clean_notified
         result = run_once(force_account=_force_next)
         _force_next = False  # one-shot; cache resumes from here
+
+        # ── Alerting: compact summary → log + optional push notification ──────
+        summary = summarize_run(result)
+        logger.info("\n%s", summary)
+
+        if result.errors:
+            # High-priority push: list failing symbols and stages.
+            err_preview = ", ".join(
+                f"{e.get('symbol', '?')} ({e.get('stage', '?')})"
+                for e in result.errors[:3]
+            )
+            suffix = (
+                f" +{len(result.errors) - 3} more"
+                if len(result.errors) > 3
+                else ""
+            )
+            notify(
+                title="InvestYo ⚠ Errors Detected",
+                message=(
+                    f"{len(result.errors)} symbol(s) failed: "
+                    f"{err_preview}{suffix}\n"
+                    f"OK={len(result.recommendations)}  "
+                    f"Duration={result.duration_seconds:.1f}s"
+                ),
+                priority="high",
+            )
+        elif not _clean_notified:
+            # One normal-priority notification per launch on a fully clean run.
+            notify(
+                title="InvestYo ✓ Refresh Complete",
+                message=summary,
+                priority="default",
+            )
+            _clean_notified = True
+        # ─────────────────────────────────────────────────────────────────────
 
         market = get_provider()
         _write_to_sheet(result, market=market)

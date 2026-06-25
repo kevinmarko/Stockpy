@@ -5,26 +5,97 @@ technical & fundamental indicators, runs multi-horizon forecasts, backtests
 strategies, persists signals to SQLite, and publishes results to Google Sheets /
 an HTML report.
 
-## Setup
+## Quick start (fresh machine)
 
 ```bash
-./setup.sh                 # creates .venv (Python 3.12), installs requirements.txt
-source .venv/bin/activate
-cp .env.example .env       # then fill in your secrets (see below)
+# 1. Create the virtual environment (Python 3.12 required)
+./setup.sh
+
+# 2. Copy the environment template and fill in your credentials
+cp .env.example .env
+# edit .env — see "Required .env keys" below
+
+# 3. Share the Google Sheet with the service-account email
+#    Open credentials.json → find "client_email"
+#    In the Sheet: Share → paste the email → Editor role
+
+# 4. Verify everything works before relying on it
+make verify           # env check + tests + one live cycle (or double-click verify.command)
+
+# 5. Launch
+./launch.command      # double-click from Finder, or run in terminal
 ```
+
+---
+
+## Required `.env` keys
+
+Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never commit `.env`.**
+
+| Key | Required? | Purpose |
+|-----|-----------|---------|
+| `FRED_API_KEY` | **Required** | Macro data (VIX, yield curve). Free key at [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html) |
+| `RH_USERNAME` | Optional | Robinhood read-only snapshot (held symbols always included) |
+| `RH_PASSWORD` | Optional | — |
+| `RH_MFA_SECRET` | Optional | Base32 TOTP secret (Robinhood → Settings → Security → Authenticator) |
+| `ALPACA_API_KEY` | Optional | Broker execution |
+| `ALPACA_SECRET_KEY` | Optional | — |
+| `ALPACA_PAPER` | Optional | `true` (default) = paper trading |
+| `FINNHUB_API_KEY` | Optional | Better fundamental data; degrades to yfinance when absent |
+| `NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app |
+| `WATCHLIST` | Optional | Comma-separated tickers (alternative: `watchlist.txt`, one per line) |
+| `DISCORD_WEBHOOK_URL` | Optional | Discord channel alerts |
+| `SLACK_WEBHOOK_URL` | Optional | Slack channel alerts |
+
+All other keys (sizing parameters, risk-gate thresholds, financial constants) have
+safe defaults — see the full list in [`.env.example`](.env.example).
+
+---
+
+## Launching
+
+```bash
+./launch.command                          # double-click from Finder (recommended)
+
+.venv/bin/python3 main.py                 # single advisory cycle
+.venv/bin/python3 main.py --interval 60   # refresh every 60 s
+.venv/bin/python3 main_orchestrator.py    # async orchestrator (HTML report + broker)
+```
+
+---
+
+## Verify before use
+
+```bash
+make verify          # env check → test suite → one live cycle → print summary
+./verify.command     # same, double-clickable from macOS Finder
+```
+
+---
+
+## Other commands
+
+```bash
+pytest                                      # full test suite
+pytest tests/test_pipeline_smoke.py -v     # end-to-end smoke tests only
+make smoke                                  # same
+streamlit run observability/dashboard.py    # live observability dashboard
+python scripts/preflight_check.py           # pre-live readiness gate (exit 0 = pass)
+python -m execution.kill_switch --status    # check / toggle the global kill switch
+```
+
+---
 
 ## Configuration
 
-All runtime configuration — secrets, financial constants, and output paths — is
-centralized in [`settings.py`](settings.py) and loaded from environment variables
-or a local `.env` file (never committed). Copy `.env.example` to `.env` and fill
-in values. The most important key is `FRED_API_KEY`.
+All runtime configuration is centralized in [`settings.py`](settings.py) and loaded
+from a local `.env` file (never committed). The most important key is `FRED_API_KEY`.
 
 ## Running
 
 ```bash
-python3 main.py                  # legacy sync orchestrator -> Google Sheets
-python3 main_orchestrator.py     # async master orchestrator -> HTML report
+python3 main.py                  # advisory orchestrator → Google Sheets
+python3 main_orchestrator.py     # async master orchestrator → HTML report
 pytest                           # run the test suite
 ```
 

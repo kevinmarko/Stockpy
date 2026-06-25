@@ -544,9 +544,60 @@ Useful during development when you know certain checks will fail. Do not skip ch
 
 ## 14. Setting Up Alerts
 
-The platform can notify you when important events happen (kill switch firing, position drift, large slippage, etc.). All alert channels are optional — configure as many or as few as you want.
+The platform has **two independent alert layers**: push notifications to your phone via ntfy.sh (new, from `alerting.py`) and channel-based alerts for operational events (Discord/Slack/email/file, from `observability/alerts.py`). Both are fully optional — the app runs without either.
 
-### Discord (easiest)
+---
+
+### Phone push notifications — ntfy.sh (alerting.py)
+
+ntfy.sh is a free, open-source push-notification service with native iOS and Android apps. No account is required for public topics.
+
+#### Setup (5 minutes)
+
+1. Install the **ntfy** app on your phone — search "ntfy" on the App Store or Google Play.
+2. Choose a topic name that is **long and random** (it acts as your password — anyone who knows it can see your notifications). Example: `investyo-kml-x9f2q7`.
+3. In the ntfy app, tap **Subscribe to topic** → enter your topic name.
+4. Add to `.env`:
+   ```
+   NTFY_TOPIC=investyo-kml-x9f2q7
+   ```
+
+#### What gets sent
+
+| Event | Priority | When |
+|-------|----------|------|
+| ⚠ Errors Detected | **HIGH** (always makes a sound) | Any symbol-level pipeline failure |
+| ✓ Refresh Complete | Default | Once per launch (not per interval tick) |
+
+The error notification lists which symbols failed and at which pipeline stage. The "refresh complete" notification includes the full run summary (BUY/SELL/HOLD counts, top 3 recommendations, duration).
+
+**Interval mode** (`python3 main.py --interval 60`): the "refresh complete" notification fires only once per launch, not once per tick. Error notifications fire every cycle where errors occur.
+
+#### Without NTFY_TOPIC
+
+When `NTFY_TOPIC` is unset `notify()` is a silent no-op — the app runs identically. Only the rotating log file (`logs/investyo.log`) is written.
+
+---
+
+### Log file (always-on, no config needed)
+
+`logs/investyo.log` is created automatically on first run. It rotates at 10 MB and keeps 5 backups (≈50 MB max). The format is:
+
+```
+2026-06-25 09:35:01  INFO      InvestYo.main — Evaluating 12 symbols...
+2026-06-25 09:35:08  WARNING   InvestYo.main — Advisory failed for TSLA: TimeoutError
+2026-06-25 09:35:09  INFO      InvestYo.main —
+InvestYo Run — 2026-06-25 09:35:01 UTC  (8.4 s)
+Universe: 12 evaluated  (11 OK, 1 error)
+Signals : BUY=4  HOLD=6  SELL=1
+Errors  : 1  (TSLA @ advisory_evaluate)
+── Top 3 actionable ──────────────────────────────────
+  1. BUY  AAPL     conviction=0.82  pos=4.5%  "Strong momentum..."
+```
+
+---
+
+### Operational event alerts — Discord (easiest)
 
 1. In Discord: open a channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy URL
 2. Add to `.env`:
