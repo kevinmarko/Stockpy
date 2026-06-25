@@ -290,7 +290,7 @@ if not closed_df.empty:
             .rename(columns={"realized_pnl": "Realized P&L ($)"})
         )
         pnl_by_strat["Realized P&L ($)"] = pnl_by_strat["Realized P&L ($)"].round(2)
-        st.dataframe(pnl_by_strat, use_container_width=True)
+        st.dataframe(pnl_by_strat, width='stretch')
     else:
         st.info("P&L columns not available — run trades through the pipeline first.")
 else:
@@ -314,7 +314,7 @@ with col_open:
             c for c in ["symbol", "strategy_id", "entry_price", "entry_ts", "qty"]
             if c in open_df.columns
         ]
-        st.dataframe(open_df[display_cols] if display_cols else open_df, use_container_width=True)
+        st.dataframe(open_df[display_cols] if display_cols else open_df, width='stretch')
     else:
         st.info("No open positions in the internal book.")
 
@@ -328,7 +328,7 @@ with col_signals:
             sigs_df["kelly_target"] = (
                 sigs_df["kelly_target"] * 100
             ).round(1).astype(str) + "%"
-        st.dataframe(sigs_df, use_container_width=True)
+        st.dataframe(sigs_df, width='stretch')
     else:
         st.info("No signals in last snapshot.")
 
@@ -394,7 +394,7 @@ if val_reports:
         ["strategy_id", "Status", "pbo", "dsr", "sharpe", "max_drawdown", "report_date"]
         if c in vr_df.columns
     ]
-    st.dataframe(vr_df[show_cols], use_container_width=True)
+    st.dataframe(vr_df[show_cols], width='stretch')
 else:
     st.warning(
         "No validation summaries found in reports/.  "
@@ -418,7 +418,7 @@ if not closed_df.empty:
         ["symbol", "strategy_id", "entry_price", "exit_price", "realized_pnl", "exit_ts"]
         if c in display.columns
     ]
-    st.dataframe(display[show_cols] if show_cols else display, use_container_width=True)
+    st.dataframe(display[show_cols] if show_cols else display, width='stretch')
 else:
     st.info("No closed trades yet.")
 
@@ -433,7 +433,7 @@ st.subheader("🚧 Risk Gate Block Log (last 100)")
 
 if block_log:
     block_df = pd.DataFrame(block_log)
-    st.dataframe(block_df, use_container_width=True)
+    st.dataframe(block_df, width='stretch')
 else:
     st.success("No blocked orders in the log.")
 
