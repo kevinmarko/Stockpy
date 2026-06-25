@@ -713,15 +713,18 @@ def test_main_orchestrator_pipeline():
     fund_raw = mock_de.fetch_fundamentals_raw(tickers)
     tech_raw = mock_de.fetch_technical_raw(tickers)
     
-    final_df = run_pipeline(tickers, macro_raw, fund_raw, tech_raw)
+    final_df, _macro_dto, _shared_ctx = run_pipeline(tickers, macro_raw, fund_raw, tech_raw)
     assert not final_df.empty
-    
+
     # Assert all strategy keys are present and populated
     assert "Action Signal" in final_df.columns
     assert "buyRange" in final_df.columns
     assert "Kelly Target" in final_df.columns
     assert "Option Strategy" in final_df.columns
-    
+
+    # run_pipeline() now returns the macro_dto with HMM probability
+    assert _macro_dto is not None
+
     # Validate final schema
     try:
         config.DashboardSchema.validate(final_df)

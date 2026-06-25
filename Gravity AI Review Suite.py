@@ -2803,6 +2803,644 @@ class GravityAIAuditor:
 
         self.report["step_26_market_data_provider_audit"] = audit
 
+    def run_advisory_audit(self) -> None:
+        """Step 27: Validate engine/advisory.py — holding-aware BUY/SELL/HOLD engine.
+
+        Checks:
+          (a) Module and Recommendation dataclass importable and frozen.
+          (b) evaluate() function exists with the correct signature.
+          (c) CONFIG dict present with all 16 required keys.
+          (d) No bare numeric literals in the decision-logic section
+              (all threshold references go through CONFIG).
+          (e) AC1: held position above cost + high dividend yield + neutral forecast
+              → HOLD with rationale mentioning dividends.
+          (f) AC2: held position below cost + bearish forecast → SELL with
+              elevated conviction (≥ conviction_strong_sell = 0.80).
+          (g) AC3: non-held symbol with strong bullish signal + positive Kelly
+              → BUY with suggested_position_pct in (0, max_single_position_pct].
+          (h) STALE quote sets data_quality="STALE" when no module fails.
+          (i) Any engine module failure sets data_quality="PARTIAL".
+          (j) SELL and HOLD always produce suggested_position_pct == 0.0.
+        """
+        audit: dict = {
+            "step": 27,
+            "description": "engine/advisory.py — holding-aware per-symbol advisory engine",
+            "checks": {},
+        }
+
+        try:
+            # ── (a) Import and frozen check ───────────────────────────────────
+            import importlib
+            advisory_mod = importlib.import_module("engine.advisory")
+            Recommendation = advisory_mod.Recommendation
+            import dataclasses
+            is_frozen = dataclasses.fields(Recommendation) and getattr(
+                Recommendation.__dataclass_params__, "frozen", False
+            )
+            audit["checks"]["recommendation_importable_and_frozen"] = {
+                "status": "PASSED" if is_frozen else "FAILED",
+                "frozen": is_frozen,
+            }
+
+            # ── (b) evaluate() signature ──────────────────────────────────────
+            import inspect
+            evaluate = advisory_mod.evaluate
+            sig = inspect.signature(evaluate)
+            required_params = {"symbol", "position", "market", "snapshot"}
+            optional_params = {"macro_dto", "transactions_store"}
+            present = set(sig.parameters.keys())
+            sig_ok = required_params.issubset(present) and optional_params.issubset(present)
+            audit["checks"]["evaluate_signature"] = {
+                "status": "PASSED" if sig_ok else "FAILED",
+                "has_required": list(required_params),
+                "has_optional": list(optional_params),
+                "missing": list((required_params | optional_params) - present),
+            }
+
+            # ── (c) CONFIG keys ───────────────────────────────────────────────
+            CONFIG = advisory_mod.CONFIG
+            required_keys = {
+                "strong_buy_score_threshold", "buy_score_threshold", "sell_score_threshold",
+                "unrealized_gain_hold_bias_pct", "unrealized_loss_sell_threshold_pct",
+                "dividend_yield_hold_bias_threshold", "dividend_total_received_hold_bias_usd",
+                "max_single_position_pct", "kelly_fraction", "kelly_cap",
+                "conviction_strong_buy", "conviction_buy", "conviction_hold",
+                "conviction_sell", "conviction_strong_sell", "bearish_forecast_pct_threshold",
+            }
+            missing_keys = required_keys - set(CONFIG.keys())
+            config_ok = len(missing_keys) == 0
+            audit["checks"]["config_keys_complete"] = {
+                "status": "PASSED" if config_ok else "FAILED",
+                "missing_keys": list(missing_keys),
+                "total_keys": len(CONFIG),
+            }
+
+            # ── (d) No magic numbers in logic section ─────────────────────────
+            # Read the source and check that CONFIG values are referenced by key,
+            # not embedded as bare literals in the decision logic (if/elif blocks
+            # below the CONFIG dict definition).
+            import ast, textwrap
+            src_lines = inspect.getsource(advisory_mod).splitlines()
+            # Find the line where CONFIG dict definition ends (after the closing })
+            config_end = 0
+            brace_depth = 0
+            in_config = False
+            for i, line in enumerate(src_lines):
+                if "CONFIG: Dict" in line or "CONFIG =" in line:
+                    in_config = True
+                if in_config:
+                    brace_depth += line.count("{") - line.count("}")
+                    if brace_depth <= 0 and in_config and i > 0:
+                        config_end = i
+                        break
+            logic_src = "\n".join(src_lines[config_end:])
+            # Check that CONFIG threshold values are not repeated as bare literals
+            # in comparison operators. We check the five most critical thresholds.
+            threshold_literals = [
+                str(CONFIG["strong_buy_score_threshold"]),   # 75
+                str(CONFIG["buy_score_threshold"]),           # 55
+                str(CONFIG["sell_score_threshold"]),          # 35
+                str(int(CONFIG["unrealized_gain_hold_bias_pct"])),      # 10
+                str(int(abs(CONFIG["unrealized_loss_sell_threshold_pct"]))),  # 10
+            ]
+            import re
+            violations = []
+            for lit in threshold_literals:
+                # Flag bare integer comparisons like "< 75" or "> 55" not inside CONFIG[...]
+                pattern = rf'(?<!CONFIG\[.{{0,40}})[<>!]=?\s*{re.escape(lit)}(?!\s*,)'
+                for match in re.finditer(pattern, logic_src):
+                    ctx = logic_src[max(0, match.start()-40):match.end()+20].strip()
+                    # Allow if it's inside a string literal / comment
+                    if 'CONFIG' not in ctx and '"' not in ctx and '#' not in ctx:
+                        violations.append(ctx[:60])
+            no_magic = len(violations) == 0
+            audit["checks"]["no_magic_numbers_in_logic"] = {
+                "status": "PASSED" if no_magic else "WARNING",
+                "violations_found": violations[:5],
+            }
+
+            # ── (e-j) Acceptance criteria and data-quality checks ─────────────
+            # All AC checks use fully mocked engines (no network calls).
+            from unittest.mock import MagicMock, patch
+            import pandas as _pd
+            import numpy as _np
+            from transactions_store import TransactionsStore as _TS
+
+            # Shared test fixtures ------------------------------------------------
+            def _make_bars(seed=42, n=120):
+                rng = _np.random.default_rng(seed)
+                closes = 100.0 + _np.cumsum(rng.normal(0, 0.5, n))
+                idx = _pd.date_range("2024-01-01", periods=n, freq="B")
+                return _pd.DataFrame({
+                    "Open": closes * 0.99, "High": closes * 1.01,
+                    "Low": closes * 0.98, "Close": closes, "Volume": [1_000_000] * n,
+                }, index=idx)
+
+            def _market_mock(price=110.0, stale=False, bars=None):
+                m = MagicMock()
+                q = MagicMock(); q.price = price; q.is_stale = stale
+                m.get_latest_quote.return_value = q
+                m.get_intraday_bars.return_value = bars if bars is not None else _make_bars()
+                m.get_fundamentals.return_value = {
+                    "trailingPE": 20.0, "priceToBook": 2.0,
+                    "dividendYield": 0.06, "bookValue": 50.0,
+                    "trailingEps": 5.0, "sector": "Technology",
+                    "shortName": "TEST INC",
+                }
+                return m
+
+            def _snapshot_mock(equity=100_000.0):
+                s = MagicMock()
+                s.total_equity = equity
+                s.buying_power = equity * 0.5
+                return s
+
+            ts = _TS(db_url="sqlite:///:memory:")
+
+            mock_targets = [
+                "engine.advisory.ProcessingEngine",
+                "engine.advisory.ForecastingEngine",
+                "engine.advisory.TechnicalOptionsEngine",
+                "engine.advisory.StrategyEngine",
+            ]
+
+            def _patched_evaluate(symbol, position, market_mock, snapshot_mock,
+                                   strategy_out_override=None, forecast_override=100.0):
+                """Run evaluate() with all heavy engines mocked."""
+                with patch(mock_targets[0]) as MockPE, \
+                     patch(mock_targets[1]) as MockFE, \
+                     patch(mock_targets[2]) as MockTOE, \
+                     patch(mock_targets[3]) as MockSE:
+
+                    # ProcessingEngine
+                    MockPE.return_value.calculate_technical_metrics.return_value = {
+                        symbol: {
+                            "RSI": 55.0, "RSI_2": 12.0, "MACD_Line": 0.5,
+                            "MACD_Signal": 0.3, "Aroon Oscillator": 60.0,
+                            "ATR": 2.0, "SMA_200": 95.0, "SMA_5": 102.0,
+                            "Chandelier Exit": 98.0, "ROC_12M": 0.15,
+                            "Sortino Ratio": 1.2, "Max Drawdown": -0.08,
+                            "RS vs SPY": 1.05, "Realized_Vol_60D": 0.20,
+                        }
+                    }
+
+                    # ForecastingEngine
+                    MockFE.return_value.generate_forecast.return_value = {
+                        "Forecast_30": forecast_override,
+                    }
+
+                    # TechnicalOptionsEngine
+                    MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.22
+
+                    # StrategyEngine
+                    default_out = {
+                        "Action Signal": "BUY",
+                        "Score": 70,
+                        "Kelly Target": 0.04,
+                        "buyRange": "$95-$100",
+                        "sellRange": "Sell Zone: $115-$120",
+                    }
+                    if strategy_out_override:
+                        default_out.update(strategy_out_override)
+                    MockSE.return_value.evaluate_security.return_value = default_out
+
+                    return advisory_mod.evaluate(
+                        symbol=symbol,
+                        position=position,
+                        market=market_mock,
+                        snapshot=snapshot_mock,
+                        transactions_store=ts,
+                    )
+
+            # ── (e) AC1: held + dividends + gain + neutral forecast → HOLD ────
+            pos_ac1 = MagicMock()
+            pos_ac1.quantity = 10.0
+            pos_ac1.average_cost = 90.0        # bought at 90, now at 110 → +22% gain
+            pos_ac1.dividends_received = 80.0  # $80 cumulative → above $50 threshold
+            rec_ac1 = _patched_evaluate(
+                "AAPL", pos_ac1, _market_mock(price=110.0), _snapshot_mock(),
+                strategy_out_override={"Action Signal": "HOLD", "Score": 50},
+                forecast_override=112.0,   # slightly bullish but score is neutral
+            )
+            ac1_ok = (
+                rec_ac1.action == "HOLD"
+                and "dividend" in rec_ac1.rationale.lower()
+            )
+            audit["checks"]["ac1_held_dividends_gain_hold"] = {
+                "status": "PASSED" if ac1_ok else "FAILED",
+                "action": rec_ac1.action,
+                "rationale_mentions_dividend": "dividend" in rec_ac1.rationale.lower(),
+            }
+
+            # ── (f) AC2: held + below cost + bearish forecast → SELL ──────────
+            pos_ac2 = MagicMock()
+            pos_ac2.quantity = 10.0
+            pos_ac2.average_cost = 130.0       # bought at 130, now at 110 → -15% loss
+            pos_ac2.dividends_received = 0.0
+            # bearish forecast: 110 → 100 = -9% change (< -3% threshold)
+            rec_ac2 = _patched_evaluate(
+                "XYZ", pos_ac2, _market_mock(price=110.0), _snapshot_mock(),
+                strategy_out_override={"Action Signal": "HOLD", "Score": 48},
+                forecast_override=100.0,
+            )
+            ac2_ok = (
+                rec_ac2.action == "SELL"
+                and rec_ac2.conviction >= CONFIG["conviction_strong_sell"]
+            )
+            audit["checks"]["ac2_below_cost_bearish_sell"] = {
+                "status": "PASSED" if ac2_ok else "FAILED",
+                "action": rec_ac2.action,
+                "conviction": round(rec_ac2.conviction, 4),
+                "conviction_threshold": CONFIG["conviction_strong_sell"],
+            }
+
+            # ── (g) AC3: non-held + strong bullish + positive Kelly → BUY ─────
+            rec_ac3 = _patched_evaluate(
+                "NVDA", None, _market_mock(price=110.0), _snapshot_mock(),
+                strategy_out_override={"Action Signal": "STRONG BUY", "Score": 82,
+                                        "Kelly Target": 0.04},
+                forecast_override=125.0,   # +13.6% forecast
+            )
+            ac3_ok = (
+                rec_ac3.action == "BUY"
+                and 0.0 < rec_ac3.suggested_position_pct <= CONFIG["max_single_position_pct"]
+            )
+            audit["checks"]["ac3_non_held_strong_buy"] = {
+                "status": "PASSED" if ac3_ok else "FAILED",
+                "action": rec_ac3.action,
+                "suggested_position_pct": round(rec_ac3.suggested_position_pct, 6),
+                "max_cap": CONFIG["max_single_position_pct"],
+            }
+
+            # ── (h) STALE quote → data_quality="STALE" ────────────────────────
+            rec_stale = _patched_evaluate(
+                "MSFT", None, _market_mock(price=110.0, stale=True), _snapshot_mock(),
+                strategy_out_override={"Action Signal": "BUY", "Score": 65},
+                forecast_override=115.0,
+            )
+            stale_ok = rec_stale.data_quality == "STALE"
+            audit["checks"]["stale_quote_sets_stale_quality"] = {
+                "status": "PASSED" if stale_ok else "FAILED",
+                "data_quality": rec_stale.data_quality,
+            }
+
+            # ── (i) Module failure → data_quality="PARTIAL" ───────────────────
+            with patch(mock_targets[0]) as MockPE, \
+                 patch(mock_targets[1]) as MockFE, \
+                 patch(mock_targets[2]) as MockTOE, \
+                 patch(mock_targets[3]) as MockSE:
+                MockPE.return_value.calculate_technical_metrics.side_effect = RuntimeError("test failure")
+                MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 115.0}
+                MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.22
+                MockSE.return_value.evaluate_security.return_value = {
+                    "Action Signal": "BUY", "Score": 65, "Kelly Target": 0.04,
+                }
+                rec_partial = advisory_mod.evaluate(
+                    symbol="FAIL",
+                    position=None,
+                    market=_market_mock(price=110.0, stale=False),
+                    snapshot=_snapshot_mock(),
+                    transactions_store=ts,
+                )
+            partial_ok = rec_partial.data_quality == "PARTIAL"
+            audit["checks"]["engine_failure_sets_partial_quality"] = {
+                "status": "PASSED" if partial_ok else "FAILED",
+                "data_quality": rec_partial.data_quality,
+            }
+
+            # ── (j) SELL and HOLD → suggested_position_pct == 0.0 ─────────────
+            pos_sell = MagicMock(); pos_sell.quantity = 5.0
+            pos_sell.average_cost = 140.0; pos_sell.dividends_received = 0.0
+            rec_sell = _patched_evaluate(
+                "TSLA", pos_sell, _market_mock(price=110.0), _snapshot_mock(),
+                strategy_out_override={"Action Signal": "HOLD", "Score": 45},
+                forecast_override=100.0,   # bearish → SELL override
+            )
+            sizing_ok = rec_sell.suggested_position_pct == 0.0
+            audit["checks"]["sell_hold_position_pct_zero"] = {
+                "status": "PASSED" if sizing_ok else "FAILED",
+                "action": rec_sell.action,
+                "suggested_position_pct": rec_sell.suggested_position_pct,
+            }
+
+            passed = all(v.get("status") in ("PASSED", "WARNING") for v in audit["checks"].values())
+            audit["status"] = "PASSED" if passed else "FAILED"
+
+        except ImportError as exc:
+            audit["status"] = "FAILED"
+            audit["error"] = f"Import error: {exc}"
+        except Exception as exc:
+            audit["status"] = "ERROR"
+            audit["error"] = str(exc)
+
+        self.report["step_27_advisory_engine_audit"] = audit
+
+    # =========================================================================
+    # Step 28 — Clean Advisory Orchestrator (main.py refactor)
+    # =========================================================================
+
+    def run_run_once_orchestrator_audit(self) -> None:
+        """Verify the refactored main.py advisory orchestrator.
+
+        Checks
+        ------
+        a. RunResult is a frozen dataclass with all required fields.
+        b. run_once() is importable and callable without network (mocked).
+        c. Dead-letter pattern: one failing symbol → error in RunResult.errors,
+           not an exception propagated to caller.
+        d. Empty universe → RunResult with empty lists (no crash).
+        e. force_account=True threads force=True to fetch_account_snapshot.
+        f. RunResult.errors dict has required keys: symbol, stage, error_type,
+           message, timestamp.
+        g. _load_watchlist() reads WATCHLIST env var (comma-sep) and watchlist.txt.
+        h. _build_universe() produces held ∪ watchlist, deduped, sorted.
+        i. _build_context_extras() returns dict with xsec_percentile_ranks and
+           multifactor_scores keys (or {} on error — never raises).
+        j. No direct DataEngine / ProcessingEngine / ForecastingEngine /
+           StrategyEngine / TechnicalOptionsEngine imports at module top level
+           (all orchestration delegated to engine.advisory.evaluate()).
+        """
+        audit: dict = {
+            "description": "Refactored main.py clean advisory orchestrator",
+            "checks": {},
+        }
+        try:
+            import importlib
+            import os
+            import ast
+            from dataclasses import fields
+            from datetime import datetime, timezone
+            from unittest.mock import patch, MagicMock
+
+            # ── a. RunResult is a frozen dataclass with required fields ───────
+            check_a = {"status": "PASS"}
+            try:
+                import main as _main
+                from main import RunResult
+                rf = {f.name for f in fields(RunResult)}
+                required = {"snapshot", "recommendations", "errors",
+                            "started_at", "finished_at", "duration_seconds"}
+                if not required.issubset(rf):
+                    check_a = {"status": "FAIL",
+                               "error": f"Missing fields: {required - rf}"}
+                else:
+                    # Test immutability
+                    snap = MagicMock()
+                    snap.age_hours.return_value = 0.0
+                    snap.is_stale.return_value = False
+                    snap.total_equity = 0.0
+                    snap.buying_power = 0.0
+                    snap.positions = {}
+                    r = RunResult(
+                        snapshot=snap, recommendations=[], errors=[],
+                        started_at=datetime.now(timezone.utc),
+                        finished_at=datetime.now(timezone.utc),
+                        duration_seconds=0.0,
+                    )
+                    try:
+                        r.recommendations = []  # type: ignore
+                        check_a = {"status": "FAIL",
+                                   "error": "RunResult is NOT frozen"}
+                    except (AttributeError, TypeError):
+                        pass  # expected — frozen OK
+            except Exception as exc:
+                check_a = {"status": "ERROR", "error": str(exc)}
+            audit["checks"]["a_run_result_frozen"] = check_a
+
+            # ── b. run_once importable ────────────────────────────────────────
+            check_b = {"status": "PASS"}
+            try:
+                from main import run_once
+            except Exception as exc:
+                check_b = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["b_run_once_importable"] = check_b
+
+            # ── c. Dead-letter per symbol ─────────────────────────────────────
+            check_c = {"status": "PASS"}
+            try:
+                snap_mock = MagicMock()
+                snap_mock.positions = {}
+                snap_mock.buying_power = 0.0
+                snap_mock.total_equity = 0.0
+                snap_mock.total_dividends = 0.0
+                snap_mock.fetched_at = datetime.now(timezone.utc)
+                snap_mock.age_hours.return_value = 0.0
+                snap_mock.is_stale.return_value = False
+
+                macro_mock = MagicMock()
+                macro_mock.market_regime = "NEUTRAL"
+                macro_mock.vix_value = 18.0
+
+                with patch("main.fetch_account_snapshot", return_value=snap_mock), \
+                     patch("main.get_provider", return_value=MagicMock()), \
+                     patch("main._build_macro_dto", return_value=macro_mock), \
+                     patch("main._fetch_bars_for_universe", return_value={}), \
+                     patch("main._build_context_extras", return_value={}), \
+                     patch.dict(os.environ, {"WATCHLIST": "FAILSYM"}, clear=False), \
+                     patch("main.advisory_evaluate",
+                           side_effect=RuntimeError("deliberate test failure")):
+                    result = run_once()
+                assert len(result.errors) == 1, "Expected 1 error entry"
+                assert result.errors[0]["symbol"] == "FAILSYM"
+                assert len(result.recommendations) == 0
+            except Exception as exc:
+                check_c = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["c_dead_letter_per_symbol"] = check_c
+
+            # ── d. Empty universe → empty result, no crash ────────────────────
+            check_d = {"status": "PASS"}
+            try:
+                snap_mock2 = MagicMock()
+                snap_mock2.positions = {}
+                snap_mock2.buying_power = 0.0
+                snap_mock2.total_equity = 0.0
+                snap_mock2.total_dividends = 0.0
+                snap_mock2.fetched_at = datetime.now(timezone.utc)
+                snap_mock2.age_hours.return_value = 0.0
+                snap_mock2.is_stale.return_value = False
+                macro_mock2 = MagicMock()
+                macro_mock2.market_regime = "NEUTRAL"
+                macro_mock2.vix_value = 18.0
+
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmp:
+                    orig_dir = os.getcwd()
+                    os.chdir(tmp)
+                    try:
+                        with patch("main.fetch_account_snapshot", return_value=snap_mock2), \
+                             patch("main.get_provider", return_value=MagicMock()), \
+                             patch("main._build_macro_dto", return_value=macro_mock2), \
+                             patch("main._fetch_bars_for_universe", return_value={}), \
+                             patch("main._build_context_extras", return_value={}):
+                            _env_bak = os.environ.pop("WATCHLIST", None)
+                            try:
+                                result = run_once()
+                            finally:
+                                if _env_bak is not None:
+                                    os.environ["WATCHLIST"] = _env_bak
+                    finally:
+                        os.chdir(orig_dir)
+                assert len(result.recommendations) == 0
+                assert len(result.errors) == 0
+            except Exception as exc:
+                check_d = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["d_empty_universe_no_crash"] = check_d
+
+            # ── e. force_account threads to fetch_account_snapshot ────────────
+            check_e = {"status": "PASS"}
+            try:
+                snap_mock3 = MagicMock()
+                snap_mock3.positions = {}
+                snap_mock3.buying_power = 0.0
+                snap_mock3.total_equity = 0.0
+                snap_mock3.total_dividends = 0.0
+                snap_mock3.fetched_at = datetime.now(timezone.utc)
+                snap_mock3.age_hours.return_value = 0.0
+                snap_mock3.is_stale.return_value = False
+                macro_mock3 = MagicMock()
+                macro_mock3.market_regime = "NEUTRAL"
+                macro_mock3.vix_value = 18.0
+
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmp2:
+                    orig_dir2 = os.getcwd()
+                    os.chdir(tmp2)
+                    try:
+                        with patch("main.fetch_account_snapshot", return_value=snap_mock3) as mock_fetch, \
+                             patch("main.get_provider", return_value=MagicMock()), \
+                             patch("main._build_macro_dto", return_value=macro_mock3), \
+                             patch("main._fetch_bars_for_universe", return_value={}), \
+                             patch("main._build_context_extras", return_value={}):
+                            _env_bak2 = os.environ.pop("WATCHLIST", None)
+                            try:
+                                run_once(force_account=True)
+                            finally:
+                                if _env_bak2 is not None:
+                                    os.environ["WATCHLIST"] = _env_bak2
+                    finally:
+                        os.chdir(orig_dir2)
+                mock_fetch.assert_called_once_with(max_age_hours=20.0, force=True)
+            except Exception as exc:
+                check_e = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["e_force_account_threading"] = check_e
+
+            # ── f. Error dict has required keys ───────────────────────────────
+            check_f = {"status": "PASS"}
+            try:
+                required_err_keys = {"symbol", "stage", "error_type", "message", "timestamp"}
+                from main import RunResult as _RR
+                import dataclasses
+                _snap = MagicMock()
+                _snap.age_hours.return_value = 0.0
+                _snap.is_stale.return_value = False
+                _snap.total_equity = 0.0
+                _snap.buying_power = 0.0
+                _snap.positions = {}
+                err_entry = {
+                    "symbol": "X", "stage": "advisory_evaluate",
+                    "error_type": "RuntimeError", "message": "test",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                r2 = _RR(
+                    snapshot=_snap, recommendations=[], errors=[err_entry],
+                    started_at=datetime.now(timezone.utc),
+                    finished_at=datetime.now(timezone.utc),
+                    duration_seconds=0.0,
+                )
+                if not required_err_keys.issubset(r2.errors[0].keys()):
+                    check_f = {"status": "FAIL",
+                               "error": f"Error dict missing keys: "
+                                        f"{required_err_keys - r2.errors[0].keys()}"}
+            except Exception as exc:
+                check_f = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["f_error_dict_keys"] = check_f
+
+            # ── g. _load_watchlist reads env var ──────────────────────────────
+            check_g = {"status": "PASS"}
+            try:
+                from main import _load_watchlist
+                with patch.dict(os.environ, {"WATCHLIST": "AAPL,MSFT,GOOG"}, clear=False):
+                    wl = _load_watchlist()
+                assert set(wl) == {"AAPL", "MSFT", "GOOG"}, f"Got {wl}"
+            except Exception as exc:
+                check_g = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["g_load_watchlist_env"] = check_g
+
+            # ── h. _build_universe unions held + watchlist, deduped ───────────
+            check_h = {"status": "PASS"}
+            try:
+                from main import _build_universe
+                _snap_h = MagicMock()
+                _pos_aapl = MagicMock()
+                _pos_aapl.symbol = "AAPL"
+                _snap_h.positions = {"AAPL": _pos_aapl}
+                with patch.dict(os.environ, {"WATCHLIST": "AAPL,NVDA"}, clear=False):
+                    universe = _build_universe(_snap_h)
+                assert set(universe) == {"AAPL", "NVDA"}, f"Got {universe}"
+                assert universe == sorted(universe), "Universe not sorted"
+                assert universe.count("AAPL") == 1, "AAPL duplicated"
+            except Exception as exc:
+                check_h = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["h_build_universe_union_dedup"] = check_h
+
+            # ── i. _build_context_extras returns dict or {} on error ──────────
+            check_i = {"status": "PASS"}
+            try:
+                from main import _build_context_extras
+                result_ctx = _build_context_extras([], {}, MagicMock())
+                assert isinstance(result_ctx, dict), "Must return dict"
+                # Also check valid keys when non-empty input provided
+                if result_ctx:
+                    assert "xsec_percentile_ranks" in result_ctx or len(result_ctx) == 0
+            except Exception as exc:
+                check_i = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["i_context_extras_returns_dict"] = check_i
+
+            # ── j. Module-level top imports do NOT include old engine direct calls
+            check_j = {"status": "PASS"}
+            try:
+                import main as _m_src
+                import inspect
+                src = inspect.getsource(_m_src)
+                top_lines = src.split("\n")
+                # Find the line where import subprocess ends (venv routing block)
+                # and check module-level imports after it
+                forbidden = [
+                    "from processing_engine import ProcessingEngine",
+                    "from forecasting_engine import ForecastingEngine",
+                    "from strategy_engine import StrategyEngine",
+                    "from technical_options_engine import TechnicalOptionsEngine",
+                    "from evaluation_engine import EvaluationEngine",
+                    "from data.robinhood_client import RobinhoodClient",
+                ]
+                for bad in forbidden:
+                    if bad in src:
+                        check_j = {
+                            "status": "FAIL",
+                            "error": f"Found disallowed top-level import: '{bad}'. "
+                                     f"These engines are now delegated to engine.advisory.evaluate().",
+                        }
+                        break
+            except Exception as exc:
+                check_j = {"status": "FAIL", "error": str(exc)}
+            audit["checks"]["j_no_direct_engine_imports"] = check_j
+
+            # Final status
+            failed = [k for k, v in audit["checks"].items()
+                      if v.get("status") not in ("PASS",)]
+            audit["status"] = "FAILED" if failed else "PASSED"
+            if failed:
+                audit["failed_checks"] = failed
+
+        except ImportError as exc:
+            audit["status"] = "FAILED"
+            audit["error"] = f"Import error: {exc}"
+        except Exception as exc:
+            audit["status"] = "ERROR"
+            audit["error"] = str(exc)
+
+        self.report["step_28_run_once_orchestrator_audit"] = audit
+
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
         self.run_schema_audit()
@@ -2830,6 +3468,8 @@ class GravityAIAuditor:
         self.run_robinhood_integration_audit()
         self.run_robinhood_portfolio_audit()
         self.run_market_data_provider_audit()
+        self.run_advisory_audit()
+        self.run_run_once_orchestrator_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================
