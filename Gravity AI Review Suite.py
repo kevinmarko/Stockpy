@@ -225,6 +225,7 @@ class GravityAIAuditor:
             "step_14_xsec_momentum_audit": {},
             "step_22_triple_barrier_meta_label_audit": {},
             "step_23_qlib_arch_model_registry_audit": {},
+            "step_24_cache_system_audit": {},
         }
         self.data_engine = GravityTestEngine()
         self.test_df = self.data_engine.fetch_historical_prices()
@@ -2593,6 +2594,7 @@ class GravityAIAuditor:
         self.run_sell_side_range_audit()
         self.run_triple_barrier_meta_label_audit()
         self.run_qlib_arch_model_registry_audit()
+        self.run_cache_system_audit()
         self.run_robinhood_portfolio_audit()
         return json.dumps(self.report, indent=4)
 

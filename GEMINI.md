@@ -178,3 +178,20 @@ MetaLabeler trains a binary LightGBM classifier to predict P(primary_signal_corr
 
 QLIB-STYLE ML ARCHITECTURE (ml/ — Prompt 4.3, no qlib dependency):
 Three-layer structure: ml/data/ (PIT feature store + label construction), ml/models/ (Model ABC + implementations), ml/strategies/ (StrategySpec). ALL ML models must implement ml.models.base.Model: fit(X, y, t1)/predict(X)/save(path)/load(path). Both LGBMCrossSectionalRanker and MetaLabeler satisfy this ABC. ml/registry.yaml lists production models with trained_date, cpcv_dsr, pbo, and deployable flag; parse with PyYAML (added to requirements.txt). PITFeatureStore (ml/data/store.py) caches daily cross-sectional features as Parquet files (ml/data/cache/) for expanding-window retraining. StrategySpec (ml/strategies/__init__.py) links a Model to a signal_id and flags is_meta_labeler.
+
+DISK-PERSISTED CADENCE CACHE (cache/cache_store.py — Stage 5):
+A reusable, SQLite-backed cache layer at cache/cache.db that prevents redundant network calls across all data-fetch categories. No new third-party dependencies — uses only stdlib (sqlite3, gzip, json, threading, hashlib) plus pandas.
+
+Core types: Cadence enum (INTRADAY=5 min, DAILY=20 h, WEEKLY=7 d, MONTHLY=30 d, QUARTERLY=90 d, YEARLY=365 d). CADENCE_TTL dict is the single place to retune any TTL. CADENCE_REGISTRY maps logical names ("quotes", "daily_bars", "fundamentals", "financials", "dividends_meta", "analyst_ratings", "earnings_calendar", "company_profile", "macro_regime_inputs") to their Cadence. CacheEntry (frozen dataclass) holds value + fetched_at (tz-aware UTC) + expires_at + cadence; exposes age_seconds and is_fresh.
+
+Cache class: SQLite WAL mode + threading.RLock (one writer at a time, unlimited concurrent readers). isolation_level=None (autocommit) with manual BEGIN IMMEDIATE / COMMIT / ROLLBACK for atomic writes. Two tables: cache_entries (JSON key-value; PRIMARY KEY (namespace, key)) and history_cache (gzip-compressed JSON blobs for OHLCV time-series; PRIMARY KEY (symbol, namespace)). Methods: get / set / invalidate / clear(namespace=None). explicit expires_at override: set() accepts an optional expires_at datetime to pin expiry to a known event (e.g., next-earnings date) rather than the cadence TTL.
+
+Incremental history (get_history_incremental): Three-case logic: (1) cold cache → full fetch via fetch_fn(symbol); (2) warm cache within TTL → return cached DataFrame, no network call; (3) expired → delta fetch via fetch_fn(symbol, start="YYYY-MM-DD") starting the day after the last cached bar, merged and de-duplicated on DatetimeIndex. Falls back to full re-fetch via TypeError catch if fetch_fn doesn't accept start. Logs "Fetching history delta from <date> for <symbol> (namespace=<ns>)" at INFO on every delta fetch. tz-aware DatetimeIndex is normalised to tz-naive on write so yfinance (tz-aware) and FRED (tz-naive) sources concat without collision.
+
+get_default_cache() / _inject_cache(): thread-safe module-level singleton (the production instance). _inject_cache(cache) replaces it for test isolation — preferred over monkeypatching.
+
+@cached(namespace, cadence) decorator: transparent cache lookup + store around any fetch function. Accepts force=True kwarg (consumed before forwarding to wrapped function). Logs cache hits at INFO. Attaches ._cache_namespace and ._cache_cadence for Gravity auditing.
+
+Serialisation: custom JSON encoder/decoder supports pd.DataFrame (orient="split"), pd.Series (orient="split"), and datetime (ISO). OHLCV DataFrames stored as gzip-compressed JSON blobs (no pyarrow). Cache keys > 128 chars are SHA-256-hashed. SECRETS MUST NEVER BE PASSED AS CACHE VALUES — callers are responsible; the cache stores no credentials.
+
+Gravity Step 25 (cache system audit): Checks Cache API completeness, all Cadence enum values present in CADENCE_TTL with non-zero TTLs, CADENCE_REGISTRY has all required keys, @cached second call is a hit (network called once), TTL expiry triggers refresh, force=True bypasses cache, and no known secret-pattern strings appear in cache values.
