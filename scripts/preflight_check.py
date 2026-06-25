@@ -41,22 +41,25 @@ Usage
 
 Checks
 ------
- 1. fred_key_configured       — FRED_API_KEY is set and is not the known-
-                                compromised value (detected via settings.fred_key_is_leaked).
- 2. alpaca_configured         — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
- 3. alpaca_paper_mode         — ALPACA_PAPER=True.  Warning-only when False.
- 4. dry_run_disabled          — DRY_RUN=False (orders reach the broker).
- 5. env_not_committed         — .env file is git-untracked (``git ls-files``).
- 6. kill_switch_inactive      — The KILL_SWITCH sentinel file does not exist.
- 7. heartbeat_fresh           — output/heartbeat.txt was updated within 2 hours.
- 8. db_exists                 — quant_platform.db exists and is non-empty.
- 9. paper_trading_duration    — Paper-trading started ≥ 90 days ago
-                                (requires PAPER_TRADING_START_DATE in .env).
-10. validation_reports        — Every *_validation_summary.json in reports/ is
-                                deployable=True and dated within 30 days.
-11. no_unexpected_risk_blocks — No "minimum_validation" risk gate blocks in the
-                                last 24 hours (indicates missing/expired reports
-                                were discovered at order time rather than here).
+ 1. fred_key_configured         — FRED_API_KEY is set and is not the known-
+                                  compromised value (detected via settings.fred_key_is_leaked).
+ 2. alpaca_configured           — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
+ 3. macro_regime_gate_enabled   — MACRO_REGIME_GATE_ENABLED=True when live trading.
+                                  Warning-only in paper mode; blocking when
+                                  ALPACA_PAPER=False + gate disabled.
+ 4. alpaca_paper_mode           — ALPACA_PAPER=True.  Warning-only when False.
+ 5. dry_run_disabled            — DRY_RUN=False (orders reach the broker).
+ 6. env_not_committed           — .env file is git-untracked (``git ls-files``).
+ 7. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
+ 8. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
+ 9. db_exists                   — quant_platform.db exists and is non-empty.
+10. paper_trading_duration      — Paper-trading started ≥ 90 days ago
+                                  (requires PAPER_TRADING_START_DATE in .env).
+11. validation_reports          — Every *_validation_summary.json in reports/ is
+                                  deployable=True and dated within 30 days.
+12. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
+                                  last 24 hours (indicates missing/expired reports
+                                  were discovered at order time rather than here).
 """
 
 from __future__ import annotations
@@ -152,6 +155,38 @@ def check_alpaca_configured() -> CheckResult:
             "broker execution will be skipped",
         )
     return CheckResult(name, True, "ALPACA_API_KEY and ALPACA_SECRET_KEY are configured")
+
+
+def check_macro_regime_gate_enabled() -> CheckResult:
+    """Fail if the macro regime gate is disabled while live trading is configured.
+
+    ``MACRO_REGIME_GATE_ENABLED=false`` is an operator override for hybrid mode
+    (technical signals run without macro veto) and is acceptable in paper trading.
+    It is a **blocking** failure if both live trading (``ALPACA_PAPER=false``) and
+    ``MACRO_REGIME_GATE_ENABLED=false`` are active simultaneously — that combination
+    exposes the live account to unprotected BUY orders during a recession.
+    """
+    name = "macro_regime_gate_enabled"
+    try:
+        gate_enabled = settings.MACRO_REGIME_GATE_ENABLED
+        alpaca_paper = settings.ALPACA_PAPER
+    except Exception as exc:
+        return CheckResult(name, False, f"Check raised: {exc}")
+    if not gate_enabled and not alpaca_paper:
+        return CheckResult(
+            name, False,
+            "MACRO_REGIME_GATE_ENABLED=false AND ALPACA_PAPER=false — live trading "
+            "without the macro regime veto is not allowed.  Re-enable the gate "
+            "in .env or switch back to paper mode.",
+        )
+    if not gate_enabled:
+        return CheckResult(
+            name, True,
+            "⚠️  MACRO_REGIME_GATE_ENABLED=false — macro regime veto is disabled "
+            "(hybrid mode).  Acceptable in paper trading; re-enable before going live.",
+            warning=True,
+        )
+    return CheckResult(name, True, "Macro regime gate is enabled (autonomous mode)")
 
 
 def check_alpaca_paper_mode() -> CheckResult:
@@ -480,6 +515,7 @@ def check_no_unexpected_risk_blocks(hours: float = 24.0) -> CheckResult:
 ALL_CHECKS = [
     check_fred_key_configured,
     check_alpaca_configured,
+    check_macro_regime_gate_enabled,
     check_alpaca_paper_mode,
     check_dry_run_disabled,
     check_env_not_committed,

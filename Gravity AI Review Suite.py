@@ -227,6 +227,7 @@ class GravityAIAuditor:
             "step_23_qlib_arch_model_registry_audit": {},
             "step_32_html_report_audit": {},
             "step_33_gui_command_center_audit": {},
+            "step_34_macro_regime_gate_toggle_audit": {},
         }
         self.data_engine = GravityTestEngine()
         self.test_df = self.data_engine.fetch_historical_prices()
@@ -4120,7 +4121,230 @@ class GravityAIAuditor:
         self.run_env_loading_audit()
         self.run_html_report_audit()
         self.run_gui_command_center_audit()
+        self.run_macro_regime_gate_toggle_audit()
         return json.dumps(self.report, indent=4)
+
+    def run_macro_regime_gate_toggle_audit(self) -> None:
+        """Step 34 — Macro Regime Gate toggle safety audit.
+
+        Checks
+        ------
+        1.  ``settings.MACRO_REGIME_GATE_ENABLED`` exists and defaults to True.
+        2.  ``execution.risk_gate.PreTradeRiskGate.macro_kill_switch_check`` passes
+            immediately (without touching ``context.macro``) when the setting is False.
+        3.  ``execution.risk_gate.PreTradeRiskGate.macro_kill_switch_check`` blocks a
+            BUY when the setting is True and ``MacroEconomicDTO.killSwitch`` is active.
+        4.  ``gui.env_io.ALLOWED_KEYS`` contains ``MACRO_REGIME_GATE_ENABLED``.
+        5.  ``gui.env_io.SECRET_KEYS`` does NOT contain ``MACRO_REGIME_GATE_ENABLED``
+            (it is a toggle, not a credential).
+        6.  ``scripts.preflight_check.check_macro_regime_gate_enabled`` fails when
+            gate is off and ALPACA_PAPER is False (live-trading safety guard).
+        7.  ``main_orchestrator._write_state_snapshot`` surfaces ``sahm_rule``,
+            ``high_yield_oas``, and ``macro_regime_gate_enabled`` keys so the GUI
+            Observability tab can display recession telemetry without a live FRED call.
+        8.  No bare-except in ``gui/panels.py``'s ``render_observability`` function.
+        """
+        audit = {
+            "step": "step_34_macro_regime_gate_toggle_audit",
+            "description": "Macro Regime Gate toggle: settings, risk gate, env_io, preflight, state snapshot",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        all_pass = True
+
+        # ------------------------------------------------------------------
+        # Check 1 — settings field exists and defaults True
+        # ------------------------------------------------------------------
+        try:
+            from settings import settings as _settings
+            gate_default = _settings.__class__.model_fields["MACRO_REGIME_GATE_ENABLED"].default
+            passed = gate_default is True
+            audit["checks"].append({
+                "check": "MACRO_REGIME_GATE_ENABLED defaults to True in settings",
+                "passed": passed,
+                "detail": f"default={gate_default!r}",
+            })
+            all_pass = all_pass and passed
+        except Exception as exc:
+            audit["checks"].append({"check": "settings field exists", "passed": False, "detail": str(exc)})
+            all_pass = False
+
+        # ------------------------------------------------------------------
+        # Check 2 — gate OFF → risk check passes without reading macro context
+        # ------------------------------------------------------------------
+        try:
+            from unittest.mock import MagicMock, patch
+            from execution.risk_gate import PreTradeRiskGate, RiskContext
+            from execution.broker_base import OrderIntent, OrderSide, OrderType, AccountSnapshot
+
+            intent = OrderIntent(
+                strategy_id="gravity_audit",
+                symbol="SPY",
+                side=OrderSide.BUY,
+                qty=1,
+                order_type=OrderType.MARKET,
+                limit_price=None,
+                dry_run=True,
+            )
+            ctx = RiskContext(
+                account=AccountSnapshot(buying_power=10_000.0, equity=50_000.0, cash=10_000.0),
+                open_positions=[],
+                macro=None,  # deliberately None — gate OFF must never dereference this
+                returns_df=None,
+                start_of_day_equity=50_000.0,
+                validation_reports={},
+                is_premium_sell_strategy=False,
+                current_prices={},
+                timestamp=None,
+            )
+            gate = PreTradeRiskGate()
+            with patch.object(_settings, "MACRO_REGIME_GATE_ENABLED", False):
+                result = gate.macro_kill_switch_check(intent, ctx)
+            passed = result.passed is True and "disabled by operator" in result.reason
+            audit["checks"].append({
+                "check": "gate OFF → BUY passes (no macro context dereference)",
+                "passed": passed,
+                "detail": f"passed={result.passed}, reason={result.reason!r}",
+            })
+            all_pass = all_pass and passed
+        except Exception as exc:
+            audit["checks"].append({"check": "gate OFF bypass", "passed": False, "detail": str(exc)})
+            all_pass = False
+
+        # ------------------------------------------------------------------
+        # Check 3 — gate ON + killSwitch → BUY blocked
+        # ------------------------------------------------------------------
+        try:
+            from dto_models import MacroEconomicDTO
+            ctx_with_macro = RiskContext(
+                account=AccountSnapshot(buying_power=10_000.0, equity=50_000.0, cash=10_000.0),
+                open_positions=[],
+                macro=MacroEconomicDTO(
+                    yield_curve_10y_2y=-0.5,
+                    high_yield_oas=7.0,
+                    inflation_rate=0.04,
+                    vix_value=35.0,
+                    sahm_rule_indicator=0.55,
+                ),
+                returns_df=None,
+                start_of_day_equity=50_000.0,
+                validation_reports={},
+                is_premium_sell_strategy=False,
+                current_prices={},
+                timestamp=None,
+            )
+            with patch.object(_settings, "MACRO_REGIME_GATE_ENABLED", True):
+                result_on = gate.macro_kill_switch_check(intent, ctx_with_macro)
+            passed = result_on.passed is False
+            audit["checks"].append({
+                "check": "gate ON + killSwitch active → BUY blocked",
+                "passed": passed,
+                "detail": f"passed={result_on.passed}, reason={result_on.reason!r}",
+            })
+            all_pass = all_pass and passed
+        except Exception as exc:
+            audit["checks"].append({"check": "gate ON blocks BUY", "passed": False, "detail": str(exc)})
+            all_pass = False
+
+        # ------------------------------------------------------------------
+        # Check 4 — ALLOWED_KEYS includes the toggle
+        # ------------------------------------------------------------------
+        try:
+            from gui import env_io
+            passed = "MACRO_REGIME_GATE_ENABLED" in env_io.ALLOWED_KEYS
+            audit["checks"].append({
+                "check": "gui.env_io.ALLOWED_KEYS contains MACRO_REGIME_GATE_ENABLED",
+                "passed": passed,
+                "detail": f"in ALLOWED_KEYS: {passed}",
+            })
+            all_pass = all_pass and passed
+        except Exception as exc:
+            audit["checks"].append({"check": "ALLOWED_KEYS", "passed": False, "detail": str(exc)})
+            all_pass = False
+
+        # ------------------------------------------------------------------
+        # Check 5 — NOT in SECRET_KEYS
+        # ------------------------------------------------------------------
+        try:
+            passed = "MACRO_REGIME_GATE_ENABLED" not in env_io.SECRET_KEYS
+            audit["checks"].append({
+                "check": "MACRO_REGIME_GATE_ENABLED is NOT in SECRET_KEYS",
+                "passed": passed,
+                "detail": f"in SECRET_KEYS: {not passed}",
+            })
+            all_pass = all_pass and passed
+        except Exception as exc:
+            audit["checks"].append({"check": "SECRET_KEYS exclusion", "passed": False, "detail": str(exc)})
+            all_pass = False
+
+        # ------------------------------------------------------------------
+        # Check 6 — preflight blocks gate-off in live mode
+        # ------------------------------------------------------------------
+        try:
+            from scripts.preflight_check import check_macro_regime_gate_enabled
+            with (
+                patch.object(_settings, "MACRO_REGIME_GATE_ENABLED", False),
+                patch.object(_settings, "ALPACA_PAPER", False),
+            ):
+                result_preflight = check_macro_regime_gate_enabled()
+            passed = result_preflight.passed is False
+            audit["checks"].append({
+                "check": "preflight fails when gate OFF + ALPACA_PAPER=False",
+                "passed": passed,
+                "detail": f"passed={result_preflight.passed}, reason={result_preflight.reason!r}",
+            })
+            all_pass = all_pass and passed
+        except Exception as exc:
+            audit["checks"].append({"check": "preflight gate guard", "passed": False, "detail": str(exc)})
+            all_pass = False
+
+        # ------------------------------------------------------------------
+        # Check 7 — state snapshot contains sahm_rule, high_yield_oas, macro_regime_gate_enabled
+        # ------------------------------------------------------------------
+        try:
+            import inspect
+            import main_orchestrator as _mo
+            src = inspect.getsource(_mo._write_state_snapshot)
+            required_keys = ["sahm_rule", "high_yield_oas", "macro_regime_gate_enabled"]
+            missing = [k for k in required_keys if f'"{k}"' not in src]
+            passed = len(missing) == 0
+            audit["checks"].append({
+                "check": "state_snapshot surfaces sahm_rule / high_yield_oas / macro_regime_gate_enabled",
+                "passed": passed,
+                "detail": f"missing keys: {missing}" if missing else "all keys present",
+            })
+            all_pass = all_pass and passed
+        except Exception as exc:
+            audit["checks"].append({"check": "state snapshot keys", "passed": False, "detail": str(exc)})
+            all_pass = False
+
+        # ------------------------------------------------------------------
+        # Check 8 — no bare except in render_observability
+        # ------------------------------------------------------------------
+        try:
+            import re
+            with open("gui/panels.py", encoding="utf-8") as fh:
+                panels_src = fh.read()
+            # Extract from render_observability start to the next def (or EOF)
+            obs_match = re.search(
+                r"def render_observability\(\).*?(?=\ndef |\Z)", panels_src, re.DOTALL
+            )
+            obs_src = obs_match.group(0) if obs_match else ""
+            bare_except_count = len(re.findall(r"except\s*:", obs_src))
+            passed = bare_except_count == 0
+            audit["checks"].append({
+                "check": "no bare except in render_observability (CONSTRAINT #5)",
+                "passed": passed,
+                "detail": f"bare except count: {bare_except_count}",
+            })
+            all_pass = all_pass and passed
+        except Exception as exc:
+            audit["checks"].append({"check": "bare except scan", "passed": False, "detail": str(exc)})
+            all_pass = False
+
+        audit["overall_pass"] = all_pass
+        self.report["step_34_macro_regime_gate_toggle_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

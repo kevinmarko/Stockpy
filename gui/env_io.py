@@ -76,6 +76,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MAX_ORDER_RATE_PER_MIN",
     "HMM_RISK_OFF_BLOCK_THRESHOLD",
     "RISK_GATE_ENFORCE_MARKET_HOURS",
+    "MACRO_REGIME_GATE_ENABLED",
     # Meta-labeling
     "META_LABEL_MIN_CONFIDENCE",
     # Observability / runtime

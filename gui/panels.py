@@ -746,14 +746,29 @@ def render_market_data() -> None:
 # ===========================================================================
 
 def render_observability() -> None:
-    """Compact macro/regime/P&L view mirroring observability/dashboard.py."""
-    st.subheader("📊 Observability")
-    st.caption("Summary of the file-backed state. The full standalone dashboard "
-               "is still available via `streamlit run observability/dashboard.py`.")
+    """Compact macro / regime / P&L view — Mission Control for the platform.
+
+    Sections
+    --------
+    1.  System-health bar      — kill switch, macro regime, VIX, HMM risk-on.
+    2.  Macro Regime Gate      — operator toggle (MACRO_REGIME_GATE_ENABLED) with
+                                 live Sahm-Rule and HY-OAS telemetry.  Writes the
+                                 setting to .env via gui.env_io (CONSTRAINT #3).
+    3.  Recession indicators   — Sahm Rule / HY OAS / yield curve with threshold
+                                 colour-coding so the operator can judge whether
+                                 a "Risk Off" trigger is genuine or idiosyncratic.
+    4.  Strategy P&L           — realized P&L by strategy from TransactionsStore.
+    """
+    st.subheader("📊 Observability — Mission Control")
+    st.caption(
+        "Summary of the file-backed state last written by the orchestrator. "
+        "Full standalone dashboard: `streamlit run observability/dashboard.py`"
+    )
 
     snap = load_state_snapshot()
     ks = _kill_switch()
 
+    # ── 1. System-health bar ─────────────────────────────────────────────────
     c_ks, c_reg, c_vix, c_hmm = st.columns(4)
     with c_ks:
         if ks.is_active():
@@ -767,16 +782,186 @@ def render_observability() -> None:
         st.metric("Macro Regime", f"{colour} {regime}")
     with c_vix:
         vix = snap.get("vix")
-        st.metric("VIX", f"{vix:.1f}" if isinstance(vix, (int, float)) else "—")
+        st.metric("VIX", f"{vix:.1f}" if isinstance(vix, (int, float)) else "—",
+                  delta=None, help="Kill-switch threshold: 30")
     with c_hmm:
         hmm_vals = [s.get("hmm_risk_on") for s in snap.get("signals", [])
                     if s.get("hmm_risk_on") is not None]
-        st.metric("HMM Risk-On", f"{hmm_vals[0]:.1%}" if hmm_vals else "—")
+        st.metric("HMM Risk-On", f"{hmm_vals[0]:.1%}" if hmm_vals else "—",
+                  help="Gaussian-HMM second opinion; below 20% → hmm_regime gate fires")
 
     last = snap.get("timestamp", "—")
     st.caption(f"Pipeline last run: **{last}**")
 
-    # Trades from the transactions store.
+    st.divider()
+
+    # ── 2. Macro Regime Gate toggle ──────────────────────────────────────────
+    st.markdown("### 🔒 Macro Regime Gate")
+    st.markdown(
+        "Controls whether **MacroEconomicDTO.killSwitch** vetoes new BUY orders "
+        "during recessionary/credit-stress environments.  "
+        "\n\n"
+        "- **ON (default):** autonomous mode — the engine halts fresh equity "
+        "allocations and overrides technical BUY signals when Sahm Rule ≥ 0.5, "
+        "VIX > 30, or HY OAS > 6 %.  \n"
+        "- **OFF:** hybrid mode — technical signals run freely; the operator "
+        "accepts responsibility for idiosyncratic false-positive suppression.  \n"
+        "\n"
+        "> ⚠️  **Always re-enable before going live.**  "
+        "`scripts/preflight_check.py` will fail if the gate is off and "
+        "`ALPACA_PAPER=false`."
+    )
+
+    # Read the *current* value from .env (not the in-process settings object so
+    # changes made earlier this session are visible without a restart).
+    try:
+        current_raw = env_io.get_value("MACRO_REGIME_GATE_ENABLED")
+        gate_on = current_raw.lower() not in ("false", "0", "no", "off")
+    except Exception:
+        # Key absent from .env — fall back to the settings default (True).
+        gate_on = settings.MACRO_REGIME_GATE_ENABLED
+
+    col_status, col_btn = st.columns([3, 1])
+    with col_status:
+        if gate_on:
+            st.success("🟢 **Gate ON** — macro regime vetoes active")
+        else:
+            st.error("🔴 **Gate OFF** — technical signals run without macro veto")
+
+    with col_btn:
+        if gate_on:
+            if st.button("⏸ Disable gate", key="disable_macro_gate",
+                         help="Switch to hybrid mode (technical signals only)"):
+                try:
+                    env_io.write_setting("MACRO_REGIME_GATE_ENABLED", False)
+                    st.cache_data.clear()
+                    st.toast("Macro gate disabled — takes effect on next orchestrator launch.",
+                             icon="⏸")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to write setting: {exc}")
+        else:
+            if st.button("▶ Enable gate", key="enable_macro_gate",
+                         help="Restore autonomous macro-veto mode"):
+                try:
+                    env_io.write_setting("MACRO_REGIME_GATE_ENABLED", True)
+                    st.cache_data.clear()
+                    st.toast("Macro gate enabled — takes effect on next orchestrator launch.",
+                             icon="✅")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to write setting: {exc}")
+
+    if not gate_on:
+        st.warning(
+            "⚠️ **Macro Regime Gate is OFF.**  BUY orders will NOT be vetoed by "
+            "RECESSION or CREDIT EVENT regime signals.  Re-enable before going live.",
+            icon="⚠️",
+        )
+
+    st.caption(
+        "Writes `MACRO_REGIME_GATE_ENABLED` to `.env` via `gui/env_io.py`.  "
+        "Change takes effect when the orchestrator next starts."
+    )
+
+    st.divider()
+
+    # ── 3. Recession-indicator telemetry ─────────────────────────────────────
+    st.markdown("### 📉 Recession Indicator Telemetry")
+    st.caption(
+        "Values are sourced from the last orchestrator run's state snapshot "
+        "(FRED data).  They reflect conditions at pipeline execution time, "
+        "not real-time — run the orchestrator to refresh."
+    )
+
+    sahm = snap.get("sahm_rule")
+    hy_oas = snap.get("high_yield_oas")
+    yc = snap.get("yield_curve")
+    vix_val = snap.get("vix")
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    # Sahm Rule — threshold 0.5 (kill switch) / 0.3 (hmm-agreement fast-trigger)
+    with c1:
+        if sahm is not None:
+            sahm_delta = None
+            sahm_str = f"{sahm:.3f}"
+            st.metric(
+                "Sahm Rule", sahm_str,
+                delta=None,
+                help="≥ 0.50 → killSwitch fires; ≥ 0.30 + HMM agreement → lowered-threshold fast-trigger",
+            )
+            if sahm >= 0.5:
+                st.error("🔴 ≥ 0.50 — kill-switch threshold breached")
+            elif sahm >= 0.3:
+                st.warning("🟡 ≥ 0.30 — fast-trigger zone (HMM agreement needed)")
+            else:
+                st.success("🟢 < 0.30 — below fast-trigger zone")
+        else:
+            st.metric("Sahm Rule", "—", help="Not available in last snapshot")
+
+    # HY OAS — threshold 6.0 (RECESSION) / 4.5 (NEUTRAL→CREDIT EVENT)
+    with c2:
+        if hy_oas is not None:
+            st.metric(
+                "HY OAS (%)", f"{hy_oas:.2f}",
+                help="High-Yield Option-Adjusted Spread. >6.0% → RECESSION; >4.5% → CREDIT EVENT; >6% + yield inversion → RECESSION",
+            )
+            if hy_oas >= 6.0:
+                st.error("🔴 ≥ 6.0% — RECESSION regime trigger")
+            elif hy_oas >= 4.5:
+                st.warning("🟡 ≥ 4.5% — CREDIT EVENT zone")
+            else:
+                st.success("🟢 < 4.5% — below credit-stress threshold")
+        else:
+            st.metric("HY OAS (%)", "—")
+
+    # Yield curve — inversion below -0.25 is part of RECESSION gate
+    with c3:
+        if yc is not None:
+            st.metric(
+                "10Y-2Y Spread (%)", f"{yc:.3f}",
+                help="Yield curve 10Y-2Y. < -0.25% + HY OAS > 6% → RECESSION",
+            )
+            if yc < -0.25:
+                st.warning("🟡 Inverted (< -0.25%)")
+            else:
+                st.success("🟢 Not inverted")
+        else:
+            st.metric("10Y-2Y Spread (%)", "—")
+
+    # VIX — kill-switch threshold 30
+    with c4:
+        if vix_val is not None:
+            st.metric(
+                "VIX", f"{vix_val:.1f}",
+                help="CBOE Volatility Index. > 30 → killSwitch fires",
+            )
+            if vix_val > 30:
+                st.error("🔴 > 30 — kill-switch VIX threshold breached")
+            elif vix_val > 25:
+                st.warning("🟡 > 25 — lowered-threshold zone (HMM-agreement)")
+            else:
+                st.success("🟢 ≤ 25")
+        else:
+            st.metric("VIX", "—")
+
+    # Composite kill-switch status derived from snapshot
+    gate_from_snap = snap.get("macro_regime_gate_enabled", True)
+    ks_active = snap.get("kill_switch_active", False)
+    if ks_active:
+        st.error("🚨 **MacroEconomicDTO.killSwitch was ACTIVE** at last pipeline run — "
+                 "BUY orders were vetoed.")
+    elif not gate_from_snap:
+        st.info("ℹ️ Macro regime gate was **disabled** at last pipeline run — "
+                "kill-switch veto was bypassed.")
+    else:
+        st.success("✅ Macro regime gate was active and kill switch was inactive at last run.")
+
+    st.divider()
+
+    # ── 4. Strategy P&L ──────────────────────────────────────────────────────
+    st.markdown("### 💹 Strategy P&L")
     try:
         from transactions_store import TransactionsStore
 
@@ -784,9 +969,11 @@ def render_observability() -> None:
         closed = ts.closed_trades_df()
         if not closed.empty and {"realized_pnl", "strategy_id"} <= set(closed.columns):
             pnl = (closed.groupby("strategy_id")["realized_pnl"].sum()
-                   .round(2).reset_index().rename(columns={"realized_pnl": "Realized P&L ($)"}))
-            st.markdown("**P&L by strategy**")
+                   .round(2).reset_index()
+                   .rename(columns={"realized_pnl": "Realized P&L ($)"}))
             st.dataframe(pnl, width="stretch")
+        else:
+            st.caption("No closed trades in transactions store yet.")
     except Exception as exc:
         st.caption(f"(transactions store unavailable: {exc})")
 
