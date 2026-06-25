@@ -4,6 +4,31 @@ Operational reference for the first 5 trading days live and ongoing incident res
 
 ---
 
+## 0. Everyday Startup (macOS double-click)
+
+The fastest way to start the platform is to **double-click `launch.command`** in Finder or the Dock. The script:
+
+1. Verifies `.venv` exists and Python is exactly 3.12.x before starting.
+2. Prints a clear error (and pauses for you to read it) if either check fails.
+3. Runs `python main.py --interval 60` by default — refreshes every 60 s until you close the window.
+4. Pauses with "Press any key to close" after exit so final output is always visible.
+
+**To change the interval**: open `launch.command` in any text editor, set `REFRESH_INTERVAL_SECONDS=N` at the top (0 = single run).
+
+**If `.venv` is missing** (e.g., fresh clone):
+
+```bash
+cd /Users/kevinlee/Desktop/Stockpy
+python3.12 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+```
+
+Then double-click `launch.command` again.
+
+**If the wrong Python version is detected**: the launcher tells you which version was found and how to recreate `.venv` with Python 3.12.
+
+---
+
 ## 1. Switching from Paper to Live
 
 ### Pre-switch (T-1 day)
@@ -40,6 +65,7 @@ Run this EVERY trading morning before 09:00 ET:
 
 | Check | Command / Action |
 |-------|-----------------|
+| **Start pipeline** | Double-click `launch.command` (auto-interval mode, 60 s refresh) |
 | Kill switch inactive | `python -m execution.kill_switch --status` |
 | Heartbeat recent | `ls -la output/heartbeat.txt` (< 2 h old) |
 | Preflight pass | `python scripts/preflight_check.py` (exit 0) |

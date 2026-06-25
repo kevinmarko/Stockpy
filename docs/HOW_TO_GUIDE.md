@@ -158,7 +158,34 @@ If you use `main.py` (the legacy orchestrator), tickers are read from column A o
 
 ## 5. Running the Pipeline
 
-### The primary command (use this)
+### The easiest way — double-click on macOS
+
+`launch.command` at the project root is a macOS launcher you can double-click from **Finder** or the **Dock**. It:
+
+1. Navigates to the project root automatically.
+2. Verifies `.venv` exists — if not, prints exact instructions for creating it.
+3. Confirms the `.venv` Python is exactly **3.12.x** — if it's 3.14 or anything else, shows a clear error and exits rather than running with the wrong interpreter.
+4. Warns if `.env` is missing (non-fatal — the pipeline degrades gracefully).
+5. Runs `python main.py --interval 60` (keeps refreshing every 60 seconds) **or** `python main.py` (single run), depending on the `REFRESH_INTERVAL_SECONDS` variable at the top of the file.
+6. Pauses with **"Press any key to close"** on exit so you can always read the output.
+
+**One-time setup** (already done — listed here for reference if you ever recreate the file):
+
+```bash
+chmod +x launch.command
+```
+
+**To add to the Dock**: drag `launch.command` to your Dock → right-click → Options → Keep in Dock.
+
+**To switch between interval and single-run mode**: open `launch.command` in any text editor and change line:
+
+```bash
+REFRESH_INTERVAL_SECONDS=60   # change to 0 for a single run
+```
+
+---
+
+### From Terminal — primary async orchestrator
 
 ```bash
 python3 main_orchestrator.py
