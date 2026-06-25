@@ -100,6 +100,13 @@ COLUMN_SCHEMA = [
     {"header": "Kelly Size", "key": "Kelly Target", "format": "percent"},
     {"header": "Option Strategy", "key": "Option Strategy", "format": "string"},
     {"header": "Buy Range", "key": "buyRange", "format": "string"},
+    # Dedicated sell-side range produced by strategy_engine.apply_sell_side_range.
+    # Always populated (every Action Signal yields a sellRange string) so the
+    # dashboard / Google Sheets sink can render a resting take-profit + trailing-stop
+    # plan alongside the buy corridor. See strategy_engine.apply_sell_side_range
+    # for level construction (1.5σ / 3σ ATR envelope, forecast-aware upper bound,
+    # Chandelier-anchored trailing stop).
+    {"header": "Sell Range", "key": "sellRange", "format": "string"},
     {"header": "Strategy Notes", "key": "Strategy Explainer Notes", "format": "string"},
 
     # ==========================================================

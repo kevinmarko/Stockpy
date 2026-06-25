@@ -57,6 +57,77 @@ class Settings(BaseSettings):
     ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
     ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
     ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
+    # --- Order management (execution/order_manager.py) ---
+    # When True the orchestrator logs intended orders but never submits them.
+    # Override via CLI --dry-run flag or DRY_RUN=true in .env.
+    DRY_RUN: bool = Field(default=False, description="Log orders but do not submit to broker.")
+    # Slack / Discord incoming-webhook URL for reconciliation drift alerts.
+    ALERT_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Webhook URL for CRITICAL drift alerts (Slack/Discord incoming webhook).",
+    )
+
+    # --- Pre-trade risk gate (execution/risk_gate.py) ---
+    MAX_CORRELATION: float = Field(
+        default=0.85,
+        description="Max absolute pairwise return correlation before a new position is blocked.",
+    )
+    DAILY_LOSS_LIMIT_PCT: float = Field(
+        default=0.02,
+        description="Halt new BUY orders when intraday P&L drops below this fraction of start-of-day equity.",
+    )
+    MAX_ORDER_RATE_PER_MIN: int = Field(
+        default=10,
+        description="Maximum order submissions in any 60-second rolling window.",
+    )
+    HMM_RISK_OFF_BLOCK_THRESHOLD: float = Field(
+        default=0.80,
+        description="Block new long orders when HMM risk-off probability exceeds this.",
+    )
+    RISK_GATE_ENFORCE_MARKET_HOURS: bool = Field(
+        default=True,
+        description="Block orders outside NYSE RTH (09:30–16:00 ET).",
+    )
+
+    # --- Kill switch (execution/kill_switch.py) ---
+    # When True and the kill switch fires, a CRITICAL reminder is logged to flatten
+    # open positions manually. Automatic flattening is a future extension.
+    FLATTEN_ON_KILL: bool = Field(
+        default=False,
+        description="Log CRITICAL position-flatten reminder when kill switch activates.",
+    )
+
+    # --- Observability / alerts (observability/alerts.py, observability/dashboard.py) ---
+    DISCORD_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Discord incoming-webhook URL for alert dispatch.",
+    )
+    SLACK_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Slack incoming-webhook URL for alert dispatch.",
+    )
+    ALERT_FILE_PATH: Optional[str] = Field(
+        default=None,
+        description="Absolute path for JSON-lines alert log file. None = disabled.",
+    )
+    ALERT_EMAIL_FROM: Optional[str] = Field(default=None, description="SMTP sender address.")
+    ALERT_EMAIL_TO: Optional[str] = Field(
+        default=None,
+        description="Comma-separated recipient addresses for email alerts.",
+    )
+    ALERT_SMTP_HOST: Optional[str] = Field(default=None, description="SMTP server hostname.")
+    ALERT_SMTP_PORT: int = Field(default=587, description="SMTP server port (587=STARTTLS).")
+    ALERT_SMTP_USER: Optional[str] = Field(default=None, description="SMTP authentication username.")
+    ALERT_SMTP_PASSWORD: Optional[str] = Field(default=None, description="SMTP authentication password.")
+    DASHBOARD_REFRESH_SECONDS: int = Field(
+        default=30, description="Auto-refresh interval for the Streamlit observability dashboard."
+    )
+    # ISO date string (YYYY-MM-DD) recording when paper trading began.
+    # Used by scripts/preflight_check.py to verify >= 90 days of paper history.
+    PAPER_TRADING_START_DATE: Optional[str] = Field(
+        default=None,
+        description="ISO date (YYYY-MM-DD) when paper trading began. Required by preflight check.",
+    )
 
     # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py) ---
     # These three variables feed the TOTP-based read-only portfolio fetch.

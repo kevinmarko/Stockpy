@@ -49,9 +49,20 @@ class CombinatorialPurgedCV:
 
         # Define default t1 if not provided
         if t1 is None:
-            # Each event ends at the next index/timestamp
+            # Each event ends at the next index/timestamp.
+            # The last element can't be shifted forward; we set it to one step
+            # beyond the final index value.  For string/label indices (e.g. ticker
+            # symbols) string + int would raise TypeError, so fall back to re-using
+            # the final label itself — a zero-duration sentinel that is still the
+            # correct type for the downstream string comparisons in the purge loop.
             t1_times = pd.Series(X.index).shift(-1)
-            t1_times.iloc[-1] = X.index[-1] + pd.Timedelta(days=1) if isinstance(X.index, pd.DatetimeIndex) else X.index[-1] + 1
+            if isinstance(X.index, pd.DatetimeIndex):
+                t1_times.iloc[-1] = X.index[-1] + pd.Timedelta(days=1)
+            elif pd.api.types.is_integer_dtype(X.index.dtype):
+                t1_times.iloc[-1] = X.index[-1] + 1
+            else:
+                # String or other label index: sentinel = the label itself
+                t1_times.iloc[-1] = X.index[-1]
             t1 = pd.Series(t1_times.values, index=X.index)
 
         # 1. Partition observations into contiguous blocks
