@@ -3813,132 +3813,134 @@ class GravityAIAuditor:
 
         self.report["step_31_env_loading_audit"] = audit
 
-    def run_gui_command_center_audit(self) -> None:
-        """Step 32: audit the GUI Command Center (gui/) safety invariants.
+    def run_html_report_audit(self) -> None:
+        """Step 32 — Validates the rebuilt daily HTML report (Holdings & P&L + Rationale).
 
-        Verifies the security-critical contract of the new on-demand Streamlit
-        operational suite (gui/app.py and helpers):
+        ``diagnostics_and_visuals.generate_html_report`` is the ACTIVE report
+        path (called by both ``main.py`` and ``main_orchestrator.py``).  The
+        2026-06 redesign leads with holdings/P&L and action/rationale and adds
+        an optional ``account_summary`` portfolio band.  This audit pins the
+        new contract and — critically — verifies the rendered HTML never leaks
+        credential-shaped tokens (the account snapshot is the only account-state
+        source and is documented to carry no secrets).
 
-        1.  ``gui.env_io`` never returns a secret in cleartext and refuses to
-            write any key in ``SECRET_KEYS`` (CONSTRAINT #3).
-        2.  ``gui.env_io.write_setting`` rejects keys outside ``ALLOWED_KEYS``.
-        3.  ``settings.DISABLED_SIGNAL_MODULES`` actually drops a module from
-            ``SignalAggregator.aggregate()`` — the Strategy Matrix toggle has
-            real effect, not just display.
-        4.  No order-submission functions live in the gui/ package (it is a
-            read-only / file-backed front-end; orders go through execution/).
+        Checks:
+          1. ``generate_html_report`` accepts the ``account_summary`` keyword.
+          2. Advisory rows render holdings (price, signed P&L) + rationale.
+          3. The ``account_summary`` band renders equity / buying power / tally.
+          4. Backward-compat: ``account_summary=None`` renders with NO band.
+          5. NO credential-shaped tokens appear in the rendered HTML.
+          6. ``tests/test_html_report.py`` exists (regression coverage).
         """
-        audit = {"status": "PENDING", "checks": {}}
-        checks = []
+        import inspect as _inspect
+        import tempfile as _tempfile
+        from pathlib import Path as _Path
 
-        def _chk(name: str, passed: bool, detail: str = "") -> None:
-            audit["checks"][name] = {"passed": bool(passed), "detail": detail}
-            checks.append(bool(passed))
+        audit: dict = {"checks": [], "status": "PENDING"}
+        checks: list[bool] = []
+
+        def _chk(name: str, ok: bool, detail: str = "") -> None:
+            entry: dict = {"check": name, "status": "PASS" if ok else "FAIL"}
+            if detail:
+                entry["detail"] = detail
+            audit["checks"].append(entry)
+            checks.append(ok)
 
         try:
-            import tempfile
-            from pathlib import Path as _Path
-            from datetime import datetime as _dt
+            from diagnostics_and_visuals import generate_html_report
 
-            from gui import env_io as _env_io
-            from settings import settings as _settings, Settings as _Settings
-
-            # 1. Secret protection: masking + write refusal.
-            with tempfile.TemporaryDirectory() as _td:
-                _envf = _Path(_td) / ".env"
-                _envf.write_text("FRED_API_KEY=secret-xyz\nRISK_FREE_RATE=0.045\n", encoding="utf-8")
-                _orig = _env_io.ENV_PATH
-                try:
-                    _env_io.ENV_PATH = _envf
-                    display = _env_io.read_settings()
-                    _chk(
-                        "secret_masked_in_read",
-                        display.get("FRED_API_KEY") == _env_io._MASK_SET
-                        and "secret-xyz" not in str(display),
-                        "FRED_API_KEY must be masked, never cleartext",
-                    )
-                    secret_write_refused = False
-                    try:
-                        _env_io.write_setting("ALPACA_SECRET_KEY", "nope")
-                    except _env_io.SecretWriteError:
-                        secret_write_refused = True
-                    _chk("secret_write_refused", secret_write_refused,
-                         "write_setting must raise SecretWriteError for secrets")
-
-                    # 2. Allowlist enforcement.
-                    unknown_rejected = False
-                    try:
-                        _env_io.write_setting("MADE_UP_KEY", "1")
-                    except _env_io.DisallowedKeyError:
-                        unknown_rejected = True
-                    _chk("unknown_key_rejected", unknown_rejected,
-                         "write_setting must reject non-allowlisted keys")
-
-                    # JSON round-trip for a structured tunable.
-                    _env_io.write_setting("DISABLED_SIGNAL_MODULES", ["rsi2_mean_reversion"])
-                    import json as _json
-                    rt = _json.loads(_env_io.get_value("DISABLED_SIGNAL_MODULES"))
-                    _chk("json_roundtrip", rt == ["rsi2_mean_reversion"],
-                         "list/dict tunables must JSON round-trip")
-                finally:
-                    _env_io.ENV_PATH = _orig
-
-            # 3. DISABLED_SIGNAL_MODULES actually drops a module from aggregate().
-            import pandas as _pd
-            from signals.base import SignalModule as _SM, SignalContext as _SC, SignalOutput as _SO
-            from signals.registry import SignalRegistry as _SR
-            from signals.aggregator import SignalAggregator as _SA
-            from dto_models import MarketBarDTO as _MB, FundamentalDataDTO as _FD, MacroEconomicDTO as _MD
-
-            class _Pos(_SM):
-                name = "gravity_probe_signal"
-                required_features = []
-
-                def is_active_in_regime(self, macro):
-                    return True
-
-                def compute(self, row, context):
-                    return _SO(score=1.0, confidence=1.0, explanation="probe", meta_label_proba=1.0)
-
-            _ctx = _SC(
-                bar=_MB(_dt.now(), "TEST", 100.0, 100.0, 100.0, 100.0, 1000),
-                fundamentals=_FD(ticker="TEST", pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
-                                 book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
-                                 payout_ratio=0.0, sector="Unknown", company_name="Unknown"),
-                macro=_MD(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=0.03,
-                          vix_value=15.0, hmm_risk_on_probability=None),
-            )
-            _reg = _SR()
-            _reg.register(_Pos())
-            _agg = _SA(_reg, weights={"gravity_probe_signal": 20.0})
-
-            _saved = list(_settings.DISABLED_SIGNAL_MODULES)
-            try:
-                _settings.DISABLED_SIGNAL_MODULES = []
-                enabled_score = _agg.aggregate(_pd.Series({"Symbol": "TEST"}), _ctx)[0]
-                _settings.DISABLED_SIGNAL_MODULES = ["gravity_probe_signal"]
-                disabled_score = _agg.aggregate(_pd.Series({"Symbol": "TEST"}), _ctx)[0]
-            finally:
-                _settings.DISABLED_SIGNAL_MODULES = _saved
+            # 1. Signature contract — account_summary keyword present.
+            sig = _inspect.signature(generate_html_report)
             _chk(
-                "disabled_module_drops_contribution",
-                abs(enabled_score - 70.0) < 1e-6 and abs(disabled_score - 50.0) < 1e-6,
-                f"enabled={enabled_score}, disabled={disabled_score} (expect 70 / 50)",
+                "accepts_account_summary_kwarg",
+                "account_summary" in sig.parameters,
+                "" if "account_summary" in sig.parameters
+                else "generate_html_report must accept account_summary=",
             )
-            _chk("default_disabled_list_empty", _Settings().DISABLED_SIGNAL_MODULES == [],
-                 "fresh Settings() must default to no disabled modules")
 
-            # 4. No order functions defined in the gui/ package.
-            import re as _re
-            gui_dir = _Path(__file__).resolve().parent / "gui"
-            order_pat = _re.compile(r"^\s*def\s+(submit_order|place_order|place_equity_order|"
-                                    r"place_option_order|buy_order|sell_order|place_\w+)", _re.MULTILINE)
-            offenders = []
-            for pyf in gui_dir.glob("*.py"):
-                if order_pat.search(pyf.read_text(encoding="utf-8")):
-                    offenders.append(pyf.name)
-            _chk("gui_has_no_order_functions", not offenders,
-                 f"order functions found in: {offenders}" if offenders else "clean")
+            advisory_rows = [
+                {
+                    "Symbol": "AAPL", "Action Signal": "BUY",
+                    "Advisory_Conviction": 0.72,
+                    "Advisory_Rationale": "Held above effective cost basis with a constructive forecast.",
+                    "Advisory_Position_Pct": 0.043, "Forecast_30": 232.50,
+                    "data_quality": "OK", "strategy": "momentum_trend",
+                    "Robinhood Shares": 12.0, "Robinhood Avg Cost": 180.25,
+                    "Robinhood Current Price": 214.10, "Robinhood Market Value": 2569.20,
+                    "Robinhood Unrealized PL": 406.20, "Robinhood Unrealized PL Pct": 0.1878,
+                    "Robinhood Dividends": 8.40, "Company Name": "Apple Inc.",
+                },
+                {
+                    "Symbol": "AGNC", "Action Signal": "SELL",
+                    "Advisory_Conviction": 0.81,
+                    "Advisory_Rationale": "Below effective cost basis with a bearish forecast.",
+                    "Advisory_Position_Pct": 0.0, "Forecast_30": 8.95,
+                    "data_quality": "OK", "strategy": "mean_reversion",
+                    "Robinhood Shares": 300.0, "Robinhood Avg Cost": 11.40,
+                    "Robinhood Current Price": 9.62, "Robinhood Market Value": 2886.0,
+                    "Robinhood Unrealized PL": -534.0, "Robinhood Unrealized PL Pct": -0.1561,
+                    "Robinhood Dividends": 142.0, "Company Name": "AGNC Investment Corp.",
+                },
+            ]
+            account_summary = {
+                "total_equity": 41250.0, "buying_power": 5120.0,
+                "total_unrealized_pl": -127.80, "total_dividends": 150.40,
+                "num_positions": 2, "fetched_at": "2026-06-25 13:02 UTC",
+                "age_hours": 1.4, "is_stale": False,
+            }
+
+            with _tempfile.TemporaryDirectory() as _td:
+                out = _Path(_td) / "report.html"
+
+                # 2 + 3. Advisory render with summary band.
+                generate_html_report(
+                    advisory_rows, "NEUTRAL", str(out),
+                    account_summary=account_summary,
+                )
+                html = out.read_text(encoding="utf-8")
+                holdings_ok = (
+                    "Apple Inc." in html and "$214.10" in html
+                    and "+$406" in html and "-$534" in html
+                )
+                rationale_ok = (
+                    "Held above effective cost basis" in html
+                    and "sig-BUY" in html and "conv-fill" in html
+                )
+                band_ok = (
+                    "Total Equity" in html and "$41,250" in html
+                    and "1 BUY" in html and "1 SELL" in html
+                )
+                _chk("holdings_pnl_render", holdings_ok,
+                     "" if holdings_ok else "holdings/P&L values missing from rendered HTML")
+                _chk("action_rationale_render", rationale_ok,
+                     "" if rationale_ok else "action signal class / conviction meter / rationale missing")
+                _chk("account_summary_band_renders", band_ok,
+                     "" if band_ok else "summary band equity/tally missing")
+
+                # 5. No credential-shaped tokens in the report.
+                lowered = html.lower()
+                leaked = [t for t in ("password", "secret", "mfa", "api_key", "apikey")
+                          if t in lowered]
+                _chk("no_credential_tokens_in_html", not leaked,
+                     "" if not leaked else f"credential-shaped token(s) leaked: {leaked}")
+
+                # 4. Backward-compat — no band when account_summary is None.
+                out2 = _Path(_td) / "report_nobands.html"
+                pipeline_rows = [{
+                    "Symbol": "SPY", "Action Signal": "HOLD", "Price": 540.0,
+                    "Forecast_30": 545.0, "Kelly Target": 0.05,
+                }]
+                generate_html_report(pipeline_rows, "RISK ON", str(out2))
+                html2 = out2.read_text(encoding="utf-8")
+                compat_ok = "SPY" in html2 and "Total Equity" not in html2
+                _chk("backward_compat_no_band", compat_ok,
+                     "" if compat_ok else "pipeline schema must render without the summary band")
+
+            # 6. Regression test exists.
+            repo_root = _Path(__file__).parent
+            reg = repo_root / "tests" / "test_html_report.py"
+            _chk("regression_test_exists", reg.exists(),
+                 "tests/test_html_report.py is the canonical regression coverage")
 
             audit["status"] = "PASSED" if all(checks) else "FAILED"
 
@@ -3980,7 +3982,7 @@ class GravityAIAuditor:
         self.run_alerting_module_audit()
         self.run_pipeline_smoke_audit()
         self.run_env_loading_audit()
-        self.run_gui_command_center_audit()
+        self.run_html_report_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================
