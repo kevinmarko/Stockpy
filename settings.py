@@ -154,7 +154,7 @@ class Settings(BaseSettings):
     ALERT_SMTP_USER: Optional[str] = Field(default=None, description="SMTP authentication username.")
     ALERT_SMTP_PASSWORD: Optional[str] = Field(default=None, description="SMTP authentication password.")
     DASHBOARD_REFRESH_SECONDS: int = Field(
-        default=30, description="Auto-refresh interval for the Streamlit observability dashboard."
+        default=1800, description="Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min."
     )
     # ISO date string (YYYY-MM-DD) recording when paper trading began.
     # Used by scripts/preflight_check.py to verify >= 90 days of paper history.
