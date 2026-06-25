@@ -282,11 +282,32 @@ The pipeline prints a JSON payload at the end:
 
 ### HTML report
 
-`output/daily_report_dashboard.html` — open in any browser. Contains:
-- Macro regime status and key indicators
-- Per-ticker signal table with scores, forecasts, fundamentals
-- Buy/hold/trim price ranges
-- Options overlay recommendations
+Two entry points write a daily report via the same renderer
+(`diagnostics_and_visuals.generate_html_report`):
+
+- `python3 main.py` → `output/daily_report.html` (advisory path — the holdings-aware report below)
+- `python3 main_orchestrator.py` → `output/daily_report_dashboard.html` (wide pipeline schema)
+
+Open either in any browser. The advisory report (`daily_report.html`)
+**leads with Holdings & P&L and Action & Rationale**:
+
+- **Portfolio summary band** (top): total equity, buying power, aggregate
+  unrealized P&L (green/red), dividends received, position count, and a
+  BUY/HOLD/SELL tally. Sourced from your Robinhood account snapshot
+  (`cache/account_snapshot.json`); shows an "ACCOUNT DATA STALE" pill when the
+  snapshot is older than 24 h. Hidden when no account data is available.
+- **Macro regime + portfolio-heat cards** and a BUY/HOLD/SELL doughnut.
+- **Holdings, Action Signals & Rationale table**: per symbol — shares, average
+  cost, current price, market value, signed unrealized P&L ($ and %), suggested
+  position size, and the 30-day forecast. The action signal is colour-coded
+  with a conviction meter. **Click any row** to expand the plain-English
+  rationale plus strategy, RSI, GARCH vol, drawdown and data-quality detail.
+- **Search box + sortable columns**: type to filter by symbol/action/rationale;
+  click a column header to sort. (No page reload, no external JS libraries.)
+- **Gravity AI Audit Log tab**: raw JSON findings from the verification suite.
+
+Non-held watchlist symbols render "—" in the holdings columns (positions are
+never fabricated). The report contains no credentials.
 
 ### Interactive volatility chart
 
@@ -514,6 +535,8 @@ streamlit run observability/dashboard.py
 ```
 
 Auto-refreshes every 30 seconds (configurable via `DASHBOARD_REFRESH_SECONDS`).
+Use the **🔄 Refresh now** button in the sidebar to force an immediate refresh
+(clears all cached reads) without waiting for the auto-refresh interval.
 
 ### What you'll see
 
@@ -521,12 +544,17 @@ Auto-refreshes every 30 seconds (configurable via `DASHBOARD_REFRESH_SECONDS`).
 |-------|-------------|--------------|
 | Kill switch banner | `output/KILL_SWITCH` file | Red = active (all orders blocked), Green = inactive |
 | Macro regime | `output/state_snapshot.json` | Current regime, VIX, HMM risk-on probability |
+| **Account Holdings & P&L** | **`cache/account_snapshot.json`** | **Total equity, buying power, unrealized P&L, dividends, and a per-position table with green/red-coloured unrealized P&L. Falls back to a "run `main.py --refresh-account`" note when no snapshot exists.** |
 | Strategy P&L | `quant_platform.db` | Realized P&L by strategy |
 | Open positions | `quant_platform.db` vs signals | Internal book vs pipeline recommendations |
 | Portfolio heat | State snapshot | Adverse unrealized P&L as % of equity |
 | Validation status | `reports/*_validation_summary.json` | Deployable / not deployable per strategy |
 | Recent closed trades | `quant_platform.db` | Last 20 fills |
 | Risk gate block log | `output/risk_gate_blocks.jsonl` | Last 100 blocked orders and which check blocked them |
+
+The Account Holdings panel reads the same Robinhood snapshot the advisory
+report uses — it is the source of truth for account state (holdings, cost
+basis, dividends, equity) and never contains credentials.
 
 ### Staleness warning
 
