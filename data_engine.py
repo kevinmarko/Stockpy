@@ -38,6 +38,14 @@ class IDataProvider(ABC):
         pass
 
     @abstractmethod
+    def fetch_macro_history(self) -> pd.DataFrame:
+        """Fetches historical daily macro series (VIXCLS, T10Y2Y) for regime models
+        (e.g. regime/hmm_regime.py) that need an expanding-window time series rather
+        than a single current snapshot. Returns an empty DataFrame (never fabricated
+        defaults) when the underlying source is unavailable."""
+        pass
+
+    @abstractmethod
     def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
         """Fetches historical price series (OHLCV) for a group of assets."""
         pass
@@ -45,6 +53,14 @@ class IDataProvider(ABC):
     @abstractmethod
     def fetch_fundamentals_raw(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         """Fetches fundamental data, income statements, and balance sheets."""
+        pass
+
+    @abstractmethod
+    def fetch_options_chain(self, ticker: str, expiration: Optional[str] = None) -> Any:
+        """Fetches option chain or options metadata for a ticker.
+        If expiration is specified, returns an OptionChain-like object with .calls and .puts.
+        If expiration is None, returns a list of expiration date strings.
+        """
         pass
 
 
@@ -96,6 +112,28 @@ class DataEngine(IDataProvider):
             logger.error(f"Error fetching economic data from FRED: {e}")
             return {'T10Y2Y': 0.5, 'BAMLH0A0HYM2': 3.5, 'UNRATE': 3.8, 'VIXCLS': 15.0}
 
+    def fetch_macro_history(self) -> pd.DataFrame:
+        """
+        Fetches full historical daily series for VIXCLS and T10Y2Y from FRED.
+        Used by regime/hmm_regime.py to fit/refit on an expanding window -- a
+        single current-snapshot value (fetch_macro_raw) cannot train a time-series
+        model. Returns an empty DataFrame (never fabricated placeholder rows) if
+        FRED is unavailable or the fetch fails.
+        """
+        if not self.fred:
+            logger.warning("FRED API not initialized. Cannot fetch macro history.")
+            return pd.DataFrame(columns=['VIXCLS', 'T10Y2Y'])
+
+        try:
+            vix_series = self.fred.get_series('VIXCLS').rename('VIXCLS')
+            yield_curve_series = self.fred.get_series('T10Y2Y').rename('T10Y2Y')
+            history_df = pd.concat([vix_series, yield_curve_series], axis=1)
+            history_df.index = pd.to_datetime(history_df.index)
+            return history_df.sort_index()
+        except Exception as e:
+            logger.error(f"Error fetching macro history from FRED: {e}")
+            return pd.DataFrame(columns=['VIXCLS', 'T10Y2Y'])
+
     def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
         """
         Fetches daily historical pricing (OHLCV) spanning the last 250 trading days.
@@ -139,6 +177,22 @@ class DataEngine(IDataProvider):
                 logger.warning(f"Failed fundamental parsing for {symbol}: {e}")
         return raw_fundamentals
 
+    def fetch_options_chain(self, ticker: str, expiration: Optional[str] = None) -> Any:
+        """
+        Fetches yfinance option chain or expirations list.
+        """
+        try:
+            t = yf.Ticker(ticker)
+            if expiration is None:
+                return list(t.options)
+            else:
+                return t.option_chain(expiration)
+        except Exception as e:
+            logger.error(f"Failed to fetch options chain for {ticker} (exp={expiration}): {e}")
+            if expiration is None:
+                return []
+            return None
+
 
 # =============================================================================
 # 3. HIGH-FIDELITY MOCK DATA ENGINE (DETERMINISTIC UNIT TESTING)
@@ -174,6 +228,16 @@ class MockDataEngine(IDataProvider):
     def fetch_macro_raw(self) -> Dict[str, Any]:
         return self.preset_macro
 
+    def fetch_macro_history(self) -> pd.DataFrame:
+        """Deterministic synthetic VIXCLS/T10Y2Y history for tests -- long enough
+        (500 trading days) for HMM fitting without requiring network access."""
+        rng = np.random.RandomState(42)
+        n = 500
+        dates = pd.date_range(end=datetime.now(), periods=n, freq='B')
+        vix = pd.Series(15.0 + rng.normal(0, 3.0, n).cumsum() * 0.05, index=dates).clip(lower=9.0)
+        yield_curve = pd.Series(0.5 + rng.normal(0, 0.05, n).cumsum() * 0.02, index=dates)
+        return pd.DataFrame({'VIXCLS': vix, 'T10Y2Y': yield_curve})
+
     def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
         # Synthesize a highly standardized Pandas DataFrame tracking pricing days
         results = {}
@@ -205,3 +269,61 @@ class MockDataEngine(IDataProvider):
                 }
             })
         return results
+
+    def fetch_options_chain(self, ticker: str, expiration: Optional[str] = None) -> Any:
+        """
+        Deterministic mock options chain generator.
+        """
+        today = datetime.now()
+        # Front month (15 days out) and second month (45 days out)
+        exp1 = (today + timedelta(days=15)).strftime("%Y-%m-%d")
+        exp2 = (today + timedelta(days=45)).strftime("%Y-%m-%d")
+        
+        if expiration is None:
+            return [exp1, exp2]
+        
+        # Get spot price
+        spot = 100.0
+        try:
+            tech = self.fetch_technical_raw([ticker])
+            if ticker in tech and not tech[ticker].empty:
+                spot = float(tech[ticker]['Close'].iloc[-1])
+        except Exception:
+            pass
+
+        # Generate strikes around spot
+        strikes = [round(spot * factor * 2) / 2 for factor in [0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2]]
+        
+        calls_data = []
+        puts_data = []
+        
+        for k in strikes:
+            # Deterministic IV smile
+            iv = 0.25 + 0.15 * ((k - spot) / spot) ** 2
+            # Add small difference for front vs second month to test interpolation
+            if expiration == exp2:
+                iv += 0.05
+            
+            # Simple call/put pricing
+            calls_data.append({
+                'strike': float(k),
+                'impliedVolatility': float(iv),
+                'lastPrice': max(0.1, spot - k),
+                'bid': max(0.05, spot - k - 0.05),
+                'ask': max(0.15, spot - k + 0.05)
+            })
+            puts_data.append({
+                'strike': float(k),
+                'impliedVolatility': float(iv),
+                'lastPrice': max(0.1, k - spot),
+                'bid': max(0.05, k - spot - 0.05),
+                'ask': max(0.15, k - spot + 0.05)
+            })
+            
+        class MockOptionChain:
+            def __init__(self, c, p):
+                self.calls = pd.DataFrame(c)
+                self.puts = pd.DataFrame(p)
+                
+        return MockOptionChain(calls_data, puts_data)
+

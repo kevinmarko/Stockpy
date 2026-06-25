@@ -1,0 +1,35 @@
+# Credentials
+credentials.json
+secrets.py
+.env
+
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
+.venv/
+env/
+venv/
+
+# IDE and OS
+.DS_Store
+.vscode/
+*.code-workspace
+
+# Debug output files / DB
+*.csv
+*.db
+*.html
+*.json
+!Gravity_Verification_Report.json
+
+# Scratch files
+scratch_*.py
+combined_code.*
+pip install*.md
+
+# Generated report output
+/output/

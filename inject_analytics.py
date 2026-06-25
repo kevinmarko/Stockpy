@@ -53,8 +53,8 @@ analytics_table_html = """
                         <td><strong>{{ row.Symbol }}</strong></td>
                         <td>${{ "%.2f"|format(row.Price) }}</td>
                         <td>${{ "{:,.2f}".format(row.position_size) if row.position_size is not none else "0.00" }}</td>
-                        <td style="color: var(--success-color);">{{ "%.2f"|format(row.MFE * 100) if row.MFE is not none else "0.00" }}%</td>
-                        <td style="color: var(--danger-color);">{{ "%.2f"|format(row.MAE * 100) if row.MAE is not none else "0.00" }}%</td>
+                        <td style="color: var(--success-color);">{{ "%.2f"|format(row.MFE * 100) if (row.MFE is not none and row.MFE == row.MFE) else "N/A — no trade history" }}{% if row.MFE is not none and row.MFE == row.MFE %}%{% endif %}</td>
+                        <td style="color: var(--danger-color);">{{ "%.2f"|format(row.MAE * 100) if (row.MAE is not none and row.MAE == row.MAE) else "N/A — no trade history" }}{% if row.MAE is not none and row.MAE == row.MAE %}%{% endif %}</td>
                         <td>{{ "%.4f"|format(row.BF_Allocation) if row.BF_Allocation is not none else "0.0000" }}</td>
                         <td>{{ "%.4f"|format(row.BF_Selection) if row.BF_Selection is not none else "0.0000" }}</td>
                         <td>{{ "%.4f"|format(row.Portfolio_Heat) if row.Portfolio_Heat is not none else "0.0000" }}</td>

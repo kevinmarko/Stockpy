@@ -1,0 +1,58 @@
+# InvestYo ML Model Registry
+# ===========================
+# Lists production models with their paths, training metadata, and CPCV validation metrics.
+# Updated automatically by the monthly retraining job in main_orchestrator.py.
+#
+# Fields
+# ------
+# role:          what the model does in the pipeline
+# path:          path relative to repo root (or absolute)
+# trained_date:  ISO date of most recent training run
+# cpcv_dsr:      Deflated Sharpe Ratio from CPCV path evaluation (target > 0.95)
+# pbo:           Probability of Backtest Overfitting from CPCV (target < 0.50)
+# n_train:       number of training samples in the most recent run
+# notes:         any caveats, data limitations, or scope restrictions
+# deployable:    true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
+
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: null
+    cpcv_dsr: null
+    pbo: null
+    n_train: null
+    deployable: false
+    notes: >
+      LightGBM LambdaRank model for cross-sectional return rank prediction.
+      Trained monthly on an expanding window of dashboard_df snapshots via
+      PITFeatureStore. NDCG@1 monitored in CV logs. Weight in
+      settings.SIGNAL_WEIGHTS["lgbm_ranker"] = 0.10 (modest until validated
+      at > 200 out-of-sample dates).
+
+  meta_labeler_timeseries_momentum:
+    role: meta_labeler
+    path: ml/models/meta_timeseries_momentum_latest.pkl
+    trained_date: null
+    cpcv_dsr: null
+    pbo: null
+    n_train: null
+    deployable: false
+    notes: >
+      Binary LightGBM classifier predicting P(timeseries_momentum signal correct).
+      Trained on triple-barrier labels from ml/triple_barrier.py.
+      If predict_proba < settings.META_LABEL_MIN_CONFIDENCE (0.4), the
+      position size for that cycle is zeroed by SignalAggregator.
+
+  meta_labeler_cross_sectional_momentum:
+    role: meta_labeler
+    path: ml/models/meta_cross_sectional_momentum_latest.pkl
+    trained_date: null
+    cpcv_dsr: null
+    pbo: null
+    n_train: null
+    deployable: false
+    notes: >
+      Binary LightGBM classifier predicting P(cross_sectional_momentum signal correct).
+      Shares the same triple-barrier label construction and feature set as the
+      timeseries momentum meta-labeler; trained and persisted independently.

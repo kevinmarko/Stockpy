@@ -11,6 +11,7 @@ UPDATES IN THIS VERSION:
    levels across all risk regimes using ATR-based standard deviations.
 """
 
+import logging
 import math
 import numpy as np
 import pandas as pd
@@ -19,6 +20,16 @@ from datetime import datetime
 
 # Import type-safe data transfer containers
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+from settings import settings
+from sizing.kelly import (
+    estimate_win_rate_and_payoff,
+    fractional_kelly,
+    kelly_sizing_for_strategy,
+    MIN_TRADES_REQUIRED,
+)
+from sizing.vol_target import volatility_target_weight
+
+logger = logging.getLogger(__name__)
 
 
 def apply_tactical_ranges(signal: str, current_price: float, safe_atr: float, chandelier_long: float, chandelier_short: float, graham_val: float = 0.0) -> str:
@@ -61,8 +72,16 @@ class StrategyEngine:
     and macroeconomic parameters into high-conviction allocation instructions.
     """
     
-    def __init__(self, risk_free_rate: float = 0.0425):
+    def __init__(self, risk_free_rate: float = 0.0425, transactions_store: Optional[Any] = None):
+        """
+        Args:
+            risk_free_rate: Annualized risk-free rate used elsewhere in the engine.
+            transactions_store: Optional injected TransactionsStore (for testing
+                with an in-memory DB). Defaults to a real TransactionsStore()
+                instance lazily constructed on first use.
+        """
         self.risk_free_rate = risk_free_rate
+        self._transactions_store = transactions_store
 
     # =============================================================================
     # 1. CORE STRATEGY KERNEL
@@ -84,181 +103,93 @@ class StrategyEngine:
                           garch_vol: Optional[float] = None,
                           edge_ratio: Optional[float] = None,
                           chandelier_long: float = 0.0,
-                          chandelier_short: float = 0.0) -> Dict[str, Any]:
+                          chandelier_short: float = 0.0,
+                          roc_12m: float = 0.0,
+                          sma_200: float = 0.0,
+                          rsi_2: float = 50.0,
+                          sma_5: Optional[float] = None,
+                          strategy_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Executes multi-phase quantitative scoring across the security.
         Synthesizes technical, fundamental, macro, and volatility factors to produce
         high-precision signals, custom action ranges, options hedging, and explainability notes.
-        """
-        score = 50  # Baseline neutral score
-        score_log: List[str] = []
-        warnings: List[str] = []
-        details: List[str] = []
 
+        Parameters
+        ----------
+        strategy_id : str or None
+            When provided, activates the per-strategy bootstrap-conservative
+            Kelly path (Stage 1.7): trades are filtered to this strategy,
+            bootstrapped (n=1_000), and the 5th-percentile Kelly fraction is
+            used as the sizing weight instead of the global aggregate point
+            estimate. Pass None (default) to use the existing global pool path
+            (backward-compatible).
+        """
         current_price = bar.close
         ticker = bar.ticker
         sector = fundamentals.sector
-
-        # ---------------------------------------------------------------------
-        # PHASE 1: SYSTEMIC MACRO OVERRIDES (TOP-DOWN RISK WINDOWS)
-        # ---------------------------------------------------------------------
-        regime = macro.market_regime
-        if regime == "RECESSION":
-            score_log.append("-15pts: Recession Regime Active (Inverted Yield Curve)")
-            score -= 15
-            warnings.append("Systemic recession warning.")
-        elif regime == "CREDIT EVENT":
-            score_log.append("-25pts: Hostile Credit Event (HY OAS Spreads Elevated)")
-            score -= 25
-            warnings.append("High debt distress window.")
-        elif regime == "RISK ON":
-            score_log.append("+10pts: Favorable Macro Regime")
-            score += 10
-
-        # Systemic killSwitch check (triggers if Sahm >= 0.5 or VIX > 30)
-        # F-04 FIX: Mandate specifies a -5 LOCALIZED penalty, not a -50 hard score freeze.
-        # The Phase 5 hard HOLD cap on BUY signals below serves as the secondary safety rail.
-        if hasattr(macro, 'killSwitch') and macro.killSwitch:
-            score_log.append("-5pts: Systemic Risk Overlay Active (Sahm/VIX Breach) — localized penalty applied")
-            score -= 5
-            warnings.append("SYSTEMIC KILLSWITCH ACTIVE: Fresh equity allocations halted.")
-
-        # ---------------------------------------------------------------------
-        # PHASE 2: SECTOR ROTATION & INTEREST SENSITIVITY
-        # ---------------------------------------------------------------------
-        if regime in ["RECESSION", "CREDIT EVENT"]:
-            if "Financial" in sector or "Real Estate" in sector:
-                score_log.append("-15pts: Macro headwind penalty on highly leveraged asset")
-                score -= 15
-            elif "Consumer Staples" in sector or "Healthcare" in sector:
-                score_log.append("+10pts: Defensive sector premium")
-                score += 10
-
-        # ---------------------------------------------------------------------
-        # PHASE 3: FUNDAMENTAL VALUATION CONFLUENCE
-        # ---------------------------------------------------------------------
         graham_val = fundamentals.graham_number
-        if graham_val > 0:
-            if graham_val > current_price:
-                score_log.append(f"+15pts: Undervalued vs Graham (${graham_val:.2f})")
-                score += 15
-                details.append("Value Anchor Met")
-            else:
-                score_log.append(f"-10pts: Overvalued vs Graham (${graham_val:.2f})")
-                score -= 10
+        # RSI(2) mean reversion (signals/rsi2_mean_reversion.py) needs the
+        # already-reverted guard (Close > SMA(5)); default to current_price
+        # (i.e. "at" SMA5) when unavailable so the guard fails closed (score 0)
+        # rather than firing on missing data.
+        sma_5_resolved = sma_5 if sma_5 is not None else current_price
+
+        # 1. Package inputs into pd.Series and SignalContext
+        row = pd.Series({
+            "forecast_price": forecast_price,
+            "trend_strength": trend_strength,
+            "atr": atr,
+            "macd_line": macd_line,
+            "macd_signal": macd_signal,
+            "aroon_osc": aroon_osc,
+            "rsi": rsi,
+            "sortino_ratio": sortino_ratio,
+            "max_drawdown": max_drawdown,
+            "relative_strength": relative_strength,
+            "garch_vol": garch_vol,
+            "GARCH_Vol": garch_vol,
+            "edge_ratio": edge_ratio,
+            "chandelier_long": chandelier_long,
+            "chandelier_short": chandelier_short,
+            "current_price": current_price,
+            "Close": current_price,
+            "ticker": ticker,
+            "sector": sector,
+            "roc_12m": roc_12m,
+            "ROC_12M": roc_12m,
+            "SMA_200": sma_200,
+            "RSI_2": rsi_2,
+            "SMA_5": sma_5_resolved,
+        })
+        
+        from signals.base import SignalContext
+        from signals import global_registry, SignalAggregator
+        
+        context = SignalContext(bar=bar, fundamentals=fundamentals, macro=macro)
+
+        # 2. Run weighted aggregation
+        aggregator = SignalAggregator(global_registry)
+        # aggregate() returns a 6-tuple; the 6th element (meta_label_composite)
+        # is a Stage 4 placeholder — geometric mean of active modules'
+        # meta_label_proba values, always 1.0 until real meta-labels are wired.
+        final_score_raw, score_log, warnings, details, outputs, meta_label_composite = aggregator.aggregate(row, context)
+        final_score = int(round(final_score_raw))
+
+        # Determine trend direction for options and sizing
+        if aroon_osc is not None and not pd.isna(aroon_osc):
+            is_uptrend = aroon_osc >= 50
         else:
-            score_log.append("-5pts: No Intrinsic Graham Value possible")
-            score -= 5
+            is_uptrend = trend_strength >= 50.0
 
-        if fundamentals.dividend_yield > 0:
-            if fundamentals.is_dividend_sustainable:
-                score_log.append("+10pts: Sustainable Dividend")
-                score += 10
+        # Options overlay uses lookahead-free strong uptrend filter
+        if roc_12m != 0.0:
+            if sma_200 > 0:
+                is_strong_uptrend = (roc_12m > 0) and (current_price > sma_200)
             else:
-                score_log.append("-25pts: Yield Trap Warning (Payout > 100%)")
-                score -= 25
-                warnings.append("Dividend Sustainability Failure")
-
-        # ---------------------------------------------------------------------
-        # PHASE 4: MOMENTUM, TREND, & FORECAST (CALIBRATED)
-        # ---------------------------------------------------------------------
-        if aroon_osc is not None:
-            # 1. MACD Momentum
-            if macd_line > macd_signal:
-                score_log.append("+10pts: MACD Bullish")
-                score += 10
-            else:
-                score_log.append("-15pts: MACD Bearish Crossover")
-                score -= 15
-
-            # 2. Aroon Oscillator Chop Filter
-            if abs(aroon_osc) < 50:
-                score_log.append(f"-15pts: Choppy Market via Aroon Oscillator ({aroon_osc:.1f}) - High False Positive Risk")
-                score -= 15
-                is_uptrend = False
-            elif aroon_osc >= 50:
-                score_log.append(f"+15pts: Strong Aroon Oscillator Uptrend ({aroon_osc:.1f})")
-                score += 15
-                is_uptrend = True
-            else: # aroon_osc <= -50
-                score_log.append(f"-15pts: Strong Aroon Oscillator Downtrend ({aroon_osc:.1f})")
-                score -= 15
-                is_uptrend = False
+                is_strong_uptrend = roc_12m > 0
         else:
-            # Fallback to legacy Trend Strength (Aroon Up) if Aroon Oscillator not provided
-            # Calibrated Trend: >= 50 is bullish, 30-50 is neutral/consolidation, < 30 is bearish
-            if trend_strength >= 50.0:
-                score_log.append("+10pts: Bullish technical trend (Aroon >= 50)")
-                score += 10
-                is_uptrend = True
-            elif 30.0 <= trend_strength < 50.0:
-                score_log.append("-5pts: Weakening trend momentum")
-                score -= 5
-                is_uptrend = False
-            else:
-                score_log.append("-15pts: Bearish pricing structure")
-                score -= 15
-                is_uptrend = False
-
-        # Calibrated Forecast: 1.5% in 30 days is an excellent 18% annualized return
-        if forecast_price > current_price:
-            expected_gain = ((forecast_price - current_price) / current_price) * 100
-            if expected_gain >= 1.5:
-                score_log.append(f"+10pts: Strong forecast projection (+{expected_gain:.1f}%)")
-                score += 10
-            elif expected_gain > 0:
-                score_log.append(f"+5pts: Moderate positive forecast (+{expected_gain:.1f}%)")
-                score += 5
-        else:
-            score_log.append("-10pts: Forecast suggests structural price erosion")
-            score -= 10
-
-        # ---------------------------------------------------------------------
-        # PHASE 4B: RELATIVE STRENGTH & OVERBOUGHT/OVERSOLD (RSI)
-        # ---------------------------------------------------------------------
-        if relative_strength is not None:
-            if relative_strength > 0:
-                score_log.append(f"+10pts: Outperforming S&P 500 (RS: {relative_strength:.2f})")
-                score += 10
-            else:
-                score_log.append(f"-10pts: Underperforming S&P 500 (RS: {relative_strength:.2f})")
-                score -= 10
-
-        if rsi is not None:
-            if rsi < 30:
-                score_log.append("+20pts: RSI < 30 (Mean Reversion)")
-                score += 20
-            elif rsi > 70:
-                score_log.append("-20pts: RSI > 70 (Overbought)")
-                score -= 20
-
-        # ---------------------------------------------------------------------
-        # PHASE 4C: RISK ADJUSTED RETURNS
-        # ---------------------------------------------------------------------
-        if sortino_ratio is not None and sortino_ratio > 2.0:
-            score_log.append(f"+10pts: High Sortino ({sortino_ratio:.2f})")
-            score += 10
-        if max_drawdown is not None and max_drawdown < -0.25:
-            score_log.append(f"-10pts: Steep Drawdown ({max_drawdown*100:.1f}%)")
-            score -= 10
-
-        # ---------------------------------------------------------------------
-        # PHASE 4D: EDGE RATIO & GARCH VOLATILITY OVERLAYS
-        # ---------------------------------------------------------------------
-        if edge_ratio is not None and edge_ratio > 0.0:
-            if edge_ratio >= 1.2:
-                score_log.append(f"+15pts: Strong Mathematical Edge ({edge_ratio:.2f})")
-                score += 15
-            elif edge_ratio < 0.8:
-                score_log.append(f"-15pts: Negative Mathematical Edge ({edge_ratio:.2f})")
-                score -= 15
-
-        if garch_vol is not None and garch_vol > 0.40:
-            score_log.append(f"-20pts: Extreme GARCH Volatility ({garch_vol*100:.1f}%) - High Tail Risk")
-            score -= 20
-
-        # Enforce analytical scoring boundaries [0, 100]
-        final_score = max(0, min(100, score))
+            # Fallback to legacy trend filter in unit tests when roc_12m is not provided
+            is_strong_uptrend = is_uptrend
 
         # ---------------------------------------------------------------------
         # PHASE 5: ACTION ADVICE GENERATOR
@@ -298,19 +229,35 @@ class StrategyEngine:
         # ---------------------------------------------------------------------
         # PHASE 7 & 8: OPTIONS & SIZING
         # ---------------------------------------------------------------------
-        option_strategy, option_details = self._select_options_overlay(bar, fundamentals, signal, is_uptrend, atr)
-        kelly_fraction = self._calculate_kelly_sizing(final_score, is_uptrend, sortino_ratio, edge_ratio)
+        option_strategy, option_details = self._select_options_overlay(bar, fundamentals, signal, is_strong_uptrend, atr)
+        kelly_fraction, sizing_path_tag = self._calculate_kelly_sizing(garch_vol, strategy_id=strategy_id)
+
+        # HMM regime second opinion (signals/regime_multiplier.py) scales the
+        # final Kelly Target down when the HMM's risk_on_probability is low --
+        # it never adds directional alpha (its own score contribution is
+        # always 0.0; see settings.SIGNAL_WEIGHTS['regime_multiplier']=0.0).
+        # Defaults to 1.0 (no-op) if the signal didn't run or HMM is unavailable.
+        regime_multiplier_output = outputs.get('regime_multiplier')
+        regime_multiplier = regime_multiplier_output.confidence if regime_multiplier_output else 1.0
+
+        # meta_label_composite is the geometric mean of active signal modules'
+        # meta_label_proba values (Stage 4 placeholder, always 1.0 currently).
+        # Applied multiplicatively alongside the HMM regime multiplier.
+        kelly_fraction = max(0.0, min(
+            kelly_fraction * regime_multiplier * meta_label_composite,
+            settings.MAX_POSITION_WEIGHT
+        ))
 
         # ---------------------------------------------------------------------
         # PHASE 9: COMPILE VERBOSE NOTES
         # ---------------------------------------------------------------------
         trend_status = "Uptrend" if is_uptrend else "No Uptrend"
-        actionable_advice_signal = f"{signal}: {advice} (Regime: {regime}, Trend: {trend_status})"
+        actionable_advice_signal = f"{signal}: {advice} (Regime: {macro.market_regime}, Trend: {trend_status})"
 
         verbose_notes = [
             f"SCORE {final_score}/100: {'; '.join(score_log)}.",
-            f"MACD ENV: {regime} | Ticker: {ticker}.",
-            f"RISK FRAME: Sizing target {kelly_fraction * 100:.1f}% based on win probability models.",
+            f"MACD ENV: {macro.market_regime} | Ticker: {ticker}.",
+            f"RISK FRAME: Sizing target {kelly_fraction * 100:.1f}% based on win probability models [{sizing_path_tag}].",
             f"OPTIONS HEDGE: {option_strategy} - {option_details}"
         ]
         if warnings:
@@ -382,32 +329,104 @@ class StrategyEngine:
                 )
 
     # =============================================================================
-    # MATHEMATICAL KELLY CRITERION MODEL
+    # POSITION SIZING: VOLATILITY TARGETING + ESTIMATED-p FRACTIONAL KELLY
     # =============================================================================
-    def _calculate_kelly_sizing(self, score: int, is_uptrend: bool, sortino_ratio: Optional[float] = None, edge_ratio: Optional[float] = None) -> float:
+    @property
+    def transactions_store(self):
+        """Lazily constructs a real TransactionsStore if none was injected."""
+        if self._transactions_store is None:
+            from transactions_store import TransactionsStore
+            self._transactions_store = TransactionsStore()
+        return self._transactions_store
+
+    def _calculate_kelly_sizing(
+        self,
+        realized_vol: Optional[float] = None,
+        strategy_id: Optional[str] = None,
+    ) -> Tuple[float, str]:
         """
-        Implements the Kelly Criterion allocation formula: f* = p - (q / b)
+        Single source-of-truth position sizing call. Returns (weight, sizing_path_tag).
+
+        When ``strategy_id`` is provided (Stage 1.7 per-strategy bootstrap path):
+          - Delegates to ``kelly_sizing_for_strategy(transactions_store, strategy_id,
+            realized_vol)`` which:
+              1. Filters closed trades to ``strategy_id``.
+              2. If < 30 per-strategy trades: falls back to vol-target-only,
+                 tagged "vol_target_fallback".
+              3. Otherwise bootstraps 1_000 resamples and takes the
+                 5th-percentile Kelly fraction -- the conservative/epistemic-
+                 humility sizing -- tagged "bootstrap_kelly_5th_pct(...)".
+          - Either path is then clamped to ``settings.MAX_POSITION_WEIGHT``
+            in the caller (``evaluate_security``).
+
+        When ``strategy_id`` is None (backward-compatible global aggregate path):
+          - Calls ``estimate_win_rate_and_payoff(all_closed_trades)`` on the
+            global pool (no strategy filtering) and takes the point-estimate
+            fractional Kelly. Falls back to vol-target-only when fewer than 30
+            total closed trades exist. Tagged "aggregate_kelly" or
+            "vol_target_fallback" accordingly.
+
+        The final weight is NOT clamped here; ``evaluate_security()`` applies
+        ``min(weight, settings.MAX_POSITION_WEIGHT)`` after multiplying by the
+        regime and meta-label composites.
         """
-        win_probability = 0.35 + (score / 100.0) * 0.40
-        b = 2.0  # Assumed standard risk-reward payout ratio of 2:1
-        q = 1.0 - win_probability
-        
-        raw_kelly = win_probability - (q / b)
-        half_kelly = raw_kelly * 0.5
-        
-        # Kelly sizing execution logic updates:
-        # Require a positive Edge Ratio (edge_ratio >= 1.0) and sortino > 1.0 before allowing max 25% "STRONG BUY" allocation.
-        # Otherwise, follow scoring brackets: 15% (uptrend) or 5% (no uptrend) for BUY, 5% for HOLD, 0% for RISK REDUCE.
-        if score >= 75 and sortino_ratio is not None and sortino_ratio > 1.0 and edge_ratio is not None and edge_ratio >= 1.0:
-            max_allocation = 0.25
-        elif score >= 55:
-            max_allocation = 0.15 if is_uptrend else 0.05
-        elif score >= 35:
-            max_allocation = 0.05
-        else:
-            max_allocation = 0.00
-            
-        return max(0.0, min(half_kelly, max_allocation))
+        raw_weight, path_tag = self._raw_kelly_or_vol_target_sizing(
+            realized_vol, strategy_id=strategy_id
+        )
+        # Clamp: enforce single-name ceiling before returning.
+        return max(0.0, min(raw_weight, settings.MAX_POSITION_WEIGHT)), path_tag
+
+    def _raw_kelly_or_vol_target_sizing(
+        self,
+        realized_vol: Optional[float],
+        strategy_id: Optional[str] = None,
+    ) -> Tuple[float, str]:
+        """Unclamped sizing weight -- see _calculate_kelly_sizing for the clamp.
+
+        Dispatches to the per-strategy bootstrap path (Stage 1.7) when
+        ``strategy_id`` is provided, otherwise uses the global aggregate
+        point-estimate path (Stage 1.6 backward-compatible).
+        """
+        # --- Stage 1.7: per-strategy bootstrap path ---
+        if strategy_id is not None:
+            weight, tag = kelly_sizing_for_strategy(
+                self.transactions_store,
+                strategy_id=strategy_id,
+                realized_vol=realized_vol,
+                min_trades=MIN_TRADES_REQUIRED,
+                n_bootstraps=1_000,
+                fraction=settings.KELLY_FRACTION,
+                cap=settings.KELLY_CAP,
+                target_vol=settings.VOL_TARGET,
+                max_leverage=settings.MAX_LEVERAGE,
+            )
+            return weight, tag
+
+        # --- Stage 1.6 (legacy): global aggregate point-estimate path ---
+        try:
+            closed_trades_df = self.transactions_store.closed_trades_df()
+        except Exception as e:
+            logger.error(f"Kelly sizing: failed to read transactions store: {e}")
+            closed_trades_df = pd.DataFrame()
+
+        p, b, n_trades = estimate_win_rate_and_payoff(closed_trades_df, lookback_trades=100)
+
+        if not (math.isnan(p) or math.isnan(b)):
+            return fractional_kelly(p, b, fraction=settings.KELLY_FRACTION, cap=settings.KELLY_CAP), "aggregate_kelly"
+
+        logger.warning(
+            f"Kelly sizing disabled (n_trades={n_trades} closed trades; need >= 30 for an "
+            f"estimate, >= 50 for confidence). Falling back to volatility-target-only sizing "
+            f"until 50 trades are recorded."
+        )
+
+        if realized_vol is None or (isinstance(realized_vol, float) and math.isnan(realized_vol)) or realized_vol <= 0:
+            logger.warning("Kelly sizing fallback: realized_vol unavailable/non-positive; sizing weight = 0.0.")
+            return 0.0, "cold_start_no_vol"
+
+        return volatility_target_weight(
+            realized_vol, target_vol=settings.VOL_TARGET, max_leverage=settings.MAX_LEVERAGE
+        ), "vol_target_fallback"
 
 
 # =============================================================================

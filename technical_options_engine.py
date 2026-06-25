@@ -14,8 +14,10 @@ from typing import Dict, Any, Optional
 from scipy.stats import norm
 from scipy.optimize import brentq
 
+from settings import settings
+
 # --- GLOBAL CONSTANTS ---
-RISK_FREE_RATE = 0.045
+RISK_FREE_RATE = settings.RISK_FREE_RATE
 TRADING_DAYS_PER_YEAR = 252
 
 
@@ -154,18 +156,26 @@ class OptionsPricingRecommender:
 
         return theoretical_theta * (1.0 - haircut)
 
-    def generate_strategy_pricing_matrix(self, ivr: float, current_iv: float, trend_bias: str, target_dte: int = 30) -> dict:
+    def generate_strategy_pricing_matrix(
+        self, 
+        true_ivr: float, 
+        current_iv: float, 
+        trend_bias: str, 
+        target_dte: int = 30,
+        vrp: Optional[float] = None,
+        macro_dto: Optional[Any] = None
+    ) -> dict:
         """
-        Deterministic Options Matrix synthesizing Trend, IVR, and Target Deltas 
-        to output specific recommended Call and Put prices.
+        Deterministic Options Matrix synthesizing Trend, True IVR, and Target Deltas 
+        to output specific recommended Call and Put prices, gated by Volatility Risk Premium (VRP).
         """
         T = target_dte / 365.0
         sigma = current_iv
         
         # The ultimate returned dictionary payload
         directive = {
-            "Strategy": "",
-            "Action": "",
+            "Strategy": "Cash",
+            "Action": "Wait",
             "Legs": [],
             "Net_Premium": 0.0,
             "Realizable_Daily_Theta": 0.0
@@ -178,7 +188,19 @@ class OptionsPricingRecommender:
         CONDOR_LONG_TARGET = 0.05
         ATM_DELTA_TARGET = 0.50
 
-        if ivr > 70:
+        # Enforce VRP regime gate: only sell premium if true_ivr > 50, vrp > 0.02, vix < 30, not CREDIT EVENT
+        sell_premium_allowed = True
+        if vrp is not None and vrp <= 0.02:
+            sell_premium_allowed = False
+        if macro_dto is not None:
+            vix = getattr(macro_dto, 'vix', 15.0)
+            regime = getattr(macro_dto, 'market_regime', 'RISK ON')
+            if vix >= 30.0 or regime == 'CREDIT EVENT':
+                sell_premium_allowed = False
+
+        if true_ivr > 50.0:
+            if not sell_premium_allowed:
+                return directive  # high IV but gated -> Cash / Wait (do not buy expensive options)
             # HIGH IVR REGIME: Premium Selling Environment
             if trend_bias == 'Bullish':
                 directive["Strategy"] = "Put Credit Spread"
@@ -196,7 +218,6 @@ class OptionsPricingRecommender:
                     {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)},
                     {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)}
                 ]
-                # Credit received: Short price - Long price
                 directive["Net_Premium"] = round(short_metrics['Price'] - long_metrics['Price'], 2)
                 raw_theta = short_metrics['Theta_Daily'] - long_metrics['Theta_Daily']
                 directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
@@ -251,7 +272,7 @@ class OptionsPricingRecommender:
                 raw_theta = (short_put_metrics['Theta_Daily'] - long_put_metrics['Theta_Daily']) + (short_call_metrics['Theta_Daily'] - long_call_metrics['Theta_Daily'])
                 directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
 
-        elif ivr < 30:
+        elif true_ivr < 30.0:
             # LOW IVR REGIME: Premium Buying Environment
             if trend_bias == 'Bullish':
                 directive["Strategy"] = "Call Debit Spread"
@@ -269,7 +290,6 @@ class OptionsPricingRecommender:
                     {"Side": "Long", "Type": "Call", "Strike": k_long, "Price": round(long_metrics['Price'], 2)},
                     {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2)}
                 ]
-                # Debit paid: Long Price - Short Price
                 directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
 
             elif trend_bias == 'Bearish':
@@ -294,16 +314,20 @@ class OptionsPricingRecommender:
         else:
             # NEUTRAL IVR REGIME
             if trend_bias == 'Bullish':
-                directive["Strategy"] = "Covered Call"
-                directive["Action"] = "Sell to Open"
-                
-                k_short = self.find_strike_for_delta(SHORT_DELTA_TARGET, T, sigma, 'call')
-                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
-                
-                directive["Legs"] = [
-                    {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
-                ]
-                directive["Net_Premium"] = round(short_metrics['Price'], 2)
+                if sell_premium_allowed:
+                    directive["Strategy"] = "Covered Call"
+                    directive["Action"] = "Sell to Open"
+                    
+                    k_short = self.find_strike_for_delta(SHORT_DELTA_TARGET, T, sigma, 'call')
+                    short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
+                    
+                    directive["Legs"] = [
+                        {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
+                    ]
+                    directive["Net_Premium"] = round(short_metrics['Price'], 2)
+                else:
+                    directive["Strategy"] = "Cash"
+                    directive["Action"] = "Wait"
             elif trend_bias == 'Bearish':
                 directive["Strategy"] = "Put Debit Spread"
                 directive["Action"] = "Buy to Open"
@@ -447,9 +471,9 @@ class TechnicalOptionsEngine:
         annualized_vol = daily_vol * np.sqrt(252)
         return float(max(0.02, min(3.0, annualized_vol)))
 
-    def calculate_ivr(self, df: pd.DataFrame, current_vol: float) -> float:
+    def calculate_realized_vol_rank(self, df: pd.DataFrame, current_vol: float) -> float:
         """
-        Calculates the Implied Volatility Rank (IVR) proxy by comparing current annualized
+        Calculates the Realized Volatility Rank proxy by comparing current annualized
         volatility against the 52-week historical rolling annualized volatility range (252 trading days).
         """
         df_clean = self.sanitize_ohlcv(df)
@@ -474,18 +498,21 @@ class TechnicalOptionsEngine:
             return 50.0
 
         # Rank the current volatility within the range
-        ivr = ((current_vol - vol_min) / (vol_max - vol_min)) * 100.0
-        return float(max(0.0, min(100.0, ivr)))
+        realized_vol_rank = ((current_vol - vol_min) / (vol_max - vol_min)) * 100.0
+        return float(max(0.0, min(100.0, realized_vol_rank)))
+
 
     def generate_option_strategy_matrix(
         self, 
-        ivr: float, 
+        true_ivr: float, 
         aroon_osc: float, 
         coppock_val: float, 
         stock_price: float = 100.0, 
         current_iv: float = 0.20,
         target_dte: int = 30,
-        risk_free_rate: float = RISK_FREE_RATE
+        risk_free_rate: float = RISK_FREE_RATE,
+        vrp: Optional[float] = None,
+        macro_dto: Optional[Any] = None
     ) -> str:
         """
         Automated Option Strategy Matrix upgraded to Quantitative Option Pricing and Strike Recommendation.
@@ -504,7 +531,8 @@ class TechnicalOptionsEngine:
         
         # Get option directive dictionary
         directive = recommender.generate_strategy_pricing_matrix(
-            ivr=ivr, current_iv=current_iv, trend_bias=trend_bias, target_dte=target_dte
+            true_ivr=true_ivr, current_iv=current_iv, trend_bias=trend_bias, target_dte=target_dte,
+            vrp=vrp, macro_dto=macro_dto
         )
         
         strategy = directive.get("Strategy", "Cash")

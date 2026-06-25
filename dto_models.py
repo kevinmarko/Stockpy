@@ -216,10 +216,19 @@ class MacroEconomicDTO(BaseDTO):
     Represents systemic macroeconomic risk indicators captured from raw economic databases.
     Houses the top-down risk assessment models.
     """
-    def __init__(self, yield_curve_10y_2y: float, high_yield_oas: float, 
+    # HMM disagreement thresholds (regime/hmm_regime.py second opinion).
+    # See market_regime/killSwitch docstrings below for how these are applied.
+    HMM_RISK_ON_DOWNGRADE_THRESHOLD: float = 0.3
+    HMM_RISK_OFF_AGREEMENT_THRESHOLD: float = 0.7
+    # Lowered (more sensitive) kill-switch thresholds used only when the
+    # rules-based regime is RECESSION AND the HMM agrees (see killSwitch).
+    KILLSWITCH_VIX_THRESHOLD_AGREED: float = 25.0
+    KILLSWITCH_SAHM_THRESHOLD_AGREED: float = 0.3
+
+    def __init__(self, yield_curve_10y_2y: float, high_yield_oas: float,
                  inflation_rate: float, nominal_10y: float = 4.0,
                  date: Optional[datetime] = None, sahm_rule_indicator: float = 0.0,
-                 vix_value: float = 15.0):
+                 vix_value: float = 15.0, hmm_risk_on_probability: Optional[float] = None):
         self.date = date if date is not None else datetime.now()
         self.sahm_rule_indicator = sahm_rule_indicator
         self.yield_curve: float = self._to_float(yield_curve_10y_2y) # Yield spread (Negative = Inverted)
@@ -227,6 +236,32 @@ class MacroEconomicDTO(BaseDTO):
         self.inflation: float = self._to_float(inflation_rate)
         self.nominal_10y: float = self._to_float(nominal_10y)
         self.vix: float = self._to_float(vix_value)
+        # Second-opinion probability from regime/hmm_regime.py's
+        # HMMRegimeDetector.predict_proba()['risk_on_probability']. None means
+        # the HMM did not run this cycle (e.g. insufficient history) -- in
+        # that case market_regime/killSwitch behave EXACTLY as before this
+        # feature was added (no fabricated probability, rules-based stays
+        # fully authoritative).
+        self.hmm_risk_on_probability: Optional[float] = (
+            self._to_float(hmm_risk_on_probability, None) if hmm_risk_on_probability is not None else None
+        )
+
+    @property
+    def _rules_based_regime(self) -> str:
+        """The rules-based regime classification, with NO HMM adjustment.
+        Internal helper -- market_regime (public) applies the HMM downgrade
+        on top of this; killSwitch's agreement check also reads this directly
+        so the downgrade (RISK ON -> NEUTRAL) never masks the RECESSION
+        agreement check below.
+        """
+        if (self.yield_curve < -0.25 and self.credit_spread > 6.0) or self.sahm_rule_indicator >= 0.6:
+            return "RECESSION"
+        elif self.credit_spread > 6.0:
+            return "CREDIT EVENT"
+        elif self.credit_spread > 4.5:
+            return "NEUTRAL"
+        else:
+            return "RISK ON"
 
     @property
     def killSwitch(self) -> bool:
@@ -234,8 +269,30 @@ class MacroEconomicDTO(BaseDTO):
         Triggers True (halting all new long equity deployments) if:
         - Sahm rule indicator threshold is breached (>= 0.5) OR
         - VIX spikes above 30
+
+        HMM AGREEMENT -- FASTER KILL SWITCH: if the rules-based regime is
+        RECESSION AND the HMM's second opinion agrees (risk_off_probability
+        = 1 - hmm_risk_on_probability > HMM_RISK_OFF_AGREEMENT_THRESHOLD),
+        the kill switch additionally fires at LOWERED (more sensitive)
+        thresholds: VIX > KILLSWITCH_VIX_THRESHOLD_AGREED (25, vs. 30) or
+        sahm_rule_indicator >= KILLSWITCH_SAHM_THRESHOLD_AGREED (0.3, vs. 0.5).
+        This never makes the kill switch LESS sensitive -- it is a strict
+        OR with the base condition.
         """
-        return self.sahm_rule_indicator >= 0.5 or self.vix > 30.0
+        base_kill = self.sahm_rule_indicator >= 0.5 or self.vix > 30.0
+
+        if self.hmm_risk_on_probability is None or self._rules_based_regime != "RECESSION":
+            return base_kill
+
+        hmm_risk_off_probability = 1.0 - self.hmm_risk_on_probability
+        if hmm_risk_off_probability > self.HMM_RISK_OFF_AGREEMENT_THRESHOLD:
+            agreed_kill = (
+                self.sahm_rule_indicator >= self.KILLSWITCH_SAHM_THRESHOLD_AGREED
+                or self.vix > self.KILLSWITCH_VIX_THRESHOLD_AGREED
+            )
+            return base_kill or agreed_kill
+
+        return base_kill
 
     @property
     def real_yield(self) -> float:
@@ -249,15 +306,30 @@ class MacroEconomicDTO(BaseDTO):
         - CREDIT EVENT: Spread of corporate bonds over Treasuries spikes (> 6.0%).
         - NEUTRAL: Standard operating environment.
         - RISK ON: Favorable macroeconomic conditions.
+
+        HMM DISAGREEMENT -- DOWNGRADE: if the rules-based regime is RISK ON
+        but the HMM's second opinion (hmm_risk_on_probability) is below
+        HMM_RISK_ON_DOWNGRADE_THRESHOLD (0.3), this downgrades to NEUTRAL and
+        logs the disagreement. The rules-based engine remains primary in
+        every other case -- the HMM can only ever pull RISK ON back to
+        NEUTRAL, never independently declare RECESSION/CREDIT EVENT, and
+        never upgrade a worse rules-based regime.
         """
-        if (self.yield_curve < -0.25 and self.credit_spread > 6.0) or self.sahm_rule_indicator >= 0.6:
-            return "RECESSION"
-        elif self.credit_spread > 6.0:
-            return "CREDIT EVENT"
-        elif self.credit_spread > 4.5:
+        rules_regime = self._rules_based_regime
+
+        if (
+            rules_regime == "RISK ON"
+            and self.hmm_risk_on_probability is not None
+            and self.hmm_risk_on_probability < self.HMM_RISK_ON_DOWNGRADE_THRESHOLD
+        ):
+            logger.warning(
+                "MacroEconomicDTO.market_regime: rules-based regime is RISK ON but HMM "
+                "risk_on_probability=%.3f < %.2f -- downgrading to NEUTRAL.",
+                self.hmm_risk_on_probability, self.HMM_RISK_ON_DOWNGRADE_THRESHOLD,
+            )
             return "NEUTRAL"
-        else:
-            return "RISK ON"
+
+        return rules_regime
 
     def __repr__(self) -> str:
         return f"<MacroEconomicDTO - Regime: {self.market_regime} (Spread: {self.credit_spread}%)>"

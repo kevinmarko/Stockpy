@@ -53,9 +53,11 @@ COLUMN_SCHEMA = [
     # --- TECHNICAL & VOLATILITY ---
     {"header": "Volume", "key": "Volume", "format": "number"},
     {"header": "RSI", "key": "RSI", "format": "number"},
+    {"header": "RSI(2)", "key": "RSI_2", "format": "number"},
     {"header": "MACD Line", "key": "MACD_Line", "format": "number"},
     {"header": "MACD Signal", "key": "MACD_Signal", "format": "number"},
     {"header": "ATR", "key": "ATR", "format": "number"},
+    {"header": "SMA 5", "key": "SMA_5", "format": "currency"},
     {"header": "SMA 50", "key": "SMA_50", "format": "currency"},
     {"header": "SMA 200", "key": "SMA_200", "format": "currency"},
     {"header": "Aroon Up", "key": "Aroon Up", "format": "number"},
@@ -66,8 +68,13 @@ COLUMN_SCHEMA = [
     {"header": "Relative Strength", "key": "RS vs SPY", "format": "number"},
     {"header": "RS Momentum Slope", "key": "RS-MACD", "format": "number"},
     {"header": "GARCH Vol", "key": "GARCH_Vol", "format": "number"},
-    {"header": "IV Rank", "key": "IVR", "format": "number"},
+    {"header": "Realized Vol Rank", "key": "Realized_Vol_Rank", "format": "number"},
+    {"header": "True IVR", "key": "True_IVR", "format": "number"},
+    {"header": "Volatility Risk Premium", "key": "VRP", "format": "percent"},
     {"header": "Options IV Edge", "key": "Options IV Edge", "format": "percent"},
+    {"header": "ROC 12M", "key": "ROC_12M", "format": "percent"},
+    {"header": "ROC 6M", "key": "ROC_6M", "format": "percent"},
+    {"header": "Momentum Vol Scaled", "key": "Momentum_Vol_Scaled", "format": "number"},
     
     # --- RISK & PERFORMANCE METRICS ---
     {"header": "VaR 95", "key": "VaR 95", "format": "percent"},
@@ -102,7 +109,27 @@ COLUMN_SCHEMA = [
     {"header": "Max Adverse Excursion", "key": "MAE", "format": "percent"},
     {"header": "BF Allocation Effect", "key": "BF_Allocation", "format": "number"},
     {"header": "BF Selection Effect", "key": "BF_Selection", "format": "number"},
-    {"header": "Portfolio Heat", "key": "Portfolio_Heat", "format": "percent"}
+    {"header": "Portfolio Heat", "key": "Portfolio_Heat", "format": "percent"},
+
+    # ==========================================================
+    # --- CROSS-SECTIONAL MOMENTUM (Jegadeesh-Titman 1993) ---
+    # ==========================================================
+    {"header": "XSec 12-1M Return", "key": "XSec_12_1M", "format": "percent"},
+    {"header": "XSec Momentum Rank", "key": "XSec_Momentum_Rank", "format": "percent"},
+
+    # ==========================================================
+    # --- MULTIFACTOR (Fama-French-style; Hou-Xue-Zhang 2020 priors) ---
+    # ==========================================================
+    {"header": "Value Z-Score", "key": "Value_Z", "format": "number"},
+    {"header": "Quality Z-Score", "key": "Quality_Z", "format": "number"},
+    {"header": "Low Vol Z-Score", "key": "LowVol_Z", "format": "number"},
+    {"header": "Size Z-Score", "key": "Size_Z", "format": "number"},
+    {"header": "Multifactor Composite", "key": "Multifactor_Composite", "format": "number"},
+
+    # ==========================================================
+    # --- HMM REGIME SECOND OPINION (Hamilton 1989) ---
+    # ==========================================================
+    {"header": "HMM Risk-On Probability", "key": "HMM_Risk_On_Probability", "format": "percent"}
 ]
 
 def get_headers():
