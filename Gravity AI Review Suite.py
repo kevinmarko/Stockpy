@@ -1757,6 +1757,401 @@ class GravityAIAuditor:
 
         self.report["step_21_stress_scenario_audit"] = stress_report
 
+    def run_broker_order_manager_audit(self):
+        """
+        STEP 22 — Alpaca Broker & OrderManager Audit
+        Checks:
+        1. BrokerBase ABC cannot be instantiated directly.
+        2. AlpacaBroker raises RuntimeError when credentials are absent.
+        3. make_client_order_id is deterministic for the same inputs.
+        4. make_client_order_id differs for different symbols.
+        5. make_client_order_id differs for different strategy_ids.
+        6. OrderManager dry_run=True: broker.submit_order never called.
+        7. reconcile_state never raises even when broker.get_open_positions raises.
+        8. ReconciliationReport.has_drift detects broker-side orphaned position.
+        9. DRY_RUN setting defaults to False (never silently live).
+        """
+        import asyncio
+        from datetime import datetime
+        broker_report = {"status": "PASSED", "checks": {}}
+
+        # Check 1: BrokerBase is abstract
+        try:
+            from execution.broker_base import BrokerBase
+            try:
+                BrokerBase()
+                broker_report["checks"]["broker_base_abstract"] = "FAIL: BrokerBase should not be instantiatable"
+                broker_report["status"] = "FAILED"
+            except TypeError:
+                broker_report["checks"]["broker_base_abstract"] = "PASS: BrokerBase raises TypeError on direct instantiation"
+        except Exception as e:
+            broker_report["checks"]["broker_base_abstract"] = f"ERROR: {e}"
+            broker_report["status"] = "FAILED"
+
+        # Check 2: AlpacaBroker raises on missing credentials
+        try:
+            from execution.alpaca_broker import AlpacaBroker
+            try:
+                AlpacaBroker(api_key=None, secret_key=None)
+                broker_report["checks"]["alpaca_missing_creds"] = "FAIL: should raise RuntimeError"
+                broker_report["status"] = "FAILED"
+            except RuntimeError:
+                broker_report["checks"]["alpaca_missing_creds"] = "PASS: raises RuntimeError when credentials absent"
+            except Exception as e:
+                broker_report["checks"]["alpaca_missing_creds"] = f"FAIL: wrong exception {type(e).__name__}: {e}"
+                broker_report["status"] = "FAILED"
+        except Exception as e:
+            broker_report["checks"]["alpaca_missing_creds"] = f"ERROR importing AlpacaBroker: {e}"
+            broker_report["status"] = "FAILED"
+
+        # Checks 3-5: make_client_order_id
+        try:
+            from execution.order_manager import make_client_order_id
+            ts = datetime(2024, 1, 15, 10, 0, 0)
+            coid1 = make_client_order_id("strat", "AAPL", "buy", 1.0, timestamp=ts)
+            coid2 = make_client_order_id("strat", "AAPL", "buy", 1.0, timestamp=ts)
+            if coid1 == coid2:
+                broker_report["checks"]["coid_deterministic"] = "PASS"
+            else:
+                broker_report["checks"]["coid_deterministic"] = f"FAIL: {coid1} != {coid2}"
+                broker_report["status"] = "FAILED"
+            coid_msft = make_client_order_id("strat", "MSFT", "buy", 1.0, timestamp=ts)
+            broker_report["checks"]["coid_differs_symbol"] = "PASS" if coid1 != coid_msft else "FAIL: same ID for different symbols"
+            if coid1 == coid_msft:
+                broker_report["status"] = "FAILED"
+            coid_s2 = make_client_order_id("strat2", "AAPL", "buy", 1.0, timestamp=ts)
+            broker_report["checks"]["coid_differs_strategy"] = "PASS" if coid1 != coid_s2 else "FAIL: same ID for different strategy_ids"
+            if coid1 == coid_s2:
+                broker_report["status"] = "FAILED"
+        except Exception as e:
+            broker_report["checks"]["coid_checks"] = f"ERROR: {e}"
+            broker_report["status"] = "FAILED"
+
+        # Check 6: dry_run prevents broker call
+        try:
+            from execution.broker_base import (
+                AccountSnapshot, BrokerBase as _BB, OrderIntent, OrderResult,
+                OrderSide, OrderStatus, OrderType,
+            )
+            from execution.order_manager import OrderManager
+
+            class _CountingBroker:
+                call_count = 0
+                async def submit_order(self, intent):
+                    _CountingBroker.call_count += 1
+                    return OrderResult("", "mock", OrderStatus.ACCEPTED)
+                async def cancel_order(self, _): return True
+                async def get_open_positions(self): return []
+                async def get_account(self): return AccountSnapshot(100_000, 100_000, 200_000)
+                async def get_orders(self, **kw): return []
+                async def stream_trade_updates(self): return; yield  # noqa
+
+            _CountingBroker.call_count = 0
+            om = OrderManager(_CountingBroker(), dry_run=True)
+            intent = OrderIntent("gravity_test", "SPY", OrderSide.BUY, 1.0, OrderType.MARKET)
+            asyncio.run(om.submit_order_with_idempotency(intent, timestamp=ts))
+            if _CountingBroker.call_count == 0:
+                broker_report["checks"]["dry_run_no_broker_call"] = "PASS: dry_run=True → zero broker calls"
+            else:
+                broker_report["checks"]["dry_run_no_broker_call"] = f"FAIL: broker called {_CountingBroker.call_count}x in dry-run"
+                broker_report["status"] = "FAILED"
+        except Exception as e:
+            broker_report["checks"]["dry_run_no_broker_call"] = f"ERROR: {e}"
+            broker_report["status"] = "FAILED"
+
+        # Check 7: reconcile_state never raises on broker error
+        try:
+            import pandas as pd
+            from unittest.mock import MagicMock
+
+            class _ErrorBroker:
+                async def get_open_positions(self): raise RuntimeError("Broker down")
+                async def submit_order(self, i): return OrderResult("", None, OrderStatus.ERROR)
+                async def cancel_order(self, _): return True
+                async def get_account(self): return AccountSnapshot(0, 0, 0)
+                async def get_orders(self, **kw): return []
+                async def stream_trade_updates(self): return; yield  # noqa
+
+            om2 = OrderManager(_ErrorBroker(), dry_run=True)
+            mock_ts = MagicMock()
+            mock_ts.open_trades_df.return_value = pd.DataFrame()
+            r = asyncio.run(om2.reconcile_state(mock_ts))
+            if r.error is not None:
+                broker_report["checks"]["reconcile_never_raises"] = "PASS: broker error captured in report.error"
+            else:
+                broker_report["checks"]["reconcile_never_raises"] = "FAIL: report.error should be set on broker failure"
+                broker_report["status"] = "FAILED"
+        except Exception as e:
+            broker_report["checks"]["reconcile_never_raises"] = f"FAIL: raised {type(e).__name__}: {e}"
+            broker_report["status"] = "FAILED"
+
+        # Check 8: reconcile_state detects drift
+        try:
+            import pandas as pd
+            from unittest.mock import MagicMock
+            from execution.broker_base import PositionSnapshot
+
+            class _DriftBroker:
+                async def get_open_positions(self): return [PositionSnapshot("NVDA", 5.0, 100.0, 500.0, 0.0)]
+                async def submit_order(self, i): return OrderResult("", "m", OrderStatus.ACCEPTED)
+                async def cancel_order(self, _): return True
+                async def get_account(self): return AccountSnapshot(100_000, 100_000, 200_000)
+                async def get_orders(self, **kw): return []
+                async def stream_trade_updates(self): return; yield  # noqa
+
+            om3 = OrderManager(_DriftBroker(), dry_run=True)
+            mock_ts2 = MagicMock()
+            mock_ts2.open_trades_df.return_value = pd.DataFrame()
+            r3 = asyncio.run(om3.reconcile_state(mock_ts2))
+            if r3.has_drift:
+                broker_report["checks"]["reconcile_detects_drift"] = "PASS: orphaned broker position flagged as drift"
+            else:
+                broker_report["checks"]["reconcile_detects_drift"] = "FAIL: drift not detected"
+                broker_report["status"] = "FAILED"
+        except Exception as e:
+            broker_report["checks"]["reconcile_detects_drift"] = f"ERROR: {e}"
+            broker_report["status"] = "FAILED"
+
+        # Check 9: DRY_RUN defaults to False
+        try:
+            from settings import Settings
+            if Settings().DRY_RUN is False:
+                broker_report["checks"]["dry_run_default_false"] = "PASS: settings.DRY_RUN defaults to False"
+            else:
+                broker_report["checks"]["dry_run_default_false"] = "FAIL: DRY_RUN should default to False"
+                broker_report["status"] = "FAILED"
+        except Exception as e:
+            broker_report["checks"]["dry_run_default_false"] = f"ERROR: {e}"
+            broker_report["status"] = "FAILED"
+
+        self.report["step_22_broker_order_manager_audit"] = broker_report
+
+    # =========================================================================
+    # STEP 23 — Sell-Side Range Audit
+    # =========================================================================
+    def run_sell_side_range_audit(self):
+        """
+        STEP 23 — Dedicated Sell-Side Range Audit
+        (strategy_engine.apply_sell_side_range; config.COLUMN_SCHEMA["sellRange"])
+
+        The sell-side range is a first-class, ALWAYS-POPULATED execution
+        corridor surfaced for every Action Signal — distinct from the
+        legacy single-corridor `buyRange` which only emits a sell hint
+        on RISK REDUCE. This audit verifies:
+
+        1. Schema integration — `sellRange` is a registered column in
+           `config.COLUMN_SCHEMA` (so the Sheets sink + Pandera schema
+           pick it up without per-call-site plumbing).
+        2. Helper output contract — `apply_sell_side_range` returns the
+           documented "Sell Zone..." string for active longs and the
+           "Sell Now @ market..." string for RISK REDUCE / unknown signals.
+        3. Monotonicity — emitted Sell Zone lower bound is strictly less
+           than the upper bound (no degenerate / inverted ranges that
+           would break limit-sell submission downstream).
+        4. No fabrication — when forecast_price=0 (no forecast available)
+           the upper bound falls back to the pure ATR-derived ceiling
+           rather than fabricating an upside target. CONSTRAINT #4.
+        5. Stop-floor invariant — under pathological ATR > current_price,
+           the trailing stop is clamped to ≥ $0.01 (never negative / zero).
+        6. evaluate_security integration — `StrategyEngine.evaluate_security`
+           returns the `sellRange` key in its output dict so the orchestrator
+           sees the same source-of-truth value.
+        7. Lookahead invariant — repeated calls with identical scalar inputs
+           yield byte-identical output (the helper is a pure function; a
+           future refactor introducing hidden state would fail this).
+        """
+        import re
+        from datetime import datetime
+        sell_report = {"status": "PASSED", "checks": {}}
+
+        try:
+            import config as _cfg
+            from strategy_engine import StrategyEngine, apply_sell_side_range
+            from dto_models import (
+                MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO,
+            )
+        except Exception as e:
+            sell_report["status"] = "FAILED"
+            sell_report["checks"]["imports"] = f"ERROR importing sell-side range stack: {e}"
+            self.report["step_23_sell_side_range_audit"] = sell_report
+            return
+
+        sell_zone_re = re.compile(
+            r"^Sell Zone: \$([0-9]+\.[0-9]{2}) - \$([0-9]+\.[0-9]{2}) \| Stop @ \$([0-9]+\.[0-9]{2})$"
+        )
+        sell_now_re = re.compile(
+            r"^Sell Now @ market \| Stop @ \$([0-9]+\.[0-9]{2})$"
+        )
+
+        # Check 1: schema registration
+        try:
+            keys = [c["key"] for c in _cfg.COLUMN_SCHEMA]
+            headers = {c["key"]: c["header"] for c in _cfg.COLUMN_SCHEMA}
+            if "sellRange" in keys and headers.get("sellRange") == "Sell Range":
+                # Adjacent-to-buyRange invariant (UI pairs the two corridors).
+                if keys.index("sellRange") == keys.index("buyRange") + 1:
+                    sell_report["checks"]["schema_registration"] = (
+                        "PASS: sellRange registered as 'Sell Range', adjacent to buyRange"
+                    )
+                else:
+                    sell_report["checks"]["schema_registration"] = (
+                        "FAIL: sellRange must immediately follow buyRange in COLUMN_SCHEMA"
+                    )
+                    sell_report["status"] = "FAILED"
+            else:
+                sell_report["checks"]["schema_registration"] = (
+                    "FAIL: sellRange missing or mis-headered in config.COLUMN_SCHEMA"
+                )
+                sell_report["status"] = "FAILED"
+        except Exception as e:
+            sell_report["checks"]["schema_registration"] = f"ERROR: {e}"
+            sell_report["status"] = "FAILED"
+
+        # Check 2 & 3: active-long format + monotonicity
+        try:
+            for sig in ("STRONG BUY", "BUY", "HOLD"):
+                out = apply_sell_side_range(
+                    signal=sig, current_price=100.0, safe_atr=2.0,
+                    chandelier_long=95.0, chandelier_short=0.0,
+                    forecast_price=110.0,
+                )
+                m = sell_zone_re.match(out)
+                if not m:
+                    sell_report["checks"][f"sell_zone_format[{sig}]"] = (
+                        f"FAIL: bad format {out!r}"
+                    )
+                    sell_report["status"] = "FAILED"
+                    continue
+                lo, hi, stop = map(float, m.groups())
+                if lo >= hi:
+                    sell_report["checks"][f"sell_zone_monotone[{sig}]"] = (
+                        f"FAIL: lower ({lo}) >= upper ({hi}) — degenerate range"
+                    )
+                    sell_report["status"] = "FAILED"
+                else:
+                    sell_report["checks"][f"sell_zone_format[{sig}]"] = (
+                        f"PASS: monotone Sell Zone {lo}..{hi}, stop {stop}"
+                    )
+        except Exception as e:
+            sell_report["checks"]["sell_zone_format"] = f"ERROR: {e}"
+            sell_report["status"] = "FAILED"
+
+        # Check 4: no fabrication when forecast_price == 0
+        try:
+            out = apply_sell_side_range(
+                signal="BUY", current_price=200.0, safe_atr=4.0,
+                chandelier_long=190.0, chandelier_short=0.0,
+                forecast_price=0.0,
+            )
+            m = sell_zone_re.match(out)
+            if m and abs(float(m.group(2)) - 212.0) < 1e-6:
+                sell_report["checks"]["no_fabricated_upper"] = (
+                    "PASS: forecast_price=0 → upper falls back to pure ATR ceiling"
+                )
+            else:
+                sell_report["checks"]["no_fabricated_upper"] = (
+                    f"FAIL: expected upper=$212.00 (pure ATR), got {out!r}"
+                )
+                sell_report["status"] = "FAILED"
+        except Exception as e:
+            sell_report["checks"]["no_fabricated_upper"] = f"ERROR: {e}"
+            sell_report["status"] = "FAILED"
+
+        # Check 5: stop-floor invariant under pathological ATR
+        try:
+            out = apply_sell_side_range(
+                signal="BUY", current_price=1.0, safe_atr=10.0,
+                chandelier_long=0.0, chandelier_short=0.0,
+                forecast_price=0.0,
+            )
+            m = sell_zone_re.match(out)
+            if m and float(m.group(3)) >= 0.01:
+                sell_report["checks"]["stop_floor_clamped"] = (
+                    f"PASS: stop clamped to >= $0.01 under ATR > price (stop={m.group(3)})"
+                )
+            else:
+                sell_report["checks"]["stop_floor_clamped"] = (
+                    f"FAIL: stop floor invariant violated: {out!r}"
+                )
+                sell_report["status"] = "FAILED"
+        except Exception as e:
+            sell_report["checks"]["stop_floor_clamped"] = f"ERROR: {e}"
+            sell_report["status"] = "FAILED"
+
+        # Check 6: RISK REDUCE / unknown signals fail closed
+        try:
+            for sig in ("RISK REDUCE", "MOON_LAMBO"):
+                out = apply_sell_side_range(
+                    signal=sig, current_price=50.0, safe_atr=1.0,
+                    chandelier_long=48.0, chandelier_short=0.0,
+                    forecast_price=55.0,
+                )
+                if sell_now_re.match(out):
+                    sell_report["checks"][f"fail_closed[{sig}]"] = (
+                        "PASS: emits 'Sell Now @ market' immediate-exit"
+                    )
+                else:
+                    sell_report["checks"][f"fail_closed[{sig}]"] = (
+                        f"FAIL: expected 'Sell Now @ market...': {out!r}"
+                    )
+                    sell_report["status"] = "FAILED"
+        except Exception as e:
+            sell_report["checks"]["fail_closed"] = f"ERROR: {e}"
+            sell_report["status"] = "FAILED"
+
+        # Check 7: evaluate_security returns sellRange
+        try:
+            bar = MarketBarDTO(datetime.now(), "AAPL", 150.0, 152.0, 149.0, 150.0, 4_000_000)
+            fund = FundamentalDataDTO(
+                ticker="AAPL", company_name="Apple Inc.", sector="Technology",
+                pe_ratio=28.0, pb_ratio=42.0, book_value=4.0, eps_trailing=6.0,
+                dividend_yield=0.005, dividend_growth_rate=0.05, payout_ratio=0.15,
+            )
+            macro = MacroEconomicDTO(0.45, 2.50, 2.10, 4.0)
+            out = StrategyEngine().evaluate_security(
+                bar=bar, fundamentals=fund, macro=macro,
+                forecast_price=160.0, trend_strength=65.0, atr=2.50,
+            )
+            if "sellRange" in out and isinstance(out["sellRange"], str) and out["sellRange"]:
+                if sell_zone_re.match(out["sellRange"]) or sell_now_re.match(out["sellRange"]):
+                    sell_report["checks"]["evaluate_security_emits_sell_range"] = (
+                        f"PASS: evaluate_security['sellRange'] = {out['sellRange']!r}"
+                    )
+                else:
+                    sell_report["checks"]["evaluate_security_emits_sell_range"] = (
+                        f"FAIL: sellRange does not match either canonical format: {out['sellRange']!r}"
+                    )
+                    sell_report["status"] = "FAILED"
+            else:
+                sell_report["checks"]["evaluate_security_emits_sell_range"] = (
+                    "FAIL: evaluate_security() return dict missing 'sellRange'"
+                )
+                sell_report["status"] = "FAILED"
+        except Exception as e:
+            sell_report["checks"]["evaluate_security_emits_sell_range"] = f"ERROR: {e}"
+            sell_report["status"] = "FAILED"
+
+        # Check 8: purity / lookahead invariant
+        try:
+            kwargs = dict(signal="BUY", current_price=100.0, safe_atr=2.0,
+                          chandelier_long=95.0, chandelier_short=0.0,
+                          forecast_price=110.0)
+            a = apply_sell_side_range(**kwargs)
+            b = apply_sell_side_range(**kwargs)
+            if a == b:
+                sell_report["checks"]["pure_function"] = (
+                    "PASS: identical inputs → identical output (no hidden state)"
+                )
+            else:
+                sell_report["checks"]["pure_function"] = (
+                    f"FAIL: repeated call diverged: {a!r} vs {b!r}"
+                )
+                sell_report["status"] = "FAILED"
+        except Exception as e:
+            sell_report["checks"]["pure_function"] = f"ERROR: {e}"
+            sell_report["status"] = "FAILED"
+
+        self.report["step_23_sell_side_range_audit"] = sell_report
 
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
@@ -1778,6 +2173,8 @@ class GravityAIAuditor:
         self.run_ivr_vrp_audit()
         self.run_pairs_trading_audit()
         self.run_stress_scenario_audit()
+        self.run_broker_order_manager_audit()
+        self.run_sell_side_range_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================

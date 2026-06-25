@@ -157,19 +157,22 @@ def test_lgbm_deployability_gate_respected():
     dates = price_df.index
     cost_model = TieredCostModel()
 
-    # Strategy that deliberately loses money (negative alpha signal)
+    # Strategy that deliberately loses money (negative alpha signal).
+    # Use a DETERMINISTIC constant daily loss rather than a random draw:
+    # np.random.default_rng(99).normal(-0.001, 0.05, n) has expected mean -0.001
+    # but the 79-sample realisation with seed 99 has actual mean ≈ +0.006 (small-
+    # sample luck), producing Sharpe ≈ +2.0 and a spurious PASS.  A constant
+    # -0.5 % / day = annualised Sharpe of -∞ (zero variance) which always fails
+    # the Sharpe > 0.5 gate regardless of sample size.
     def losing_strategy(X_train, y_train, X_test, y_test):
         ret_te = X_test.pct_change().dropna()
-        # Random noise = near-zero, high-cost returns -> Sharpe well below 0.5
-        noisy = pd.Series(
-            np.random.default_rng(99).normal(-0.001, 0.05, len(ret_te)),
-            index=ret_te.index,
-        )
+        # Constant -0.5% per day: reliably negative, seed-independent.
+        losing = pd.Series(-0.005, index=ret_te.index)
         return [{
             "params": "LosingStrategy",
-            "train_returns": noisy,
-            "test_returns": noisy,
-            "turnover": 0.5,   # high turnover tanks net-of-cost returns
+            "train_returns": losing,
+            "test_returns": losing,
+            "turnover": 0.5,   # high turnover further tanks net-of-cost returns
         }]
 
     harness = StrategyValidationHarness(

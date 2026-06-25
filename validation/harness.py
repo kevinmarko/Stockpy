@@ -115,6 +115,23 @@ class ValidationReport:
         max_dd_pass = (not np.isnan(self.max_dd)) and (self.max_dd < 0.30)
         return bool(pbo_pass and dsr_pass and sharpe_pass and max_dd_pass and self.stress_gate_passed)
 
+    def to_summary_dict(self) -> dict:
+        """Return a JSON-serialisable summary suitable for the preflight check and dashboard."""
+        from datetime import datetime, timezone
+        return {
+            "strategy_id": self.name,
+            "deployable": self.deployable,
+            "pbo": float(self.pbo),
+            "dsr": float(self.dsr),
+            "sharpe": float(self.sharpe) if not np.isnan(self.sharpe) else None,
+            "max_drawdown": float(self.max_dd) if not np.isnan(self.max_dd) else None,
+            "is_options_selling": self.is_options_selling,
+            "stress_gate_passed": self.stress_gate_passed,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "report_date": datetime.now(timezone.utc).date().isoformat(),
+        }
+
 class StrategyValidationHarness:
     """
     Validation harness that runs Walk-Forward and CPCV tests on strategies.
@@ -205,9 +222,12 @@ class StrategyValidationHarness:
             if trials:
                 # Find best in-sample configuration
                 is_sharpes = [sharpe_ratio(t["train_returns"]) for t in trials]
-                best_idx = np.nanargmax(is_sharpes) if is_sharpes else 0
+                # nanargmax raises ValueError on an all-NaN slice (e.g. constant
+                # returns have zero std → NaN Sharpe); guard with any-valid check.
+                has_valid = any(not np.isnan(s) for s in is_sharpes)
+                best_idx = int(np.nanargmax(is_sharpes)) if has_valid else 0
                 best_trial = trials[best_idx]
-                
+
                 # Apply transaction cost model to test returns
                 turnover = best_trial.get("turnover", 0.05)
                 net_test_returns = self._apply_cost_model(best_trial["test_returns"], turnover=turnover)
@@ -231,7 +251,8 @@ class StrategyValidationHarness:
         full_trials = self.strategy_fn(X, y, X, y)
         if full_trials:
             is_sharpes = [sharpe_ratio(t["train_returns"]) for t in full_trials]
-            best_idx = np.nanargmax(is_sharpes) if is_sharpes else 0
+            has_valid = any(not np.isnan(s) for s in is_sharpes)
+            best_idx = int(np.nanargmax(is_sharpes)) if has_valid else 0
             best_trial = full_trials[best_idx]
             # Net returns over full sample
             turnover = best_trial.get("turnover", 0.05)
@@ -311,7 +332,28 @@ class StrategyValidationHarness:
         # 6. Render HTML report
         self._render_html_report(report)
 
+        # 7. Write machine-readable JSON summary for preflight_check and dashboard.
+        self._write_json_summary(report)
+
         return report
+
+    def _write_json_summary(self, report: "ValidationReport") -> None:
+        """Write a compact JSON summary to reports/<strategy_id>_validation_summary.json."""
+        import json
+        from pathlib import Path
+        try:
+            reports_dir = Path("reports")
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = report.name.replace(" ", "_").replace("/", "_")
+            dest = reports_dir / f"{safe_name}_validation_summary.json"
+            dest.write_text(
+                json.dumps(report.to_summary_dict(), indent=2), encoding="utf-8"
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to write validation JSON summary: %s", exc
+            )
 
     def _apply_cost_model(self, returns: pd.Series, turnover: float = 0.05) -> pd.Series:
         """Applies execution costs based on turnover to daily returns."""
