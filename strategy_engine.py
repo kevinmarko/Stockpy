@@ -209,7 +209,8 @@ class StrategyEngine:
                           rsi_2: float = 50.0,
                           sma_5: Optional[float] = None,
                           strategy_id: Optional[str] = None,
-                          robinhood_position: Optional[RobinhoodPositionDTO] = None) -> Dict[str, Any]:
+                          robinhood_position: Optional[RobinhoodPositionDTO] = None,
+                          context_extras: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Executes multi-phase quantitative scoring across the security.
         Synthesizes technical, fundamental, macro, and volatility factors to produce
@@ -265,8 +266,15 @@ class StrategyEngine:
         
         from signals.base import SignalContext
         from signals import global_registry, SignalAggregator
-        
+
         context = SignalContext(bar=bar, fundamentals=fundamentals, macro=macro)
+        # Inject pre-computed cross-sectional/multifactor ranks from the orchestrator's
+        # universe pre_compute pass.  Without this, the advisory path (which calls
+        # evaluate_security() per-symbol without a full universe loop) would always see
+        # empty dicts and score those modules at 0 (neutral).
+        if context_extras:
+            context.xsec_percentile_ranks = context_extras.get('xsec_percentile_ranks', {})
+            context.multifactor_scores = context_extras.get('multifactor_scores', {})
 
         # 2. Run weighted aggregation
         aggregator = SignalAggregator(global_registry)

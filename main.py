@@ -1,592 +1,999 @@
-# ==============================================================================
-# MODULE: ORCHESTRATOR
-# File: main.py
-# Description: Coordinates Data -> Processing -> Forecasting -> Strategy.
-# ==============================================================================
+"""
+main.py — InvestYo Quant Platform Entry Point
+============================================
+Clean sequential orchestrator that runs one full pipeline cycle per refresh.
 
+Pipeline stages (per cycle)
+---------------------------
+  A. Account snapshot   — Robinhood positions via data.robinhood_portfolio,
+                          at-most-once-per-day (daily JSON cache).
+  B. Universe build     — held symbols ∪ WATCHLIST env var ∪ watchlist.txt
+  C. Macro context      — FRED data + HMM second opinion (degrades to neutral
+                          defaults when FRED_API_KEY is not configured)
+  D. Context pre-compute— 12-1m cross-sectional momentum ranks + multifactor
+                          composites built once for the full universe before
+                          the per-symbol loop so advisory signals see real
+                          cross-sectional data rather than the 0-score fallback
+  E. Per-symbol evaluate— market data + advisory engine; dead-letter error
+                          capture per symbol; never aborts the run
+  F. Sheet sink         — write RunResult to Google Sheets (skipped when
+                          credentials.json is absent)
+  G. HTML report        — generate daily HTML report (skipped on IO error)
+  H. Run summary        — structured log line; return RunResult
+
+Two-tier refresh cadence
+------------------------
+  Account tier  : Robinhood snapshot fetched at most once per day via a daily
+                  JSON cache at cache/account_snapshot.json.  Use --refresh-account
+                  to force a fresh login on this launch; subsequent iterations of
+                  --interval mode then resume normal caching.
+  Market tier   : prices, bars, indicators, forecasts refreshed on every call to
+                  run_once() from the live market-data provider.
+
+NOTE — Double-fetch for pre-compute
+  _fetch_bars_for_universe() fetches OHLCV history once for the full universe
+  to build the cross-sectional pre-compute context.  engine.advisory.evaluate()
+  will then fetch bars again per symbol internally (the market provider does not
+  cache bars, only quotes).  This is a known tradeoff accepted for correctness:
+  pre-compute requires the full universe before the per-symbol loop, so bars
+  must be fetched upfront.  Future optimisation: extend MarketDataProvider with
+  a bars cache or pass bars through to advisory via context_extras.
+"""
+
+# ---------------------------------------------------------------------------
+# Auto-route to the project's .venv interpreter (must be first executable code)
+# ---------------------------------------------------------------------------
 import sys
 import os
-import subprocess
+import subprocess as _sp
 
-# Auto-re-route to virtual environment interpreter if not already running in it
-venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "bin")
-venv_python = os.path.join(venv_dir, "python3")
-if not os.path.exists(venv_python):
-    venv_python = os.path.join(venv_dir, "python")
+_venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "bin")
+_venv_python = os.path.join(_venv_dir, "python3")
+if not os.path.exists(_venv_python):
+    _venv_python = os.path.join(_venv_dir, "python")
+if os.path.exists(_venv_python) and os.path.realpath(sys.executable) != os.path.realpath(_venv_python):
+    sys.exit(_sp.call([_venv_python] + sys.argv))
 
-if os.path.exists(venv_python) and os.path.realpath(sys.executable) != os.path.realpath(venv_python):
-    sys.exit(subprocess.call([venv_python] + sys.argv))
-
-
-import gspread
-import pandas as pd
-import numpy as np
-import logging 
+# ---------------------------------------------------------------------------
+# Standard-library imports (after venv guarantee)
+# ---------------------------------------------------------------------------
+import argparse
+import logging
+import signal
 import time
-import os
-from datetime import datetime
-from gspread_dataframe import set_with_dataframe
-from data_engine import DataEngine
-from processing_engine import ProcessingEngine
-from forecasting_engine import ForecastingEngine
-from strategy_engine import StrategyEngine
-from reporting_engine import ReportingEngine
-from evaluation_engine import EvaluationEngine
-from technical_options_engine import TechnicalOptionsEngine
-from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+
+# ---------------------------------------------------------------------------
+# Project imports
+# ---------------------------------------------------------------------------
 import config
+from data.market_data import get_provider, MarketDataProvider
+from data.robinhood_portfolio import (
+    AccountSnapshot,
+    PortfolioPosition,
+    fetch_account_snapshot,
+)
+from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
+from engine.advisory import Recommendation, evaluate as advisory_evaluate
 from settings import settings
-from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
-from data.robinhood_client import RobinhoodClient
+from signals import global_registry
+from signals.base import SignalContext
 
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+)
+logger = logging.getLogger("InvestYo.main")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+WATCHLIST_FILE = "watchlist.txt"      # one ticker per line; '#' lines ignored
+CREDENTIALS_FILE = "credentials.json" # Google Sheets service-account key
 SHEET_NAME = "Stock Dashboard Py"
-TAB_NAME_INPUT = "Sheet2"
 TAB_NAME_OUTPUT = "FidelityData_Automated"
-CREDENTIALS_FILE = "credentials.json"
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def main():
-    print("--- 🚀 STARTING QUANT PIPELINE ---")
-    
-    # 1. INIT
+# ---------------------------------------------------------------------------
+# RunResult — immutable container for one full pipeline cycle
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RunResult:
+    """Immutable result of one run_once() cycle.
+
+    Attributes
+    ----------
+    snapshot : AccountSnapshot
+        Robinhood account snapshot (may be stale; check snapshot.is_stale()).
+    recommendations : list[Recommendation]
+        Advisory results for every symbol that evaluated successfully.
+    errors : list[dict]
+        Dead-letter entries for each symbol that failed.  Each dict has keys:
+        symbol, stage, error_type, message, timestamp (UTC ISO-8601).
+    started_at : datetime  (UTC-aware)
+    finished_at : datetime (UTC-aware)
+    duration_seconds : float
+    """
+
+    snapshot: AccountSnapshot
+    recommendations: List[Recommendation]
+    errors: List[dict]
+    started_at: datetime
+    finished_at: datetime
+    duration_seconds: float
+
+
+# ---------------------------------------------------------------------------
+# Universe helpers
+# ---------------------------------------------------------------------------
+
+def _load_watchlist() -> List[str]:
+    """Return uppercase tickers from WATCHLIST env var or watchlist.txt.
+
+    WATCHLIST env var (comma-separated) takes precedence over the file.
+    Returns an empty list when neither source is configured.
+    """
+    env_val = os.environ.get("WATCHLIST", "").strip()
+    if env_val:
+        return [t.strip().upper() for t in env_val.split(",") if t.strip()]
+
+    wl_path = Path(WATCHLIST_FILE)
+    if wl_path.exists():
+        tickers = [
+            line.strip().upper()
+            for line in wl_path.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+        logger.info("Loaded %d tickers from %s.", len(tickers), WATCHLIST_FILE)
+        return tickers
+
+    return []
+
+
+def _build_universe(snapshot: AccountSnapshot) -> List[str]:
+    """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
+
+    Held symbols are always included regardless of the watchlist.
+    """
+    held = set(snapshot.positions.keys())
+    watchlist = set(_load_watchlist())
+    universe = sorted(held | watchlist)
+    logger.info(
+        "Universe: %d symbols (%d held, %d watchlist-only).",
+        len(universe),
+        len(held),
+        len(watchlist - held),
+    )
+    return universe
+
+
+# ---------------------------------------------------------------------------
+# Macro context (FRED + HMM second opinion)
+# ---------------------------------------------------------------------------
+
+def _build_macro_dto() -> MacroEconomicDTO:
+    """Fetch FRED macro data and build MacroEconomicDTO with HMM probability.
+
+    Degrades gracefully to neutral defaults when FRED_API_KEY is absent or
+    FRED is unreachable.  Never raises.
+    """
+    fred_key = os.environ.get("FRED_API_KEY", "").strip()
+    if not fred_key:
+        logger.info("FRED_API_KEY not configured; using neutral macro defaults.")
+        return MacroEconomicDTO(
+            yield_curve_10y_2y=0.50,
+            high_yield_oas=3.50,
+            inflation_rate=3.0,
+            nominal_10y=4.5,
+            vix_value=18.0,
+            sahm_rule_indicator=0.0,
+        )
+
     try:
-        if not os.path.exists(CREDENTIALS_FILE):
-             logging.critical(f"❌ Missing {CREDENTIALS_FILE}")
-             return
+        from data_engine import DataEngine
+        from macro_engine import MacroEngine
 
-        settings.warn_if_fred_key_leaked(logging.getLogger(__name__))
-        settings.ensure_fred_configured()
-        de = DataEngine(settings.FRED_API_KEY)
-        pe = ProcessingEngine()
-        fe = ForecastingEngine()
-        se = StrategyEngine()
-        ee = EvaluationEngine()
-        
-        gc = gspread.service_account(filename=CREDENTIALS_FILE)
-        sh = gc.open(SHEET_NAME)
-        input_ws = sh.worksheet(TAB_NAME_INPUT)
-        tickers = [t for t in input_ws.col_values(1)[1:] if t]
-        
-        rh_client = RobinhoodClient()
-        rh_positions = {}
-        if rh_client.login():
-            rh_positions = rh_client.fetch_positions()
-            for tk in rh_positions.keys():
-                if tk not in tickers:
-                    tickers.append(tk)
-                    
-        print(f"✅ Found {len(tickers)} tickers.")
-        
-    except Exception as e:
-        logging.critical(f"❌ Init Failure: {e}")
+        de = DataEngine(fred_key)
+        macro_raw = de.fetch_macro_raw()
+
+        me = MacroEngine(data_engine=de)
+        spy_df: Optional[pd.DataFrame] = None
+        try:
+            spy_raw = de.fetch_technical_raw(["SPY"])
+            spy_df = spy_raw.get("SPY")
+        except Exception as spy_exc:
+            logger.debug("SPY history for HMM unavailable: %s", spy_exc)
+
+        hmm_prob = me.compute_hmm_risk_on_probability(spy_df)
+
+        dto = MacroEconomicDTO(
+            yield_curve_10y_2y=float(macro_raw.get("T10Y2Y", 0.5)),
+            high_yield_oas=float(macro_raw.get("BAMLH0A0HYM2", 3.5)),
+            inflation_rate=float(macro_raw.get("CPIAUCSL_YoY", 2.0)),
+            nominal_10y=float(macro_raw.get("DGS10", 4.0)),
+            vix_value=float(macro_raw.get("VIXCLS", 18.0)),
+            sahm_rule_indicator=float(macro_raw.get("SAHMREALTIME", 0.0)),
+            hmm_risk_on_probability=hmm_prob,
+        )
+        logger.info(
+            "Macro DTO built — regime=%s  VIX=%.1f  HMM=%.2f.",
+            dto.market_regime,
+            dto.vix_value,
+            hmm_prob if hmm_prob is not None else float("nan"),
+        )
+        return dto
+
+    except Exception as exc:
+        logger.warning("Macro DTO construction failed (%s); using neutral defaults.", exc)
+        return MacroEconomicDTO(
+            yield_curve_10y_2y=0.50,
+            high_yield_oas=3.50,
+            inflation_rate=3.0,
+            nominal_10y=4.5,
+            vix_value=18.0,
+            sahm_rule_indicator=0.0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Context pre-compute (cross-sectional ranks + multifactor composites)
+# ---------------------------------------------------------------------------
+
+def _fetch_bars_for_universe(
+    symbols: List[str],
+    market: MarketDataProvider,
+) -> Dict[str, pd.DataFrame]:
+    """Fetch 252-day OHLCV history for all symbols via the market provider.
+
+    Returns a dict symbol → DataFrame.  Failures are dead-lettered per symbol
+    so one bad ticker never aborts the pre-compute pass.
+    """
+    bars: Dict[str, pd.DataFrame] = {}
+    for sym in symbols:
+        try:
+            df = market.get_intraday_bars(sym, lookback_days=252)
+            if df is not None and not df.empty:
+                bars[sym] = df
+        except Exception as exc:
+            logger.debug("Bars pre-fetch skipped for %s: %s", sym, exc)
+    logger.info("Pre-fetched bars for %d / %d symbols.", len(bars), len(symbols))
+    return bars
+
+
+def _build_context_extras(
+    symbols: List[str],
+    bars_dict: Dict[str, pd.DataFrame],
+    macro_dto: MacroEconomicDTO,
+) -> Dict[str, Any]:
+    """Build universe-wide pre-computed signal context for injection into advisory.
+
+    Computes 12-1m cross-sectional momentum ranks and Fama-French multifactor
+    composites by running global_registry.run_pre_compute() on a minimal
+    universe DataFrame.  The result is passed as context_extras to each
+    advisory.evaluate() call so cross-sectional and multifactor signals score
+    with real data instead of their neutral-0 fallback.
+
+    Returns an empty dict (and logs a warning) if pre_compute raises.
+    """
+    SKIP_DAYS = 22       # 1-month skip for Jegadeesh-Titman momentum
+    LOOKBACK_DAYS = 252  # 12-month lookback
+    REQUIRED = LOOKBACK_DAYS + SKIP_DAYS + 1
+
+    try:
+        # ── Step 1: compute 12-1m cross-sectional returns ────────────────────
+        xsec_return: Dict[str, float] = {}
+        for sym, df in bars_dict.items():
+            close = df["Close"].dropna()
+            if len(close) < REQUIRED:
+                continue
+            p_recent = float(close.iloc[-(SKIP_DAYS + 1)])
+            p_old = float(close.iloc[-(LOOKBACK_DAYS + 1)])
+            if p_old > 0:
+                xsec_return[sym] = p_recent / p_old - 1.0
+
+        if xsec_return:
+            ret_series = pd.Series(xsec_return)
+            xsec_rank_series = ret_series.rank(pct=True, ascending=True)
+        else:
+            xsec_rank_series = pd.Series(dtype=float)
+
+        # ── Step 2: build a minimal universe DataFrame for pre_compute ────────
+        rows = []
+        for sym in symbols:
+            df = bars_dict.get(sym)
+            price = float(df["Close"].iloc[-1]) if df is not None and not df.empty else 0.0
+            rows.append({
+                "Symbol": sym,
+                "Price": price,
+                "XSec_12_1M": xsec_return.get(sym, float("nan")),
+                "XSec_Momentum_Rank": (
+                    float(xsec_rank_series[sym])
+                    if sym in xsec_rank_series.index
+                    else float("nan")
+                ),
+            })
+        universe_df = pd.DataFrame(rows)
+
+        # ── Step 3: run global_registry.run_pre_compute() ────────────────────
+        stub_bar = MarketBarDTO(
+            date=datetime.now(),
+            ticker="__UNIVERSE__",
+            open_price=100.0,
+            high_price=100.0,
+            low_price=100.0,
+            close_price=100.0,
+            volume=0,
+        )
+        stub_fund = FundamentalDataDTO(
+            ticker="__UNIVERSE__",
+            pe_ratio=None,
+            pb_ratio=None,
+            dividend_yield=0.0,
+            book_value=0.0,
+            eps_trailing=0.0,
+            dividend_growth_rate=0.0,
+            payout_ratio=0.0,
+            sector="Unknown",
+            company_name="Universe stub",
+        )
+        shared_ctx = SignalContext(bar=stub_bar, fundamentals=stub_fund, macro=macro_dto)
+        global_registry.run_pre_compute(universe_df, shared_ctx)
+
+        logger.info(
+            "Context pre-compute: %d xsec ranks, %d multifactor scores.",
+            len(shared_ctx.xsec_percentile_ranks),
+            len(shared_ctx.multifactor_scores),
+        )
+        return {
+            "xsec_percentile_ranks": shared_ctx.xsec_percentile_ranks,
+            "multifactor_scores": shared_ctx.multifactor_scores,
+        }
+
+    except Exception as exc:
+        logger.warning(
+            "Context pre-compute failed (%s); cross-sectional signals will score 0.", exc
+        )
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Sheet sink helpers
+# ---------------------------------------------------------------------------
+
+def _rec_to_sheet_row(
+    rec: Recommendation,
+    snapshot: AccountSnapshot,
+    price: float,
+) -> dict:
+    """Map one Recommendation + position to a Sheet-compatible row dict.
+
+    Columns not derivable from advisory output are left as "" or 0.  The row
+    uses internal column keys from config.COLUMN_SCHEMA; get_rename_mapping()
+    translates them to display headers before writing.
+    """
+    ki = rec.key_indicators
+    pos: Optional[PortfolioPosition] = snapshot.positions.get(rec.symbol)
+
+    def _f(key: str, default: float = 0.0) -> float:
+        v = ki.get(key, default)
+        if v is None:
+            return default
+        try:
+            f = float(v)
+            return default if (f != f) else f  # NaN guard
+        except (TypeError, ValueError):
+            return default
+
+    forecast_30 = float(rec.forecast) if rec.forecast is not None else 0.0
+    forecast_pct = _f("forecast_30d_pct")
+
+    return {
+        # ── Core identity ────────────────────────────────────────────────────
+        "Symbol": rec.symbol,
+        "Price": round(price, 4),
+
+        # ── Signal & advice ──────────────────────────────────────────────────
+        "Action Signal": rec.action,
+        "Advice": rec.rationale[:200] if rec.rationale else "",
+        "Actionable Advice Signal": f"{rec.action}: {rec.strategy}",
+        "Score": round(_f("score", 50.0), 2),
+        "Kelly Target": round(_f("kelly_raw"), 6),
+        "Edge Ratio": 0.0,
+
+        # ── Technical indicators ─────────────────────────────────────────────
+        "RSI": round(_f("rsi", 50.0), 2),
+        "RSI_2": round(_f("rsi_2", 50.0), 2),
+        "MACD_Line": round(_f("macd_line"), 4),
+        "ATR": round(_f("atr"), 4),
+        "Aroon Oscillator": round(_f("aroon_osc"), 2),
+        "Sortino Ratio": round(_f("sortino"), 4),
+        "Max Drawdown": round(_f("max_drawdown"), 4),
+        "RS vs SPY": round(_f("rs_vs_spy"), 4),
+        "GARCH_Vol": round(_f("garch_vol"), 6),
+
+        # ── Forecast ─────────────────────────────────────────────────────────
+        "Forecast_30": round(forecast_30, 2),
+        "Forecast_30_Pct": round(forecast_pct, 6),
+
+        # ── Dividends ────────────────────────────────────────────────────────
+        "Dividend Yield": round(_f("dividend_yield"), 4),
+
+        # ── Execution ranges (not computed by advisory) ──────────────────────
+        "buyRange": "",
+        "sellRange": "",
+        "Option Strategy": "",
+
+        # ── Robinhood position ───────────────────────────────────────────────
+        "Robinhood Shares": float(pos.quantity) if pos else 0.0,
+        "Robinhood Avg Cost": float(pos.average_cost) if pos else 0.0,
+        "Robinhood Dividends": float(pos.dividends_received) if pos else 0.0,
+        "Robinhood Advice": (
+            f"Hold {pos.quantity:.0f} @ avg ${pos.average_cost:.2f}"
+            if pos else "Not held"
+        ),
+
+        # ── Advisory overlay ─────────────────────────────────────────────────
+        "Advisory_Action": rec.action,
+        "Advisory_Conviction": round(rec.conviction, 4),
+        "Advisory_Rationale": rec.rationale,
+        "Advisory_Position_Pct": round(rec.suggested_position_pct, 6),
+        "Advisory_Data_Quality": rec.data_quality,
+
+        # ── Placeholders for full-pipeline columns not produced by advisory ──
+        "Strategy Explainer Notes": rec.rationale[:150] if rec.rationale else "",
+        "Macro Status": "",
+        "HMM_Risk_On_Probability": float("nan"),
+    }
+
+
+def _write_to_sheet(result: RunResult, market: Optional[MarketDataProvider] = None) -> None:
+    """Write RunResult to Google Sheets (Stage F).
+
+    Silently skipped when credentials.json is absent.  Errors are caught and
+    logged — the Sheet is best-effort; analysis value must not depend on it.
+    """
+    if not os.path.exists(CREDENTIALS_FILE):
+        logger.info("Sheet write skipped — %s not found.", CREDENTIALS_FILE)
         return
 
-    # 2. DATA
-    print("--- 2. EXECUTING DATA ENGINE ---")
-    macro_raw = de.fetch_macro_raw()
-    fund_raw = de.fetch_fundamentals_raw(tickers)
-    tech_raw = de.fetch_technical_raw(list(set(tickers + ["SPY"]))) # This contains HISTORY!
-
-
-    # Validate raw technical data via MarketDataSchema
-    print("⏳ Validating fetched market data schemas...")
-    validated_tech_raw = {}
-    for ticker, df in tech_raw.items():
-        try:
-            validated_df = config.MarketDataSchema.validate(df)
-            validated_tech_raw[ticker] = validated_df
-        except Exception as e:
-            logging.error(f"❌ Market data schema validation failed for {ticker}: {e}")
-            # Keep the original df but log the issue
-            validated_tech_raw[ticker] = df
-    tech_raw = validated_tech_raw
-
-    # Convert raw data into DTOs for Object-Oriented mathematical safety
-    print("⏳ Transforming raw API outputs to strictly typed DTO models...")
-    macro_dto = MacroEconomicDTO(
-        yield_curve_10y_2y=macro_raw.get('T10Y2Y', 0.5),
-        high_yield_oas=macro_raw.get('BAMLH0A0HYM2', 3.5),
-        inflation_rate=macro_raw.get('CPIAUCSL_YoY', 2.0),
-        nominal_10y=macro_raw.get('DGS10', 4.0),
-        vix_value=macro_raw.get('VIXCLS', 15.0)
-    )
-
-    fund_dtos = {}
-    if fund_raw:
-        first_ticker = list(fund_raw.keys())[0]
-        first_info = fund_raw[first_ticker].get('info', {})
-        print(f"DEBUG {first_ticker} INFO:", {k: first_info[k] for k in first_info if 'institution' in k.lower() or 'held' in k.lower() or 'debt' in k.lower() or 'equity' in k.lower()})
-        try:
-            import json
-            with open("info_keys.json", "w") as f:
-                json.dump(first_info, f, indent=4)
-        except Exception as e:
-            logging.warning(f"Could not dump info_keys.json: {e}")
-    for ticker, data in fund_raw.items():
-        if data and 'info' in data:
-            # EXPLANATION: Pass raw dividends history to DTO factory to calculate 5-year CAGR.
-            fund_dtos[ticker] = FundamentalDataDTO.from_raw_dict(ticker, data['info'], dividends=data.get('dividends'))
-
-    # EXPLANATION: Implements Step 4. Calculates portfolio-wide realized slippage and tail dependency risk (CoVaR Proxy).
-    # Load Transactions for Slippage
     try:
-        trans_ws = sh.worksheet("Transactions")
-        trans_df = pd.DataFrame(trans_ws.get_all_records())
-        portfolio_slippage_val = pe.research_engine.calculate_realized_slippage(trans_df)
-        # EXPLANATION: Handle float return values directly, keeping a fallback check.
-        portfolio_slippage = portfolio_slippage_val if isinstance(portfolio_slippage_val, (int, float)) else portfolio_slippage_val.get("average_slippage_bps", 0.0)
-    except Exception as e:
-        logging.warning(f"Could not load Transactions sheet for Slippage: {e}")
-        portfolio_slippage = 0.0
+        import gspread
+        from gspread_dataframe import set_with_dataframe
 
-    # Calculate Returns Matrix for Tail Dependency (CoVaR)
-    returns_dict = {}
-    for ticker, df in tech_raw.items():
-        if not df.empty and 'Close' in df.columns:
-            returns_dict[ticker] = df['Close'].pct_change().dropna()
-    returns_matrix = pd.DataFrame(returns_dict)
-    covar_risk_val = pe.research_engine.calculate_portfolio_covar_dependency(returns_matrix)
-    # EXPLANATION: Handle float return values directly, keeping a fallback check.
-    covar_risk = covar_risk_val if isinstance(covar_risk_val, (int, float)) else covar_risk_val.get("max_correlation", 1.0)
-
-    # 3. PROCESSING
-    print("--- 3. EXECUTING PROCESSING ENGINE ---")
-    regime_data = pe.process_macro_regime(macro_dto)
-    
-    # Load Transactions data from sheet or CSV
-    transactions_df = pd.DataFrame()
-    try:
-        trans_ws = sh.worksheet("Transactions")
-        trans_data = trans_ws.get_all_records()
-        transactions_df = pd.DataFrame(trans_data)
-        print("✅ Loaded Transactions data from Google Sheet.")
-    except Exception:
-        if os.path.exists("Transactions.csv"):
-            try:
-                transactions_df = pd.read_csv("Transactions.csv")
-                print("✅ Loaded Transactions data from Transactions.csv.")
-            except Exception as e:
-                logging.warning(f"Could not load Transactions.csv: {e}")
-
-    # Process technical metrics and fundamental metrics
-    tech_metrics = pe.calculate_technical_metrics(tech_raw, transactions_df=transactions_df)
-    realized_vol_60d_map = {
-        ticker: metrics.get('Realized_Vol_60D', float('nan'))
-        for ticker, metrics in tech_metrics.items()
-    }
-    fund_metrics = pe.calculate_fundamental_metrics(fund_dtos, realized_vol_60d_map=realized_vol_60d_map)
-    
-    dashboard_df = pe.compile_dashboard(tech_metrics, fund_metrics, regime_data)
-    # EXPLANATION: Inject portfolio-wide slippage and tail dependency risk (CoVaR Proxy) for all rows.
-    if not dashboard_df.empty:
-        dashboard_df['Realized Slippage'] = portfolio_slippage
-        dashboard_df['CoVaR Proxy'] = covar_risk
-
-    # Instantiate TechnicalOptionsEngine and calculate advanced indicators
-    toe = TechnicalOptionsEngine()
-    dashboard_df['GARCH_Vol'] = 0.0
-    dashboard_df['Realized_Vol_Rank'] = 0.0
-    dashboard_df['True_IVR'] = 0.0
-    dashboard_df['VRP'] = 0.0
-    dashboard_df['Aroon Oscillator'] = 0.0
-    dashboard_df['Coppock Curve'] = 0.0
-    dashboard_df['Chandelier Exit'] = 0.0
-    
-    tech_opt_strategies = {}
-    tech_opt_indicators = {}
-    iv_store = IVHistoryStore()
-    
-    for index, row in dashboard_df.iterrows():
-        ticker = row.get('Symbol')
-        df_hist = tech_raw.get(ticker)
-        if df_hist is not None and not df_hist.empty:
-            try:
-                indicators = toe.calculate_indicators(df_hist)
-                vol = toe.estimate_gjr_garch_volatility(df_hist)
-                realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
-                
-                # Fetch options chain / compute true 30d ATM IV
-                as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
-                price_val = float(row.get('Price', 100.0))
-                
-                current_iv = float('nan')
-                if de is not None:
-                    current_iv = get_30d_atm_iv(de, ticker, as_of_date, spot_price=price_val)
-                    if not np.isnan(current_iv):
-                        iv_store.record_iv(ticker, as_of_date, current_iv)
-                
-                true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
-                vrp = get_vrp(ticker, current_iv, vol)
-                
-                opt_strat = toe.generate_option_strategy_matrix(
-                    true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
-                    aroon_osc=indicators["Aroon_Oscillator"],
-                    coppock_val=indicators["Coppock_Curve"],
-                    stock_price=price_val,
-                    current_iv=current_iv if not np.isnan(current_iv) else vol,
-                    vrp=vrp,
-                    macro_dto=macro_dto
-                )
-                
-                dashboard_df.at[index, 'GARCH_Vol'] = vol
-                dashboard_df.at[index, 'Realized_Vol_Rank'] = realized_vol_rank
-                dashboard_df.at[index, 'True_IVR'] = true_ivr
-                dashboard_df.at[index, 'VRP'] = vrp
-                dashboard_df.at[index, 'Aroon Oscillator'] = indicators["Aroon_Oscillator"]
-                dashboard_df.at[index, 'Coppock Curve'] = indicators["Coppock_Curve"]
-                dashboard_df.at[index, 'Chandelier Exit'] = indicators["Chandelier_Long"]
-                tech_opt_strategies[ticker] = opt_strat
-                tech_opt_indicators[ticker] = indicators
-            except Exception as e:
-                logging.error(f"Technical indicators/options calc failed for {ticker}: {e}")
-
-    if "SPY" not in tickers and not dashboard_df.empty:
-        dashboard_df = dashboard_df[dashboard_df['Symbol'] != "SPY"]
-    print(f"✅ Compiled baseline data for {len(dashboard_df)} tickers.")
-
-    # 4. FORECASTING
-    print("--- 4. EXECUTING FORECASTING ENGINE ---")
-    forecast_cols = ['Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
-                     'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
-                     'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper']
-    
-    for col in forecast_cols: dashboard_df[col] = 0.0
-
-    print(f"⏳ Generating forecasts...")
-    for index, row in dashboard_df.iterrows():
+        gc = gspread.service_account(filename=CREDENTIALS_FILE)
+        sh = gc.open(SHEET_NAME)
         try:
-            ticker = row.get('Symbol')
-            price = row.get('Price')
-            
-            if not price or price == 0: continue
-
-            # Retrieve History from tech_raw dictionary
-            history_df = tech_raw.get(ticker)
-            history_series = history_df['Close'] if history_df is not None else None
-
-            # Pass history to engine so ARIMA/HW/CNN-LSTM can run
-            forecasts = fe.generate_forecast(row, price, history_series, history_df=history_df)
-            
-            # Map results
-            for key in forecast_cols:
-                dashboard_df.at[index, key] = forecasts.get(key, 0)
-            
-        except Exception as e:
-            logging.error(f"Forecasting failed for {ticker}: {e}")
-
-    # 5. STRATEGY EVALUATION
-    print("--- 5. EXECUTING STRATEGY ENGINE ---")
-    # 'sellRange' is the dedicated sell-side execution band. It must be
-    # pre-allocated here so the Google Sheets "Sell Range" column (config.
-    # COLUMN_SCHEMA) is populated for every ticker — including rows whose
-    # per-symbol evaluation later raises an exception and falls through.
-    strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target', 'Option Strategy', 'buyRange', 'sellRange', 'Strategy Explainer Notes']
-    for col in strategy_cols:
-        dashboard_df[col] = ""
-    dashboard_df['Kelly Target'] = 0.0
-
-    # Pre-allocate trackers for newly mapped columns
-    for col in ['Aroon Oscillator', 'Coppock Curve', 'Chandelier Exit', 'Edge Ratio']:
-        if col not in dashboard_df.columns:
-            dashboard_df[col] = 0.0
-
-    for index, row in dashboard_df.iterrows():
-        try:
-            ticker = row.get('Symbol')
-            price = row.get('Price')
-            if not price or price == 0: continue
-
-            # Construct MarketBarDTO
-            history_df = tech_raw.get(ticker)
-            if history_df is not None and not history_df.empty:
-                latest_row = history_df.iloc[-1]
-                bar_dto = MarketBarDTO(
-                    date=datetime.now(),
-                    ticker=ticker,
-                    open_price=latest_row.get('Open', price),
-                    high_price=latest_row.get('High', price),
-                    low_price=latest_row.get('Low', price),
-                    close_price=latest_row.get('Close', price),
-                    volume=latest_row.get('Volume', 0)
-                )
-            else:
-                bar_dto = MarketBarDTO(datetime.now(), ticker, price, price, price, price, 0)
-
-            # Get FundamentalDataDTO
-            fund_dto = fund_dtos.get(ticker)
-            if fund_dto is None:
-                fund_dto = FundamentalDataDTO(
-                    ticker=ticker, pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
-                    book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
-                    payout_ratio=0.0, sector="Unknown", company_name="Unknown"
-                )
-
-            # Evaluate strategy rules
-            atr_val = float(row.get('ATR', 0.0))
-            aroon_val = float(row.get('Aroon Up', 50.0))
-            macd_line_val = float(row.get('MACD_Line', 0.0))
-            macd_signal_val = float(row.get('MACD_Signal', 0.0))
-            aroon_osc_val = float(row.get('Aroon Oscillator', 0.0))
-            rsi_val = float(row.get('RSI', 50.0))
-            sortino_val = float(row.get('Sortino Ratio', row.get('Sortino_Ratio', 0.0)))
-            drawdown_val = float(row.get('Max Drawdown', row.get('Max_Drawdown', 0.0)))
-            rs_val = float(row.get('Relative_Strength', row.get('RS vs SPY', row.get('Relative Strength', 0.0))))
-            garch_val = float(row.get('GARCH_Vol', 0.0))
-            edge_val = float(row.get('Edge Ratio', row.get('Edge_Ratio', 0.0)))
-            rsi_2_val = float(row.get('RSI_2', 50.0)) if pd.notna(row.get('RSI_2', 50.0)) else 50.0
-            sma_5_val = float(row.get('SMA_5')) if pd.notna(row.get('SMA_5')) else None
-            chan_long = 0.0
-            chan_short = 0.0
-            if ticker in tech_opt_indicators:
-                chan_long = tech_opt_indicators[ticker].get("Chandelier_Long", 0.0)
-                chan_short = tech_opt_indicators[ticker].get("Chandelier_Short", 0.0)
-
-            strategy_output = se.evaluate_security(
-                bar=bar_dto,
-                fundamentals=fund_dto,
-                macro=macro_dto,
-                forecast_price=row.get('Forecast_30', 0.0),
-                trend_strength=aroon_val,
-                atr=atr_val,
-                macd_line=macd_line_val,
-                macd_signal=macd_signal_val,
-                aroon_osc=aroon_osc_val,
-                rsi=rsi_val,
-                sortino_ratio=sortino_val,
-                max_drawdown=drawdown_val,
-                relative_strength=rs_val,
-                garch_vol=garch_val,
-                edge_ratio=edge_val,
-                chandelier_long=chan_long,
-                chandelier_short=chan_short,
-                roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
-                sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
-                rsi_2=rsi_2_val,
-                sma_5=sma_5_val,
-                robinhood_position=rh_positions.get(ticker)
+            ws = sh.worksheet(TAB_NAME_OUTPUT)
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(
+                title=TAB_NAME_OUTPUT,
+                rows=500,
+                cols=len(config.get_headers()),
             )
 
-            # Map strategy fields
-            dashboard_df.at[index, 'Action Signal'] = strategy_output['Action Signal']
-            dashboard_df.at[index, 'Advice'] = strategy_output['Advice']
-            dashboard_df.at[index, 'Actionable Advice Signal'] = strategy_output['Actionable Advice Signal']
-            dashboard_df.at[index, 'Kelly Target'] = float(strategy_output['Kelly Target'])
-            dashboard_df.at[index, 'is_dividend_sustainable'] = int(fund_dto.is_dividend_sustainable)
-            dashboard_df.at[index, 'eps_trailing'] = fund_dto.eps_trailing
-            dashboard_df.at[index, 'book_value'] = fund_dto.book_value
-            dashboard_df.at[index, 'graham_number'] = fund_dto.graham_number
-            if ticker in tech_opt_strategies:
-                dashboard_df.at[index, 'Option Strategy'] = tech_opt_strategies[ticker]
-            else:
-                dashboard_df.at[index, 'Option Strategy'] = strategy_output['Option Strategy']
-            dashboard_df.at[index, 'buyRange'] = strategy_output['buyRange']
-            # Propagate the sell-side range into the Sheets sink so the
-            # "Sell Range" column (config.COLUMN_SCHEMA) is populated.
-            dashboard_df.at[index, 'sellRange'] = strategy_output['sellRange']
-            dashboard_df.at[index, 'Strategy Explainer Notes'] = strategy_output['Strategy Explainer Notes']
-            
-            dashboard_df.at[index, 'Robinhood Shares'] = strategy_output.get('Robinhood Shares', 0.0)
-            dashboard_df.at[index, 'Robinhood Avg Cost'] = strategy_output.get('Robinhood Avg Cost', 0.0)
-            dashboard_df.at[index, 'Robinhood Dividends'] = strategy_output.get('Robinhood Dividends', 0.0)
-            dashboard_df.at[index, 'Robinhood Advice'] = strategy_output.get('Robinhood Advice', 'N/A')
+        # ── Build rows for successful recommendations ─────────────────────────
+        rows: List[dict] = []
+        for rec in result.recommendations:
+            price = 0.0
+            if market is not None:
+                try:
+                    q = market.get_latest_quote(rec.symbol)
+                    price = q.price
+                except Exception:
+                    pass
+            rows.append(_rec_to_sheet_row(rec, result.snapshot, price))
 
-            # Calculate Edge Ratio on historical holding segment of last 15 active trading days
-            edge_ratio_val = 0.0
-            if history_df is not None and len(history_df) >= 20:
-                holding_period = history_df.iloc[-15:]
-                entry_d = holding_period.index[0]
-                exit_d = holding_period.index[-1]
-                trade_entry_p = float(holding_period['Close'].iloc[0])
-                
-                edge_ratio_res = ee.calculate_edge_ratio(history_df, trade_entry_p, entry_d, exit_d)
-                edge_ratio_val = float(edge_ratio_res.get("Edge Ratio", 0.0))
-            
-            dashboard_df.at[index, 'Edge Ratio'] = edge_ratio_val
-
-        except Exception as e:
-            logging.error(f"Strategy evaluation failed for {ticker}: {e}")
-
-    # Map 'Avg Cost' to 'Entry_Price' if present
-    if 'Avg Cost' in dashboard_df.columns:
-        dashboard_df['Entry_Price'] = dashboard_df['Avg Cost']
-
-    # Map 'Shares' to 'position_size' for Portfolio Heat
-    if 'Shares' in dashboard_df.columns and 'Price' in dashboard_df.columns:
-        dashboard_df['position_size'] = dashboard_df['Shares'] * dashboard_df['Price']
-    elif 'position_size' not in dashboard_df.columns:
-        dashboard_df['position_size'] = 10000.0 # Default $10k assumption
-
-    # Map VaR 95 to stop loss percentage
-    if 'VaR 95' in dashboard_df.columns:
-        dashboard_df['stop_loss_pct'] = dashboard_df['VaR 95'].abs()
-    elif 'VaR_95' in dashboard_df.columns:
-        dashboard_df['stop_loss_pct'] = dashboard_df['VaR_95'].abs()
-    elif 'stop_loss_pct' not in dashboard_df.columns:
-        dashboard_df['stop_loss_pct'] = 0.05
-
-    # Align Sector string casing
-    if 'Sector' in dashboard_df.columns and 'sector' not in dashboard_df.columns:
-        dashboard_df['sector'] = dashboard_df['Sector']
-    
-    if 'RS vs SPY' in dashboard_df.columns and 'Relative_Strength' not in dashboard_df.columns:
-        dashboard_df['Relative_Strength'] = dashboard_df['RS vs SPY']
-    elif 'Relative Strength' in dashboard_df.columns and 'Relative_Strength' not in dashboard_df.columns:
-        dashboard_df['Relative_Strength'] = dashboard_df['Relative Strength']
-    elif 'Relative_Strength' not in dashboard_df.columns:
-        dashboard_df['Relative_Strength'] = 0.0
-
-    # CRITICAL FIX 3: Generate Benchmark and Execute Evaluation
-    if 'sector' in dashboard_df.columns:
-        unique_sectors = dashboard_df['sector'].dropna().unique()
-        if len(unique_sectors) > 0:
-            benchmark_df = pd.DataFrame({
-                'sector': unique_sectors,
-                'weight': 1.0 / len(unique_sectors),
-                'return': 0.02
+        # ── Dead-letter rows (one per errored symbol) ─────────────────────────
+        for err in result.errors:
+            rows.append({
+                "Symbol": err["symbol"],
+                "Action Signal": "ERROR",
+                "Advice": (
+                    f"[{err['stage']}] {err['error_type']}: "
+                    f"{err['message'][:80]}"
+                ),
+                "Advisory_Data_Quality": "PARTIAL",
             })
-        else:
-            benchmark_df = pd.DataFrame()
-    else:
-        benchmark_df = pd.DataFrame()
 
-    if not dashboard_df.empty:
-        dashboard_df = ee.evaluate_portfolio(dashboard_df, benchmark_df, data_provider=tech_raw)
+        if not rows:
+            logger.info("Sheet write skipped — no rows to write.")
+            return
 
-    # CRITICAL FIX 4: Handle NaNs/values before Google Sheets Export
-    export_keys = ['MAE', 'MFE', 'Edge Ratio', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection']
-    for key in export_keys:
-        if key in dashboard_df.columns:
-            if key not in ['MAE', 'MFE', 'Edge Ratio']:
-                dashboard_df[key] = dashboard_df[key].fillna(0.0)
-        else:
-            if key not in ['MAE', 'MFE', 'Edge Ratio']:
-                dashboard_df[key] = 0.0
-            else:
-                dashboard_df[key] = np.nan
+        df = pd.DataFrame(rows)
 
-    # Validate compile dashboard dataframe structure
-    if not dashboard_df.empty:
+        # Rename internal keys → display headers
+        rename_map = config.get_rename_mapping()
+        df.rename(columns=rename_map, inplace=True)
+
+        # Ensure all expected columns are present (fill missing with "")
+        final_headers = config.get_headers()
+        for h in final_headers:
+            if h not in df.columns:
+                df[h] = ""
+        df = df[[h for h in final_headers if h in df.columns]]
+        df = df.replace([np.inf, -np.inf], np.nan).fillna("")
+
+        set_with_dataframe(
+            ws, df,
+            row=1, col=1,
+            include_column_header=True,
+            resize=True,
+        )
+        logger.info("Sheet updated: %d rows → '%s'.", len(df), TAB_NAME_OUTPUT)
+
+        # Apply conditional formatting (non-fatal)
         try:
-            dashboard_df = config.DashboardSchema.validate(dashboard_df)
-            print("✅ Consolidated dashboard schema validation passed.")
-        except Exception as e:
-            logging.error(f"❌ Consolidated dashboard schema validation failed: {e}")
+            _apply_conditional_formatting(sh, ws, list(df.columns))
+        except Exception as cf_exc:
+            logger.warning("Conditional formatting failed (non-critical): %s", cf_exc)
 
-    # 6. EXPORT
-    print("--- 6. PREPARING EXPORT SCHEMA ---")
-    rename_map = config.get_rename_mapping()
-    export_df = dashboard_df.rename(columns=rename_map)
-    final_headers = config.get_headers()
-    
-    for h in final_headers:
-        if h not in export_df.columns: export_df[h] = 0
-            
-    export_df = export_df[final_headers]
-    export_df = export_df.replace([np.inf, -np.inf], np.nan)
-    cols_to_fill = [c for c in export_df.columns if c not in ["Max Adverse Excursion (MAE)", "Max Favorable Excursion (MFE)", "Edge Ratio"]]
-    export_df[cols_to_fill] = export_df[cols_to_fill].fillna(0)
-    
-    # DEBUG DUMPS
-    dashboard_df.to_csv("dashboard_df_debug.csv", index=False)
-    export_df.to_csv("export_df_debug.csv", index=False)
-    transactions_df.to_csv("transactions_df_debug.csv", index=False)
-    
-    # 7. WRITE
-    print(f"--- 7. WRITING TO SHEET ---")
+    except Exception as exc:
+        logger.error("Sheet write failed: %s", exc)
+
+
+def _apply_conditional_formatting(
+    sh: Any,
+    ws: Any,
+    headers: List[str],
+) -> None:
+    """Apply conditional formatting rules to the output Sheet.
+
+    Highlights Action Signal, Dividend Payback Horizon, Leverage Distress
+    Factor, and Options IV Edge columns — matching old main.py behaviour.
+    """
+    sheet_id = ws.id
+    requests = []
+
+    # Action Signal colour banding
+    if "Action Signal" in headers:
+        col_idx = headers.index("Action Signal")
+        for text, rgb in [
+            ("STRONG BUY",  {"red": 0.20, "green": 0.80, "blue": 0.20}),
+            ("BUY",         {"red": 0.70, "green": 0.95, "blue": 0.70}),
+            ("HOLD",        {"red": 1.00, "green": 1.00, "blue": 0.80}),
+            ("SELL",        {"red": 0.95, "green": 0.70, "blue": 0.70}),
+            ("RISK REDUCE", {"red": 0.95, "green": 0.60, "blue": 0.60}),
+            ("ERROR",       {"red": 0.90, "green": 0.80, "blue": 0.80}),
+        ]:
+            requests.append({
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [{
+                            "sheetId": sheet_id,
+                            "startRowIndex": 1, "endRowIndex": 1000,
+                            "startColumnIndex": col_idx,
+                            "endColumnIndex": col_idx + 1,
+                        }],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_EQ",
+                                "values": [{"userEnteredValue": text}],
+                            },
+                            "format": {"backgroundColor": rgb},
+                        },
+                    },
+                    "index": 0,
+                }
+            })
+
+    # Dividend Payback Horizon — green (short) to red (long)
+    if "Dividend Payback Horizon" in headers:
+        dph_idx = headers.index("Dividend Payback Horizon")
+        requests.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1, "endRowIndex": 1000,
+                        "startColumnIndex": dph_idx, "endColumnIndex": dph_idx + 1,
+                    }],
+                    "gradientRule": {
+                        "minpoint": {
+                            "color": {"red": 0.85, "green": 0.95, "blue": 0.85},
+                            "type": "NUMBER", "value": "8",
+                        },
+                        "midpoint": {
+                            "color": {"red": 1.0, "green": 1.0, "blue": 0.85},
+                            "type": "NUMBER", "value": "11.5",
+                        },
+                        "maxpoint": {
+                            "color": {"red": 0.95, "green": 0.85, "blue": 0.85},
+                            "type": "NUMBER", "value": "15",
+                        },
+                    },
+                },
+                "index": 0,
+            }
+        })
+
+    # Leverage Distress Factor — red if < 0.3
+    if "Leverage Distress Factor" in headers:
+        lev_idx = headers.index("Leverage Distress Factor")
+        requests.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1, "endRowIndex": 1000,
+                        "startColumnIndex": lev_idx, "endColumnIndex": lev_idx + 1,
+                    }],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "NUMBER_LESS",
+                            "values": [{"userEnteredValue": "0.3"}],
+                        },
+                        "format": {
+                            "backgroundColor": {"red": 0.98, "green": 0.82, "blue": 0.82}
+                        },
+                    },
+                },
+                "index": 0,
+            }
+        })
+
+    # Options IV Edge — green if > 0
+    if "Options IV Edge" in headers:
+        opt_idx = headers.index("Options IV Edge")
+        requests.append({
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [{
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1, "endRowIndex": 1000,
+                        "startColumnIndex": opt_idx, "endColumnIndex": opt_idx + 1,
+                    }],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "NUMBER_GREATER",
+                            "values": [{"userEnteredValue": "0.0"}],
+                        },
+                        "format": {
+                            "backgroundColor": {"red": 0.85, "green": 0.95, "blue": 0.85}
+                        },
+                    },
+                },
+                "index": 0,
+            }
+        })
+
+    if requests:
+        sh.batch_update({"requests": requests})
+
+
+# ---------------------------------------------------------------------------
+# HTML report (Stage G)
+# ---------------------------------------------------------------------------
+
+def _write_html_report(result: RunResult, macro_dto: Optional[MacroEconomicDTO] = None) -> None:
+    """Generate the daily HTML report from RunResult (non-fatal on error)."""
     try:
-        try: output_ws = sh.worksheet(TAB_NAME_OUTPUT)
-        except: output_ws = sh.add_worksheet(title=TAB_NAME_OUTPUT, rows=100, cols=len(final_headers))
-        
-        set_with_dataframe(output_ws, export_df, row=1, col=1, include_column_header=True, resize=True)
-        
-        # EXPLANATION: Apply conditional formatting rules to make columns visually intuitive.
+        from diagnostics_and_visuals import generate_html_report
+
+        portfolio_dicts = []
+        for rec in result.recommendations:
+            ki = rec.key_indicators
+            pos = result.snapshot.positions.get(rec.symbol)
+            d = {
+                "Symbol": rec.symbol,
+                "Action Signal": rec.action,
+                "Score": ki.get("score", 0.0) or 0.0,
+                "RSI": ki.get("rsi", 0.0) or 0.0,
+                "GARCH_Vol": ki.get("garch_vol", 0.0) or 0.0,
+                "Forecast_30": float(rec.forecast or 0.0),
+                "Max Drawdown": ki.get("max_drawdown", 0.0) or 0.0,
+                "Max_Drawdown": ki.get("max_drawdown", 0.0) or 0.0,
+                "Kelly Target": ki.get("kelly_raw", 0.0) or 0.0,
+                "Advice": rec.rationale or "",
+                "Advisory_Action": rec.action,
+                "Advisory_Conviction": rec.conviction,
+                "Advisory_Rationale": rec.rationale or "",
+                "Advisory_Position_Pct": rec.suggested_position_pct,
+                "Robinhood Shares": float(pos.quantity) if pos else 0.0,
+                "Robinhood Avg Cost": float(pos.average_cost) if pos else 0.0,
+            }
+            portfolio_dicts.append(d)
+
+        regime = "NEUTRAL"
+        kw: Dict[str, Any] = {}
+        if macro_dto is not None:
+            regime = macro_dto.market_regime
+            kw = {
+                "yield_curve": getattr(macro_dto, "yield_curve", 0.5),
+                "credit_spread": getattr(macro_dto, "credit_spread", 3.5),
+                "sahm_rule": getattr(macro_dto, "sahm_rule_indicator", 0.0),
+                "real_yield": getattr(macro_dto, "real_yield", 0.0),
+            }
+
+        out_path = str(settings.OUTPUT_DIR / "daily_report.html")
+        generate_html_report(portfolio_dicts, regime, out_path, **kw)
+        logger.info("HTML report written to %s.", out_path)
+
+    except Exception as exc:
+        logger.warning("HTML report failed (non-critical): %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Run summary
+# ---------------------------------------------------------------------------
+
+def _log_summary(result: RunResult) -> None:
+    """Emit a structured run summary to the module logger."""
+    n_ok = len(result.recommendations)
+    n_err = len(result.errors)
+    buys  = sum(1 for r in result.recommendations if r.action == "BUY")
+    holds = sum(1 for r in result.recommendations if r.action == "HOLD")
+    sells = sum(1 for r in result.recommendations if r.action == "SELL")
+
+    logger.info(
+        "=== RUN SUMMARY ========================================\n"
+        "  Duration   : %.2fs  (started %s)\n"
+        "  Universe   : %d symbols — %d OK, %d errors\n"
+        "  Signals    : BUY=%d  HOLD=%d  SELL=%d\n"
+        "  Account    : age=%.2fh  equity=$%.0f  cash=$%.0f  stale=%s\n"
+        "========================================================",
+        result.duration_seconds,
+        result.started_at.strftime("%H:%M:%S UTC"),
+        n_ok + n_err, n_ok, n_err,
+        buys, holds, sells,
+        result.snapshot.age_hours(),
+        result.snapshot.total_equity,
+        result.snapshot.buying_power,
+        result.snapshot.is_stale(max_age_hours=20.0),
+    )
+    for err in result.errors:
+        logger.warning(
+            "  DEAD-LETTER  %-8s  stage=%-22s  %s: %s",
+            err["symbol"], err["stage"],
+            err["error_type"], err["message"][:80],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Core pipeline
+# ---------------------------------------------------------------------------
+
+def run_once(force_account: bool = False) -> RunResult:
+    """Execute one full pipeline cycle and return an immutable RunResult.
+
+    Parameters
+    ----------
+    force_account : bool
+        ``True`` → bypass the daily Robinhood cache and force a live TOTP
+        login.  ``False`` (default) → use the cached snapshot when it is
+        younger than 20 hours; only re-fetch when the cache has expired.
+
+    Returns
+    -------
+    RunResult
+        Always returned.  Never raises.  Per-symbol failures are collected in
+        ``RunResult.errors`` rather than being propagated.
+    """
+    started_at = datetime.now(timezone.utc)
+    recommendations: List[Recommendation] = []
+    errors: List[dict] = []
+
+    # ── Stage A: Account snapshot (Robinhood, daily cache) ───────────────────
+    snapshot: AccountSnapshot
+    try:
+        snapshot = fetch_account_snapshot(max_age_hours=20.0, force=force_account)
+        age_h = snapshot.age_hours()
+        if force_account:
+            cache_msg = "force-refreshed"
+        elif age_h < 1.0:
+            cache_msg = "served from cache (fresh)"
+        else:
+            cache_msg = f"served from cache (age={age_h:.1f}h)"
+        logger.info(
+            "Account snapshot %s — equity=$%.0f  positions=%d.",
+            cache_msg,
+            snapshot.total_equity,
+            len(snapshot.positions),
+        )
+    except Exception as rh_exc:
+        logger.warning(
+            "Robinhood snapshot unavailable (%s); proceeding with empty account. "
+            "Watchlist universe will still be evaluated.",
+            rh_exc,
+        )
+        snapshot = AccountSnapshot(
+            positions={},
+            buying_power=0.0,
+            total_equity=0.0,
+            total_dividends=0.0,
+            fetched_at=datetime.now(timezone.utc),
+        )
+
+    # ── Stage B: Universe ─────────────────────────────────────────────────────
+    symbols = _build_universe(snapshot)
+    if not symbols:
+        logger.warning(
+            "Empty symbol universe — nothing to evaluate. "
+            "Check WATCHLIST env var or add tickers to %s.",
+            WATCHLIST_FILE,
+        )
+        finished_at = datetime.now(timezone.utc)
+        return RunResult(
+            snapshot=snapshot,
+            recommendations=[],
+            errors=[],
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=(finished_at - started_at).total_seconds(),
+        )
+
+    # ── Stage C: Macro context ────────────────────────────────────────────────
+    macro_dto = _build_macro_dto()
+
+    # ── Stage D: Context pre-compute (universe-wide, before per-symbol loop) ──
+    market = get_provider()
+    bars_dict = _fetch_bars_for_universe(symbols, market)
+    context_extras = _build_context_extras(symbols, bars_dict, macro_dto)
+
+    # ── Stage E: Per-symbol advisory evaluation ───────────────────────────────
+    logger.info("Evaluating %d symbols...", len(symbols))
+    for symbol in symbols:
         try:
-            headers = list(export_df.columns)
-            sheet_id = output_ws.id
-            cf_requests = []
-
-            # Step 1: Dividend Payback Horizon Color Scale (Green low < 8, turning to Red high > 15)
-            if "Dividend Payback Horizon" in headers:
-                dph_idx = headers.index("Dividend Payback Horizon")
-                cf_requests.append({
-                    "addConditionalFormatRule": {
-                        "rule": {
-                            "ranges": [{"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": dph_idx, "endColumnIndex": dph_idx + 1}],
-                            "gradientRule": {
-                                "minpoint": {"color": {"red": 0.85, "green": 0.95, "blue": 0.85}, "type": "NUMBER", "value": "8"},
-                                "midpoint": {"color": {"red": 1.0, "green": 1.0, "blue": 0.85}, "type": "NUMBER", "value": "11.5"},
-                                "maxpoint": {"color": {"red": 0.95, "green": 0.85, "blue": 0.85}, "type": "NUMBER", "value": "15"}
-                            }
-                        },
-                        "index": 0
-                    }
-                })
-
-            # Step 2: Leverage Warning Lights (Light Red Fill if < 0.3)
-            if "Leverage Distress Factor" in headers:
-                leverage_idx = headers.index("Leverage Distress Factor")
-                cf_requests.append({
-                    "addConditionalFormatRule": {
-                        "rule": {
-                            "ranges": [{"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": leverage_idx, "endColumnIndex": leverage_idx + 1}],
-                            "booleanRule": {
-                                "condition": {"type": "NUMBER_LESS", "values": [{"userEnteredValue": "0.3"}]},
-                                "format": {"backgroundColor": {"red": 0.98, "green": 0.82, "blue": 0.82}}
-                            }
-                        },
-                        "index": 0
-                    }
-                })
-
-            # Step 3: Options Edge Identifier (Light Green Fill if > 0.0)
-            if "Options IV Edge" in headers:
-                options_idx = headers.index("Options IV Edge")
-                cf_requests.append({
-                    "addConditionalFormatRule": {
-                        "rule": {
-                            "ranges": [{"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": options_idx, "endColumnIndex": options_idx + 1}],
-                            "booleanRule": {
-                                "condition": {"type": "NUMBER_GREATER", "values": [{"userEnteredValue": "0.0"}]},
-                                "format": {"backgroundColor": {"red": 0.85, "green": 0.95, "blue": 0.85}}
-                            }
-                        },
-                        "index": 0
-                    }
-                })
-
-            if cf_requests:
-                sh.batch_update({"requests": cf_requests})
-                print("✅ Conditional formatting rules applied to Google Sheet.")
-        except Exception as fe:
-            logging.warning(f"Could not apply conditional formatting rules: {fe}")
-
-        print("✅ Dashboard Updated Successfully.")
-        
-        # 8. GENERATE DAILY HTML REPORT
-        try:
-            print("--- 8. GENERATING HTML REPORT ---")
-            from diagnostics_and_visuals import generate_html_report
-            portfolio_dicts = dashboard_df.to_dict(orient="records")
-            # Map "Max Drawdown" to "Max_Drawdown" for template compatibility
-            for row in portfolio_dicts:
-                if "Max Drawdown" in row:
-                    row["Max_Drawdown"] = row["Max Drawdown"]
-            generate_html_report(
-                portfolio_dicts, 
-                regime_data.get('Regime', 'NEUTRAL'), 
-                "daily_report.html",
-                yield_curve=float(macro_dto.yield_curve),
-                credit_spread=float(macro_dto.credit_spread),
-                sahm_rule=float(macro_dto.sahm_rule_indicator),
-                real_yield=float(macro_dto.real_yield)
+            position = snapshot.positions.get(symbol)
+            rec = advisory_evaluate(
+                symbol=symbol,
+                position=position,
+                market=market,
+                snapshot=snapshot,
+                macro_dto=macro_dto,
+                context_extras=context_extras,
             )
-            print("✅ Successfully generated dynamic daily report at daily_report.html")
-        except Exception as re_err:
-            logging.error(f"❌ Failed to generate HTML report: {re_err}")
-        
-    except Exception as e:
-        logging.critical(f"❌ Write Failed: {e}")
+            recommendations.append(rec)
+            logger.info(
+                "  %-6s  %-10s  conviction=%.2f  quality=%-7s  pos=%.1f%%",
+                symbol,
+                rec.action,
+                rec.conviction,
+                rec.data_quality,
+                rec.suggested_position_pct * 100.0,
+            )
+        except Exception as exc:
+            logger.warning("Advisory failed for %s: %s", symbol, exc)
+            errors.append({
+                "symbol": symbol,
+                "stage": "advisory_evaluate",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+    finished_at = datetime.now(timezone.utc)
+    result = RunResult(
+        snapshot=snapshot,
+        recommendations=recommendations,
+        errors=errors,
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_seconds=(finished_at - started_at).total_seconds(),
+    )
+    _log_summary(result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """CLI entry point with two-tier refresh support.
+
+    Flags
+    -----
+    (no flags)
+        Run once, write Sheet, generate HTML report, exit 0.  Even if some
+        symbols errored (their entries appear in RunResult.errors and as
+        ERROR rows in the Sheet).
+
+    --interval N
+        Loop: refresh market data every N seconds.  The account tier still
+        fetches Robinhood at most once per day — an all-day run logs in once.
+        Ctrl-C or SIGTERM exits cleanly after the current cycle completes.
+
+    --refresh-account
+        Force a fresh Robinhood login on this launch, bypassing the daily
+        cache.  For subsequent iterations in --interval mode, normal caching
+        resumes (so re-auth happens at most once per launch).
+    """
+    parser = argparse.ArgumentParser(
+        prog="main.py",
+        description="InvestYo Quant Platform — advisory pipeline launcher",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help="Refresh market data every N seconds (0 = run once and exit).",
+    )
+    parser.add_argument(
+        "--refresh-account",
+        action="store_true",
+        default=False,
+        help="Force a fresh Robinhood fetch on this launch (bypasses daily cache).",
+    )
+    args = parser.parse_args()
+
+    logger.info("InvestYo Quant Platform starting.")
+    settings.warn_if_fred_key_leaked(logger)
+
+    # Force-account flag applies only to the FIRST cycle; subsequent iterations
+    # use the daily cache regardless.
+    _force_next = args.refresh_account
+
+    def _run_cycle() -> None:
+        nonlocal _force_next
+        result = run_once(force_account=_force_next)
+        _force_next = False  # one-shot; cache resumes from here
+
+        market = get_provider()
+        _write_to_sheet(result, market=market)
+
+        # Build macro_dto again cheaply (same result, neutral defaults are fast)
+        # to pass macro context to the HTML report template.
+        try:
+            from dto_models import MacroEconomicDTO as _MDTO
+
+            _macro = _MDTO(
+                yield_curve_10y_2y=0.5,
+                high_yield_oas=3.5,
+                inflation_rate=3.0,
+                nominal_10y=4.5,
+                vix_value=18.0,
+                sahm_rule_indicator=0.0,
+            )
+        except Exception:
+            _macro = None
+
+        _write_html_report(result, macro_dto=_macro)
+
+    if args.interval > 0:
+        _shutdown = False
+
+        def _handle_signal(signum: int, frame: Any) -> None:
+            nonlocal _shutdown
+            logger.info("Shutdown signal received; finishing current cycle then exiting.")
+            _shutdown = True
+
+        signal.signal(signal.SIGTERM, _handle_signal)
+        signal.signal(signal.SIGINT, _handle_signal)
+
+        logger.info("Interval mode: market data refreshes every %ds.", args.interval)
+        while not _shutdown:
+            _run_cycle()
+            if _shutdown:
+                break
+            logger.info(
+                "Sleeping %ds until next market-data refresh...", args.interval
+            )
+            # Sleep in 1-second increments to catch shutdown signals promptly.
+            for _ in range(args.interval):
+                if _shutdown:
+                    break
+                time.sleep(1)
+
+        logger.info("Exiting interval loop cleanly.")
+
+    else:
+        # Single-run mode
+        _run_cycle()
+
+    logger.info("InvestYo Quant Platform finished.")
+    sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

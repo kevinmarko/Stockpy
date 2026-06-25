@@ -130,7 +130,8 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
 
 def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                   data_engine: Optional[Any] = None,
-                  robinhood_positions: Optional[dict] = None) -> pd.DataFrame:
+                  robinhood_positions: Optional[dict] = None,
+) -> tuple:
     """
     Synchronous execution of the quantitative engines:
     Macro -> Technical Options -> Processing -> Forecasting -> Strategy & Evaluation.
@@ -143,6 +144,22 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         opinion). None (the default) disables the HMM second opinion --
         market_regime/killSwitch then behave exactly as before this feature
         existed (no fabricated probability).
+
+    Returns
+    -------
+    tuple[pd.DataFrame, MacroEconomicDTO, SignalContext]
+        ``(dashboard_df, macro_dto, shared_context)``
+
+        * ``dashboard_df`` — fully compiled per-ticker signal table.
+        * ``macro_dto`` — the authoritative MacroEconomicDTO for this cycle
+          (carries ``hmm_risk_on_probability``); callers should use this
+          instead of reconstructing from ``macro_raw`` so the HMM field
+          is never accidentally dropped.
+        * ``shared_context`` — SignalContext whose ``xsec_percentile_ranks``
+          and ``multifactor_scores`` dicts were populated by
+          ``global_registry.run_pre_compute()``.  Pass these to
+          ``engine.advisory.evaluate(context_extras=...)`` so the advisory
+          path scores cross-sectional / multifactor signals correctly.
     """
     # 1. Macro Economic Regime Analysis
     telemetry.info("Routing data through Macro Engine...")
@@ -367,11 +384,16 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     # 'sellRange' is the dedicated sell-side execution band (strategy_engine.
     # apply_sell_side_range) — always populated alongside buyRange, never empty
     # for a valid Action Signal. See config.COLUMN_SCHEMA for the dashboard header.
-    strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target', 'Option Strategy', 'buyRange', 'sellRange', 'Strategy Explainer Notes']
+    strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target',
+                     'Option Strategy', 'buyRange', 'sellRange', 'Strategy Explainer Notes',
+                     'Robinhood Shares', 'Robinhood Avg Cost', 'Robinhood Dividends', 'Robinhood Advice']
     for col in strategy_cols:
         dashboard_df[col] = ""
     dashboard_df['Kelly Target'] = 0.0
     dashboard_df['Edge Ratio'] = 0.0
+    dashboard_df['Robinhood Shares'] = 0.0
+    dashboard_df['Robinhood Avg Cost'] = 0.0
+    dashboard_df['Robinhood Dividends'] = 0.0
 
     for idx, row in dashboard_df.iterrows():
         ticker = row['Symbol']
@@ -492,6 +514,10 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         # state snapshot all see the same source-of-truth value.
         dashboard_df.at[idx, 'sellRange'] = strategy_output['sellRange']
         dashboard_df.at[idx, 'Strategy Explainer Notes'] = strategy_output['Strategy Explainer Notes']
+        dashboard_df.at[idx, 'Robinhood Shares']    = float(strategy_output.get('Robinhood Shares', 0.0))
+        dashboard_df.at[idx, 'Robinhood Avg Cost']  = float(strategy_output.get('Robinhood Avg Cost', 0.0))
+        dashboard_df.at[idx, 'Robinhood Dividends'] = float(strategy_output.get('Robinhood Dividends', 0.0))
+        dashboard_df.at[idx, 'Robinhood Advice']    = str(strategy_output.get('Robinhood Advice', 'N/A'))
 
     # Map 'Avg Cost' to 'Entry_Price' if present
     if 'Avg Cost' in dashboard_df.columns:
@@ -582,7 +608,7 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     else:
         dashboard_df["DualMomentum_Signal"] = "disabled"
 
-    return dashboard_df
+    return dashboard_df, macro_dto, shared_context
 
 
 async def _heartbeat(output_dir, interval: int = 60) -> None:
@@ -750,6 +776,11 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     # tactical plan without re-reading the SQLite DB.
                     "buy_range": str(row.get("buyRange", "")),
                     "sell_range": str(row.get("sellRange", "")),
+                    # Holding-aware advisory overlay (engine/advisory.py)
+                    "advisory_action":       str(row.get("Advisory_Action", "")),
+                    "advisory_conviction":   float(row.get("Advisory_Conviction", 0.0) or 0.0),
+                    "advisory_position_pct": float(row.get("Advisory_Position_Pct", 0.0) or 0.0),
+                    "advisory_rationale":    str(row.get("Advisory_Rationale", "")),
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -809,7 +840,10 @@ async def _main_body(effective_dry_run: bool) -> None:
 
     # 2. Run Pipeline
     try:
-        final_df = run_pipeline(tickers, macro_raw, fund_raw, tech_raw, data_engine=de, robinhood_positions=rh_positions)
+        final_df, macro_dto, shared_context = run_pipeline(
+            tickers, macro_raw, fund_raw, tech_raw,
+            data_engine=de, robinhood_positions=rh_positions,
+        )
     except Exception as pipe_err:
         telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}")
         sys.exit(1)
@@ -821,6 +855,71 @@ async def _main_body(effective_dry_run: bool) -> None:
             telemetry.info("✅ Final compiled DataFrame successfully validated against DashboardSchema.")
         except Exception as schema_err:
             telemetry.error(f"❌ Final compiled DataFrame failed DashboardSchema validation: {schema_err}")
+
+    # 3b. Advisory Evaluation — holding-aware BUY/SELL/HOLD overlay
+    # Uses the full pipeline's macro_dto (with HMM probability), xsec ranks,
+    # and multifactor composites from shared_context so advisory scores all
+    # signal modules with real pre-computed data instead of neutral/0 defaults.
+    if not final_df.empty:
+        try:
+            from data.market_data import get_provider as _get_market_provider
+            from data.robinhood_portfolio import fetch_account_snapshot as _fetch_rh_snapshot
+            from engine.advisory import evaluate as _advisory_evaluate
+
+            _market_provider = _get_market_provider()
+            _context_extras = {
+                'xsec_percentile_ranks': shared_context.xsec_percentile_ranks,
+                'multifactor_scores':    shared_context.multifactor_scores,
+            }
+
+            _rh_snapshot = None
+            try:
+                _rh_snapshot = _fetch_rh_snapshot(max_age_hours=20.0)
+            except Exception as _rh_exc:
+                telemetry.warning(
+                    "Advisory: Robinhood account snapshot unavailable (%s) — "
+                    "position=None for all tickers; Kelly sizing still runs.", _rh_exc
+                )
+
+            for _col in ('Advisory_Action', 'Advisory_Conviction',
+                         'Advisory_Rationale', 'Advisory_Position_Pct',
+                         'Advisory_Data_Quality'):
+                final_df[_col] = ""
+            final_df['Advisory_Conviction'] = 0.0
+            final_df['Advisory_Position_Pct'] = 0.0
+
+            for _idx, _row in final_df.iterrows():
+                _ticker = str(_row.get('Symbol', '')).upper()
+                if not _ticker:
+                    continue
+                try:
+                    _position = (
+                        _rh_snapshot.positions.get(_ticker)
+                        if _rh_snapshot is not None else None
+                    )
+                    _rec = _advisory_evaluate(
+                        symbol=_ticker,
+                        position=_position,
+                        market=_market_provider,
+                        snapshot=_rh_snapshot,
+                        macro_dto=macro_dto,
+                        context_extras=_context_extras,
+                    )
+                    final_df.at[_idx, 'Advisory_Action']       = _rec.action
+                    final_df.at[_idx, 'Advisory_Conviction']   = round(_rec.conviction, 4)
+                    final_df.at[_idx, 'Advisory_Rationale']    = _rec.rationale
+                    final_df.at[_idx, 'Advisory_Position_Pct'] = round(_rec.suggested_position_pct, 6)
+                    final_df.at[_idx, 'Advisory_Data_Quality'] = _rec.data_quality
+                except Exception as _adv_exc:
+                    telemetry.warning("Advisory failed for %s: %s", _ticker, _adv_exc)
+
+            telemetry.info(
+                "Advisory evaluation complete for %d tickers.", len(final_df)
+            )
+        except Exception as _adv_loop_err:
+            telemetry.warning(
+                "Advisory evaluation loop failed (non-critical): %s", _adv_loop_err
+            )
 
     # 4. Reporting & Visualization Output
         # Output directory is centrally configured (created on settings load).
@@ -865,25 +964,24 @@ async def _main_body(effective_dry_run: bool) -> None:
         # Include 'sellRange' so downstream JSON consumers (alerts, custom
         # dashboards, paper-trading harness) receive the same sell-side
         # take-profit/stop instructions the HTML report renders.
-        output_payload = final_df[["Symbol", "Price", "Action Signal", "buyRange", "sellRange", "Kelly Target", "Option Strategy", "GARCH_Vol", "True_IVR"]].to_dict(orient="records")
+        _payload_cols = ["Symbol", "Price", "Action Signal", "buyRange", "sellRange",
+                         "Kelly Target", "Option Strategy", "GARCH_Vol", "True_IVR"]
+        # Include advisory columns when present (added by advisory loop above)
+        for _ac in ("Advisory_Action", "Advisory_Conviction",
+                    "Advisory_Rationale", "Advisory_Position_Pct", "Advisory_Data_Quality"):
+            if _ac in final_df.columns:
+                _payload_cols.append(_ac)
+        output_payload = final_df[_payload_cols].to_dict(orient="records")
         print("\n=== FINAL ACTIONABLE PAYLOAD REPRESENTATION ===")
         print(json.dumps(output_payload, indent=4))
         print("================================================\n")
 
     # 6. Broker Execution — submit delta orders and reconcile state
     # Only runs when Alpaca credentials are configured; silently skipped otherwise.
+    # Uses macro_dto returned by run_pipeline() (carries hmm_risk_on_probability
+    # for the HMM regime gate in PreTradeRiskGate.run_all()).
     if not final_df.empty and settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
-        # Reconstruct macro_dto from macro_raw for the risk gate context.
-        # run_pipeline() builds a macro_dto internally but doesn't return it, so
-        # we reconstruct the same DTO here with the same field mapping.
-        _broker_macro_dto = MacroEconomicDTO(
-            yield_curve_10y_2y=float(macro_raw.get('T10Y2Y', 0.5)),
-            high_yield_oas=float(macro_raw.get('BAMLH0A0HYM2', 3.5)),
-            inflation_rate=float(macro_raw.get('CPIAUCSL_YoY', 2.0)),
-            nominal_10y=float(macro_raw.get('DGS10', 4.0)),
-            vix_value=float(macro_raw.get('VIXCLS', 15.0)),
-        )
-        await _execute_broker_orders(final_df, effective_dry_run, macro_dto=_broker_macro_dto)
+        await _execute_broker_orders(final_df, effective_dry_run, macro_dto=macro_dto)
     elif not final_df.empty:
         telemetry.info(
             "ALPACA_API_KEY/SECRET_KEY not configured; skipping broker execution. "
