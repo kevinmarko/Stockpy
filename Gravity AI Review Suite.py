@@ -225,6 +225,7 @@ class GravityAIAuditor:
             "step_14_xsec_momentum_audit": {},
             "step_22_triple_barrier_meta_label_audit": {},
             "step_23_qlib_arch_model_registry_audit": {},
+            "step_32_gui_command_center_audit": {},
         }
         self.data_engine = GravityTestEngine()
         self.test_df = self.data_engine.fetch_historical_prices()
@@ -3812,6 +3813,141 @@ class GravityAIAuditor:
 
         self.report["step_31_env_loading_audit"] = audit
 
+    def run_gui_command_center_audit(self) -> None:
+        """Step 32: audit the GUI Command Center (gui/) safety invariants.
+
+        Verifies the security-critical contract of the new on-demand Streamlit
+        operational suite (gui/app.py and helpers):
+
+        1.  ``gui.env_io`` never returns a secret in cleartext and refuses to
+            write any key in ``SECRET_KEYS`` (CONSTRAINT #3).
+        2.  ``gui.env_io.write_setting`` rejects keys outside ``ALLOWED_KEYS``.
+        3.  ``settings.DISABLED_SIGNAL_MODULES`` actually drops a module from
+            ``SignalAggregator.aggregate()`` — the Strategy Matrix toggle has
+            real effect, not just display.
+        4.  No order-submission functions live in the gui/ package (it is a
+            read-only / file-backed front-end; orders go through execution/).
+        """
+        audit = {"status": "PENDING", "checks": {}}
+        checks = []
+
+        def _chk(name: str, passed: bool, detail: str = "") -> None:
+            audit["checks"][name] = {"passed": bool(passed), "detail": detail}
+            checks.append(bool(passed))
+
+        try:
+            import tempfile
+            from pathlib import Path as _Path
+            from datetime import datetime as _dt
+
+            from gui import env_io as _env_io
+            from settings import settings as _settings, Settings as _Settings
+
+            # 1. Secret protection: masking + write refusal.
+            with tempfile.TemporaryDirectory() as _td:
+                _envf = _Path(_td) / ".env"
+                _envf.write_text("FRED_API_KEY=secret-xyz\nRISK_FREE_RATE=0.045\n", encoding="utf-8")
+                _orig = _env_io.ENV_PATH
+                try:
+                    _env_io.ENV_PATH = _envf
+                    display = _env_io.read_settings()
+                    _chk(
+                        "secret_masked_in_read",
+                        display.get("FRED_API_KEY") == _env_io._MASK_SET
+                        and "secret-xyz" not in str(display),
+                        "FRED_API_KEY must be masked, never cleartext",
+                    )
+                    secret_write_refused = False
+                    try:
+                        _env_io.write_setting("ALPACA_SECRET_KEY", "nope")
+                    except _env_io.SecretWriteError:
+                        secret_write_refused = True
+                    _chk("secret_write_refused", secret_write_refused,
+                         "write_setting must raise SecretWriteError for secrets")
+
+                    # 2. Allowlist enforcement.
+                    unknown_rejected = False
+                    try:
+                        _env_io.write_setting("MADE_UP_KEY", "1")
+                    except _env_io.DisallowedKeyError:
+                        unknown_rejected = True
+                    _chk("unknown_key_rejected", unknown_rejected,
+                         "write_setting must reject non-allowlisted keys")
+
+                    # JSON round-trip for a structured tunable.
+                    _env_io.write_setting("DISABLED_SIGNAL_MODULES", ["rsi2_mean_reversion"])
+                    import json as _json
+                    rt = _json.loads(_env_io.get_value("DISABLED_SIGNAL_MODULES"))
+                    _chk("json_roundtrip", rt == ["rsi2_mean_reversion"],
+                         "list/dict tunables must JSON round-trip")
+                finally:
+                    _env_io.ENV_PATH = _orig
+
+            # 3. DISABLED_SIGNAL_MODULES actually drops a module from aggregate().
+            import pandas as _pd
+            from signals.base import SignalModule as _SM, SignalContext as _SC, SignalOutput as _SO
+            from signals.registry import SignalRegistry as _SR
+            from signals.aggregator import SignalAggregator as _SA
+            from dto_models import MarketBarDTO as _MB, FundamentalDataDTO as _FD, MacroEconomicDTO as _MD
+
+            class _Pos(_SM):
+                name = "gravity_probe_signal"
+                required_features = []
+
+                def is_active_in_regime(self, macro):
+                    return True
+
+                def compute(self, row, context):
+                    return _SO(score=1.0, confidence=1.0, explanation="probe", meta_label_proba=1.0)
+
+            _ctx = _SC(
+                bar=_MB(_dt.now(), "TEST", 100.0, 100.0, 100.0, 100.0, 1000),
+                fundamentals=_FD(ticker="TEST", pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
+                                 book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
+                                 payout_ratio=0.0, sector="Unknown", company_name="Unknown"),
+                macro=_MD(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=0.03,
+                          vix_value=15.0, hmm_risk_on_probability=None),
+            )
+            _reg = _SR()
+            _reg.register(_Pos())
+            _agg = _SA(_reg, weights={"gravity_probe_signal": 20.0})
+
+            _saved = list(_settings.DISABLED_SIGNAL_MODULES)
+            try:
+                _settings.DISABLED_SIGNAL_MODULES = []
+                enabled_score = _agg.aggregate(_pd.Series({"Symbol": "TEST"}), _ctx)[0]
+                _settings.DISABLED_SIGNAL_MODULES = ["gravity_probe_signal"]
+                disabled_score = _agg.aggregate(_pd.Series({"Symbol": "TEST"}), _ctx)[0]
+            finally:
+                _settings.DISABLED_SIGNAL_MODULES = _saved
+            _chk(
+                "disabled_module_drops_contribution",
+                abs(enabled_score - 70.0) < 1e-6 and abs(disabled_score - 50.0) < 1e-6,
+                f"enabled={enabled_score}, disabled={disabled_score} (expect 70 / 50)",
+            )
+            _chk("default_disabled_list_empty", _Settings().DISABLED_SIGNAL_MODULES == [],
+                 "fresh Settings() must default to no disabled modules")
+
+            # 4. No order functions defined in the gui/ package.
+            import re as _re
+            gui_dir = _Path(__file__).resolve().parent / "gui"
+            order_pat = _re.compile(r"^\s*def\s+(submit_order|place_order|place_equity_order|"
+                                    r"place_option_order|buy_order|sell_order|place_\w+)", _re.MULTILINE)
+            offenders = []
+            for pyf in gui_dir.glob("*.py"):
+                if order_pat.search(pyf.read_text(encoding="utf-8")):
+                    offenders.append(pyf.name)
+            _chk("gui_has_no_order_functions", not offenders,
+                 f"order functions found in: {offenders}" if offenders else "clean")
+
+            audit["status"] = "PASSED" if all(checks) else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = "ERROR"
+            audit["error"] = str(exc)
+
+        self.report["step_32_gui_command_center_audit"] = audit
+
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
         self.run_schema_audit()
@@ -3844,6 +3980,7 @@ class GravityAIAuditor:
         self.run_alerting_module_audit()
         self.run_pipeline_smoke_audit()
         self.run_env_loading_audit()
+        self.run_gui_command_center_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================
