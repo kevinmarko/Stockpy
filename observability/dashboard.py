@@ -189,6 +189,71 @@ def _load_trades() -> tuple[pd.DataFrame, pd.DataFrame]:
         return pd.DataFrame(), pd.DataFrame()
 
 
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_account_snapshot() -> dict:
+    """Load the cached Robinhood account snapshot (holdings + P&L).
+
+    Reads ``cache/account_snapshot.json`` — the daily JSON cache written by
+    ``data.robinhood_portfolio.fetch_account_snapshot()``.  This file is the
+    **source of truth for account state** (CONSTRAINT #4): holdings, quantity,
+    average cost basis, current price, market value, unrealized P&L, dividends,
+    buying power and equity.  It never contains credentials.
+
+    Returns an empty dict if the snapshot has not been fetched yet or the file
+    is malformed, so the holdings panel degrades to an instructional message
+    rather than crashing the dashboard.
+    """
+    cache_path = _REPO_ROOT / "cache" / "account_snapshot.json"
+    if cache_path.exists():
+        try:
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _color_pnl(val) -> str:
+    """Return a CSS colour rule for a P&L cell: green if >0, red if <0.
+
+    Used by the holdings table Styler.  Returns an empty string (no styling)
+    for zero or non-numeric values so the cell renders in the default colour.
+    """
+    try:
+        v = float(val)
+    except (TypeError, ValueError):
+        return ""
+    if v > 0:
+        return "color: #10b981; font-weight: 600;"
+    if v < 0:
+        return "color: #ef4444; font-weight: 600;"
+    return ""
+
+
+def _style_holdings(df: pd.DataFrame, pnl_cols: list[str]):
+    """Return a pandas Styler for the holdings table.
+
+    Applies currency / percentage number formatting and green/red colouring to
+    the unrealized-P&L columns.  ``Styler.map`` (pandas ≥ 2.1) is used to colour
+    individual cells.  The formatter dict only references columns that exist, so
+    a partially-populated snapshot still renders.
+    """
+    fmt = {
+        "Qty": "{:.2f}",
+        "Avg Cost": "${:.2f}",
+        "Price": "${:.2f}",
+        "Market Value": "${:,.0f}",
+        "Unrealized P&L": "${:,.0f}",
+        "P&L %": "{:.1%}",
+        "Dividends": "${:,.2f}",
+    }
+    fmt = {k: v for k, v in fmt.items() if k in df.columns}
+    styler = df.style.format(fmt)
+    for col in pnl_cols:
+        if col in df.columns:
+            styler = styler.map(_color_pnl, subset=[col])
+    return styler
+
+
 def _kill_switch() -> GlobalKillSwitch:
     """Construct a ``GlobalKillSwitch`` pointing at the configured output dir.
 
@@ -218,12 +283,20 @@ refresh_secs = st.sidebar.number_input(
     step=60,
 )
 
+# Manual refresh: clear every @st.cache_data loader and re-run immediately so
+# the operator can force a fresh read of files/SQLite/account cache without
+# waiting for the auto-refresh TTL to expire.
+if st.sidebar.button("🔄 Refresh now"):
+    st.cache_data.clear()
+    st.rerun()
+
 # Load all data sources at the top of the render loop so each panel below
 # only reads from already-loaded objects, not from disk/SQLite again.
 snap = _load_state_snapshot()
 open_df, closed_df = _load_trades()
 block_log = _load_block_log()
 val_reports = _load_validation_reports()
+account = _load_account_snapshot()
 ks = _kill_switch()
 
 last_updated = snap.get("timestamp", "—")
@@ -271,6 +344,70 @@ with col_hmm:
     ]
     hmm_display = f"{hmm_vals[0]:.1%}" if hmm_vals else "—"
     st.metric("HMM Risk-On", hmm_display)
+
+st.divider()
+
+# ── Row 1.5: Account holdings & P&L (Robinhood snapshot) ─────────────────────
+# Sourced from cache/account_snapshot.json — the source of truth for ACCOUNT
+# STATE (CONSTRAINT #4): holdings, cost basis, current price, market value,
+# unrealized P&L, dividends, equity. The four headline metrics give an
+# immediate portfolio-health read; the table below colours each position's
+# unrealized P&L green/red. Degrades gracefully to an instructional note when
+# the snapshot has not been fetched yet (Robinhood is on-demand, not always-on).
+
+st.subheader("💼 Account Holdings & P&L")
+
+if account:
+    positions = account.get("positions", {}) or {}
+    total_equity = float(account.get("total_equity", 0.0) or 0.0)
+    buying_power = float(account.get("buying_power", 0.0) or 0.0)
+    total_dividends = float(account.get("total_dividends", 0.0) or 0.0)
+    total_unrealized = sum(
+        float(p.get("unrealized_pl", 0.0) or 0.0) for p in positions.values()
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Equity", f"${total_equity:,.0f}")
+    m2.metric("Buying Power", f"${buying_power:,.0f}")
+    # ``delta`` colours the value green when positive, red when negative,
+    # giving an at-a-glance read of aggregate open-position performance.
+    m3.metric(
+        "Unrealized P&L",
+        f"${total_unrealized:,.0f}",
+        delta=f"{total_unrealized:,.0f}",
+    )
+    m4.metric("Dividends Received", f"${total_dividends:,.0f}")
+
+    fetched = account.get("fetched_at", "—")
+    st.caption(f"Snapshot fetched: {fetched}  ·  {len(positions)} position(s) held")
+
+    if positions:
+        holdings_df = pd.DataFrame([
+            {
+                "Symbol": p.get("symbol", sym),
+                "Name": p.get("name", "") or "",
+                "Qty": float(p.get("quantity", 0.0) or 0.0),
+                "Avg Cost": float(p.get("average_cost", 0.0) or 0.0),
+                "Price": float(p.get("current_price", 0.0) or 0.0),
+                "Market Value": float(p.get("market_value", 0.0) or 0.0),
+                "Unrealized P&L": float(p.get("unrealized_pl", 0.0) or 0.0),
+                "P&L %": float(p.get("unrealized_pl_pct", 0.0) or 0.0),
+                "Dividends": float(p.get("dividends_received", 0.0) or 0.0),
+            }
+            for sym, p in positions.items()
+        ]).sort_values("Market Value", ascending=False)
+
+        st.dataframe(
+            _style_holdings(holdings_df, ["Unrealized P&L", "P&L %"]),
+            width='stretch',
+        )
+    else:
+        st.info("Account snapshot has no open positions.")
+else:
+    st.info(
+        "No account snapshot found at `cache/account_snapshot.json`. "
+        "Run `python3 main.py --refresh-account` to fetch holdings from Robinhood."
+    )
 
 st.divider()
 

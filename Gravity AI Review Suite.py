@@ -3812,6 +3812,143 @@ class GravityAIAuditor:
 
         self.report["step_31_env_loading_audit"] = audit
 
+    def run_html_report_audit(self) -> None:
+        """Step 32 — Validates the rebuilt daily HTML report (Holdings & P&L + Rationale).
+
+        ``diagnostics_and_visuals.generate_html_report`` is the ACTIVE report
+        path (called by both ``main.py`` and ``main_orchestrator.py``).  The
+        2026-06 redesign leads with holdings/P&L and action/rationale and adds
+        an optional ``account_summary`` portfolio band.  This audit pins the
+        new contract and — critically — verifies the rendered HTML never leaks
+        credential-shaped tokens (the account snapshot is the only account-state
+        source and is documented to carry no secrets).
+
+        Checks:
+          1. ``generate_html_report`` accepts the ``account_summary`` keyword.
+          2. Advisory rows render holdings (price, signed P&L) + rationale.
+          3. The ``account_summary`` band renders equity / buying power / tally.
+          4. Backward-compat: ``account_summary=None`` renders with NO band.
+          5. NO credential-shaped tokens appear in the rendered HTML.
+          6. ``tests/test_html_report.py`` exists (regression coverage).
+        """
+        import inspect as _inspect
+        import tempfile as _tempfile
+        from pathlib import Path as _Path
+
+        audit: dict = {"checks": [], "status": "PENDING"}
+        checks: list[bool] = []
+
+        def _chk(name: str, ok: bool, detail: str = "") -> None:
+            entry: dict = {"check": name, "status": "PASS" if ok else "FAIL"}
+            if detail:
+                entry["detail"] = detail
+            audit["checks"].append(entry)
+            checks.append(ok)
+
+        try:
+            from diagnostics_and_visuals import generate_html_report
+
+            # 1. Signature contract — account_summary keyword present.
+            sig = _inspect.signature(generate_html_report)
+            _chk(
+                "accepts_account_summary_kwarg",
+                "account_summary" in sig.parameters,
+                "" if "account_summary" in sig.parameters
+                else "generate_html_report must accept account_summary=",
+            )
+
+            advisory_rows = [
+                {
+                    "Symbol": "AAPL", "Action Signal": "BUY",
+                    "Advisory_Conviction": 0.72,
+                    "Advisory_Rationale": "Held above effective cost basis with a constructive forecast.",
+                    "Advisory_Position_Pct": 0.043, "Forecast_30": 232.50,
+                    "data_quality": "OK", "strategy": "momentum_trend",
+                    "Robinhood Shares": 12.0, "Robinhood Avg Cost": 180.25,
+                    "Robinhood Current Price": 214.10, "Robinhood Market Value": 2569.20,
+                    "Robinhood Unrealized PL": 406.20, "Robinhood Unrealized PL Pct": 0.1878,
+                    "Robinhood Dividends": 8.40, "Company Name": "Apple Inc.",
+                },
+                {
+                    "Symbol": "AGNC", "Action Signal": "SELL",
+                    "Advisory_Conviction": 0.81,
+                    "Advisory_Rationale": "Below effective cost basis with a bearish forecast.",
+                    "Advisory_Position_Pct": 0.0, "Forecast_30": 8.95,
+                    "data_quality": "OK", "strategy": "mean_reversion",
+                    "Robinhood Shares": 300.0, "Robinhood Avg Cost": 11.40,
+                    "Robinhood Current Price": 9.62, "Robinhood Market Value": 2886.0,
+                    "Robinhood Unrealized PL": -534.0, "Robinhood Unrealized PL Pct": -0.1561,
+                    "Robinhood Dividends": 142.0, "Company Name": "AGNC Investment Corp.",
+                },
+            ]
+            account_summary = {
+                "total_equity": 41250.0, "buying_power": 5120.0,
+                "total_unrealized_pl": -127.80, "total_dividends": 150.40,
+                "num_positions": 2, "fetched_at": "2026-06-25 13:02 UTC",
+                "age_hours": 1.4, "is_stale": False,
+            }
+
+            with _tempfile.TemporaryDirectory() as _td:
+                out = _Path(_td) / "report.html"
+
+                # 2 + 3. Advisory render with summary band.
+                generate_html_report(
+                    advisory_rows, "NEUTRAL", str(out),
+                    account_summary=account_summary,
+                )
+                html = out.read_text(encoding="utf-8")
+                holdings_ok = (
+                    "Apple Inc." in html and "$214.10" in html
+                    and "+$406" in html and "-$534" in html
+                )
+                rationale_ok = (
+                    "Held above effective cost basis" in html
+                    and "sig-BUY" in html and "conv-fill" in html
+                )
+                band_ok = (
+                    "Total Equity" in html and "$41,250" in html
+                    and "1 BUY" in html and "1 SELL" in html
+                )
+                _chk("holdings_pnl_render", holdings_ok,
+                     "" if holdings_ok else "holdings/P&L values missing from rendered HTML")
+                _chk("action_rationale_render", rationale_ok,
+                     "" if rationale_ok else "action signal class / conviction meter / rationale missing")
+                _chk("account_summary_band_renders", band_ok,
+                     "" if band_ok else "summary band equity/tally missing")
+
+                # 5. No credential-shaped tokens in the report.
+                lowered = html.lower()
+                leaked = [t for t in ("password", "secret", "mfa", "api_key", "apikey")
+                          if t in lowered]
+                _chk("no_credential_tokens_in_html", not leaked,
+                     "" if not leaked else f"credential-shaped token(s) leaked: {leaked}")
+
+                # 4. Backward-compat — no band when account_summary is None.
+                out2 = _Path(_td) / "report_nobands.html"
+                pipeline_rows = [{
+                    "Symbol": "SPY", "Action Signal": "HOLD", "Price": 540.0,
+                    "Forecast_30": 545.0, "Kelly Target": 0.05,
+                }]
+                generate_html_report(pipeline_rows, "RISK ON", str(out2))
+                html2 = out2.read_text(encoding="utf-8")
+                compat_ok = "SPY" in html2 and "Total Equity" not in html2
+                _chk("backward_compat_no_band", compat_ok,
+                     "" if compat_ok else "pipeline schema must render without the summary band")
+
+            # 6. Regression test exists.
+            repo_root = _Path(__file__).parent
+            reg = repo_root / "tests" / "test_html_report.py"
+            _chk("regression_test_exists", reg.exists(),
+                 "tests/test_html_report.py is the canonical regression coverage")
+
+            audit["status"] = "PASSED" if all(checks) else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = "ERROR"
+            audit["error"] = str(exc)
+
+        self.report["step_32_html_report_audit"] = audit
+
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
         self.run_schema_audit()
@@ -3844,6 +3981,7 @@ class GravityAIAuditor:
         self.run_alerting_module_audit()
         self.run_pipeline_smoke_audit()
         self.run_env_loading_audit()
+        self.run_html_report_audit()
         return json.dumps(self.report, indent=4)
 
 # =============================================================================

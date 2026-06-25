@@ -94,10 +94,12 @@ Run this EVERY trading morning before 09:00 ET:
 | Heartbeat recent | `ls -la output/heartbeat.txt` (< 2 h old) |
 | Preflight pass | `python scripts/preflight_check.py` (exit 0) |
 | Dashboard open | `streamlit run observability/dashboard.py` |
+| Holdings & P&L sane | Dashboard → **Account Holdings & P&L** panel — equity, buying power, per-position unrealized P&L (green/red). If empty, run `python3 main.py --refresh-account`. Use the sidebar **🔄 Refresh now** button after refreshing the snapshot. |
 | No reconciliation drift | Dashboard → Open Positions panel |
 | Risk gate log clean | Dashboard → Risk Gate Block Log (no unexpected blocks) |
 | VIX check | Dashboard → VIX panel (> 25 → consider extra caution) |
 | Macro regime | Dashboard → Macro Regime (RISK ON = proceed) |
+| Daily report reviewed | Open `output/daily_report.html` — summary band (equity/P&L/dividends), then per-symbol action + click-to-expand rationale |
 
 ---
 
