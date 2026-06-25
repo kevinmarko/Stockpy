@@ -212,10 +212,10 @@ st.title("📊 InvestYo Observability Dashboard")
 st.sidebar.header("Settings")
 refresh_secs = st.sidebar.number_input(
     "Auto-refresh (seconds)",
-    min_value=5,
-    max_value=300,
+    min_value=30,
+    max_value=7200,          # 2 h upper bound; default is 1800 s (30 min)
     value=settings.DASHBOARD_REFRESH_SECONDS,
-    step=5,
+    step=60,
 )
 
 # Load all data sources at the top of the render loop so each panel below
