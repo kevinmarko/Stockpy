@@ -20,7 +20,6 @@ if os.path.exists(venv_python) and os.path.realpath(sys.executable) != os.path.r
     sys.exit(subprocess.call([venv_python] + sys.argv))
 
 
-import contextlib
 import os
 import sys
 import json
@@ -572,28 +571,9 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     return dashboard_df
 
 
-async def main(dry_run: bool = False):  # --dry-run flag propagated from CLI
+async def main():
     telemetry.info("🚀 Launching Master Orchestration Routing Hub...")
-
-    # --dry-run: merge CLI arg with settings; either source can enable it.
-    effective_dry_run = dry_run or settings.DRY_RUN
-    if effective_dry_run:
-        telemetry.info("DRY-RUN mode active: orders will be logged but NOT submitted.")
-
-    # Heartbeat background task: logs ALIVE every 60 s and writes a timestamp
-    # file so an external watchdog can detect orchestrator crashes.
-    _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
-
-    try:
-        await _main_body(effective_dry_run)
-    finally:
-        _hb_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await _hb_task
-
-
-async def _main_body(effective_dry_run: bool) -> None:
-    """Core pipeline logic, separated so the heartbeat finally-block stays clean."""
+    
     # Surface a CRITICAL alert if the previously leaked FRED key is still in use.
     settings.warn_if_fred_key_leaked(telemetry)
 
@@ -682,186 +662,9 @@ async def _main_body(effective_dry_run: bool) -> None:
         print("\n=== FINAL ACTIONABLE PAYLOAD REPRESENTATION ===")
         print(json.dumps(output_payload, indent=4))
         print("================================================\n")
-
-    # 6. Broker Execution — submit delta orders and reconcile state.
-    # Only runs when Alpaca credentials are configured; silently skipped otherwise.
-    # Reconstruct a lightweight MacroEconomicDTO from macro_raw for risk-gate checks;
-    # run_pipeline builds its own internal dto but doesn't surface it to this scope.
-    _broker_macro_dto: Optional[Any] = None
-    try:
-        from dto_models import MacroEconomicDTO as _MDE
-        _broker_macro_dto = _MDE(
-            yield_curve_10y_2y=float(macro_raw.get("T10Y2Y", 0.5)),
-            high_yield_oas=float(macro_raw.get("BAMLH0A0HYM2", 3.5)),
-            inflation_rate=float(macro_raw.get("CPIAUCSL_YoY", 2.0)),
-            nominal_10y=float(macro_raw.get("DGS10", 4.0)),
-            vix_value=float(macro_raw.get("VIXCLS", 15.0)),
-        )
-    except Exception as _dto_err:
-        telemetry.warning("Could not build macro DTO for broker risk gate: %s", _dto_err)
-
-    if not final_df.empty and settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
-        await _execute_broker_orders(final_df, effective_dry_run, macro_dto=_broker_macro_dto)
-    elif not final_df.empty:
-        telemetry.info(
-            "ALPACA_API_KEY/SECRET_KEY not configured; skipping broker execution. "
-            "Set them in .env to enable live/paper order submission."
-        )
-
+    
     telemetry.info("✅ Master Orchestration finished successfully.")
 
 
-async def _heartbeat(output_dir, interval: int = 60) -> None:
-    """Background task: log 'ALIVE' and update heartbeat.txt every ``interval`` seconds.
-
-    A watchdog script can read heartbeat.txt and activate the global kill switch
-    if the timestamp goes stale (> 2× interval), signalling an orchestrator crash.
-    """
-    heartbeat_file = output_dir / "heartbeat.txt"
-    while True:
-        await asyncio.sleep(interval)
-        ts = datetime.now(timezone.utc).isoformat()
-        logger.info("ORCHESTRATOR ALIVE — heartbeat at %s", ts)
-        try:
-            heartbeat_file.write_text(ts, encoding="utf-8")
-        except Exception as exc:
-            logger.warning("Failed to write heartbeat file: %s", exc)
-
-
-async def _execute_broker_orders(
-    final_df: "pd.DataFrame",
-    dry_run: bool,
-    macro_dto: Optional[Any] = None,
-) -> None:
-    """
-    Translate signal → desired position → delta → orders and submit via
-    OrderManager.  Runs reconciliation first to catch any broker drift.
-
-    Design constraints
-    ------------------
-    * Never called when Alpaca credentials are absent (checked by caller).
-    * Errors are logged as ERROR and never propagate to crash the pipeline —
-      broker execution is best-effort, not load-bearing.
-    * Only BUY signals with Kelly Target > 0 generate new orders; SELL/TRIM
-      signals generate SELL orders for existing positions.
-    * Pre-trade risk gate is wired in with the current macro state.
-    * ``dry_run=True`` logs intent but never reaches the broker network.
-    """
-    try:
-        from execution.alpaca_broker import AlpacaBroker
-        from execution.broker_base import OrderIntent, OrderSide, OrderType
-        from execution.order_manager import OrderManager
-        from execution.risk_gate import PreTradeRiskGate, RiskContext
-        from transactions_store import TransactionsStore
-
-        broker = AlpacaBroker()
-        ts_store = TransactionsStore()
-        risk_gate = PreTradeRiskGate()
-        om = OrderManager(broker, dry_run=dry_run, risk_gate=risk_gate)
-
-        # --- Reconcile before submitting new orders ---
-        recon_report = await om.reconcile_state(ts_store)
-        if recon_report.has_drift:
-            telemetry.critical(
-                "Broker state drift detected before order submission — "
-                "review reconciliation report before trusting signals."
-            )
-
-        # --- Fetch live account + positions for risk gate ---
-        open_pos = await broker.get_open_positions()
-        open_symbols = {p.symbol: p.qty for p in open_pos}
-        try:
-            account = await broker.get_account()
-        except Exception:
-            account = None
-
-        # Build a price map from the final_df for position-size check
-        prices: dict[str, float] = {
-            str(row.get("Symbol", "")).upper(): float(row.get("Price", 0.0) or 0.0)
-            for _, row in final_df.iterrows()
-        }
-
-        # Build returns DataFrame from the pipeline's first ticker's history
-        # (a proxy — ideally the full universe returns would be passed here)
-        returns_df = pd.DataFrame()
-
-        risk_ctx = RiskContext(
-            macro=macro_dto,
-            open_positions=open_pos,
-            account=account,
-            returns_df=returns_df if not returns_df.empty else None,
-            current_prices=prices,
-            is_premium_sell_strategy=False,
-        )
-
-        now = datetime.now(timezone.utc)
-        for _, row in final_df.iterrows():
-            symbol = str(row.get("Symbol", "")).upper()
-            signal = str(row.get("Action Signal", "")).upper()
-            kelly = float(row.get("Kelly Target", 0.0) or 0.0)
-
-            if not symbol:
-                continue
-
-            try:
-                if "BUY" in signal and kelly > 0 and symbol not in open_symbols:
-                    intent = OrderIntent(
-                        strategy_id="main_pipeline",
-                        symbol=symbol,
-                        side=OrderSide.BUY,
-                        qty=1.0,
-                        order_type=OrderType.MARKET,
-                    )
-                    result = await om.submit_order_with_idempotency(
-                        intent, timestamp=now, risk_context=risk_ctx
-                    )
-                    telemetry.info(
-                        "Order submitted: BUY %s -> status=%s broker_id=%s",
-                        symbol,
-                        result.status.value,
-                        result.broker_order_id,
-                    )
-
-                elif signal in ("SELL", "TRIM") and symbol in open_symbols:
-                    sell_qty = abs(open_symbols[symbol])
-                    intent = OrderIntent(
-                        strategy_id="main_pipeline",
-                        symbol=symbol,
-                        side=OrderSide.SELL,
-                        qty=sell_qty,
-                        order_type=OrderType.MARKET,
-                    )
-                    result = await om.submit_order_with_idempotency(
-                        intent, timestamp=now, risk_context=risk_ctx
-                    )
-                    telemetry.info(
-                        "Order submitted: SELL %s x %.4f -> status=%s broker_id=%s",
-                        symbol,
-                        sell_qty,
-                        result.status.value,
-                        result.broker_order_id,
-                    )
-
-            except Exception as order_err:
-                telemetry.error(
-                    "Order submission failed for %s: %s", symbol, order_err, exc_info=True
-                )
-
-    except Exception as exc:
-        telemetry.error(
-            "_execute_broker_orders crashed (non-fatal): %s", exc, exc_info=True
-        )
-
-
 if __name__ == "__main__":
-    import argparse
-
-    _parser = argparse.ArgumentParser(description="InvestYo Master Orchestrator")
-    _parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        default=False,
-        help="Log intended orders but do not submit to broker.",
-    )
-    _args = _parser.parse_args()
-    asyncio.run(main(dry_run=_args.dry_run))
+    asyncio.run(main())
