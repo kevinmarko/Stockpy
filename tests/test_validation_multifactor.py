@@ -29,6 +29,26 @@ derivable from real, free, point-in-time-correct data:
 Value and Quality are covered by the synthetic-but-engineered cross-section
 in tests/test_multifactor.py instead, which can construct exact, known factor
 exposures without needing a historical fundamentals feed at all.
+
+PIT-fundamentals path (Tier 2.3 Phase 3 — future extension)
+-------------------------------------------------------------
+The ``fundamentals_history`` table in ``quant_platform.db`` (written by
+``data.historical_store.HistoricalStore.get_fundamentals()``) accumulates
+real point-in-time fundamentals snapshots starting from the day Phase 3
+ships. Each row stores ``raw_json`` containing the full provider dict at
+the time of capture (including book-to-market, earnings yield, ROE, and
+operating margin).
+
+Once ≥ 90 days of history have accumulated, this harness test COULD be
+extended to replay the Value and Quality factors using
+``HistoricalStore.get_fundamentals_history(symbol)`` — reading ``raw_json``
+parsed as a daily fundamentals snapshot and computing factor z-scores
+cross-sectionally for each date.  That would close the gap noted in the
+SCOPE LIMITATION section above.
+
+**Do NOT implement that extension here** — it is explicitly out-of-scope
+for Phase 3 and should be a separate PR (filed as a follow-up ticket once
+≥ 90 days of fundamentals have been accumulated in production).
 """
 
 import math

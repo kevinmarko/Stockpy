@@ -1,8 +1,8 @@
 """
-Historical Store — Tier 2.3 Phase 1 + Phase 2
-==============================================
-Persistent OHLCV bar cache and Robinhood account snapshot store backed by
-``quant_platform.db``.
+Historical Store — Tier 2.3 Phase 1 + Phase 2 + Phase 3
+=========================================================
+Persistent OHLCV bar cache, Robinhood account snapshot store, fundamentals
+history, and FRED macro series backed by ``quant_platform.db``.
 
 Phase 1 — price_bars
     Every run currently re-fetches ~2 years of bars per symbol from yfinance even
@@ -14,6 +14,20 @@ Phase 2 — account_snapshots / account_positions
     no live login is available.  Three-tier read order in
     ``data/robinhood_portfolio.fetch_account_snapshot``: DB → JSON cache → live.
 
+Phase 3 — fundamentals_history + macro_history
+    Persist Finnhub/yfinance fundamentals snapshots (daily) and FRED macro series
+    (incremental by date) so the pipeline avoids redundant provider calls on every
+    run.  ``get_fundamentals()`` caches typed columns + raw_json for PIT replay.
+    ``get_macro()`` tops up only the missing date range from FRED.
+
+    **PIT-fundamentals note**: the ``raw_json`` column in ``fundamentals_history``
+    accumulates real point-in-time (PIT) fundamentals starting from the day Phase 3
+    ships.  After ≥ 90 days of accumulated history the
+    ``tests/test_validation_multifactor.py`` harness could be extended to the
+    Value/Quality factors (book-to-market, earnings yield, ROE, operating margin)
+    using ``get_fundamentals_history(symbol).raw_json`` — but that extension is
+    out-of-scope for Phase 3 and must not be implemented here.
+
 Design
 ------
 * **raw sqlite3 + WAL** — same pattern as ``forecasting/forecast_tracker.py``.
@@ -21,6 +35,7 @@ Design
   in try/except; failures log at WARNING and return an empty sentinel.
 * **No fabricated data** (CONSTRAINT #4): empty DB + failed live fetch returns an
   empty DataFrame / None / {}; zero-filled or synthetic rows are never returned.
+  Missing fundamentals fields → NaN, NEVER 0.0.
 * **Identical shape contract for bars**: ``get_bars()`` returns a tz-naive
   ``DatetimeIndex`` with columns ``[Open, High, Low, Close, Volume]``.
 * **AccountSnapshot is the in-memory truth** (CONSTRAINT #1): the DB tables are
@@ -33,14 +48,18 @@ Tables
 price_bars          — OHLCV bars keyed by (symbol, date)
 account_snapshots   — account-level snapshot (equity, buying power, dividends)
 account_positions   — per-symbol positions linked to a snapshot_id FK
+fundamentals_history — daily fundamentals snapshot per symbol + raw_json
+macro_history       — FRED series values keyed by (series_id, date)
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import sqlite3
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import pandas as pd
 
@@ -48,6 +67,26 @@ if TYPE_CHECKING:
     from data.robinhood_portfolio import AccountSnapshot
 
 logger = logging.getLogger(__name__)
+
+# Fundamentals key mapping: yfinance .info key → typed DB column name.
+# Finnhub keys are already mapped to yfinance-style keys by FinnhubProvider
+# before arriving at this layer (see data/market_data.py FinnhubProvider._METRIC_MAP).
+_FUND_KEY_MAP: Dict[str, str] = {
+    "trailingPE":         "pe_ratio",
+    "priceToBook":        "pb_ratio",
+    "returnOnEquity":     "roe",
+    "dividendYield":      "dividend_yield",
+    "marketCap":          "market_cap",
+    "trailingEps":        "eps",
+    "operatingMargins":   "operating_margin",
+    "debtToEquity":       "debt_to_equity",
+}
+
+# Typed DB column names for fundamentals.  Order must match INSERT/SELECT.
+_FUND_DB_COLS = [
+    "pe_ratio", "pb_ratio", "roe", "dividend_yield",
+    "market_cap", "eps", "operating_margin", "debt_to_equity",
+]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DDL — price_bars (Phase 1)
@@ -109,6 +148,54 @@ CREATE TABLE IF NOT EXISTS account_positions (
 )
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — fundamentals_history (Phase 3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FUNDAMENTALS_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS fundamentals_history (
+    symbol          TEXT NOT NULL,
+    as_of           TEXT NOT NULL,
+    pe_ratio        REAL,
+    pb_ratio        REAL,
+    roe             REAL,
+    dividend_yield  REAL,
+    market_cap      REAL,
+    eps             REAL,
+    operating_margin REAL,
+    debt_to_equity  REAL,
+    raw_json        TEXT,
+    source          TEXT NOT NULL,
+    fetched_at      TEXT NOT NULL,
+    PRIMARY KEY (symbol, as_of)
+)
+"""
+
+_FUNDAMENTALS_HISTORY_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_fund_history_symbol
+    ON fundamentals_history (symbol)
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — macro_history (Phase 3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MACRO_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS macro_history (
+    series_id   TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    value       REAL,
+    source      TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (series_id, date)
+)
+"""
+
+_MACRO_HISTORY_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_macro_history_series
+    ON macro_history (series_id, date)
+"""
+
 # Column order returned by SELECT for price_bars reconstruction.
 _SELECT_COLS = "open, high, low, close, adj_close, volume"
 
@@ -151,6 +238,10 @@ class HistoricalStore:
                 conn.execute(_ACCOUNT_SNAPSHOTS_DDL)
                 conn.execute(_ACCOUNT_SNAPSHOTS_INDEX_DDL)
                 conn.execute(_ACCOUNT_POSITIONS_DDL)
+                conn.execute(_FUNDAMENTALS_HISTORY_DDL)
+                conn.execute(_FUNDAMENTALS_HISTORY_INDEX_DDL)
+                conn.execute(_MACRO_HISTORY_DDL)
+                conn.execute(_MACRO_HISTORY_INDEX_DDL)
                 conn.commit()
         except Exception as exc:
             logger.warning("HistoricalStore._ensure_tables failed: %s", exc)
@@ -414,6 +505,440 @@ class HistoricalStore:
             return _EMPTY_HISTORY_DF.copy()
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Public API — Fundamentals (Phase 3)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_fundamentals(
+        self,
+        symbol: str,
+        max_age_days: int = 1,
+        *,
+        provider=None,
+    ) -> Dict[str, float]:
+        """Return a typed fundamentals dict for *symbol*, refreshing when stale.
+
+        Cache policy
+        ------------
+        1. Read the newest ``fundamentals_history`` row for *symbol*.
+        2. If the row's ``as_of`` date is within *max_age_days* of today → return
+           the eight typed columns as a ``{column_name: float}`` dict.  Missing DB
+           fields are ``NaN``, NEVER ``0.0`` (CONSTRAINT #4).
+        3. Otherwise resolve the provider (injectable for tests; defaults to
+           ``data.market_data.get_provider()``) and call
+           ``provider.get_fundamentals(symbol)``.  Map yfinance-style keys to the
+           typed columns, INSERT OR REPLACE, and return the typed dict.
+        4. Total failure (DB error + provider error) → ``{}`` (CONSTRAINT #6).
+
+        Parameters
+        ----------
+        symbol:
+            Ticker (case-insensitive).
+        max_age_days:
+            Rows older than this many days trigger a live refetch.  Default 1.
+        provider:
+            Injectable market-data provider.  ``None`` uses the module singleton.
+
+        Returns
+        -------
+        Dict[str, float]
+            Keys: pe_ratio, pb_ratio, roe, dividend_yield, market_cap, eps,
+            operating_margin, debt_to_equity.  Values are ``float`` or ``NaN``.
+            Returns ``{}`` on total failure.
+        """
+        symbol = symbol.upper()
+        from settings import settings as _s  # avoid circular import
+
+        # ── Step 1: try DB cache ─────────────────────────────────────────────
+        try:
+            cached = self._read_fundamentals_row(symbol)
+            if cached is not None:
+                as_of_str, typed_dict, _raw = cached
+                as_of = datetime.strptime(as_of_str, "%Y-%m-%d").date()
+                today_date = datetime.now(timezone.utc).date()
+                age_days = (today_date - as_of).days
+                if age_days < max_age_days:
+                    logger.debug(
+                        "HistoricalStore.get_fundamentals(%s): cache hit (age %d d).",
+                        symbol, age_days,
+                    )
+                    return typed_dict
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_fundamentals(%s): DB read failed: %s; "
+                "falling through to live fetch.", symbol, exc,
+            )
+
+        # ── Step 2: live fetch ───────────────────────────────────────────────
+        _provider = self._resolve_provider(provider)
+        if _provider is None:
+            logger.warning(
+                "HistoricalStore.get_fundamentals(%s): no provider; returning {}.",
+                symbol,
+            )
+            return {}
+
+        try:
+            raw: Dict[str, Any] = _provider.get_fundamentals(symbol) or {}
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_fundamentals(%s): provider fetch failed: %s; "
+                "returning {}.", symbol, exc,
+            )
+            return {}
+
+        typed = _raw_to_typed_fundamentals(raw)
+
+        # ── Step 3: upsert into DB ───────────────────────────────────────────
+        try:
+            self._upsert_fundamentals(symbol, typed, raw, source=_source_name(_provider))
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_fundamentals(%s): DB write failed: %s "
+                "(result still returned to caller).", symbol, exc,
+            )
+
+        return typed
+
+    def get_fundamentals_history(
+        self,
+        symbol: str,
+        since: Optional[datetime] = None,
+    ) -> pd.DataFrame:
+        """Return all stored fundamentals rows for *symbol* as a DataFrame.
+
+        Columns: ``as_of``, ``pe_ratio``, ``pb_ratio``, ``roe``,
+        ``dividend_yield``, ``market_cap``.  Ordered ascending by ``as_of``.
+
+        Intended for point-in-time (PIT) fundamentals replay once ≥ 90 days of
+        history have accumulated.  Returns an empty DataFrame on error (CONSTRAINT #6).
+        """
+        try:
+            since_str = since.strftime("%Y-%m-%d") if since is not None else None
+            with self._connect() as conn:
+                if since_str is not None:
+                    rows = conn.execute(
+                        """
+                        SELECT as_of, pe_ratio, pb_ratio, roe,
+                               dividend_yield, market_cap
+                        FROM fundamentals_history
+                        WHERE symbol = ? AND as_of >= ?
+                        ORDER BY as_of ASC
+                        """,
+                        (symbol.upper(), since_str),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT as_of, pe_ratio, pb_ratio, roe,
+                               dividend_yield, market_cap
+                        FROM fundamentals_history
+                        WHERE symbol = ?
+                        ORDER BY as_of ASC
+                        """,
+                        (symbol.upper(),),
+                    ).fetchall()
+            if not rows:
+                return pd.DataFrame(
+                    columns=["as_of", "pe_ratio", "pb_ratio", "roe",
+                             "dividend_yield", "market_cap"]
+                )
+            return pd.DataFrame(
+                rows,
+                columns=["as_of", "pe_ratio", "pb_ratio", "roe",
+                         "dividend_yield", "market_cap"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_fundamentals_history(%s) failed: %s", symbol, exc,
+            )
+            return pd.DataFrame(
+                columns=["as_of", "pe_ratio", "pb_ratio", "roe",
+                         "dividend_yield", "market_cap"]
+            )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public API — Macro history (Phase 3)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_macro(
+        self,
+        series_id: str,
+        *,
+        lookback_days: Optional[int] = None,
+        data_engine=None,
+    ) -> pd.Series:
+        """Return a tz-naive date-indexed Series for *series_id* from ``macro_history``.
+
+        Top-up logic
+        ------------
+        1. Read all rows for *series_id* from ``macro_history``.
+        2. If the most-recent row's ``fetched_at`` is less than
+           ``settings.MACRO_REFRESH_HOURS`` old, return the cached series.
+        3. Otherwise call ``data_engine.fetch_macro_history()`` (fetches ALL FRED
+           series in one request — VIXCLS, T10Y2Y, etc.) and upsert every series
+           via INSERT OR REPLACE, then return the union for *series_id*.
+        4. If *lookback_days* is provided, slice the tail.
+        5. Total failure → empty ``pd.Series`` (CONSTRAINT #6).
+
+        Parameters
+        ----------
+        series_id:
+            FRED series identifier (``'VIXCLS'``, ``'T10Y2Y'``, etc.).
+        lookback_days:
+            If provided, returns only the last *lookback_days* rows by date.
+        data_engine:
+            Injectable ``DataEngine`` instance.  ``None`` constructs a real one
+            (requires FRED_API_KEY to be set in the environment).
+
+        Returns
+        -------
+        pd.Series
+            tz-naive DatetimeIndex, values are floats (NaN for FRED gaps).
+            Empty Series on total failure.
+        """
+        from settings import settings as _s  # avoid circular import
+
+        # ── Step 1: read cached series ───────────────────────────────────────
+        try:
+            cached_df = self._read_macro_series(series_id)
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_macro(%s): DB read failed: %s; "
+                "falling through to live fetch.", series_id, exc,
+            )
+            cached_df = pd.DataFrame()
+
+        # ── Step 2: decide whether top-up is needed ──────────────────────────
+        needs_topup = True
+        if not cached_df.empty:
+            try:
+                latest_fetched_at_str = self._latest_macro_fetched_at(series_id)
+                if latest_fetched_at_str:
+                    latest_fetched_at = datetime.fromisoformat(latest_fetched_at_str)
+                    if latest_fetched_at.tzinfo is None:
+                        latest_fetched_at = latest_fetched_at.replace(tzinfo=timezone.utc)
+                    age_hours = (
+                        datetime.now(timezone.utc) - latest_fetched_at
+                    ).total_seconds() / 3600.0
+                    if age_hours < _s.MACRO_REFRESH_HOURS:
+                        needs_topup = False
+                        logger.debug(
+                            "HistoricalStore.get_macro(%s): cache fresh (age %.1fh < %dh).",
+                            series_id, age_hours, _s.MACRO_REFRESH_HOURS,
+                        )
+            except Exception as exc:
+                logger.debug(
+                    "HistoricalStore.get_macro(%s): freshness check failed: %s; "
+                    "will top-up.", series_id, exc,
+                )
+
+        # ── Step 3: top-up via DataEngine if stale ───────────────────────────
+        if needs_topup:
+            try:
+                _de = self._resolve_data_engine(data_engine)
+                if _de is not None:
+                    macro_df = _de.fetch_macro_history()
+                    if macro_df is not None and not macro_df.empty:
+                        self._upsert_macro(macro_df, source="fred")
+                        # Re-read after upsert
+                        try:
+                            cached_df = self._read_macro_series(series_id)
+                        except Exception:
+                            pass
+                        logger.info(
+                            "HistoricalStore.get_macro(%s): topped up %d rows from FRED.",
+                            series_id, len(macro_df),
+                        )
+                    else:
+                        logger.warning(
+                            "HistoricalStore.get_macro(%s): fetch_macro_history() returned "
+                            "empty; proceeding with cached data.", series_id,
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "HistoricalStore.get_macro(%s): top-up failed: %s; "
+                    "returning cached data.", series_id, exc,
+                )
+
+        if cached_df.empty:
+            return pd.Series(dtype=float, name=series_id)
+
+        series = cached_df["value"].copy()
+        series.index = pd.DatetimeIndex(cached_df["date"])
+        series.index = series.index.tz_localize(None)
+        series.name = series_id
+        series = series.sort_index()
+
+        if lookback_days is not None and lookback_days > 0:
+            cutoff = pd.Timestamp.now(tz=None) - pd.Timedelta(days=lookback_days)
+            series = series[series.index >= cutoff]
+
+        return series
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Private implementation helpers — fundamentals (Phase 3)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _read_fundamentals_row(self, symbol: str):
+        """Return ``(as_of_str, typed_dict, raw_json_str)`` or ``None``."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT as_of, pe_ratio, pb_ratio, roe, dividend_yield,
+                       market_cap, eps, operating_margin, debt_to_equity,
+                       raw_json
+                FROM fundamentals_history
+                WHERE symbol = ?
+                ORDER BY as_of DESC
+                LIMIT 1
+                """,
+                (symbol,),
+            ).fetchone()
+        if row is None:
+            return None
+        as_of_str = row[0]
+        typed_dict: Dict[str, float] = {
+            "pe_ratio":        row[1] if row[1] is not None else float("nan"),
+            "pb_ratio":        row[2] if row[2] is not None else float("nan"),
+            "roe":             row[3] if row[3] is not None else float("nan"),
+            "dividend_yield":  row[4] if row[4] is not None else float("nan"),
+            "market_cap":      row[5] if row[5] is not None else float("nan"),
+            "eps":             row[6] if row[6] is not None else float("nan"),
+            "operating_margin":row[7] if row[7] is not None else float("nan"),
+            "debt_to_equity":  row[8] if row[8] is not None else float("nan"),
+        }
+        raw_json_str = row[9]
+        return as_of_str, typed_dict, raw_json_str
+
+    def _upsert_fundamentals(
+        self,
+        symbol: str,
+        typed: Dict[str, float],
+        raw: Dict[str, Any],
+        source: str,
+    ) -> None:
+        """INSERT OR REPLACE one fundamentals row for (symbol, today)."""
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now_ts = self._now_utc_iso()
+        raw_json_str = json.dumps(raw, default=str)
+
+        def _db_val(v: float):
+            """Convert NaN → None so SQLite stores NULL, not 'nan' text."""
+            if isinstance(v, float) and math.isnan(v):
+                return None
+            return v
+
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO fundamentals_history
+                    (symbol, as_of, pe_ratio, pb_ratio, roe, dividend_yield,
+                     market_cap, eps, operating_margin, debt_to_equity,
+                     raw_json, source, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol,
+                    today_str,
+                    _db_val(typed.get("pe_ratio", float("nan"))),
+                    _db_val(typed.get("pb_ratio", float("nan"))),
+                    _db_val(typed.get("roe", float("nan"))),
+                    _db_val(typed.get("dividend_yield", float("nan"))),
+                    _db_val(typed.get("market_cap", float("nan"))),
+                    _db_val(typed.get("eps", float("nan"))),
+                    _db_val(typed.get("operating_margin", float("nan"))),
+                    _db_val(typed.get("debt_to_equity", float("nan"))),
+                    raw_json_str,
+                    source,
+                    now_ts,
+                ),
+            )
+            conn.commit()
+        logger.debug(
+            "HistoricalStore: upserted fundamentals for %s (as_of=%s).",
+            symbol, today_str,
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Private implementation helpers — macro (Phase 3)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _read_macro_series(self, series_id: str) -> pd.DataFrame:
+        """Return all (date, value) rows for *series_id* as a DataFrame."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT date, value
+                FROM macro_history
+                WHERE series_id = ?
+                ORDER BY date ASC
+                """,
+                (series_id,),
+            ).fetchall()
+        if not rows:
+            return pd.DataFrame(columns=["date", "value"])
+        return pd.DataFrame(rows, columns=["date", "value"])
+
+    def _latest_macro_fetched_at(self, series_id: str) -> Optional[str]:
+        """Return the MAX(fetched_at) ISO string for *series_id*, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(fetched_at) FROM macro_history WHERE series_id = ?",
+                (series_id,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def _upsert_macro(self, macro_df: pd.DataFrame, source: str) -> None:
+        """Upsert all columns of *macro_df* as separate series into macro_history.
+
+        ``macro_df`` must have a DatetimeIndex and one column per FRED series
+        (matching the shape returned by ``DataEngine.fetch_macro_history()``).
+        NaN values are stored as NULL; rows with an all-NaN date are skipped.
+        """
+        now_ts = self._now_utc_iso()
+        rows = []
+        for ts, row in macro_df.iterrows():
+            date_str = pd.Timestamp(ts).strftime("%Y-%m-%d")
+            for col in macro_df.columns:
+                val = row[col]
+                db_val = None if (isinstance(val, float) and math.isnan(val)) else float(val)
+                rows.append((col, date_str, db_val, source, now_ts))
+
+        if not rows:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO macro_history
+                    (series_id, date, value, source, fetched_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            conn.commit()
+        logger.debug(
+            "HistoricalStore: upserted %d macro rows (series: %s).",
+            len(rows), list(macro_df.columns),
+        )
+
+    @staticmethod
+    def _resolve_data_engine(data_engine):
+        """Resolve an injectable DataEngine or construct the real singleton."""
+        if data_engine is not None:
+            return data_engine
+        try:
+            from data_engine import DataEngine
+            from settings import settings as _s
+            if _s.FRED_API_KEY:
+                return DataEngine()
+        except Exception as exc:
+            logger.debug(
+                "HistoricalStore._resolve_data_engine: could not construct "
+                "DataEngine: %s", exc,
+            )
+        return None
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Private implementation helpers — bars
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -584,3 +1109,36 @@ def _int_or_none(v) -> Optional[int]:
         return int(f)
     except (TypeError, ValueError):
         return None
+
+
+def _raw_to_typed_fundamentals(raw: Dict[str, Any]) -> Dict[str, float]:
+    """Map a yfinance-style raw fundamentals dict to typed column names.
+
+    Missing keys → ``NaN``, NEVER ``0.0`` (CONSTRAINT #4).
+    ``debtToEquity`` is divided by 100 to convert yfinance's percentage
+    representation (e.g. 150.0 → 1.5) to a decimal ratio, matching the
+    convention in ``processing_engine.calculate_fundamental_metrics``.
+    """
+    typed: Dict[str, float] = {}
+    for raw_key, col in _FUND_KEY_MAP.items():
+        val = raw.get(raw_key)
+        if val is None:
+            typed[col] = float("nan")
+        else:
+            try:
+                f = float(val)
+                if col == "debt_to_equity":
+                    # yfinance returns D/E as percent (e.g. 150 = 150%); normalise to decimal.
+                    f = f / 100.0
+                typed[col] = f
+            except (TypeError, ValueError):
+                typed[col] = float("nan")
+    # Ensure all expected keys are present even if the raw dict is sparse.
+    for col in _FUND_DB_COLS:
+        typed.setdefault(col, float("nan"))
+    return typed
+
+
+def _source_name(provider) -> str:
+    """Return a human-readable source label for the given provider object."""
+    return getattr(provider, "source_name", type(provider).__name__.lower())
