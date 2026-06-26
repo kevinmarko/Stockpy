@@ -85,7 +85,7 @@ This creates `quant_platform.db` (SQLite) with the correct schema for storing da
 python scripts/preflight_check.py
 ```
 
-This runs 14 automated readiness checks. On a fresh setup you will see some failures (especially `heartbeat_fresh` and `paper_trading_duration`) — that is normal. See [Section 13](#13-preflight-check--are-you-ready-to-go-live) for what each check means.
+This runs 15 automated readiness checks. On a fresh setup you will see some failures (especially `heartbeat_fresh` and `paper_trading_duration`) — that is normal. See [Section 13](#13-preflight-check--are-you-ready-to-go-live) for what each check means.
 
 ---
 
@@ -621,18 +621,24 @@ If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt
 python scripts/preflight_check.py
 ```
 
-Runs 14 checks total. Behaviour depends on `ADVISORY_ONLY`:
+Runs 15 checks total. Behaviour depends on `ADVISORY_ONLY`:
 
-* **`ADVISORY_ONLY=true` (default)**: four broker-dependent checks are automatically
-  skipped (shown as PASS with an "advisory mode" note); `advisory_only_active` passes
+* **`ADVISORY_ONLY=true` (default)**: seven checks are automatically skipped (shown
+  as PASS with a per-check advisory-mode note): four broker-stack checks
+  (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`,
+  `paper_trading_duration`), one key-rotation check (`alpaca_key_rotation_recent` —
+  Alpaca keys have no blast-radius risk while the broker surface is quarantined), and
+  two runtime-state checks that are false-positives for advisory runs
+  (`heartbeat_fresh`, `validation_reports`). `advisory_only_active` always passes
   loudly. Exit 0 when the remaining checks pass.
-* **`ADVISORY_ONLY=false`**: all 14 checks run. Exit 0 only when ALL pass (required
+* **`ADVISORY_ONLY=false`**: all 15 checks run. Exit 0 only when ALL pass (required
   before going live).
 
 | Check | Advisory skip? | Passes when | How to fix a failure |
 |-------|:--------------:|------------|---------------------|
 | `fred_key_configured` | No | `FRED_API_KEY` is set | Add key to `.env` |
 | `key_rotation_recent` | No | `FRED_KEY_ROTATED_DATE` set and within 90 days — warning only, never blocking | Set `FRED_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` when you rotate |
+| `alpaca_key_rotation_recent` | **Yes** | `ALPACA_KEY_ROTATED_DATE` set and within 90 days — warning only, never blocking | Set `ALPACA_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` when you rotate |
 | `advisory_only_active` | No | Always — PASS-loud when `true`, PASS-with-warning when `false` | Set `ADVISORY_ONLY=true` to return to advisory mode |
 | `alpaca_configured` | **Yes** | Both Alpaca keys are set | Add keys to `.env` |
 | `macro_regime_gate_enabled` | No | `MACRO_REGIME_GATE_ENABLED=true` (blocks in live mode when off) | Set `MACRO_REGIME_GATE_ENABLED=true` in `.env` |
@@ -640,10 +646,10 @@ Runs 14 checks total. Behaviour depends on `ADVISORY_ONLY`:
 | `dry_run_disabled` | **Yes** | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
 | `env_not_committed` | No | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
 | `kill_switch_inactive` | No | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
-| `heartbeat_fresh` | No | `output/heartbeat.txt` is < 2 hours old | Run `python3 main_orchestrator.py` to generate it |
+| `heartbeat_fresh` | **Yes** | `output/heartbeat.txt` is < 2 hours old (written by `main_orchestrator.py` only) | Run `python3 main_orchestrator.py` to generate it |
 | `db_exists` | No | `quant_platform.db` exists and is non-empty | Run `python3 database_setup.py` |
 | `paper_trading_duration` | **Yes** | ≥ 90 days since `PAPER_TRADING_START_DATE` | Wait — this is intentional; set your start date when you begin |
-| `validation_reports` | No | At least one report exists, deployable, and < 30 days old | Run `python -m validation.harness --strategy main_pipeline --start 2015-01-01 --end 2024-12-31` |
+| `validation_reports` | **Yes** | At least one report exists, deployable, and < 30 days old | Run `python -m validation.harness --strategy main_pipeline --start 2015-01-01 --end 2024-12-31` |
 | `no_unexpected_risk_blocks` | No | No `minimum_validation` blocks in last 24 h | Generate a validation report — the minimum_validation risk gate is blocking because no deployable reports exist |
 
 ### JSON output (for automation)
