@@ -542,3 +542,193 @@ class TestSingleton:
         with patch.dict(os.environ, {"ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": ""}):
             p2 = get_provider()
         assert p1 is not p2
+
+
+# ---------------------------------------------------------------------------
+# 9. Rate limiter + fundamentals cache (2026-06 Finnhub 429 mitigation)
+# ---------------------------------------------------------------------------
+
+class TestSlidingWindowRateLimiter:
+    """Verifies the rate limiter blocks once the per-window budget is exhausted."""
+
+    def test_first_n_calls_do_not_sleep(self, monkeypatch):
+        from data.market_data import _SlidingWindowRateLimiter
+        slept: list[float] = []
+        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
+        rl = _SlidingWindowRateLimiter(max_calls=3, window_seconds=60.0)
+        for _ in range(3):
+            rl.acquire()
+        assert slept == []  # No sleep within budget
+
+    def test_exceeds_budget_triggers_sleep(self, monkeypatch):
+        from data.market_data import _SlidingWindowRateLimiter
+        slept: list[float] = []
+        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
+        rl = _SlidingWindowRateLimiter(max_calls=2, window_seconds=60.0)
+        rl.acquire()
+        rl.acquire()
+        rl.acquire()  # Should trigger a sleep
+        assert len(slept) == 1
+        assert slept[0] > 0
+
+
+class TestFundamentalsCache:
+    """Verifies positive AND empty fundamentals are cached with TTL semantics."""
+
+    def test_cache_returns_empty_dict_on_miss(self):
+        from data.market_data import _FundamentalsCache
+        c = _FundamentalsCache(ttl_seconds=60)
+        assert c.get("AAPL") is None
+
+    def test_cache_round_trip(self):
+        from data.market_data import _FundamentalsCache
+        c = _FundamentalsCache(ttl_seconds=60)
+        c.put("AAPL", {"trailingPE": 28.5})
+        cached = c.get("AAPL")
+        assert cached == {"trailingPE": 28.5}
+        # Defensive copy: mutating the returned dict should not corrupt the cache.
+        cached["trailingPE"] = 999.0
+        assert c.get("AAPL") == {"trailingPE": 28.5}
+
+    def test_cache_negative_entry(self):
+        """An empty-dict response is a valid cache entry (negative caching)."""
+        from data.market_data import _FundamentalsCache
+        c = _FundamentalsCache(ttl_seconds=60)
+        c.put("BAD", {})
+        assert c.get("BAD") == {}  # Distinct from None (miss)
+
+    def test_ttl_expiry(self, monkeypatch):
+        from data.market_data import _FundamentalsCache
+        c = _FundamentalsCache(ttl_seconds=1)
+        c.put("AAPL", {"x": 1})
+        # Fast-forward by patching time.monotonic.
+        import data.market_data as md
+        orig = md.time.monotonic()
+        monkeypatch.setattr(md.time, "monotonic", lambda: orig + 2.0)
+        assert c.get("AAPL") is None
+
+
+class TestFinnhubRateLimitAndCache:
+    """End-to-end: FinnhubProvider must cache and rate-limit per 2026-06 fix."""
+
+    def _make_mock_client(self, *, raise_429: bool = False):
+        client = MagicMock()
+        if raise_429:
+            # Mimic finnhub.exceptions.FinnhubAPIException's status_code attr
+            exc = Exception("Too many requests.")
+            exc.status_code = 429
+            client.company_basic_financials.side_effect = exc
+            client.quote.side_effect = exc
+            client.company_profile2.side_effect = exc
+        else:
+            client.company_basic_financials.return_value = {
+                "metric": {"peBasicExclExtraTTM": 28.5}
+            }
+            client.quote.return_value = {"c": 150.0}
+            client.company_profile2.return_value = {
+                "name": "Apple Inc", "finnhubIndustry": "Tech"
+            }
+        return client
+
+    def test_repeated_calls_hit_cache_not_network(self, monkeypatch):
+        from data.market_data import FinnhubProvider
+        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
+        provider._client = self._make_mock_client()
+
+        provider.get_fundamentals("AAPL")
+        provider.get_fundamentals("AAPL")
+        provider.get_fundamentals("AAPL")
+
+        # Only the FIRST call should reach the network.
+        assert provider._client.company_basic_financials.call_count == 1
+
+    def test_429_is_caught_and_negative_cached(self, monkeypatch):
+        """A 429 should be swallowed, return {}, and prevent re-hammer next call."""
+        from data.market_data import FinnhubProvider
+        monkeypatch.setattr("data.market_data.time.sleep", lambda s: None)
+
+        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
+        provider._client = self._make_mock_client(raise_429=True)
+
+        result = provider.get_fundamentals("BAC")
+        assert result == {}  # Empty, never raises
+
+        # Second call hits negative cache — zero additional network calls.
+        first_call_count = provider._client.company_basic_financials.call_count
+        provider.get_fundamentals("BAC")
+        assert provider._client.company_basic_financials.call_count == first_call_count
+
+    def test_rate_limiter_blocks_when_budget_exhausted(self, monkeypatch):
+        """Verify the limiter is wired into FinnhubProvider, not just a free function."""
+        from data.market_data import FinnhubProvider
+        slept: list[float] = []
+        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
+
+        # 2 calls/min budget; each get_fundamentals makes up to 3 internal calls.
+        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600,
+                                   rate_limit_per_min=2)
+        provider._client = self._make_mock_client()
+
+        provider.get_fundamentals("AAPL")
+        # The third internal call within the window should have triggered a sleep.
+        assert len(slept) >= 1
+
+
+class TestCompositeProviderFundamentalsCache:
+    """The composite-level cache prevents BOTH Finnhub AND yfinance re-hammering."""
+
+    def test_composite_caches_final_result(self, monkeypatch):
+        from data.market_data import CompositeProvider, YFinanceProvider
+        with patch.dict(os.environ, {
+            "FINNHUB_API_KEY": "", "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": "",
+        }):
+            cp = CompositeProvider()
+            yf_call_count = {"n": 0}
+
+            def _fake_yf(self, sym):  # noqa: ARG001
+                yf_call_count["n"] += 1
+                return {"trailingPE": 28.5}
+
+            monkeypatch.setattr(YFinanceProvider, "get_fundamentals", _fake_yf)
+
+            cp.get_fundamentals("AAPL")
+            cp.get_fundamentals("AAPL")
+            cp.get_fundamentals("AAPL")
+
+            assert yf_call_count["n"] == 1  # Composite cache deduplicates
+
+
+# ---------------------------------------------------------------------------
+# 10. Robin_stocks output suppression (2026-06 Robinhood 400 noise mitigation)
+# ---------------------------------------------------------------------------
+
+class TestRobinhoodOutputSuppression:
+    """Verify _suppress_rs_output redirects robin_stocks' stdout-style prints."""
+
+    def test_suppress_swallows_print_to_helper_output(self):
+        """robin_stocks prints HTTP errors via `print(msg, file=helper.get_output())`.
+
+        With suppression active, that text must land in our buffer, not stdout.
+        """
+        from data.robinhood_client import _suppress_rs_output
+        try:
+            from robin_stocks.robinhood import helper as _rs_helper
+        except Exception:  # pragma: no cover
+            pytest.skip("robin_stocks not installed")
+
+        with _suppress_rs_output() as buf:
+            print("400 Client Error: Bad Request", file=_rs_helper.get_output())
+        assert "400 Client Error" in buf.getvalue()
+
+    def test_output_restored_after_context(self):
+        """Ensure the prior output handle is restored even after suppression."""
+        from data.robinhood_client import _suppress_rs_output
+        try:
+            from robin_stocks.robinhood import helper as _rs_helper
+        except Exception:  # pragma: no cover
+            pytest.skip("robin_stocks not installed")
+
+        original = _rs_helper.get_output()
+        with _suppress_rs_output():
+            assert _rs_helper.get_output() is not original
+        assert _rs_helper.get_output() is original
