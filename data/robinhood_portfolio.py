@@ -443,7 +443,22 @@ def fetch_account_snapshot(
         Live-fetch failure + cache present → returns stale cache, logs warning.
         Live-fetch failure + no cache     → raises the original exception.
     """
-    # ---- Fast path: valid non-stale cache ----
+    # ---- Tier 1: DB-first read (fastest — no JSON I/O, no network) ----
+    if not force:
+        try:
+            from data.historical_store import HistoricalStore
+            _store = HistoricalStore()
+            _db_snap = _store.latest_account_snapshot()
+            if _db_snap is not None and not _db_snap.is_stale(max_age_hours):
+                logger.info(
+                    "Using DB-cached account snapshot (age %.1fh)",
+                    _db_snap.age_hours(),
+                )
+                return _db_snap
+        except Exception as _exc:
+            logger.debug("DB snapshot read failed, falling through: %s", _exc)
+
+    # ---- Tier 2: JSON cache ----
     if not force:
         cached = _read_cache()
         if cached is not None and not cached.is_stale(max_age_hours):
@@ -454,10 +469,16 @@ def fetch_account_snapshot(
             )
             return cached
 
-    # ---- Live fetch ----
+    # ---- Tier 3: live fetch ----
     try:
         snapshot = _fetch_live_snapshot()
         _write_cache(snapshot)
+        try:
+            from data.historical_store import HistoricalStore
+            _store = HistoricalStore()
+            _store.save_account_snapshot(snapshot)
+        except Exception as _exc:
+            logger.warning("DB snapshot write failed (non-fatal): %s", _exc)
         return snapshot
     except Exception as exc:
         logger.error("Live Robinhood fetch failed: %s", exc)

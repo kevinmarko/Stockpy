@@ -232,6 +232,15 @@ class TestCache:
 class TestFetchAccountSnapshot:
     """All network I/O is suppressed via monkeypatching."""
 
+    @pytest.fixture(autouse=True)
+    def _no_db(self, monkeypatch):
+        """Patch out the DB tier so existing tests only see JSON cache + live path."""
+        from unittest.mock import MagicMock
+        mock_store = MagicMock()
+        mock_store.latest_account_snapshot.return_value = None
+        mock_store.save_account_snapshot.return_value = 1
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda **kw: mock_store)
+
     def _setup(self, monkeypatch, tmp_path, live_snap=None):
         """Redirect cache path and wire in a fake live-fetch function."""
         cache_file = tmp_path / "account_snapshot.json"
@@ -739,3 +748,79 @@ class TestLoginFlow:
         from data.robinhood_portfolio import _login
         with pytest.raises(RuntimeError, match="Robinhood login failed"):
             _login()
+
+
+# ---------------------------------------------------------------------------
+# DB Integration Tests (Tier 2.3 Phase 2)
+# ---------------------------------------------------------------------------
+
+class TestDBIntegration:
+    """Verify the three-tier read order: DB → JSON cache → live."""
+
+    def _setup_no_live(self, monkeypatch, tmp_path):
+        """Redirect _CACHE_PATH to a temp file and wire a sentinel live-fetch."""
+        cache_file = tmp_path / "account_snapshot.json"
+        monkeypatch.setattr("data.robinhood_portfolio._CACHE_PATH", cache_file)
+        live_calls: list = []
+
+        def _no_live():
+            live_calls.append(True)
+            raise RuntimeError("live fetch must not be called in this test")
+
+        monkeypatch.setattr("data.robinhood_portfolio._fetch_live_snapshot", _no_live)
+        return cache_file, live_calls
+
+    def test_db_read_path_used_when_fresh(self, tmp_path, monkeypatch):
+        """DB-cached fresh snapshot → no live fetch and no JSON read."""
+        from data.historical_store import HistoricalStore
+
+        # Redirect JSON cache to an empty path and wire live-sentinel
+        cache_file, live_calls = self._setup_no_live(monkeypatch, tmp_path)
+
+        # Build a fresh snapshot and persist it in a temp DB
+        db_path = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db_path)
+        fresh = _make_snapshot(age_hours=1.0)
+        store.save_account_snapshot(fresh)
+
+        # Patch HistoricalStore so it returns our pre-seeded store
+        def _make_store():
+            return HistoricalStore(db_path=db_path)
+
+        monkeypatch.setattr("data.historical_store.HistoricalStore", _make_store)
+
+        result = fetch_account_snapshot(max_age_hours=20.0, force=False)
+
+        assert not live_calls, "Live fetch must NOT have been called"
+        assert result.buying_power == pytest.approx(fresh.buying_power)
+        assert result.total_equity == pytest.approx(fresh.total_equity)
+        # JSON cache must not have been written (no live fetch happened)
+        assert not cache_file.exists()
+
+    def test_falls_through_to_json_on_db_error(self, tmp_path, monkeypatch):
+        """DB error → falls through to JSON cache, never crashes."""
+        cache_file = tmp_path / "account_snapshot.json"
+        monkeypatch.setattr("data.robinhood_portfolio._CACHE_PATH", cache_file)
+
+        # Seed the JSON cache with a fresh snapshot
+        fresh = _make_snapshot(age_hours=1.0)
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(fresh.to_dict()))
+
+        # Wire live-fetch to a sentinel that fails if reached
+        monkeypatch.setattr(
+            "data.robinhood_portfolio._fetch_live_snapshot",
+            lambda: (_ for _ in ()).throw(RuntimeError("must not reach live")),
+        )
+
+        # Make HistoricalStore raise on instantiation
+        def _broken_store():
+            raise RuntimeError("DB unavailable")
+
+        monkeypatch.setattr("data.historical_store.HistoricalStore", _broken_store)
+
+        result = fetch_account_snapshot(max_age_hours=20.0, force=False)
+
+        assert result is not None, "Expected JSON fallback to succeed"
+        assert result.buying_power == pytest.approx(fresh.buying_power)
+        assert result.total_equity == pytest.approx(fresh.total_equity)

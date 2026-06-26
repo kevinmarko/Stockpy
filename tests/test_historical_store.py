@@ -1,5 +1,5 @@
 """
-tests/test_historical_store.py — Tier 2.3 Phase 1
+tests/test_historical_store.py — Tier 2.3 Phase 1 + Phase 2
 
 All tests are fully offline: no network calls, no real quant_platform.db.
 Every test uses a fresh temporary SQLite database via pytest's tmp_path fixture.
@@ -13,6 +13,7 @@ rows ending N business days ago and provide a delta frame ending today.
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -22,7 +23,7 @@ from data.historical_store import HistoricalStore, _DF_COLUMNS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers
+# Helpers — bars (Phase 1)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_ohlcv(n: int, *, end: pd.Timestamp | None = None) -> pd.DataFrame:
@@ -62,7 +63,46 @@ def _make_raising_provider() -> MagicMock:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TestTableCreation
+# Helpers — account snapshots (Phase 2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_account_snapshot(age_hours: float = 0.0, n_positions: int = 3):
+    """Build a synthetic AccountSnapshot using the real dataclasses."""
+    from data.robinhood_portfolio import AccountSnapshot, PortfolioPosition
+
+    fetched_at = datetime.now(timezone.utc) - timedelta(hours=age_hours)
+    positions = {}
+    for i in range(n_positions):
+        sym = f"SYM{i}"
+        qty = 10.0 + i
+        avg_cost = 100.0 + i * 5.0
+        current_price = 110.0 + i * 5.0
+        market_value = qty * current_price
+        cost_basis = qty * avg_cost
+        unrealized_pl = market_value - cost_basis
+        unrealized_pl_pct = (unrealized_pl / cost_basis * 100.0) if cost_basis > 0 else 0.0
+        positions[sym] = PortfolioPosition(
+            symbol=sym,
+            quantity=qty,
+            average_cost=avg_cost,
+            current_price=current_price,
+            market_value=market_value,
+            unrealized_pl=unrealized_pl,
+            unrealized_pl_pct=unrealized_pl_pct,
+            dividends_received=5.0 * i,
+            name=f"Symbol {i}",
+        )
+    return AccountSnapshot(
+        positions=positions,
+        buying_power=1000.0,
+        total_equity=5000.0,
+        total_dividends=15.0,
+        fetched_at=fetched_at,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 — TestTableCreation
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestTableCreation:
@@ -78,16 +118,20 @@ class TestTableCreation:
             ).fetchall()}
         assert "price_bars" in tables
         assert "idx_price_bars_symbol_date" in indexes
+        # Phase 2 tables also created at init
+        assert "account_snapshots" in tables
+        assert "account_positions" in tables
+        assert "idx_acct_snap_ts" in indexes
 
     def test_init_idempotent(self, tmp_path):
         """Calling __init__ twice must not raise or corrupt the DB."""
         db = str(tmp_path / "test.db")
         HistoricalStore(db_path=db)
-        HistoricalStore(db_path=db)  # second init is a no-op
+        HistoricalStore(db_path=db)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TestLatestBarDate
+# Phase 1 — TestLatestBarDate
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestLatestBarDate:
@@ -103,13 +147,12 @@ class TestLatestBarDate:
         store.get_bars("AAPL", lookback_days=30, provider=provider)
         latest = store.latest_bar_date("AAPL")
         assert latest is not None
-        # Should equal the last date in the synthetic data
         expected_last = df.index[-1].normalize()
         assert latest.normalize() == expected_last
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TestGetBars — full suite
+# Phase 1 — TestGetBars
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestGetBars:
@@ -133,7 +176,6 @@ class TestGetBars:
         assert lookback_passed == settings.BARS_BACKFILL_DAYS
         # DB was populated and result is non-empty.
         assert len(result) > 0
-        # DB has the rows.
         with sqlite3.connect(db) as conn:
             count = conn.execute(
                 "SELECT COUNT(*) FROM price_bars WHERE symbol='AAPL'"
@@ -174,11 +216,8 @@ class TestGetBars:
         result = store.get_bars("AAPL", lookback_days=60, provider=provider)
 
         assert not result.empty
-        # tz-naive index
         assert result.index.tz is None, "Index must be tz-naive"
-        # Exact column order matches DataEngine.fetch_technical_raw()
         assert list(result.columns) == _DF_COLUMNS, f"Columns: {list(result.columns)}"
-        # Sorted ascending
         assert result.index.is_monotonic_increasing
 
     def test_no_fabrication_on_total_failure(self, tmp_path):
@@ -187,7 +226,6 @@ class TestGetBars:
         provider = _make_raising_provider()
         result = store.get_bars("AAPL", lookback_days=504, provider=provider)
         assert result.empty
-        # Correct schema even when empty.
         assert list(result.columns) == _DF_COLUMNS
 
     def test_dead_letter_db_error(self, tmp_path):
@@ -199,7 +237,6 @@ class TestGetBars:
         with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("disk error")):
             result = store.get_bars("AAPL", lookback_days=20, provider=provider)
 
-        # Live fallback must still return data.
         assert not result.empty
 
     def test_upsert_idempotent(self, tmp_path):
@@ -234,12 +271,12 @@ class TestGetBars:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TestColumnContract
+# Phase 1 — TestColumnContract
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestColumnContract:
     def test_adj_close_stored_but_not_in_output(self, tmp_path):
-        """adj_close is written to the DB but NOT exposed in the public DataFrame."""
+        """adj_close is stored in the DB but not exposed in the public DataFrame."""
         db = str(tmp_path / "test.db")
         store = HistoricalStore(db_path=db)
         df = _make_ohlcv(5)
@@ -250,10 +287,156 @@ class TestColumnContract:
         assert "adj_close" not in result.columns
         assert list(result.columns) == _DF_COLUMNS
 
-    def test_volume_present_and_non_null(self, tmp_path):
+    def test_volume_is_present(self, tmp_path):
         store = HistoricalStore(db_path=str(tmp_path / "test.db"))
         df = _make_ohlcv(5)
         provider = _make_provider(df)
         result = store.get_bars("AAPL", lookback_days=10, provider=provider)
         assert "Volume" in result.columns
         assert result["Volume"].notna().all()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2 — TestAccountSnapshotPersistence
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAccountSnapshotPersistence:
+    """Tests for save_account_snapshot / latest_account_snapshot /
+    account_snapshot_history."""
+
+    def test_save_and_load_round_trip(self, tmp_path):
+        """Save a 3-position snapshot; loading returns an equal AccountSnapshot."""
+        db = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db)
+        original = _make_account_snapshot(age_hours=0.5, n_positions=3)
+
+        snapshot_id = store.save_account_snapshot(original)
+        assert snapshot_id > 0, "Expected a positive snapshot_id on success"
+
+        loaded = store.latest_account_snapshot()
+        assert loaded is not None
+
+        # Account-level fields
+        assert loaded.buying_power == pytest.approx(original.buying_power)
+        assert loaded.total_equity == pytest.approx(original.total_equity)
+        assert loaded.total_dividends == pytest.approx(original.total_dividends)
+
+        # fetched_at round-trips losslessly through ISO-8601
+        dt_delta = abs((loaded.fetched_at - original.fetched_at).total_seconds())
+        assert dt_delta < 0.001, f"fetched_at drifted by {dt_delta}s"
+
+        # Positions
+        assert set(loaded.positions.keys()) == set(original.positions.keys())
+        for sym, orig_pos in original.positions.items():
+            loaded_pos = loaded.positions[sym]
+            assert loaded_pos.quantity == pytest.approx(orig_pos.quantity)
+            assert loaded_pos.average_cost == pytest.approx(orig_pos.average_cost)
+            assert loaded_pos.current_price == pytest.approx(orig_pos.current_price)
+            assert loaded_pos.market_value == pytest.approx(orig_pos.market_value)
+            assert loaded_pos.unrealized_pl == pytest.approx(orig_pos.unrealized_pl)
+            assert loaded_pos.dividends_received == pytest.approx(orig_pos.dividends_received)
+            assert loaded_pos.name == orig_pos.name
+
+    def test_save_failure_does_not_raise(self, tmp_path):
+        """DB connect error → save_account_snapshot returns -1, never raises."""
+        store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        snap = _make_account_snapshot()
+
+        with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("full disk")):
+            result = store.save_account_snapshot(snap)
+
+        assert result == -1
+
+    def test_latest_with_empty_db(self, tmp_path):
+        """Empty DB → latest_account_snapshot returns None."""
+        store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        assert store.latest_account_snapshot() is None
+
+    def test_multiple_snapshots_returns_newest(self, tmp_path):
+        """With two snapshots stored, latest_account_snapshot returns the newer one."""
+        db = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db)
+
+        older = _make_account_snapshot(age_hours=2.0)
+        newer = _make_account_snapshot(age_hours=1.0)
+
+        # Save older first, then newer
+        store.save_account_snapshot(older)
+        store.save_account_snapshot(newer)
+
+        loaded = store.latest_account_snapshot()
+        assert loaded is not None
+        # The newer snapshot's fetched_at should be closer to now
+        assert loaded.fetched_at >= older.fetched_at
+
+    def test_history_dataframe_shape(self, tmp_path):
+        """Saving 3 snapshots → history() returns 3-row DataFrame with 4 columns."""
+        db = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db)
+
+        for i in range(3):
+            store.save_account_snapshot(_make_account_snapshot(age_hours=float(i)))
+
+        history = store.account_snapshot_history()
+        assert not history.empty
+        assert len(history) == 3
+        expected_cols = {"fetched_at", "buying_power", "total_equity", "total_dividends"}
+        assert expected_cols.issubset(set(history.columns))
+
+    def test_no_secrets_in_db(self, tmp_path):
+        """Neither account_snapshots nor account_positions contains credential columns."""
+        db = str(tmp_path / "test.db")
+        HistoricalStore(db_path=db)
+
+        forbidden = {"password", "mfa", "token", "secret", "credential"}
+        with sqlite3.connect(db) as conn:
+            for table in ("account_snapshots", "account_positions"):
+                pragma = conn.execute(f"PRAGMA table_info({table})").fetchall()
+                col_names = {row[1].lower() for row in pragma}
+                hits = col_names & forbidden
+                assert not hits, (
+                    f"Table '{table}' has forbidden column(s): {hits}"
+                )
+
+    def test_history_since_filter(self, tmp_path):
+        """account_snapshot_history(since=T) only returns snapshots after T."""
+        db = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db)
+
+        old = _make_account_snapshot(age_hours=5.0)
+        recent = _make_account_snapshot(age_hours=1.0)
+        store.save_account_snapshot(old)
+        store.save_account_snapshot(recent)
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=3)
+        history = store.account_snapshot_history(since=cutoff)
+        assert len(history) == 1  # only the 1-hour-old one qualifies
+
+    def test_history_error_returns_empty_df(self, tmp_path):
+        """DB error → account_snapshot_history returns an empty DataFrame."""
+        store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("disk")):
+            df = store.account_snapshot_history()
+        assert df.empty
+        assert "fetched_at" in df.columns
+
+    def test_save_empty_positions(self, tmp_path):
+        """Snapshot with no positions saves and loads without error."""
+        from data.robinhood_portfolio import AccountSnapshot
+
+        db = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db)
+        snap = AccountSnapshot(
+            positions={},
+            buying_power=500.0,
+            total_equity=500.0,
+            total_dividends=0.0,
+            fetched_at=datetime.now(timezone.utc),
+        )
+        sid = store.save_account_snapshot(snap)
+        assert sid > 0
+
+        loaded = store.latest_account_snapshot()
+        assert loaded is not None
+        assert loaded.positions == {}
+        assert loaded.buying_power == pytest.approx(500.0)

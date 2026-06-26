@@ -313,6 +313,28 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Historical Persistence (data/historical_store.py, Tier 2.3) ---
+    # Gates all DB read/write routing through HistoricalStore.  Setting False
+    # reproduces today's behavior exactly — every call goes directly to the
+    # live provider without touching the DB.
+    HISTORICAL_STORE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master flag for HistoricalStore DB routing. When True, OHLCV bars "
+            "and account snapshots are read from / written to quant_platform.db. "
+            "First call for a symbol = full BARS_BACKFILL_DAYS backfill; "
+            "subsequent calls = delta only. Set False to reproduce pre-Tier-2.3 "
+            "behavior (all fetches go directly to the live provider)."
+        ),
+    )
+    BARS_BACKFILL_DAYS: int = Field(
+        default=504,
+        description=(
+            "Number of calendar days to backfill on first-ever fetch for a symbol "
+            "(≈ 2 years of trading days). Subsequent fetches are incremental."
+        ),
+    )
+
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
     # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.
@@ -519,26 +541,6 @@ class Settings(BaseSettings):
             "Lopez de Prado distance d=sqrt(0.5*(1-rho)).  At 0.4, stocks "
             "with |correlation| > 0.68 merge into the same cluster.  "
             "Lower = tighter (fewer, smaller clusters); higher = looser."
-        ),
-    )
-
-    # --- Historical Persistence (data/historical_store.py, Tier 2.3) ---
-    HISTORICAL_STORE_ENABLED: bool = Field(
-        default=True,
-        description=(
-            "When True, OHLCV bars are served from the local price_bars table "
-            "in quant_platform.db with incremental top-up.  First call per symbol "
-            "= full BARS_BACKFILL_DAYS backfill; subsequent calls = delta only. "
-            "Set False to disable the cache and always refetch from the provider."
-        ),
-    )
-    BARS_BACKFILL_DAYS: int = Field(
-        default=504,
-        description=(
-            "Calendar days of OHLCV history to backfill on the first ever fetch "
-            "for a symbol (approximately 2 trading years ≈ 504 calendar days). "
-            "Subsequent incremental top-ups only fetch the delta since the last "
-            "stored bar date."
         ),
     )
 
