@@ -895,3 +895,44 @@ After the multifactor writeback block, reads `shared_context.news_sentiment_scor
 
 ### Gravity step 61 (`run_correlation_cluster_audit`)
 10 checks: `compute_correlation_clusters` importable; `fetch_returns_for_clustering` importable; known-correlated A/B share cluster; uncorrelated C in different cluster; empty DataFrame → empty labels+summary; `Correlation_Cluster` in `COLUMN_SCHEMA`; `CORRELATION_CLUSTER_LOOKBACK_DAYS == 60`; `CORRELATION_CLUSTER_THRESHOLD == 0.4`; insufficient obs symbol gets `cluster_id = 0`; `tests/test_correlation_clusters.py` exists.
+
+## Task 3 — Operator Ergonomics (2026-06)
+
+### 3.1 Daily Briefing Digest (`scripts/daily_briefing.py`)
+- **`generate_briefing(output_dir) -> str`** — assembles a full Markdown briefing with five sections: Macro Regime, Top 3 Actions, Δ Since Last Run, Dead-Lettered Symbols, and 30-Day Calibration. Each section wraps in try/except — CONSTRAINT #6. No live network calls.
+- **`write_briefing(output_dir) -> Path`** — writes to `output/briefing_YYYY-MM-DD.md` via atomic create + mkdir. Returns the path; never raises.
+- **`main(argv)`** — CLI entry point: `python -m scripts.daily_briefing [--print] [--output-dir DIR]`. `--print` echoes the briefing to stdout after writing.
+- **Wire-up in `launch.command`**: appended `python -m scripts.daily_briefing --print || true` as the final step so every launch (single-run and interval-mode) ends with a briefing printed to the Terminal window.
+- **Section helpers (all `_section_*`)**: `_section_regime` reads `state_snapshot.json` for regime/VIX/HMM; `_section_top_actions` sorts signals by action priority (BUY > HOLD > SELL) then conviction; `_section_delta` calls `scripts.snapshot_diff.compute_diff_from_history`; `_section_dead_letters` reads `output/dead_letter.json` via `gui.dead_letter.read_dead_letter`; `_section_calibration` calls `evaluation_engine.calibration_curve` + `TransactionsStore` (both imported lazily inside the function — CONSTRAINT #7).
+- **Dead-letter tolerant**: every section degrades gracefully to a "No data yet" placeholder. First-ever run (no history, no dead_letter.json) still produces a valid briefing.
+
+### 3.2 Mobile-Friendly Daily Report
+- Added a `@media (max-width: 600px)` responsive CSS block to `HTML_REPORT_TEMPLATE` in `diagnostics_and_visuals.py`, just before the closing `</style>` tag.
+- **No new dependency** — pure CSS addition to the embedded template.
+- Behaviour: single-column `exec-grid`; two-column `summary-band`; `overflow-x: auto` on the signals table so it scrolls horizontally rather than overflowing; `min-height: 44px` on `tr.data-row td` and `th` for WCAG 2.5.5 touch-target compliance; reduced font sizes and padding for narrow viewports.
+
+### 3.3 Secrets-Rotation Reminder
+- **`settings.FRED_KEY_ROTATED_DATE: Optional[str]`** (default `None`) — ISO date (YYYY-MM-DD) recording when `FRED_API_KEY` was last rotated. Set after generating a new key at https://fred.stlouisfed.org/docs/api/api_key.html.
+- **`scripts/preflight_check.check_key_rotation_recent(max_age_days=90) -> CheckResult`** — **warning-only, never blocking**. Three outcomes: (a) `FRED_KEY_ROTATED_DATE` unset → warning to start tracking; (b) key rotated within `max_age_days` → clean PASS; (c) key older → warning citing age + rotation URL. `ALPACA_KEY_ROTATED_DATE` is intentionally **not** checked (paper keys have no blast radius in advisory mode).
+- Wired into `ALL_CHECKS` as check #2, immediately after `check_fred_key_configured` and before `check_advisory_only_active`.
+- **New env var**: `FRED_KEY_ROTATED_DATE` (ISO date, optional). Add to `.env.example`.
+
+### 3.4 "Quick Add to Watchlist" GUI
+- `render_live_inventory()` in `gui/panels.py` now includes a text input + "➕ Add to watchlist" button between the Robinhood snapshot fetch and the Sync Now buttons.
+- **File-only**: writes to `watchlist.txt` (repo root), never to `.env` or via `gui.env_io.write_setting`. This avoids GUI-induced env churn and keeps the operator's watchlist editable in a plain text file.
+- **Deduplication**: reads existing non-comment lines from `watchlist.txt` before appending — silently skips if the ticker is already present, showing an `st.info` instead.
+- **Validation**: ticker is normalized to uppercase; rejects empty input or symbols that don't match `[A-Z0-9.-]` after normalization.
+- **Picked up automatically** by `main.py._load_watchlist()` on the next `run_once()` call (no restart needed).
+- **No new settings / env vars** (file path is hardcoded to `watchlist.txt` at the repo root, consistent with `main.py`'s `WATCHLIST_FILE` constant).
+
+### Tests
+- **`tests/test_operator_ergonomics.py`** (45 tests, 5 classes):
+  - `TestDailyBriefingImport` (4) — module importable, callables exist.
+  - `TestBriefingSections` (11) — regime/VIX/kill-switch text, top-actions ordering, dead-letter read, calibration MAE rendering.
+  - `TestGenerateBriefing` (5) — never raises, required headers, snapshot wired, file creation, date in filename.
+  - `TestMobileResponsiveCSS` (5) — `@media` present, 600px breakpoint, 44px tap targets, 1fr grid collapse, `overflow-x:auto`.
+  - `TestKeyRotationCheck` (11) — unset/fresh/stale/invalid/boundary, warning-only invariant, check ordering, never-False, Alpaca keys not touched, Settings field, not in SECRET_KEYS.
+  - `TestWatchlistQuickAdd` (7) — append, dedup, comment skip, uppercase, file creation, source guards.
+
+### Gravity step 63 (`step_63_operator_ergonomics_audit`)
+10 checks: `scripts.daily_briefing` importable + `generate_briefing` callable; `generate_briefing` returns Markdown with regime section; `write_briefing` produces `briefing_YYYY-MM-DD.md`; `HTML_REPORT_TEMPLATE` has `@media (max-width: 600px)` block; mobile CSS has 44px tap target + `overflow-x:auto`; `check_key_rotation_recent` in `ALL_CHECKS`; `check_key_rotation_recent` is always warning-only (never `passed=False`); `Settings.FRED_KEY_ROTATED_DATE` declared; `render_live_inventory` references `watchlist.txt` quick-add; `tests/test_operator_ergonomics.py` exists.

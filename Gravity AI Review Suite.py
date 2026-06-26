@@ -4316,6 +4316,8 @@ class GravityAIAuditor:
         self.step_61_historical_persistence_audit_phase2()
         # Tier 2.3 Phase 3 — fundamentals_history + macro_history
         self.step_62_historical_persistence_audit_phase3()
+        # Task 3 — Operator ergonomics (daily briefing, mobile CSS, key rotation, watchlist)
+        self.step_63_operator_ergonomics_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -9327,6 +9329,141 @@ class GravityAIAuditor:
 
         self.report["step_62_historical_persistence_audit_phase3"] = audit
 
+    def step_63_operator_ergonomics_audit(self) -> None:
+        """Step 63 — Operator Ergonomics (Task 3.1–3.4) audit.
+
+        Checks:
+          1. scripts/daily_briefing.py imports cleanly.
+          2. generate_briefing() returns a non-empty Markdown string.
+          3. write_briefing() produces a file dated today.
+          4. HTML_REPORT_TEMPLATE contains the mobile @media 600px block.
+          5. @media block contains min-height:44px tap targets.
+          6. check_key_rotation_recent exists in preflight ALL_CHECKS.
+          7. check_key_rotation_recent is warning-only (never passed=False).
+          8. FRED_KEY_ROTATED_DATE is declared in Settings.
+          9. render_live_inventory references watchlist.txt write.
+         10. tests/test_operator_ergonomics.py exists.
+        """
+        audit = {
+            "step": "step_63_operator_ergonomics_audit",
+            "description": "Operator ergonomics: daily briefing, mobile CSS, key rotation, watchlist quick-add",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": passed, "detail": str(detail)})
+            return passed
+
+        try:
+            import sys
+            from pathlib import Path
+            _repo = Path(__file__).resolve().parent
+            if str(_repo) not in sys.path:
+                sys.path.insert(0, str(_repo))
+
+            all_pass = True
+
+            # 1. Daily briefing module importable
+            try:
+                import scripts.daily_briefing as _db
+                ok1 = callable(getattr(_db, "generate_briefing", None))
+            except Exception as exc:
+                ok1 = False
+            all_pass = _chk("scripts.daily_briefing importable and generate_briefing callable", ok1) and all_pass
+
+            # 2. generate_briefing returns non-empty Markdown
+            try:
+                import tempfile
+                with tempfile.TemporaryDirectory() as _td:
+                    content = _db.generate_briefing(Path(_td))
+                ok2 = isinstance(content, str) and len(content) > 50 and "Macro Regime" in content
+            except Exception as exc:
+                ok2 = False
+            all_pass = _chk("generate_briefing returns Markdown with regime section", ok2) and all_pass
+
+            # 3. write_briefing produces today-dated file
+            try:
+                import tempfile
+                from datetime import date
+                with tempfile.TemporaryDirectory() as _td:
+                    p = _db.write_briefing(Path(_td))
+                    ok3 = p.exists() and date.today().isoformat() in p.name
+            except Exception as exc:
+                ok3 = False
+            all_pass = _chk("write_briefing produces briefing_YYYY-MM-DD.md", ok3) and all_pass
+
+            # 4. HTML_REPORT_TEMPLATE contains mobile @media 600px block
+            try:
+                from diagnostics_and_visuals import HTML_REPORT_TEMPLATE
+                ok4 = "@media" in HTML_REPORT_TEMPLATE and "600px" in HTML_REPORT_TEMPLATE
+            except Exception:
+                ok4 = False
+            all_pass = _chk("HTML_REPORT_TEMPLATE contains @media (max-width: 600px)", ok4) and all_pass
+
+            # 5. @media block has 44px tap target
+            try:
+                ok5 = "44px" in HTML_REPORT_TEMPLATE and "overflow-x: auto" in HTML_REPORT_TEMPLATE
+            except Exception:
+                ok5 = False
+            all_pass = _chk("Mobile CSS has 44px tap target and overflow-x:auto", ok5) and all_pass
+
+            # 6. check_key_rotation_recent in ALL_CHECKS
+            try:
+                from scripts.preflight_check import ALL_CHECKS, check_key_rotation_recent
+                ok6 = any(fn.__name__ == "check_key_rotation_recent" for fn in ALL_CHECKS)
+            except Exception:
+                ok6 = False
+            all_pass = _chk("check_key_rotation_recent in preflight ALL_CHECKS", ok6) and all_pass
+
+            # 7. check_key_rotation_recent is always warning-only
+            try:
+                from unittest import mock
+                from datetime import date, timedelta
+                from scripts.preflight_check import check_key_rotation_recent
+                with mock.patch("scripts.preflight_check.settings") as ms:
+                    ms.FRED_KEY_ROTATED_DATE = "2000-01-01"  # very old
+                    r = check_key_rotation_recent(max_age_days=90)
+                ok7 = r.passed is True  # never False — warning only
+            except Exception:
+                ok7 = False
+            all_pass = _chk("check_key_rotation_recent never sets passed=False (warning-only)", ok7) and all_pass
+
+            # 8. FRED_KEY_ROTATED_DATE in Settings
+            try:
+                import inspect
+                from settings import Settings
+                src = inspect.getsource(Settings)
+                ok8 = "FRED_KEY_ROTATED_DATE" in src
+            except Exception:
+                ok8 = False
+            all_pass = _chk("Settings.FRED_KEY_ROTATED_DATE declared", ok8) and all_pass
+
+            # 9. render_live_inventory references watchlist.txt write
+            try:
+                import inspect
+                from gui.panels import render_live_inventory
+                src = inspect.getsource(render_live_inventory)
+                ok9 = "watchlist.txt" in src and ("Add to watchlist" in src or "watchlist_add" in src)
+            except Exception:
+                ok9 = False
+            all_pass = _chk("render_live_inventory references watchlist.txt quick-add", ok9) and all_pass
+
+            # 10. test file exists
+            ok10 = (_repo / "tests" / "test_operator_ergonomics.py").exists()
+            all_pass = _chk("tests/test_operator_ergonomics.py exists", ok10) and all_pass
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_63_operator_ergonomics_audit"] = audit
+
+
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
 # =============================================================================
@@ -9334,7 +9471,7 @@ if __name__ == "__main__":
     print("Initializing Gravity AI Verification Suite...\n")
     auditor = GravityAIAuditor()
     json_output = auditor.export_machine_readable_report()
-    
+
     # Output the structured, machine-readable format for the AI to parse
     print(json_output)
     print("\n✅ Verification Suite Complete. Ready for Gravity AI ingestion.")
