@@ -1,0 +1,90 @@
+# ==============================================================================
+# watch_rules.yaml — InvestYo Symbol Watch Alert Configuration
+# ==============================================================================
+# Processed by watch_engine.py at the end of every run_once() cycle.
+# Matching rules fire ntfy push notifications (NTFY_TOPIC must be set in .env).
+#
+# Rule schema
+# -----------
+#   symbol    : Ticker symbol (e.g. "AAPL") or "*" for all symbols in the
+#               current universe.  Case-insensitive — normalised to uppercase.
+#   alert_on  : One of:
+#                 action_change     — fires when the advisory action flips
+#                                     (HOLD→BUY, BUY→SELL, etc.)
+#                 conviction_above  — fires on the FIRST run where conviction
+#                                     is >= threshold (edge-triggered; does NOT
+#                                     repeat while the condition persists)
+#                 conviction_below  — fires on the FIRST run where conviction
+#                                     is < threshold (same edge-trigger pattern)
+#   threshold : Required for conviction_above / conviction_below.  Float in
+#               [0.0, 1.0].  Not used for action_change.
+#   priority  : ntfy push priority.  One of: min, low, default, high, urgent, max
+#               Default: "default".
+#   label     : Optional human-readable label used in the notification title.
+#               Falls back to a sensible default when omitted.
+#
+# Edge-trigger semantics
+# ----------------------
+# conviction_above and conviction_below are edge-triggered: they fire once
+# when the condition first becomes true, and then stay silent until the
+# condition transitions back to false (giving the edge a chance to re-fire).
+# This prevents notification spam when a symbol stays above 0.85 for a week.
+#
+# action_change fires exactly once per flip (HOLD→BUY fires once; staying BUY
+# on subsequent runs does not re-fire).
+#
+# On the very first pipeline run (no prior state), conviction_above/below
+# evaluate against an empty baseline, so they WILL fire if the condition is
+# already met — giving you the current state on first launch.  action_change
+# never fires on first run (no prior action to compare against).
+#
+# Prerequisites
+# -------------
+#   1. NTFY_TOPIC must be set in .env (or exported in the shell).
+#      When unset, the entire watch engine is a silent no-op.
+#   2. Install the ntfy app (iOS/Android) and subscribe to your NTFY_TOPIC.
+#   3. Optional: set NTFY_DASHBOARD_URL in .env to a deep-link URL (e.g.
+#      "http://localhost:8501") that is appended to every notification body.
+# ==============================================================================
+
+rules:
+  # ── Universe-wide conviction siren ─────────────────────────────────────────
+  # Fires the first time ANY symbol in the current universe crosses the 0.85
+  # conviction threshold.  "High" priority = sound even in Do-Not-Disturb.
+  - symbol: "*"
+    alert_on: conviction_above
+    threshold: 0.85
+    priority: high
+    label: "High Conviction Alert"
+
+  # ── Action-signal flip tracker (all symbols) ───────────────────────────────
+  # Fires whenever any symbol's advisory action changes (e.g. HOLD → BUY or
+  # BUY → SELL).  Default priority = normal sound/banner.
+  - symbol: "*"
+    alert_on: action_change
+    priority: default
+    label: "Action Signal Change"
+
+  # ── Low-conviction warning (all symbols) ───────────────────────────────────
+  # Fires the first time ANY symbol's conviction drops below 0.30.  Useful for
+  # held positions that are drifting into "sell-consider" territory.
+  # Uncomment to enable:
+  # - symbol: "*"
+  #   alert_on: conviction_below
+  #   threshold: 0.30
+  #   priority: default
+  #   label: "Low Conviction Warning"
+
+  # ── Per-symbol examples (add your own below) ───────────────────────────────
+  # Alert only on AAPL action changes (in addition to the wildcard rule above):
+  # - symbol: AAPL
+  #   alert_on: action_change
+  #   priority: high
+  #   label: "AAPL Signal"
+  #
+  # Alert when TSLA conviction exceeds 0.90:
+  # - symbol: TSLA
+  #   alert_on: conviction_above
+  #   threshold: 0.90
+  #   priority: urgent
+  #   label: "TSLA High Conviction"

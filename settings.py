@@ -370,6 +370,42 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Symbol watch alerts (watch_engine.py, Tier 1.4) ---
+    # Path to the YAML file that defines symbol-watch alert rules.  Evaluated
+    # at the end of every run_once() cycle; missing file = no rules (no-op).
+    # Rule types: action_change, conviction_above, conviction_below.
+    # See watch_rules.yaml at the project root for the full schema.
+    WATCH_RULES_FILE: str = Field(
+        default="watch_rules.yaml",
+        description=(
+            "Path to watch_rules.yaml.  Defines per-symbol ntfy push-alert "
+            "rules (action_change, conviction_above, conviction_below).  "
+            "Missing file = no rules active (silent no-op)."
+        ),
+    )
+
+    # --- Rationale verbosity (engine/advisory.py, Task 1.5) ---
+    # Controls how much narrative detail the per-symbol advisory rationale
+    # produces.  Standard mode (the default) is a single terse paragraph
+    # citing the top 2-3 drivers — suitable for dashboards and notifications.
+    # Verbose mode appends four labelled sections:
+    #   [A] Regime context — HMM probability + FRED macro snapshot
+    #   [B] Historical calibration — strategy win-rate and Kelly edge estimate
+    #   [C] Signal invalidation thresholds — the conditions that void the
+    #       current recommendation (RSI flip points, macro gates, sector veto)
+    #   [D] Indicator theory notes — first-line __doc__ of each active
+    #       signal module (pulled dynamically from signals.registry)
+    # Valid values: "standard" (default) | "verbose"
+    RATIONALE_VERBOSITY: str = Field(
+        default="standard",
+        description=(
+            "Advisory rationale depth. 'standard' = top 2-3 driver paragraph "
+            "(default). 'verbose' = adds regime context [A], historical "
+            "calibration [B], invalidation thresholds [C], and indicator "
+            "theory notes [D]. Set RATIONALE_VERBOSITY=verbose in .env."
+        ),
+    )
+
     # --- Dual Momentum allocator overlay ---
     USE_DUAL_MOMENTUM_OVERLAY: bool = Field(
         default=False,
