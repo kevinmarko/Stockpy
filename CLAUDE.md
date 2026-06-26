@@ -758,3 +758,68 @@ Valid values: `"standard"` (default) | `"verbose"`. Any other value is treated a
 
 ### Gravity step 57 (`run_rationale_verbosity_audit`)
 10 checks: `settings.RATIONALE_VERBOSITY` exists and defaults to `"standard"`; CONFIG contains both RSI invalidation-level keys; `_build_rationale` signature includes all four verbose-mode kwargs; standard mode produces no [A/B/C/D] markers; verbose mode produces [A/B/C]; HMM ≥ 0.70 → "strongly confirms"; HMM < 0.30 → "risk-off"; `win_rate_data=None` → calibration fallback; sector veto for Financials but not Technology; `tests/test_rationale_verbosity.py` exists.
+
+## Tier 2.1 — Regime-Conditional Signal Weights (2026-06)
+
+### Overview
+`SIGNAL_WEIGHTS` is now regime-keyed: per-macro-regime override dicts are merged onto the flat default weights each aggregation cycle. Mean-reversion signals (RSI(2)) can be suppressed in RECESSION/CREDIT EVENT and momentum signals boosted in RISK ON — without any behavioral change when no overrides are configured (fully backward-compatible).
+
+### `resolve_regime_weights()` (`signals/aggregator.py`, module-level)
+```python
+def resolve_regime_weights(
+    market_regime: str,
+    regime_weights: Dict[str, Dict[str, float]],
+    default_weights: Dict[str, float],
+) -> Dict[str, float]:
+```
+- When `regime_weights` is empty (default): returns `default_weights` unchanged (same object, zero-overhead no-op).
+- Exact `market_regime` match → `{**default_weights, **override}` (merge; unlisted keys inherit default).
+- Falls back to `regime_weights["_default"]` when no exact match.
+- Unknown regime with no `_default` → returns `default_weights` unchanged.
+- `SignalAggregator.aggregate()` calls this once per cycle; effective weights replace `self.weights.get(name)` in the module loop.
+
+### `settings.REGIME_SIGNAL_WEIGHTS: dict[str, dict[str, float]]`
+Default `{}` (empty — flat weights, identical to pre-Tier-2.1). Configure in `.env` as JSON:
+```
+REGIME_SIGNAL_WEIGHTS={"RECESSION": {"rsi2_mean_reversion": 0.0, "macro_regime": 60.0}, "RISK ON": {"timeseries_momentum": 40.0}}
+```
+The `_default` key acts as a catch-all for unmapped regimes.
+
+### Tests
+- **`tests/test_regime_weights.py`** (33 tests): empty override returns same object, exact match applies overrides + inherits defaults, `_default` fallback, unknown-regime-no-default returns defaults, merge does not mutate inputs, new keys can be added, RECESSION suppresses rsi2, RISK ON boosts momentum.
+
+### Gravity step 58 (`run_regime_weights_audit`)
+8 checks: `resolve_regime_weights` importable; empty dict returns defaults unchanged; RECESSION override applies + inherits uninvolved keys; `_default` fires for unmapped regime; no-match-no-default returns defaults; `settings.REGIME_SIGNAL_WEIGHTS` defaults to `{}`; `SignalAggregator.aggregate` docstring references regime weights; `tests/test_regime_weights.py` exists.
+
+## Tier 2.2 — Forecast Ensemble Weighted by Recent Skill (2026-06)
+
+### Overview
+Replaces the static hardcoded blend ratios (`lstm*0.4 + arima*0.2 + mc*0.4`) in `ForecastingEngine.generate_forecast()` with inverse-RMSE weighting from a SQLite-backed skill tracker. Forecast prices are recorded each run and compared to actual prices once the horizon elapses; the model with the lowest recent RMSE gets the highest ensemble weight. Cold-start (< 30 completed observations per model) falls back to equal weights, and the entire tracker is optional — passing no `tracker` to `ForecastingEngine.__init__` reproduces the original static blending exactly.
+
+### New package: `forecasting/`
+- **`forecasting/__init__.py`** — package marker; re-exports `ForecastTracker`.
+- **`forecasting/forecast_tracker.py`** — `ForecastTracker` class. SQLite table `forecast_errors` (columns: `id`, `symbol`, `model_name`, `horizon_days`, `forecast_ts`, `forecast_price`, `actual_price`, `squared_error`, `recorded_at`). Public API:
+  - `record_forecasts(symbol, horizon_days, model_prices: dict[str, float], forecast_ts)` — inserts per-model prices (skips 0/negative).
+  - `update_actuals(symbol, horizon_days, actual_price, as_of, tolerance_days=5) -> int` — matches past forecasts with realized prices. The 5-day tolerance absorbs weekends/holidays.
+  - `get_skill_weights(symbol, horizon_days, window_days=60, min_obs=30) -> dict[str, float]` — returns normalized inverse-RMSE weights. Empty dict when no history. Cold-start equal weights when any model has < `min_obs` completed rows.
+  - `pending_count(symbol, horizon_days) -> int` / `completed_count(symbol, horizon_days, window_days=60) -> int` — monitoring helpers.
+  - All methods wrapped in try/except; DB failure → returns `{}` / `0` / `None`, never raises (CONSTRAINT #6).
+  - `_MIN_RMSE = 0.01` — floor to prevent infinite weight on a perfect model.
+  - WAL journal mode for concurrent read-write safety.
+
+### `ForecastingEngine` changes (`forecasting_engine.py`)
+- `__init__(self, tracker=None)` — accepts optional `ForecastTracker`; stores as `self._tracker`. Non-`ForecastTracker` values silently ignored (sets `_tracker=None`).
+- `_blend_with_skill(model_forecasts, skill_weights, preferred_model, current_price) -> float` — static method. When `skill_weights` is non-empty, computes weighted average over the intersection of `model_forecasts` and `skill_weights` keys (renormalized). Falls back to original static sector-preference blending when `skill_weights={}`.
+- `generate_forecast()` — tracker lifecycle integrated into the `for h in horizons:` loop:
+  1. Before the loop: `update_actuals()` for all horizons (fills in past errors).
+  2. Per horizon: `get_skill_weights()` → `_blend_with_skill()` → `record_forecasts()`.
+
+### New settings
+- **`FORECAST_SKILL_WINDOW_DAYS: int = 60`** — rolling window for RMSE computation.
+- **`FORECAST_SKILL_MIN_OBS: int = 30`** — minimum completed rows per model before skill weighting activates (cold-start below this).
+
+### Tests
+- **`tests/test_forecast_tracker.py`** (56 tests): table/index creation, DDL column coverage, `record_forecasts` (positive/zero/negative/uppercase), `update_actuals` (past-due, recent, tolerance boundary, idempotency, squared_error value), `get_skill_weights` (empty history, cold-start, warm-path ordering, weights sum to 1, `_MIN_RMSE` guard, old-row window exclusion, DB error), `pending_count`/`completed_count`, `ForecastingEngine` init/tracker kwarg, `_blend_with_skill` (skill path, normalization, static fallback, empty forecasts, single-model restriction, HW preferred).
+
+### Gravity step 59 (`run_forecast_skill_audit`)
+10 checks: `ForecastTracker` importable; DDL contains all required columns; cold-start returns equal weights; warm-path inverse-RMSE makes better model higher-weight; `_MIN_RMSE > 0`; `ForecastingEngine.__init__` accepts `tracker` kwarg; `_blend_with_skill` is callable; `settings.FORECAST_SKILL_WINDOW_DAYS` and `FORECAST_SKILL_MIN_OBS` exist and are > 0; `forecasting/__init__.py` re-exports `ForecastTracker`; `tests/test_forecast_tracker.py` exists.
