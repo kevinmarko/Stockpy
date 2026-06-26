@@ -56,8 +56,11 @@ _WATCHLIST_FILES_ENV: str = "SYNC_WATCHLIST_FILES"
 class RobinhoodClient:
     """Encapsulates Robinhood API interactions and DTO mapping.
 
-    Authentication uses the legacy SMS path (``by_sms=True``).  For TOTP-based
-    read-only account snapshots see :mod:`data.robinhood_portfolio`.
+    Authentication falls back to interactive MFA prompting (no ``mfa_code``
+    supplied). ``robin-stocks`` >= 3.4 removed the legacy ``by_sms=`` kwarg —
+    the library prompts the terminal for the MFA code automatically when none
+    is provided. For TOTP-based read-only account snapshots see
+    :mod:`data.robinhood_portfolio`.
     """
 
     def __init__(self) -> None:
@@ -66,13 +69,13 @@ class RobinhoodClient:
         self.is_authenticated: bool = False
 
     def login(self) -> bool:
-        """Authenticate with Robinhood. Prompts for SMS MFA in the terminal if needed."""
+        """Authenticate with Robinhood. Prompts for MFA in the terminal if needed."""
         if not self.username or not self.password:
             logger.info("Robinhood credentials missing. Skipping Robinhood integration.")
             return False
 
         try:
-            login_result = r.login(self.username, self.password, by_sms=True)
+            login_result = r.login(self.username, self.password)
             if login_result and "access_token" in login_result:
                 self.is_authenticated = True
                 logger.info("Successfully authenticated with Robinhood.")
