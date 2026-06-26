@@ -58,6 +58,9 @@ RUN_LOG_PATH = settings.OUTPUT_DIR / "gui_run.log"
 # is not confused by main.py's lighter-weight progress lines.
 ADVISORY_LOG_PATH = settings.OUTPUT_DIR / "gui_advisory.log"
 
+# Log written by ``launch_symbol_retry`` for per-symbol dead-letter retries.
+RETRY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_retry.log"
+
 # Telemetry log written by ``alerting.setup_logging()`` and shared by both
 # entry points. Surfaced in the Launcher tab so the operator sees structured
 # diagnostics from across the platform (CONSTRAINT #2 — observable feedback).
@@ -341,6 +344,75 @@ def heartbeat_age_seconds() -> Optional[float]:
         return max(0.0, time.time() - hb.stat().st_mtime)
     except Exception:
         return None
+
+
+def launch_symbol_retry(
+    symbol: str,
+    refresh_account: bool = False,
+) -> "RunHandle":
+    """Spawn ``main.py`` targeting a single symbol for a dead-letter retry.
+
+    The symbol is injected via the ``WATCHLIST`` environment variable so
+    the advisory run contains only that ticker.  Held positions are always
+    included by ``main.run_once()``'s ``_build_universe`` — the operator
+    can confirm the single-symbol result on the Paper Monitor tab.
+
+    The retry is a best-effort diagnosis run, not a production execution:
+    ``main.py`` is advisory-only and submits no orders.
+
+    Parameters
+    ----------
+    symbol:
+        Ticker to retry (case-insensitive; forced to upper-case for the env).
+    refresh_account:
+        Pass ``--refresh-account`` to bypass the daily Robinhood cache.
+
+    Returns
+    -------
+    RunHandle
+        Handle with ``mode="retry"`` and ``log_path=RETRY_LOG_PATH``.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "main.py"]
+    if refresh_account:
+        cmd.append("--refresh-account")
+
+    # Inject the single target symbol via WATCHLIST so no code in main.py
+    # needs to change — it already reads WATCHLIST from os.environ.
+    env = os.environ.copy()
+    env["WATCHLIST"] = symbol.upper()
+
+    log_file = open(RETRY_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115
+    log_file.write(
+        f"# InvestYo dead-letter retry: {symbol.upper()} "
+        f"@ {time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(refresh_account={refresh_account})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=env,
+        bufsize=1,
+        text=True,
+    )
+    logger.info(
+        "Launched dead-letter retry pid=%s symbol=%s", popen.pid, symbol.upper()
+    )
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=refresh_account,
+        log_path=RETRY_LOG_PATH,
+        mode="retry",
+        _popen=popen,
+    )
 
 
 def compute_stage_status(handle: Optional[RunHandle]) -> Dict[str, str]:

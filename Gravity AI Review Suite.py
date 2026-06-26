@@ -4286,6 +4286,7 @@ class GravityAIAuditor:
         self.run_observability_telemetry_audit()
         self.run_safety_analytics_control_audit()
         self.run_zero_position_size_crashfix_audit()
+        self.run_enhanced_observability_audit()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -6237,6 +6238,209 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_45_zero_position_size_crashfix_audit"] = audit
+
+    def run_enhanced_observability_audit(self) -> None:
+        """Step 46 — Enhanced Observability & Error Handling audit.
+
+        Background
+        ----------
+        Three features added in 2026-06 to improve operator situational awareness:
+
+        1. **Dead-letter queue** — ``main_orchestrator.run_pipeline`` now wraps
+           each ticker's per-symbol block in a try/except with a ``_stage``
+           tracker, and writes ``output/dead_letter.json`` atomically after the
+           loop.  ``gui/dead_letter.py`` is the read-side consumer; the Launcher
+           tab shows failed symbols + per-symbol **🔄 Retry** buttons that spawn
+           ``main.py`` via ``orchestrator_runner.launch_symbol_retry``.
+        2. **Contextual error classification** — ``extract_symbol_from_message``
+           and ``classify_log_entry`` in ``gui/observability_telemetry.py``
+           distinguish *systemic* (pipeline-wide) from *symbol-specific* errors
+           in the Error Aggregation section of the Observability tab.  Symbol-
+           specific takes priority over systemic (a dead-lettered ticker message
+           logged by ``main_orchestrator`` is NOT a systemic failure).
+        3. **Heartbeat trend sparkline** — ``HeartbeatTrendStore`` (60-sample
+           ring buffer) persisted in ``st.session_state`` on the Observability
+           tab; a rising trend reveals memory leaks / hanging threads before a
+           full crash.
+
+        Checks
+        ------
+        1.  ``gui.dead_letter.read_dead_letter`` returns ``None`` on missing file.
+        2.  ``gui.dead_letter.DeadLetterReport.is_clean`` is True for empty entries.
+        3.  ``gui.dead_letter.DeadLetterReport.symbols`` lists ticker strings.
+        4.  ``gui.observability_telemetry.extract_symbol_from_message`` extracts
+            the ticker from a "Dead-lettered HKIT" message.
+        5.  ``classify_log_entry`` returns ``"symbol_specific"`` for a dead-lettered
+            ticker message (symbol-specific WINS over logger-name systemic match).
+        6.  ``classify_log_entry`` returns ``"systemic"`` for a pipeline-crash message
+            that contains no ticker.
+        7.  ``HeartbeatTrendStore`` ring buffer rolls off oldest samples when full.
+        8.  ``gui.orchestrator_runner.launch_symbol_retry`` exists and is callable
+            (structural check — does not spawn a process).
+        9.  ``main_orchestrator.run_pipeline`` source contains the dead-letter try/except
+            block and the dead-letter JSON write.
+        10. ``main_orchestrator.run_pipeline`` contains the stage-tracking variable
+            ``_stage`` for accurate failure attribution.
+        """
+        audit: dict = {
+            "step": "step_46_enhanced_observability_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import ast
+            import inspect
+            import json as _json
+            import tempfile
+            from pathlib import Path
+
+            # -- Dead-letter module API ----------------------------------------
+            from gui.dead_letter import (
+                DeadLetterEntry,
+                DeadLetterReport,
+                read_dead_letter,
+            )
+
+            # Check 1: missing file → None
+            result1 = read_dead_letter(path=Path("/tmp/__nonexistent_dl__.json"))
+            c1 = result1 is None
+            audit["checks"].append({
+                "check": "read_dead_letter returns None on missing file (CONSTRAINT #4 — no fabrication)",
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            # Check 2: is_clean True for empty entries
+            report_clean = DeadLetterReport(run_id="X", generated_at="Y", entries=[])
+            c2 = report_clean.is_clean
+            audit["checks"].append({
+                "check": "DeadLetterReport.is_clean is True when entries is empty",
+                "passed": c2,
+            })
+            all_pass = all_pass and c2
+
+            # Check 3: symbols property
+            entries = [
+                DeadLetterEntry("AAPL", "strategy", "err", "T"),
+                DeadLetterEntry("MSFT", "edge_ratio", "err", "T"),
+            ]
+            report_syms = DeadLetterReport(run_id="X", generated_at="Y", entries=entries)
+            c3 = report_syms.symbols == ["AAPL", "MSFT"]
+            audit["checks"].append({
+                "check": "DeadLetterReport.symbols returns list of ticker strings in order",
+                "passed": c3,
+            })
+            all_pass = all_pass and c3
+
+            # -- Contextual error classification --------------------------------
+            from gui.observability_telemetry import (
+                LogEntry,
+                classify_log_entry,
+                extract_symbol_from_message,
+            )
+            from datetime import datetime, timezone
+
+            # Check 4: extract_symbol finds ticker in dead-letter message
+            sym = extract_symbol_from_message("Dead-lettered HKIT at stage=strategy: ZeroDivisionError")
+            c4 = sym == "HKIT"
+            audit["checks"].append({
+                "check": "extract_symbol_from_message extracts HKIT from dead-letter log message",
+                "passed": c4,
+                "detail": f"got {sym!r}",
+            })
+            all_pass = all_pass and c4
+
+            def _entry(level: str, name: str, msg: str) -> LogEntry:
+                return LogEntry(
+                    timestamp=datetime.now(timezone.utc),
+                    level=level,
+                    logger_name=name,
+                    message=msg,
+                    raw=f"2026-06-26  {level:<8}  {name} — {msg}",
+                )
+
+            # Check 5: symbol-specific wins over systemic when ticker is named
+            e5 = _entry(
+                "ERROR", "main_orchestrator",
+                "Dead-lettered HKIT at stage=strategy: ZeroDivisionError",
+            )
+            c5 = classify_log_entry(e5) == "symbol_specific"
+            audit["checks"].append({
+                "check": "classify_log_entry: symbol-specific wins over orchestrator-name systemic match",
+                "passed": c5,
+                "detail": f"got {classify_log_entry(e5)!r}",
+            })
+            all_pass = all_pass and c5
+
+            # Check 6: systemic classification for pipeline-crash message
+            e6 = _entry(
+                "CRITICAL", "main_orchestrator",
+                "Platform execution pipeline crashed: float division by zero",
+            )
+            c6 = classify_log_entry(e6) == "systemic"
+            audit["checks"].append({
+                "check": "classify_log_entry: pipeline-crash message (no ticker) classified as systemic",
+                "passed": c6,
+                "detail": f"got {classify_log_entry(e6)!r}",
+            })
+            all_pass = all_pass and c6
+
+            # -- HeartbeatTrendStore ring buffer --------------------------------
+            from gui.observability_telemetry import HeartbeatTrendStore
+
+            store = HeartbeatTrendStore(max_samples=3)
+            for i in range(5):
+                store.record(float(i))
+            ages = [s.age_seconds for s in store.samples()]
+            c7 = ages == [2.0, 3.0, 4.0]  # oldest rolled off
+            audit["checks"].append({
+                "check": "HeartbeatTrendStore rolls off oldest sample when capacity exceeded",
+                "passed": c7,
+                "detail": f"ages={ages}",
+            })
+            all_pass = all_pass and c7
+
+            # Check 8: launch_symbol_retry exists and is callable (structural)
+            from gui import orchestrator_runner
+            c8 = callable(getattr(orchestrator_runner, "launch_symbol_retry", None))
+            audit["checks"].append({
+                "check": "orchestrator_runner.launch_symbol_retry is callable",
+                "passed": c8,
+            })
+            all_pass = all_pass and c8
+
+            # Check 9: dead-letter write and try/except present in run_pipeline
+            import main_orchestrator
+            rp_src = inspect.getsource(main_orchestrator.run_pipeline)
+            c9a = "dead_letter_entries" in rp_src
+            c9b = "dead_letter.json" in rp_src
+            c9 = c9a and c9b
+            audit["checks"].append({
+                "check": "run_pipeline contains dead_letter_entries accumulator and JSON write",
+                "passed": c9,
+                "detail": f"accumulator={c9a}, json_write={c9b}",
+            })
+            all_pass = all_pass and c9
+
+            # Check 10: _stage tracker present in run_pipeline
+            c10 = "_stage" in rp_src
+            audit["checks"].append({
+                "check": "run_pipeline contains _stage tracker for accurate dead-letter attribution",
+                "passed": c10,
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_46_enhanced_observability_audit"] = audit
 
     def run_robinhood_watchlist_noise_audit(self) -> None:
         """Step 39 — Robinhood watchlist 400-noise suppression audit.
