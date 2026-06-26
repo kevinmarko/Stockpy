@@ -4285,6 +4285,7 @@ class GravityAIAuditor:
         self.run_market_data_diagnostics_audit()
         self.run_observability_telemetry_audit()
         self.run_safety_analytics_control_audit()
+        self.run_zero_position_size_crashfix_audit()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -6062,6 +6063,180 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_44_safety_analytics_control_audit"] = audit
+
+    def run_zero_position_size_crashfix_audit(self) -> None:
+        """Step 45 — Regression guard: evaluate_portfolio must not crash on zero position sizes.
+
+        Background
+        ----------
+        Production crash logged 2026-06-26 09:28:16:
+          "Platform execution pipeline crashed: float division by zero"
+
+        Root cause: ``EvaluationEngine.evaluate_portfolio`` computed
+        Brinson-Fachler sector weights as::
+
+            port_sector_weights = df.groupby('sector')['position_size'].sum()
+                                   / df['position_size'].sum()
+
+        When every ticker in the universe is a watchlist-only ticker (zero
+        shares held → ``Shares × Price = 0`` for all rows),
+        ``position_size.sum() == 0.0`` and Python raises
+        ``ZeroDivisionError: float division by zero``.  The exception
+        propagated out of ``run_pipeline``, was caught by ``_main_body``'s
+        bare except (without ``exc_info``), and killed the entire pipeline.
+
+        Fixes applied
+        -------------
+        1. ``evaluation_engine.py``: guard ``total_position_size <= 0`` before
+           dividing; skip BF attribution and default ``BF_Allocation /
+           BF_Selection`` to ``0.0`` with a WARNING log.
+        2. ``main_orchestrator.py``: after ``position_size = Shares × Price``,
+           replace zero values with the ``$10 000`` notional default so
+           watchlist-only tickers behave identically to the pre-existing
+           ``elif position_size not in df.columns`` default branch.
+        3. ``main_orchestrator.py``: add ``exc_info=True`` to the pipeline
+           crash ``critical()`` call so future crashes log the full traceback.
+
+        Checks
+        ------
+        1.  All-zero ``position_size`` DataFrame does NOT raise.
+        2.  BF columns are 0.0 (not NaN) when skipped due to zero total.
+        3.  Mixed zero/nonzero ``position_size`` DataFrame runs BF normally.
+        4.  ``exc_info=True`` present in the pipeline crash handler.
+        5.  Zero-replacement guard present in ``main_orchestrator.run_pipeline``.
+        """
+        audit: dict = {
+            "step": "step_45_zero_position_size_crashfix_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import numpy as np
+            import pandas as pd
+            import transactions_store
+            from evaluation_engine import EvaluationEngine
+
+            # Patch TransactionsStore to use empty in-memory DB
+            original_init = transactions_store.TransactionsStore.__init__
+
+            def _mem_init(self, db_url=None):  # noqa: ANN001
+                original_init(self, db_url="sqlite:///:memory:")
+
+            transactions_store.TransactionsStore.__init__ = _mem_init
+            try:
+                ee = EvaluationEngine()
+            finally:
+                transactions_store.TransactionsStore.__init__ = original_init
+
+            watchlist_df = pd.DataFrame({
+                "Symbol": ["AAPL", "MSFT"],
+                "sector": ["Technology", "Technology"],
+                "position_size": [0.0, 0.0],
+                "stop_loss_pct": [0.05, 0.05],
+                "Relative_Strength": [0.05, 0.03],
+            })
+            bench_df = pd.DataFrame({
+                "sector": ["Technology"],
+                "weight": [1.0],
+                "return": [0.02],
+            })
+
+            # Check 1: no ZeroDivisionError on all-zero position_sizes
+            crashed = False
+            result = None
+            try:
+                result = ee.evaluate_portfolio(watchlist_df.copy(), bench_df)
+            except ZeroDivisionError:
+                crashed = True
+            check1 = not crashed
+            audit["checks"].append({
+                "check": "evaluate_portfolio does not raise ZeroDivisionError on all-zero position_sizes",
+                "passed": check1,
+                "detail": "ZeroDivisionError raised" if crashed else "no exception",
+            })
+            all_pass = all_pass and check1
+
+            # Check 2: BF columns are 0.0 when skipped, not NaN
+            if result is not None:
+                bf_ok = bool(
+                    "BF_Allocation" in result.columns
+                    and "BF_Selection" in result.columns
+                    and (result["BF_Allocation"] == 0.0).all()
+                    and (result["BF_Selection"] == 0.0).all()
+                )
+            else:
+                bf_ok = False
+            audit["checks"].append({
+                "check": "BF_Allocation and BF_Selection default to 0.0 (not NaN) on zero-position skip",
+                "passed": bf_ok,
+            })
+            all_pass = all_pass and bf_ok
+
+            # Check 3: mixed zero/nonzero runs BF without crash
+            mixed_df = pd.DataFrame({
+                "Symbol": ["AAPL", "MSFT"],
+                "sector": ["Technology", "Technology"],
+                "position_size": [15000.0, 0.0],
+                "stop_loss_pct": [0.05, 0.05],
+                "Relative_Strength": [0.05, 0.03],
+            })
+            mixed_crashed = False
+            try:
+                transactions_store.TransactionsStore.__init__ = _mem_init
+                try:
+                    ee2 = EvaluationEngine()
+                finally:
+                    transactions_store.TransactionsStore.__init__ = original_init
+                ee2.evaluate_portfolio(mixed_df.copy(), bench_df)
+            except ZeroDivisionError:
+                mixed_crashed = True
+            audit["checks"].append({
+                "check": "Mixed zero/nonzero position_sizes run BF attribution without crash",
+                "passed": not mixed_crashed,
+            })
+            all_pass = all_pass and not mixed_crashed
+
+            # Check 4: exc_info=True in the pipeline crash handler
+            import ast, inspect
+            import main_orchestrator
+            src = inspect.getsource(main_orchestrator._main_body)
+            tree = ast.parse(src)
+            exc_info_found = False
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(getattr(node, "func", None), ast.Attribute)
+                    and node.func.attr == "critical"
+                ):
+                    for kw in node.keywords:
+                        if kw.arg == "exc_info" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                            exc_info_found = True
+            audit["checks"].append({
+                "check": "pipeline crash handler logs exc_info=True for diagnosable tracebacks",
+                "passed": exc_info_found,
+            })
+            all_pass = all_pass and exc_info_found
+
+            # Check 5: zero-replacement guard present in run_pipeline
+            rp_src = inspect.getsource(main_orchestrator.run_pipeline)
+            zero_guard_present = "zero_mask" in rp_src or "<= 0.0" in rp_src
+            audit["checks"].append({
+                "check": "run_pipeline replaces zero position_sizes with $10k default (zero_mask guard)",
+                "passed": zero_guard_present,
+            })
+            all_pass = all_pass and zero_guard_present
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_45_zero_position_size_crashfix_audit"] = audit
 
     def run_robinhood_watchlist_noise_audit(self) -> None:
         """Step 39 — Robinhood watchlist 400-noise suppression audit.

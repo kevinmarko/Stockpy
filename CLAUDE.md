@@ -299,6 +299,10 @@ Flat, modular "Engine" architecture using dependency injection — no package di
   - `calculate_momentum_metrics()` MUST return `float('nan')` for all ROC/vol columns in the `len(df) < 253` early-return path. `0.0` is fabricated data (Constraint #4).
   - `evaluate_portfolio()`'s `benchmark_df` parameter MUST default to `None`; create a fresh `pd.DataFrame()` inside the function body.
   - The fallback-forecast exception path in `run_pipeline` MUST call `fe.run_monte_carlo(price, mu, sigma, N)` for every forecast horizon — not `price * (1 + mu * N)`.
+- **Zero-position-size crash fix (2026-06-26 — must never regress):** Production CRITICAL crash `"Platform execution pipeline crashed: float division by zero"` was caused by `evaluate_portfolio`'s Brinson-Fachler block computing `df.groupby('sector')['position_size'].sum() / df['position_size'].sum()` when every ticker is a watchlist-only ticker (zero shares → `Shares × Price = 0` → `position_size.sum() == 0`). Three invariants enforced:
+  1. `EvaluationEngine.evaluate_portfolio` MUST guard `total_position_size = df['position_size'].sum()` and skip the BF division (default `BF_Allocation`/`BF_Selection` to `0.0`) when `total_position_size <= 0`. Never divide by a zero position total.
+  2. `main_orchestrator.run_pipeline` MUST replace zero `position_size` values (after `Shares × Price`) with the `$10 000` notional default via `zero_mask = position_size <= 0.0; dashboard_df.loc[zero_mask, 'position_size'] = 10000.0`.
+  3. The pipeline crash handler in `_main_body` MUST use `telemetry.critical(..., exc_info=True)` so the full traceback appears in `logs/investyo.log` for future diagnosis. Covered by `tests/test_evaluate_portfolio_zero_positions.py` (5 tests) and Gravity Step 45.
 
 
 

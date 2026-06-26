@@ -578,16 +578,32 @@ class EvaluationEngine:
 
         # 3. Evaluate Brinson-Fachler Sector Attribution
         if 'sector' in df.columns and not benchmark_df.empty:
-            port_sector_weights = df.groupby('sector')['position_size'].sum() / df['position_size'].sum()
-            port_sector_returns = df.groupby('sector')['Relative_Strength'].mean() 
+            total_position_size = df['position_size'].sum()
+            if total_position_size <= 0.0:
+                # Watchlist-only run (no held shares) — all position_sizes are 0.
+                # Dividing by zero here would crash the entire pipeline (ZeroDivisionError).
+                # Skip attribution and default to 0 rather than fabricating weights.
+                logger.warning(
+                    "All position_sizes are zero (watchlist-only or no holdings) — "
+                    "skipping Brinson-Fachler attribution, defaulting BF columns to 0."
+                )
+                df['BF_Allocation'] = 0.0
+                df['BF_Selection'] = 0.0
+            else:
+                port_sector_weights = (
+                    df.groupby('sector')['position_size'].sum() / total_position_size
+                )
+                port_sector_returns = df.groupby('sector')['Relative_Strength'].mean()
 
-            bench_weights = benchmark_df.set_index('sector')['weight']
-            bench_returns = benchmark_df.set_index('sector')['return']
+                bench_weights = benchmark_df.set_index('sector')['weight']
+                bench_returns = benchmark_df.set_index('sector')['return']
 
-            bf_df = self.calculate_brinson_fachler(port_sector_weights, bench_weights, port_sector_returns, bench_returns)
+                bf_df = self.calculate_brinson_fachler(
+                    port_sector_weights, bench_weights, port_sector_returns, bench_returns
+                )
 
-            df['BF_Allocation'] = df['sector'].map(bf_df['BF_Allocation']).fillna(0.0).round(4)
-            df['BF_Selection'] = df['sector'].map(bf_df['BF_Selection']).fillna(0.0).round(4)
+                df['BF_Allocation'] = df['sector'].map(bf_df['BF_Allocation']).fillna(0.0).round(4)
+                df['BF_Selection'] = df['sector'].map(bf_df['BF_Selection']).fillna(0.0).round(4)
         else:
             logger.warning("Missing sector or benchmark data. Defaulting Brinson-Fachler to 0.")
             df['BF_Allocation'] = 0.0

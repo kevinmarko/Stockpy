@@ -558,11 +558,17 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     if 'Avg Cost' in dashboard_df.columns:
         dashboard_df['Entry_Price'] = dashboard_df['Avg Cost']
 
-    # Map 'Shares' to 'position_size' for Portfolio Heat
+    # Map 'Shares' to 'position_size' for Portfolio Heat.
+    # Watchlist-only tickers have 0 shares, so Shares * Price = 0 for every row.
+    # Replace zero-valued position sizes with the $10k notional default so downstream
+    # calculations (portfolio heat, Brinson-Fachler sector weights) never divide by zero.
     if 'Shares' in dashboard_df.columns and 'Price' in dashboard_df.columns:
         dashboard_df['position_size'] = dashboard_df['Shares'] * dashboard_df['Price']
+        zero_mask = dashboard_df['position_size'] <= 0.0
+        if zero_mask.any():
+            dashboard_df.loc[zero_mask, 'position_size'] = 10000.0
     elif 'position_size' not in dashboard_df.columns:
-        dashboard_df['position_size'] = 10000.0 # Default $10k assumption
+        dashboard_df['position_size'] = 10000.0  # Default $10k assumption
 
     # Map VaR 95 to stop loss percentage
     if 'VaR 95' in dashboard_df.columns:
@@ -887,7 +893,9 @@ async def _main_body(effective_dry_run: bool) -> None:
             data_engine=de, robinhood_positions=rh_positions,
         )
     except Exception as pipe_err:
-        telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}")
+        # exc_info=True logs the full traceback so future crashes are diagnosable
+        # from the log alone rather than requiring a debugger attach.
+        telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}", exc_info=True)
         sys.exit(1)
 
     # 3. Schema Validation
