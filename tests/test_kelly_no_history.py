@@ -37,7 +37,7 @@ def test_kelly_disabled_with_no_trades_falls_back_to_vol_target(empty_store):
 
 def test_kelly_disabled_with_fewer_than_30_trades_falls_back(empty_store):
     """<30 closed trades (below MIN_TRADES_REQUIRED) -> still vol-target-only."""
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now("UTC")
     for i in range(20):  # below the 30-trade minimum
         trade_id = empty_store.record_trade(
             symbol="AAPL", side="long", entry_ts=now, entry_price=100.0, shares=10.0
@@ -54,7 +54,7 @@ def test_kelly_disabled_with_fewer_than_30_trades_falls_back(empty_store):
 def test_kelly_enabled_once_history_sufficient(empty_store):
     """>=30 closed trades with a real edge -> fractional Kelly takes over,
     no longer matching the pure volatility-target weight."""
-    now = pd.Timestamp.utcnow()
+    now = pd.Timestamp.now("UTC")
     # 18 wins @ +10%, 12 losses @ -5% -> p=0.6, b=2.0
     for i in range(18):
         trade_id = empty_store.record_trade(

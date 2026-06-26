@@ -47,7 +47,7 @@ def _mem_store() -> TransactionsStore:
 
 def _add_closed(store: TransactionsStore, *, symbol="AAPL", entry_price=100.0,
                 exit_price=110.0, conviction=None, days_ago=1) -> int:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     tid = store.record_trade(
         symbol=symbol, side="long",
         entry_ts=now - timedelta(days=days_ago + 1),
@@ -224,7 +224,7 @@ class TestJoinToStore:
 
     def test_finds_match_within_window(self):
         store = _mem_store()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Trade entered 1 hour ago — comfortably within the 24 h window
         tid = store.record_trade("AAPL", "long", now - timedelta(hours=1), 100.0, 1.0)
         store.close_trade(tid, now, 110.0)
@@ -254,7 +254,7 @@ class TestJoinToStore:
 
     def test_picks_closest_when_multiple(self):
         store = _mem_store()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Two trades: one 1 h ago, one 12 h ago
         t_close = store.record_trade("AAPL", "long", now - timedelta(hours=1), 100.0, 1.0)
         store.close_trade(t_close, now, 110.0)
@@ -276,7 +276,7 @@ class TestJoinToStore:
 
     def test_case_insensitive_symbol_match(self):
         store = _mem_store()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         tid = store.record_trade("AAPL", "long", now, 100.0, 1.0)
         store.close_trade(tid, now + timedelta(hours=1), 110.0)
         # Entry uses lowercase
@@ -342,7 +342,7 @@ class TestLogDecision:
 
     def test_acted_joins_when_trade_within_window(self, tmp_path: Path):
         store = _mem_store()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         tid = store.record_trade("AAPL", "long", now, 100.0, 1.0)
         store.close_trade(tid, now + timedelta(hours=1), 110.0)
         log = tmp_path / "dl.jsonl"

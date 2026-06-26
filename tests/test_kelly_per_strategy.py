@@ -56,7 +56,7 @@ def _seed_store(
     loss_pct: float = -0.05,
 ) -> None:
     """Seed the store with n_wins+n_losses trades for a given strategy."""
-    ts = pd.Timestamp.utcnow()
+    ts = pd.Timestamp.now("UTC")
     for i in range(n_wins):
         tid = store.record_trade(
             symbol="AAPL",
