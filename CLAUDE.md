@@ -2,6 +2,33 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Multi-Agent Branch Workflow
+
+Two agents work on this repo: **Claude Code** and **Antigravity IDE**.
+
+### Branch naming
+```
+agent/claude-code/<short-description>    # Claude Code's branches
+agent/antigravity/<short-description>    # Antigravity's branches
+```
+- Never commit directly to `main` — always open a PR from a feature branch.
+- Branch names are lowercase-kebab: `agent/claude-code/fix-hmm-lookahead`.
+
+### Domain split (avoid editing the other agent's files in the same PR)
+| Domain | Owner |
+|---|---|
+| `signals/`, `strategy_engine.py`, `sizing/`, `ml/`, `regime/`, `macro_engine.py`, `validation/`, `execution/`, `tests/` | Claude Code |
+| `gui/`, `observability/`, `reporting_engine.py`, `diagnostics_and_visuals.py`, `scripts/` | Antigravity |
+| `config.py`, `dto_models.py`, `data/`, `data_engine.py`, `main.py`, `main_orchestrator.py`, `requirements.txt` | **Shared** — flag in PR |
+
+### Claude Code start-of-session checklist
+1. `git fetch origin && git rebase origin/main` — sync from main before starting.
+2. `git checkout -b agent/claude-code/<description>` — never work on an existing branch another agent pushed.
+3. Open a PR when the feature is complete; do not squash or amend published commits.
+
+### Merge sequencing for shared files
+When both agents edit a shared file in the same sprint, merge the smaller/less-risky PR first, then rebase the other on the updated `main` before merging. Document the sequence in the PR "Conflicts" section.
+
 ## Project
 
 InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative analysis pipeline: fetches market/macro data, computes technical & fundamental indicators, runs multi-horizon forecasts, backtests strategies, persists signals to SQLite, and publishes results to Google Sheets / an HTML report.
