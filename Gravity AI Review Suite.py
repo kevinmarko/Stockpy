@@ -4279,7 +4279,6 @@ class GravityAIAuditor:
         self.run_risk_gates_portfolio_heat_audit()
         self.run_six_bug_regression_audit()
         self.run_options_matrix_integrity_audit()
-        self.run_robinhood_watchlist_noise_audit()
         self.run_brinson_fachler_attribution_audit()
         self.run_launcher_telemetry_audit()
         self.run_market_data_diagnostics_audit()
@@ -4287,6 +4286,17 @@ class GravityAIAuditor:
         self.run_safety_analytics_control_audit()
         self.run_zero_position_size_crashfix_audit()
         self.run_enhanced_observability_audit()
+        self.run_robinhood_watchlist_noise_audit()
+        # GUI Operational Improvements Plan — steps 47-50
+        self.run_launcher_safety_bundle_audit()
+        self.run_preflight_runner_audit()
+        self.run_dual_mode_header_audit()
+        self.run_strategy_health_audit()
+        # Extend existing steps with new coverage
+        self._extend_launcher_telemetry_audit_stage_status()
+        self._extend_safety_control_audit_launcher()
+        # Write the gravity verification report (contract for gui/strategy_health.py).
+        self._write_gravity_verification_report()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -6239,7 +6249,6 @@ class GravityAIAuditor:
 
         self.report["step_45_zero_position_size_crashfix_audit"] = audit
 
-<<<<<<< HEAD
     def run_enhanced_observability_audit(self) -> None:
         """Step 46 — Enhanced Observability & Error Handling audit.
 
@@ -6443,8 +6452,616 @@ class GravityAIAuditor:
 
         self.report["step_46_enhanced_observability_audit"] = audit
 
-=======
->>>>>>> 7b3182f (fix: prevent ZeroDivisionError crash on watchlist-only runs)
+    # =========================================================================
+    # GUI Operational Improvements Plan — Steps 47-50
+    # =========================================================================
+
+    def run_launcher_safety_bundle_audit(self) -> None:
+        """Step 47 — Launcher kill-switch + Safe Mode bundle audit.
+
+        Checks
+        ------
+        1.  ``gui.panels`` imports ``GlobalKillSwitch`` (via ``_kill_switch``).
+        2.  ``_render_launcher_safety_controls`` exists in ``gui.panels``.
+        3.  The safe-mode toggle writes BOTH ``DRY_RUN`` and the kill-switch
+            sentinel atomically (AST-grep for both calls in the toggle handler).
+        4.  Safe Mode is DERIVED (ON iff kill_active AND DRY_RUN=true) — no new env var.
+        5.  ``tests/test_launcher_safety_controls.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_47_launcher_safety_bundle_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+        try:
+            import ast
+            import inspect
+            from pathlib import Path
+
+            # Check 1: panels imports GlobalKillSwitch
+            import gui.panels as _panels_mod
+            src = inspect.getsource(_panels_mod)
+            c1 = "GlobalKillSwitch" in src
+            audit["checks"].append({
+                "check": "gui.panels references GlobalKillSwitch",
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            # Check 2: _render_launcher_safety_controls exists
+            c2 = hasattr(_panels_mod, "_render_launcher_safety_controls")
+            audit["checks"].append({
+                "check": "_render_launcher_safety_controls exists in gui.panels",
+                "passed": c2,
+            })
+            all_pass = all_pass and c2
+
+            # Check 3: the helper touches DRY_RUN AND kill-switch together (AST-grep)
+            tree = ast.parse(src)
+            class _SafeModeVisitor(ast.NodeVisitor):
+                def __init__(self):
+                    self.found_dry_run = False
+                    self.found_ks = False
+                def visit_FunctionDef(self, node):
+                    if "_render_launcher_safety_controls" in node.name:
+                        s = ast.unparse(node)
+                        self.found_dry_run = "DRY_RUN" in s
+                        self.found_ks = ("activate" in s or "deactivate" in s) and "kill" in s.lower()
+                    self.generic_visit(node)
+            v = _SafeModeVisitor()
+            v.visit(tree)
+            c3 = v.found_dry_run and v.found_ks
+            audit["checks"].append({
+                "check": "_render_launcher_safety_controls writes both DRY_RUN and kill-switch sentinel",
+                "passed": c3,
+                "detail": f"dry_run_found={v.found_dry_run}, ks_found={v.found_ks}",
+            })
+            all_pass = all_pass and c3
+
+            # Check 4: Safe Mode env var not present in ALLOWED_KEYS
+            from gui.env_io import ALLOWED_KEYS
+            c4 = "SAFE_MODE" not in ALLOWED_KEYS
+            audit["checks"].append({
+                "check": "SAFE_MODE is not a new env var (Safe Mode is derived)",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # Check 5: test file exists
+            test_path = Path("tests/test_launcher_safety_controls.py")
+            c5 = test_path.exists()
+            audit["checks"].append({
+                "check": "tests/test_launcher_safety_controls.py exists",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_47_launcher_safety_bundle_audit"] = audit
+
+    def run_preflight_runner_audit(self) -> None:
+        """Step 48 — ``gui/preflight_runner.py`` contract audit.
+
+        Checks
+        ------
+        1.  ``gui.preflight_runner`` is importable.
+        2.  ``run_preflight()`` returns a typed ``PreflightReport``.
+        3.  Timeout path returns ``all_passed=False`` (CONSTRAINT #4 — never fabricate success).
+        4.  ``gui.panels._render_preflight_panel`` exists and is wired into ``render_launcher``.
+        5.  ``tests/test_preflight_runner.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_48_preflight_runner_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+        try:
+            import ast
+            import inspect
+            from pathlib import Path
+            from unittest.mock import patch, MagicMock
+            import subprocess
+
+            # Check 1: module importable
+            try:
+                from gui import preflight_runner
+                c1 = True
+            except ImportError as e:
+                c1 = False
+                audit["checks"].append({"check": "gui.preflight_runner importable", "passed": False, "detail": str(e)})
+                all_pass = False
+            if c1:
+                audit["checks"].append({"check": "gui.preflight_runner importable", "passed": True})
+
+            if c1:
+                # Check 2: run_preflight returns typed PreflightReport
+                from gui.preflight_runner import run_preflight, PreflightReport
+                mock_result = MagicMock()
+                mock_result.returncode = 0
+                mock_result.stdout = '[{"name":"fred_key_configured","passed":true,"reason":"ok","warning":false}]'
+                mock_result.stderr = ""
+                with patch("subprocess.run", return_value=mock_result):
+                    report = run_preflight(timeout=5.0)
+                c2 = isinstance(report, PreflightReport) and isinstance(report.all_passed, bool)
+                audit["checks"].append({
+                    "check": "run_preflight returns typed PreflightReport with all_passed field",
+                    "passed": c2,
+                    "detail": f"type={type(report).__name__}, all_passed={getattr(report, 'all_passed', '?')}",
+                })
+                all_pass = all_pass and c2
+
+                # Check 3: timeout path returns all_passed=False
+                import subprocess as _sp
+                with patch("subprocess.run", side_effect=_sp.TimeoutExpired("cmd", 5.0)):
+                    timeout_report = run_preflight(timeout=5.0)
+                c3 = (not timeout_report.all_passed)
+                audit["checks"].append({
+                    "check": "run_preflight timeout returns all_passed=False (CONSTRAINT #4 — no fabricated success)",
+                    "passed": c3,
+                    "detail": f"all_passed={timeout_report.all_passed}",
+                })
+                all_pass = all_pass and c3
+
+            # Check 4: _render_preflight_panel exists and is called from render_launcher
+            import gui.panels as _panels_mod
+            c4a = hasattr(_panels_mod, "_render_preflight_panel")
+            src = inspect.getsource(_panels_mod)
+            # Check it's referenced in render_launcher
+            tree = ast.parse(src)
+            class _LauncherVisitor(ast.NodeVisitor):
+                def __init__(self):
+                    self.preflight_called = False
+                def visit_FunctionDef(self, node):
+                    if node.name == "render_launcher":
+                        s = ast.unparse(node)
+                        self.preflight_called = "_render_preflight_panel" in s
+                    self.generic_visit(node)
+            lv = _LauncherVisitor()
+            lv.visit(tree)
+            c4 = c4a and lv.preflight_called
+            audit["checks"].append({
+                "check": "_render_preflight_panel exists and is called from render_launcher",
+                "passed": c4,
+                "detail": f"exists={c4a}, called_from_launcher={lv.preflight_called}",
+            })
+            all_pass = all_pass and c4
+
+            # Check 5: test file exists
+            c5 = Path("tests/test_preflight_runner.py").exists()
+            audit["checks"].append({
+                "check": "tests/test_preflight_runner.py exists",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_48_preflight_runner_audit"] = audit
+
+    def run_dual_mode_header_audit(self) -> None:
+        """Step 49 — ``gui/run_mode.py`` persistent header audit.
+
+        Checks
+        ------
+        1.  ``gui.run_mode`` is importable.
+        2.  ``read_active_run_mode()`` exists and returns a typed ``RunModeState``.
+        3.  No session_state → ``idle`` mode (neutral default, no crash).
+        4.  ``gui.app`` imports ``gui.run_mode`` (header is rendered app-wide).
+        5.  ``tests/test_run_mode.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_49_dual_mode_header_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+        try:
+            import ast
+            import inspect
+            from pathlib import Path
+
+            # Check 1: importable
+            try:
+                from gui import run_mode
+                c1 = True
+            except ImportError as e:
+                c1 = False
+                audit["checks"].append({"check": "gui.run_mode importable", "passed": False, "detail": str(e)})
+                all_pass = False
+            if c1:
+                audit["checks"].append({"check": "gui.run_mode importable", "passed": True})
+
+            if c1:
+                # Check 2: read_active_run_mode exists + returns RunModeState
+                from gui.run_mode import read_active_run_mode, RunModeState
+                c2 = callable(read_active_run_mode)
+                audit["checks"].append({
+                    "check": "read_active_run_mode is callable and RunModeState is defined",
+                    "passed": c2,
+                })
+                all_pass = all_pass and c2
+
+                # Check 3: no session state → idle
+                state = read_active_run_mode(session_state={})
+                c3 = state.process == "idle"
+                audit["checks"].append({
+                    "check": "read_active_run_mode with empty session_state returns process='idle'",
+                    "passed": c3,
+                    "detail": f"process={state.process}",
+                })
+                all_pass = all_pass and c3
+
+            # Check 4: gui.app imports gui.run_mode
+            app_src = Path("gui/app.py").read_text(encoding="utf-8")
+            c4 = "run_mode" in app_src
+            audit["checks"].append({
+                "check": "gui/app.py imports/references gui.run_mode",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # Check 5: test file exists
+            c5 = Path("tests/test_run_mode.py").exists()
+            audit["checks"].append({
+                "check": "tests/test_run_mode.py exists",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_49_dual_mode_header_audit"] = audit
+
+    def run_strategy_health_audit(self) -> None:
+        """Step 50 — Strategy Health view + ``validation/thresholds.py`` audit.
+
+        Checks
+        ------
+        1.  ``validation.thresholds`` exists and exports the five canonical constants.
+        2.  ``validation.harness`` imports from ``validation.thresholds``.
+        3.  ``gui.strategy_health`` is importable.
+        4.  ``read_gravity_report`` returns ``[]`` on a missing file (no fabrication).
+        5.  Corrupt JSON → ``[]`` (CONSTRAINT #4 — never fabricate success).
+        6.  ``output/gravity_verification_report.json`` is written atomically by
+            this suite (via ``_write_gravity_verification_report``).
+        7.  ``tests/test_strategy_health.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_50_strategy_health_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+        try:
+            import ast
+            import inspect
+            import json as _json
+            import tempfile
+            from pathlib import Path
+
+            # Check 1: thresholds module exports 5 constants
+            from validation.thresholds import (
+                PBO_MAX, DSR_MIN, NET_SHARPE_MIN, MAX_DRAWDOWN_MAX, STRESS_MAX_DRAWDOWN
+            )
+            c1 = all(
+                isinstance(v, float)
+                for v in [PBO_MAX, DSR_MIN, NET_SHARPE_MIN, MAX_DRAWDOWN_MAX, STRESS_MAX_DRAWDOWN]
+            )
+            audit["checks"].append({
+                "check": "validation.thresholds exports 5 float constants",
+                "passed": c1,
+                "detail": f"PBO_MAX={PBO_MAX}, DSR_MIN={DSR_MIN}, NET_SHARPE_MIN={NET_SHARPE_MIN}, "
+                          f"MAX_DRAWDOWN_MAX={MAX_DRAWDOWN_MAX}, STRESS_MAX_DRAWDOWN={STRESS_MAX_DRAWDOWN}",
+            })
+            all_pass = all_pass and c1
+
+            # Check 2: harness imports thresholds
+            harness_src = Path("validation/harness.py").read_text(encoding="utf-8")
+            c2 = "from validation.thresholds import" in harness_src
+            audit["checks"].append({
+                "check": "validation.harness imports from validation.thresholds",
+                "passed": c2,
+            })
+            all_pass = all_pass and c2
+
+            # Check 3: gui.strategy_health importable
+            try:
+                from gui import strategy_health as _sh
+                c3 = True
+            except ImportError as e:
+                c3 = False
+                audit["checks"].append({"check": "gui.strategy_health importable", "passed": False, "detail": str(e)})
+                all_pass = False
+            if c3:
+                audit["checks"].append({"check": "gui.strategy_health importable", "passed": True})
+
+            if c3:
+                from gui.strategy_health import read_gravity_report
+
+                # Check 4: missing file → []
+                c4_list = read_gravity_report(path=Path("/tmp/__no_gravity__.json"))
+                c4 = c4_list == []
+                audit["checks"].append({
+                    "check": "read_gravity_report returns [] on missing file (CONSTRAINT #4)",
+                    "passed": c4,
+                })
+                all_pass = all_pass and c4
+
+                # Check 5: corrupt JSON → []
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", delete=False, encoding="utf-8"
+                ) as tf:
+                    tf.write("{corrupt json!!!")
+                    tf_path = Path(tf.name)
+                try:
+                    c5_list = read_gravity_report(path=tf_path)
+                    c5 = c5_list == []
+                finally:
+                    tf_path.unlink(missing_ok=True)
+                audit["checks"].append({
+                    "check": "read_gravity_report returns [] on corrupt JSON (CONSTRAINT #4)",
+                    "passed": c5,
+                })
+                all_pass = all_pass and c5
+
+            # Check 6: gravity_verification_report.json written by this suite
+            gvr = Path("output/gravity_verification_report.json")
+            c6 = gvr.exists()
+            audit["checks"].append({
+                "check": "output/gravity_verification_report.json was written atomically by this suite",
+                "passed": c6,
+                "detail": f"path_exists={c6}",
+            })
+            # Don't fail on this: the report is written AFTER this step runs in the
+            # export sequence. We record the check for transparency but don't block.
+
+            # Check 7: test file exists
+            c7 = Path("tests/test_strategy_health.py").exists()
+            audit["checks"].append({
+                "check": "tests/test_strategy_health.py exists",
+                "passed": c7,
+            })
+            all_pass = all_pass and c7
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_50_strategy_health_audit"] = audit
+
+    def _extend_launcher_telemetry_audit_stage_status(self) -> None:
+        """Extend step_41 to also verify StageStatus enum and four-stage map.
+
+        This is called AFTER run_launcher_telemetry_audit() so the new checks
+        are appended to the existing step rather than creating a separate entry.
+        The step is only extended (never reset) to preserve backwards-compatible
+        reporting for callers that already check step_41.
+        """
+        step = self.report.get("step_41_launcher_telemetry_audit", {})
+        if not isinstance(step, dict):
+            return
+        checks = step.setdefault("checks", [])
+        all_prev = step.get("overall_pass", True)
+        ext_pass = True
+        try:
+            # Check: StageStatus enum exists in orchestrator_runner
+            from gui.orchestrator_runner import StageStatus
+            c_enum = issubclass(StageStatus, str)
+            checks.append({
+                "check": "StageStatus is a str-subclassed enum in gui.orchestrator_runner",
+                "passed": c_enum,
+            })
+            ext_pass = ext_pass and c_enum
+
+            # Check: SUCCESS/ACTIVE/ERROR/PENDING/SKIPPED members present
+            required_members = {"SUCCESS", "ACTIVE", "ERROR", "PENDING", "SKIPPED"}
+            members_ok = required_members.issubset({m.name for m in StageStatus})
+            checks.append({
+                "check": "StageStatus has SUCCESS/ACTIVE/ERROR/PENDING/SKIPPED members",
+                "passed": members_ok,
+            })
+            ext_pass = ext_pass and members_ok
+
+            # Check: string equality still works (backwards compatibility)
+            c_compat = StageStatus.SUCCESS == "success" and StageStatus.ACTIVE == "active"
+            checks.append({
+                "check": "StageStatus.SUCCESS == 'success' and StageStatus.ACTIVE == 'active' (legacy compat)",
+                "passed": c_compat,
+            })
+            ext_pass = ext_pass and c_compat
+
+            # Check: compute_stage_status returns a 4-stage map
+            from gui.orchestrator_runner import compute_stage_status, STAGES
+            c_four = len(STAGES) == 4
+            checks.append({
+                "check": "STAGES list has exactly 4 pipeline stages",
+                "passed": c_four,
+                "detail": f"stages={[s[0] for s in STAGES]}",
+            })
+            ext_pass = ext_pass and c_four
+
+            # Update the step's overall pass
+            step["overall_pass"] = all_prev and ext_pass
+            if step.get("status", "").startswith("PASS") and not ext_pass:
+                step["status"] = "FAILED"
+        except Exception as exc:
+            checks.append({
+                "check": "StageStatus extension check",
+                "passed": False,
+                "detail": f"Exception: {exc}",
+            })
+            step["overall_pass"] = False
+            step["status"] = "FAILED"
+        self.report["step_41_launcher_telemetry_audit"] = step
+
+    def _extend_safety_control_audit_launcher(self) -> None:
+        """Extend step_44 to verify Launcher-tab safety controls.
+
+        The existing step covers Strategy Matrix kill-switch UI. This extension
+        asserts that the same GlobalKillSwitch is also reachable from the
+        Launcher tab (not just the Strategy Matrix tab).
+        """
+        step = self.report.get("step_44_safety_analytics_control_audit", {})
+        if not isinstance(step, dict):
+            return
+        checks = step.setdefault("checks", [])
+        all_prev = step.get("overall_pass", True)
+        ext_pass = True
+        try:
+            import ast
+            import inspect
+            import gui.panels as _panels_mod
+            src = inspect.getsource(_panels_mod)
+            tree = ast.parse(src)
+
+            # Check: _render_launcher_safety_controls exists
+            has_helper = hasattr(_panels_mod, "_render_launcher_safety_controls")
+            checks.append({
+                "check": "Launcher-tab _render_launcher_safety_controls exists in gui.panels",
+                "passed": has_helper,
+            })
+            ext_pass = ext_pass and has_helper
+
+            # Check: render_launcher calls _render_launcher_safety_controls
+            class _LauncherKSVisitor(ast.NodeVisitor):
+                def __init__(self):
+                    self.found = False
+                def visit_FunctionDef(self, node):
+                    if node.name == "render_launcher":
+                        s = ast.unparse(node)
+                        self.found = "_render_launcher_safety_controls" in s
+                    self.generic_visit(node)
+            lv = _LauncherKSVisitor()
+            lv.visit(tree)
+            checks.append({
+                "check": "render_launcher calls _render_launcher_safety_controls",
+                "passed": lv.found,
+            })
+            ext_pass = ext_pass and lv.found
+
+            step["overall_pass"] = all_prev and ext_pass
+            if step.get("status", "").startswith("PASS") and not ext_pass:
+                step["status"] = "FAILED"
+        except Exception as exc:
+            checks.append({
+                "check": "Launcher safety control extension check",
+                "passed": False,
+                "detail": f"Exception: {exc}",
+            })
+            step["overall_pass"] = False
+            step["status"] = "FAILED"
+        self.report["step_44_safety_analytics_control_audit"] = step
+
+    def _write_gravity_verification_report(self) -> None:
+        """Write ``output/gravity_verification_report.json`` atomically.
+
+        This is the published artifact that ``gui/strategy_health.py`` reads.
+        Shape: ``{"run_id": str, "generated_at": ISO-8601, "strategies": [...]}``
+        where each strategy dict matches the ``StrategyHealth`` dataclass contract.
+
+        Data source: the harness audit step (step_12) runs two synthetic strategies
+        (Random_Audit, Trending_Audit) and records their PBO/DSR/Sharpe/MaxDD.
+        We serialise those into the gravity report format so the Strategy Health
+        panel has real data from each suite run.
+
+        Atomic write: write to a ``.tmp`` file then rename so readers never see
+        a partial file.
+        """
+        import json as _json
+        import time as _time
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        try:
+            output_dir = Path("output")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            run_id = f"gravity_{int(_time.time())}"
+
+            # Extract strategy data from the harness audit step.
+            harness = self.report.get("step_12_validation_harness_audit", {})
+            strategies = []
+
+            def _make_entry(strategy_id, pbo, dsr, sharpe, max_dd, is_options_selling=False):
+                from validation.thresholds import PBO_MAX, DSR_MIN, NET_SHARPE_MIN, MAX_DRAWDOWN_MAX
+                import math
+                def _safe(v):
+                    return None if (v is None or (isinstance(v, float) and math.isnan(v))) else float(v)
+                pbo_v = _safe(pbo)
+                dsr_v = _safe(dsr)
+                sharpe_v = _safe(sharpe)
+                maxdd_v = _safe(max_dd)
+                deployable = (
+                    pbo_v is not None and pbo_v < PBO_MAX
+                    and dsr_v is not None and dsr_v > DSR_MIN
+                    and sharpe_v is not None and sharpe_v > NET_SHARPE_MIN
+                    and maxdd_v is not None and maxdd_v < MAX_DRAWDOWN_MAX
+                )
+                return {
+                    "strategy_id": strategy_id,
+                    "pbo": pbo_v,
+                    "dsr": dsr_v,
+                    "net_sharpe": sharpe_v,
+                    "max_drawdown": maxdd_v,
+                    "is_options_selling": is_options_selling,
+                    "stress_test_passed": None,
+                    "deployable": deployable,
+                    "last_audited_at": now_iso,
+                }
+
+            if harness.get("random_strategy_pbo") is not None:
+                strategies.append(_make_entry(
+                    "Random_Audit",
+                    harness.get("random_strategy_pbo"),
+                    harness.get("random_strategy_dsr"),
+                    None,  # harness doesn't expose sharpe per strategy via dict
+                    None,
+                ))
+            if harness.get("trending_strategy_pbo") is not None:
+                strategies.append(_make_entry(
+                    "Trending_Audit",
+                    harness.get("trending_strategy_pbo"),
+                    harness.get("trending_strategy_dsr"),
+                    harness.get("trending_strategy_sharpe"),
+                    harness.get("trending_strategy_max_dd"),
+                ))
+
+            payload = {
+                "run_id": run_id,
+                "generated_at": now_iso,
+                "strategies": strategies,
+            }
+            dest = output_dir / "gravity_verification_report.json"
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+            tmp.rename(dest)
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Failed to write gravity_verification_report.json: %s", exc
+            )
+
     def run_robinhood_watchlist_noise_audit(self) -> None:
         """Step 39 — Robinhood watchlist 400-noise suppression audit.
 
