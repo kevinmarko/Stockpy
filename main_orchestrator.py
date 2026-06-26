@@ -426,119 +426,171 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     dashboard_df['Robinhood Avg Cost'] = 0.0
     dashboard_df['Robinhood Dividends'] = 0.0
 
+    # dead_letter_entries accumulates per-symbol failures (Constraint #6).
+    # Written atomically to output/dead_letter.json after the loop so the GUI
+    # can display failed symbols and offer targeted retry without a full restart.
     eval_results = {}
+    dead_letter_entries: list[dict] = []
+
     for idx, row in dashboard_df.iterrows():
         ticker = row['Symbol']
         price = row['Price']
         if not price or price == 0:
             continue
 
-        # MarketBar DTO
-        history_df = tech_raw.get(ticker)
-        if history_df is not None and not history_df.empty:
-            latest_row = history_df.iloc[-1]
-            bar_dto = MarketBarDTO(
-                date=datetime.now(),
-                ticker=ticker,
-                open_price=latest_row.get('Open', price),
-                high_price=latest_row.get('High', price),
-                low_price=latest_row.get('Low', price),
-                close_price=latest_row.get('Close', price),
-                volume=int(latest_row.get('Volume', 0))
+        # Track which processing stage we are in so dead-letter entries carry
+        # actionable context (e.g. "strategy" vs "dto_construction").
+        _stage = "dto_construction"
+        try:
+            # MarketBar DTO
+            history_df = tech_raw.get(ticker)
+            if history_df is not None and not history_df.empty:
+                latest_row = history_df.iloc[-1]
+                bar_dto = MarketBarDTO(
+                    date=datetime.now(),
+                    ticker=ticker,
+                    open_price=latest_row.get('Open', price),
+                    high_price=latest_row.get('High', price),
+                    low_price=latest_row.get('Low', price),
+                    close_price=latest_row.get('Close', price),
+                    volume=int(latest_row.get('Volume', 0))
+                )
+            else:
+                bar_dto = MarketBarDTO(datetime.now(), ticker, price, price, price, price, 0)
+
+            # Fundamentals DTO
+            fund_dto = fund_dtos.get(ticker)
+            if fund_dto is None:
+                fund_dto = FundamentalDataDTO(
+                    ticker=ticker, pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
+                    book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
+                    payout_ratio=0.0, sector="Unknown", company_name="Unknown"
+                )
+
+            # Robinhood Position DTO
+            rh_position = robinhood_positions.get(ticker) if robinhood_positions else None
+
+            # Generate action signal
+            _stage = "strategy"
+            atr_val = float(row.get('ATR', 0.0))
+            aroon_val = float(row.get('Aroon Up', 50.0))
+            macd_line_val = float(row.get('MACD_Line', 0.0))
+            macd_signal_val = float(row.get('MACD_Signal', 0.0))
+            aroon_osc_val = float(row.get('Aroon Oscillator', 0.0))
+            rsi_val = float(row.get('RSI', 50.0))
+            sortino_val = float(row.get('Sortino Ratio', row.get('Sortino_Ratio', 0.0)))
+            drawdown_val = float(row.get('Max Drawdown', row.get('Max_Drawdown', 0.0)))
+            rs_val = float(row.get('Relative_Strength', row.get('RS vs SPY', row.get('Relative Strength', 0.0))))
+            garch_val = float(row.get('GARCH_Vol', 0.0))
+            edge_val = float(row.get('Edge Ratio', row.get('Edge_Ratio', 0.0)))
+            rsi_2_val = float(row.get('RSI_2', 50.0)) if pd.notna(row.get('RSI_2', 50.0)) else 50.0
+            sma_5_val = float(row.get('SMA_5')) if pd.notna(row.get('SMA_5')) else None
+
+            chan_long = 0.0
+            chan_short = 0.0
+            if ticker in tech_opt_indicators:
+                chan_long = tech_opt_indicators[ticker].get('Chandelier_Long', 0.0)
+                chan_short = tech_opt_indicators[ticker].get('Chandelier_Short', 0.0)
+
+            strategy_output = se.evaluate_security(
+                bar=bar_dto,
+                fundamentals=fund_dto,
+                macro=macro_dto,
+                forecast_price=row.get('Forecast_30', 0.0),
+                trend_strength=aroon_val,
+                atr=atr_val,
+                macd_line=macd_line_val,
+                macd_signal=macd_signal_val,
+                aroon_osc=aroon_osc_val,
+                rsi=rsi_val,
+                sortino_ratio=sortino_val,
+                max_drawdown=drawdown_val,
+                relative_strength=rs_val,
+                garch_vol=garch_val,
+                edge_ratio=edge_val,
+                chandelier_long=chan_long,
+                chandelier_short=chan_short,
+                roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
+                sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
+                rsi_2=rsi_2_val,
+                sma_5=sma_5_val,
+                robinhood_position=rh_position
+            )
+
+            # Calculate Edge Ratio (Post-trade evaluation)
+            _stage = "edge_ratio"
+            edge_ratio_val = 0.0
+            if history_df is not None and len(history_df) >= 20:
+                # Evaluate a mock hold period for the last 15 trading days
+                entry_d = history_df.index[-15]
+                exit_d = history_df.index[-1]
+                trade_entry_p = float(history_df["Close"].iloc[-15])
+
+                edge_data = ee.calculate_edge_ratio(history_df, trade_entry_p, entry_d, exit_d)
+                edge_ratio_val = float(edge_data['Edge Ratio'])
+                # Add Edge Ratio to explainer notes for completeness
+                strategy_output["Strategy Explainer Notes"] += (
+                    f"\nPOST-TRADE EDGE RATIO: {edge_data['Edge Ratio']:.2f} "
+                    f"(MFE: {edge_data['MFE']*100:.1f}%, MAE: {edge_data['MAE']*100:.1f}%)"
+                )
+
+            _stage = "results"
+            eval_results[ticker] = {
+                'Edge Ratio': edge_ratio_val,
+                'Action Signal': strategy_output['Action Signal'],
+                'Advice': strategy_output['Advice'],
+                'Actionable Advice Signal': strategy_output['Actionable Advice Signal'],
+                'is_dividend_sustainable': int(fund_dto.is_dividend_sustainable),
+                'eps_trailing': fund_dto.eps_trailing,
+                'book_value': fund_dto.book_value,
+                'graham_number': fund_dto.graham_number,
+                'Kelly Target': float(strategy_output['Kelly Target']),
+                'Option Strategy': tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '') if ticker in tech_opt_indicators else strategy_output['Option Strategy'],
+                'buyRange': strategy_output['buyRange'],
+                'sellRange': strategy_output['sellRange'],
+                'Strategy Explainer Notes': strategy_output['Strategy Explainer Notes'],
+                'Robinhood Shares': float(strategy_output.get('Robinhood Shares', 0.0)),
+                'Robinhood Avg Cost': float(strategy_output.get('Robinhood Avg Cost', 0.0)),
+                'Robinhood Dividends': float(strategy_output.get('Robinhood Dividends', 0.0)),
+                'Robinhood Advice': str(strategy_output.get('Robinhood Advice', 'N/A'))
+            }
+
+        except Exception as _ticker_exc:
+            # Dead-letter this symbol: record stage + error, continue to next ticker.
+            dead_letter_entries.append({
+                "symbol": ticker,
+                "stage": _stage,
+                "error": str(_ticker_exc),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            telemetry.error(
+                "Dead-lettered %s at stage=%s: %s", ticker, _stage, _ticker_exc,
+                exc_info=True,
+            )
+
+    # Persist dead-letter report (always written — empty entries = clean run).
+    # Written inline to avoid importing gui.* from the pipeline layer.
+    _dl_path = settings.OUTPUT_DIR / "dead_letter.json"
+    try:
+        import json as _json
+        _dl_payload = {
+            "run_id": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "entries": dead_letter_entries,
+        }
+        _dl_tmp = _dl_path.with_suffix(".tmp")
+        _dl_path.parent.mkdir(parents=True, exist_ok=True)
+        _dl_tmp.write_text(_json.dumps(_dl_payload, indent=2), encoding="utf-8")
+        _dl_tmp.replace(_dl_path)
+        if dead_letter_entries:
+            telemetry.warning(
+                "Dead-letter report: %d symbol(s) failed — see %s",
+                len(dead_letter_entries), _dl_path,
             )
         else:
-            bar_dto = MarketBarDTO(datetime.now(), ticker, price, price, price, price, 0)
-
-        # Fundamentals DTO
-        fund_dto = fund_dtos.get(ticker)
-        if fund_dto is None:
-            fund_dto = FundamentalDataDTO(
-                ticker=ticker, pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
-                book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
-                payout_ratio=0.0, sector="Unknown", company_name="Unknown"
-            )
-
-        # Robinhood Position DTO
-        rh_position = robinhood_positions.get(ticker) if robinhood_positions else None
-
-        # Generate action signal
-        atr_val = float(row.get('ATR', 0.0))
-        aroon_val = float(row.get('Aroon Up', 50.0))
-        macd_line_val = float(row.get('MACD_Line', 0.0))
-        macd_signal_val = float(row.get('MACD_Signal', 0.0))
-        aroon_osc_val = float(row.get('Aroon Oscillator', 0.0))
-        rsi_val = float(row.get('RSI', 50.0))
-        sortino_val = float(row.get('Sortino Ratio', row.get('Sortino_Ratio', 0.0)))
-        drawdown_val = float(row.get('Max Drawdown', row.get('Max_Drawdown', 0.0)))
-        rs_val = float(row.get('Relative_Strength', row.get('RS vs SPY', row.get('Relative Strength', 0.0))))
-        garch_val = float(row.get('GARCH_Vol', 0.0))
-        edge_val = float(row.get('Edge Ratio', row.get('Edge_Ratio', 0.0)))
-        rsi_2_val = float(row.get('RSI_2', 50.0)) if pd.notna(row.get('RSI_2', 50.0)) else 50.0
-        sma_5_val = float(row.get('SMA_5')) if pd.notna(row.get('SMA_5')) else None
-
-        chan_long = 0.0
-        chan_short = 0.0
-        if ticker in tech_opt_indicators:
-            chan_long = tech_opt_indicators[ticker].get('Chandelier_Long', 0.0)
-            chan_short = tech_opt_indicators[ticker].get('Chandelier_Short', 0.0)
-
-        strategy_output = se.evaluate_security(
-            bar=bar_dto,
-            fundamentals=fund_dto,
-            macro=macro_dto,
-            forecast_price=row.get('Forecast_30', 0.0),
-            trend_strength=aroon_val,
-            atr=atr_val,
-            macd_line=macd_line_val,
-            macd_signal=macd_signal_val,
-            aroon_osc=aroon_osc_val,
-            rsi=rsi_val,
-            sortino_ratio=sortino_val,
-            max_drawdown=drawdown_val,
-            relative_strength=rs_val,
-            garch_vol=garch_val,
-            edge_ratio=edge_val,
-            chandelier_long=chan_long,
-            chandelier_short=chan_short,
-            roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
-            sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
-            rsi_2=rsi_2_val,
-            sma_5=sma_5_val,
-            robinhood_position=rh_position
-        )
-
-        # Calculate Edge Ratio (Post-trade evaluation)
-        edge_ratio_val = 0.0
-        if history_df is not None and len(history_df) >= 20:
-            # Evaluate a mock hold period for the last 15 trading days
-            entry_d = history_df.index[-15]
-            exit_d = history_df.index[-1]
-            trade_entry_p = float(history_df["Close"].iloc[-15])
-            
-            edge_data = ee.calculate_edge_ratio(history_df, trade_entry_p, entry_d, exit_d)
-            edge_ratio_val = float(edge_data['Edge Ratio'])
-            # Add Edge Ratio to explainer notes for completeness
-            strategy_output["Strategy Explainer Notes"] += f"\nPOST-TRADE EDGE RATIO: {edge_data['Edge Ratio']:.2f} (MFE: {edge_data['MFE']*100:.1f}%, MAE: {edge_data['MAE']*100:.1f}%)"
-
-        eval_results[ticker] = {
-            'Edge Ratio': edge_ratio_val,
-            'Action Signal': strategy_output['Action Signal'],
-            'Advice': strategy_output['Advice'],
-            'Actionable Advice Signal': strategy_output['Actionable Advice Signal'],
-            'is_dividend_sustainable': int(fund_dto.is_dividend_sustainable),
-            'eps_trailing': fund_dto.eps_trailing,
-            'book_value': fund_dto.book_value,
-            'graham_number': fund_dto.graham_number,
-            'Kelly Target': float(strategy_output['Kelly Target']),
-            'Option Strategy': tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '') if ticker in tech_opt_indicators else strategy_output['Option Strategy'],
-            'buyRange': strategy_output['buyRange'],
-            'sellRange': strategy_output['sellRange'],
-            'Strategy Explainer Notes': strategy_output['Strategy Explainer Notes'],
-            'Robinhood Shares': float(strategy_output.get('Robinhood Shares', 0.0)),
-            'Robinhood Avg Cost': float(strategy_output.get('Robinhood Avg Cost', 0.0)),
-            'Robinhood Dividends': float(strategy_output.get('Robinhood Dividends', 0.0)),
-            'Robinhood Advice': str(strategy_output.get('Robinhood Advice', 'N/A'))
-        }
+            telemetry.info("All symbols processed cleanly — dead_letter.json cleared.")
+    except Exception as _dl_exc:
+        telemetry.warning("Failed to write dead-letter report: %s", _dl_exc)
 
     # Vectorized mapping to avoid iterrows mutation (Constraint #3)
     for col in [
@@ -558,11 +610,17 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     if 'Avg Cost' in dashboard_df.columns:
         dashboard_df['Entry_Price'] = dashboard_df['Avg Cost']
 
-    # Map 'Shares' to 'position_size' for Portfolio Heat
+    # Map 'Shares' to 'position_size' for Portfolio Heat.
+    # Watchlist-only tickers have 0 shares, so Shares * Price = 0 for every row.
+    # Replace zero-valued position sizes with the $10k notional default so downstream
+    # calculations (portfolio heat, Brinson-Fachler sector weights) never divide by zero.
     if 'Shares' in dashboard_df.columns and 'Price' in dashboard_df.columns:
         dashboard_df['position_size'] = dashboard_df['Shares'] * dashboard_df['Price']
+        zero_mask = dashboard_df['position_size'] <= 0.0
+        if zero_mask.any():
+            dashboard_df.loc[zero_mask, 'position_size'] = 10000.0
     elif 'position_size' not in dashboard_df.columns:
-        dashboard_df['position_size'] = 10000.0 # Default $10k assumption
+        dashboard_df['position_size'] = 10000.0  # Default $10k assumption
 
     # Map VaR 95 to stop loss percentage
     if 'VaR 95' in dashboard_df.columns:
@@ -887,7 +945,9 @@ async def _main_body(effective_dry_run: bool) -> None:
             data_engine=de, robinhood_positions=rh_positions,
         )
     except Exception as pipe_err:
-        telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}")
+        # exc_info=True logs the full traceback so future crashes are diagnosable
+        # from the log alone rather than requiring a debugger attach.
+        telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}", exc_info=True)
         sys.exit(1)
 
     # 3. Schema Validation

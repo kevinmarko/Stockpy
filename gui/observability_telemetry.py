@@ -427,3 +427,180 @@ def tally_levels(entries: Sequence[LogEntry]) -> Dict[str, int]:
         else:
             tally["UNPARSED"] += 1
     return tally
+
+
+# ===========================================================================
+# 4. Contextual error classification
+# ===========================================================================
+
+# Regex patterns that indicate a log message is about a specific equity ticker.
+# Ordered by specificity — first match wins.
+_SYMBOL_PATTERNS: List[re.Pattern[str]] = [
+    # "Dead-lettered AAPL at stage=..." (main_orchestrator dead-letter log)
+    re.compile(r"Dead-lettered\s+([A-Z]{1,5})\b"),
+    # "for HKIT", "for ticker AAPL", "for symbol MSFT"
+    re.compile(r"\bfor\s+(?:ticker\s+|symbol\s+)?([A-Z]{1,5})\b"),
+    # "AAPL: " at message start
+    re.compile(r"^([A-Z]{1,5}):\s"),
+    # "symbol=AAPL" (keyword-argument style)
+    re.compile(r"\bsymbol=([A-Z]{1,5})\b"),
+    # "ticker=AAPL"
+    re.compile(r"\bticker=([A-Z]{1,5})\b"),
+    # "[AAPL]" bracketed
+    re.compile(r"\[([A-Z]{1,5})\]"),
+]
+
+# Terms in the logger name or message that indicate a systemic (pipeline-wide)
+# error rather than a per-symbol failure.
+_SYSTEMIC_KEYWORDS = frozenset({
+    "pipeline",
+    "orchestrat",
+    "crash",
+    "critical",
+    "fatal",
+    "DataEngine",
+    "MacroEngine",
+    "ForecastingEngine",
+    "heartbeat",
+    "data_engine",
+    "macro_engine",
+    "fred",
+    "sheet",
+    "database",
+    "schema",
+})
+
+
+def extract_symbol_from_message(message: str) -> Optional[str]:
+    """Extract a ticker symbol from a log message string if one is present.
+
+    Uses an ordered list of regex patterns; returns the first match or ``None``
+    when no recognisable ticker pattern is found.
+
+    Parameters
+    ----------
+    message:
+        The ``LogEntry.message`` string (not the full ``raw`` line).
+    """
+    for pattern in _SYMBOL_PATTERNS:
+        m = pattern.search(message)
+        if m:
+            candidate = m.group(1)
+            # Exclude common false positives: single-letter words, reserved
+            # Python words, or all-vowel strings that are unlikely tickers.
+            if len(candidate) >= 2 and candidate not in {"AT", "IN", "IS", "OR", "TO", "BE", "OF"}:
+                return candidate
+    return None
+
+
+def classify_log_entry(entry: LogEntry) -> str:
+    """Classify a log entry as ``"systemic"``, ``"symbol_specific"``, or ``"unknown"``.
+
+    Classification logic
+    --------------------
+    Symbol-specific is tested FIRST because a dead-lettered ticker message
+    (e.g. "Dead-lettered HKIT at stage=strategy") is a contained per-symbol
+    failure even when it is logged by ``main_orchestrator`` — and matching
+    ``"orchestrat"`` in the logger name would otherwise mis-classify it as
+    systemic.  The priority order therefore is:
+
+    1. ``"symbol_specific"`` — ``extract_symbol_from_message()`` found a ticker.
+    2. ``"systemic"`` — message or logger name contains a pipeline-level keyword
+       (crash, orchestrator, FRED, schema, etc.) with no per-symbol attribution.
+    3. ``"unknown"`` — neither of the above.
+
+    Only parsed entries (with a recognised level) are meaningfully classified;
+    unparseable continuation lines always return ``"unknown"``.
+    """
+    if not entry.parsed:
+        return "unknown"
+    # Symbol-specific takes priority — an explicitly named ticker is never systemic.
+    if extract_symbol_from_message(entry.message) is not None:
+        return "symbol_specific"
+    haystack = (entry.logger_name + " " + entry.message).lower()
+    for kw in _SYSTEMIC_KEYWORDS:
+        if kw.lower() in haystack:
+            return "systemic"
+    return "unknown"
+
+
+# ===========================================================================
+# 5. Heartbeat trend ring buffer
+# ===========================================================================
+
+@dataclass(frozen=True)
+class HeartbeatSample:
+    """One heartbeat-age observation recorded by the Observability tab.
+
+    Attributes
+    ----------
+    sampled_at:
+        Wall-clock UTC time when the age was measured.
+    age_seconds:
+        ``heartbeat_age_seconds()`` value at that moment; ``float('nan')``
+        when the orchestrator has not yet written ``output/heartbeat.txt``.
+    """
+
+    sampled_at: datetime
+    age_seconds: float
+
+
+class HeartbeatTrendStore:
+    """Bounded ring buffer of :class:`HeartbeatSample` observations.
+
+    Holds up to ``max_samples`` readings, dropping the oldest when full.
+    Persisted across Streamlit reruns via ``st.session_state`` — never to disk
+    (values are only meaningful within a single GUI session).
+
+    Parameters
+    ----------
+    max_samples:
+        Buffer capacity. Default 60 ≈ one hour of readings at 60 s tab refresh.
+    """
+
+    def __init__(self, max_samples: int = 60) -> None:
+        if max_samples < 1:
+            raise ValueError("max_samples must be >= 1")
+        self._samples: Deque[HeartbeatSample] = deque(maxlen=max_samples)
+
+    def record(self, age_seconds: float) -> HeartbeatSample:
+        """Store one heartbeat-age reading taken at the current UTC time.
+
+        Parameters
+        ----------
+        age_seconds:
+            Value from ``orchestrator_runner.heartbeat_age_seconds()``.  Pass
+            ``float('nan')`` when the heartbeat file is absent — the ring
+            buffer preserves NaN so the sparkline can render a gap.
+        """
+        sample = HeartbeatSample(
+            sampled_at=datetime.now(timezone.utc),
+            age_seconds=float(age_seconds),
+        )
+        self._samples.append(sample)
+        return sample
+
+    def samples(self) -> List[HeartbeatSample]:
+        """Return a list copy of all stored samples (oldest first)."""
+        return list(self._samples)
+
+    def clear(self) -> None:
+        """Drop all samples (e.g. operator reset)."""
+        self._samples.clear()
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def to_dataframe(self) -> "Any":
+        """Convert to a ``pandas.DataFrame`` for ``st.line_chart``.
+
+        Returns a DataFrame with columns ``sampled_at`` (index) and
+        ``age_seconds``.  Empty store → empty DataFrame.  Import is local to
+        avoid adding a Streamlit-layer dependency to this headless module.
+        """
+        import pandas as _pd  # local so unit tests don't require pandas in scope
+        if not self._samples:
+            return _pd.DataFrame(columns=["age_seconds"])
+        rows = [{"sampled_at": s.sampled_at, "age_seconds": s.age_seconds} for s in self._samples]
+        df = _pd.DataFrame(rows).set_index("sampled_at")
+        return df

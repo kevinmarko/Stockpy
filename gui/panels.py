@@ -711,10 +711,89 @@ def render_launcher() -> None:
         )
         st.code(orchestrator_runner.read_telemetry_tail(max_lines=120), language="text")
 
+    # ── Dead-Letter Queue ───────────────────────────────────────────────────
+    st.divider()
+    _render_dead_letter_queue()
+
     # ── Auto-refresh ticker (opt-in; cheap because Streamlit reruns are fast) ──
     if running and auto_refresh:
         time.sleep(5)
         st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Launcher — Dead-Letter Queue section
+# ---------------------------------------------------------------------------
+
+def _render_dead_letter_queue() -> None:
+    """Display failed symbols from the last pipeline run with per-symbol retry buttons.
+
+    Source: ``output/dead_letter.json`` written by :func:`main_orchestrator.run_pipeline`
+    at the end of each run (empty entries = all symbols processed cleanly).
+
+    Each failed symbol shows the pipeline stage at which it failed (e.g.
+    ``"strategy"`` vs ``"dto_construction"``), the short exception text, and a
+    **🔄 Retry** button that spawns ``main.py`` for just that symbol via
+    :func:`gui.orchestrator_runner.launch_symbol_retry`.
+    """
+    from gui.dead_letter import DEAD_LETTER_PATH, read_dead_letter
+    from gui import orchestrator_runner
+
+    st.markdown("### 🔴 Dead-Letter Queue — Failed Symbols")
+    st.caption(
+        "Symbols that failed during the last pipeline run. "
+        "Each failure is isolated — the rest of the run was unaffected (Constraint #6). "
+        "Use **🔄 Retry** to re-run just that symbol without a full restart."
+    )
+
+    report = read_dead_letter()
+    if report is None:
+        st.caption(
+            f"`{DEAD_LETTER_PATH.name}` not found yet — run the pipeline once to populate."
+        )
+        return
+
+    if report.is_clean:
+        st.success(
+            f"✅ All symbols processed cleanly in the last run "
+            f"(run_id: {report.run_id[:19]})."
+        )
+        return
+
+    run_ts = report.run_id[:19] if report.run_id else "unknown time"
+    st.warning(
+        f"⚠️  **{len(report.entries)} symbol(s) failed** in the last run "
+        f"({run_ts}). "
+        "Use **🔄 Retry** to re-evaluate a single symbol."
+    )
+
+    for entry in report.entries:
+        retry_key = f"dl_retry_{entry.symbol}"
+        retry_handle_key = f"dl_handle_{entry.symbol}"
+
+        c_sym, c_stage, c_err, c_btn = st.columns([1, 1, 4, 1])
+        c_sym.code(entry.symbol)
+        c_stage.caption(f"stage: **{entry.stage}**")
+        c_err.caption(f"🔸 {entry.error[:160]}")
+
+        if c_btn.button("🔄 Retry", key=retry_key, use_container_width=True):
+            retry_handle = orchestrator_runner.launch_symbol_retry(entry.symbol)
+            st.session_state[retry_handle_key] = retry_handle
+            st.success(f"Retry launched for `{entry.symbol}` — PID {retry_handle.pid}.")
+
+        # Show retry log inline if a retry was launched for this symbol.
+        retry_handle = st.session_state.get(retry_handle_key)
+        if retry_handle is not None:
+            is_running = retry_handle.is_running()
+            status_label = "🟢 Running" if is_running else "⏹ Done"
+            with st.expander(
+                f"Retry log — `{entry.symbol}` ({status_label})",
+                expanded=is_running,
+            ):
+                st.code(
+                    orchestrator_runner.read_log_tail(max_lines=60, handle=retry_handle),
+                    language="text",
+                )
 
 
 # ===========================================================================
@@ -2116,6 +2195,9 @@ def render_observability() -> None:
         st.caption(f"(transactions store unavailable: {exc})")
 
     st.divider()
+    _render_observability_heartbeat_trend()
+
+    st.divider()
     _render_observability_system_telemetry()
 
     st.divider()
@@ -2123,6 +2205,100 @@ def render_observability() -> None:
 
     st.divider()
     _render_observability_error_log()
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4b: Heartbeat Trend Sparkline
+# ---------------------------------------------------------------------------
+
+def _render_observability_heartbeat_trend() -> None:
+    """Sparkline of orchestrator heartbeat age over the current GUI session.
+
+    Why this matters
+    ----------------
+    A single "heartbeat age = 226 s" metric tells the operator the orchestrator
+    is slow *right now*, but it gives no signal about *trajectory*. A rising
+    trend over several minutes indicates a memory leak or a hanging background
+    thread that will eventually crash the system; a flat trend at 90 s means the
+    orchestrator is just doing a long single-ticker computation.
+
+    Implementation
+    --------------
+    :class:`gui.observability_telemetry.HeartbeatTrendStore` is a 60-sample ring
+    buffer persisted across Streamlit reruns via ``st.session_state``.  One sample
+    is recorded on every render of this panel (up to once per auto-refresh cycle,
+    typically 30 s), so 60 samples ≈ 30 minutes of history.
+    """
+    from gui.observability_telemetry import HeartbeatTrendStore
+    from gui import orchestrator_runner
+
+    st.markdown("### 💓 Heartbeat Age Trend")
+    st.caption(
+        "Sampled on each tab render (60-sample ring buffer ≈ 30 min at 30 s "
+        "auto-refresh). A rising trend indicates the orchestrator is slowing — "
+        "check for memory pressure or a hanging background thread."
+    )
+
+    store_key = "obs_heartbeat_trend"
+    if store_key not in st.session_state:
+        st.session_state[store_key] = HeartbeatTrendStore(max_samples=60)
+    store: HeartbeatTrendStore = st.session_state[store_key]
+
+    age = orchestrator_runner.heartbeat_age_seconds()
+    if age is not None:
+        store.record(age)
+    elif len(store) == 0:
+        # No heartbeat at all yet — record NaN so the chart shows a gap.
+        import math
+        store.record(math.nan)
+
+    df = store.to_dataframe()
+
+    kc1, kc2, kc3, kc4 = st.columns(4)
+    if not df.empty and not df["age_seconds"].isna().all():
+        valid = df["age_seconds"].dropna()
+        latest_age = valid.iloc[-1] if not valid.empty else float("nan")
+        peak_age = valid.max() if not valid.empty else float("nan")
+
+        if latest_age != latest_age:  # NaN
+            status = "⚪ No heartbeat"
+        elif latest_age > 120:
+            status = "🔴 Stale"
+        elif latest_age > 60:
+            status = "🟡 Slow"
+        else:
+            status = "🟢 Fresh"
+
+        kc1.metric("Current age", f"{latest_age:.0f} s" if latest_age == latest_age else "—")
+        kc2.metric("Peak age", f"{peak_age:.0f} s" if peak_age == peak_age else "—")
+        kc3.metric("Samples", len(store))
+        kc4.metric("Status", status)
+
+        if status == "🔴 Stale":
+            st.error(
+                "🔴 Heartbeat is stale. The orchestrator may have crashed or be "
+                "hanging on a long computation — check the orchestrator log in the "
+                "**Launcher** tab."
+            )
+
+        st.line_chart(
+            df.rename(columns={"age_seconds": "Heartbeat age (s)"}),
+            height=130,
+        )
+    else:
+        kc1.metric("Current age", "—")
+        kc2.metric("Peak age", "—")
+        kc3.metric("Samples", len(store))
+        kc4.metric("Status", "⚪ No data")
+        st.info(
+            "No heartbeat data yet. Launch the orchestrator and return here after "
+            "a few refreshes to see the trend.",
+            icon="ℹ️",
+        )
+
+    if st.button("🧹 Clear heartbeat history", key="obs_clear_heartbeat"):
+        store.clear()
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -2278,14 +2454,25 @@ def _render_observability_latency_heatmap() -> None:
 # ---------------------------------------------------------------------------
 
 def _render_observability_error_log() -> None:
-    """Centralised log viewer with level filter + free-text search.
+    """Centralised log viewer with level filter, free-text search, and contextual classification.
 
     Reads ``logs/investyo.log`` (the rotating handler configured by
     :func:`alerting.setup_logging`) via
     :func:`gui.observability_telemetry.read_log_tail`.
+
+    Above the raw log a **Contextual Error Summary** expander groups errors into:
+
+    * **systemic** — pipeline-wide failures (orchestrator crash, FRED unavailable, schema error).
+    * **symbol-specific** — per-ticker failures extracted by :func:`gui.observability_telemetry.extract_symbol_from_message`.
+
+    This allows the operator to immediately distinguish a systemic issue (the whole
+    run is broken) from a symbol-specific issue (one ticker failed; retrying it via
+    the Dead-Letter Queue on the Launcher tab may be enough).
     """
     from gui.observability_telemetry import (
         VALID_LEVELS,
+        classify_log_entry,
+        extract_symbol_from_message,
         filter_log_entries,
         parse_log_lines,
         read_log_tail,
@@ -2293,11 +2480,13 @@ def _render_observability_error_log() -> None:
     )
     from gui.orchestrator_runner import TELEMETRY_LOG_PATH
 
-    st.markdown("### 🗂️ Error Aggregation")
+    st.markdown("### 🗂️ Error Aggregation & Contextual Log")
     st.caption(
         f"Tail of `{TELEMETRY_LOG_PATH}`. "
         "Filter by minimum level and substring; multi-line tracebacks are "
-        "preserved so context isn't lost."
+        "preserved so context isn't lost. "
+        "Errors above WARNING are automatically classified as **systemic** "
+        "(whole-pipeline) or **symbol-specific** (one ticker) in the summary below."
     )
 
     raw_lines = read_log_tail(TELEMETRY_LOG_PATH, max_lines=1000)
@@ -2320,6 +2509,68 @@ def _render_observability_error_log() -> None:
     k4.metric("INFO", tally.get("INFO", 0))
     k5.metric("Total lines", len(entries))
 
+    # ── Contextual Error Summary ────────────────────────────────────────────
+    error_entries = [
+        e for e in entries
+        if e.parsed and e.level in ("ERROR", "CRITICAL", "WARNING")
+    ]
+    if error_entries:
+        systemic = [e for e in error_entries if classify_log_entry(e) == "systemic"]
+        sym_pairs = [
+            (e, extract_symbol_from_message(e.message))
+            for e in error_entries
+            if classify_log_entry(e) == "symbol_specific"
+        ]
+        unknown_errors = [
+            e for e in error_entries
+            if classify_log_entry(e) == "unknown"
+        ]
+
+        any_error = bool(systemic or sym_pairs)
+        with st.expander(
+            f"🔬 Contextual Error Summary"
+            f" — {len(systemic)} systemic, {len(sym_pairs)} symbol-specific"
+            f"{', ' + str(len(unknown_errors)) + ' unclassified' if unknown_errors else ''}",
+            expanded=any_error,
+        ):
+            if systemic:
+                st.error(
+                    f"**{len(systemic)} systemic error(s)** — "
+                    "failures affecting the whole pipeline run:"
+                )
+                for e in systemic[-10:]:
+                    st.markdown(
+                        f"- `[{e.level}]` `{e.logger_name}` — {e.message[:220]}"
+                    )
+                if len(systemic) > 10:
+                    st.caption(f"… and {len(systemic) - 10} more. Filter the log below for full detail.")
+
+            if sym_pairs:
+                # Deduplicate: group messages by symbol.
+                sym_map: dict[str, list[str]] = {}
+                for e, sym in sym_pairs:
+                    if sym:
+                        sym_map.setdefault(sym, []).append(
+                            f"[{e.level}] {e.message[:180]}"
+                        )
+                st.warning(
+                    f"**{len(sym_pairs)} symbol-specific error(s)** across "
+                    f"{len(sym_map)} ticker(s) — use **🔄 Retry** on the "
+                    "Launcher tab to re-run just that symbol:"
+                )
+                for sym, msgs in sym_map.items():
+                    with st.expander(f"🔹 {sym} — {len(msgs)} error(s)"):
+                        for msg in msgs:
+                            st.caption(f"• {msg}")
+
+            if unknown_errors and not (systemic or sym_pairs):
+                st.caption(
+                    f"{len(unknown_errors)} unclassified warning/error line(s) "
+                    "could not be attributed to a specific symbol or pipeline stage. "
+                    "Review the full log below."
+                )
+
+    # ── Filters ────────────────────────────────────────────────────────────
     f1, f2 = st.columns([1, 2])
     with f1:
         min_level = st.selectbox(
