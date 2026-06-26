@@ -112,6 +112,32 @@ class Settings(BaseSettings):
     # When True the orchestrator logs intended orders but never submits them.
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.
     DRY_RUN: bool = Field(default=False, description="Log orders but do not submit to broker.")
+
+    # --- Advisory-only mode (Tier 5.1, 2026-06) ---
+    # When True (the project default), the entire broker-execution surface is
+    # quarantined: main_orchestrator._execute_broker_orders() returns
+    # immediately with an INFO log, the GUI Strategy Matrix mode toggle is
+    # disabled, and preflight_check.py drops the broker-readiness checks
+    # (alpaca_configured / alpaca_paper_mode / dry_run_disabled) in favour of
+    # a single advisory_only_active check.  This is a HARDER guarantee than
+    # DRY_RUN: DRY_RUN is enforced inside OrderManager (which can be bypassed
+    # by a future caller); ADVISORY_ONLY is enforced at the orchestrator-level
+    # ``_execute_broker_orders`` gate AND surfaced in every GUI tab as a
+    # persistent banner, so the operator cannot click into Live by mistake.
+    #
+    # Set to False ONLY if you have explicitly re-enabled the broker stack
+    # and intend to submit orders.  Both flags must agree (ADVISORY_ONLY=false
+    # AND DRY_RUN=false AND ALPACA_PAPER=false) to reach a live submission.
+    ADVISORY_ONLY: bool = Field(
+        default=True,
+        description=(
+            "When True, ALL broker order submission is suppressed. The pipeline "
+            "still runs end-to-end (signals, sizing, HTML report, JSON payload) "
+            "but main_orchestrator._execute_broker_orders() returns immediately "
+            "and the GUI Strategy Matrix execution-mode toggle is disabled. "
+            "Set False ONLY when broker execution is intentionally re-enabled."
+        ),
+    )
     # Slack / Discord incoming-webhook URL for reconciliation drift alerts.
     ALERT_WEBHOOK_URL: Optional[str] = Field(
         default=None,

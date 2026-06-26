@@ -1489,6 +1489,12 @@ def _render_strategy_mode_toggle() -> None:
     ``DRY_RUN`` and ``ALPACA_PAPER`` to ``.env`` via the allowlist-bounded
     :mod:`gui.env_io` writer. Effect on the **next** orchestrator launch — we
     never patch a running ``settings`` instance.
+
+    Tier 5.1: when ``settings.ADVISORY_ONLY`` is True (the project default),
+    the radio + confirm button are NOT rendered.  A disabled placeholder is
+    shown instead with a one-line explanation pointing at the ``.env`` flag,
+    so the operator cannot accidentally flip the broker stack on through this
+    control while ADVISORY_ONLY is the binding gate.
     """
     from gui.strategy_registry import (
         ExecutionMode,
@@ -1498,6 +1504,24 @@ def _render_strategy_mode_toggle() -> None:
     )
 
     st.markdown("### 🎚️ Global Execution Mode")
+
+    if getattr(settings, "ADVISORY_ONLY", True):
+        st.warning(
+            "📋 **Advisory mode — broker execution disabled.** "
+            "Mode-switching is suppressed because `settings.ADVISORY_ONLY=true`. "
+            "Set `ADVISORY_ONLY=false` in `.env` to re-enable Simulation / "
+            "Paper / Live selection. This is a deliberate Tier 5.1 quarantine.",
+            icon="📋",
+        )
+        # Read-only display so the operator can still see the underlying
+        # DRY_RUN / ALPACA_PAPER state — they just cannot edit it from here.
+        state = read_active_mode()
+        st.caption(
+            f"Underlying flags (read-only): {state.mode.label} "
+            f"(DRY_RUN={state.dry_run}, ALPACA_PAPER={state.alpaca_paper})"
+        )
+        return
+
     state = read_active_mode()
 
     if state.is_live:

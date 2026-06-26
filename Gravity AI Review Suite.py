@@ -4298,6 +4298,8 @@ class GravityAIAuditor:
         self.run_calibration_audit()
         # Tier 1 / 1.3 — Manual execution decision journal
         self.run_decision_log_audit()
+        # Tier 5.1 — Advisory-only mode quarantine audit
+        self.run_advisory_only_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -7357,6 +7359,170 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_53_decision_log_audit"] = audit
+
+    def run_advisory_only_audit(self) -> None:
+        """Step 54 — Advisory-only mode quarantine (Tier 5.1).
+
+        The ``settings.ADVISORY_ONLY`` flag is the project's authoritative
+        "broker is off" gate.  Three independent layers must honour it:
+
+        1. ``main_orchestrator._execute_broker_orders`` returns immediately
+           (no broker imports) when the flag is True.
+        2. ``gui/panels._render_strategy_mode_toggle`` does NOT render the
+           Simulation/Paper/Live radio + confirm button when the flag is True.
+        3. ``scripts.preflight_check.run_checks`` auto-skips the four broker-
+           dependent checks (alpaca_configured, alpaca_paper_mode,
+           dry_run_disabled, paper_trading_duration) and the new
+           ``advisory_only_active`` check appears in the result set.
+
+        Checks
+        ------
+        1.  ``settings.ADVISORY_ONLY`` default is True.
+        2.  Source of ``main_orchestrator.py`` references ADVISORY_ONLY and
+            the early-return INFO log (AST/source grep).
+        3.  Source of ``gui/panels.py`` references ADVISORY_ONLY and the
+            "Advisory mode — broker execution disabled" banner string.
+        4.  Source of ``gui/app.py`` references ADVISORY_ONLY and the
+            "ADVISORY MODE" banner string.
+        5.  ``scripts.preflight_check`` exports ``check_advisory_only_active``.
+        6.  ``scripts.preflight_check._ADVISORY_AUTO_SKIP`` lists exactly
+            the four broker-dependent check names.
+        7.  Functional: when ADVISORY_ONLY=True, ``run_checks`` PASSes each
+            check in ``_ADVISORY_AUTO_SKIP`` with reason naming ADVISORY_ONLY.
+        8.  Functional: when ADVISORY_ONLY=False, the ``advisory_only_active``
+            check has ``warning=True`` (live broker is loud).
+        9.  ``tests/test_advisory_only.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_54_advisory_only_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            from pathlib import Path
+
+            # Check 1: settings default
+            from settings import settings as _s
+            c1 = bool(getattr(_s, "ADVISORY_ONLY", False)) is True
+            audit["checks"].append({
+                "check": "settings.ADVISORY_ONLY default == True",
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            # Check 2: orchestrator wiring (source-grep)
+            orch_src = Path("main_orchestrator.py").read_text(encoding="utf-8")
+            c2 = (
+                "ADVISORY_ONLY" in orch_src
+                and "broker execution surface is quarantined" in orch_src
+            )
+            audit["checks"].append({
+                "check": "main_orchestrator._execute_broker_orders references ADVISORY_ONLY + quarantine log",
+                "passed": c2,
+            })
+            all_pass = all_pass and c2
+
+            # Check 3: GUI Strategy Matrix toggle gate (source-grep)
+            panels_src = Path("gui/panels.py").read_text(encoding="utf-8")
+            c3 = (
+                "ADVISORY_ONLY" in panels_src
+                and "Advisory mode — broker execution disabled" in panels_src
+            )
+            audit["checks"].append({
+                "check": "gui/panels.py _render_strategy_mode_toggle has ADVISORY_ONLY guard + banner",
+                "passed": c3,
+            })
+            all_pass = all_pass and c3
+
+            # Check 4: GUI app banner (source-grep)
+            app_src = Path("gui/app.py").read_text(encoding="utf-8")
+            c4 = "ADVISORY_ONLY" in app_src and "ADVISORY MODE" in app_src
+            audit["checks"].append({
+                "check": "gui/app.py renders ADVISORY MODE banner",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # Check 5: preflight exposes the new check fn
+            from scripts import preflight_check
+            c5 = hasattr(preflight_check, "check_advisory_only_active")
+            audit["checks"].append({
+                "check": "preflight_check.check_advisory_only_active exists",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            # Check 6: auto-skip list contents
+            expected_skip = {
+                "alpaca_configured", "alpaca_paper_mode",
+                "dry_run_disabled", "paper_trading_duration",
+            }
+            actual_skip = set(getattr(preflight_check, "_ADVISORY_AUTO_SKIP", ()))
+            c6 = actual_skip == expected_skip
+            audit["checks"].append({
+                "check": "_ADVISORY_AUTO_SKIP names the four broker-dependent checks",
+                "passed": c6,
+                "detail": f"actual={sorted(actual_skip)}",
+            })
+            all_pass = all_pass and c6
+
+            # Check 7: functional skip path (ADVISORY_ONLY=True)
+            prior_val = getattr(preflight_check.settings, "ADVISORY_ONLY", True)
+            try:
+                preflight_check.settings.ADVISORY_ONLY = True
+                results = preflight_check.run_checks(skip=[])
+                by_name = {r.name: r for r in results}
+                c7 = all(
+                    name in by_name and by_name[name].passed
+                    and "ADVISORY_ONLY" in by_name[name].reason
+                    for name in expected_skip
+                )
+            finally:
+                try:
+                    preflight_check.settings.ADVISORY_ONLY = prior_val
+                except Exception:
+                    pass
+            audit["checks"].append({
+                "check": "run_checks auto-skips broker checks under ADVISORY_ONLY=True",
+                "passed": c7,
+            })
+            all_pass = all_pass and c7
+
+            # Check 8: warning when ADVISORY_ONLY=False
+            try:
+                preflight_check.settings.ADVISORY_ONLY = False
+                r = preflight_check.check_advisory_only_active()
+                c8 = r.passed is True and r.warning is True and "ADVISORY_ONLY=False" in r.reason
+            finally:
+                try:
+                    preflight_check.settings.ADVISORY_ONLY = prior_val
+                except Exception:
+                    pass
+            audit["checks"].append({
+                "check": "check_advisory_only_active warns when flag is False",
+                "passed": c8,
+            })
+            all_pass = all_pass and c8
+
+            # Check 9: regression test file exists
+            c9 = Path("tests/test_advisory_only.py").exists()
+            audit["checks"].append({
+                "check": "tests/test_advisory_only.py exists",
+                "passed": c9,
+            })
+            all_pass = all_pass and c9
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_54_advisory_only_audit"] = audit
 
     def _extend_launcher_telemetry_audit_stage_status(self) -> None:
         """Extend step_41 to also verify StageStatus enum and four-stage map.

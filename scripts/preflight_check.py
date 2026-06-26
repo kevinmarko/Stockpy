@@ -43,21 +43,34 @@ Checks
 ------
  1. fred_key_configured         — FRED_API_KEY is set and is not the known-
                                   compromised value (detected via settings.fred_key_is_leaked).
- 2. alpaca_configured           — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
- 3. macro_regime_gate_enabled   — MACRO_REGIME_GATE_ENABLED=True when live trading.
+ 2. advisory_only_active        — settings.ADVISORY_ONLY=True (Tier 5.1
+                                  quarantine).  When True, the three
+                                  broker-readiness checks below
+                                  (alpaca_configured / alpaca_paper_mode /
+                                  dry_run_disabled) are dropped from the gate
+                                  because broker submission is structurally
+                                  suppressed.  Warning-only when False (live
+                                  broker stack is in scope).
+ 3. alpaca_configured           — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
+                                  SKIPPED when ADVISORY_ONLY=True.
+ 4. macro_regime_gate_enabled   — MACRO_REGIME_GATE_ENABLED=True when live trading.
                                   Warning-only in paper mode; blocking when
                                   ALPACA_PAPER=False + gate disabled.
- 4. alpaca_paper_mode           — ALPACA_PAPER=True.  Warning-only when False.
- 5. dry_run_disabled            — DRY_RUN=False (orders reach the broker).
- 6. env_not_committed           — .env file is git-untracked (``git ls-files``).
- 7. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
- 8. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
- 9. db_exists                   — quant_platform.db exists and is non-empty.
-10. paper_trading_duration      — Paper-trading started ≥ 90 days ago
+ 5. alpaca_paper_mode           — ALPACA_PAPER=True.  Warning-only when False.
+                                  SKIPPED when ADVISORY_ONLY=True.
+ 6. dry_run_disabled            — DRY_RUN=False (orders reach the broker).
+                                  SKIPPED when ADVISORY_ONLY=True.
+ 7. env_not_committed           — .env file is git-untracked (``git ls-files``).
+ 8. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
+ 9. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
+10. db_exists                   — quant_platform.db exists and is non-empty.
+11. paper_trading_duration      — Paper-trading started ≥ 90 days ago
                                   (requires PAPER_TRADING_START_DATE in .env).
-11. validation_reports          — Every *_validation_summary.json in reports/ is
+                                  SKIPPED when ADVISORY_ONLY=True (no broker
+                                  → no paper-trading clock).
+12. validation_reports          — Every *_validation_summary.json in reports/ is
                                   deployable=True and dated within 30 days.
-12. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
+13. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
                                   last 24 hours (indicates missing/expired reports
                                   were discovered at order time rather than here).
 """
@@ -138,6 +151,36 @@ def check_fred_key_configured() -> CheckResult:
             "FRED_API_KEY matches the known-compromised leaked value — rotate immediately",
         )
     return CheckResult(name, True, "FRED_API_KEY is configured and not the leaked value")
+
+
+def check_advisory_only_active() -> CheckResult:
+    """Verify that ADVISORY_ONLY mode is active (Tier 5.1 quarantine).
+
+    When ``settings.ADVISORY_ONLY`` is True (the project default), the broker
+    surface is quarantined: ``main_orchestrator._execute_broker_orders`` is a
+    no-op, the GUI mode toggle is disabled, and broker credentials need not be
+    configured.  This check passes loudly so the operator sees the quarantine
+    in the readiness table.
+
+    When ``ADVISORY_ONLY`` is False the broker stack is live; we emit a
+    *warning-level* PASS so the operator confirms they intentionally lifted
+    the quarantine.  Other broker-readiness checks (``alpaca_configured``,
+    ``alpaca_paper_mode``, ``dry_run_disabled``, ``paper_trading_duration``)
+    then run; under ADVISORY_ONLY=True they are skipped by ``run_checks``.
+    """
+    name = "advisory_only_active"
+    if getattr(settings, "ADVISORY_ONLY", True):
+        return CheckResult(
+            name, True,
+            "ADVISORY_ONLY=True — broker execution surface is quarantined. "
+            "Pipeline produces signals + reports only.",
+        )
+    return CheckResult(
+        name, True,
+        "⚠️  ADVISORY_ONLY=False — broker execution surface is LIVE. "
+        "Confirm this is intentional and that downstream broker checks pass.",
+        warning=True,
+    )
 
 
 def check_alpaca_configured() -> CheckResult:
@@ -514,6 +557,7 @@ def check_no_unexpected_risk_blocks(hours: float = 24.0) -> CheckResult:
 # matching relies on (strip ``check_`` prefix → name).
 ALL_CHECKS = [
     check_fred_key_configured,
+    check_advisory_only_active,
     check_alpaca_configured,
     check_macro_regime_gate_enabled,
     check_alpaca_paper_mode,
@@ -526,6 +570,17 @@ ALL_CHECKS = [
     check_validation_reports,
     check_no_unexpected_risk_blocks,
 ]
+
+
+# Checks that depend on the broker stack being live.  When ADVISORY_ONLY is
+# True these are auto-skipped by ``run_checks`` (and rendered as PASS with a
+# clear "(skipped: ADVISORY_ONLY)" reason) — no broker => no broker checks.
+_ADVISORY_AUTO_SKIP: tuple[str, ...] = (
+    "alpaca_configured",
+    "alpaca_paper_mode",
+    "dry_run_disabled",
+    "paper_trading_duration",
+)
 
 
 def run_checks(skip: list[str] | None = None) -> list[CheckResult]:
@@ -544,13 +599,25 @@ def run_checks(skip: list[str] | None = None) -> list[CheckResult]:
     check function (e.g. an unexpected attribute error in a new version of
     ``settings``) produces a FAIL result rather than aborting the remaining
     checks.  The exception message is included in the reason string.
+
+    Tier 5.1 — When ``settings.ADVISORY_ONLY`` is True the broker-dependent
+    checks in ``_ADVISORY_AUTO_SKIP`` are auto-skipped (PASS with a clear
+    reason) so the gate does not require Alpaca credentials, ALPACA_PAPER, or
+    PAPER_TRADING_START_DATE while the broker surface is quarantined.
     """
-    skip = skip or []
+    skip = list(skip or [])
+    advisory_only = bool(getattr(settings, "ADVISORY_ONLY", True))
     results: list[CheckResult] = []
     for fn in ALL_CHECKS:
         check_name = fn.__name__.replace("check_", "")
         if check_name in skip:
             results.append(CheckResult(check_name, True, "(skipped via --skip)"))
+            continue
+        if advisory_only and check_name in _ADVISORY_AUTO_SKIP:
+            results.append(CheckResult(
+                check_name, True,
+                "(skipped: ADVISORY_ONLY=True — broker check not applicable)",
+            ))
             continue
         try:
             results.append(fn())
