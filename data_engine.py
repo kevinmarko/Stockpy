@@ -143,7 +143,7 @@ class DataEngine(IDataProvider):
             try:
                 # Require historical lookback window to calculate 200-day rolling states & indicators
                 ticker = yf.Ticker(symbol)
-                df = ticker.history(period="1y")
+                df = ticker.history(period="2y")
                 if not df.empty:
                     raw_tech[symbol] = df
                     logger.info(f"Retrieved technical time series for {symbol}")

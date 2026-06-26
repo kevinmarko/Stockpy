@@ -450,6 +450,7 @@ class EvaluationEngine:
         store = TransactionsStore()
         
         # 1. Evaluate MAE / MFE / Edge Ratio / Slippage against real trade history
+        eval_results = {}
         for idx, row in df.iterrows():
             symbol = row['Symbol']
             # Find trade history for this symbol
@@ -534,12 +535,17 @@ class EvaluationEngine:
                     else:
                         edge_ratio = mfe / 1e-6 if mfe > 0 else 0.0
             
-                
-            df.at[idx, 'Entry_Price'] = entry_price
-            df.at[idx, 'MAE'] = mae
-            df.at[idx, 'MFE'] = mfe
-            df.at[idx, 'Edge Ratio'] = edge_ratio
-            df.at[idx, 'Realized Slippage'] = slippage
+            eval_results[idx] = {
+                'Entry_Price': entry_price,
+                'MAE': mae,
+                'MFE': mfe,
+                'Edge Ratio': edge_ratio,
+                'Realized Slippage': slippage
+            }
+
+        # Vectorized mapping to avoid iterrows mutation (Constraint #3)
+        for col in ['Entry_Price', 'MAE', 'MFE', 'Edge Ratio', 'Realized Slippage']:
+            df[col] = df.index.map(lambda idx: eval_results.get(idx, {}).get(col, np.nan))
 
         # 2. Evaluate Portfolio Heat against Max Thresholds
         if 'position_size' not in df.columns:

@@ -47,7 +47,7 @@ class DataEngine(IDataProvider):
             try:
                 # Require historical lookback window to calculate rolling states & indicators
                 ticker_obj = yf.Ticker(symbol)
-                df = ticker_obj.history(period="1y")
+                df = ticker_obj.history(period="2y")
                 
                 if not df.empty:
                     # Ensure DataFrame is sorted chronologically

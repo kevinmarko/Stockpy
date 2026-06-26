@@ -237,8 +237,41 @@ class GravityAIAuditor:
         """Validates that the digital schema strictly rejects malformed data."""
         try:
             MarketDataSchema.validate(self.test_df)
+            
+            # Conformance checks for dynamic DashboardSchema from config.py
+            import config as platform_config
+            
+            # Construct a valid dashboard DataFrame
+            valid_row = {}
+            for col in platform_config.COLUMN_SCHEMA:
+                k = col["key"]
+                fmt = col["format"]
+                if k == "Symbol":
+                    valid_row[k] = "AAPL"
+                elif fmt in ["currency", "currency_large", "percent", "number"]:
+                    valid_row[k] = 100.0
+                else:
+                    valid_row[k] = "test_string"
+            valid_dashboard_df = pd.DataFrame([valid_row])
+            platform_config.DashboardSchema.validate(valid_dashboard_df)
+
+            # Construct an invalid dashboard DataFrame
+            invalid_row = valid_row.copy()
+            invalid_row["Symbol"] = "TOOLONGTICKER"  # fails str_length(1, 10)
+            invalid_dashboard_df = pd.DataFrame([invalid_row])
+            try:
+                platform_config.DashboardSchema.validate(invalid_dashboard_df)
+                dashboard_invalid_rejected = False
+            except Exception:
+                dashboard_invalid_rejected = True
+                
+            if not dashboard_invalid_rejected:
+                raise ValueError("DashboardSchema failed to reject invalid Symbol column length.")
+                
             self.report["step_1_schema_validation"]["status"] = "PASSED"
-            self.report["step_1_schema_validation"]["details"] = "Pandera gateway successfully validated deterministic test data."
+            self.report["step_1_schema_validation"]["details"] = (
+                "Pandera gateway successfully validated MarketDataSchema and DashboardSchema dynamic conformance."
+            )
         except Exception as e:
             self.report["step_1_schema_validation"]["status"] = "FAILED"
             self.report["step_1_schema_validation"]["error"] = str(e)
@@ -467,7 +500,32 @@ class GravityAIAuditor:
                     xsec_leak_detected = True
                     break
 
-            status_8 = "PASSED" if (bad_leaks and not good_leaks and not tsmom_leak and not xsec_leak_detected) else "FAILED"
+            # 4. Multi-indicator lookahead perturbation check (Constraint #2)
+            # Run calculations using the actual ProcessingEngine
+            df_la_base = df_300.copy()
+            df_la_pert = df_300.copy()
+            df_la_pert.loc[df_la_pert.index[281]:, ["Open", "High", "Low", "Close", "Volume"]] *= 10.0
+            
+            raw_base = {"TEST": df_la_base, "SPY": df_300.copy()}
+            raw_pert = {"TEST": df_la_pert, "SPY": df_300.copy()}
+            
+            pe.calculate_technical_metrics(raw_base)
+            pe.calculate_technical_metrics(raw_pert)
+            
+            row_base = df_la_base.iloc[280]
+            row_pert = df_la_pert.iloc[280]
+            
+            multi_indicator_leak = False
+            for col in ['RSI', 'RSI_2', 'MACD_Line', 'ATR', 'Aroon_Oscillator', 'Coppock_Curve', 'Chandelier_Exit']:
+                val_base = row_base.get(col, np.nan)
+                val_pert = row_pert.get(col, np.nan)
+                if pd.isna(val_base) and pd.isna(val_pert):
+                    continue
+                if pd.isna(val_base) or pd.isna(val_pert) or abs(val_base - val_pert) > 1e-5:
+                    multi_indicator_leak = True
+                    break
+
+            status_8 = "PASSED" if (bad_leaks and not good_leaks and not tsmom_leak and not xsec_leak_detected and not multi_indicator_leak) else "FAILED"
         except Exception as e_la:
             xsec_leak_detected = None
             status_8 = f"XSec lookahead check error: {str(e_la)}"
@@ -479,8 +537,9 @@ class GravityAIAuditor:
             "tsmom_leakage_detected": tsmom_leak,
             "xsec_12_1m_leakage_detected": xsec_leak_detected,
             "details": (
-                "Lookahead perturbation audit verified: Time-Series Momentum and "
-                "Cross-Sectional 12-1M return formation are both lookahead-free."
+                "Lookahead perturbation audit verified: Time-Series Momentum, "
+                "Cross-Sectional 12-1M return formation, and all ProcessingEngine "
+                "technical/risk indicators are lookahead-free."
             )
         }
 
@@ -4129,6 +4188,7 @@ class GravityAIAuditor:
         self.run_gui_command_center_audit()
         self.run_macro_regime_gate_toggle_audit()
         self.run_portfolio_sync_audit()
+        self.run_risk_gates_portfolio_heat_audit()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -4353,6 +4413,7 @@ class GravityAIAuditor:
         audit["overall_pass"] = all_pass
         self.report["step_34_macro_regime_gate_toggle_audit"] = audit
 
+<<<<<<< HEAD
     def run_portfolio_sync_audit(self) -> None:
         """Step 35 — Validates Task 1.4 portfolio & watchlist synchronization.
 
@@ -4537,6 +4598,153 @@ class GravityAIAuditor:
             audit["error"] = f"{type(exc).__name__}: {exc}"
 
         self.report["step_35_portfolio_sync_audit"] = audit
+
+    def run_risk_gates_portfolio_heat_audit(self) -> None:
+        """Step 36 — Pre-trade risk gate portfolio heat limit audit.
+        
+        Verifies that:
+        1. PreTradeRiskGate(max_portfolio_heat=0.06) blocks a BUY order when heat > 6%.
+        2. PreTradeRiskGate(max_portfolio_heat=0.06) allows a BUY order when heat <= 6%.
+        3. PreTradeRiskGate(max_portfolio_heat=0.06) skips the check for a SELL order (allows it).
+        4. Conservative-pass behavior handles missing or empty context gracefully.
+        """
+        audit = {
+            "step": "step_36_portfolio_heat_risk_gate_audit",
+            "description": "Pre-trade risk gate portfolio heat limit (6% halt)",
+            "checks": [],
+            "overall_pass": False
+        }
+        
+        all_pass = True
+        
+        try:
+            from execution.risk_gate import PreTradeRiskGate, RiskContext
+            from execution.broker_base import (
+                AccountSnapshot,
+                OrderIntent,
+                OrderSide,
+                OrderType,
+                PositionSnapshot,
+            )
+            
+            gate = PreTradeRiskGate(max_portfolio_heat=0.06)
+            
+            # Helper to build mock buy order
+            buy_intent = OrderIntent(
+                strategy_id="gravity_heat_audit",
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                qty=10,
+                order_type=OrderType.MARKET
+            )
+            # Helper to build mock sell order
+            sell_intent = OrderIntent(
+                strategy_id="gravity_heat_audit",
+                symbol="AAPL",
+                side=OrderSide.SELL,
+                qty=10,
+                order_type=OrderType.MARKET
+            )
+            
+            # Helper for position snapshot
+            def _pos(sym, pl):
+                return PositionSnapshot(
+                    symbol=sym, qty=100.0, avg_entry_price=50.0,
+                    market_value=5000.0, unrealized_pl=pl
+                )
+            
+            # Check 1: passes low heat (e.g. 500 / 100000 = 0.5% < 6%)
+            ctx_low = RiskContext(
+                account=AccountSnapshot(buying_power=50_000.0, equity=100_000.0, cash=50_000.0),
+                open_positions=[_pos("MSFT", -500.0)],
+                macro=None,
+                returns_df=None,
+                start_of_day_equity=100_000.0,
+                validation_reports={},
+                is_premium_sell_strategy=False,
+                current_prices={},
+                timestamp=None
+            )
+            res_low = gate.portfolio_heat_check(buy_intent, ctx_low)
+            passed_low = res_low.passed is True
+            audit["checks"].append({
+                "check": "heat check passes on low heat (0.5%)",
+                "passed": passed_low,
+                "detail": f"passed={res_low.passed}, reason={res_low.reason!r}"
+            })
+            all_pass = all_pass and passed_low
+            
+            # Check 2: fails high heat (e.g. 7000 / 100000 = 7% > 6%)
+            ctx_high = RiskContext(
+                account=AccountSnapshot(buying_power=50_000.0, equity=100_000.0, cash=50_000.0),
+                open_positions=[_pos("MSFT", -7000.0)],
+                macro=None,
+                returns_df=None,
+                start_of_day_equity=100_000.0,
+                validation_reports={},
+                is_premium_sell_strategy=False,
+                current_prices={},
+                timestamp=None
+            )
+            res_high = gate.portfolio_heat_check(buy_intent, ctx_high)
+            passed_high = res_high.passed is False
+            audit["checks"].append({
+                "check": "heat check blocks BUY on high heat (7%)",
+                "passed": passed_high,
+                "detail": f"passed={res_high.passed}, reason={res_high.reason!r}"
+            })
+            all_pass = all_pass and passed_high
+            
+            # Check 3: sell skips heat check (passes even at 50% heat)
+            ctx_sell = RiskContext(
+                account=AccountSnapshot(buying_power=50_000.0, equity=100_000.0, cash=50_000.0),
+                open_positions=[_pos("MSFT", -50000.0)],
+                macro=None,
+                returns_df=None,
+                start_of_day_equity=100_000.0,
+                validation_reports={},
+                is_premium_sell_strategy=False,
+                current_prices={},
+                timestamp=None
+            )
+            res_sell = gate.portfolio_heat_check(sell_intent, ctx_sell)
+            passed_sell = res_sell.passed is True
+            audit["checks"].append({
+                "check": "heat check skipped for SELL orders",
+                "passed": passed_sell,
+                "detail": f"passed={res_sell.passed}, reason={res_sell.reason!r}"
+            })
+            all_pass = all_pass and passed_sell
+            
+            # Check 4: conservative pass when account context missing
+            ctx_missing = RiskContext(
+                account=None,
+                open_positions=[_pos("MSFT", -5000.0)],
+                macro=None,
+                returns_df=None,
+                start_of_day_equity=100_000.0,
+                validation_reports={},
+                is_premium_sell_strategy=False,
+                current_prices={},
+                timestamp=None
+            )
+            res_missing = gate.portfolio_heat_check(buy_intent, ctx_missing)
+            passed_missing = res_missing.passed is True
+            audit["checks"].append({
+                "check": "heat check passes conservatively when account snapshot missing",
+                "passed": passed_missing,
+                "detail": f"passed={res_missing.passed}, reason={res_missing.reason!r}"
+            })
+            all_pass = all_pass and passed_missing
+            
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {str(exc)}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+            
+        self.report["step_36_portfolio_heat_risk_gate_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

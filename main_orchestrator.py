@@ -268,16 +268,17 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     dashboard_df['Aroon Oscillator'] = 0.0
     dashboard_df['Coppock Curve'] = 0.0
     dashboard_df['Chandelier Exit'] = 0.0
-    for idx, row in dashboard_df.iterrows():
-        ticker = row['Symbol']
-        if ticker in tech_opt_indicators:
-            dashboard_df.at[idx, 'GARCH_Vol'] = tech_opt_indicators[ticker].get('GARCH_Vol', 0.0)
-            dashboard_df.at[idx, 'Realized_Vol_Rank'] = tech_opt_indicators[ticker].get('Realized_Vol_Rank', 0.0)
-            dashboard_df.at[idx, 'True_IVR'] = tech_opt_indicators[ticker].get('True_IVR', 0.0)
-            dashboard_df.at[idx, 'VRP'] = tech_opt_indicators[ticker].get('VRP', 0.0)
-            dashboard_df.at[idx, 'Aroon Oscillator'] = tech_opt_indicators[ticker].get('Aroon_Oscillator', 0.0)
-            dashboard_df.at[idx, 'Coppock Curve'] = tech_opt_indicators[ticker].get('Coppock_Curve', 0.0)
-            dashboard_df.at[idx, 'Chandelier Exit'] = tech_opt_indicators[ticker].get('Chandelier_Long', 0.0)
+    # Vectorized mapping to avoid iterrows mutation (Constraint #3)
+    for col_key, mapped_key in [
+        ('GARCH_Vol', 'GARCH_Vol'),
+        ('Realized_Vol_Rank', 'Realized_Vol_Rank'),
+        ('True_IVR', 'True_IVR'),
+        ('VRP', 'VRP'),
+        ('Aroon Oscillator', 'Aroon_Oscillator'),
+        ('Coppock Curve', 'Coppock_Curve'),
+        ('Chandelier Exit', 'Chandelier_Long')
+    ]:
+        dashboard_df[col_key] = dashboard_df['Symbol'].map(lambda x: tech_opt_indicators.get(x, {}).get(mapped_key, 0.0))
 
     # 4. Multi-Horizon Forecasting (with robust ML exception safety)
     telemetry.info("Routing data through Forecasting Engine...")
@@ -285,9 +286,7 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     forecast_cols = ['Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
                      'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
                      'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper']
-    for col in forecast_cols:
-        dashboard_df[col] = 0.0
-
+    forecast_results = {}
     for idx, row in dashboard_df.iterrows():
         ticker = row['Symbol']
         price = row['Price']
@@ -300,10 +299,9 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         # ML Fallback wrapping: ensures CNN-LSTM failure does not crash execution
         try:
             forecasts = fe.generate_forecast(row, price, history_series, history_df=history_df)
-            for col in forecast_cols:
-                dashboard_df.at[idx, col] = forecasts.get(col, 0.0)
+            forecast_results[ticker] = forecasts
         except Exception as ml_err:
-            telemetry.warning(f"ML / Deep learning forecast failed for {ticker}: {ml_err}. Falling back to statistical values.")
+            telemetry.warning(f"Forecasting Engine failure for {ticker}: {ml_err}. Reverting to baseline default.")
             # Calculate standard Monte Carlo and ARIMA manually as fallback
             mu = 0.0002
             sigma = 0.015
@@ -313,14 +311,23 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                 sigma = float(returns.std())
             
             mc_target, mc_low, mc_high = fe.run_monte_carlo(price, mu, sigma, 30)
-            dashboard_df.at[idx, 'Target_Days'] = 30
-            dashboard_df.at[idx, 'MC_Target'] = mc_target
-            dashboard_df.at[idx, 'MC_Lower'] = mc_low
-            dashboard_df.at[idx, 'MC_Upper'] = mc_high
-            dashboard_df.at[idx, 'Forecast_30'] = mc_target
-            dashboard_df.at[idx, 'Forecast_10'] = price * (1.0 + mu * 10)
-            dashboard_df.at[idx, 'Forecast_60'] = price * (1.0 + mu * 60)
-            dashboard_df.at[idx, 'Forecast_90'] = price * (1.0 + mu * 90)
+            forecast_results[ticker] = {
+                'Target_Days': 30,
+                'ARIMA': price,
+                'MC_Target': mc_target,
+                'MC_Lower': mc_low,
+                'MC_Upper': mc_high,
+                'Forecast_30': mc_target,
+                'Forecast_10': price * (1.0 + mu * 10),
+                'Forecast_60': price * (1.0 + mu * 60),
+                'Forecast_90': price * (1.0 + mu * 90),
+                'Forecast_30_Prophet_Lower': mc_low,
+                'Forecast_30_Prophet_Upper': mc_high
+            }
+
+    # Vectorized mapping to avoid iterrows mutation (Constraint #3)
+    for col in forecast_cols:
+        dashboard_df[col] = dashboard_df['Symbol'].map(lambda x: forecast_results.get(x, {}).get(col, 0.0))
 
     # 5. Cross-Sectional Momentum Pre-Compute (Jegadeesh-Titman 1993)
     # Must run BEFORE the per-ticker strategy loop so pre_compute populates
@@ -346,12 +353,9 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         if p_old_i > 0:
             xsec_return_dict[ticker_i] = p_recent_i / p_old_i - 1.0
 
-    for idx_x, row_x in dashboard_df.iterrows():
-        tk = row_x['Symbol']
-        if tk in xsec_return_dict:
-            dashboard_df.at[idx_x, 'XSec_12_1M'] = xsec_return_dict[tk]
-        if tk in xsec_rank_series.index:
-            dashboard_df.at[idx_x, 'XSec_Momentum_Rank'] = float(xsec_rank_series[tk])
+    # Vectorized mapping to avoid iterrows mutation (Constraint #3)
+    dashboard_df['XSec_12_1M'] = dashboard_df['Symbol'].map(xsec_return_dict)
+    dashboard_df['XSec_Momentum_Rank'] = dashboard_df['Symbol'].map(xsec_rank_series)
 
     # Build a shared SignalContext stub (bar/fundamentals populated per-ticker below)
     # The xsec_percentile_ranks dict lives in the shared context and is read-only per ticker
@@ -379,13 +383,12 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     # MultifactorSignal.pre_compute above; not available before this point).
     for col in ('Value_Z', 'Quality_Z', 'LowVol_Z', 'Size_Z', 'Multifactor_Composite'):
         dashboard_df[col] = float('nan')
-    for idx_m, row_m in dashboard_df.iterrows():
-        tk_m = row_m['Symbol']
-        entry_m = shared_context.multifactor_scores.get(tk_m)
-        if entry_m is None:
-            continue
-        for col in ('Value_Z', 'Quality_Z', 'LowVol_Z', 'Size_Z', 'Multifactor_Composite'):
-            dashboard_df.at[idx_m, col] = entry_m.get(col, float('nan'))
+    # Vectorized mapping to avoid iterrows mutation (Constraint #3)
+    for col in ('Value_Z', 'Quality_Z', 'LowVol_Z', 'Size_Z', 'Multifactor_Composite'):
+        dashboard_df[col] = dashboard_df['Symbol'].map(
+            lambda x: shared_context.multifactor_scores.get(x, {}).get(col, float('nan'))
+            if shared_context.multifactor_scores else float('nan')
+        )
 
     # 6. Strategy & Sizing Evaluations
     telemetry.info("Routing data through Strategy and Evaluation Engines...")
@@ -406,6 +409,7 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     dashboard_df['Robinhood Avg Cost'] = 0.0
     dashboard_df['Robinhood Dividends'] = 0.0
 
+    eval_results = {}
     for idx, row in dashboard_df.iterrows():
         ticker = row['Symbol']
         price = row['Price']
@@ -498,37 +502,40 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
             edge_ratio_val = float(edge_data['Edge Ratio'])
             # Add Edge Ratio to explainer notes for completeness
             strategy_output["Strategy Explainer Notes"] += f"\nPOST-TRADE EDGE RATIO: {edge_data['Edge Ratio']:.2f} (MFE: {edge_data['MFE']*100:.1f}%, MAE: {edge_data['MAE']*100:.1f}%)"
-        
-        dashboard_df.at[idx, 'Edge Ratio'] = edge_ratio_val
 
-        # Apply strategy options and Kelly Targets
-        dashboard_df.at[idx, 'Action Signal'] = strategy_output['Action Signal']
-        dashboard_df.at[idx, 'Advice'] = strategy_output['Advice']
-        dashboard_df.at[idx, 'Actionable Advice Signal'] = strategy_output['Actionable Advice Signal']
-        dashboard_df.at[idx, 'is_dividend_sustainable'] = int(fund_dto.is_dividend_sustainable)
-        dashboard_df.at[idx, 'eps_trailing'] = fund_dto.eps_trailing
-        dashboard_df.at[idx, 'book_value'] = fund_dto.book_value
-        dashboard_df.at[idx, 'graham_number'] = fund_dto.graham_number
-        
-        # Kelly Target: single source of truth is StrategyEngine._calculate_kelly_sizing
-        # (sizing.kelly.fractional_kelly / sizing.vol_target.volatility_target_weight),
-        # already computed inside se.evaluate_security() above. No second, divergent
-        # win-probability formula or score-bracket override here anymore.
-        dashboard_df.at[idx, 'Kelly Target'] = float(strategy_output['Kelly Target'])
-        if ticker in tech_opt_indicators:
-            dashboard_df.at[idx, 'Option Strategy'] = tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '')
+        eval_results[ticker] = {
+            'Edge Ratio': edge_ratio_val,
+            'Action Signal': strategy_output['Action Signal'],
+            'Advice': strategy_output['Advice'],
+            'Actionable Advice Signal': strategy_output['Actionable Advice Signal'],
+            'is_dividend_sustainable': int(fund_dto.is_dividend_sustainable),
+            'eps_trailing': fund_dto.eps_trailing,
+            'book_value': fund_dto.book_value,
+            'graham_number': fund_dto.graham_number,
+            'Kelly Target': float(strategy_output['Kelly Target']),
+            'Option Strategy': tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '') if ticker in tech_opt_indicators else strategy_output['Option Strategy'],
+            'buyRange': strategy_output['buyRange'],
+            'sellRange': strategy_output['sellRange'],
+            'Strategy Explainer Notes': strategy_output['Strategy Explainer Notes'],
+            'Robinhood Shares': float(strategy_output.get('Robinhood Shares', 0.0)),
+            'Robinhood Avg Cost': float(strategy_output.get('Robinhood Avg Cost', 0.0)),
+            'Robinhood Dividends': float(strategy_output.get('Robinhood Dividends', 0.0)),
+            'Robinhood Advice': str(strategy_output.get('Robinhood Advice', 'N/A'))
+        }
+
+    # Vectorized mapping to avoid iterrows mutation (Constraint #3)
+    for col in [
+        'Edge Ratio', 'Action Signal', 'Advice', 'Actionable Advice Signal',
+        'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number',
+        'Kelly Target', 'Option Strategy', 'buyRange', 'sellRange',
+        'Strategy Explainer Notes', 'Robinhood Shares', 'Robinhood Avg Cost',
+        'Robinhood Dividends', 'Robinhood Advice'
+    ]:
+        if col in ['Edge Ratio', 'Kelly Target', 'Robinhood Shares', 'Robinhood Avg Cost', 'Robinhood Dividends', 'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number']:
+            default_val = 0.0 if col != 'is_dividend_sustainable' else 0
+            dashboard_df[col] = dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, default_val))
         else:
-            dashboard_df.at[idx, 'Option Strategy'] = strategy_output['Option Strategy']
-        dashboard_df.at[idx, 'buyRange'] = strategy_output['buyRange']
-        # Propagate the dedicated sell-side range into dashboard_df so the
-        # HTML report, Google Sheets sink, JSON payload, and observability
-        # state snapshot all see the same source-of-truth value.
-        dashboard_df.at[idx, 'sellRange'] = strategy_output['sellRange']
-        dashboard_df.at[idx, 'Strategy Explainer Notes'] = strategy_output['Strategy Explainer Notes']
-        dashboard_df.at[idx, 'Robinhood Shares']    = float(strategy_output.get('Robinhood Shares', 0.0))
-        dashboard_df.at[idx, 'Robinhood Avg Cost']  = float(strategy_output.get('Robinhood Avg Cost', 0.0))
-        dashboard_df.at[idx, 'Robinhood Dividends'] = float(strategy_output.get('Robinhood Dividends', 0.0))
-        dashboard_df.at[idx, 'Robinhood Advice']    = str(strategy_output.get('Robinhood Advice', 'N/A'))
+            dashboard_df[col] = dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, ""))
 
     # Map 'Avg Cost' to 'Entry_Price' if present
     if 'Avg Cost' in dashboard_df.columns:
@@ -630,13 +637,13 @@ async def _heartbeat(output_dir, interval: int = 60) -> None:
     """
     heartbeat_file = output_dir / "heartbeat.txt"
     while True:
-        await asyncio.sleep(interval)
         ts = datetime.now(timezone.utc).isoformat()
         logger.info("ORCHESTRATOR ALIVE — heartbeat at %s", ts)
         try:
             heartbeat_file.write_text(ts, encoding="utf-8")
         except Exception as exc:
             logger.warning("Failed to write heartbeat file: %s", exc)
+        await asyncio.sleep(interval)
 
 
 async def _execute_broker_orders(
@@ -906,6 +913,7 @@ async def _main_body(effective_dry_run: bool) -> None:
             final_df['Advisory_Conviction'] = 0.0
             final_df['Advisory_Position_Pct'] = 0.0
 
+            advisory_results = {}
             for _idx, _row in final_df.iterrows():
                 _ticker = str(_row.get('Symbol', '')).upper()
                 if not _ticker:
@@ -923,13 +931,24 @@ async def _main_body(effective_dry_run: bool) -> None:
                         macro_dto=macro_dto,
                         context_extras=_context_extras,
                     )
-                    final_df.at[_idx, 'Advisory_Action']       = _rec.action
-                    final_df.at[_idx, 'Advisory_Conviction']   = round(_rec.conviction, 4)
-                    final_df.at[_idx, 'Advisory_Rationale']    = _rec.rationale
-                    final_df.at[_idx, 'Advisory_Position_Pct'] = round(_rec.suggested_position_pct, 6)
-                    final_df.at[_idx, 'Advisory_Data_Quality'] = _rec.data_quality
+                    advisory_results[_ticker] = {
+                        'Advisory_Action': _rec.action,
+                        'Advisory_Conviction': round(_rec.conviction, 4),
+                        'Advisory_Rationale': _rec.rationale,
+                        'Advisory_Position_Pct': round(_rec.suggested_position_pct, 6),
+                        'Advisory_Data_Quality': _rec.data_quality
+                    }
                 except Exception as _adv_exc:
                     telemetry.warning("Advisory failed for %s: %s", _ticker, _adv_exc)
+
+            # Vectorized mapping to avoid iterrows mutation (Constraint #3)
+            for _col in ('Advisory_Action', 'Advisory_Conviction',
+                         'Advisory_Rationale', 'Advisory_Position_Pct',
+                         'Advisory_Data_Quality'):
+                if _col in ('Advisory_Conviction', 'Advisory_Position_Pct'):
+                    final_df[_col] = final_df['Symbol'].map(lambda x: advisory_results.get(str(x).upper(), {}).get(_col, 0.0))
+                else:
+                    final_df[_col] = final_df['Symbol'].map(lambda x: advisory_results.get(str(x).upper(), {}).get(_col, ""))
 
             telemetry.info(
                 "Advisory evaluation complete for %d tickers.", len(final_df)
