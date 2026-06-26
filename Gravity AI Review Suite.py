@@ -4413,7 +4413,6 @@ class GravityAIAuditor:
         audit["overall_pass"] = all_pass
         self.report["step_34_macro_regime_gate_toggle_audit"] = audit
 
-<<<<<<< HEAD
     def run_portfolio_sync_audit(self) -> None:
         """Step 35 — Validates Task 1.4 portfolio & watchlist synchronization.
 
