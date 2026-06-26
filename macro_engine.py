@@ -94,11 +94,49 @@ class MacroEngine:
             logger.warning("HMM regime: no SPY price history available; skipping (hmm_risk_on_probability=None).")
             return None
 
+        # ── Phase 3: route macro history through HistoricalStore ──────────────
+        # When HISTORICAL_STORE_ENABLED is True, HistoricalStore.get_macro() tops
+        # up only the delta from FRED and serves the rest from quant_platform.db.
+        # The single-snapshot _build_macro_dto path (current-state reads) is NOT
+        # touched here — only the historical series used by the HMM are cached.
         try:
-            macro_history = self.data_engine.fetch_macro_history() if self.data_engine else pd.DataFrame()
-        except Exception as e:
-            logger.warning(f"HMM regime: fetch_macro_history() failed: {e}; skipping.")
-            return None
+            from settings import settings as _s
+            if _s.HISTORICAL_STORE_ENABLED:
+                from data.historical_store import HistoricalStore
+                _store = HistoricalStore()
+                vix_series = _store.get_macro(
+                    "VIXCLS", data_engine=self.data_engine
+                )
+                t10y2y_series = _store.get_macro(
+                    "T10Y2Y", data_engine=self.data_engine
+                )
+                if vix_series.empty or t10y2y_series.empty:
+                    logger.warning(
+                        "HMM regime: HistoricalStore returned empty macro series; "
+                        "falling back to direct DataEngine fetch."
+                    )
+                    raise RuntimeError("empty series from HistoricalStore")
+                macro_history = pd.DataFrame(
+                    {"VIXCLS": vix_series, "T10Y2Y": t10y2y_series}
+                )
+                logger.debug(
+                    "HMM regime: macro history from HistoricalStore "
+                    "(%d rows, VIXCLS=%d, T10Y2Y=%d).",
+                    len(macro_history), vix_series.notna().sum(), t10y2y_series.notna().sum(),
+                )
+            else:
+                raise RuntimeError("HISTORICAL_STORE_ENABLED=False")
+        except Exception as _hist_exc:
+            # Graceful fallback: direct DataEngine fetch (pre-Phase-3 behavior).
+            logger.debug(
+                "HMM regime: HistoricalStore path skipped (%s); "
+                "falling back to DataEngine.fetch_macro_history().", _hist_exc,
+            )
+            try:
+                macro_history = self.data_engine.fetch_macro_history() if self.data_engine else pd.DataFrame()
+            except Exception as e:
+                logger.warning(f"HMM regime: fetch_macro_history() failed: {e}; skipping.")
+                return None
 
         if macro_history is None or macro_history.empty or 'VIXCLS' not in macro_history.columns:
             logger.warning("HMM regime: no usable VIX/yield-curve history; skipping (hmm_risk_on_probability=None).")

@@ -4314,6 +4314,8 @@ class GravityAIAuditor:
         self.run_historical_persistence_audit_phase1()
         # Tier 2.3 Phase 2 — account_snapshots + account_positions
         self.step_61_historical_persistence_audit_phase2()
+        # Tier 2.3 Phase 3 — fundamentals_history + macro_history
+        self.step_62_historical_persistence_audit_phase3()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -9125,6 +9127,205 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_61_historical_persistence_audit_phase2"] = audit
+
+    def step_62_historical_persistence_audit_phase3(self) -> None:
+        """Tier 2.3 Phase 3 — fundamentals_history + macro_history persistence.
+
+        Checks
+        ------
+        1.  fundamentals_history table exists after HistoricalStore.__init__.
+        2.  macro_history table exists after HistoricalStore.__init__.
+        3.  get_fundamentals returns NaN for missing fields (CONSTRAINT #4).
+        4.  get_fundamentals respects max_age_days (no refetch when fresh).
+        5.  get_macro round-trip via mock DataEngine works.
+        6.  settings.FUNDAMENTALS_REFRESH_DAYS == 1.
+        7.  settings.MACRO_REFRESH_HOURS == 12.
+        8.  processing_engine.py source references HistoricalStore.
+        9.  macro_engine.py source references HistoricalStore.
+        10. tests/test_historical_store.py contains TestFundamentalsHistory
+            and TestMacroHistory classes.
+        """
+        import math
+        import os
+        import sqlite3
+        import tempfile
+        import ast
+        from datetime import datetime, timezone, timedelta
+        from unittest.mock import MagicMock
+
+        import pandas as pd
+
+        audit: dict = {
+            "step": "step_62_historical_persistence_audit_phase3",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        def _chk(name: str, passed: bool, detail: str = "") -> None:
+            audit["checks"].append({"check": name, "passed": passed, "detail": detail})
+
+        try:
+            from data.historical_store import HistoricalStore
+
+            # ── 1. fundamentals_history table exists ─────────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "gravity_p3.db")
+                HistoricalStore(db_path=db_path)
+                with sqlite3.connect(db_path) as conn:
+                    tables = {r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()}
+                    indexes = {r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='index'"
+                    ).fetchall()}
+            fund_ok = "fundamentals_history" in tables and "idx_fund_history_symbol" in indexes
+            _chk("fundamentals_history table and index exist", fund_ok,
+                 f"tables={tables}, indexes={indexes}")
+            all_pass = all_pass and fund_ok
+
+            # ── 2. macro_history table exists ────────────────────────────────
+            macro_ok = "macro_history" in tables and "idx_macro_history_series" in indexes
+            _chk("macro_history table and index exist", macro_ok,
+                 f"tables={tables}, indexes={indexes}")
+            all_pass = all_pass and macro_ok
+
+            # ── 3. get_fundamentals: missing fields → NaN, not 0.0 ──────────
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "nan_test.db")
+                store = HistoricalStore(db_path=db_path)
+                mock_prov = MagicMock()
+                mock_prov.get_fundamentals.return_value = {"trailingPE": 18.0}
+                mock_prov.source_name = "test"
+                result = store.get_fundamentals("AAPL", provider=mock_prov)
+            nan_ok = (
+                isinstance(result, dict)
+                and result.get("pe_ratio") == 18.0
+                and math.isnan(result.get("pb_ratio", 0.0))
+                and math.isnan(result.get("roe", 0.0))
+            )
+            _chk(
+                "get_fundamentals: missing fields are NaN not 0.0 (CONSTRAINT #4)",
+                nan_ok,
+                f"pe_ratio={result.get('pe_ratio')}, pb_ratio={result.get('pb_ratio')}",
+            )
+            all_pass = all_pass and nan_ok
+
+            # ── 4. get_fundamentals: fresh cache skips provider ──────────────
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "fresh_test.db")
+                store = HistoricalStore(db_path=db_path)
+                mock_prov2 = MagicMock()
+                mock_prov2.get_fundamentals.return_value = {"trailingPE": 25.0}
+                mock_prov2.source_name = "test"
+                # First call seeds the DB
+                store.get_fundamentals("MSFT", max_age_days=1, provider=mock_prov2)
+                first_count = mock_prov2.get_fundamentals.call_count
+                # Second call — row is fresh (written just now)
+                store.get_fundamentals("MSFT", max_age_days=1, provider=mock_prov2)
+                second_count = mock_prov2.get_fundamentals.call_count
+            fresh_ok = second_count == first_count  # provider not called again
+            _chk(
+                "get_fundamentals: respects max_age_days (no refetch when fresh)",
+                fresh_ok,
+                f"call_count after 1st={first_count}, after 2nd={second_count}",
+            )
+            all_pass = all_pass and fresh_ok
+
+            # ── 5. get_macro round-trip ───────────────────────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "macro_rt.db")
+                store = HistoricalStore(db_path=db_path)
+                today = pd.Timestamp.now(tz=None).normalize()
+                dates = pd.bdate_range(end=today, periods=100)
+                macro_df = pd.DataFrame(
+                    {
+                        "VIXCLS": [15.0 + i * 0.05 for i in range(100)],
+                        "T10Y2Y": [0.5 + i * 0.01 for i in range(100)],
+                    },
+                    index=dates,
+                )
+                mock_de = MagicMock()
+                mock_de.fetch_macro_history.return_value = macro_df
+                series = store.get_macro("VIXCLS", data_engine=mock_de)
+            rt_ok = (
+                isinstance(series, pd.Series)
+                and len(series) == 100
+                and series.name == "VIXCLS"
+                and series.index.tz is None
+            )
+            _chk(
+                "get_macro round-trip via mock DataEngine",
+                rt_ok,
+                f"len={len(series)}, name={series.name}, tz={series.index.tz}",
+            )
+            all_pass = all_pass and rt_ok
+
+            # ── 6. settings.FUNDAMENTALS_REFRESH_DAYS == 1 ──────────────────
+            from settings import settings as _s
+            frd_ok = getattr(_s, "FUNDAMENTALS_REFRESH_DAYS", None) == 1
+            _chk(
+                "settings.FUNDAMENTALS_REFRESH_DAYS == 1",
+                frd_ok,
+                f"FUNDAMENTALS_REFRESH_DAYS={getattr(_s, 'FUNDAMENTALS_REFRESH_DAYS', None)}",
+            )
+            all_pass = all_pass and frd_ok
+
+            # ── 7. settings.MACRO_REFRESH_HOURS == 12 ───────────────────────
+            mrh_ok = getattr(_s, "MACRO_REFRESH_HOURS", None) == 12
+            _chk(
+                "settings.MACRO_REFRESH_HOURS == 12",
+                mrh_ok,
+                f"MACRO_REFRESH_HOURS={getattr(_s, 'MACRO_REFRESH_HOURS', None)}",
+            )
+            all_pass = all_pass and mrh_ok
+
+            # ── 8. processing_engine.py references HistoricalStore ───────────
+            pe_src = open("processing_engine.py", encoding="utf-8").read()
+            pe_ok = "HistoricalStore" in pe_src and "FUNDAMENTALS_REFRESH_DAYS" in pe_src
+            _chk(
+                "processing_engine.py references HistoricalStore and FUNDAMENTALS_REFRESH_DAYS",
+                pe_ok,
+            )
+            all_pass = all_pass and pe_ok
+
+            # ── 9. macro_engine.py references HistoricalStore ────────────────
+            me_src = open("macro_engine.py", encoding="utf-8").read()
+            me_ok = "HistoricalStore" in me_src and "get_macro" in me_src
+            _chk(
+                "macro_engine.py references HistoricalStore.get_macro",
+                me_ok,
+            )
+            all_pass = all_pass and me_ok
+
+            # ── 10. test file contains Phase 3 test classes ──────────────────
+            test_src = open("tests/test_historical_store.py", encoding="utf-8").read()
+            test_tree = ast.parse(test_src)
+            class_names = {
+                node.name
+                for node in ast.walk(test_tree)
+                if isinstance(node, ast.ClassDef)
+            }
+            classes_ok = (
+                "TestFundamentalsHistory" in class_names
+                and "TestMacroHistory" in class_names
+            )
+            _chk(
+                "tests/test_historical_store.py contains TestFundamentalsHistory and TestMacroHistory",
+                classes_ok,
+                f"classes found: {class_names}",
+            )
+            all_pass = all_pass and classes_ok
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_62_historical_persistence_audit_phase3"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

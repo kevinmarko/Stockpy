@@ -334,6 +334,24 @@ class Settings(BaseSettings):
             "(≈ 2 years of trading days). Subsequent fetches are incremental."
         ),
     )
+    FUNDAMENTALS_REFRESH_DAYS: int = Field(
+        default=1,
+        description=(
+            "Maximum age (calendar days) of a cached fundamentals row before "
+            "HistoricalStore.get_fundamentals() refetches from the provider. "
+            "1 = daily refresh. Fundamentals rarely change intraday, so 1 day "
+            "is the recommended minimum. Set 0 to always refetch."
+        ),
+    )
+    MACRO_REFRESH_HOURS: int = Field(
+        default=12,
+        description=(
+            "Minimum age (hours) of the most-recent macro_history row before "
+            "HistoricalStore.get_macro() triggers a FRED top-up. FRED publishes "
+            "VIXCLS daily and T10Y2Y daily; 12 h ensures we top up at most twice "
+            "per day while not running stale for longer than half a trading session."
+        ),
+    )
 
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
