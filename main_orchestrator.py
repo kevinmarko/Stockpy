@@ -175,7 +175,12 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     # 1. Macro Economic Regime Analysis
     telemetry.info("Routing data through Macro Engine...")
     me = MacroEngine(data_engine=data_engine)
-    sahm_val = me._fallback_sentiment("")  # Default sahm value proxy
+    # BUG-FIX: was `me._fallback_sentiment("")` which always returns 0.0 (NLP
+    # sentiment helper on empty text). The Sahm Rule indicator is a FRED-derived
+    # recession signal and must be fetched via calculate_sahm_rule(). Calling
+    # the wrong method silently disabled the RECESSION kill-switch path
+    # (sahm_rule_indicator >= 0.5 could never trigger).
+    sahm_val = me.calculate_sahm_rule()
     macro_data = me.run_macro_killswitch(macro_raw, sahm_val)
     market_regime = macro_data["market_regime"].iloc[0]
 
@@ -189,6 +194,11 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         inflation_rate=float(macro_raw.get('CPIAUCSL_YoY', 2.0)),
         nominal_10y=float(macro_raw.get('DGS10', 4.0)),
         vix_value=float(macro_raw.get('VIXCLS', 15.0)),
+        # BUG-FIX: sahm_rule_indicator was never wired in, so macro_dto always
+        # had sahm_rule_indicator=0.0 (the default). This structurally prevented
+        # macro_dto.killSwitch from ever firing via the Sahm Rule branch
+        # (self.sahm_rule_indicator >= 0.5). Now passes the FRED-derived value.
+        sahm_rule_indicator=sahm_val,
         hmm_risk_on_probability=hmm_risk_on_probability,
     )
 
@@ -311,16 +321,23 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                 sigma = float(returns.std())
             
             mc_target, mc_low, mc_high = fe.run_monte_carlo(price, mu, sigma, 30)
+            # BUG-FIX: Forecast_10/60/90 previously used a naive linear formula
+            # `price * (1 + mu * N)` which is not a valid GBM estimate and
+            # fabricates a trend without variance (Constraint #4). Use Monte Carlo
+            # for all horizons so the fallback path is consistent with the happy path.
+            mc_10, _, _ = fe.run_monte_carlo(price, mu, sigma, 10)
+            mc_60, _, _ = fe.run_monte_carlo(price, mu, sigma, 60)
+            mc_90, _, _ = fe.run_monte_carlo(price, mu, sigma, 90)
             forecast_results[ticker] = {
                 'Target_Days': 30,
                 'ARIMA': price,
                 'MC_Target': mc_target,
                 'MC_Lower': mc_low,
                 'MC_Upper': mc_high,
+                'Forecast_10': mc_10,
                 'Forecast_30': mc_target,
-                'Forecast_10': price * (1.0 + mu * 10),
-                'Forecast_60': price * (1.0 + mu * 60),
-                'Forecast_90': price * (1.0 + mu * 90),
+                'Forecast_60': mc_60,
+                'Forecast_90': mc_90,
                 'Forecast_30_Prophet_Lower': mc_low,
                 'Forecast_30_Prophet_Upper': mc_high
             }
