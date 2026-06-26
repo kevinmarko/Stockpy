@@ -522,6 +522,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Historical Persistence (data/historical_store.py, Tier 2.3) ---
+    HISTORICAL_STORE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True, OHLCV bars are served from the local price_bars table "
+            "in quant_platform.db with incremental top-up.  First call per symbol "
+            "= full BARS_BACKFILL_DAYS backfill; subsequent calls = delta only. "
+            "Set False to disable the cache and always refetch from the provider."
+        ),
+    )
+    BARS_BACKFILL_DAYS: int = Field(
+        default=504,
+        description=(
+            "Calendar days of OHLCV history to backfill on the first ever fetch "
+            "for a symbol (approximately 2 trading years ≈ 504 calendar days). "
+            "Subsequent incremental top-ups only fetch the delta since the last "
+            "stored bar date."
+        ),
+    )
+
     # --- Dual Momentum allocator overlay ---
     USE_DUAL_MOMENTUM_OVERLAY: bool = Field(
         default=False,
