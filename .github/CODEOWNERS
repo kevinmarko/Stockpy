@@ -1,0 +1,32 @@
+# Domain ownership split for two-agent workflow.
+# Neither agent should edit the other's owned files in the same PR
+# without a note in the PR template's "Conflicts" section.
+
+# Claude Code owns
+signals/                    @kevinmarko
+strategy_engine.py          @kevinmarko
+sizing/                     @kevinmarko
+ml/                         @kevinmarko
+regime/                     @kevinmarko
+macro_engine.py             @kevinmarko
+validation/                 @kevinmarko
+execution/                  @kevinmarko
+tests/                      @kevinmarko
+
+# Antigravity owns
+gui/                        @kevinmarko
+observability/              @kevinmarko
+reporting_engine.py         @kevinmarko
+diagnostics_and_visuals.py  @kevinmarko
+daily_report_template.html  @kevinmarko
+scripts/                    @kevinmarko
+
+# Shared — either agent may edit, but flag it in the PR
+config.py                   @kevinmarko
+dto_models.py               @kevinmarko
+data/                       @kevinmarko
+data_engine.py              @kevinmarko
+main.py                     @kevinmarko
+main_orchestrator.py        @kevinmarko
+requirements.txt            @kevinmarko
+CLAUDE.md                   @kevinmarko
