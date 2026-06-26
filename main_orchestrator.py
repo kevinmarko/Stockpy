@@ -630,13 +630,13 @@ async def _heartbeat(output_dir, interval: int = 60) -> None:
     """
     heartbeat_file = output_dir / "heartbeat.txt"
     while True:
-        await asyncio.sleep(interval)
         ts = datetime.now(timezone.utc).isoformat()
         logger.info("ORCHESTRATOR ALIVE — heartbeat at %s", ts)
         try:
             heartbeat_file.write_text(ts, encoding="utf-8")
         except Exception as exc:
             logger.warning("Failed to write heartbeat file: %s", exc)
+        await asyncio.sleep(interval)
 
 
 async def _execute_broker_orders(
