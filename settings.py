@@ -83,6 +83,23 @@ class Settings(BaseSettings):
         default=30,
         description="In-process quote cache TTL in seconds (never persisted to disk).",
     )
+    # TTL (seconds) for the in-process fundamentals cache in FinnhubProvider
+    # and CompositeProvider.  Fundamentals are quarterly/slow-moving, so a
+    # multi-hour TTL is safe and prevents the free Finnhub tier (60 calls/min)
+    # from being exhausted by repeated orchestrator passes.  Both positive AND
+    # empty responses are cached so 429-rate-limited symbols don't re-trigger
+    # network calls within the window.
+    FUNDAMENTALS_CACHE_TTL_SECONDS: int = Field(
+        default=21_600,
+        description="In-process fundamentals cache TTL in seconds (default 6 h).",
+    )
+    # Sliding-window call budget for FinnhubProvider (per 60 s).  Free tier is
+    # 60 calls/minute; we default to 50 to leave headroom for the two auxiliary
+    # endpoints (quote, company_profile2) that ``get_fundamentals`` invokes.
+    FINNHUB_RATE_LIMIT_PER_MIN: int = Field(
+        default=50,
+        description="Finnhub sliding-window call budget per 60 s (free tier ceiling: 60).",
+    )
     # --- Robinhood Integration (legacy data/robinhood_client.py — SMS login) ---
     ROBINHOOD_USERNAME: Optional[str] = Field(default=None, description="Robinhood username (email).")
     ROBINHOOD_PASSWORD: Optional[str] = Field(default=None, description="Robinhood password.")

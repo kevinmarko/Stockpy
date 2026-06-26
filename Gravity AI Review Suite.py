@@ -2846,12 +2846,100 @@ class GravityAIAuditor:
             has_provider_field = hasattr(s, "MARKET_DATA_PROVIDER")
             has_finnhub_field = hasattr(s, "FINNHUB_API_KEY")
             has_ttl_field = hasattr(s, "MARKET_DATA_QUOTE_TTL_SECONDS")
-            all_fields_present = has_provider_field and has_finnhub_field and has_ttl_field
+            # 2026-06 Finnhub 429 mitigation — cache TTL + rate-limit settings.
+            has_fund_cache_ttl = hasattr(s, "FUNDAMENTALS_CACHE_TTL_SECONDS")
+            has_finnhub_rate_limit = hasattr(s, "FINNHUB_RATE_LIMIT_PER_MIN")
+            all_fields_present = (
+                has_provider_field and has_finnhub_field and has_ttl_field
+                and has_fund_cache_ttl and has_finnhub_rate_limit
+            )
             audit["checks"]["settings_fields_present"] = {
                 "status": "PASSED" if all_fields_present else "FAILED",
                 "MARKET_DATA_PROVIDER": has_provider_field,
                 "FINNHUB_API_KEY": has_finnhub_field,
                 "MARKET_DATA_QUOTE_TTL_SECONDS": has_ttl_field,
+                "FUNDAMENTALS_CACHE_TTL_SECONDS": has_fund_cache_ttl,
+                "FINNHUB_RATE_LIMIT_PER_MIN": has_finnhub_rate_limit,
+            }
+
+            # ── (l) Finnhub fundamentals cache: positive AND negative entries ─
+            # Asserts the 2026-06 fix: repeat get_fundamentals() calls within the
+            # TTL window hit the cache and never re-invoke the network client.
+            from data.market_data import FinnhubProvider, _FundamentalsCache
+            fh = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
+            fh._client = MagicMock()
+            fh._client.company_basic_financials.return_value = {
+                "metric": {"peBasicExclExtraTTM": 25.0}
+            }
+            fh._client.quote.return_value = {"c": 150.0}
+            fh._client.company_profile2.return_value = {}
+            fh.get_fundamentals("AAPL")
+            fh.get_fundamentals("AAPL")
+            fh.get_fundamentals("AAPL")
+            cache_dedupes = fh._client.company_basic_financials.call_count == 1
+            audit["checks"]["finnhub_fundamentals_cache_dedupes"] = {
+                "status": "PASSED" if cache_dedupes else "FAILED",
+                "call_count": fh._client.company_basic_financials.call_count,
+            }
+
+            # ── (m) 429 is swallowed AND negative-cached ──────────────────────
+            # A FinnhubAPIException-shaped exception (status_code=429) must NOT
+            # raise; it must return {} and prevent re-hammer on the next call.
+            fh2 = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
+            fh2._client = MagicMock()
+            mock_exc = Exception("Too many requests.")
+            mock_exc.status_code = 429
+            fh2._client.company_basic_financials.side_effect = mock_exc
+            with patch("data.market_data.time.sleep", lambda s: None):
+                first = fh2.get_fundamentals("BAC")
+                second = fh2.get_fundamentals("BAC")
+            call_count_after_two = fh2._client.company_basic_financials.call_count
+            rate_limit_handled = (
+                first == {} and second == {} and call_count_after_two == 1
+            )
+            audit["checks"]["finnhub_429_swallowed_and_cached"] = {
+                "status": "PASSED" if rate_limit_handled else "FAILED",
+                "first": first,
+                "second": second,
+                "client_call_count": call_count_after_two,
+            }
+
+            # ── (n) Sliding-window rate limiter sleeps when budget exhausted ─
+            from data.market_data import _SlidingWindowRateLimiter
+            slept: list[float] = []
+            with patch("data.market_data.time.sleep", lambda s: slept.append(s)):
+                rl = _SlidingWindowRateLimiter(max_calls=2, window_seconds=60.0)
+                rl.acquire()
+                rl.acquire()
+                rl.acquire()  # third call MUST sleep
+            limiter_blocks = len(slept) == 1 and slept[0] > 0
+            audit["checks"]["rate_limiter_blocks_on_budget"] = {
+                "status": "PASSED" if limiter_blocks else "FAILED",
+                "sleeps": slept,
+            }
+
+            # ── (o) CompositeProvider-level fundamentals cache dedup ──────────
+            # Verifies yfinance fallback is not re-hammered within TTL either.
+            import os as _os_o
+            from data.market_data import CompositeProvider
+            with patch.dict(_os_o.environ, {
+                "FINNHUB_API_KEY": "", "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": "",
+            }):
+                cp = CompositeProvider()
+                yf_calls = {"n": 0}
+
+                def _fake_yf(_self, _sym):
+                    yf_calls["n"] += 1
+                    return {"trailingPE": 28.5}
+
+                with patch.object(YFinanceProvider, "get_fundamentals", _fake_yf):
+                    cp.get_fundamentals("AAPL")
+                    cp.get_fundamentals("AAPL")
+                    cp.get_fundamentals("AAPL")
+            composite_cache_works = yf_calls["n"] == 1
+            audit["checks"]["composite_fundamentals_cache_dedupes"] = {
+                "status": "PASSED" if composite_cache_works else "FAILED",
+                "yfinance_calls": yf_calls["n"],
             }
 
             passed = all(v.get("status") == "PASSED" for v in audit["checks"].values())
@@ -4191,6 +4279,7 @@ class GravityAIAuditor:
         self.run_risk_gates_portfolio_heat_audit()
         self.run_six_bug_regression_audit()
         self.run_options_matrix_integrity_audit()
+        self.run_robinhood_watchlist_noise_audit()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -5158,6 +5247,91 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_38_options_matrix_integrity_audit"] = audit
+
+    def run_robinhood_watchlist_noise_audit(self) -> None:
+        """Step 39 — Robinhood watchlist 400-noise suppression audit.
+
+        Background
+        ----------
+        Robinhood's ``midlands/lists/items/?list_id=<UUID>`` endpoint returns
+        400 for certain system-curated watchlists (e.g. "100 Most Popular").
+        The ``robin_stocks`` library prints the HTTPError via
+        ``print(message, file=helper.get_output())`` rather than raising, so
+        for every Robinhood watchlist sync we were getting a flood of
+        unactionable lines on stdout for every account.
+
+        Fix
+        ---
+        ``data/robinhood_client.py`` redirects ``robin_stocks.helper``'s output
+        sink to an in-memory buffer during ``get_all_watchlists`` and
+        ``get_watchlist_by_name`` calls.  Captured text is forwarded to the
+        module logger at DEBUG so it remains diagnosable without polluting
+        stdout.
+
+        Checks
+        ------
+        1.  ``_suppress_rs_output`` context manager exists and is callable.
+        2.  Inside the context, a ``print`` to robin_stocks' output sink lands
+            in the captured buffer (NOT stdout).
+        3.  After the context exits, the prior output sink is restored.
+        """
+        audit: dict = {"step": "step_39_robinhood_watchlist_noise_audit",
+                       "checks": [], "status": "PENDING"}
+        all_pass = True
+        try:
+            from data.robinhood_client import _suppress_rs_output
+
+            # 1. Importable & callable
+            audit["checks"].append({
+                "check": "_suppress_rs_output is importable from data.robinhood_client",
+                "passed": callable(_suppress_rs_output),
+            })
+
+            try:
+                from robin_stocks.robinhood import helper as _rs_helper
+            except Exception as exc:  # pragma: no cover
+                audit["checks"].append({
+                    "check": "robin_stocks.robinhood.helper importable",
+                    "passed": False,
+                    "detail": f"ImportError: {exc}",
+                })
+                audit["status"] = "SKIPPED"
+                self.report["step_39_robinhood_watchlist_noise_audit"] = audit
+                return
+
+            # 2. Output redirection captures into the buffer
+            sentinel = "400 Client Error: Bad Request for url: <test sentinel>"
+            with _suppress_rs_output() as buf:
+                print(sentinel, file=_rs_helper.get_output())
+            capture_ok = sentinel in buf.getvalue()
+            audit["checks"].append({
+                "check": "robin_stocks stdout error is captured into the in-memory buffer",
+                "passed": capture_ok,
+                "detail": f"buffer_len={len(buf.getvalue())}",
+            })
+            all_pass = all_pass and capture_ok
+
+            # 3. Prior output sink restored
+            original = _rs_helper.get_output()
+            with _suppress_rs_output():
+                inside = _rs_helper.get_output()
+            restored = _rs_helper.get_output() is original
+            redirect_inside = inside is not original
+            audit["checks"].append({
+                "check": "robin_stocks output sink is swapped inside and restored after",
+                "passed": redirect_inside and restored,
+                "detail": f"redirect_inside={redirect_inside}, restored={restored}",
+            })
+            all_pass = all_pass and redirect_inside and restored
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_39_robinhood_watchlist_noise_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

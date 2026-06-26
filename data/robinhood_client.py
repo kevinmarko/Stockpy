@@ -34,17 +34,52 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import os
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional
 
 import robin_stocks.robinhood as r
+
+# robin_stocks prints HTTP errors via `print(message, file=helper.get_output())`
+# rather than raising or using `logging`.  Robinhood's
+# `midlands/lists/items/?list_id=<UUID>` endpoint returns 400 for certain
+# system-curated watchlists (e.g. "100 Most Popular", algorithm-driven lists),
+# and that produces a flood of unactionable noise on stdout for every account.
+# We re-route robin_stocks' output to an in-memory buffer during discovery so
+# the noise disappears while still capturing it for debug-level logging.
+try:  # pragma: no cover — import is best-effort; downgrade to no-op on failure.
+    from robin_stocks.robinhood import helper as _rs_helper  # type: ignore
+except Exception:  # noqa: BLE001
+    _rs_helper = None  # type: ignore[assignment]
 
 from dto_models import RobinhoodPositionDTO
 from settings import settings
 
 logger = logging.getLogger("RobinhoodClient")
+
+
+@contextmanager
+def _suppress_rs_output() -> Iterator[io.StringIO]:
+    """Redirect robin_stocks' internal ``print``-based error output.
+
+    robin_stocks emits HTTP errors via ``print(msg, file=helper.get_output())``;
+    setting the output to a ``StringIO`` swallows the spam from endpoints that
+    return 400 for read-only system watchlists.  The captured text is yielded
+    so the caller can log it at DEBUG if desired.
+    """
+    if _rs_helper is None:
+        yield io.StringIO()
+        return
+    buf = io.StringIO()
+    prev = _rs_helper.get_output()
+    _rs_helper.set_output(buf)
+    try:
+        yield buf
+    finally:
+        _rs_helper.set_output(prev)
 
 # Env var: colon-separated list of additional plain-text watchlist files.
 # Each file holds one ticker per line; '#' begins a comment. Empty / missing
@@ -152,7 +187,11 @@ class RobinhoodClient:
         if not self.is_authenticated:
             return []
         try:
-            wl_raw = r.get_all_watchlists() or {}
+            with _suppress_rs_output() as buf:
+                wl_raw = r.get_all_watchlists() or {}
+            captured = buf.getvalue().strip()
+            if captured:
+                logger.debug("robin_stocks output during get_all_watchlists: %s", captured)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not list Robinhood watchlists: %s", exc)
             return []
@@ -195,7 +234,17 @@ def _watchlist_tickers(name: str) -> List[str]:
     empty list — they must not propagate to the discovery caller.
     """
     try:
-        rows = r.get_watchlist_by_name(name) or []
+        # Suppress robin_stocks' stdout error prints for endpoints that return
+        # 400 on system-curated lists (a known Robinhood API quirk); the
+        # function still returns None/empty in that case and we degrade silently.
+        with _suppress_rs_output() as buf:
+            rows = r.get_watchlist_by_name(name) or []
+        captured = buf.getvalue().strip()
+        if captured:
+            logger.debug(
+                "robin_stocks output during get_watchlist_by_name(%r): %s",
+                name, captured,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not read Robinhood watchlist %r: %s", name, exc)
         return []
