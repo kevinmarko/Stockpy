@@ -663,3 +663,79 @@ def test_no_order_functions_in_module_source() -> None:
             f"Forbidden execution-function reference '{pattern}' found in "
             f"data/robinhood_portfolio.py"
         )
+
+
+# ---------------------------------------------------------------------------
+# Login Flow Tests
+# ---------------------------------------------------------------------------
+
+class TestLoginFlow:
+    def test_login_with_mfa_secret(self, monkeypatch) -> None:
+        """When RH_MFA_SECRET is set, login should use TOTP and by_sms=False."""
+        login_calls = []
+
+        def mock_login(username, password, store_session=True, mfa_code=None, by_sms=False):
+            login_calls.append({
+                "username": username,
+                "password": password,
+                "store_session": store_session,
+                "mfa_code": mfa_code,
+                "by_sms": by_sms
+            })
+            return {"access_token": "mock-totp-token"}
+
+        monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
+        monkeypatch.setenv("RH_USERNAME", "totp_user@example.com")
+        monkeypatch.setenv("RH_PASSWORD", "totp_pass")
+        monkeypatch.setenv("RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
+
+        from data.robinhood_portfolio import _login
+        _login()
+
+        assert len(login_calls) == 1
+        assert login_calls[0]["username"] == "totp_user@example.com"
+        assert login_calls[0]["password"] == "totp_pass"
+        assert login_calls[0]["mfa_code"] is not None
+        assert login_calls[0]["by_sms"] is False
+
+    def test_login_without_mfa_secret_sms_fallback(self, monkeypatch) -> None:
+        """When RH_MFA_SECRET is empty/missing, login should fall back to SMS MFA (by_sms=True)."""
+        login_calls = []
+
+        def mock_login(username, password, store_session=True, mfa_code=None, by_sms=True):
+            login_calls.append({
+                "username": username,
+                "password": password,
+                "store_session": store_session,
+                "mfa_code": mfa_code,
+                "by_sms": by_sms
+            })
+            return {"access_token": "mock-sms-token"}
+
+        monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
+        monkeypatch.setenv("RH_USERNAME", "sms_user@example.com")
+        monkeypatch.setenv("RH_PASSWORD", "sms_pass")
+        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+
+        from data.robinhood_portfolio import _login
+        _login()
+
+        assert len(login_calls) == 1
+        assert login_calls[0]["username"] == "sms_user@example.com"
+        assert login_calls[0]["password"] == "sms_pass"
+        assert login_calls[0]["mfa_code"] is None
+        assert login_calls[0]["by_sms"] is True
+
+    def test_login_failures(self, monkeypatch) -> None:
+        """If login fails (does not return dict with access_token), raise RuntimeError."""
+        def mock_login(username, password, **kwargs):
+            return None
+
+        monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
+        monkeypatch.setenv("RH_USERNAME", "user@example.com")
+        monkeypatch.setenv("RH_PASSWORD", "pass")
+        monkeypatch.setenv("RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
+
+        from data.robinhood_portfolio import _login
+        with pytest.raises(RuntimeError, match="Robinhood login failed"):
+            _login()

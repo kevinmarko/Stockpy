@@ -953,7 +953,7 @@ def run_once(force_account: bool = False) -> RunResult:
         # without spelunking through the source.
         logger.warning(
             "Empty symbol universe — nothing to evaluate. "
-            "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET in "
+            "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET (optional) in "
             ".env so Robinhood positions populate the universe, (2) set the "
             "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), (3) "
             "create %s with one ticker per line, or (4) add tickers to "
