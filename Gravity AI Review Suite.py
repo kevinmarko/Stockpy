@@ -4310,6 +4310,8 @@ class GravityAIAuditor:
         self.run_regime_weights_audit()
         # Tier 2.2 — Forecast ensemble weighted by recent skill
         self.run_forecast_skill_audit()
+        # Tier 2.3 Phase 1 — Persistent OHLCV price bar storage
+        self.run_historical_persistence_audit_phase1()
         # Tier 2.4 — News catalyst signal (FinBERT / lexicon + Finnhub)
         self.run_news_catalyst_audit()
         # Tier 2.5 — Correlation cluster awareness
@@ -9152,6 +9154,123 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_61_correlation_cluster_audit"] = audit
+
+    # -------------------------------------------------------------------------
+    # Step 60 — Tier 2.3 Phase 1: Persistent OHLCV price bar storage
+    # -------------------------------------------------------------------------
+    def run_historical_persistence_audit_phase1(self) -> None:
+        """Verify the 8 correctness invariants for data/historical_store.py."""
+        import sqlite3
+        import tempfile, os
+        import pandas as pd
+        from unittest.mock import MagicMock
+
+        audit: dict = {
+            "step": "step_60_historical_persistence_audit_phase1",
+            "checks": [],
+            "status": "PENDING",
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"check": name, "passed": passed, "detail": detail})
+
+        try:
+            # ── Check 1: HistoricalStore importable ──────────────────────────
+            try:
+                from data.historical_store import HistoricalStore, _DF_COLUMNS
+                _chk("historical_store_importable", True)
+            except ImportError as exc:
+                _chk("historical_store_importable", False, str(exc))
+                raise
+
+            # ── Check 2: price_bars table + index created on init ────────────
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "test.db")
+                HistoricalStore(db_path=db_path)
+                with sqlite3.connect(db_path) as conn:
+                    tables = {r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()}
+                    indexes = {r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='index'"
+                    ).fetchall()}
+                ok = "price_bars" in tables and "idx_price_bars_symbol_date" in indexes
+                _chk("price_bars_table_and_index_exist", ok,
+                     f"tables={tables}, indexes={indexes}")
+
+            # ── Check 3: HISTORICAL_STORE_ENABLED defaults True ──────────────
+            from settings import settings as _s
+            enabled = getattr(_s, "HISTORICAL_STORE_ENABLED", None)
+            _chk("historical_store_enabled_default_true", enabled is True,
+                 f"HISTORICAL_STORE_ENABLED={enabled}")
+
+            # ── Check 4: BARS_BACKFILL_DAYS == 504 ──────────────────────────
+            backfill = getattr(_s, "BARS_BACKFILL_DAYS", None)
+            _chk("bars_backfill_days_is_504", backfill == 504,
+                 f"BARS_BACKFILL_DAYS={backfill}")
+
+            # ── Check 5: get_bars shape contract ────────────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "test.db")
+                store = HistoricalStore(db_path=db_path)
+                today = pd.Timestamp.now().normalize()
+                dates = pd.bdate_range(end=today, periods=30)
+                df = pd.DataFrame({
+                    "Open": [100.0] * 30, "High": [101.0] * 30,
+                    "Low":  [99.0]  * 30, "Close": [100.5] * 30,
+                    "Volume": [1_000_000] * 30,
+                }, index=dates)
+                provider = MagicMock()
+                provider.get_intraday_bars.return_value = df
+                provider.source_name = "yfinance"
+                result = store.get_bars("TEST", lookback_days=60, provider=provider)
+                shape_ok = (
+                    not result.empty
+                    and list(result.columns) == _DF_COLUMNS
+                    and result.index.tz is None
+                    and result.index.is_monotonic_increasing
+                )
+                _chk("get_bars_shape_contract", shape_ok,
+                     f"columns={list(result.columns)}, tz={result.index.tz}, "
+                     f"empty={result.empty}")
+
+            # ── Check 6: DB-error fallback never raises ──────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "test.db")
+                store = HistoricalStore(db_path=db_path)
+                failing = MagicMock()
+                failing.get_intraday_bars.side_effect = RuntimeError("network fail")
+                failing.source_name = "yfinance"
+                try:
+                    result = store.get_bars("FAIL", lookback_days=10, provider=failing)
+                    fallback_ok = result.empty and list(result.columns) == _DF_COLUMNS
+                except Exception as exc:
+                    fallback_ok = False
+                _chk("db_error_fallback_no_raise", fallback_ok)
+
+            # ── Check 7: main.py references HistoricalStore ──────────────────
+            with open("main.py", "r", encoding="utf-8") as fh:
+                main_src = fh.read()
+            main_ok = (
+                "HistoricalStore" in main_src
+                and "HISTORICAL_STORE_ENABLED" in main_src
+            )
+            _chk("main_py_references_historical_store", main_ok)
+
+            # ── Check 8: test file exists ────────────────────────────────────
+            tests_ok = os.path.exists("tests/test_historical_store.py")
+            _chk("test_file_exists", tests_ok)
+
+            all_passed = all(c["passed"] for c in audit["checks"])
+            audit["status"] = "PASS" if all_passed else "FAIL"
+            audit["overall_pass"] = all_passed
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_60_historical_persistence_audit_phase1"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

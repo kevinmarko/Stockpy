@@ -325,10 +325,21 @@ def _fetch_bars_for_universe(
     Returns a dict symbol → DataFrame.  Failures are dead-lettered per symbol
     so one bad ticker never aborts the pre-compute pass.
     """
+    _store = None
+    if settings.HISTORICAL_STORE_ENABLED:
+        try:
+            from data.historical_store import HistoricalStore
+            _store = HistoricalStore()
+        except Exception as exc:
+            logger.warning("HistoricalStore unavailable; using direct provider. %s", exc)
+
     bars: Dict[str, pd.DataFrame] = {}
     for sym in symbols:
         try:
-            df = market.get_intraday_bars(sym, lookback_days=450)
+            if _store is not None:
+                df = _store.get_bars(sym, lookback_days=450, provider=market)
+            else:
+                df = market.get_intraday_bars(sym, lookback_days=450)
             if df is not None and not df.empty:
                 bars[sym] = df
         except Exception as exc:
