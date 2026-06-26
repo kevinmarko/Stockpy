@@ -137,3 +137,14 @@ else
     echo ""
     python main.py
 fi
+
+# ── Daily briefing digest ──────────────────────────────────────────────────────
+# Generates output/briefing_YYYY-MM-DD.md and prints it to this Terminal window
+# so the operator sees a concise summary of the current regime, top actions, Δ
+# since yesterday, any dead-lettered symbols, and the 30-day calibration score
+# — without having to open the HTML report or the GUI.
+echo ""
+echo "──────────────────────────────────────────────────────────────────────"
+echo "  Generating daily briefing…"
+echo ""
+python -m scripts.daily_briefing --print || true

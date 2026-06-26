@@ -421,6 +421,37 @@ HTML_REPORT_TEMPLATE = """
             color: #a5d6ff; border: 1px solid var(--border); font-size: 13px; line-height: 1.5;
         }
         .empty-note { padding: 28px 20px; color: var(--text-muted); font-size: 14px; text-align: center; }
+
+        /* ======== MOBILE RESPONSIVE — single-column collapse below 600 px ======== */
+        /* Operators checking from their phones see a readable single-column layout  */
+        /* with touch-friendly tap targets on expandable rows (min-height 44 px).    */
+        @media (max-width: 600px) {
+            body { padding: 14px 10px; }
+            h1 { font-size: 18px; }
+            header { flex-direction: column; align-items: flex-start; gap: 8px; }
+            .timestamp { font-size: 12px; }
+            /* Single-column stack for summary tiles */
+            .summary-band { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .summary-tile { padding: 12px 14px; }
+            .summary-tile .value { font-size: 18px; }
+            /* Single-column stack for macro / regime cards */
+            .exec-grid { grid-template-columns: 1fr; gap: 12px; }
+            .exec-card { padding: 16px; }
+            /* Δ-band: single column */
+            .delta-grid { grid-template-columns: 1fr; gap: 10px; }
+            /* Allow the table to scroll horizontally rather than overflow the viewport */
+            .signal-table-wrap, table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            /* Larger tap targets on data rows and headers */
+            tr.data-row td { padding: 14px 8px; min-height: 44px; font-size: 13px; }
+            th { padding: 12px 8px; min-height: 44px; font-size: 11px; }
+            /* Detail grid: two columns on mobile */
+            .detail-grid { grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+            .rationale { font-size: 13px; padding: 10px 12px; }
+            /* Badges: slightly larger text for readability */
+            .badge { font-size: 12px; padding: 5px 10px; }
+            /* Search input full-width */
+            #search-input { width: 100%; box-sizing: border-box; }
+        }
     </style>
 </head>
 <body>

@@ -3304,6 +3304,59 @@ def render_live_inventory() -> None:
             st.error(f"Robinhood snapshot failed: {exc}")
 
     # ------------------------------------------------------------------ #
+    # Quick-add ticker to watchlist.txt
+    # Writes to the file only — never touches .env — so the GUI cannot
+    # pollute the environment with stale ticker lists.  Picked up by
+    # main.py's _load_watchlist() on the next run_once() call.
+    # ------------------------------------------------------------------ #
+    st.divider()
+    st.caption("**➕ Quick-add ticker** — written to `watchlist.txt`, picked up on next run.")
+    _wl_col_ticker, _wl_col_btn = st.columns([3, 1])
+    with _wl_col_ticker:
+        _new_ticker_raw = st.text_input(
+            "Ticker symbol",
+            key="live_inv_watchlist_add_ticker",
+            placeholder="e.g. NVDA",
+            label_visibility="collapsed",
+        )
+    with _wl_col_btn:
+        _add_clicked = st.button(
+            "➕ Add to watchlist",
+            key="live_inv_watchlist_add_btn",
+            help="Append the ticker to watchlist.txt (file-backed; never edits .env).",
+            use_container_width=True,
+        )
+    if _add_clicked:
+        _ticker = (_new_ticker_raw or "").strip().upper()
+        if not _ticker:
+            st.warning("Enter a ticker symbol before clicking Add.")
+        elif not _ticker.replace(".", "").replace("-", "").isalnum():
+            st.warning(f"'{_ticker}' does not look like a valid ticker symbol.")
+        else:
+            _wl_path = _REPO_ROOT / "watchlist.txt"
+            try:
+                # Deduplicate: only append if not already present.
+                _existing: list[str] = []
+                if _wl_path.exists():
+                    _existing = [
+                        ln.strip().upper()
+                        for ln in _wl_path.read_text(encoding="utf-8").splitlines()
+                        if ln.strip() and not ln.strip().startswith("#")
+                    ]
+                if _ticker in _existing:
+                    st.info(f"**{_ticker}** is already in watchlist.txt.")
+                else:
+                    with _wl_path.open("a", encoding="utf-8") as _fh:
+                        _fh.write(f"{_ticker}\n")
+                    st.success(
+                        f"**{_ticker}** added to `watchlist.txt`. "
+                        "It will appear in the universe on the next pipeline run."
+                    )
+                    logger.info("Watchlist quick-add: appended %s to watchlist.txt", _ticker)
+            except OSError as _exc:  # noqa: BLE001
+                st.error(f"Could not write watchlist.txt: {_exc}")
+
+    # ------------------------------------------------------------------ #
     # 2. Optionally trigger an async sync. Run the coroutine to completion on
     #    a freshly created event loop — Streamlit runs each interaction on a
     #    new thread so we MUST create the loop explicitly.

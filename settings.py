@@ -206,6 +206,22 @@ class Settings(BaseSettings):
         description="ISO date (YYYY-MM-DD) when paper trading began. Required by preflight check.",
     )
 
+    # ISO date string (YYYY-MM-DD) recording when FRED_API_KEY was last rotated.
+    # Used by scripts/preflight_check.py::check_key_rotation_recent to surface a
+    # warning when the key has not been rotated within the recommended 90-day window.
+    # Set this whenever you generate a new key at:
+    #   https://fred.stlouisfed.org/docs/api/api_key.html
+    # Advisory-only operators still benefit from rotating the FRED key to limit
+    # blast radius if the key leaks from logs or shared .env files.
+    FRED_KEY_ROTATED_DATE: Optional[str] = Field(
+        default=None,
+        description=(
+            "ISO date (YYYY-MM-DD) when FRED_API_KEY was last rotated. "
+            "Set after generating a new key to keep the rotation reminder current. "
+            "Unset = key-age check skipped (warning-level PASS, not blocking)."
+        ),
+    )
+
     # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py) ---
     # These three variables feed the TOTP-based read-only portfolio fetch.
     # data/robinhood_portfolio.py reads them directly from os.environ so that

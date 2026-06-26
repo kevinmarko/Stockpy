@@ -43,7 +43,12 @@ Checks
 ------
  1. fred_key_configured         — FRED_API_KEY is set and is not the known-
                                   compromised value (detected via settings.fred_key_is_leaked).
- 2. advisory_only_active        — settings.ADVISORY_ONLY=True (Tier 5.1
+ 2. key_rotation_recent         — FRED_API_KEY was rotated within the last 90
+                                  days (FRED_KEY_ROTATED_DATE in .env).
+                                  Warning-only; never blocking.  ALPACA keys
+                                  are NOT checked (no blast radius in advisory
+                                  mode).
+ 3. advisory_only_active        — settings.ADVISORY_ONLY=True (Tier 5.1
                                   quarantine).  When True, the three
                                   broker-readiness checks below
                                   (alpaca_configured / alpaca_paper_mode /
@@ -51,26 +56,26 @@ Checks
                                   because broker submission is structurally
                                   suppressed.  Warning-only when False (live
                                   broker stack is in scope).
- 3. alpaca_configured           — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
+ 4. alpaca_configured           — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
                                   SKIPPED when ADVISORY_ONLY=True.
- 4. macro_regime_gate_enabled   — MACRO_REGIME_GATE_ENABLED=True when live trading.
+ 5. macro_regime_gate_enabled   — MACRO_REGIME_GATE_ENABLED=True when live trading.
                                   Warning-only in paper mode; blocking when
                                   ALPACA_PAPER=False + gate disabled.
- 5. alpaca_paper_mode           — ALPACA_PAPER=True.  Warning-only when False.
+ 6. alpaca_paper_mode           — ALPACA_PAPER=True.  Warning-only when False.
                                   SKIPPED when ADVISORY_ONLY=True.
- 6. dry_run_disabled            — DRY_RUN=False (orders reach the broker).
+ 7. dry_run_disabled            — DRY_RUN=False (orders reach the broker).
                                   SKIPPED when ADVISORY_ONLY=True.
- 7. env_not_committed           — .env file is git-untracked (``git ls-files``).
- 8. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
- 9. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
-10. db_exists                   — quant_platform.db exists and is non-empty.
-11. paper_trading_duration      — Paper-trading started ≥ 90 days ago
+ 8. env_not_committed           — .env file is git-untracked (``git ls-files``).
+ 9. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
+10. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
+11. db_exists                   — quant_platform.db exists and is non-empty.
+12. paper_trading_duration      — Paper-trading started ≥ 90 days ago
                                   (requires PAPER_TRADING_START_DATE in .env).
                                   SKIPPED when ADVISORY_ONLY=True (no broker
                                   → no paper-trading clock).
-12. validation_reports          — Every *_validation_summary.json in reports/ is
+13. validation_reports          — Every *_validation_summary.json in reports/ is
                                   deployable=True and dated within 30 days.
-13. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
+14. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
                                   last 24 hours (indicates missing/expired reports
                                   were discovered at order time rather than here).
 """
@@ -151,6 +156,59 @@ def check_fred_key_configured() -> CheckResult:
             "FRED_API_KEY matches the known-compromised leaked value — rotate immediately",
         )
     return CheckResult(name, True, "FRED_API_KEY is configured and not the leaked value")
+
+
+def check_key_rotation_recent(max_age_days: int = 90) -> CheckResult:
+    """Warn if FRED_API_KEY has not been rotated within the recommended window.
+
+    Advisory-only operators rely on FRED for macroeconomic regime data even when
+    no orders are submitted.  Rotating credentials every 90 days limits the blast
+    radius if a key leaks from logs or a shared ``.env`` file.
+
+    This check is **warning-only** (never blocking) because a stale rotation date
+    does not prevent the platform from running; it is a hygiene reminder.
+
+    If ``FRED_KEY_ROTATED_DATE`` is unset the check still passes with a warning so
+    the operator is prompted to start tracking the rotation date — it does NOT fail
+    because the field is optional and not set in existing deployments.
+
+    ``ALPACA_KEY_ROTATED_DATE`` is intentionally NOT checked here: Alpaca paper keys
+    have no blast-radius risk in advisory mode, and paper → live migration (which
+    would make them sensitive) is handled by the ``advisory_only_active`` gate.
+    """
+    name = "key_rotation_recent"
+    rotated_str = getattr(settings, "FRED_KEY_ROTATED_DATE", None)
+    if not rotated_str:
+        return CheckResult(
+            name, True,
+            "⚠️  FRED_KEY_ROTATED_DATE not set in .env — consider adding it after "
+            "your next key rotation so the 90-day reminder can track age. "
+            "Set at https://fred.stlouisfed.org/docs/api/api_key.html",
+            warning=True,
+        )
+    try:
+        rotated = date.fromisoformat(rotated_str)
+    except ValueError:
+        return CheckResult(
+            name, True,
+            f"⚠️  FRED_KEY_ROTATED_DATE has invalid format {rotated_str!r} "
+            "(expected YYYY-MM-DD). Cannot check rotation age.",
+            warning=True,
+        )
+    age_days = (date.today() - rotated).days
+    if age_days > max_age_days:
+        return CheckResult(
+            name, True,
+            f"⚠️  FRED_API_KEY was last rotated {age_days} days ago "
+            f"(limit {max_age_days} days). Consider rotating at "
+            "https://fred.stlouisfed.org/docs/api/api_key.html and updating "
+            "FRED_KEY_ROTATED_DATE in .env.",
+            warning=True,
+        )
+    return CheckResult(
+        name, True,
+        f"FRED_API_KEY rotated {age_days} days ago (within {max_age_days}-day window)",
+    )
 
 
 def check_advisory_only_active() -> CheckResult:
@@ -557,6 +615,7 @@ def check_no_unexpected_risk_blocks(hours: float = 24.0) -> CheckResult:
 # matching relies on (strip ``check_`` prefix → name).
 ALL_CHECKS = [
     check_fred_key_configured,
+    check_key_rotation_recent,
     check_advisory_only_active,
     check_alpaca_configured,
     check_macro_regime_gate_enabled,
