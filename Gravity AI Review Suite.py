@@ -4312,10 +4312,8 @@ class GravityAIAuditor:
         self.run_forecast_skill_audit()
         # Tier 2.3 Phase 1 — Persistent OHLCV price bar storage
         self.run_historical_persistence_audit_phase1()
-        # Tier 2.4 — News catalyst signal (FinBERT / lexicon + Finnhub)
-        self.run_news_catalyst_audit()
-        # Tier 2.5 — Correlation cluster awareness
-        self.run_correlation_cluster_audit()
+        # Tier 2.3 Phase 2 — account_snapshots + account_positions
+        self.step_61_historical_persistence_audit_phase2()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -8849,312 +8847,6 @@ class GravityAIAuditor:
 
         self.report["step_59_forecast_skill_audit"] = audit
 
-    def run_news_catalyst_audit(self) -> None:
-        """Step 60 — Tier 2.4: News / Earnings Catalyst Signal audit.
-
-        Checks
-        ------
-        1. ``signals.news_catalyst`` importable; ``NewsCatalystSignal`` exists.
-        2. ``name`` attribute == ``"news_catalyst"``.
-        3. FinBERT pipeline helper returns ``None`` gracefully when transformers absent.
-        4. Lexicon: clear positive headline scores > 0; clear negative < 0.
-        5. Earnings proximity: score == 0.0 within 48h of earnings (suppress).
-        6. Earnings proximity: |score| * 0.5 within 7 days (dampen).
-        7. ``pre_compute`` populates ``context.news_sentiment_scores`` and ``context.earnings_dates``.
-        8. No-key path: empty ``FINNHUB_API_KEY`` → caches empty, no crash.
-        9. ``settings.news_catalyst`` weight in ``SIGNAL_WEIGHTS``.
-        10. ``tests/test_news_catalyst.py`` exists.
-        """
-        audit: dict = {"step": "step_60_news_catalyst_audit", "checks": [], "status": "PENDING"}
-        try:
-            checks = []
-            overall = True
-
-            # Check 1 — importable
-            try:
-                from signals.news_catalyst import NewsCatalystSignal, _lexicon_sentiment, _earnings_proximity_multiplier
-                checks.append({"check": "signals.news_catalyst importable", "passed": True})
-            except ImportError as ie:
-                checks.append({"check": "signals.news_catalyst importable", "passed": False, "error": str(ie)})
-                overall = False
-
-            # Check 2 — name attribute
-            try:
-                sig = object.__new__(NewsCatalystSignal)
-                sig._news_scores = {}
-                sig._earnings_dt = {}
-                name_ok = getattr(NewsCatalystSignal, "name", "") == "news_catalyst"
-                checks.append({"check": "name == 'news_catalyst'", "passed": name_ok})
-                if not name_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "name attribute", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 3 — FinBERT optional (graceful None)
-            try:
-                from signals.news_catalyst import _get_finbert_pipeline
-                import signals.news_catalyst as _nc_mod
-                _nc_mod._FINBERT_LOAD_ATTEMPTED = False  # reset so we can re-test
-                _nc_mod._FINBERT_PIPELINE = None
-                # When transformers is absent, should return None not raise
-                with __import__("unittest.mock", fromlist=["patch"]).patch(
-                    "signals.news_catalyst._FINBERT_LOAD_ATTEMPTED", True
-                ):
-                    result = _nc_mod._FINBERT_PIPELINE  # should be None
-                checks.append({"check": "FinBERT returns None when unavailable", "passed": True})
-            except Exception as e:
-                checks.append({"check": "FinBERT graceful None", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 4 — lexicon positive/negative
-            try:
-                pos_score = _lexicon_sentiment("Stock surges and beats earnings expectations")
-                neg_score = _lexicon_sentiment("Stock crashes as losses mount and fraud widens")
-                pos_ok = pos_score > 0
-                neg_ok = neg_score < 0
-                checks.append({"check": "lexicon positive > 0", "passed": pos_ok, "score": pos_score})
-                checks.append({"check": "lexicon negative < 0", "passed": neg_ok, "score": neg_score})
-                if not pos_ok:
-                    overall = False
-                if not neg_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "lexicon scoring", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 5 — suppress within 48h
-            try:
-                from datetime import datetime, timedelta, timezone
-                now = datetime.now(timezone.utc)
-                soon = now + timedelta(hours=24)
-                multiplier_suppress = _earnings_proximity_multiplier(soon, now, 48.0, 7.0)
-                supp_ok = multiplier_suppress == 0.0
-                checks.append({"check": "earnings suppress within 48h → 0.0", "passed": supp_ok, "multiplier": multiplier_suppress})
-                if not supp_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "earnings suppress check", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 6 — dampen within 7 days
-            try:
-                mid = now + timedelta(days=4)
-                multiplier_dampen = _earnings_proximity_multiplier(mid, now, 48.0, 7.0)
-                damp_ok = multiplier_dampen == 0.5
-                checks.append({"check": "earnings dampen within 7 days → 0.5", "passed": damp_ok, "multiplier": multiplier_dampen})
-                if not damp_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "earnings dampen check", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 7 — pre_compute populates context fields
-            try:
-                import types, os
-                from unittest.mock import MagicMock, patch as _patch
-                ctx = types.SimpleNamespace(news_sentiment_scores={}, earnings_dates={})
-                uni = __import__("pandas").DataFrame({"Symbol": ["AAPL"]})
-                s = object.__new__(NewsCatalystSignal)
-                s._news_scores = {}
-                s._earnings_dt = {}
-                mock_client = MagicMock()
-                mock_client.company_news.return_value = [{"headline": "beats expectations"}]
-                mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-                with _patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
-                    with _patch("signals.news_catalyst._build_finnhub_client", return_value=mock_client):
-                        with _patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
-                            with _patch("signals.news_catalyst.time.sleep"):
-                                s.pre_compute(uni, ctx)
-                ctx_ok = isinstance(ctx.news_sentiment_scores, dict) and isinstance(ctx.earnings_dates, dict)
-                checks.append({"check": "pre_compute populates context.news_sentiment_scores and .earnings_dates", "passed": ctx_ok})
-                if not ctx_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "pre_compute context population", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 8 — no key → no crash, empty caches
-            try:
-                s2 = object.__new__(NewsCatalystSignal)
-                s2._news_scores = {}
-                s2._earnings_dt = {}
-                ctx2 = types.SimpleNamespace(news_sentiment_scores={}, earnings_dates={})
-                uni2 = __import__("pandas").DataFrame({"Symbol": ["AAPL"]})
-                with _patch.dict(os.environ, {"FINNHUB_API_KEY": ""}, clear=False):
-                    s2.pre_compute(uni2, ctx2)
-                no_crash_ok = True
-                checks.append({"check": "no FINNHUB_API_KEY → no crash", "passed": True})
-            except Exception as e:
-                checks.append({"check": "no key resilience", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 9 — weight in SIGNAL_WEIGHTS
-            try:
-                from settings import settings as _s
-                weight_ok = "news_catalyst" in _s.SIGNAL_WEIGHTS
-                checks.append({"check": "news_catalyst in SIGNAL_WEIGHTS", "passed": weight_ok, "weight": _s.SIGNAL_WEIGHTS.get("news_catalyst")})
-                if not weight_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "SIGNAL_WEIGHTS entry", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 10 — test file exists
-            import os as _os
-            test_exists = _os.path.isfile("tests/test_news_catalyst.py")
-            checks.append({"check": "tests/test_news_catalyst.py exists", "passed": test_exists})
-            if not test_exists:
-                overall = False
-
-            audit["checks"] = checks
-            audit["overall_pass"] = overall
-            audit["status"] = "PASSED" if overall else "FAILED"
-
-        except Exception as exc:
-            audit["status"] = f"Execution Error: {exc}"
-            audit["error"] = str(exc)
-            audit["overall_pass"] = False
-
-        self.report["step_60_news_catalyst_audit"] = audit
-
-    def run_correlation_cluster_audit(self) -> None:
-        """Step 61 — Tier 2.5: Correlation Cluster Awareness audit.
-
-        Checks
-        ------
-        1. ``research_engine.compute_correlation_clusters`` importable.
-        2. ``research_engine.fetch_returns_for_clustering`` importable.
-        3. Known correlated symbols (A, B) cluster together.
-        4. Uncorrelated symbol (C) in different cluster.
-        5. Empty DataFrame → empty labels dict, empty summary.
-        6. ``Correlation_Cluster`` in ``config.COLUMN_SCHEMA``.
-        7. ``settings.CORRELATION_CLUSTER_LOOKBACK_DAYS`` == 60.
-        8. ``settings.CORRELATION_CLUSTER_THRESHOLD`` == 0.4.
-        9. Insufficient obs symbols get cluster_id = 0.
-        10. ``tests/test_correlation_clusters.py`` exists.
-        """
-        audit: dict = {"step": "step_61_correlation_cluster_audit", "checks": [], "status": "PENDING"}
-        try:
-            checks = []
-            overall = True
-
-            # Check 1 — compute_correlation_clusters importable
-            try:
-                from research_engine import compute_correlation_clusters
-                checks.append({"check": "compute_correlation_clusters importable", "passed": True})
-            except ImportError as ie:
-                checks.append({"check": "compute_correlation_clusters importable", "passed": False, "error": str(ie)})
-                overall = False
-
-            # Check 2 — fetch_returns_for_clustering importable
-            try:
-                from research_engine import fetch_returns_for_clustering
-                checks.append({"check": "fetch_returns_for_clustering importable", "passed": True})
-            except ImportError as ie:
-                checks.append({"check": "fetch_returns_for_clustering importable", "passed": False, "error": str(ie)})
-                overall = False
-
-            # Check 3 & 4 — known correlated symbols cluster together
-            try:
-                import numpy as np
-                import pandas as pd
-                rng = np.random.default_rng(42)
-                dates = pd.date_range("2026-01-01", periods=60, freq="B")
-                base = rng.standard_normal(60)
-                returns_a = base * 0.01 + rng.standard_normal(60) * 0.0005
-                returns_b = base * 0.01 + rng.standard_normal(60) * 0.0005
-                returns_c = rng.standard_normal(60) * 0.01
-                returns_df = pd.DataFrame({"A": returns_a, "B": returns_b, "C": returns_c}, index=dates)
-                labels, summary = compute_correlation_clusters(returns_df, distance_threshold=0.4)
-                ab_same = labels.get("A") == labels.get("B")
-                ac_diff = labels.get("A") != labels.get("C")
-                checks.append({"check": "correlated A,B share cluster", "passed": ab_same, "A": labels.get("A"), "B": labels.get("B")})
-                checks.append({"check": "uncorrelated C in different cluster", "passed": ac_diff, "A": labels.get("A"), "C": labels.get("C")})
-                if not ab_same:
-                    overall = False
-                if not ac_diff:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "known-group clustering", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 5 — empty DataFrame returns empty
-            try:
-                empty_labels, empty_summary = compute_correlation_clusters(pd.DataFrame())
-                empty_ok = (empty_labels == {}) and empty_summary.empty
-                checks.append({"check": "empty DataFrame → empty labels and summary", "passed": empty_ok})
-                if not empty_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "empty DataFrame resilience", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 6 — Correlation_Cluster in COLUMN_SCHEMA
-            try:
-                from config import COLUMN_SCHEMA
-                keys = [col["key"] for col in COLUMN_SCHEMA]
-                col_ok = "Correlation_Cluster" in keys
-                checks.append({"check": "Correlation_Cluster in COLUMN_SCHEMA", "passed": col_ok})
-                if not col_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "COLUMN_SCHEMA check", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 7 — settings.CORRELATION_CLUSTER_LOOKBACK_DAYS == 60
-            try:
-                from settings import settings as _s
-                lb_ok = _s.CORRELATION_CLUSTER_LOOKBACK_DAYS == 60
-                checks.append({"check": "CORRELATION_CLUSTER_LOOKBACK_DAYS == 60", "passed": lb_ok, "value": _s.CORRELATION_CLUSTER_LOOKBACK_DAYS})
-                if not lb_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "lookback setting", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 8 — settings.CORRELATION_CLUSTER_THRESHOLD == 0.4
-            try:
-                thresh_ok = abs(_s.CORRELATION_CLUSTER_THRESHOLD - 0.4) < 1e-9
-                checks.append({"check": "CORRELATION_CLUSTER_THRESHOLD == 0.4", "passed": thresh_ok, "value": _s.CORRELATION_CLUSTER_THRESHOLD})
-                if not thresh_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "threshold setting", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 9 — insufficient obs → cluster_id = 0
-            try:
-                rng2 = np.random.default_rng(99)
-                dates2 = pd.date_range("2026-01-01", periods=10, freq="B")
-                short_df = pd.DataFrame({"SCARCE": rng2.standard_normal(10) * 0.01}, index=dates2)
-                short_labels, _ = compute_correlation_clusters(short_df, min_obs=20)
-                ins_ok = short_labels.get("SCARCE") == 0
-                checks.append({"check": "insufficient obs symbol gets cluster_id=0", "passed": ins_ok, "label": short_labels.get("SCARCE")})
-                if not ins_ok:
-                    overall = False
-            except Exception as e:
-                checks.append({"check": "insufficient obs check", "passed": False, "error": str(e)})
-                overall = False
-
-            # Check 10 — test file exists
-            import os as _os
-            test_exists = _os.path.isfile("tests/test_correlation_clusters.py")
-            checks.append({"check": "tests/test_correlation_clusters.py exists", "passed": test_exists})
-            if not test_exists:
-                overall = False
-
-            audit["checks"] = checks
-            audit["overall_pass"] = overall
-            audit["status"] = "PASSED" if overall else "FAILED"
-
-        except Exception as exc:
-            audit["status"] = f"Execution Error: {exc}"
-            audit["error"] = str(exc)
-            audit["overall_pass"] = False
-
-        self.report["step_61_correlation_cluster_audit"] = audit
-
     # -------------------------------------------------------------------------
     # Step 60 — Tier 2.3 Phase 1: Persistent OHLCV price bar storage
     # -------------------------------------------------------------------------
@@ -9271,6 +8963,168 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_60_historical_persistence_audit_phase1"] = audit
+
+    def step_61_historical_persistence_audit_phase2(self) -> None:
+        """Tier 2.3 Phase 2 — account_snapshots + account_positions persistence."""
+        import os, inspect, sqlite3, tempfile
+        from datetime import datetime, timezone, timedelta
+
+        audit: dict = {
+            "step": "step_61_historical_persistence_audit_phase2",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+        try:
+            # 1. account_snapshots and account_positions tables exist after init
+            from data.historical_store import HistoricalStore
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "gravity_phase2.db")
+                HistoricalStore(db_path=db_path)
+                with sqlite3.connect(db_path) as conn:
+                    tables = {
+                        r[0] for r in conn.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        ).fetchall()
+                    }
+                    indexes = {
+                        r[0] for r in conn.execute(
+                            "SELECT name FROM sqlite_master WHERE type='index'"
+                        ).fetchall()
+                    }
+            snap_table_ok = "account_snapshots" in tables
+            pos_table_ok = "account_positions" in tables
+            idx_ok = "idx_acct_snap_ts" in indexes
+            audit["checks"].append({
+                "check": "account_snapshots table exists after HistoricalStore.__init__",
+                "passed": snap_table_ok,
+                "detail": str(tables),
+            })
+            audit["checks"].append({
+                "check": "account_positions table exists after HistoricalStore.__init__",
+                "passed": pos_table_ok,
+                "detail": str(tables),
+            })
+            audit["checks"].append({
+                "check": "idx_acct_snap_ts index exists",
+                "passed": idx_ok,
+                "detail": str(indexes),
+            })
+            all_pass = all_pass and snap_table_ok and pos_table_ok and idx_ok
+
+            # 2. save_account_snapshot + latest_account_snapshot round-trip
+            from data.robinhood_portfolio import AccountSnapshot, PortfolioPosition
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, "gravity_rt.db")
+                store = HistoricalStore(db_path=db_path)
+                pos = PortfolioPosition(
+                    symbol="TSLA",
+                    quantity=5.0,
+                    average_cost=200.0,
+                    current_price=250.0,
+                    market_value=1250.0,
+                    unrealized_pl=250.0,
+                    unrealized_pl_pct=25.0,
+                    dividends_received=0.0,
+                    name="Tesla Inc.",
+                )
+                snap = AccountSnapshot(
+                    positions={"TSLA": pos},
+                    buying_power=5000.0,
+                    total_equity=6250.0,
+                    total_dividends=0.0,
+                    fetched_at=datetime.now(timezone.utc),
+                )
+                snap_id = store.save_account_snapshot(snap)
+                loaded = store.latest_account_snapshot()
+                rt_ok = (
+                    snap_id > 0
+                    and loaded is not None
+                    and abs(loaded.buying_power - snap.buying_power) < 0.01
+                    and "TSLA" in loaded.positions
+                )
+            audit["checks"].append({
+                "check": "save_account_snapshot + latest_account_snapshot round-trip",
+                "passed": rt_ok,
+                "detail": f"snapshot_id={snap_id}, loaded buying_power={getattr(loaded, 'buying_power', None)}",
+            })
+            all_pass = all_pass and rt_ok
+
+            # 3. save_account_snapshot returns -1 on DB error (never raises)
+            from unittest.mock import patch as _patch
+            with tempfile.TemporaryDirectory() as td:
+                store2 = HistoricalStore(db_path=os.path.join(td, "err.db"))
+                with _patch("sqlite3.connect", side_effect=sqlite3.OperationalError("full")):
+                    err_result = store2.save_account_snapshot(snap)
+            error_sentinel_ok = err_result == -1
+            audit["checks"].append({
+                "check": "save_account_snapshot returns -1 on DB error (never raises)",
+                "passed": error_sentinel_ok,
+                "detail": f"returned {err_result!r}",
+            })
+            all_pass = all_pass and error_sentinel_ok
+
+            # 4. latest_account_snapshot returns None on empty DB
+            with tempfile.TemporaryDirectory() as td:
+                empty_store = HistoricalStore(db_path=os.path.join(td, "empty.db"))
+                none_result = empty_store.latest_account_snapshot()
+            none_ok = none_result is None
+            audit["checks"].append({
+                "check": "latest_account_snapshot returns None on empty DB",
+                "passed": none_ok,
+            })
+            all_pass = all_pass and none_ok
+
+            # 5. data/robinhood_portfolio.py references HistoricalStore in
+            #    both the read path and the post-live-fetch write path
+            rh_src = open("data/robinhood_portfolio.py", encoding="utf-8").read()
+            rh_import_ok = "from data.historical_store import HistoricalStore" in rh_src
+            rh_read_ok = "latest_account_snapshot" in rh_src
+            rh_write_ok = "save_account_snapshot" in rh_src
+            audit["checks"].append({
+                "check": "data/robinhood_portfolio.py imports HistoricalStore",
+                "passed": rh_import_ok,
+            })
+            audit["checks"].append({
+                "check": "data/robinhood_portfolio.py calls latest_account_snapshot (DB read path)",
+                "passed": rh_read_ok,
+            })
+            audit["checks"].append({
+                "check": "data/robinhood_portfolio.py calls save_account_snapshot (post-live-fetch write)",
+                "passed": rh_write_ok,
+            })
+            all_pass = all_pass and rh_import_ok and rh_read_ok and rh_write_ok
+
+            # 6. tests/test_robinhood_portfolio.py::TestDBIntegration exists
+            import ast
+            rh_test_src = open("tests/test_robinhood_portfolio.py", encoding="utf-8").read()
+            rh_test_tree = ast.parse(rh_test_src)
+            db_integration_class_ok = any(
+                isinstance(node, ast.ClassDef) and node.name == "TestDBIntegration"
+                for node in ast.walk(rh_test_tree)
+            )
+            audit["checks"].append({
+                "check": "tests/test_robinhood_portfolio.py contains TestDBIntegration class",
+                "passed": db_integration_class_ok,
+            })
+            all_pass = all_pass and db_integration_class_ok
+
+            # 7. tests/test_historical_store.py exists
+            test_file_ok = os.path.isfile("tests/test_historical_store.py")
+            audit["checks"].append({
+                "check": "tests/test_historical_store.py exists",
+                "passed": test_file_ok,
+            })
+            all_pass = all_pass and test_file_ok
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_61_historical_persistence_audit_phase2"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
