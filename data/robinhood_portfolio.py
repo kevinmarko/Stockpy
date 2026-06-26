@@ -196,8 +196,9 @@ def _login() -> None:
     ``store_session=True`` persists the session pickle in ~/.tokens so that
     subsequent logins on the same device reuse the stored OAuth token,
     minimising MFA prompts and avoiding spurious "new device" notifications.
-    ``by_sms=False`` prevents the library from requesting an SMS code when a
-    TOTP code is already being supplied.
+    Passing ``mfa_code=`` selects the TOTP path; ``robin-stocks`` >= 3.4
+    removed the legacy ``by_sms=`` kwarg and infers the path from whether
+    ``mfa_code`` is supplied.
     """
     username = _require_env("RH_USERNAME")
     password = _require_env("RH_PASSWORD")
@@ -212,7 +213,6 @@ def _login() -> None:
         password,
         store_session=True,  # persist ~/.tokens pickle for same-device reuse
         mfa_code=mfa_code,
-        by_sms=False,        # suppress SMS prompt — TOTP code is already provided
     )
 
     if not isinstance(result, dict) or "access_token" not in result:
