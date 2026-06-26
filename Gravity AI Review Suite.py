@@ -6239,6 +6239,7 @@ class GravityAIAuditor:
 
         self.report["step_45_zero_position_size_crashfix_audit"] = audit
 
+<<<<<<< HEAD
     def run_enhanced_observability_audit(self) -> None:
         """Step 46 — Enhanced Observability & Error Handling audit.
 
@@ -6442,6 +6443,8 @@ class GravityAIAuditor:
 
         self.report["step_46_enhanced_observability_audit"] = audit
 
+=======
+>>>>>>> 7b3182f (fix: prevent ZeroDivisionError crash on watchlist-only runs)
     def run_robinhood_watchlist_noise_audit(self) -> None:
         """Step 39 — Robinhood watchlist 400-noise suppression audit.
 
