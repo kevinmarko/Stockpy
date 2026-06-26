@@ -187,40 +187,49 @@ class AccountSnapshot:
 # ---------------------------------------------------------------------------
 
 def _login() -> None:
-    """Authenticate to Robinhood using TOTP MFA.
+    """Authenticate to Robinhood using TOTP or SMS MFA.
 
-    Reads RH_USERNAME, RH_PASSWORD, and RH_MFA_SECRET from os.environ
+    Reads RH_USERNAME, RH_PASSWORD, and optional RH_MFA_SECRET from os.environ
     (populated from .env by python-dotenv / pydantic-settings at startup).
-    Raises RuntimeError if any credential is missing or if login fails.
+    Raises RuntimeError if any required credential is missing or if login fails.
 
     ``store_session=True`` persists the session pickle in ~/.tokens so that
     subsequent logins on the same device reuse the stored OAuth token,
     minimising MFA prompts and avoiding spurious "new device" notifications.
     Passing ``mfa_code=`` selects the TOTP path; ``robin-stocks`` >= 3.4
     removed the legacy ``by_sms=`` kwarg and infers the path from whether
-    ``mfa_code`` is supplied.
+    ``mfa_code`` is supplied. If RH_MFA_SECRET is not set, falls back to 
+    interactive MFA prompting in the terminal.
     """
     username = _require_env("RH_USERNAME")
     password = _require_env("RH_PASSWORD")
-    mfa_secret = _require_env("RH_MFA_SECRET")
+    mfa_secret = os.environ.get("RH_MFA_SECRET", "").strip()
 
-    # Generate the current 6-digit TOTP code from the base32 secret.
-    # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
-    mfa_code = pyotp.TOTP(mfa_secret).now()
-
-    result = r.login(
-        username,
-        password,
-        store_session=True,  # persist ~/.tokens pickle for same-device reuse
-        mfa_code=mfa_code,
-    )
+    if mfa_secret:
+        # Generate the current 6-digit TOTP code from the base32 secret.
+        # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
+        mfa_code = pyotp.TOTP(mfa_secret).now()
+        
+        result = r.login(
+            username,
+            password,
+            store_session=True,  # persist ~/.tokens pickle for same-device reuse
+            mfa_code=mfa_code,
+        )
+    else:
+        logger.info("RH_MFA_SECRET is missing or empty. Falling back to interactive MFA login.")
+        result = r.login(
+            username,
+            password,
+            store_session=True,  # persist ~/.tokens pickle for same-device reuse
+        )
 
     if not isinstance(result, dict) or "access_token" not in result:
         raise RuntimeError(
-            "Robinhood TOTP login failed — no access_token in login response. "
-            "Check RH_USERNAME, RH_PASSWORD, and RH_MFA_SECRET."
+            "Robinhood login failed — no access_token in login response. "
+            "Check RH_USERNAME and RH_PASSWORD."
         )
-    logger.info("Robinhood TOTP login succeeded.")
+    logger.info("Robinhood login succeeded.")
 
 
 # ---------------------------------------------------------------------------
