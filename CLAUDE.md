@@ -264,6 +264,13 @@ Flat, modular "Engine" architecture using dependency injection — no package di
   - **Step 1 dynamic schema validation**: covered dynamic `DashboardSchema` validation in `run_schema_audit()`.
   - **Step 8 multi-indicator perturbation**: added lookahead perturbation check for all technical indicators (`RSI`, `RSI_2`, `MACD`, `ATR`, `Aroon`, `Coppock`, `Chandelier_Exit`) in `run_lookahead_audit()`, verifying the actual `ProcessingEngine` calculations.
   - **Step 35 portfolio heat limit audit**: added `run_risk_gates_portfolio_heat_audit()` verifying that `PreTradeRiskGate` with 6% limit blocks BUY orders and allows SELL orders in mock mode.
+  - **Step 37 six-bug regression audit** (`run_six_bug_regression_audit()`): enforces the six production bugs found in the 2026-06 bug-hunt session cannot regress. Checks: (1) `_fallback_sentiment("")` is an NLP scorer not a Sahm proxy; (2) `calculate_sahm_rule()` is called in `run_pipeline`; (3) `sahm_rule_indicator=` keyword wired to `MacroEconomicDTO` in `main_orchestrator.py`; (4) `MacroEconomicDTO.killSwitch` fires at `sahm_rule_indicator >= 0.5`; (5) Gordon Growth Model uses the same capped g in both numerator and denominator; (6) `calculate_momentum_metrics` returns NaN (not 0.0) for `ROC_12M`/`Realized_Vol_60D` when `len(df) < 253`; (7) `evaluate_portfolio`'s `benchmark_df` default is `None`; (8) fallback forecast path in `main_orchestrator` uses `run_monte_carlo`, not `price*(1+mu*N)`.
+- **Six-bug session invariants** (2026-06 bug-hunt — must never regress):
+  - `main_orchestrator.run_pipeline` MUST call `me.calculate_sahm_rule()` (not `me._fallback_sentiment("")`) and forward the result as `sahm_rule_indicator=sahm_val` to `MacroEconomicDTO`. Violating either half silently disables the Sahm Rule recession kill-switch.
+  - `calculate_gordon_fair_value()` MUST cap `g` before computing `D1 = D0 * (1 + g_capped)`. Both numerator and denominator must use the same capped rate.
+  - `calculate_momentum_metrics()` MUST return `float('nan')` for all ROC/vol columns in the `len(df) < 253` early-return path. `0.0` is fabricated data (Constraint #4).
+  - `evaluate_portfolio()`'s `benchmark_df` parameter MUST default to `None`; create a fresh `pd.DataFrame()` inside the function body.
+  - The fallback-forecast exception path in `run_pipeline` MUST call `fe.run_monte_carlo(price, mu, sigma, N)` for every forecast horizon — not `price * (1 + mu * N)`.
 
 
 

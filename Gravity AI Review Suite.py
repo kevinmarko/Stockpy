@@ -4189,6 +4189,7 @@ class GravityAIAuditor:
         self.run_macro_regime_gate_toggle_audit()
         self.run_portfolio_sync_audit()
         self.run_risk_gates_portfolio_heat_audit()
+        self.run_six_bug_regression_audit()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -4744,6 +4745,235 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
             
         self.report["step_36_portfolio_heat_risk_gate_audit"] = audit
+
+    # -------------------------------------------------------------------------
+    # STEP 37 — Six-Bug Regression Audit (2026-06 bug-hunt session)
+    # -------------------------------------------------------------------------
+    def run_six_bug_regression_audit(self) -> None:
+        """Verify the six production bugs found in the 2026-06 bug-hunt session
+        are fixed and cannot regress.
+
+        BUG-1 / BUG-2: Sahm Rule calculation & wiring in run_pipeline
+        BUG-3: Gordon Growth Model asymmetric g cap
+        BUG-4: Momentum early-return emits 0.0 instead of NaN
+        BUG-5: Mutable default argument in evaluate_portfolio
+        BUG-6: Fallback forecast used naive linear formula instead of Monte Carlo
+        """
+        import inspect
+        import math
+        import numpy as np
+        import pandas as pd
+
+        audit: dict = {
+            "step": "step_37_six_bug_regression_audit",
+            "description": "Regression guard for the six bugs fixed in 2026-06",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        try:
+            # ------------------------------------------------------------------
+            # BUG-1: _fallback_sentiment must NOT be used as the Sahm proxy
+            # ------------------------------------------------------------------
+            from macro_engine import MacroEngine
+            from data_engine import MockDataEngine
+
+            me = MacroEngine(data_engine=MockDataEngine())
+            sentinel = object()
+            result_fs = me._fallback_sentiment("")
+            # _fallback_sentiment("") returns 0.0 — it is an NLP helper, NOT Sahm
+            fs_check = result_fs == 0.0
+            audit["checks"].append({
+                "check": "BUG-1: _fallback_sentiment('') returns 0.0 (NLP helper, not Sahm)",
+                "passed": fs_check,
+                "detail": f"_fallback_sentiment('')={result_fs!r}",
+            })
+            all_pass = all_pass and fs_check
+
+            # calculate_sahm_rule must exist and be callable (not _fallback_sentiment)
+            has_sahm_method = callable(getattr(me, "calculate_sahm_rule", None))
+            audit["checks"].append({
+                "check": "BUG-1: calculate_sahm_rule() method exists on MacroEngine",
+                "passed": has_sahm_method,
+                "detail": str(has_sahm_method),
+            })
+            all_pass = all_pass and has_sahm_method
+
+            # ------------------------------------------------------------------
+            # BUG-2: MacroEconomicDTO.killSwitch fires at sahm_rule_indicator >= 0.5
+            # ------------------------------------------------------------------
+            from dto_models import MacroEconomicDTO
+
+            dto_high = MacroEconomicDTO(
+                yield_curve_10y_2y=0.5, high_yield_oas=3.0,
+                inflation_rate=2.0, vix_value=18.0, sahm_rule_indicator=0.52,
+            )
+            bug2a = dto_high.killSwitch is True
+            audit["checks"].append({
+                "check": "BUG-2: MacroEconomicDTO.killSwitch fires when sahm_rule_indicator=0.52",
+                "passed": bug2a,
+                "detail": f"killSwitch={dto_high.killSwitch!r}, regime={dto_high.market_regime!r}",
+            })
+            all_pass = all_pass and bug2a
+
+            dto_low = MacroEconomicDTO(
+                yield_curve_10y_2y=0.5, high_yield_oas=3.0,
+                inflation_rate=2.0, vix_value=18.0, sahm_rule_indicator=0.0,
+            )
+            bug2b = dto_low.killSwitch is False
+            audit["checks"].append({
+                "check": "BUG-2: MacroEconomicDTO.killSwitch is False when sahm_rule_indicator=0.0 and VIX<30",
+                "passed": bug2b,
+                "detail": f"killSwitch={dto_low.killSwitch!r}",
+            })
+            all_pass = all_pass and bug2b
+
+            # Verify main_orchestrator.py passes sahm_rule_indicator to MacroEconomicDTO
+            import ast, pathlib
+            orch_src = pathlib.Path("main_orchestrator.py").read_text()
+            tree = ast.parse(orch_src)
+            sahm_wired = False
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    for kw in getattr(node, "keywords", []):
+                        if kw.arg == "sahm_rule_indicator":
+                            sahm_wired = True
+                            break
+            audit["checks"].append({
+                "check": "BUG-2: main_orchestrator.py passes sahm_rule_indicator= to MacroEconomicDTO",
+                "passed": sahm_wired,
+                "detail": "AST found sahm_rule_indicator= keyword in a Call node" if sahm_wired
+                          else "MISSING: sahm_rule_indicator= keyword not found in any Call node",
+            })
+            all_pass = all_pass and sahm_wired
+
+            # Verify main_orchestrator.py calls calculate_sahm_rule (not _fallback_sentiment)
+            uses_sahm = "calculate_sahm_rule()" in orch_src
+            uses_fallback_as_sahm = "_fallback_sentiment" in orch_src and "sahm_val" in orch_src
+            # The fix: calculate_sahm_rule() should appear; _fallback_sentiment used as sahm_val is the bug
+            orch_src_lines = orch_src.splitlines()
+            fallback_sahm_proxy = any(
+                "_fallback_sentiment" in line and "sahm_val" in line
+                for line in orch_src_lines
+            )
+            bug1_fixed = uses_sahm and not fallback_sahm_proxy
+            audit["checks"].append({
+                "check": "BUG-1 (AST): main_orchestrator.py uses calculate_sahm_rule(), not _fallback_sentiment for sahm_val",
+                "passed": bug1_fixed,
+                "detail": f"calculate_sahm_rule present={uses_sahm}, _fallback_sentiment used as sahm_val={fallback_sahm_proxy}",
+            })
+            all_pass = all_pass and bug1_fixed
+
+            # ------------------------------------------------------------------
+            # BUG-3: Gordon Growth Model symmetric g cap
+            # ------------------------------------------------------------------
+            from processing_engine import ProcessingEngine
+            pe = ProcessingEngine()
+            pe.required_return_rate = 0.10
+
+            # With g_raw=0.14 > r-0.01=0.09, both D1 and denominator must use capped g=0.09
+            price, dy, g_raw = 100.0, 0.05, 0.14
+            g_capped = 0.10 - 0.01
+            result_gordon = pe.calculate_gordon_fair_value(price, dy, g_raw)
+            expected_correct = (price * dy * (1 + g_capped)) / (0.10 - g_capped)
+            bug3_numerator = math.isclose(result_gordon, expected_correct, rel_tol=1e-4)
+            audit["checks"].append({
+                "check": "BUG-3: Gordon numerator uses capped g (not raw g_raw=14%)",
+                "passed": bug3_numerator,
+                "detail": f"result={result_gordon:.4f}, expected={expected_correct:.4f} (both use g_capped={g_capped})",
+            })
+            all_pass = all_pass and bug3_numerator
+
+            # ------------------------------------------------------------------
+            # BUG-4: calculate_momentum_metrics returns NaN for <253 bars
+            # ------------------------------------------------------------------
+            short_dates = pd.date_range("2024-01-01", periods=100, freq="B")
+            short_df = pd.DataFrame({
+                "Open": [100.0] * 100, "High": [100.0] * 100,
+                "Low": [100.0] * 100, "Close": [100.0] * 100,
+                "Volume": [1_000_000] * 100,
+            }, index=short_dates)
+            out_mom = pe.calculate_momentum_metrics(short_df)
+            roc_nan = math.isnan(out_mom["ROC_12M"].iloc[-1])
+            audit["checks"].append({
+                "check": "BUG-4: calculate_momentum_metrics returns NaN (not 0.0) for ROC_12M when len(df)<253",
+                "passed": roc_nan,
+                "detail": f"ROC_12M value={out_mom['ROC_12M'].iloc[-1]!r}",
+            })
+            all_pass = all_pass and roc_nan
+
+            vol_nan = math.isnan(out_mom["Realized_Vol_60D"].iloc[-1])
+            audit["checks"].append({
+                "check": "BUG-4: calculate_momentum_metrics returns NaN (not 0.0) for Realized_Vol_60D when len(df)<253",
+                "passed": vol_nan,
+                "detail": f"Realized_Vol_60D value={out_mom['Realized_Vol_60D'].iloc[-1]!r}",
+            })
+            all_pass = all_pass and vol_nan
+
+            # ------------------------------------------------------------------
+            # BUG-5: evaluate_portfolio benchmark_df default is None (not mutable)
+            # ------------------------------------------------------------------
+            from evaluation_engine import EvaluationEngine
+
+            sig = inspect.signature(EvaluationEngine.evaluate_portfolio)
+            default_val = sig.parameters["benchmark_df"].default
+            bug5 = default_val is None
+            audit["checks"].append({
+                "check": "BUG-5: evaluate_portfolio benchmark_df default is None (not mutable pd.DataFrame())",
+                "passed": bug5,
+                "detail": f"default type={type(default_val).__name__!r}, value={default_val!r}",
+            })
+            all_pass = all_pass and bug5
+
+            # ------------------------------------------------------------------
+            # BUG-6: Fallback forecast in main_orchestrator uses Monte Carlo
+            # ------------------------------------------------------------------
+            # Verify the source of the exception-path uses run_monte_carlo not linear
+            orch_lines = orch_src.splitlines()
+            linear_pattern = "(1.0 + mu * 10)"  # the old naive formula
+            has_linear_fallback = any(linear_pattern in line for line in orch_lines)
+            bug6 = not has_linear_fallback
+            audit["checks"].append({
+                "check": "BUG-6: main_orchestrator fallback forecast does NOT use naive linear formula price*(1+mu*N)",
+                "passed": bug6,
+                "detail": f"Linear formula '{linear_pattern}' present in source: {has_linear_fallback}",
+            })
+            all_pass = all_pass and bug6
+
+            # Also verify run_monte_carlo is actually called in orchestrator
+            mc_in_fallback = "run_monte_carlo" in orch_src
+            audit["checks"].append({
+                "check": "BUG-6: run_monte_carlo() appears in main_orchestrator.py",
+                "passed": mc_in_fallback,
+                "detail": f"run_monte_carlo present in orchestrator source: {mc_in_fallback}",
+            })
+            all_pass = all_pass and mc_in_fallback
+
+            # Verify ForecastingEngine.run_monte_carlo produces distinct values per horizon
+            from forecasting_engine import ForecastingEngine
+            fe = ForecastingEngine()
+            m10, _, _ = fe.run_monte_carlo(100.0, 0.0002, 0.015, 10, simulations=2000)
+            m60, _, _ = fe.run_monte_carlo(100.0, 0.0002, 0.015, 60, simulations=2000)
+            distinct_horizons = m10 != m60
+            audit["checks"].append({
+                "check": "BUG-6: Monte Carlo gives distinct means for different horizons (10d vs 60d)",
+                "passed": distinct_horizons,
+                "detail": f"mc_10={m10:.4f}, mc_60={m60:.4f}, distinct={distinct_horizons}",
+            })
+            all_pass = all_pass and distinct_horizons
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            import traceback
+            audit["status"] = f"Execution Error: {str(exc)}"
+            audit["error"] = traceback.format_exc()
+            audit["overall_pass"] = False
+
+        self.report["step_37_six_bug_regression_audit"] = audit
+
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
