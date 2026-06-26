@@ -228,6 +228,7 @@ class GravityAIAuditor:
             "step_32_html_report_audit": {},
             "step_33_gui_command_center_audit": {},
             "step_34_macro_regime_gate_toggle_audit": {},
+            "step_35_portfolio_sync_audit": {},
         }
         self.data_engine = GravityTestEngine()
         self.test_df = self.data_engine.fetch_historical_prices()
@@ -4127,6 +4128,7 @@ class GravityAIAuditor:
         self.run_html_report_audit()
         self.run_gui_command_center_audit()
         self.run_macro_regime_gate_toggle_audit()
+        self.run_portfolio_sync_audit()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -4350,6 +4352,191 @@ class GravityAIAuditor:
 
         audit["overall_pass"] = all_pass
         self.report["step_34_macro_regime_gate_toggle_audit"] = audit
+
+    def run_portfolio_sync_audit(self) -> None:
+        """Step 35 — Validates Task 1.4 portfolio & watchlist synchronization.
+
+        All checks are fully offline. The market-data provider and Robinhood
+        client are monkey-patched so this audit never touches the network.
+
+        Audits (in order):
+          (a) Module is importable + public API present
+              (CoverageStatus, SymbolStatus, SyncReport, build_sync_report,
+              async_sync_now, write_cache, read_cache).
+          (b) CoverageStatus carries the five mandated values
+              (FULL/QUOTES_ONLY/EQUITY_ONLY/UNCOVERED/UNKNOWN).
+          (c) SymbolStatus + SyncReport are frozen dataclasses.
+          (d) Discovery helpers exist on data.robinhood_client
+              (discover_watchlists, discover_universe, _file_tickers,
+              _watchlist_files_from_env).
+          (e) discover_universe deduplicates a holdings + watchlist + file
+              union into one sorted, case-normalised list.
+          (f) build_sync_report's "held but uncovered" path upgrades to
+              EQUITY_ONLY (NEVER drops the symbol — CONSTRAINT for the equity
+              view stays accurate even when market data is missing).
+          (g) build_sync_report fabricates no metrics: a held position with no
+              live quote has current_price=NaN AND market_value=NaN.
+          (h) No order/execution function names appear in the
+              data/portfolio_sync.py source (it MUST be advisory only — the
+              orchestrator owns broker contact via execution/order_manager.py).
+          (i) async_sync_now(persist_default_tickers=False) does NOT call
+              gui.env_io.write_setting (dry-run honours the flag).
+        """
+        audit: dict = {
+            "step": "step_35_portfolio_sync_audit",
+            "status": "PENDING",
+            "checks": {},
+        }
+        try:
+            # ── (a) Public API ────────────────────────────────────────────
+            from data.portfolio_sync import (
+                CoverageStatus, SymbolStatus, SyncReport,
+                build_sync_report, async_sync_now, write_cache, read_cache,
+            )
+            audit["checks"]["module_importable"] = {"status": "PASSED"}
+
+            # ── (b) CoverageStatus values ────────────────────────────────
+            expected = {"full", "quotes_only", "equity_only", "uncovered", "unknown"}
+            actual = {c.value for c in CoverageStatus}
+            audit["checks"]["coverage_status_values"] = {
+                "status": "PASSED" if expected == actual else "FAILED",
+                "missing": list(expected - actual),
+                "unexpected": list(actual - expected),
+            }
+
+            # ── (c) Frozen dataclasses ───────────────────────────────────
+            import dataclasses
+            ss_frozen = (
+                dataclasses.is_dataclass(SymbolStatus)
+                and SymbolStatus.__dataclass_params__.frozen
+            )
+            sr_frozen = (
+                dataclasses.is_dataclass(SyncReport)
+                and SyncReport.__dataclass_params__.frozen
+            )
+            audit["checks"]["frozen_dataclasses"] = {
+                "status": "PASSED" if (ss_frozen and sr_frozen) else "FAILED",
+                "symbol_status_frozen": ss_frozen,
+                "sync_report_frozen": sr_frozen,
+            }
+
+            # ── (d) Discovery helpers on robinhood_client ────────────────
+            import data.robinhood_client as rc
+            has_helpers = all(hasattr(rc, name) for name in (
+                "discover_watchlists",
+                "discover_universe",
+                "_file_tickers",
+                "_watchlist_files_from_env",
+            ))
+            audit["checks"]["discovery_helpers_present"] = {
+                "status": "PASSED" if has_helpers else "FAILED",
+            }
+
+            # ── (e) Dedup + sort across sources ──────────────────────────
+            from unittest.mock import patch
+
+            class _FakeClient:
+                is_authenticated = True
+                def __init__(self): self._wl = {"L1": ["msft", "AAPL"], "L2": ["aapl", "nvda"]}
+                def fetch_positions(self): return {"AAPL": object()}
+                def list_watchlist_names(self): return list(self._wl)
+
+            fc = _FakeClient()
+            with patch.object(rc, "_watchlist_tickers",
+                              side_effect=lambda n: fc._wl.get(n, [])):
+                uni = rc.discover_universe(fc)
+            dedup_ok = uni == ["AAPL", "MSFT", "NVDA"]
+            audit["checks"]["discover_universe_dedup_sort"] = {
+                "status": "PASSED" if dedup_ok else "FAILED",
+                "got": uni,
+            }
+
+            # ── (f) Held-but-uncovered → EQUITY_ONLY (never dropped) ─────
+            class _FakePos:
+                def __init__(self): self.symbol="OBSC"; self.quantity=10; self.average_cost=5.0; self.market_value=0.0
+            class _FakeSnap:
+                positions = {"OBSC": _FakePos()}
+            class _FakeProv:
+                quote_source = "test"
+                def get_latest_quote(self, s): raise RuntimeError("no")
+                def get_intraday_bars(self, s, lookback_days=5): raise RuntimeError("no")
+                def get_fundamentals(self, s): return {}
+            import data.market_data as md
+            with patch.object(md, "get_provider", lambda: _FakeProv()):
+                rpt = build_sync_report(_FakeSnap(), client=None)
+            sym = rpt.symbols.get("OBSC")
+            held_upgrade = (
+                sym is not None
+                and sym.held is True
+                and sym.coverage is CoverageStatus.EQUITY_ONLY
+            )
+            audit["checks"]["held_uncovered_equity_only"] = {
+                "status": "PASSED" if held_upgrade else "FAILED",
+                "coverage": getattr(sym, "coverage", None).value if sym else None,
+            }
+
+            # ── (g) No fabricated metrics ────────────────────────────────
+            no_fab = (
+                sym is not None
+                and sym.current_price != sym.current_price   # NaN
+                and sym.market_value  != sym.market_value    # NaN
+            )
+            audit["checks"]["no_fabricated_metrics"] = {
+                "status": "PASSED" if no_fab else "FAILED",
+                "current_price_is_nan": (
+                    sym.current_price != sym.current_price if sym else False
+                ),
+            }
+
+            # ── (h) No order/execution function names in the module ─────
+            import ast, pathlib
+            src = (pathlib.Path(__file__).resolve().parent
+                   / "data" / "portfolio_sync.py").read_text(encoding="utf-8")
+            tree = ast.parse(src)
+            forbidden = {
+                "submit_order", "buy_order", "sell_order",
+                "place_order", "place_equity_order", "place_option_order",
+            }
+            offenders: list[str] = []
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name in forbidden or node.name.startswith("place_"):
+                        offenders.append(node.name)
+            audit["checks"]["no_order_functions"] = {
+                "status": "PASSED" if not offenders else "FAILED",
+                "offenders": offenders,
+            }
+
+            # ── (i) Dry-run sync skips env writes ────────────────────────
+            import asyncio
+            import gui.env_io as env_io
+
+            write_calls: list = []
+            class _FakeSnap2:
+                positions = {}
+
+            with patch.object(md, "get_provider", lambda: _FakeProv()), \
+                 patch.object(env_io, "write_setting",
+                              side_effect=lambda k, v: write_calls.append(k)):
+                asyncio.run(async_sync_now(
+                    _FakeSnap2(), client=None, persist_default_tickers=False,
+                ))
+            audit["checks"]["dry_run_skips_env_write"] = {
+                "status": "PASSED" if write_calls == [] else "FAILED",
+                "unexpected_writes": write_calls,
+            }
+
+            all_pass = all(
+                v.get("status") == "PASSED"
+                for v in audit["checks"].values()
+            )
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:  # noqa: BLE001 - audit must never raise
+            audit["status"] = "ERROR"
+            audit["error"] = f"{type(exc).__name__}: {exc}"
+
+        self.report["step_35_portfolio_sync_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

@@ -21,6 +21,8 @@ Tabs
 7.  Options Matrix            — Black-Scholes greeks + IVR proxy per symbol
 8.  Market Data               — active provider, quote freshness, cache controls
 9.  Observability             — compact macro/regime/P&L summary
+10. Live Inventory            — synchronized portfolio + watchlist coverage map
+                                with on-demand "Sync Now" (Task 1.4)
 
 Design
 ------
@@ -121,6 +123,7 @@ tab_labels = [
     "🧮 Options",
     "🛰️ Market Data",
     "📊 Observability",
+    "📡 Live Inventory",
 ]
 tabs = st.tabs(tab_labels)
 
@@ -142,5 +145,7 @@ with tabs[7]:
     safe_panel(panels.render_market_data)
 with tabs[8]:
     safe_panel(panels.render_observability)
+with tabs[9]:
+    safe_panel(panels.render_live_inventory)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")
