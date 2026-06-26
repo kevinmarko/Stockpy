@@ -25,3 +25,4 @@ import signals.rsi2_mean_reversion
 import signals.multifactor
 import signals.regime_multiplier
 import signals.lgbm_ranker
+import signals.news_catalyst

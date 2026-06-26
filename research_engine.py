@@ -283,6 +283,191 @@ class AdvancedResearchEngine:
 
 
 # =============================================================================
+# CORRELATION CLUSTER ANALYSIS (Tier 2.5)
+# =============================================================================
+
+from typing import Tuple  # noqa: E402 — used only by compute_correlation_clusters
+
+
+def compute_correlation_clusters(
+    returns_df: pd.DataFrame,
+    distance_threshold: float = 0.4,
+    min_obs: int = 20,
+) -> Tuple[Dict[str, int], pd.DataFrame]:
+    """Hierarchical clustering of symbols on pairwise return correlation.
+
+    Uses the Lopez de Prado distance metric ``d = sqrt(0.5 * (1 - ρ))``
+    (range [0, 1]) which satisfies the triangle inequality and maps
+    perfectly-correlated pairs to 0, uncorrelated to ≈0.71, and
+    anti-correlated to 1.  Ward linkage minimises within-cluster variance.
+
+    Parameters
+    ----------
+    returns_df : pd.DataFrame
+        Columns = symbols, index = dates, values = daily returns (fraction).
+        Symbols with fewer than ``min_obs`` valid rows are excluded and
+        assigned cluster 0 (insufficient history).
+    distance_threshold : float
+        Cut the dendrogram at this distance.  At the default 0.4 symbols
+        with |ρ| ≥ 0.68 merge into the same cluster.  Lower → tighter
+        clusters; higher → more singletons.
+    min_obs : int
+        Minimum non-NaN daily return rows required to include a symbol in
+        clustering.  Excluded symbols get cluster_id = 0.
+
+    Returns
+    -------
+    cluster_labels : Dict[str, int]
+        Symbol → cluster ID (1-indexed integers; 0 = insufficient history).
+    cluster_summary : pd.DataFrame
+        Columns: ``cluster_id``, ``symbols`` (list), ``n_symbols``,
+        ``avg_intra_corr`` (mean pairwise |ρ| within the cluster; NaN for
+        singletons).  Empty DataFrame (correct schema) on any fatal error
+        so callers are never forced to handle exceptions.
+    """
+    _empty_summary = pd.DataFrame(
+        columns=["cluster_id", "symbols", "n_symbols", "avg_intra_corr"]
+    )
+    _re_logger = logging.getLogger("ResearchEngine.cluster")
+
+    if returns_df is None or returns_df.empty:
+        return {}, _empty_summary
+
+    try:
+        from scipy.cluster import hierarchy as _sch  # type: ignore
+        from scipy.spatial.distance import squareform as _squareform  # type: ignore
+    except ImportError:
+        _re_logger.warning(
+            "compute_correlation_clusters: scipy not installed — returning empty clusters."
+        )
+        return {col: 0 for col in returns_df.columns}, _empty_summary
+
+    # ---- Drop symbols with insufficient history ----
+    valid_mask = returns_df.count() >= min_obs
+    excluded = [str(s) for s in returns_df.columns[~valid_mask]]
+    included_df = returns_df.loc[:, valid_mask].copy()
+
+    if excluded:
+        _re_logger.info(
+            "compute_correlation_clusters: %d symbol(s) excluded (< %d obs): %s",
+            len(excluded),
+            min_obs,
+            excluded,
+        )
+
+    cluster_labels: Dict[str, int] = {sym: 0 for sym in excluded}
+
+    if included_df.empty or included_df.shape[1] < 2:
+        # Only 0 or 1 valid symbol — trivially one cluster
+        if included_df.shape[1] == 1:
+            sym = str(included_df.columns[0])
+            cluster_labels[sym] = 1
+            summary = pd.DataFrame(
+                [{"cluster_id": 1, "symbols": [sym], "n_symbols": 1,
+                  "avg_intra_corr": float("nan")}]
+            )
+            return cluster_labels, summary
+        return cluster_labels, _empty_summary
+
+    try:
+        corr_matrix = included_df.corr().fillna(0.0)
+        symbols = list(corr_matrix.columns)
+
+        # Lopez de Prado distance: d = sqrt(0.5 * (1 - rho))
+        dist_matrix = np.sqrt(np.clip(0.5 * (1.0 - corr_matrix.values), 0.0, 1.0))
+        np.fill_diagonal(dist_matrix, 0.0)
+
+        condensed = _squareform(dist_matrix, checks=False)
+        linkage_matrix = _sch.linkage(condensed, method="ward")
+        raw_labels = _sch.fcluster(
+            linkage_matrix, t=distance_threshold, criterion="distance"
+        )
+
+        for sym, label in zip(symbols, raw_labels):
+            cluster_labels[str(sym)] = int(label)
+
+        # ---- Build summary DataFrame ----
+        unique_ids = sorted(set(raw_labels))
+        rows = []
+        for cid in unique_ids:
+            members = [symbols[i] for i, lbl in enumerate(raw_labels) if lbl == cid]
+            if len(members) >= 2:
+                sub_corr = corr_matrix.loc[members, members]
+                upper = sub_corr.values[np.triu_indices_from(sub_corr.values, k=1)]
+                avg_corr = float(np.mean(np.abs(upper))) if upper.size > 0 else float("nan")
+            else:
+                avg_corr = float("nan")
+            rows.append({
+                "cluster_id": cid,
+                "symbols": members,
+                "n_symbols": len(members),
+                "avg_intra_corr": avg_corr,
+            })
+        cluster_summary = pd.DataFrame(rows)
+        return cluster_labels, cluster_summary
+
+    except Exception as exc:
+        _re_logger.warning("compute_correlation_clusters: error during clustering: %s", exc)
+        return {sym: 0 for sym in included_df.columns} | cluster_labels, _empty_summary
+
+
+def fetch_returns_for_clustering(
+    symbols: List[str],
+    lookback_days: int = 60,
+) -> pd.DataFrame:
+    """Download daily close prices and return a returns DataFrame.
+
+    Uses yfinance (already a project dependency) and gracefully handles
+    missing symbols — columns with all-NaN closes are dropped before
+    return computation.
+
+    Parameters
+    ----------
+    symbols : list[str]
+        Ticker symbols to fetch.
+    lookback_days : int
+        Approximate calendar days of history to request.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns = symbols, index = dates, values = pct_change() daily
+        returns.  Empty DataFrame when no data could be fetched.
+    """
+    if not symbols:
+        return pd.DataFrame()
+    try:
+        import yfinance as yf  # type: ignore
+        period = "3mo" if lookback_days <= 90 else ("6mo" if lookback_days <= 180 else "1y")
+        raw = yf.download(
+            list(symbols),
+            period=period,
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+        )
+        if raw.empty:
+            return pd.DataFrame()
+        # Handle single-symbol (no MultiIndex) and multi-symbol (MultiIndex)
+        if isinstance(raw.columns, pd.MultiIndex):
+            closes = raw["Close"] if "Close" in raw.columns.get_level_values(0) else raw.iloc[:, :len(symbols)]
+        else:
+            closes = raw[["Close"]] if "Close" in raw.columns else raw.iloc[:, :1]
+            closes.columns = symbols[:closes.shape[1]]
+
+        closes = closes.dropna(axis=1, how="all")
+        if closes.empty:
+            return pd.DataFrame()
+        returns = closes.pct_change().dropna(how="all")
+        return returns
+    except Exception as exc:
+        logging.getLogger("ResearchEngine.cluster").warning(
+            "fetch_returns_for_clustering: %s", exc
+        )
+        return pd.DataFrame()
+
+
+# =============================================================================
 # AUTO-AUDIT & GRAVITY WORKFLOW TESTER
 # =============================================================================
 if __name__ == "__main__":

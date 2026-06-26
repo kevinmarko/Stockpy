@@ -536,6 +536,145 @@ def _render_decision_journal_section(signals: list) -> None:
 
 
 # ===========================================================================
+# Correlation Cluster Section — Streamlit section (Tier 2.5, Reports tab)
+# ===========================================================================
+
+def _render_correlation_cluster_section(signals: list) -> None:
+    """Hierarchical clustering of symbol returns — on-demand in the Reports tab.
+
+    Fetches 60-day returns for the current signal universe via yfinance,
+    computes pairwise correlation clusters (Lopez de Prado distance + Ward
+    linkage), and renders:
+
+    * **Cluster assignments** table: Symbol, Cluster ID, Avg Intra-Cluster
+      Correlation.
+    * **Cluster Concentration** bar: per-cluster aggregate position weight (%)
+      so the operator can see "you'd be 40% in the mega-cap-tech cluster if
+      you take all these BUYs".
+
+    No live data is fetched until the operator clicks the "Compute clusters"
+    button (on-demand, never automatic).
+    """
+    with st.expander("📊 Correlation Cluster Awareness (Tier 2.5)", expanded=False):
+        if not signals:
+            st.info("No signals available. Run the pipeline from the Launcher tab first.")
+            return
+
+        syms = sorted({str(s.get("symbol", "")).upper() for s in signals if s.get("symbol")})
+        if not syms:
+            st.caption("Signal frame has no 'symbol' field — cannot cluster.")
+            return
+
+        st.caption(
+            f"{len(syms)} symbol(s) in current signal universe. "
+            "Clustering uses 60-day yfinance returns (fetched on demand)."
+        )
+
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            lookback = st.slider(
+                "Return lookback (days)",
+                min_value=20,
+                max_value=252,
+                value=int(settings.CORRELATION_CLUSTER_LOOKBACK_DAYS),
+                step=5,
+                key="cluster_lookback",
+            )
+        with col2:
+            threshold = st.slider(
+                "Distance threshold",
+                min_value=0.1,
+                max_value=1.0,
+                value=float(settings.CORRELATION_CLUSTER_THRESHOLD),
+                step=0.05,
+                key="cluster_threshold",
+                help="d=sqrt(0.5*(1-ρ)). At 0.4 → stocks with |ρ|>0.68 merge.",
+            )
+
+        if st.button("🔗 Compute Clusters", key="compute_clusters_btn"):
+            with st.spinner(f"Fetching {lookback}-day returns for {len(syms)} symbols…"):
+                try:
+                    from research_engine import fetch_returns_for_clustering, compute_correlation_clusters
+                    returns_df = fetch_returns_for_clustering(syms, lookback_days=lookback)
+                    if returns_df.empty:
+                        st.warning("Could not fetch returns data. Check network connectivity.")
+                        return
+                    labels, summary = compute_correlation_clusters(
+                        returns_df, distance_threshold=threshold
+                    )
+                    st.session_state["cluster_labels"] = labels
+                    st.session_state["cluster_summary"] = summary
+                    st.session_state["cluster_signals"] = signals
+                except Exception as exc:
+                    st.error(f"Clustering failed: {exc}")
+                    return
+
+        labels = st.session_state.get("cluster_labels")
+        summary = st.session_state.get("cluster_summary")
+        cached_signals = st.session_state.get("cluster_signals", [])
+
+        if labels is None or summary is None:
+            st.caption("Click 'Compute Clusters' to run the analysis.")
+            return
+
+        # ── Cluster assignment table ──────────────────────────────────────────
+        st.markdown("**Symbol → Cluster Assignments**")
+        sig_map = {
+            str(s.get("symbol", "")).upper(): s
+            for s in cached_signals if s.get("symbol")
+        }
+        rows = []
+        for sym in sorted(labels):
+            cid = labels[sym]
+            sig = sig_map.get(sym, {})
+            kelly = float(sig.get("kelly_target", 0.0) or 0.0)
+            action = str(sig.get("action", sig.get("action_signal", "—")))
+            rows.append({
+                "Symbol": sym,
+                "Cluster": cid if cid != 0 else "—",
+                "Action": action,
+                "Kelly Target": f"{kelly:.1%}" if kelly else "—",
+            })
+        assign_df = pd.DataFrame(rows).sort_values(["Cluster", "Symbol"])
+        st.dataframe(assign_df, width="stretch", hide_index=True)
+
+        # ── Cluster concentration ─────────────────────────────────────────────
+        if not summary.empty:
+            st.markdown("**Per-Cluster Concentration (sum of Kelly Targets)**")
+            conc_rows = []
+            for _, row in summary.iterrows():
+                cid = int(row["cluster_id"])
+                cluster_syms = row["symbols"] if isinstance(row["symbols"], list) else []
+                total_kelly = sum(
+                    float(sig_map.get(s, {}).get("kelly_target", 0.0) or 0.0)
+                    for s in cluster_syms
+                )
+                avg_corr = row.get("avg_intra_corr", float("nan"))
+                conc_rows.append({
+                    "Cluster ID": cid,
+                    "Symbols": ", ".join(cluster_syms),
+                    "Count": int(row["n_symbols"]),
+                    "Total Position %": f"{total_kelly:.1%}",
+                    "Avg |Corr|": f"{avg_corr:.2f}" if avg_corr == avg_corr else "—",
+                })
+            conc_df = pd.DataFrame(conc_rows).sort_values("Cluster ID")
+            st.dataframe(conc_df, width="stretch", hide_index=True)
+
+            # Highlight clusters with heavy concentration
+            heavy = [
+                r for r in conc_rows
+                if float(r["Total Position %"].strip("%")) / 100 > 0.30
+            ]
+            if heavy:
+                names = ", ".join(f"Cluster {r['Cluster ID']}" for r in heavy)
+                st.warning(
+                    f"⚠️ High concentration: {names} together exceed 30% of total "
+                    "Kelly-weighted position. Consider diversifying across clusters "
+                    "before acting on all BUY signals simultaneously."
+                )
+
+
+# ===========================================================================
 # Conviction Calibration — Streamlit section (consumed by Reports tab, 1.2)
 # ===========================================================================
 
@@ -1340,6 +1479,9 @@ def render_report_viewer() -> None:
                 st.caption("Signal frame has no `symbol` column to drill into.")
     else:
         st.caption("MFE/MAE/Edge populate once closed trades and signals exist.")
+
+    # ── Correlation Cluster Awareness (Tier 2.5) ─────────────────────────────
+    _render_correlation_cluster_section(signals)
 
     # ── Signal decision journal (1.3) ────────────────────────────────────────
     _render_decision_journal_section(signals)

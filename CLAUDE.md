@@ -823,3 +823,72 @@ Replaces the static hardcoded blend ratios (`lstm*0.4 + arima*0.2 + mc*0.4`) in 
 
 ### Gravity step 59 (`run_forecast_skill_audit`)
 10 checks: `ForecastTracker` importable; DDL contains all required columns; cold-start returns equal weights; warm-path inverse-RMSE makes better model higher-weight; `_MIN_RMSE > 0`; `ForecastingEngine.__init__` accepts `tracker` kwarg; `_blend_with_skill` is callable; `settings.FORECAST_SKILL_WINDOW_DAYS` and `FORECAST_SKILL_MIN_OBS` exist and are > 0; `forecasting/__init__.py` re-exports `ForecastTracker`; `tests/test_forecast_tracker.py` exists.
+
+## Tier 2.4 — Sentiment / News Catalyst Signal (2026-06)
+
+### Overview
+`signals/news_catalyst.py` adds a `NewsCatalystSignal` that scores headlines via FinBERT (optional) or a built-in keyword lexicon, then gates the signal by earnings proximity. Runs as a standard pluggable `SignalModule` with weight 10.0 and uses the two-phase `pre_compute` / `compute` hook pattern.
+
+### `signals/news_catalyst.py` (new)
+- **`NewsCatalystSignal`** — `SignalModule` subclass. `name = "news_catalyst"`. Auto-registers via `global_registry.register(NewsCatalystSignal())` at module end; triggered by `import signals.news_catalyst` added to `signals/__init__.py`.
+- **`pre_compute(universe_df, context)`** — batch-fetches Finnhub `company_news` + `earnings_calendar` for every symbol (short-circuits when `FINNHUB_API_KEY` is absent). Populates `self._news_scores`, `self._earnings_dt` (instance cache) AND `context.news_sentiment_scores`, `context.earnings_dates` (new `SignalContext` fields). Courtesy `time.sleep(0.12)` per symbol ≈ 8 calls/s, under the 60/min free-tier ceiling.
+- **`compute(row, context)`** — reads `self._news_scores`; returns `SignalOutput(score=0.0)` when no data (dead-letter resilient, CONSTRAINT #6).
+- **FinBERT path**: lazy process-level singleton `_FINBERT_PIPELINE` (loaded once via `transformers.pipeline("sentiment-analysis", model="ProsusAI/finbert")`; `_FINBERT_LOAD_ATTEMPTED` flag prevents repeated failures). Maps `positive/negative/neutral` labels to `+confidence/-confidence/0`. Disabled via `settings.FINBERT_ENABLED=False`.
+- **Lexicon fallback**: `_POSITIVE_WORDS` and `_NEGATIVE_WORDS` frozensets (~80 words). `_lexicon_sentiment(headline)` = `(pos − neg) / max(1, pos + neg)` ∈ [-1, 1]; tokenises by `.lower().split()` and strips `".,!?;:\"'()[]"`.
+- **`_earnings_proximity_multiplier(next_earnings, now, suppress_hours, dampen_days)`**: 0.0 within `suppress_hours` (default 48 h — zero weight near earnings), 0.5 within `dampen_days` (default 7 d — half weight approaching earnings), 0.5 for 24 h post-earnings (fresh noise), 1.0 beyond.
+
+### `signals/base.py` changes
+Two new `SignalContext` fields:
+- `news_sentiment_scores: Dict[str, float] = field(default_factory=dict)`
+- `earnings_dates: Dict[str, str] = field(default_factory=dict)`
+
+### `config.py` changes
+Three new `COLUMN_SCHEMA` entries (advisory signals section):
+```python
+{"header": "News Sentiment", "key": "News_Sentiment",       "format": "number"},
+{"header": "Earnings Date",  "key": "Earnings_Date",        "format": "string"},
+{"header": "Cluster",        "key": "Correlation_Cluster",  "format": "number"},
+```
+
+### `main_orchestrator.py` writeback
+After the multifactor writeback block, reads `shared_context.news_sentiment_scores` / `context.earnings_dates` and writes `dashboard_df['News_Sentiment']` / `dashboard_df['Earnings_Date']` via `.map()`. Always initialises `dashboard_df['Correlation_Cluster'] = float('nan')` (on-demand GUI only).
+
+### New settings / env vars
+- **`NEWS_LOOKBACK_DAYS: int = 7`** — Finnhub `company_news` fetch window.
+- **`FINBERT_ENABLED: bool = True`** — toggles neural vs. lexicon path.
+- **`NEWS_EARNINGS_SUPPRESS_HOURS: float = 48.0`** — zero-weight window near earnings.
+- **`NEWS_EARNINGS_DAMPEN_DAYS: float = 7.0`** — half-weight window before earnings.
+- Env vars `FINNHUB_API_KEY` and `NTFY_DASHBOARD_URL` already existed; no new secrets.
+- Optional dep: `transformers>=4.35.0` in `requirements.txt` (PyTorch/TF backend required); `ImportError` → lexicon fallback automatically, never a crash.
+
+### Tests
+- **`tests/test_news_catalyst.py`** (46 tests, 8 classes): `TestLexiconSentiment`, `TestEarningsProximity`, `TestScoreHeadline`, `TestSignalCompute`, `TestPreCompute`, `TestRegistration`, `TestFetchHelpers`, `TestSettings`. All Finnhub/transformers calls monkeypatched.
+
+### Gravity step 60 (`run_news_catalyst_audit`)
+10 checks: importable; `name == "news_catalyst"`; FinBERT helper returns `None` safely when unavailable; lexicon positive headline > 0 and negative < 0; suppress within 48 h → 0.0; dampen within 7 d → 0.5; `pre_compute` populates `context.news_sentiment_scores` and `context.earnings_dates`; no `FINNHUB_API_KEY` → no crash; `"news_catalyst"` in `settings.SIGNAL_WEIGHTS`; `tests/test_news_catalyst.py` exists.
+
+## Tier 2.5 — Correlation Cluster Awareness (2026-06)
+
+### Overview
+`research_engine.compute_correlation_clusters()` uses hierarchical Ward-linkage clustering on the Lopez de Prado distance metric `d = sqrt(0.5 * (1 − ρ))` to label every symbol with a cluster ID. Computed **on-demand** in the GUI Reports tab (not in the main pipeline) because clustering requires simultaneous returns for all symbols at once, which is incompatible with the orchestrator's per-symbol loop.
+
+### `research_engine.py` additions (module-level)
+- **`compute_correlation_clusters(returns_df, distance_threshold=0.4, min_obs=20) -> Tuple[Dict[str, int], pd.DataFrame]`**
+  - `returns_df`: columns = symbols, index = dates. Symbols with < `min_obs` valid rows get `cluster_id = 0` (excluded; CONSTRAINT #4 — never fabricates a cluster label).
+  - Converts correlation matrix to distance via `d = sqrt(0.5 * (1 − ρ))`, then calls `scipy.cluster.hierarchy.linkage(method='ward')` + `fcluster(criterion='distance', t=distance_threshold)`.
+  - Returns `(labels: Dict[str, int], cluster_summary: pd.DataFrame)`. `cluster_summary` columns: `cluster_id`, `symbols` (list), `n_symbols`, `avg_intra_corr` (NaN for singletons — never fabricated).
+  - Returns `({}, empty DataFrame with correct schema)` on any fatal error (CONSTRAINT #6).
+- **`fetch_returns_for_clustering(symbols, lookback_days=60) -> pd.DataFrame`** — fetches yfinance daily closes (lazy `import yfinance as yf` inside body so tests patch `yfinance.download` directly), returns `pct_change()`. Returns empty DataFrame on error or empty symbol list.
+
+### GUI: Reports tab (`gui/panels.py`)
+- **`_render_correlation_cluster_section(signals)`** — inserted in `render_report_viewer()` before `_render_decision_journal_section`. UI: lookback slider (30–250 d), threshold slider (0.05–1.5), "Compute Clusters" on-demand button (CONSTRAINT #5). Results stored in `st.session_state["cluster_labels"]` and `st.session_state["cluster_summary"]`; renders a symbol–cluster assignment table and a per-cluster aggregate position % concentration table with `>30%` warning.
+
+### New settings / env vars
+- **`CORRELATION_CLUSTER_LOOKBACK_DAYS: int = 60`**
+- **`CORRELATION_CLUSTER_THRESHOLD: float = 0.4`**
+
+### Tests
+- **`tests/test_correlation_clusters.py`** (27 tests, 7 classes): `TestComputeCorrelationClusters` (7 tests — known correlated A/B share cluster; uncorrelated C separate; all symbols assigned; IDs positive int; all-correlated single cluster; empty/None → empty), `TestDistanceThreshold` (3), `TestSummaryDataFrame` (6), `TestEdgeCases` (4 — single symbol; all-NaN col; insufficient obs; two symbols), `TestFetchReturnsHelper` (3 — patches `yfinance.download` directly), `TestSettings` (7 — defaults, COLUMN_SCHEMA entries). `compute_correlation_clusters` is a pure function; no mocking required.
+
+### Gravity step 61 (`run_correlation_cluster_audit`)
+10 checks: `compute_correlation_clusters` importable; `fetch_returns_for_clustering` importable; known-correlated A/B share cluster; uncorrelated C in different cluster; empty DataFrame → empty labels+summary; `Correlation_Cluster` in `COLUMN_SCHEMA`; `CORRELATION_CLUSTER_LOOKBACK_DAYS == 60`; `CORRELATION_CLUSTER_THRESHOLD == 0.4`; insufficient obs symbol gets `cluster_id = 0`; `tests/test_correlation_clusters.py` exists.

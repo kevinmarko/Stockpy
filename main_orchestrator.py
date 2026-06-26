@@ -408,6 +408,25 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
             if shared_context.multifactor_scores else float('nan')
         )
 
+    # Write news sentiment and earnings dates (Tier 2.4 — NewsCatalystSignal.pre_compute).
+    # These fields are populated only when FINNHUB_API_KEY is configured.
+    # NaN / "" are safe defaults that degrade gracefully in all downstream consumers.
+    dashboard_df['News_Sentiment'] = float('nan')
+    dashboard_df['Earnings_Date'] = ""
+    if shared_context.news_sentiment_scores:
+        dashboard_df['News_Sentiment'] = dashboard_df['Symbol'].map(
+            lambda x: shared_context.news_sentiment_scores.get(str(x).upper(), float('nan'))
+        )
+    if shared_context.earnings_dates:
+        dashboard_df['Earnings_Date'] = dashboard_df['Symbol'].map(
+            lambda x: shared_context.earnings_dates.get(str(x).upper(), "")
+        )
+    # Correlation_Cluster column is computed on-demand in the GUI Reports tab
+    # (fetch_returns_for_clustering + compute_correlation_clusters) rather than
+    # in the main pipeline, because it requires simultaneous historical returns
+    # for all symbols.  Default NaN here so the column exists in the schema.
+    dashboard_df['Correlation_Cluster'] = float('nan')
+
     # 6. Strategy & Sizing Evaluations
     telemetry.info("Routing data through Strategy and Evaluation Engines...")
     se = StrategyEngine()

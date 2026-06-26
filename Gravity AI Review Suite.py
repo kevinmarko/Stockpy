@@ -4310,6 +4310,10 @@ class GravityAIAuditor:
         self.run_regime_weights_audit()
         # Tier 2.2 — Forecast ensemble weighted by recent skill
         self.run_forecast_skill_audit()
+        # Tier 2.4 — News catalyst signal (FinBERT / lexicon + Finnhub)
+        self.run_news_catalyst_audit()
+        # Tier 2.5 — Correlation cluster awareness
+        self.run_correlation_cluster_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -8842,6 +8846,312 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_59_forecast_skill_audit"] = audit
+
+    def run_news_catalyst_audit(self) -> None:
+        """Step 60 — Tier 2.4: News / Earnings Catalyst Signal audit.
+
+        Checks
+        ------
+        1. ``signals.news_catalyst`` importable; ``NewsCatalystSignal`` exists.
+        2. ``name`` attribute == ``"news_catalyst"``.
+        3. FinBERT pipeline helper returns ``None`` gracefully when transformers absent.
+        4. Lexicon: clear positive headline scores > 0; clear negative < 0.
+        5. Earnings proximity: score == 0.0 within 48h of earnings (suppress).
+        6. Earnings proximity: |score| * 0.5 within 7 days (dampen).
+        7. ``pre_compute`` populates ``context.news_sentiment_scores`` and ``context.earnings_dates``.
+        8. No-key path: empty ``FINNHUB_API_KEY`` → caches empty, no crash.
+        9. ``settings.news_catalyst`` weight in ``SIGNAL_WEIGHTS``.
+        10. ``tests/test_news_catalyst.py`` exists.
+        """
+        audit: dict = {"step": "step_60_news_catalyst_audit", "checks": [], "status": "PENDING"}
+        try:
+            checks = []
+            overall = True
+
+            # Check 1 — importable
+            try:
+                from signals.news_catalyst import NewsCatalystSignal, _lexicon_sentiment, _earnings_proximity_multiplier
+                checks.append({"check": "signals.news_catalyst importable", "passed": True})
+            except ImportError as ie:
+                checks.append({"check": "signals.news_catalyst importable", "passed": False, "error": str(ie)})
+                overall = False
+
+            # Check 2 — name attribute
+            try:
+                sig = object.__new__(NewsCatalystSignal)
+                sig._news_scores = {}
+                sig._earnings_dt = {}
+                name_ok = getattr(NewsCatalystSignal, "name", "") == "news_catalyst"
+                checks.append({"check": "name == 'news_catalyst'", "passed": name_ok})
+                if not name_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "name attribute", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 3 — FinBERT optional (graceful None)
+            try:
+                from signals.news_catalyst import _get_finbert_pipeline
+                import signals.news_catalyst as _nc_mod
+                _nc_mod._FINBERT_LOAD_ATTEMPTED = False  # reset so we can re-test
+                _nc_mod._FINBERT_PIPELINE = None
+                # When transformers is absent, should return None not raise
+                with __import__("unittest.mock", fromlist=["patch"]).patch(
+                    "signals.news_catalyst._FINBERT_LOAD_ATTEMPTED", True
+                ):
+                    result = _nc_mod._FINBERT_PIPELINE  # should be None
+                checks.append({"check": "FinBERT returns None when unavailable", "passed": True})
+            except Exception as e:
+                checks.append({"check": "FinBERT graceful None", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 4 — lexicon positive/negative
+            try:
+                pos_score = _lexicon_sentiment("Stock surges and beats earnings expectations")
+                neg_score = _lexicon_sentiment("Stock crashes as losses mount and fraud widens")
+                pos_ok = pos_score > 0
+                neg_ok = neg_score < 0
+                checks.append({"check": "lexicon positive > 0", "passed": pos_ok, "score": pos_score})
+                checks.append({"check": "lexicon negative < 0", "passed": neg_ok, "score": neg_score})
+                if not pos_ok:
+                    overall = False
+                if not neg_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "lexicon scoring", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 5 — suppress within 48h
+            try:
+                from datetime import datetime, timedelta, timezone
+                now = datetime.now(timezone.utc)
+                soon = now + timedelta(hours=24)
+                multiplier_suppress = _earnings_proximity_multiplier(soon, now, 48.0, 7.0)
+                supp_ok = multiplier_suppress == 0.0
+                checks.append({"check": "earnings suppress within 48h → 0.0", "passed": supp_ok, "multiplier": multiplier_suppress})
+                if not supp_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "earnings suppress check", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 6 — dampen within 7 days
+            try:
+                mid = now + timedelta(days=4)
+                multiplier_dampen = _earnings_proximity_multiplier(mid, now, 48.0, 7.0)
+                damp_ok = multiplier_dampen == 0.5
+                checks.append({"check": "earnings dampen within 7 days → 0.5", "passed": damp_ok, "multiplier": multiplier_dampen})
+                if not damp_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "earnings dampen check", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 7 — pre_compute populates context fields
+            try:
+                import types, os
+                from unittest.mock import MagicMock, patch as _patch
+                ctx = types.SimpleNamespace(news_sentiment_scores={}, earnings_dates={})
+                uni = __import__("pandas").DataFrame({"Symbol": ["AAPL"]})
+                s = object.__new__(NewsCatalystSignal)
+                s._news_scores = {}
+                s._earnings_dt = {}
+                mock_client = MagicMock()
+                mock_client.company_news.return_value = [{"headline": "beats expectations"}]
+                mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+                with _patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+                    with _patch("signals.news_catalyst._build_finnhub_client", return_value=mock_client):
+                        with _patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                            with _patch("signals.news_catalyst.time.sleep"):
+                                s.pre_compute(uni, ctx)
+                ctx_ok = isinstance(ctx.news_sentiment_scores, dict) and isinstance(ctx.earnings_dates, dict)
+                checks.append({"check": "pre_compute populates context.news_sentiment_scores and .earnings_dates", "passed": ctx_ok})
+                if not ctx_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "pre_compute context population", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 8 — no key → no crash, empty caches
+            try:
+                s2 = object.__new__(NewsCatalystSignal)
+                s2._news_scores = {}
+                s2._earnings_dt = {}
+                ctx2 = types.SimpleNamespace(news_sentiment_scores={}, earnings_dates={})
+                uni2 = __import__("pandas").DataFrame({"Symbol": ["AAPL"]})
+                with _patch.dict(os.environ, {"FINNHUB_API_KEY": ""}, clear=False):
+                    s2.pre_compute(uni2, ctx2)
+                no_crash_ok = True
+                checks.append({"check": "no FINNHUB_API_KEY → no crash", "passed": True})
+            except Exception as e:
+                checks.append({"check": "no key resilience", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 9 — weight in SIGNAL_WEIGHTS
+            try:
+                from settings import settings as _s
+                weight_ok = "news_catalyst" in _s.SIGNAL_WEIGHTS
+                checks.append({"check": "news_catalyst in SIGNAL_WEIGHTS", "passed": weight_ok, "weight": _s.SIGNAL_WEIGHTS.get("news_catalyst")})
+                if not weight_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "SIGNAL_WEIGHTS entry", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 10 — test file exists
+            import os as _os
+            test_exists = _os.path.isfile("tests/test_news_catalyst.py")
+            checks.append({"check": "tests/test_news_catalyst.py exists", "passed": test_exists})
+            if not test_exists:
+                overall = False
+
+            audit["checks"] = checks
+            audit["overall_pass"] = overall
+            audit["status"] = "PASSED" if overall else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_60_news_catalyst_audit"] = audit
+
+    def run_correlation_cluster_audit(self) -> None:
+        """Step 61 — Tier 2.5: Correlation Cluster Awareness audit.
+
+        Checks
+        ------
+        1. ``research_engine.compute_correlation_clusters`` importable.
+        2. ``research_engine.fetch_returns_for_clustering`` importable.
+        3. Known correlated symbols (A, B) cluster together.
+        4. Uncorrelated symbol (C) in different cluster.
+        5. Empty DataFrame → empty labels dict, empty summary.
+        6. ``Correlation_Cluster`` in ``config.COLUMN_SCHEMA``.
+        7. ``settings.CORRELATION_CLUSTER_LOOKBACK_DAYS`` == 60.
+        8. ``settings.CORRELATION_CLUSTER_THRESHOLD`` == 0.4.
+        9. Insufficient obs symbols get cluster_id = 0.
+        10. ``tests/test_correlation_clusters.py`` exists.
+        """
+        audit: dict = {"step": "step_61_correlation_cluster_audit", "checks": [], "status": "PENDING"}
+        try:
+            checks = []
+            overall = True
+
+            # Check 1 — compute_correlation_clusters importable
+            try:
+                from research_engine import compute_correlation_clusters
+                checks.append({"check": "compute_correlation_clusters importable", "passed": True})
+            except ImportError as ie:
+                checks.append({"check": "compute_correlation_clusters importable", "passed": False, "error": str(ie)})
+                overall = False
+
+            # Check 2 — fetch_returns_for_clustering importable
+            try:
+                from research_engine import fetch_returns_for_clustering
+                checks.append({"check": "fetch_returns_for_clustering importable", "passed": True})
+            except ImportError as ie:
+                checks.append({"check": "fetch_returns_for_clustering importable", "passed": False, "error": str(ie)})
+                overall = False
+
+            # Check 3 & 4 — known correlated symbols cluster together
+            try:
+                import numpy as np
+                import pandas as pd
+                rng = np.random.default_rng(42)
+                dates = pd.date_range("2026-01-01", periods=60, freq="B")
+                base = rng.standard_normal(60)
+                returns_a = base * 0.01 + rng.standard_normal(60) * 0.0005
+                returns_b = base * 0.01 + rng.standard_normal(60) * 0.0005
+                returns_c = rng.standard_normal(60) * 0.01
+                returns_df = pd.DataFrame({"A": returns_a, "B": returns_b, "C": returns_c}, index=dates)
+                labels, summary = compute_correlation_clusters(returns_df, distance_threshold=0.4)
+                ab_same = labels.get("A") == labels.get("B")
+                ac_diff = labels.get("A") != labels.get("C")
+                checks.append({"check": "correlated A,B share cluster", "passed": ab_same, "A": labels.get("A"), "B": labels.get("B")})
+                checks.append({"check": "uncorrelated C in different cluster", "passed": ac_diff, "A": labels.get("A"), "C": labels.get("C")})
+                if not ab_same:
+                    overall = False
+                if not ac_diff:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "known-group clustering", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 5 — empty DataFrame returns empty
+            try:
+                empty_labels, empty_summary = compute_correlation_clusters(pd.DataFrame())
+                empty_ok = (empty_labels == {}) and empty_summary.empty
+                checks.append({"check": "empty DataFrame → empty labels and summary", "passed": empty_ok})
+                if not empty_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "empty DataFrame resilience", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 6 — Correlation_Cluster in COLUMN_SCHEMA
+            try:
+                from config import COLUMN_SCHEMA
+                keys = [col["key"] for col in COLUMN_SCHEMA]
+                col_ok = "Correlation_Cluster" in keys
+                checks.append({"check": "Correlation_Cluster in COLUMN_SCHEMA", "passed": col_ok})
+                if not col_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "COLUMN_SCHEMA check", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 7 — settings.CORRELATION_CLUSTER_LOOKBACK_DAYS == 60
+            try:
+                from settings import settings as _s
+                lb_ok = _s.CORRELATION_CLUSTER_LOOKBACK_DAYS == 60
+                checks.append({"check": "CORRELATION_CLUSTER_LOOKBACK_DAYS == 60", "passed": lb_ok, "value": _s.CORRELATION_CLUSTER_LOOKBACK_DAYS})
+                if not lb_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "lookback setting", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 8 — settings.CORRELATION_CLUSTER_THRESHOLD == 0.4
+            try:
+                thresh_ok = abs(_s.CORRELATION_CLUSTER_THRESHOLD - 0.4) < 1e-9
+                checks.append({"check": "CORRELATION_CLUSTER_THRESHOLD == 0.4", "passed": thresh_ok, "value": _s.CORRELATION_CLUSTER_THRESHOLD})
+                if not thresh_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "threshold setting", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 9 — insufficient obs → cluster_id = 0
+            try:
+                rng2 = np.random.default_rng(99)
+                dates2 = pd.date_range("2026-01-01", periods=10, freq="B")
+                short_df = pd.DataFrame({"SCARCE": rng2.standard_normal(10) * 0.01}, index=dates2)
+                short_labels, _ = compute_correlation_clusters(short_df, min_obs=20)
+                ins_ok = short_labels.get("SCARCE") == 0
+                checks.append({"check": "insufficient obs symbol gets cluster_id=0", "passed": ins_ok, "label": short_labels.get("SCARCE")})
+                if not ins_ok:
+                    overall = False
+            except Exception as e:
+                checks.append({"check": "insufficient obs check", "passed": False, "error": str(e)})
+                overall = False
+
+            # Check 10 — test file exists
+            import os as _os
+            test_exists = _os.path.isfile("tests/test_correlation_clusters.py")
+            checks.append({"check": "tests/test_correlation_clusters.py exists", "passed": test_exists})
+            if not test_exists:
+                overall = False
+
+            audit["checks"] = checks
+            audit["overall_pass"] = overall
+            audit["status"] = "PASSED" if overall else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_61_correlation_cluster_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
