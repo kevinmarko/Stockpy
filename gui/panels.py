@@ -383,6 +383,159 @@ def validate_brinson_fachler_weights(
 
 
 # ===========================================================================
+# Signal Decision Journal — Streamlit section (Reports tab, Tier 1 / 1.3)
+# ===========================================================================
+
+def _render_decision_journal_section(signals: list) -> None:
+    """Let the operator log whether they acted on, passed, or modified a signal.
+
+    Renders a compact form with three decision buttons per symbol.  Entries
+    are appended to ``output/decision_log.jsonl`` via ``gui.decision_log``.
+    The optional trade join (``"acted"`` path) links the entry to the nearest
+    ``TransactionsStore`` record within 24 hours so the calibration tracker
+    (1.2) can filter to signals the operator actually executed.
+
+    Also renders a collapsible past-decisions log so the operator can verify
+    what has been recorded.
+    """
+    st.markdown("**Signal Decision Journal** — log what you decided to do with each signal")
+
+    if not signals:
+        st.caption("No signals yet — run the advisory engine from the Launcher tab.")
+        return
+
+    from gui.decision_log import (
+        ActionTaken,
+        decisions_df,
+        log_decision,
+    )
+
+    log_path = settings.OUTPUT_DIR / "decision_log.jsonl"
+
+    # ── Symbol selector ──────────────────────────────────────────────────────
+    sym_options = sorted({str(s.get("symbol", "")).upper() for s in signals if s.get("symbol")})
+    if not sym_options:
+        st.caption("Signal list has no symbol column.")
+        return
+
+    dj_sym = st.selectbox(
+        "Symbol to journal",
+        options=sym_options,
+        key="dj_selected_symbol",
+        help="Pick the ticker whose signal you want to record a decision for.",
+    )
+
+    # Pull the matching signal dict so we can show context
+    sig_match = next(
+        (s for s in signals if str(s.get("symbol", "")).upper() == dj_sym),
+        {},
+    )
+    sig_action = (
+        sig_match.get("advisory_action")
+        or sig_match.get("action")
+        or "—"
+    )
+    sig_conviction = sig_match.get("advisory_conviction") or sig_match.get("conviction")
+    sig_ts = sig_match.get("timestamp", "")
+
+    # ── Signal context strip ─────────────────────────────────────────────────
+    sc1, sc2, sc3 = st.columns(3)
+    sc1.metric("System recommendation", sig_action)
+    sc2.metric(
+        "Conviction",
+        f"{float(sig_conviction):.0%}" if sig_conviction is not None else "—",
+    )
+    sc3.metric("Symbol", dj_sym)
+
+    # ── Notes (visible for all actions; mandatory prompt for "modified") ──────
+    dj_notes = st.text_area(
+        "Notes (optional — required context when modifying a signal)",
+        value="",
+        key="dj_notes",
+        height=68,
+        placeholder="e.g. 'Size halved — position already large', 'Used limit instead of market'",
+    )
+
+    # ── Three decision buttons ────────────────────────────────────────────────
+    st.caption("Log your decision:")
+    b1, b2, b3 = st.columns(3)
+
+    _LOG_KWARGS: dict = dict(
+        signal_action=sig_action,
+        conviction=float(sig_conviction) if sig_conviction is not None else None,
+        notes=dj_notes.strip(),
+        signal_ts=sig_ts,
+        log_path=log_path,
+    )
+
+    def _do_log(action: ActionTaken) -> None:
+        try:
+            from transactions_store import TransactionsStore
+            ts_store: object | None = TransactionsStore()
+        except Exception:
+            ts_store = None
+        entry = log_decision(
+            symbol=dj_sym,
+            action_taken=action,
+            transactions_store=ts_store,
+            **_LOG_KWARGS,
+        )
+        st.session_state["dj_last_result"] = (action, entry.symbol, entry.trade_id)
+
+    with b1:
+        if st.button("✅ Acted", key="dj_btn_acted", use_container_width=True,
+                     help="You placed this trade (or are about to)"):
+            _do_log("acted")
+    with b2:
+        if st.button("⏭ Passed", key="dj_btn_passed", use_container_width=True,
+                     help="You reviewed but skipped this signal"):
+            _do_log("passed")
+    with b3:
+        if st.button("🔁 Modified", key="dj_btn_modified", use_container_width=True,
+                     help="You acted but changed size, limit price, or timing"):
+            if not dj_notes.strip():
+                st.warning("Please add a note describing how you modified the signal.")
+            else:
+                _do_log("modified")
+
+    # ── Success feedback ──────────────────────────────────────────────────────
+    if "dj_last_result" in st.session_state:
+        action_done, sym_done, trade_id_done = st.session_state["dj_last_result"]
+        icon = {"acted": "✅", "passed": "⏭", "modified": "🔁"}.get(action_done, "")
+        join_note = (
+            f" · linked to trade #{trade_id_done}"
+            if trade_id_done is not None
+            else " · no trade match found within 24 h"
+            if action_done == "acted"
+            else ""
+        )
+        st.success(f"Logged: **{sym_done}** → {icon} {action_done}{join_note}")
+
+    # ── Past decisions (collapsible) ──────────────────────────────────────────
+    with st.expander("📋 Past decisions log"):
+        try:
+            hist_df = decisions_df(log_path)
+        except Exception as exc:
+            st.caption(f"(log unavailable: {exc})")
+            return
+
+        if hist_df.empty:
+            st.caption("No decisions logged yet.")
+            return
+
+        # Show most recent first; drop the internal-only notes-empty rows
+        hist_display = hist_df.sort_values("timestamp", ascending=False).reset_index(drop=True)
+        st.dataframe(hist_display, hide_index=True)
+
+        st.download_button(
+            "⬇️ Export decision log (CSV)",
+            data=hist_display.to_csv(index=False).encode("utf-8"),
+            file_name="decision_log.csv",
+            mime="text/csv",
+        )
+
+
+# ===========================================================================
 # Conviction Calibration — Streamlit section (consumed by Reports tab, 1.2)
 # ===========================================================================
 
@@ -1187,6 +1340,9 @@ def render_report_viewer() -> None:
                 st.caption("Signal frame has no `symbol` column to drill into.")
     else:
         st.caption("MFE/MAE/Edge populate once closed trades and signals exist.")
+
+    # ── Signal decision journal (1.3) ────────────────────────────────────────
+    _render_decision_journal_section(signals)
 
     # ── Brinson-Fachler attribution (interactive section) ───────────────────
     _render_brinson_fachler_section()

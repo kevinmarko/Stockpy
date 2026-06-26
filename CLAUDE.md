@@ -513,3 +513,38 @@ calibration_curve(transactions_store, n_bins=10, min_trades_per_bin=5) -> pd.Dat
 
 ### Gravity step 52
 - **`step_52_calibration_audit`** — 10 checks: import, schema constant, empty store, no conviction column, all-null, long win logic, short win logic, min_trades gate, dead-letter read failure, record_trade persistence.
+
+## Tier 1 / 1.3 — Manual Execution Decision Journal (2026-06)
+
+### Overview
+Operator logs whether each advisory signal was acted on, passed, or modified. Records accumulate in `output/decision_log.jsonl` (JSON-Lines, append-only). An optional join step links "acted" entries back to the nearest `TransactionsStore` trade record within ±24 h so the calibration tracker (1.2) can filter to decisions that were actually executed — turning the calibration from "all signals" to "signals the operator endorsed."
+
+### New module: `gui/decision_log.py`
+Headlessly testable (no streamlit imports). Public API:
+- `DecisionEntry` — frozen dataclass: `symbol`, `action_taken` (`"acted"|"passed"|"modified"`), `signal_action`, `conviction`, `notes`, `timestamp`, `signal_ts`, `trade_id`.
+- `append_decision(entry, log_path)` — atomic JSONL line append; creates parent dirs.
+- `read_decisions(log_path)` — tolerant reader; corrupt/blank lines skipped (CONSTRAINT #6).
+- `decisions_df(log_path)` — typed DataFrame (Int64 nullable `trade_id`); empty schema when log absent (CONSTRAINT #4).
+- `join_to_store(entry, transactions_store, window_hours=24.0)` — finds closest matching trade by symbol within `±window_hours` of `entry.timestamp`; returns `None` on no-match or any failure.
+- `log_decision(...)` — orchestrates: build → join (if acted) → append; injectable `now_fn` for tests.
+
+### GUI: Reports tab (`gui/panels.py`)
+- `_render_decision_journal_section(signals)` — inserted between the drill-down expander and Brinson-Fachler.
+- Symbol selectbox + signal-context KPI strip (system action, conviction) + notes textarea.
+- Three buttons: **✅ Acted** / **⏭ Passed** / **🔁 Modified** (Modified requires non-empty notes).
+- Success banner after click shows join result (`linked to trade #N` or `no match within 24h`).
+- Past-decisions collapsible log with CSV download.
+
+### Log file
+`output/decision_log.jsonl` — append-only, never read by the signal pipeline. Written to `settings.OUTPUT_DIR / "decision_log.jsonl"` from the GUI. Never committed to git (add to `.gitignore` if not already excluded via `output/`).
+
+### Join convention (must never regress)
+- `join_to_store` is called ONLY when `action_taken == "acted"`. "passed" and "modified" decisions never set `trade_id`.
+- The join window default is 24 h. Never fabricate a `trade_id` — if no match, set `None` (CONSTRAINT #4).
+- Symbol matching is case-insensitive (normalized to uppercase).
+
+### Test surface
+- **`tests/test_decision_log.py`** (30 tests, 5 classes): `TestDecisionEntry` (frozen, fields, action_taken values); `TestAppendAndRead` (round-trip, multiple entries, missing file, corrupt/blank lines, trade_id/None-conviction round-trips, parent-dir creation); `TestDecisionsDf` (empty schema, Int64 dtype, nullable NaN, row count); `TestJoinToStore` (within window, outside window, symbol not found, closest pick, store failure, case-insensitive); `TestLogDecision` (field wiring, log append, passed/modified skip join, acted joins, acted no match → None, None conviction).
+
+### Gravity step 53
+- **`step_53_decision_log_audit`** — 10 checks: import, frozen dataclass + fields, round-trip, empty schema, corrupt line skip, join within window, join returns None outside, passed skips join, acted joins, test file exists.

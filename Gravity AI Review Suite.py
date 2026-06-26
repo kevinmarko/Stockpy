@@ -4296,6 +4296,8 @@ class GravityAIAuditor:
         self.run_snapshot_diff_audit()
         # Tier 1 / 1.2 — Conviction calibration tracker
         self.run_calibration_audit()
+        # Tier 1 / 1.3 — Manual execution decision journal
+        self.run_decision_log_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -7198,6 +7200,163 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_52_calibration_audit"] = audit
+
+    def run_decision_log_audit(self) -> None:
+        """Step 53 — Manual execution decision journal (Tier 1 / 1.3).
+
+        Checks
+        ------
+        1.  ``gui.decision_log`` is importable.
+        2.  ``DecisionEntry`` is a frozen dataclass with correct fields.
+        3.  ``append_decision`` / ``read_decisions`` round-trip (tmp file).
+        4.  ``decisions_df`` returns correct schema on empty / missing log.
+        5.  Corrupt JSONL line is skipped; subsequent valid entry is returned.
+        6.  ``join_to_store`` finds match within 24 h window.
+        7.  ``join_to_store`` returns ``None`` outside window.
+        8.  ``log_decision`` does NOT join store for ``"passed"`` action.
+        9.  ``log_decision`` joins store for ``"acted"`` with trade in window.
+        10. ``tests/test_decision_log.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_53_decision_log_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import json
+            import tempfile
+            from dataclasses import asdict
+            from datetime import datetime, timedelta, timezone
+            from pathlib import Path
+
+            # ── 1. Import ────────────────────────────────────────────────────
+            try:
+                from gui.decision_log import (
+                    DecisionEntry,
+                    _SCHEMA,
+                    append_decision,
+                    decisions_df,
+                    join_to_store,
+                    log_decision,
+                    read_decisions,
+                )
+                import_ok = True
+            except ImportError as exc:
+                audit["checks"].append({"check": "gui.decision_log importable", "passed": False, "detail": str(exc)})
+                audit["status"] = "FAILED"
+                self.report["step_53_decision_log_audit"] = audit
+                return
+            audit["checks"].append({"check": "gui.decision_log importable", "passed": True})
+
+            # ── 2. DecisionEntry is frozen dataclass ──────────────────────────
+            e = DecisionEntry("AAPL", "acted", "BUY", 0.8, "", "2026-06-26T12:00:00+00:00", "")
+            try:
+                exec("e.symbol = 'MSFT'")  # noqa: S102 — intentional freeze test
+                frozen_ok = False
+            except (AttributeError, TypeError):
+                frozen_ok = True
+            required_fields = {"symbol", "action_taken", "signal_action", "conviction", "notes", "timestamp", "signal_ts", "trade_id"}
+            fields_ok = required_fields.issubset(set(asdict(e).keys()))
+            audit["checks"].append({"check": "DecisionEntry frozen + correct fields", "passed": frozen_ok and fields_ok})
+            all_pass = all_pass and frozen_ok and fields_ok
+
+            # ── 3. Round-trip ─────────────────────────────────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                log = Path(td) / "dl.jsonl"
+                entry = DecisionEntry("MSFT", "passed", "HOLD", 0.6, "test", "2026-06-26T12:00:00+00:00", "")
+                append_decision(entry, log_path=log)
+                result = read_decisions(log)
+                rt_ok = (len(result) == 1 and result[0].symbol == "MSFT"
+                         and result[0].action_taken == "passed")
+            audit["checks"].append({"check": "append_decision / read_decisions round-trip", "passed": rt_ok})
+            all_pass = all_pass and rt_ok
+
+            # ── 4. decisions_df schema on empty log ───────────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                df = decisions_df(Path(td) / "nonexistent.jsonl")
+                schema_ok = df.empty and list(df.columns) == list(_SCHEMA.keys())
+            audit["checks"].append({"check": "decisions_df empty schema correct", "passed": schema_ok})
+            all_pass = all_pass and schema_ok
+
+            # ── 5. Corrupt line skipped ───────────────────────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                log = Path(td) / "dl.jsonl"
+                good_line = json.dumps(asdict(DecisionEntry("AAPL", "passed", "BUY", 0.7, "", "2026-06-26T12:00:00+00:00", "")))
+                log.write_text(f"{good_line}\nnot-json!!!\n{good_line}\n", encoding="utf-8")
+                entries = read_decisions(log)
+                corrupt_ok = len(entries) == 2
+            audit["checks"].append({"check": "corrupt JSONL line skipped, others returned", "passed": corrupt_ok})
+            all_pass = all_pass and corrupt_ok
+
+            # ── 6 & 7. join_to_store window ──────────────────────────────────
+            from transactions_store import TransactionsStore
+
+            def _mem():
+                return TransactionsStore(db_url="sqlite:///:memory:")
+
+            store6 = _mem()
+            now = datetime.utcnow()
+            tid6 = store6.record_trade("AAPL", "long", now - timedelta(hours=1), 100.0, 1.0)
+            store6.close_trade(tid6, now, 110.0)
+            entry6 = DecisionEntry("AAPL", "acted", "BUY", 0.9, "", datetime.now(timezone.utc).isoformat(), "")
+            join_ok = join_to_store(entry6, store6, window_hours=24.0) == tid6
+            audit["checks"].append({"check": "join_to_store finds match within 24 h window", "passed": join_ok})
+            all_pass = all_pass and join_ok
+
+            store7 = _mem()
+            tid7 = store7.record_trade("AAPL", "long", now - timedelta(days=5), 100.0, 1.0)
+            store7.close_trade(tid7, now - timedelta(days=4), 110.0)
+            entry7 = DecisionEntry("AAPL", "acted", "BUY", 0.9, "", now.isoformat(), "")
+            outside_ok = join_to_store(entry7, store7, window_hours=24.0) is None
+            audit["checks"].append({"check": "join_to_store returns None outside window", "passed": outside_ok})
+            all_pass = all_pass and outside_ok
+
+            # ── 8. "passed" does not join ─────────────────────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                store8 = _mem()
+                tid8 = store8.record_trade("AAPL", "long", now, 100.0, 1.0)
+                store8.close_trade(tid8, now + timedelta(hours=1), 110.0)
+                entry8 = log_decision(
+                    "AAPL", "passed", "BUY", 0.9,
+                    transactions_store=store8,
+                    log_path=Path(td) / "dl.jsonl",
+                    now_fn=lambda: now.isoformat(),
+                )
+                passed_no_join_ok = entry8.trade_id is None
+            audit["checks"].append({"check": "'passed' action does not join TransactionsStore", "passed": passed_no_join_ok})
+            all_pass = all_pass and passed_no_join_ok
+
+            # ── 9. "acted" joins ──────────────────────────────────────────────
+            with tempfile.TemporaryDirectory() as td:
+                store9 = _mem()
+                tid9 = store9.record_trade("AAPL", "long", now - timedelta(hours=1), 100.0, 1.0)
+                store9.close_trade(tid9, now, 110.0)
+                entry9 = log_decision(
+                    "AAPL", "acted", "BUY", 0.9,
+                    transactions_store=store9,
+                    log_path=Path(td) / "dl.jsonl",
+                    now_fn=lambda: datetime.now(timezone.utc).isoformat(),
+                )
+                acted_join_ok = entry9.trade_id == tid9
+            audit["checks"].append({"check": "'acted' action joins trade within window", "passed": acted_join_ok, "detail": str(entry9.trade_id)})
+            all_pass = all_pass and acted_join_ok
+
+            # ── 10. Test file exists ──────────────────────────────────────────
+            test_exists = Path("tests/test_decision_log.py").exists()
+            audit["checks"].append({"check": "tests/test_decision_log.py exists", "passed": test_exists})
+            all_pass = all_pass and test_exists
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_53_decision_log_audit"] = audit
 
     def _extend_launcher_telemetry_audit_stage_status(self) -> None:
         """Extend step_41 to also verify StageStatus enum and four-stage map.

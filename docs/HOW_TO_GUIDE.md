@@ -318,6 +318,8 @@ Open either in any browser. The advisory report (`daily_report.html`)
 - **Search box + sortable columns**: type to filter by symbol/action/rationale;
   click a column header to sort. (No page reload, no external JS libraries.)
 - **Gravity AI Audit Log tab**: raw JSON findings from the verification suite.
+- **Reports tab — Decision Journal**: log whether you acted on, passed, or modified each advisory signal (see [Manual Execution Journal](#manual-execution-journal-reports-tab) below).
+- **Reports tab — Conviction Calibration**: reliability diagram showing whether the conviction scores match actual win rates (see [Conviction Calibration](#conviction-calibration-reports-tab) below).
 
 Non-held watchlist symbols render "—" in the holdings columns (positions are
 never fabricated). The report contains no credentials.
@@ -329,6 +331,38 @@ never fabricated). The report contains no credentials.
 ### State snapshot (for the dashboard)
 
 `output/state_snapshot.json` — machine-readable summary consumed by the Streamlit observability dashboard. Updated every pipeline run. A timestamped copy is ALSO written to `output/history/state_snapshot_<UTC>.json` and pruned after `SNAPSHOT_HISTORY_DAYS` (default 30); the daily HTML report's "Δ Since Last Run" band reads the two most recent rotated copies via `scripts/snapshot_diff.py`.
+
+### Manual Execution Journal (Reports tab)
+
+The **Decision Journal** section in the Reports tab lets you log what you did with each advisory signal — useful for post-hoc analysis and for teaching the calibration tracker which signals you actually endorsed.
+
+**How it works:**
+
+1. Open the Reports tab and scroll to "Signal Decision Journal".
+2. Select the symbol from the dropdown (pre-populated with the last pipeline signals).
+3. The context strip shows the system recommendation, conviction score, and current price.
+4. Add optional notes, then click one of:
+   - **✅ Acted** — you executed (or are executing) the suggested action.
+   - **⏭ Passed** — you saw the signal but chose not to act.
+   - **🔁 Modified** — you acted differently from the system (enter notes explaining the change).
+5. The entry is appended to `output/decision_log.jsonl` (JSON-Lines, one entry per line).
+
+For **"Acted"** entries only, the journal automatically looks up the nearest matching trade in `quant_platform.db` within ±24 h and records the `trade_id`. This allows the conviction calibration chart to filter to "decisions the operator actually endorsed."
+
+**Log file location:** `output/decision_log.jsonl` — append-only, never read by the signal pipeline. The Past Decisions expander shows the last 20 entries with a CSV download button.
+
+### Conviction Calibration (Reports tab)
+
+The **Conviction Calibration** section in the Reports tab renders a reliability diagram — comparing the system's stated conviction score against the actual empirical win rate per conviction bin.
+
+- X-axis: conviction bin (0–1, split into 10 equal bins by default).
+- Y-axis: actual win rate for closed trades in that bin.
+- Diagonal line: "perfect calibration" (conviction 0.8 → 80% actual win rate).
+
+Bars above the diagonal → conviction underestimates actual skill in that range.
+Bars below the diagonal → conviction is overconfident in that range.
+
+**Important:** win rates are only shown for bins with ≥ 5 trades (configurable). The 169 seeded trades from the Robinhood order history have no conviction scores, so the chart starts empty and fills in as `record_trade(conviction=...)` calls accumulate from live advisory runs.
 
 ### Database
 

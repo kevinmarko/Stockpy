@@ -33,6 +33,8 @@ The **Launcher tab** now exposes two distinct entry points: **▶️ Launch Pipe
 
 The **daily HTML report** now leads with a **"Δ Since Last Run" band** (between the portfolio summary band and the macro/regime cards): new BUYs, action flips, conviction moves with `|Δ| ≥ SNAPSHOT_CONVICTION_DELTA_THRESHOLD` (default 0.20), holdings added/dropped, and regime changes. Powered by rotated state snapshots in `output/history/state_snapshot_<UTC>.json` (pruned after `SNAPSHOT_HISTORY_DAYS=30` days). To inspect the diff between any two runs directly: `python -m scripts.snapshot_diff` (or pass two file paths). The band is hidden whenever no prior rotated snapshot exists — it never blocks the report.
 
+The **Reports tab** now includes two Tier-1 decision-support sections: **Decision Journal** (log "acted / passed / modified" per signal; entries go to `output/decision_log.jsonl` and for "acted" entries are linked back to the nearest `quant_platform.db` trade record within ±24 h) and **Conviction Calibration** (reliability diagram showing whether stated conviction scores match empirical win rates per bin — starts empty until conviction-annotated live trades accumulate; bins with < 5 trades show NaN rather than noisy estimates). See `docs/HOW_TO_GUIDE.md` → "Manual Execution Journal" and "Conviction Calibration" for operator instructions.
+
 ---
 
 ## 1. Switching from Paper to Live
