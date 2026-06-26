@@ -24,12 +24,15 @@ state and market-data prices are never conflated.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -39,6 +42,40 @@ from gui import env_io, orchestrator_runner
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------------------
+# GICS 11 sector seed for the Brinson-Fachler attribution editor. Choosing a
+# fixed canonical list (rather than an empty grid) gives the operator a
+# starting point that matches the way most public benchmarks publish their
+# sector exposures, so the typical workflow is "tweak weights" rather than
+# "type 11 sector names from scratch".
+# ---------------------------------------------------------------------------
+GICS_SECTORS: Tuple[str, ...] = (
+    "Communication Services",
+    "Consumer Discretionary",
+    "Consumer Staples",
+    "Energy",
+    "Financials",
+    "Health Care",
+    "Industrials",
+    "Information Technology",
+    "Materials",
+    "Real Estate",
+    "Utilities",
+)
+
+# Canonical column names used by the editor table AND
+# ``EvaluationEngine._calculate_brinson_fachler_compat`` (it accepts both
+# ``portfolio_weight``/``portfolio_return`` and ``weight``/``return`` shapes;
+# we hand it the explicit form so the column-rename layer is exercised
+# deterministically).
+_BF_EDITOR_COLUMNS: Tuple[str, ...] = (
+    "Sector",
+    "Portfolio Weight (%)",
+    "Portfolio Return (%)",
+    "Benchmark Weight (%)",
+    "Benchmark Return (%)",
+)
 
 
 # ===========================================================================
@@ -156,35 +193,452 @@ def _active_symbols(snap: dict) -> List[str]:
 
 
 # ===========================================================================
+# Brinson-Fachler attribution — pure helpers (testable without Streamlit)
+# ===========================================================================
+
+def default_brinson_fachler_frame() -> pd.DataFrame:
+    """Return the seed editor DataFrame (GICS 11 sectors, zero weights/returns).
+
+    Kept as a separate factory function so tests can construct the same shape
+    the UI starts with without spinning up Streamlit.
+    """
+    rows = [
+        {
+            "Sector": s,
+            "Portfolio Weight (%)": 0.0,
+            "Portfolio Return (%)": 0.0,
+            "Benchmark Weight (%)": 0.0,
+            "Benchmark Return (%)": 0.0,
+        }
+        for s in GICS_SECTORS
+    ]
+    return pd.DataFrame(rows, columns=list(_BF_EDITOR_COLUMNS))
+
+
+def parse_pasted_sector_matrix(text: str) -> pd.DataFrame:
+    """Parse a TSV / CSV block pasted from a spreadsheet into the editor shape.
+
+    The function accepts either:
+
+    *   A 5-column matrix with a header row whose names match (case-insensitive,
+        whitespace-tolerant) :data:`_BF_EDITOR_COLUMNS`.
+    *   A 5-column matrix with no header (positional: sector, p_w, p_r, b_w,
+        b_r).
+
+    Values are coerced to float; missing / unparseable cells become ``0.0`` so
+    the engine never sees ``NaN`` (the engine fills NaN to 0 internally too,
+    but normalizing up front gives a clean editor view).
+
+    Raises
+    ------
+    ValueError
+        On unrecognised column counts or completely empty input.
+    """
+    if not text or not text.strip():
+        raise ValueError("Pasted text is empty.")
+
+    # Detect delimiter — spreadsheet copies are usually TSV; fall back to CSV.
+    sample = text.strip().splitlines()[0]
+    delim = "\t" if "\t" in sample else ","
+
+    # Header detection: pandas would happily promote the first data row to the
+    # header, dropping a real data row in the header-less case. Sniff the first
+    # line directly: if columns 2..5 parse as floats, it's data, not a header.
+    first_cells = [c.strip().replace("%", "") for c in sample.split(delim)]
+    has_header = True
+    if len(first_cells) >= 5:
+        try:
+            for cell in first_cells[1:5]:
+                float(cell)
+            has_header = False  # all numeric → first row is data
+        except ValueError:
+            has_header = True
+
+    header_arg = 0 if has_header else None
+    df = pd.read_csv(io.StringIO(text), sep=delim, dtype=str,
+                     engine="python", header=header_arg)
+
+    if df.shape[1] != 5:
+        raise ValueError(
+            f"Expected 5 columns (Sector, P-Weight, P-Return, B-Weight, B-Return); "
+            f"got {df.shape[1]}."
+        )
+
+    if not has_header:
+        df.columns = list(_BF_EDITOR_COLUMNS)
+    else:
+        # Header present — normalise column names by lowercase comparison.
+        canonical = {c.lower().strip(): c for c in _BF_EDITOR_COLUMNS}
+        renamed: Dict[str, str] = {}
+        for c in df.columns:
+            key = str(c).lower().strip()
+            if key in canonical:
+                renamed[c] = canonical[key]
+        df = df.rename(columns=renamed)
+        # If after renaming we still don't have all canonical columns, treat
+        # the input as positional anyway.
+        if not set(_BF_EDITOR_COLUMNS).issubset(df.columns):
+            df.columns = list(_BF_EDITOR_COLUMNS)
+
+    # Coerce numerics; non-parsable strings -> 0.0
+    for c in _BF_EDITOR_COLUMNS[1:]:
+        df[c] = pd.to_numeric(df[c].astype(str).str.replace("%", "", regex=False),
+                              errors="coerce").fillna(0.0)
+    df["Sector"] = df["Sector"].astype(str).str.strip()
+    df = df[df["Sector"] != ""]  # drop blank rows
+    if df.empty:
+        raise ValueError("No data rows found after parsing.")
+    return df[list(_BF_EDITOR_COLUMNS)].reset_index(drop=True)
+
+
+def build_brinson_fachler_inputs(
+    editor_df: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Split the editor frame into the (portfolio_df, benchmark_df) shape the
+    engine's DataFrame-compat path consumes.
+
+    Percentages in the editor are converted to fractions (``/ 100.0``) so the
+    engine's allocation/selection arithmetic is unit-consistent (the engine
+    multiplies weights × returns without rescaling).
+
+    The DataFrames carry the explicit ``portfolio_weight`` / ``portfolio_return``
+    and ``benchmark_weight`` / ``benchmark_return`` column names that
+    ``EvaluationEngine._calculate_brinson_fachler_compat`` looks up — passing
+    the explicit shape exercises the engine's name-mapping branch deterministically.
+    """
+    if editor_df is None or editor_df.empty:
+        raise ValueError("Sector editor is empty.")
+
+    df = editor_df.copy()
+    for c in _BF_EDITOR_COLUMNS:
+        if c not in df.columns:
+            raise ValueError(f"Editor frame missing required column: {c}")
+
+    df["Sector"] = df["Sector"].astype(str).str.strip()
+    df = df[df["Sector"] != ""].copy()
+    if df.empty:
+        raise ValueError("Sector editor has no non-empty rows.")
+
+    portfolio_df = pd.DataFrame({
+        "sector": df["Sector"],
+        "portfolio_weight": pd.to_numeric(df["Portfolio Weight (%)"], errors="coerce").fillna(0.0) / 100.0,
+        "portfolio_return": pd.to_numeric(df["Portfolio Return (%)"], errors="coerce").fillna(0.0) / 100.0,
+    })
+    benchmark_df = pd.DataFrame({
+        "sector": df["Sector"],
+        "benchmark_weight": pd.to_numeric(df["Benchmark Weight (%)"], errors="coerce").fillna(0.0) / 100.0,
+        "benchmark_return": pd.to_numeric(df["Benchmark Return (%)"], errors="coerce").fillna(0.0) / 100.0,
+    })
+    return portfolio_df, benchmark_df
+
+
+def compute_brinson_fachler(editor_df: pd.DataFrame) -> Dict[str, Any]:
+    """Run :class:`EvaluationEngine.calculate_brinson_fachler` on editor input.
+
+    Returns the engine's structured dict unchanged so the UI and tests share
+    one canonical result shape — ``Portfolio Return``, ``Benchmark Return``,
+    ``Active Return``, ``Allocation Effect``, ``Selection Effect``,
+    ``Interaction Effect``, ``Attribution Sum``, and ``Sector Details``.
+    """
+    from evaluation_engine import EvaluationEngine
+
+    portfolio_df, benchmark_df = build_brinson_fachler_inputs(editor_df)
+    engine = EvaluationEngine()
+    return engine.calculate_brinson_fachler(portfolio_df, benchmark_df)
+
+
+def validate_brinson_fachler_weights(
+    editor_df: pd.DataFrame,
+    *,
+    tolerance_pct: float = 1.0,
+) -> List[str]:
+    """Return a list of human-readable validation warnings (empty when clean).
+
+    Checks:
+      * portfolio weights sum to ~100% (within ``tolerance_pct``);
+      * benchmark weights sum to ~100%;
+      * no negative weights (the engine itself does not forbid them, but
+        negative sector weights almost always indicate a data-entry error in
+        long-only attribution).
+    """
+    warnings: List[str] = []
+    if editor_df is None or editor_df.empty:
+        return ["Sector editor is empty."]
+
+    p_sum = float(pd.to_numeric(editor_df.get("Portfolio Weight (%)", 0), errors="coerce").fillna(0.0).sum())
+    b_sum = float(pd.to_numeric(editor_df.get("Benchmark Weight (%)", 0), errors="coerce").fillna(0.0).sum())
+    if abs(p_sum - 100.0) > tolerance_pct:
+        warnings.append(f"Portfolio weights sum to {p_sum:.2f}% (expected ~100%).")
+    if abs(b_sum - 100.0) > tolerance_pct:
+        warnings.append(f"Benchmark weights sum to {b_sum:.2f}% (expected ~100%).")
+
+    for col in ("Portfolio Weight (%)", "Benchmark Weight (%)"):
+        if col in editor_df.columns:
+            neg = pd.to_numeric(editor_df[col], errors="coerce").fillna(0.0) < 0
+            if neg.any():
+                warnings.append(f"Negative values found in '{col}' — long-only attribution typically requires non-negative weights.")
+    return warnings
+
+
+# ===========================================================================
+# Brinson-Fachler attribution — Streamlit section (consumed by Reports tab)
+# ===========================================================================
+
+def _render_brinson_fachler_section() -> None:
+    """Render the interactive Brinson-Fachler attribution UI.
+
+    Layout (top → bottom):
+      1. **Editable sector matrix** (``st.data_editor``) seeded with GICS 11 —
+         operator types or pastes weights & returns directly.
+      2. **Bulk paste** — a textarea accepting CSV or TSV from a spreadsheet,
+         with a "Parse pasted data" button that replaces the editor contents.
+      3. **Validation chips** — warn on weights that don't sum to ~100 % or any
+         negative weight (long-only attribution convention).
+      4. **Compute attribution** — runs
+         :func:`compute_brinson_fachler` which delegates to
+         ``EvaluationEngine.calculate_brinson_fachler``.
+      5. **Result panel** — top-line metrics (portfolio/benchmark/active
+         returns, allocation/selection/interaction effects), per-sector
+         breakdown table, and an effects bar chart.  CSV download buttons let
+         the operator persist the editor input and the per-sector breakdown.
+
+    All editor + result state lives in ``st.session_state`` keys prefixed with
+    ``bf_`` so swapping tabs doesn't lose work.
+    """
+    st.markdown("---")
+    st.markdown("### 📊 Brinson-Fachler Attribution Analysis")
+    st.caption(
+        "Decompose active return into **allocation effect** (sector weighting) "
+        "and **selection effect** (stock picking) via "
+        "`EvaluationEngine.calculate_brinson_fachler`. Edit the matrix below, "
+        "or bulk-paste TSV/CSV from a spreadsheet."
+    )
+
+    # ── 1. Editor frame in session state ─────────────────────────────────────
+    if "bf_editor_df" not in st.session_state:
+        st.session_state["bf_editor_df"] = default_brinson_fachler_frame()
+
+    edited = st.data_editor(
+        st.session_state["bf_editor_df"],
+        key="bf_editor_widget",
+        width="stretch",
+        num_rows="dynamic",
+        hide_index=True,
+        column_config={
+            "Sector": st.column_config.TextColumn(
+                "Sector", required=True, help="Sector label (free-form)."
+            ),
+            "Portfolio Weight (%)": st.column_config.NumberColumn(
+                "Portfolio Weight (%)", format="%.4f",
+                help="Portfolio weight in this sector, in percent (0–100).",
+            ),
+            "Portfolio Return (%)": st.column_config.NumberColumn(
+                "Portfolio Return (%)", format="%.4f",
+                help="Portfolio return contributed by this sector, in percent.",
+            ),
+            "Benchmark Weight (%)": st.column_config.NumberColumn(
+                "Benchmark Weight (%)", format="%.4f",
+                help="Benchmark weight in this sector, in percent (0–100).",
+            ),
+            "Benchmark Return (%)": st.column_config.NumberColumn(
+                "Benchmark Return (%)", format="%.4f",
+                help="Benchmark return for this sector, in percent.",
+            ),
+        },
+    )
+    # Persist the latest edit so reruns survive.
+    st.session_state["bf_editor_df"] = edited
+
+    # ── 2. Bulk paste fallback ────────────────────────────────────────────────
+    with st.expander("📋 Bulk paste from spreadsheet (TSV / CSV)"):
+        st.caption(
+            "Copy a 5-column block (Sector, P-Weight%, P-Return%, B-Weight%, "
+            "B-Return%) from Excel / Google Sheets and paste here. The header "
+            "row is optional."
+        )
+        pasted = st.text_area(
+            "Paste data here", value="", height=140, key="bf_paste_area",
+            placeholder="Sector\tPortfolio Weight (%)\tPortfolio Return (%)\tBenchmark Weight (%)\tBenchmark Return (%)\nInformation Technology\t28\t12.4\t26\t10.1",
+        )
+        c_paste, c_reset = st.columns(2)
+        with c_paste:
+            if st.button("📥 Parse pasted data", key="bf_paste_btn"):
+                try:
+                    parsed = parse_pasted_sector_matrix(pasted)
+                    st.session_state["bf_editor_df"] = parsed
+                    st.success(f"Parsed {len(parsed)} sector row(s) — editor refreshed.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001 - user-facing parse error
+                    st.error(f"Could not parse pasted data: {exc}")
+        with c_reset:
+            if st.button("♻️ Reset to GICS 11 default", key="bf_reset_btn"):
+                st.session_state["bf_editor_df"] = default_brinson_fachler_frame()
+                st.rerun()
+
+    # ── 3. Validation chips ───────────────────────────────────────────────────
+    warnings = validate_brinson_fachler_weights(edited)
+    if warnings:
+        for w in warnings:
+            st.warning(f"⚠️ {w}")
+    else:
+        st.success("✅ Weights validated (portfolio + benchmark each sum to ~100%).")
+
+    # ── 4. Compute attribution ───────────────────────────────────────────────
+    if st.button("▶️ Compute Brinson-Fachler attribution",
+                 type="primary", key="bf_compute_btn"):
+        try:
+            result = compute_brinson_fachler(edited)
+            st.session_state["bf_result"] = result
+        except Exception as exc:  # noqa: BLE001 - surface engine error inline
+            logger.exception("Brinson-Fachler attribution failed")
+            st.error(f"Attribution failed: {exc}")
+            st.session_state["bf_result"] = None
+
+    # ── 5. Result panel ──────────────────────────────────────────────────────
+    result = st.session_state.get("bf_result")
+    if result:
+        st.markdown("#### 📈 Attribution result")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Portfolio Return",  f"{float(result.get('Portfolio Return', 0.0))*100:.3f}%")
+        m2.metric("Benchmark Return",  f"{float(result.get('Benchmark Return', 0.0))*100:.3f}%")
+        m3.metric("Active Return",     f"{float(result.get('Active Return', 0.0))*100:.3f}%")
+
+        e1, e2, e3, e4 = st.columns(4)
+        e1.metric("Allocation Effect",
+                  f"{float(result.get('Allocation Effect', 0.0))*100:.3f}%",
+                  help="Active return from sector weighting decisions.")
+        e2.metric("Selection Effect",
+                  f"{float(result.get('Selection Effect', 0.0))*100:.3f}%",
+                  help="Active return from stock-picking within sectors.")
+        e3.metric("Interaction Effect",
+                  f"{float(result.get('Interaction Effect', 0.0))*100:.3f}%",
+                  help="Cross-term: (Δweight) × (Δreturn).")
+        e4.metric("Attribution Sum",
+                  f"{float(result.get('Attribution Sum', 0.0))*100:.3f}%",
+                  help="Allocation + Selection + Interaction (should ≈ Active Return).")
+
+        sector_details = result.get("Sector Details") or {}
+        if sector_details:
+            sector_df = pd.DataFrame.from_dict(sector_details, orient="index").reset_index()
+            sector_df = sector_df.rename(columns={"index": "sector"})
+            # Pretty column order for display.
+            preferred = [
+                "sector", "weight_p", "weight_b", "return_p", "return_b",
+                "allocation_effect", "selection_effect",
+                "interaction_effect", "total_attribution",
+            ]
+            ordered = [c for c in preferred if c in sector_df.columns]
+            sector_df = sector_df[ordered]
+
+            st.markdown("**Per-sector breakdown**")
+            st.dataframe(sector_df, width="stretch", hide_index=True)
+
+            # Bar chart of allocation vs. selection by sector — vectorized, no
+            # extra dependencies (st.bar_chart consumes a DataFrame directly).
+            chart_df = sector_df.set_index("sector")[
+                [c for c in ("allocation_effect", "selection_effect") if c in sector_df.columns]
+            ]
+            st.markdown("**Allocation vs. Selection effect by sector**")
+            st.bar_chart(chart_df)
+
+            st.download_button(
+                "⬇️ Download per-sector breakdown (CSV)",
+                data=sector_df.to_csv(index=False).encode("utf-8"),
+                file_name="brinson_fachler_breakdown.csv",
+                mime="text/csv",
+                key="bf_download_sector",
+            )
+
+        st.download_button(
+            "⬇️ Download editor input (CSV)",
+            data=edited.to_csv(index=False).encode("utf-8"),
+            file_name="brinson_fachler_input.csv",
+            mime="text/csv",
+            key="bf_download_input",
+        )
+
+
+# ===========================================================================
 # Tab 1 — Launcher & Orchestration
 # ===========================================================================
 
 def render_launcher() -> None:
-    """Launch ``main_orchestrator.py`` and show live per-stage status + log tail."""
+    """Launch the pipeline (orchestrator OR advisory) and stream live feedback.
+
+    Two launch paths are surfaced, each as a distinct button so the operator
+    can pick the entry point that matches their intent:
+
+    *   **▶️ Launch Pipeline** — spawns ``main_orchestrator.py`` (async, full
+        pipeline including broker execution + HTML report).
+    *   **🔄 Refresh Data (Advisory)** — spawns ``main.py`` (synchronous
+        advisory loop).  This is the canonical ``.env``-loading entry point per
+        the project convention documented in :mod:`main`, so the operator can
+        use it as a fast, broker-free refresh that still hydrates the state
+        snapshot every observability panel reads from.
+
+    Pre-launch readiness:
+        :func:`orchestrator_runner.validate_required_env` is run on every
+        render and a missing variable is surfaced as an inline warning BEFORE
+        the buttons are clicked — eliminating the failure mode where the
+        subprocess silently degrades to neutral defaults and the operator
+        sees no observable result.
+
+    Telemetry feedback:
+        Three log streams are tailed side-by-side — the active run log
+        (``output/gui_run.log`` or ``output/gui_advisory.log`` depending on
+        which entry point was launched), and the platform-wide structured
+        telemetry written by ``alerting.setup_logging()`` to
+        ``logs/investyo.log``.  The expander auto-expands while a run is in
+        flight and an opt-in **auto-refresh** ticker (5 s) keeps the tail
+        scrolling without manual clicks.
+    """
     st.subheader("🚀 Program Launcher & Orchestration")
     st.caption(
-        "Triggers the async `main_orchestrator.py` pipeline as a subprocess "
-        "(non-blocking). Stage indicators are derived from the run log, "
-        "heartbeat, and state snapshot."
+        "Two entry points: the async `main_orchestrator.py` (full pipeline + "
+        "broker) or the synchronous `main.py` advisory loop. Stage indicators, "
+        "log tail, and the `logs/investyo.log` telemetry stream below give "
+        "real-time observability."
     )
 
-    col_a, col_b, col_c = st.columns([1, 1, 2])
+    # ── Pre-launch environment readiness check ─────────────────────────────
+    env_status = orchestrator_runner.validate_required_env()
+    missing = [k for k, ok in env_status.items() if not ok]
+    if missing:
+        st.error(
+            "⚠️  Missing required env var(s): "
+            + ", ".join(f"`{k}`" for k in missing)
+            + ". Pipeline will run but produce neutral / degraded output. "
+            "Set them in `.env` before launching."
+        )
+    else:
+        st.caption("✅  Required env vars present (`" + "`, `".join(env_status.keys()) + "`).")
+
+    # ── Launch controls ────────────────────────────────────────────────────
+    col_a, col_b, col_c, col_d = st.columns([1, 1, 1.4, 1.4])
     with col_a:
         dry_run = st.checkbox(
             "Dry run", value=settings.DRY_RUN,
-            help="Log intended orders but never submit them to the broker.",
+            help="Orchestrator-only: log intended orders but never submit them.",
         )
     with col_b:
         refresh_account = st.checkbox(
-            "Refresh Robinhood account", value=False,
-            help="Force a fresh account snapshot on this launch.",
+            "Refresh RH account", value=False,
+            help="Force a fresh Robinhood account snapshot on this launch.",
         )
     with col_c:
-        launch = st.button("▶️  Launch Pipeline", type="primary", width="stretch")
+        launch_orch = st.button(
+            "▶️  Launch Pipeline", type="primary", width="stretch",
+            help="Run `main_orchestrator.py` (async, includes broker execution).",
+        )
+    with col_d:
+        launch_adv = st.button(
+            "🔄  Refresh Data (Advisory)", width="stretch",
+            help="Run `main.py` (advisory-only — no broker; canonical `.env` entry point).",
+        )
 
     handle: Optional[orchestrator_runner.RunHandle] = st.session_state.get("run_handle")
 
-    if launch:
+    if launch_orch:
         if handle is not None and handle.is_running():
             st.warning("A pipeline run is already in progress — wait for it to finish.")
         else:
@@ -192,39 +646,75 @@ def render_launcher() -> None:
                 dry_run=dry_run, refresh_account=refresh_account
             )
             st.session_state["run_handle"] = handle
-            st.success(f"Launched orchestrator (PID {handle.pid}).")
+            st.session_state["last_launch_kind"] = "orchestrator"
+            st.success(f"🚀  Launched orchestrator (PID {handle.pid}).")
+    elif launch_adv:
+        if handle is not None and handle.is_running():
+            st.warning("A pipeline run is already in progress — wait for it to finish.")
+        else:
+            handle = orchestrator_runner.launch_advisory_main(refresh_account=refresh_account)
+            st.session_state["run_handle"] = handle
+            st.session_state["last_launch_kind"] = "advisory"
+            st.success(f"🔄  Launched advisory main.py (PID {handle.pid}).")
 
-    # Status row.
+    # ── Status row ─────────────────────────────────────────────────────────
     running = handle is not None and handle.is_running()
     hb_age = orchestrator_runner.heartbeat_age_seconds()
-    cols = st.columns(2)
+    cols = st.columns(3)
     with cols[0]:
         if handle is None:
             st.info("No run launched this session.")
         elif running:
-            st.success(f"🟢 Running (PID {handle.pid})")
+            mode_label = (handle.mode or "?").title()
+            st.success(f"🟢 Running ({mode_label}, PID {handle.pid})")
         else:
             rc = handle.returncode()
-            st.info(f"⏹️ Finished (exit code {rc})" if rc is not None else "⏹️ Finished")
+            mode_label = (handle.mode or "?").title()
+            if rc is None:
+                st.info(f"⏹️ Finished ({mode_label})")
+            elif rc == 0:
+                st.success(f"✅ Finished cleanly ({mode_label}, exit 0)")
+            else:
+                st.error(f"❌ Finished with errors ({mode_label}, exit {rc})")
     with cols[1]:
         if hb_age is None:
             st.metric("Heartbeat", "—")
         else:
             fresh = "🟢" if hb_age < 90 else "🔴"
             st.metric("Heartbeat age", f"{fresh} {hb_age:.0f}s")
+    with cols[2]:
+        auto_refresh = st.checkbox(
+            "Auto-refresh while running", value=False, key="launcher_auto_refresh",
+            help="Re-render this tab every 5 s while a run is active so the log tail keeps scrolling.",
+        )
 
-    # Stage indicators.
-    st.markdown("**Pipeline stages**")
-    stage_status = orchestrator_runner.compute_stage_status(handle)
-    icon = {"done": "✅", "active": "🟡", "pending": "⚪", "idle": "⚪"}
-    stage_cols = st.columns(len(stage_status))
-    for col, (label, status) in zip(stage_cols, stage_status.items()):
-        with col:
-            st.metric(label, f"{icon.get(status, '⚪')} {status}")
+    # ── Stage indicators (orchestrator only — advisory has its own log shape) ──
+    if handle is None or handle.mode == "orchestrator":
+        st.markdown("**Pipeline stages**")
+        stage_status = orchestrator_runner.compute_stage_status(handle)
+        icon = {"done": "✅", "active": "🟡", "pending": "⚪", "idle": "⚪"}
+        stage_cols = st.columns(len(stage_status))
+        for col, (label, status) in zip(stage_cols, stage_status.items()):
+            with col:
+                st.metric(label, f"{icon.get(status, '⚪')} {status}")
 
-    # Log tail.
-    with st.expander("📜 Run log (tail)", expanded=running):
-        st.code(orchestrator_runner.read_log_tail(max_lines=200), language="text")
+    # ── Active run log (kind picked from the active handle) ────────────────
+    log_label = "📜 Advisory log tail" if (handle and handle.mode == "advisory") else "📜 Orchestrator log tail"
+    with st.expander(log_label, expanded=running):
+        st.code(orchestrator_runner.read_log_tail(max_lines=200, handle=handle), language="text")
+
+    # ── Platform-wide structured telemetry (alerting.py / logs/investyo.log) ──
+    with st.expander("🛰️ Telemetry log (logs/investyo.log)", expanded=False):
+        st.caption(
+            "Structured logs written by `alerting.setup_logging()` — shared by "
+            "both entry points. Rotates at 10 MB × 5 backups."
+        )
+        st.code(orchestrator_runner.read_telemetry_tail(max_lines=120), language="text")
+
+    # ── Auto-refresh ticker (opt-in; cheap because Streamlit reruns are fast) ──
+    if running and auto_refresh:
+        time.sleep(5)
+        st.rerun()
 
 
 # ===========================================================================
@@ -281,12 +771,8 @@ def render_report_viewer() -> None:
     else:
         st.caption("MFE/MAE/Edge populate once closed trades and signals exist.")
 
-    # ── Brinson-Fachler attribution (informational; needs weights) ───────────
-    with st.expander("📊 Brinson-Fachler attribution (requires weights)"):
-        st.caption(
-            "Provide portfolio & benchmark sector weights to compute allocation / "
-            "selection effects via `EvaluationEngine.calculate_brinson_fachler`."
-        )
+    # ── Brinson-Fachler attribution (interactive section) ───────────────────
+    _render_brinson_fachler_section()
 
     # ── Existing HTML report export ──────────────────────────────────────────
     st.markdown("**Generated reports**")

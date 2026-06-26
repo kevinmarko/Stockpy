@@ -41,14 +41,33 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from settings import settings
 
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Orchestrator (async) launch log — written by ``main_orchestrator.py``.
 RUN_LOG_PATH = settings.OUTPUT_DIR / "gui_run.log"
+
+# Advisory (synchronous main.py) launch log — written when the operator picks
+# the "Refresh Data (Advisory main.py)" button on the Launcher tab. Kept in a
+# distinct file so the orchestrator's stage-marker scan in ``compute_stage_status``
+# is not confused by main.py's lighter-weight progress lines.
+ADVISORY_LOG_PATH = settings.OUTPUT_DIR / "gui_advisory.log"
+
+# Telemetry log written by ``alerting.setup_logging()`` and shared by both
+# entry points. Surfaced in the Launcher tab so the operator sees structured
+# diagnostics from across the platform (CONSTRAINT #2 — observable feedback).
+TELEMETRY_LOG_PATH = _REPO_ROOT / "logs" / "investyo.log"
+
+# Env vars the pipeline NEEDS to produce non-trivial output. Missing values are
+# surfaced as a pre-launch warning in the UI rather than discovered after a
+# silent degraded run. Only the *minimum* set required for a useful refresh —
+# optional integrations (Robinhood, alerts, broker) are NOT listed here.
+REQUIRED_ENV_VARS: tuple[str, ...] = ("FRED_API_KEY",)
 
 # Ordered pipeline stages surfaced as indicators in the UI. Each tuple is
 # (display_label, list of case-insensitive substrings that, once seen in the
@@ -65,10 +84,18 @@ STAGES: List[tuple[str, List[str]]] = [
 
 @dataclass
 class RunHandle:
-    """Mutable handle for a launched orchestrator subprocess.
+    """Mutable handle for a launched pipeline subprocess.
 
     Stored in Streamlit ``session_state`` so the run survives reruns and the UI
     can poll status without re-launching.
+
+    The ``mode`` field distinguishes the two supported entry points:
+
+    *   ``"orchestrator"`` — async ``main_orchestrator.py`` (full pipeline,
+        broker execution, schema validation, HTML report).
+    *   ``"advisory"``     — synchronous ``main.py`` (advisory-only, no broker,
+        primary entry point for environment loading + global constraint
+        validation per the project's ``.env`` convention).
     """
 
     pid: int
@@ -76,6 +103,7 @@ class RunHandle:
     dry_run: bool
     refresh_account: bool
     log_path: Path = RUN_LOG_PATH
+    mode: str = "orchestrator"
     _popen: Optional[subprocess.Popen] = field(default=None, repr=False)
 
     def is_running(self) -> bool:
@@ -165,19 +193,139 @@ def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) ->
         started_at=time.time(),
         dry_run=dry_run,
         refresh_account=refresh_account,
+        log_path=RUN_LOG_PATH,
+        mode="orchestrator",
         _popen=popen,
     )
 
 
-def read_log_tail(max_lines: int = 200) -> str:
-    """Return the last ``max_lines`` lines of the current run log (or a hint)."""
-    if not RUN_LOG_PATH.exists():
-        return "(no run log yet — launch the orchestrator to populate it)"
+def launch_advisory_main(refresh_account: bool = False) -> RunHandle:
+    """Spawn ``main.py`` (the advisory, synchronous entry point) as a subprocess.
+
+    This is the path the project's ``.env`` convention says is canonical for
+    environment loading and global-constraint validation (the entry-point-level
+    ``load_dotenv()`` call lives in ``main.py``).  Surfacing it from the
+    Launcher tab gives the operator a fast, one-shot refresh that:
+
+    * loads ``.env`` into ``os.environ`` (modules using ``os.environ.get``
+      directly — notably ``data.robinhood_portfolio`` — depend on this);
+    * runs the structured-logging + push-notification ``alerting.setup_logging``
+      flow, so the ``logs/investyo.log`` telemetry tail in the UI populates;
+    * writes ``output/state_snapshot.json`` so all observability panels
+      refresh their data without restarting the async orchestrator.
+
+    Parameters
+    ----------
+    refresh_account:
+        Pass ``--refresh-account`` to bypass the daily Robinhood cache for
+        this launch.
+
+    Returns
+    -------
+    RunHandle
+        Handle for polling status and tailing :data:`ADVISORY_LOG_PATH`.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "main.py"]
+    if refresh_account:
+        cmd.append("--refresh-account")
+
+    log_file = open(ADVISORY_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo advisory (main.py) launch @ {time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(refresh_account={refresh_account})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched advisory main.py pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,  # main.py is advisory-only — no orders submitted
+        refresh_account=refresh_account,
+        log_path=ADVISORY_LOG_PATH,
+        mode="advisory",
+        _popen=popen,
+    )
+
+
+def _read_tail(path: Path, max_lines: int, idle_hint: str) -> str:
+    """Return the last ``max_lines`` lines of ``path`` (or ``idle_hint``)."""
+    if not path.exists():
+        return idle_hint
     try:
-        lines = RUN_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         return "\n".join(lines[-max_lines:])
     except Exception as exc:  # pragma: no cover - IO edge
-        return f"(failed to read run log: {exc})"
+        return f"(failed to read {path.name}: {exc})"
+
+
+def read_log_tail(max_lines: int = 200, handle: Optional[RunHandle] = None) -> str:
+    """Return the last ``max_lines`` lines of the active run log.
+
+    If ``handle`` is supplied, its ``log_path`` is preferred so the tail follows
+    whichever entry point (orchestrator vs. advisory) the operator launched
+    most recently. With no handle, the orchestrator's log is the default to
+    preserve backwards-compatible behaviour for older callers.
+    """
+    target = handle.log_path if handle is not None else RUN_LOG_PATH
+    return _read_tail(
+        target,
+        max_lines,
+        idle_hint="(no run log yet — launch a pipeline to populate it)",
+    )
+
+
+def read_telemetry_tail(max_lines: int = 120) -> str:
+    """Return the last ``max_lines`` lines of ``logs/investyo.log``.
+
+    ``alerting.setup_logging()`` rotates that file at 10 MB × 5 backups and is
+    invoked by both ``main.py`` and (indirectly) the orchestrator path; tailing
+    it gives the UI a single, entry-point-agnostic stream of structured
+    diagnostics that survives across runs.
+    """
+    return _read_tail(
+        TELEMETRY_LOG_PATH,
+        max_lines,
+        idle_hint="(no telemetry yet — alerting.setup_logging() runs on first launch)",
+    )
+
+
+def validate_required_env(
+    required: Optional[Iterable[str]] = None,
+) -> Dict[str, bool]:
+    """Return a mapping ``{env_var: present}`` for each required variable.
+
+    A variable is considered *present* when it appears in ``os.environ`` with a
+    non-empty stripped value. This is a pre-launch readiness check surfaced in
+    the Launcher tab so a missing key (most commonly ``FRED_API_KEY``) is
+    diagnosed *before* the subprocess silently degrades to neutral defaults
+    rather than after — eliminating the failure mode the user reported as
+    "Refresh Data does not produce observable results".
+
+    Parameters
+    ----------
+    required:
+        Iterable of env-var names to check. Defaults to
+        :data:`REQUIRED_ENV_VARS`.
+    """
+    names = tuple(required) if required is not None else REQUIRED_ENV_VARS
+    out: Dict[str, bool] = {}
+    for n in names:
+        val = os.environ.get(n, "")
+        out[n] = bool(val and val.strip())
+    return out
 
 
 def heartbeat_age_seconds() -> Optional[float]:
@@ -207,10 +355,12 @@ def compute_stage_status(handle: Optional[RunHandle]) -> Dict[str, str]:
                       and a snapshot was written.
     """
     labels = [label for label, _ in STAGES]
-    if handle is None or not RUN_LOG_PATH.exists():
+    if handle is None:
+        return {label: "idle" for label in labels}
+    if not handle.log_path.exists():
         return {label: "idle" for label in labels}
 
-    log_text = read_log_tail(max_lines=2000).lower()
+    log_text = read_log_tail(max_lines=2000, handle=handle).lower()
     reached: List[bool] = []
     for _label, markers in STAGES:
         reached.append(any(m in log_text for m in markers))

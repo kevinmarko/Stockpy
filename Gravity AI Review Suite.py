@@ -4280,6 +4280,8 @@ class GravityAIAuditor:
         self.run_six_bug_regression_audit()
         self.run_options_matrix_integrity_audit()
         self.run_robinhood_watchlist_noise_audit()
+        self.run_brinson_fachler_attribution_audit()
+        self.run_launcher_telemetry_audit()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -5247,6 +5249,297 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_38_options_matrix_integrity_audit"] = audit
+
+    def run_brinson_fachler_attribution_audit(self) -> None:
+        """Step 40 — Brinson-Fachler Attribution UI ↔ Engine wiring audit.
+
+        Background
+        ----------
+        The Command Center's Reports tab exposes an interactive Brinson-Fachler
+        attribution analysis: an editable sector-weight matrix + bulk-paste
+        textarea that the operator uses to compute allocation/selection/
+        interaction effects.  The UI delegates the math to
+        ``EvaluationEngine.calculate_brinson_fachler`` (DataFrame-compat path)
+        via three pure helpers in ``gui/panels.py``:
+
+            * :func:`default_brinson_fachler_frame`
+            * :func:`build_brinson_fachler_inputs`
+            * :func:`compute_brinson_fachler`
+
+        Plus the bulk-paste parser :func:`parse_pasted_sector_matrix`.
+
+        Without this audit a future refactor could silently break the
+        unit-conversion contract (editor stores percents, engine consumes
+        fractions) or drop the engine's per-sector dictionary shape — both
+        would render the UI useless without a crash anywhere.
+
+        Checks
+        ------
+        1.  Default editor frame matches the GICS-11 sector list and the
+            canonical 5-column header.
+        2.  ``build_brinson_fachler_inputs`` divides percents by 100 before
+            handing them to the engine (unit consistency invariant).
+        3.  ``compute_brinson_fachler`` returns the engine's canonical result
+            dict with all eight documented top-level keys, AND a per-sector
+            ``Sector Details`` mapping with the eight per-row keys.
+        4.  Attribution-sum = active-return identity holds within 1e-6
+            (mirrors the in-engine drift warning at 1e-5).
+        5.  Bulk-paste TSV round-trip without a header is interpreted
+            positionally (regression guard for the header-sniffing logic).
+        """
+        audit: dict = {"step": "step_40_brinson_fachler_attribution_audit",
+                       "checks": [], "status": "PENDING"}
+        all_pass = True
+        try:
+            import math
+            import pandas as pd
+
+            from gui.panels import (
+                GICS_SECTORS,
+                build_brinson_fachler_inputs,
+                compute_brinson_fachler,
+                default_brinson_fachler_frame,
+                parse_pasted_sector_matrix,
+            )
+
+            # 1. Default frame shape
+            default_df = default_brinson_fachler_frame()
+            cols_ok = list(default_df.columns) == [
+                "Sector",
+                "Portfolio Weight (%)",
+                "Portfolio Return (%)",
+                "Benchmark Weight (%)",
+                "Benchmark Return (%)",
+            ]
+            sectors_ok = list(default_df["Sector"]) == list(GICS_SECTORS)
+            audit["checks"].append({
+                "check": "default_brinson_fachler_frame matches GICS 11 + canonical column header",
+                "passed": cols_ok and sectors_ok,
+                "detail": f"cols_ok={cols_ok}, sectors_ok={sectors_ok}",
+            })
+            all_pass = all_pass and cols_ok and sectors_ok
+
+            # 2. Percent → fraction conversion
+            editor = pd.DataFrame([
+                {"Sector": "Tech", "Portfolio Weight (%)": 60.0, "Portfolio Return (%)": 10.0,
+                 "Benchmark Weight (%)": 50.0, "Benchmark Return (%)": 8.0},
+                {"Sector": "Financials", "Portfolio Weight (%)": 40.0, "Portfolio Return (%)": 4.0,
+                 "Benchmark Weight (%)": 50.0, "Benchmark Return (%)": 5.0},
+            ])
+            p_df, b_df = build_brinson_fachler_inputs(editor)
+            unit_ok = (
+                abs(float(p_df.loc[0, "portfolio_weight"]) - 0.60) < 1e-9 and
+                abs(float(b_df.loc[1, "benchmark_return"]) - 0.05) < 1e-9
+            )
+            audit["checks"].append({
+                "check": "build_brinson_fachler_inputs divides percents by 100 (unit consistency)",
+                "passed": unit_ok,
+                "detail": (
+                    f"p_w[0]={float(p_df.loc[0, 'portfolio_weight'])}, "
+                    f"b_r[1]={float(b_df.loc[1, 'benchmark_return'])}"
+                ),
+            })
+            all_pass = all_pass and unit_ok
+
+            # 3. End-to-end engine call returns canonical result dict
+            result = compute_brinson_fachler(editor)
+            top_keys = {
+                "Portfolio Return", "Benchmark Return", "Active Return",
+                "Allocation Effect", "Selection Effect", "Interaction Effect",
+                "Attribution Sum", "Sector Details",
+            }
+            top_ok = top_keys.issubset(result.keys())
+            sector_details = result.get("Sector Details") or {}
+            row_keys = {
+                "weight_p", "weight_b", "return_p", "return_b",
+                "allocation_effect", "selection_effect",
+                "interaction_effect", "total_attribution",
+            }
+            rows_ok = bool(sector_details) and all(
+                row_keys.issubset(v.keys()) for v in sector_details.values()
+            )
+            audit["checks"].append({
+                "check": "compute_brinson_fachler returns the canonical 8-key engine result",
+                "passed": top_ok and rows_ok,
+                "detail": (
+                    f"top_keys_ok={top_ok}, sector_rows_ok={rows_ok}, "
+                    f"n_sectors={len(sector_details)}"
+                ),
+            })
+            all_pass = all_pass and top_ok and rows_ok
+
+            # 4. Attribution sum ≈ active return identity
+            attribution_id_ok = math.isclose(
+                float(result.get("Attribution Sum", 0.0)),
+                float(result.get("Active Return", 0.0)),
+                abs_tol=1e-6,
+            )
+            audit["checks"].append({
+                "check": "Attribution Sum ≈ Active Return within 1e-6 (engine drift invariant)",
+                "passed": attribution_id_ok,
+                "detail": (
+                    f"attribution_sum={result.get('Attribution Sum')}, "
+                    f"active_return={result.get('Active Return')}"
+                ),
+            })
+            all_pass = all_pass and attribution_id_ok
+
+            # 5. Bulk-paste header-less TSV is interpreted positionally
+            text = "Energy\t5\t2.1\t4\t1.5\nUtilities\t3\t1.0\t3\t0.8\n"
+            parsed = parse_pasted_sector_matrix(text)
+            paste_ok = (
+                list(parsed["Sector"]) == ["Energy", "Utilities"]
+                and float(parsed.loc[0, "Benchmark Weight (%)"]) == 4.0
+            )
+            audit["checks"].append({
+                "check": "parse_pasted_sector_matrix handles header-less TSV positionally",
+                "passed": paste_ok,
+                "detail": f"sectors={list(parsed['Sector'])}",
+            })
+            all_pass = all_pass and paste_ok
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_40_brinson_fachler_attribution_audit"] = audit
+
+    def run_launcher_telemetry_audit(self) -> None:
+        """Step 41 — Launcher pre-flight env check + dual-mode + telemetry audit.
+
+        Background
+        ----------
+        The Command Center's Launcher tab now exposes TWO entry points
+        (``main_orchestrator.py`` and the canonical ``.env``-loading
+        ``main.py``), tails BOTH the active run log and ``logs/investyo.log``,
+        and surfaces a pre-launch env-var readiness check.  Helpers added to
+        ``gui/orchestrator_runner.py``:
+
+            * :func:`validate_required_env`
+            * :func:`launch_advisory_main`
+            * :func:`read_telemetry_tail`
+            * ``RunHandle.mode`` (``"orchestrator"`` | ``"advisory"``)
+
+        Without this audit a regression could silently disable the
+        pre-launch check or revert the launcher to a single entry point
+        without breaking any other test.
+
+        Checks
+        ------
+        1.  ``validate_required_env`` returns ``False`` when the var is unset.
+        2.  ``validate_required_env`` returns ``True`` when the var is set.
+        3.  ``launch_advisory_main`` is importable and the resulting handle
+            has ``mode == "advisory"`` and points at ``ADVISORY_LOG_PATH``
+            (subprocess monkeypatched so no child is spawned).
+        4.  ``read_telemetry_tail`` returns an "idle" hint when the
+            telemetry file does not yet exist.
+        5.  ``RUN_LOG_PATH`` and ``ADVISORY_LOG_PATH`` resolve to DISTINCT
+            files (so stage marker scans on one don't see the other's text).
+        """
+        audit: dict = {"step": "step_41_launcher_telemetry_audit",
+                       "checks": [], "status": "PENDING"}
+        all_pass = True
+        try:
+            import os
+            import time as _time
+
+            from gui import orchestrator_runner as runner
+
+            # 1. Missing env var → False
+            os.environ.pop("__GRAVITY_BF_TEST_KEY__", None)
+            missing = runner.validate_required_env(["__GRAVITY_BF_TEST_KEY__"])
+            missing_ok = missing == {"__GRAVITY_BF_TEST_KEY__": False}
+            audit["checks"].append({
+                "check": "validate_required_env reports missing var as False",
+                "passed": missing_ok,
+                "detail": str(missing),
+            })
+            all_pass = all_pass and missing_ok
+
+            # 2. Set env var → True
+            os.environ["__GRAVITY_BF_TEST_KEY__"] = "set"
+            try:
+                present = runner.validate_required_env(["__GRAVITY_BF_TEST_KEY__"])
+            finally:
+                os.environ.pop("__GRAVITY_BF_TEST_KEY__", None)
+            present_ok = present == {"__GRAVITY_BF_TEST_KEY__": True}
+            audit["checks"].append({
+                "check": "validate_required_env reports set var as True",
+                "passed": present_ok,
+                "detail": str(present),
+            })
+            all_pass = all_pass and present_ok
+
+            # 3. launch_advisory_main produces an advisory-mode handle
+            original_popen = runner.subprocess.Popen
+
+            class _Stub:
+                def __init__(self, *a, **kw):
+                    self.pid = 9999
+                def poll(self):
+                    return None
+
+            runner.subprocess.Popen = _Stub  # type: ignore[assignment]
+            try:
+                handle = runner.launch_advisory_main(refresh_account=False)
+                handle_ok = (
+                    handle.mode == "advisory"
+                    and handle.log_path == runner.ADVISORY_LOG_PATH
+                    and handle.dry_run is False
+                )
+            finally:
+                runner.subprocess.Popen = original_popen  # type: ignore[assignment]
+            audit["checks"].append({
+                "check": "launch_advisory_main returns a handle tagged mode='advisory'",
+                "passed": handle_ok,
+                "detail": f"mode={handle.mode}, log_path={handle.log_path.name}",
+            })
+            all_pass = all_pass and handle_ok
+
+            # 4. read_telemetry_tail idle hint when file absent
+            telemetry_path = runner.TELEMETRY_LOG_PATH
+            if telemetry_path.exists():
+                # Don't delete the real telemetry log — just check the hint
+                # behaviour against a non-existent path instead.
+                from pathlib import Path as _P
+                runner.TELEMETRY_LOG_PATH = _P("/__definitely_not_present__/investyo.log")
+                try:
+                    txt = runner.read_telemetry_tail()
+                finally:
+                    runner.TELEMETRY_LOG_PATH = telemetry_path
+            else:
+                txt = runner.read_telemetry_tail()
+            hint_ok = "no telemetry yet" in txt.lower()
+            audit["checks"].append({
+                "check": "read_telemetry_tail returns idle hint when file absent",
+                "passed": hint_ok,
+                "detail": txt[:80],
+            })
+            all_pass = all_pass and hint_ok
+
+            # 5. Distinct log paths
+            distinct_ok = runner.RUN_LOG_PATH != runner.ADVISORY_LOG_PATH
+            audit["checks"].append({
+                "check": "RUN_LOG_PATH and ADVISORY_LOG_PATH resolve to distinct files",
+                "passed": distinct_ok,
+                "detail": (
+                    f"run={runner.RUN_LOG_PATH.name}, "
+                    f"adv={runner.ADVISORY_LOG_PATH.name}"
+                ),
+            })
+            all_pass = all_pass and distinct_ok
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_41_launcher_telemetry_audit"] = audit
 
     def run_robinhood_watchlist_noise_audit(self) -> None:
         """Step 39 — Robinhood watchlist 400-noise suppression audit.
