@@ -30,6 +30,19 @@ Design principles
   reason "(skipped via --skip)" so the result set always has one entry per
   check regardless.
 
+* **Advisory-mode auto-skip.**  When ``settings.ADVISORY_ONLY=True`` the checks
+  listed in ``_ADVISORY_AUTO_SKIP`` are automatically marked PASS (with a clear
+  "skipped: ADVISORY_ONLY" reason) because they are either broker-dependent or
+  have no meaningful signal when no orders are submitted.  This prevents false-
+  positive failures on a correctly-running advisory deployment:
+    - Broker-dependent checks (4): alpaca_configured, alpaca_paper_mode,
+      dry_run_disabled, paper_trading_duration.
+    - Advisory false-positives (3): heartbeat_fresh (main.py does not write
+      the heartbeat file — only main_orchestrator.py does), validation_reports
+      (strategy validation reports are a go-live gate, not advisory health),
+      no_unexpected_risk_blocks (risk-gate blocks only occur on order submission,
+      which never happens in advisory mode).
+
 * **No side effects.**  Checks are read-only.  They inspect files, environment
   variables, and database state but never write, modify, or delete anything.
 
@@ -39,7 +52,7 @@ Usage
     python scripts/preflight_check.py --json              # machine-readable JSON array
     python scripts/preflight_check.py --skip heartbeat_fresh paper_trading_duration
 
-Checks
+Checks (15 total)
 ------
  1. fred_key_configured         — FRED_API_KEY is set and is not the known-
                                   compromised value (detected via settings.fred_key_is_leaked).
@@ -49,13 +62,13 @@ Checks
                                   are NOT checked (no blast radius in advisory
                                   mode).
  3. advisory_only_active        — settings.ADVISORY_ONLY=True (Tier 5.1
-                                  quarantine).  When True, the three
-                                  broker-readiness checks below
-                                  (alpaca_configured / alpaca_paper_mode /
-                                  dry_run_disabled) are dropped from the gate
-                                  because broker submission is structurally
-                                  suppressed.  Warning-only when False (live
-                                  broker stack is in scope).
+                                  quarantine).  When True, the broker-readiness
+                                  checks (alpaca_configured / alpaca_paper_mode
+                                  / dry_run_disabled / paper_trading_duration)
+                                  and advisory false-positive checks (heartbeat_
+                                  fresh / validation_reports / no_unexpected_
+                                  risk_blocks) are auto-skipped.  Warning-only
+                                  when False (live broker stack is in scope).
  4. alpaca_configured           — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
                                   SKIPPED when ADVISORY_ONLY=True.
  5. macro_regime_gate_enabled   — MACRO_REGIME_GATE_ENABLED=True when live trading.
@@ -67,17 +80,29 @@ Checks
                                   SKIPPED when ADVISORY_ONLY=True.
  8. env_not_committed           — .env file is git-untracked (``git ls-files``).
  9. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
-10. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
-11. db_exists                   — quant_platform.db exists and is non-empty.
-12. paper_trading_duration      — Paper-trading started ≥ 90 days ago
+10. state_snapshot_fresh        — output/state_snapshot.json exists and its
+                                  embedded timestamp is < 2 hours old.  Both
+                                  main.py (advisory) and main_orchestrator.py
+                                  write this file, making it the cross-mode
+                                  liveness indicator.  NOT auto-skipped in
+                                  advisory mode (it IS the advisory liveness
+                                  check).
+11. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
+                                  SKIPPED when ADVISORY_ONLY=True because main.py
+                                  does not write this file — only the full async
+                                  orchestrator does.
+12. db_exists                   — quant_platform.db exists and is non-empty.
+13. paper_trading_duration      — Paper-trading started ≥ 90 days ago
                                   (requires PAPER_TRADING_START_DATE in .env).
                                   SKIPPED when ADVISORY_ONLY=True (no broker
                                   → no paper-trading clock).
-13. validation_reports          — Every *_validation_summary.json in reports/ is
+14. validation_reports          — Every *_validation_summary.json in reports/ is
                                   deployable=True and dated within 30 days.
-14. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
-                                  last 24 hours (indicates missing/expired reports
-                                  were discovered at order time rather than here).
+                                  SKIPPED when ADVISORY_ONLY=True (validation
+                                  reports gate live deployment, not advisory op).
+15. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
+                                  last 24 hours.  SKIPPED when ADVISORY_ONLY=True
+                                  (no order submissions → no risk-gate blocks).
 """
 
 from __future__ import annotations
@@ -394,6 +419,54 @@ def check_kill_switch_inactive() -> CheckResult:
     return CheckResult(name, True, "Kill switch is inactive")
 
 
+def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
+    """Verify that the pipeline state snapshot was written recently.
+
+    Both ``main.py`` (advisory) and ``main_orchestrator.py`` (full pipeline)
+    write ``OUTPUT_DIR/state_snapshot.json`` at the end of every run.  The file
+    carries an ISO 8601 UTC ``timestamp`` field that this check reads to compute
+    the snapshot age.  File mtime is used as a fallback when the ``timestamp``
+    field is absent (e.g., written by an older version of the platform).
+
+    This is the cross-mode liveness indicator: it is meaningful in advisory mode
+    (where ``main.py`` does NOT write ``heartbeat.txt``) AND in full-pipeline
+    mode (where ``main_orchestrator.py`` writes both).  It is therefore NOT in
+    ``_ADVISORY_AUTO_SKIP`` — it is the one check that replaces ``heartbeat_fresh``
+    as the liveness gate when running in advisory mode.
+    """
+    name = "state_snapshot_fresh"
+    snapshot_path = settings.OUTPUT_DIR / "state_snapshot.json"
+    if not snapshot_path.exists():
+        return CheckResult(
+            name, False,
+            "output/state_snapshot.json not found — has the pipeline been run recently? "
+            "Run: python3 main.py  (advisory)  or  python3 main_orchestrator.py",
+        )
+    try:
+        data = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        ts_str = data.get("timestamp", "")
+        if ts_str:
+            ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - ts
+        else:
+            mtime = snapshot_path.stat().st_mtime
+            age = datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, tz=timezone.utc)
+        if age > timedelta(hours=max_age_hours):
+            return CheckResult(
+                name, False,
+                f"State snapshot is {age.total_seconds()/3600:.1f}h old (limit {max_age_hours}h) — "
+                "pipeline may be down; run python3 main.py to refresh",
+            )
+        return CheckResult(
+            name, True,
+            f"State snapshot is {age.total_seconds()/60:.0f} min old",
+        )
+    except Exception as exc:
+        return CheckResult(name, False, f"Could not read state snapshot: {exc}")
+
+
 def check_heartbeat_fresh(max_age_hours: float = 2.0) -> CheckResult:
     """Verify that the orchestrator heartbeat file was updated recently.
 
@@ -623,6 +696,7 @@ ALL_CHECKS = [
     check_dry_run_disabled,
     check_env_not_committed,
     check_kill_switch_inactive,
+    check_state_snapshot_fresh,
     check_heartbeat_fresh,
     check_db_exists,
     check_paper_trading_duration,
@@ -631,14 +705,30 @@ ALL_CHECKS = [
 ]
 
 
-# Checks that depend on the broker stack being live.  When ADVISORY_ONLY is
-# True these are auto-skipped by ``run_checks`` (and rendered as PASS with a
-# clear "(skipped: ADVISORY_ONLY)" reason) — no broker => no broker checks.
+# Checks that are auto-skipped when ADVISORY_ONLY=True.
+# Two categories:
+#   (a) Broker-dependent (4): no broker stack means these have no meaning.
+#   (b) Advisory false-positives (3): checks that require the full async
+#       orchestrator pipeline or broker execution to produce a meaningful signal;
+#       in advisory mode they would always fail even on a healthy platform.
+#
+#       - heartbeat_fresh: written by main_orchestrator.py only; main.py does not
+#         write heartbeat.txt, so this always fails in advisory mode.
+#       - validation_reports: strategy validation reports are a pre-live deployment
+#         gate, not an advisory health signal.
+#       - no_unexpected_risk_blocks: risk-gate blocks occur only on order
+#         submission; advisory mode never submits orders.
+#
+# Note: state_snapshot_fresh is deliberately NOT in this list — it is the
+# advisory-mode liveness check (both entry points write state_snapshot.json).
 _ADVISORY_AUTO_SKIP: tuple[str, ...] = (
     "alpaca_configured",
     "alpaca_paper_mode",
     "dry_run_disabled",
     "paper_trading_duration",
+    "heartbeat_fresh",
+    "validation_reports",
+    "no_unexpected_risk_blocks",
 )
 
 

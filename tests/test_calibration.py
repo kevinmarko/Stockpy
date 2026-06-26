@@ -12,7 +12,7 @@ is never touched (CONSTRAINT #4 / test isolation).
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -40,7 +40,7 @@ def add_closed_trade(
     conviction: float | None = None,
     days_ago: int = 1,
 ) -> int:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     entry_ts = now - timedelta(days=days_ago + 1)
     exit_ts = now - timedelta(days=days_ago)
     tid = store.record_trade(
@@ -253,7 +253,7 @@ class TestRecordTradeConviction:
         store = make_store()
         tid = store.record_trade(
             symbol="MSFT", side="long",
-            entry_ts=datetime.utcnow(), entry_price=300.0, shares=2.0,
+            entry_ts=datetime.now(timezone.utc), entry_price=300.0, shares=2.0,
             conviction=0.82,
         )
         assert tid > 0
@@ -275,7 +275,7 @@ class TestRecordTradeConviction:
         store = make_store()
         store.record_trade(
             symbol="NVDA", side="long",
-            entry_ts=datetime.utcnow(), entry_price=500.0, shares=1.0,
+            entry_ts=datetime.now(timezone.utc), entry_price=500.0, shares=1.0,
             conviction=0.90,
         )
         df = store.open_trades_df()

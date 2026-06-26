@@ -547,3 +547,143 @@ class TestMainExitCode:
         data = json.loads(out)
         assert isinstance(data, list)
         assert all("name" in d and "passed" in d and "reason" in d for d in data)
+
+
+# ---------------------------------------------------------------------------
+# state_snapshot_fresh
+# ---------------------------------------------------------------------------
+
+class TestStateSnapshotFresh:
+    """check_state_snapshot_fresh — cross-mode liveness indicator.
+
+    Both main.py (advisory) and main_orchestrator.py write state_snapshot.json
+    so this check is meaningful in both deployment modes.  It is NOT in
+    _ADVISORY_AUTO_SKIP, unlike heartbeat_fresh.
+    """
+
+    def test_passes_when_snapshot_is_recent(self, tmp_path):
+        """A snapshot with a current UTC timestamp passes within the age limit."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        snapshot = tmp_path / "state_snapshot.json"
+        snapshot.write_text(
+            json.dumps({"timestamp": datetime.now(timezone.utc).isoformat()}),
+            encoding="utf-8",
+        )
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert r.passed
+        assert r.name == "state_snapshot_fresh"
+
+    def test_fails_when_snapshot_is_stale(self, tmp_path):
+        """A snapshot older than max_age_hours fails with age info in the reason."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        snapshot = tmp_path / "state_snapshot.json"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        snapshot.write_text(
+            json.dumps({"timestamp": stale_ts}),
+            encoding="utf-8",
+        )
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert not r.passed
+        assert "old" in r.reason.lower()
+
+    def test_fails_when_snapshot_is_missing(self, tmp_path):
+        """No state_snapshot.json file → FAIL with 'not found' in reason."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh()
+        assert not r.passed
+        assert "not found" in r.reason
+
+    def test_falls_back_to_mtime_when_no_timestamp_field(self, tmp_path):
+        """When 'timestamp' is absent, file mtime is used as fallback."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        import os, time
+        snapshot = tmp_path / "state_snapshot.json"
+        snapshot.write_text(json.dumps({"signals": []}), encoding="utf-8")
+        # mtime is seconds-ago fresh, so this should pass
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert r.passed
+
+    def test_not_in_advisory_auto_skip(self):
+        """state_snapshot_fresh must NOT be auto-skipped in advisory mode —
+        it is the advisory liveness check."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "state_snapshot_fresh" not in _ADVISORY_AUTO_SKIP
+
+
+# ---------------------------------------------------------------------------
+# _ADVISORY_AUTO_SKIP expanded set
+# ---------------------------------------------------------------------------
+
+class TestAdvisoryAutoSkip:
+    """Verify that all 7 expected checks are in _ADVISORY_AUTO_SKIP.
+
+    Three broker-dependent checks were always there (alpaca_configured,
+    alpaca_paper_mode, dry_run_disabled, paper_trading_duration).  Stage 2
+    added three advisory false-positive checks to eliminate spurious failures
+    on a correctly-running advisory deployment.
+    """
+
+    def test_original_broker_checks_present(self):
+        """The original four broker-dependent checks are still auto-skipped."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        broker_checks = {
+            "alpaca_configured",
+            "alpaca_paper_mode",
+            "dry_run_disabled",
+            "paper_trading_duration",
+        }
+        assert broker_checks.issubset(set(_ADVISORY_AUTO_SKIP))
+
+    def test_heartbeat_fresh_in_auto_skip(self):
+        """heartbeat_fresh is auto-skipped because main.py (advisory) does not write it."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "heartbeat_fresh" in _ADVISORY_AUTO_SKIP
+
+    def test_validation_reports_in_auto_skip(self):
+        """validation_reports gates live deployment, not advisory operation."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "validation_reports" in _ADVISORY_AUTO_SKIP
+
+    def test_no_unexpected_risk_blocks_in_auto_skip(self):
+        """no_unexpected_risk_blocks is irrelevant in advisory mode (no orders)."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "no_unexpected_risk_blocks" in _ADVISORY_AUTO_SKIP
+
+    def test_auto_skip_has_seven_entries(self):
+        """Exactly 7 checks are in _ADVISORY_AUTO_SKIP (4 broker + 3 false-positives)."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert len(_ADVISORY_AUTO_SKIP) == 7
+
+    def test_state_snapshot_not_auto_skipped(self):
+        """state_snapshot_fresh must remain active in advisory mode (it IS the liveness check)."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "state_snapshot_fresh" not in _ADVISORY_AUTO_SKIP
+
+    def test_advisory_auto_skip_applied_by_run_checks(self, tmp_path):
+        """run_checks marks all _ADVISORY_AUTO_SKIP checks as PASS when ADVISORY_ONLY=True."""
+        from scripts.preflight_check import run_checks, _ADVISORY_AUTO_SKIP
+        s = _settings(tmp_path)
+        s.ADVISORY_ONLY = True
+        with patch("scripts.preflight_check.settings", s):
+            results = run_checks(skip=[
+                "fred_key_configured",
+                "key_rotation_recent",
+                "advisory_only_active",
+                "macro_regime_gate_enabled",
+                "env_not_committed",
+                "kill_switch_inactive",
+                "state_snapshot_fresh",
+                "db_exists",
+            ])
+        by_name = {r.name: r for r in results}
+        for name in _ADVISORY_AUTO_SKIP:
+            assert by_name[name].passed, f"Expected {name} to be auto-skipped (PASS)"
+            assert "ADVISORY_ONLY" in by_name[name].reason

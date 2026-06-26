@@ -4322,6 +4322,8 @@ class GravityAIAuditor:
         self.step_64_recommendation_tracking_audit()
         # Tier 4.2 — Walk-forward validation cadence
         self.step_65_refresh_validations_audit()
+        # Stage 2 — Advisory false-positive preflight fixes (state_snapshot_fresh + expanded _ADVISORY_AUTO_SKIP)
+        self.step_66_advisory_false_positive_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -7103,7 +7105,7 @@ class GravityAIAuditor:
 
         try:
             import math
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, timezone
             import numpy as np
             import pandas as pd
 
@@ -7135,7 +7137,7 @@ class GravityAIAuditor:
                 return TransactionsStore(db_url="sqlite:///:memory:")
 
             def _add_closed(store, *, side="long", entry=100.0, exit_p=110.0, conv=0.75):
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 tid = store.record_trade(
                     symbol="TST", side=side,
                     entry_ts=now - timedelta(days=2), entry_price=entry, shares=1.0,
@@ -7321,7 +7323,7 @@ class GravityAIAuditor:
                 return TransactionsStore(db_url="sqlite:///:memory:")
 
             store6 = _mem()
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             tid6 = store6.record_trade("AAPL", "long", now - timedelta(hours=1), 100.0, 1.0)
             store6.close_trade(tid6, now, 110.0)
             entry6 = DecisionEntry("AAPL", "acted", "BUY", 0.9, "", datetime.now(timezone.utc).isoformat(), "")
@@ -7719,17 +7721,25 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c5
 
-            # Check 6: auto-skip list contents
-            expected_skip = {
+            # Check 6: auto-skip list contents — expanded in Stage 2 to cover advisory
+            # false-positive checks (heartbeat_fresh, validation_reports,
+            # no_unexpected_risk_blocks) in addition to the original four broker checks.
+            broker_checks = {
                 "alpaca_configured", "alpaca_paper_mode",
                 "dry_run_disabled", "paper_trading_duration",
             }
+            advisory_fp_checks = {
+                "heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks",
+            }
+            expected_skip = broker_checks | advisory_fp_checks
             actual_skip = set(getattr(preflight_check, "_ADVISORY_AUTO_SKIP", ()))
-            c6 = actual_skip == expected_skip
+            # Verify all seven expected names are present (don't require exact equality
+            # so that future additions to _ADVISORY_AUTO_SKIP don't break this check).
+            c6 = broker_checks.issubset(actual_skip) and advisory_fp_checks.issubset(actual_skip)
             audit["checks"].append({
-                "check": "_ADVISORY_AUTO_SKIP names the four broker-dependent checks",
+                "check": "_ADVISORY_AUTO_SKIP contains all 7 advisory-mode auto-skip checks",
                 "passed": c6,
-                "detail": f"actual={sorted(actual_skip)}",
+                "detail": f"actual={sorted(actual_skip)}, expected_subset={sorted(expected_skip)}",
             })
             all_pass = all_pass and c6
 
@@ -7750,7 +7760,7 @@ class GravityAIAuditor:
                 except Exception:
                     pass
             audit["checks"].append({
-                "check": "run_checks auto-skips broker checks under ADVISORY_ONLY=True",
+                "check": "run_checks auto-skips all 7 advisory checks under ADVISORY_ONLY=True",
                 "passed": c7,
             })
             all_pass = all_pass and c7
@@ -8699,7 +8709,7 @@ class GravityAIAuditor:
 
         try:
             import os, math, tempfile, sqlite3
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, timezone
 
             # 1. ForecastTracker importable
             from forecasting.forecast_tracker import ForecastTracker, _MIN_RMSE, MODEL_ARIMA, MODEL_MONTE_CARLO
@@ -8727,8 +8737,8 @@ class GravityAIAuditor:
                 db = os.path.join(tmpdir, "skill_test.db")
                 tracker = ForecastTracker(db_path=db)
                 # Insert only 3 completed rows (below any reasonable min_obs)
-                old_ts = (datetime.utcnow() - timedelta(days=35)).isoformat()
-                now_iso = datetime.utcnow().isoformat()
+                old_ts = (datetime.now(timezone.utc) - timedelta(days=35)).isoformat()
+                now_iso = datetime.now(timezone.utc).isoformat()
                 with sqlite3.connect(db) as conn:
                     for model in (MODEL_ARIMA, MODEL_MONTE_CARLO):
                         for _ in range(3):
@@ -8756,7 +8766,7 @@ class GravityAIAuditor:
                 tracker2 = ForecastTracker(db_path=db2)
                 # arima_delta=0 (perfect), mc_delta=5 (bad)
                 for _ in range(35):
-                    ts = (datetime.utcnow() - timedelta(days=40)).isoformat()
+                    ts = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
                     with sqlite3.connect(db2) as conn:
                         conn.execute(
                             "INSERT INTO forecast_errors (symbol, model_name, horizon_days, "
@@ -9812,6 +9822,210 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_65_refresh_validations_audit"] = audit
+
+    def step_66_advisory_false_positive_audit(self) -> None:
+        """Stage 2 — Advisory false-positive preflight fixes.
+
+        Verifies that:
+        1. ``check_state_snapshot_fresh`` exists and is in ``ALL_CHECKS``.
+        2. ``_ADVISORY_AUTO_SKIP`` contains all 7 expected entries (4 broker +
+           3 advisory false-positives: heartbeat_fresh, validation_reports,
+           no_unexpected_risk_blocks).
+        3. ``state_snapshot_fresh`` is NOT in ``_ADVISORY_AUTO_SKIP`` — it is
+           the advisory liveness indicator and must always run.
+        4. ``check_state_snapshot_fresh`` passes when snapshot is fresh and
+           fails when snapshot is missing (fail-closed).
+        5. ``check_state_snapshot_fresh`` uses the ``timestamp`` field from
+           the JSON (not only file mtime) for age calculation.
+        6. ``heartbeat_fresh`` is skipped under ``ADVISORY_ONLY=True``
+           (auto-skip behaviour confirmed via ``run_checks``).
+        7. ``validation_reports`` is skipped under ``ADVISORY_ONLY=True``.
+        8. ``no_unexpected_risk_blocks`` is skipped under ``ADVISORY_ONLY=True``.
+        9. Total ``ALL_CHECKS`` count is 15 (14 original + 1 new).
+        10. ``tests/test_preflight.py`` contains ``TestStateSnapshotFresh``
+            and ``TestAdvisoryAutoSkip`` class definitions.
+        """
+        audit: dict = {
+            "step": "step_66_advisory_false_positive_audit",
+            "description": "Stage 2 advisory false-positive preflight fixes",
+            "checks": [],
+            "overall_pass": True,
+        }
+        all_pass = True
+
+        try:
+            import json
+            import tempfile
+            from datetime import datetime, timezone, timedelta
+            from pathlib import Path
+            from unittest.mock import MagicMock, patch
+
+            import scripts.preflight_check as preflight_check
+
+            # Check 1: check_state_snapshot_fresh exists
+            c1 = hasattr(preflight_check, "check_state_snapshot_fresh")
+            audit["checks"].append({
+                "check": "check_state_snapshot_fresh function exists in preflight_check",
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            # Check 2: check_state_snapshot_fresh is in ALL_CHECKS
+            all_check_names = [fn.__name__ for fn in preflight_check.ALL_CHECKS]
+            c2 = "check_state_snapshot_fresh" in all_check_names
+            audit["checks"].append({
+                "check": "check_state_snapshot_fresh is registered in ALL_CHECKS",
+                "passed": c2,
+                "detail": f"ALL_CHECKS names: {all_check_names}",
+            })
+            all_pass = all_pass and c2
+
+            # Check 3: _ADVISORY_AUTO_SKIP contains all 7 expected entries
+            actual_skip = set(getattr(preflight_check, "_ADVISORY_AUTO_SKIP", ()))
+            broker_checks = {"alpaca_configured", "alpaca_paper_mode", "dry_run_disabled", "paper_trading_duration"}
+            fp_checks = {"heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks"}
+            all_expected = broker_checks | fp_checks
+            c3 = all_expected.issubset(actual_skip)
+            audit["checks"].append({
+                "check": "_ADVISORY_AUTO_SKIP contains all 7 advisory-mode auto-skip entries",
+                "passed": c3,
+                "detail": f"actual={sorted(actual_skip)}, missing={sorted(all_expected - actual_skip)}",
+            })
+            all_pass = all_pass and c3
+
+            # Check 4: state_snapshot_fresh NOT in _ADVISORY_AUTO_SKIP
+            c4 = "state_snapshot_fresh" not in actual_skip
+            audit["checks"].append({
+                "check": "state_snapshot_fresh is NOT auto-skipped (it IS the advisory liveness check)",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # Check 5: check_state_snapshot_fresh passes with a fresh snapshot
+            c5_pass = False
+            c5_fail = False
+            if c1:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    td = Path(tmpdir)
+                    snap = td / "state_snapshot.json"
+                    snap.write_text(
+                        json.dumps({"timestamp": datetime.now(timezone.utc).isoformat()}),
+                        encoding="utf-8",
+                    )
+                    mock_settings = MagicMock()
+                    mock_settings.OUTPUT_DIR = td
+                    with patch("scripts.preflight_check.settings", mock_settings):
+                        r_pass = preflight_check.check_state_snapshot_fresh(max_age_hours=2.0)
+                    c5_pass = r_pass.passed
+
+                    # Missing snapshot → fail
+                    snap.unlink()
+                    with patch("scripts.preflight_check.settings", mock_settings):
+                        r_fail = preflight_check.check_state_snapshot_fresh()
+                    c5_fail = not r_fail.passed
+            c5 = c5_pass and c5_fail
+            audit["checks"].append({
+                "check": "check_state_snapshot_fresh: fresh=PASS, missing=FAIL (fail-closed)",
+                "passed": c5,
+                "detail": f"fresh_pass={c5_pass}, missing_fail={c5_fail}",
+            })
+            all_pass = all_pass and c5
+
+            # Check 6: stale snapshot fails (timestamp-field path)
+            c6 = False
+            if c1:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    td = Path(tmpdir)
+                    snap = td / "state_snapshot.json"
+                    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat()
+                    snap.write_text(json.dumps({"timestamp": stale_ts}), encoding="utf-8")
+                    mock_settings = MagicMock()
+                    mock_settings.OUTPUT_DIR = td
+                    with patch("scripts.preflight_check.settings", mock_settings):
+                        r_stale = preflight_check.check_state_snapshot_fresh(max_age_hours=2.0)
+                    c6 = not r_stale.passed
+            audit["checks"].append({
+                "check": "check_state_snapshot_fresh fails when timestamp is stale (>2h)",
+                "passed": c6,
+            })
+            all_pass = all_pass and c6
+
+            # Check 7: heartbeat_fresh skipped under ADVISORY_ONLY=True
+            c7 = False
+            prior_val = getattr(preflight_check.settings, "ADVISORY_ONLY", True)
+            try:
+                preflight_check.settings.ADVISORY_ONLY = True
+                results = preflight_check.run_checks(skip=[
+                    n for n in all_check_names
+                    if n not in ("check_heartbeat_fresh",)
+                    and n.replace("check_", "") not in actual_skip
+                ])
+                by_name = {r.name: r for r in results}
+                hb = by_name.get("heartbeat_fresh")
+                c7 = hb is not None and hb.passed and "ADVISORY_ONLY" in hb.reason
+            finally:
+                try:
+                    preflight_check.settings.ADVISORY_ONLY = prior_val
+                except Exception:
+                    pass
+            audit["checks"].append({
+                "check": "heartbeat_fresh auto-skipped (PASS + ADVISORY_ONLY reason) under ADVISORY_ONLY=True",
+                "passed": c7,
+            })
+            all_pass = all_pass and c7
+
+            # Check 8: validation_reports and no_unexpected_risk_blocks also skipped
+            c8 = False
+            try:
+                preflight_check.settings.ADVISORY_ONLY = True
+                results8 = preflight_check.run_checks(skip=[])
+                by_name8 = {r.name: r for r in results8}
+                c8 = all(
+                    by_name8.get(n) is not None
+                    and by_name8[n].passed
+                    and "ADVISORY_ONLY" in by_name8[n].reason
+                    for n in ("validation_reports", "no_unexpected_risk_blocks")
+                )
+            finally:
+                try:
+                    preflight_check.settings.ADVISORY_ONLY = prior_val
+                except Exception:
+                    pass
+            audit["checks"].append({
+                "check": "validation_reports + no_unexpected_risk_blocks auto-skipped under ADVISORY_ONLY=True",
+                "passed": c8,
+            })
+            all_pass = all_pass and c8
+
+            # Check 9: total ALL_CHECKS count is 15
+            c9 = len(preflight_check.ALL_CHECKS) == 15
+            audit["checks"].append({
+                "check": f"ALL_CHECKS has 15 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "passed": c9,
+            })
+            all_pass = all_pass and c9
+
+            # Check 10: test file contains both new test classes
+            c10 = False
+            test_file = Path("tests/test_preflight.py")
+            if test_file.exists():
+                src = test_file.read_text(encoding="utf-8")
+                c10 = "TestStateSnapshotFresh" in src and "TestAdvisoryAutoSkip" in src
+            audit["checks"].append({
+                "check": "tests/test_preflight.py contains TestStateSnapshotFresh + TestAdvisoryAutoSkip",
+                "passed": c10,
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_66_advisory_false_positive_audit"] = audit
 
 
 # =============================================================================

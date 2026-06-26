@@ -20,7 +20,7 @@ Covers:
 import math
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict
 from unittest import mock
 
@@ -48,7 +48,7 @@ def _make_tracker(tmp_path) -> ForecastTracker:
 
 def _record(tracker: ForecastTracker, symbol="AAPL", horizon=30, **model_prices):
     """Helper to record a set of model prices at a given timestamp."""
-    ts = datetime.utcnow() - timedelta(days=horizon + 1)  # already past horizon
+    ts = datetime.now(timezone.utc) - timedelta(days=horizon + 1)  # already past horizon
     tracker.record_forecasts(symbol, horizon, dict(model_prices), ts)
     return ts
 
@@ -58,12 +58,12 @@ def _fill_window(tracker: ForecastTracker, symbol: str, horizon: int, n: int,
     """Insert ``n`` completed observations with controlled errors."""
     base_price = 100.0
     for i in range(n):
-        ts = datetime.utcnow() - timedelta(days=horizon + 2 + i)
+        ts = datetime.now(timezone.utc) - timedelta(days=horizon + 2 + i)
         tracker.record_forecasts(symbol, horizon, {
             MODEL_ARIMA: base_price + arima_delta,
             MODEL_MONTE_CARLO: base_price + mc_delta,
         }, ts)
-        tracker.update_actuals(symbol, horizon, base_price, datetime.utcnow(), tolerance_days=5)
+        tracker.update_actuals(symbol, horizon, base_price, datetime.now(timezone.utc), tolerance_days=5)
 
 
 # ---------------------------------------------------------------------------
@@ -115,19 +115,19 @@ class TestTableCreation:
 class TestRecordForecasts:
     def test_records_positive_prices(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow()
+        ts = datetime.now(timezone.utc)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0, MODEL_MONTE_CARLO: 152.0}, ts)
         assert tracker.pending_count("AAPL", 30) == 2
 
     def test_skips_zero_and_negative_prices(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow()
+        ts = datetime.now(timezone.utc)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 0.0, MODEL_MONTE_CARLO: -5.0}, ts)
         assert tracker.pending_count("AAPL", 30) == 0
 
     def test_symbol_uppercased(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow()
+        ts = datetime.now(timezone.utc)
         tracker.record_forecasts("aapl", 30, {MODEL_ARIMA: 150.0}, ts)
         assert tracker.pending_count("AAPL", 30) == 1
 
@@ -135,7 +135,7 @@ class TestRecordForecasts:
         tracker = _make_tracker(tmp_path)
         tracker._db_path = "/nonexistent/path/db.sqlite"
         # Should not raise; logs a warning
-        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, datetime.utcnow())
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, datetime.now(timezone.utc))
 
 
 # ---------------------------------------------------------------------------
@@ -145,16 +145,16 @@ class TestRecordForecasts:
 class TestUpdateActuals:
     def test_actualizes_past_due_forecasts(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow() - timedelta(days=35)  # 35 days ago, horizon 30
+        ts = datetime.now(timezone.utc) - timedelta(days=35)  # 35 days ago, horizon 30
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
-        n = tracker.update_actuals("AAPL", 30, 155.0, datetime.utcnow(), tolerance_days=5)
+        n = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc), tolerance_days=5)
         assert n == 1
 
     def test_does_not_actualize_recent_forecasts(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow() - timedelta(days=10)  # only 10 days ago, horizon 30
+        ts = datetime.now(timezone.utc) - timedelta(days=10)  # only 10 days ago, horizon 30
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
-        n = tracker.update_actuals("AAPL", 30, 155.0, datetime.utcnow(), tolerance_days=5)
+        n = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc), tolerance_days=5)
         assert n == 0
 
     def test_tolerance_window_boundary(self, tmp_path):
@@ -162,26 +162,26 @@ class TestUpdateActuals:
         tracker = _make_tracker(tmp_path)
         horizon, tol = 30, 5
         # Made exactly (horizon - tolerance) days ago → on the boundary, should actualize
-        ts = datetime.utcnow() - timedelta(days=horizon - tol)
+        ts = datetime.now(timezone.utc) - timedelta(days=horizon - tol)
         tracker.record_forecasts("AAPL", horizon, {MODEL_ARIMA: 150.0}, ts)
-        n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.utcnow(), tolerance_days=tol)
+        n = tracker.update_actuals("AAPL", horizon, 155.0, datetime.now(timezone.utc), tolerance_days=tol)
         assert n == 1
 
     def test_idempotent_already_actualized(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow() - timedelta(days=35)
+        ts = datetime.now(timezone.utc) - timedelta(days=35)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
-        n1 = tracker.update_actuals("AAPL", 30, 155.0, datetime.utcnow())
-        n2 = tracker.update_actuals("AAPL", 30, 155.0, datetime.utcnow())
+        n1 = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
+        n2 = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert n1 == 1
         assert n2 == 0  # already actualized → no rows updated
 
     def test_squared_error_written_correctly(self, tmp_path):
         import sqlite3
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow() - timedelta(days=35)
+        ts = datetime.now(timezone.utc) - timedelta(days=35)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
-        tracker.update_actuals("AAPL", 30, 160.0, datetime.utcnow())
+        tracker.update_actuals("AAPL", 30, 160.0, datetime.now(timezone.utc))
         with sqlite3.connect(tracker._db_path) as conn:
             row = conn.execute(
                 "SELECT squared_error FROM forecast_errors WHERE model_name='arima'"
@@ -192,7 +192,7 @@ class TestUpdateActuals:
     def test_does_not_raise_on_db_error(self, tmp_path):
         tracker = _make_tracker(tmp_path)
         tracker._db_path = "/nonexistent/path/db.sqlite"
-        result = tracker.update_actuals("AAPL", 30, 155.0, datetime.utcnow())
+        result = tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert result == 0
 
 
@@ -256,8 +256,8 @@ class TestGetSkillWeights:
         tracker = _make_tracker(tmp_path)
         import sqlite3
         # Manually insert a completed row with forecast_ts older than 60 days
-        old_ts = (datetime.utcnow() - timedelta(days=90)).isoformat()
-        now_iso = datetime.utcnow().isoformat()
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(tracker._db_path) as conn:
             conn.execute(
                 "INSERT INTO forecast_errors (symbol, model_name, horizon_days, forecast_ts, "
@@ -277,15 +277,15 @@ class TestGetSkillWeights:
 class TestCountHelpers:
     def test_pending_count_increases_on_record(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow()
+        ts = datetime.now(timezone.utc)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0, MODEL_MONTE_CARLO: 151.0}, ts)
         assert tracker.pending_count("AAPL", 30) == 2
 
     def test_pending_decreases_after_actualize(self, tmp_path):
         tracker = _make_tracker(tmp_path)
-        ts = datetime.utcnow() - timedelta(days=35)
+        ts = datetime.now(timezone.utc) - timedelta(days=35)
         tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 150.0}, ts)
-        tracker.update_actuals("AAPL", 30, 155.0, datetime.utcnow())
+        tracker.update_actuals("AAPL", 30, 155.0, datetime.now(timezone.utc))
         assert tracker.pending_count("AAPL", 30) == 0
 
     def test_completed_count_increases_after_actualize(self, tmp_path):

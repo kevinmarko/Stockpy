@@ -39,7 +39,7 @@ Database table: ``forecast_errors``
 import logging
 import math
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ class ForecastTracker:
             UTC timestamp when the forecast was computed.
         """
         try:
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
             ts_iso = forecast_ts.isoformat() if isinstance(forecast_ts, datetime) else str(forecast_ts)
             rows = [
                 (symbol.upper(), name, horizon_days, ts_iso, price, now_iso)
@@ -269,7 +269,7 @@ class ForecastTracker:
             ``{model_name: normalized_weight}``.  Empty when no history.
         """
         try:
-            since_iso = (datetime.utcnow() - timedelta(days=window_days)).isoformat()
+            since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
             with self._connect() as conn:
                 cursor = conn.execute(
                     """SELECT model_name,
@@ -346,7 +346,7 @@ class ForecastTracker:
         Returns 0 on any DB error.
         """
         try:
-            since_iso = (datetime.utcnow() - timedelta(days=window_days)).isoformat()
+            since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
             with self._connect() as conn:
                 cursor = conn.execute(
                     """SELECT COUNT(*) FROM forecast_errors

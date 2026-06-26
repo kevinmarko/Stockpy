@@ -35,7 +35,7 @@ STRATEGY_B = "mean_reversion_v1"
 
 def _seed_store_with_trades(store: TransactionsStore, n: int, strategy: str, win: bool = True):
     """Add n closed trades to the store, all wins or all losses."""
-    ts = pd.Timestamp.utcnow()
+    ts = pd.Timestamp.now("UTC")
     for i in range(n):
         tid = store.record_trade(
             symbol="AAPL",

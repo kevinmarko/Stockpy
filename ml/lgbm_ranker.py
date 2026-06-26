@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import pickle
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -243,7 +243,7 @@ class LGBMCrossSectionalRanker(Model):
     def save(self, path: Optional[Path] = None) -> Path:
         """Pickle model to ml/models/lgbm_<YYYYMMDD>.pkl."""
         if path is None:
-            stamp = datetime.utcnow().strftime("%Y%m%d")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
             path = _MODELS_DIR / f"lgbm_{stamp}.pkl"
         with open(path, "wb") as f:
             pickle.dump(self, f)

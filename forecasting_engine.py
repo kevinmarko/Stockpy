@@ -8,7 +8,7 @@
 
 import logging
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
@@ -634,7 +634,7 @@ class ForecastingEngine:
 
             # Symbol and timestamp for skill tracker integration (Tier 2.2)
             symbol = str(row.get('Symbol', row.get('Ticker', 'UNKNOWN'))).upper()
-            now_utc = datetime.utcnow()
+            now_utc = datetime.now(timezone.utc)
 
             # Train the CNN-LSTM ONCE (direct multi-step) and reuse its per-horizon
             # outputs below, instead of retraining a fresh model per horizon.
