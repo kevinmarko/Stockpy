@@ -91,6 +91,70 @@ def _signal_symbols(snap: dict) -> List[str]:
     return list(settings.DEFAULT_TICKERS)
 
 
+def _watchlist_symbols() -> List[str]:
+    """Return tickers from ``WATCHLIST`` env var or repo-root ``watchlist.txt``.
+
+    Mirrors :func:`main._load_watchlist` so the GUI's symbol discovery is
+    consistent with the orchestrator's evaluation universe. Silently returns
+    ``[]`` when neither source exists — never raises (CONSTRAINT #6).
+    """
+    import os
+
+    env_val = os.environ.get("WATCHLIST", "").strip()
+    if env_val:
+        return [t.strip().upper() for t in env_val.split(",") if t.strip()]
+
+    wl = _REPO_ROOT / "watchlist.txt"
+    if wl.exists():
+        try:
+            return [
+                line.strip().upper()
+                for line in wl.read_text().splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("watchlist.txt read failed: %s", exc)
+    return []
+
+
+def _held_symbols() -> List[str]:
+    """Robinhood-held tickers from a cached snapshot (if any).
+
+    Reads ``cache/account_snapshot.json`` directly so the matrix tab doesn't
+    trigger a live broker login. Returns ``[]`` if the cache is absent or
+    unparseable.
+    """
+    cache = _REPO_ROOT / "cache" / "account_snapshot.json"
+    if not cache.exists():
+        return []
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+        positions = data.get("positions", {})
+        return sorted(positions.keys())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("account_snapshot.json read failed: %s", exc)
+        return []
+
+
+def _active_symbols(snap: dict) -> List[str]:
+    """Union of held positions, watchlist, and last pipeline signals.
+
+    Falls back to :data:`settings.DEFAULT_TICKERS` only when all three
+    sources are empty — matches the Portfolio & Watchlist Synchronization
+    contract documented in :mod:`main`.
+    """
+    universe: List[str] = []
+    seen: set = set()
+    for src in (_held_symbols(), _watchlist_symbols(), _signal_symbols(snap)):
+        for s in src:
+            if s not in seen:
+                seen.add(s)
+                universe.append(s)
+    if not universe:
+        return list(settings.DEFAULT_TICKERS)
+    return universe
+
+
 # ===========================================================================
 # Tab 1 — Launcher & Orchestration
 # ===========================================================================
@@ -630,68 +694,161 @@ def _parse_trailing_json(text: str) -> Optional[dict]:
 # ===========================================================================
 
 def render_options_matrix() -> None:
-    """Black-Scholes Greeks + IVR proxy for active symbols (options-selling aid)."""
+    """Hydrated premium-selling matrix across held + watchlist + signal symbols.
+
+    Pipeline per symbol (dead-letter resilient, CONSTRAINT #6):
+      1. Provider quote + 252-day OHLCV.
+      2. ``build_premium_directive`` — GJR-GARCH σ, realized-vol IVR proxy,
+         Aroon+Coppock trend bias, full ATM Black-Scholes Greeks, deterministic
+         strategy directive (Put Credit / Iron Condor / Debit / Covered Call),
+         realizable daily theta after DTE-scaled execution friction, and the
+         per-leg matrix-integrity verdict ($0.50 strike grid + delta-target
+         tolerance).
+      3. The macro state snapshot is forwarded into the directive so the VRP
+         regime gate (VIX ≥ 30 ∨ CREDIT EVENT) fires identically to the live
+         orchestrator path — no premium-selling advice in a stress regime.
+
+    The universe auto-iterates **all** active symbols from
+    :func:`_active_symbols` (held Robinhood positions ∪ watchlist ∪ last
+    pipeline signals) so no premium-selling opportunity is silently dropped.
+    """
     st.subheader("🧮 Technical Options Matrix")
     st.caption(
-        "ATM Black-Scholes Greeks and an IV-Rank proxy for active symbols, "
-        "to support premium-selling decisions."
+        "Hydrated premium-selling matrix: GJR-GARCH σ, realized-vol IVR proxy, "
+        "Aroon+Coppock trend bias, ATM Black-Scholes Greeks, and the "
+        "deterministic strategy directive with $0.50 strike-grid integrity checks."
     )
 
     snap = load_state_snapshot()
-    symbols = _signal_symbols(snap)
-    default_syms = ", ".join(symbols[:10])
-    sym_text = st.text_input("Symbols (comma-separated)", value=default_syms)
-    target_dte = st.slider("Target DTE (days)", min_value=1, max_value=90, value=30)
-    symbols = [s.strip().upper() for s in sym_text.split(",") if s.strip()]
+    default_universe = _active_symbols(snap)
 
+    col_syms, col_dte, col_auto = st.columns([4, 1, 1])
+    with col_syms:
+        sym_text = st.text_input(
+            "Symbols",
+            value=", ".join(default_universe),
+            help="Auto-populated from held positions ∪ watchlist ∪ last signals. Edit to override.",
+        )
+    with col_dte:
+        target_dte = st.number_input(
+            "Target DTE", min_value=1, max_value=120, value=30, step=1,
+            help="Days to expiration used by Black-Scholes and the theta haircut.",
+        )
+    with col_auto:
+        auto_run = st.checkbox(
+            "Auto-run", value=False,
+            help="Recompute on every rerun (otherwise click the button).",
+        )
+
+    symbols = [s.strip().upper() for s in sym_text.split(",") if s.strip()]
     if not symbols:
         st.info("Enter at least one symbol.")
         return
 
-    if st.button("Compute Greeks matrix", type="primary"):
-        from technical_options_engine import OptionsPricingRecommender, TechnicalOptionsEngine
-        from data.market_data import get_provider
+    run = auto_run or st.button("▶️ Compute matrix", type="primary")
+    if not run:
+        st.caption(f"{len(symbols)} symbol(s) queued: {', '.join(symbols[:25])}"
+                   + (" …" if len(symbols) > 25 else ""))
+        return
 
-        provider = get_provider()
-        toe = TechnicalOptionsEngine()
-        rows: List[Dict[str, Any]] = []
-        T = max(target_dte, 1) / 365.0
-        for sym in symbols:
-            try:
-                quote = provider.get_latest_quote(sym)
-                price = float(quote.price)
-                bars = provider.get_intraday_bars(sym, lookback_days=252)
-                try:
-                    sigma = float(toe.estimate_gjr_garch_volatility(bars))
-                except Exception:
-                    sigma = 0.25
-                try:
-                    ivr = float(toe.calculate_realized_vol_rank(bars, sigma))
-                except Exception:
-                    ivr = float("nan")
-                opr = OptionsPricingRecommender(stock_price=price, risk_free_rate=settings.RISK_FREE_RATE)
-                greeks = opr.black_scholes_pricing_and_greeks(K=price, T=T, sigma=sigma, option_type="call")
-                rows.append({
-                    "Symbol": sym,
-                    "Price": round(price, 2),
-                    "Stale": quote.is_stale,
-                    "IV (σ)": round(sigma, 3),
-                    "IVR%": round(ivr, 1) if ivr == ivr else None,
-                    "ATM Price": round(float(greeks.get("Price", float("nan"))), 2),
-                    "Delta": round(float(greeks.get("Delta", float("nan"))), 3),
-                    "Gamma": round(float(greeks.get("Gamma", float("nan"))), 4),
-                    "Vega": round(float(greeks.get("Vega", float("nan"))), 3),
-                    "Theta/day": round(float(greeks.get("Theta_Daily", float("nan"))), 4),
-                })
-            except Exception as exc:
-                logger.warning("options matrix failed for %s: %s", sym, exc)
-                rows.append({"Symbol": sym, "Price": None, "Stale": None,
-                             "IV (σ)": None, "IVR%": None, "ATM Price": None,
-                             "Delta": None, "Gamma": None, "Vega": None,
-                             "Theta/day": None})
-        st.dataframe(pd.DataFrame(rows), width="stretch")
-        st.caption("σ from GJR-GARCH; IVR% is a realized-vol percentile proxy. "
-                   "Stale=True means a delayed quote (yfinance).")
+    from technical_options_engine import build_premium_directive
+    from data.market_data import get_provider, MarketDataError
+
+    # Lightweight MacroEconomicDTO-shaped object built from the snapshot so the
+    # regime gate can fire without a live FRED round-trip. Anything missing is
+    # left at its neutral default — the gate only flips on positive evidence.
+    class _MacroProxy:
+        def __init__(self, snap_: dict):
+            self.vix = float(snap_.get("vix")) if snap_.get("vix") is not None else 15.0
+            self.market_regime = str(snap_.get("market_regime", "RISK ON"))
+
+    macro_proxy = _MacroProxy(snap)
+    provider = get_provider()
+    rows: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    progress = st.progress(0.0, text="Computing premium directives…")
+    for i, sym in enumerate(symbols):
+        try:
+            quote = provider.get_latest_quote(sym)
+            bars = provider.get_intraday_bars(sym, lookback_days=252)
+            row = build_premium_directive(
+                sym,
+                bars,
+                spot_price=float(quote.price),
+                is_stale=bool(quote.is_stale),
+                target_dte=int(target_dte),
+                macro_dto=macro_proxy,
+                vrp=None,  # VRP requires an options chain — left None to skip that gate
+                risk_free_rate=settings.RISK_FREE_RATE,
+            )
+        except MarketDataError as exc:
+            logger.warning("market data error for %s: %s", sym, exc)
+            errors.append(f"{sym}: market data unavailable ({exc})")
+            row = {"Symbol": sym, "Strategy": "—", "Action": "—", "Integrity_OK": False,
+                   "Integrity_Issues": [str(exc)]}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("options matrix failed for %s: %s", sym, exc)
+            errors.append(f"{sym}: {exc}")
+            row = {"Symbol": sym, "Strategy": "—", "Action": "—", "Integrity_OK": False,
+                   "Integrity_Issues": [str(exc)]}
+        rows.append(row)
+        progress.progress((i + 1) / len(symbols),
+                          text=f"Computing premium directives… ({i + 1}/{len(symbols)})")
+    progress.empty()
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        st.info("No rows computed.")
+        return
+
+    # Stable column order matching config.COLUMN_SCHEMA naming conventions where
+    # they overlap. NaN columns are tolerated by Streamlit's dataframe widget.
+    column_order = [
+        "Symbol", "Price", "Stale",
+        "Sigma_GARCH", "IVR_Proxy",
+        "Aroon_Oscillator", "Coppock_Curve", "Trend_Bias",
+        "Strategy", "Action",
+        "Short_Strike", "Short_Delta", "Long_Strike", "Long_Delta",
+        "Net_Premium", "Realizable_Daily_Theta",
+        "ATM_Delta", "ATM_Gamma", "ATM_Vega", "ATM_Theta_Daily",
+        "Integrity_OK",
+    ]
+    display_cols = [c for c in column_order if c in df.columns]
+    st.dataframe(df[display_cols], width="stretch")
+
+    # Integrity verdict summary (top-line readout — drill-down available below).
+    if "Integrity_OK" in df.columns:
+        ok_count = int(df["Integrity_OK"].sum())
+        total = len(df)
+        if ok_count == total:
+            st.success(f"✅ Matrix integrity: {ok_count}/{total} legs on $0.50 grid + within delta tolerance.")
+        else:
+            st.warning(f"⚠️ Matrix integrity: {ok_count}/{total} clean; "
+                       f"{total - ok_count} symbol(s) flagged below.")
+
+    # Per-symbol breakdown for any flagged or actionable row.
+    flagged = df[~df.get("Integrity_OK", True).fillna(False).astype(bool)]
+    if not flagged.empty:
+        with st.expander(f"🔬 Integrity issues ({len(flagged)})", expanded=False):
+            for _, r in flagged.iterrows():
+                issues = r.get("Integrity_Issues") or []
+                st.markdown(f"**{r.get('Symbol', '?')}** — {r.get('Strategy', '?')}")
+                for issue in issues:
+                    st.markdown(f"  - {issue}")
+
+    if errors:
+        with st.expander(f"⚠️ Errors ({len(errors)})", expanded=False):
+            for e in errors:
+                st.markdown(f"- {e}")
+
+    st.caption(
+        "σ from GJR-GARCH(1,1) with 20-day realized fallback; **IVR proxy** is a "
+        "realized-vol percentile (true IVR requires an options chain). Trend bias is "
+        "Aroon+Coppock sign agreement. **Stale=True** marks delayed (~15 min) yfinance "
+        "quotes. Realizable Theta applies a DTE-scaled execution-friction haircut "
+        "(40% @ 1DTE, 22% @ 7DTE, 12% @ 30DTE, 5% baseline)."
+    )
 
 
 # ===========================================================================

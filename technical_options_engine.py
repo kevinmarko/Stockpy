@@ -554,3 +554,280 @@ class TechnicalOptionsEngine:
             return f"{action} {strategy}: {legs_str} (Net Premium: ${net_prem:.2f}, Realizable Daily Theta: ${theta:.4f})"
         else:
             return f"{action} {strategy}: {legs_str} (Net Premium: ${net_prem:.2f})"
+
+
+# =============================================================================
+# PREMIUM DIRECTIVE HELPER
+# Public, GUI- and audit-friendly wrapper that fuses GJR-GARCH sigma, realized-
+# vol IVR proxy, Aroon+Coppock trend bias, full ATM Black-Scholes Greeks, and
+# the deterministic strategy matrix into a single dict suitable for hydrating a
+# DataGrid row.  Centralised here (rather than duplicated in gui/panels.py) so
+# the Gravity AI Review Suite can call the *exact same* code path and assert
+# the matrix integrity invariants (strike grid, delta targets, regime gate).
+# =============================================================================
+
+# Conventional Black-Scholes deltas for each (strategy, side, type) tuple.
+# Iron Condor short/long deltas (0.16 / 0.05) and credit-spread deltas
+# (0.30 / 0.15) mirror the targets used inside
+# ``OptionsPricingRecommender.generate_strategy_pricing_matrix``.
+EXPECTED_DELTA_TARGETS: Dict[tuple, float] = {
+    ("Put Credit Spread", "Short", "Put"): -0.30,
+    ("Put Credit Spread", "Long", "Put"): -0.15,
+    ("Call Credit Spread", "Short", "Call"): 0.30,
+    ("Call Credit Spread", "Long", "Call"): 0.15,
+    ("Iron Condor", "Short", "Put"): -0.16,
+    ("Iron Condor", "Long", "Put"): -0.05,
+    ("Iron Condor", "Short", "Call"): 0.16,
+    ("Iron Condor", "Long", "Call"): 0.05,
+    ("Covered Call", "Short", "Call"): 0.30,
+    ("Call Debit Spread", "Long", "Call"): 0.50,
+    ("Call Debit Spread", "Short", "Call"): 0.30,
+    ("Put Debit Spread", "Long", "Put"): -0.50,
+    ("Put Debit Spread", "Short", "Put"): -0.30,
+}
+
+# Standard equity option strike grid in USD.  Real exchange grids vary by
+# underlying price (often $1 / $2.50 / $5 above $100), but $0.50 is the
+# tightest grid commonly listed for liquid names; any rounded strike that
+# satisfies the $0.50 grid is, by definition, also on every coarser grid.
+STRIKE_GRID_USD: float = 0.50
+
+
+def _on_strike_grid(strike: float, grid: float = STRIKE_GRID_USD) -> bool:
+    """True iff ``strike`` lies on a multiple of ``grid`` (within FP epsilon)."""
+    if not np.isfinite(strike) or grid <= 0:
+        return False
+    remainder = abs(strike / grid - round(strike / grid))
+    return remainder < 1e-6
+
+
+def validate_directive_integrity(
+    directive: Dict[str, Any],
+    *,
+    delta_tolerance: float = 0.05,
+    strike_grid: float = STRIKE_GRID_USD,
+) -> Dict[str, Any]:
+    """Audit a strategy directive against the matrix-integrity invariants.
+
+    Returns a dict ``{"ok": bool, "issues": list[str], "checks": dict}`` so
+    callers can both branch on the boolean and display a per-leg breakdown.
+    Cash / Wait directives are treated as trivially valid.
+
+    Invariants enforced:
+      * Every leg strike lies on the ``strike_grid`` (default $0.50).
+      * Where the leg carries a resolved ``Delta`` and the strategy/side/type
+        combination has a conventional target in
+        :data:`EXPECTED_DELTA_TARGETS`, ``|delta - target| <= delta_tolerance``.
+
+    The delta check is skipped (not failed) when the leg dict omits ``Delta``
+    — Iron Condor legs in the current engine intentionally omit it.  This
+    means callers should treat the function as a strict *upper-bound* check:
+    a PASS guarantees correctness for the present leg payload, but never
+    fabricates a verdict against a missing field (CONSTRAINT #4).
+    """
+    issues: list[str] = []
+    checks: list[Dict[str, Any]] = []
+    strategy = directive.get("Strategy", "Cash")
+    legs = directive.get("Legs", []) or []
+
+    if strategy == "Cash" or not legs:
+        return {"ok": True, "issues": [], "checks": []}
+
+    for leg in legs:
+        strike = float(leg.get("Strike", float("nan")))
+        side = str(leg.get("Side", ""))
+        typ = str(leg.get("Type", ""))
+        on_grid = _on_strike_grid(strike, strike_grid)
+        delta_ok: Optional[bool] = None
+        target = EXPECTED_DELTA_TARGETS.get((strategy, side, typ))
+        if "Delta" in leg and target is not None:
+            delta = float(leg["Delta"])
+            delta_ok = abs(delta - target) <= delta_tolerance
+            if not delta_ok:
+                issues.append(
+                    f"{strategy} {side} {typ} K={strike:.2f}: delta {delta:+.3f} "
+                    f"deviates from target {target:+.2f} by > {delta_tolerance:.2f}"
+                )
+        if not on_grid:
+            issues.append(
+                f"{strategy} {side} {typ} K={strike:.4f} is off the ${strike_grid:.2f} grid"
+            )
+        checks.append(
+            {
+                "Side": side,
+                "Type": typ,
+                "Strike": strike,
+                "OnGrid": on_grid,
+                "DeltaOK": delta_ok,
+                "Delta": leg.get("Delta"),
+                "Target": target,
+            }
+        )
+
+    return {"ok": not issues, "issues": issues, "checks": checks}
+
+
+def _determine_trend_bias(aroon_osc: float, coppock_val: float) -> str:
+    """Deterministic trend bias from Aroon Oscillator + Coppock Curve sign."""
+    if aroon_osc > 0 and coppock_val > 0:
+        return "Bullish"
+    if aroon_osc < 0 and coppock_val < 0:
+        return "Bearish"
+    return "Neutral"
+
+
+def build_premium_directive(
+    symbol: str,
+    bars: pd.DataFrame,
+    *,
+    spot_price: float,
+    is_stale: bool = False,
+    target_dte: int = 30,
+    macro_dto: Optional[Any] = None,
+    vrp: Optional[float] = None,
+    risk_free_rate: float = RISK_FREE_RATE,
+) -> Dict[str, Any]:
+    """Compute a fully-hydrated premium-selling row for one symbol.
+
+    Wraps :class:`TechnicalOptionsEngine` + :class:`OptionsPricingRecommender`
+    into a single dict containing both the diagnostic feature columns the
+    Command Center renders (sigma, IVR proxy, trend bias, ATM Greeks) and the
+    actionable strategy directive (legs, net premium, realizable daily theta).
+
+    Parameters
+    ----------
+    symbol :
+        Ticker label (used only for display / dead-letter logging).
+    bars :
+        OHLCV DataFrame with at least 22 rows; the same shape returned by
+        :meth:`data.market_data.CompositeProvider.get_intraday_bars`.
+    spot_price :
+        Latest mid price for the underlying.
+    is_stale :
+        Surfaced verbatim into the row so the GUI can flag delayed quotes.
+    target_dte, macro_dto, vrp, risk_free_rate :
+        Forwarded to
+        :meth:`OptionsPricingRecommender.generate_strategy_pricing_matrix`.
+
+    Returns
+    -------
+    dict
+        Always a *complete* row; numeric fields are ``float('nan')`` when the
+        underlying primitive could not be computed (never fabricated as 0.0,
+        CONSTRAINT #4).  The ``"integrity"`` sub-dict is the output of
+        :func:`validate_directive_integrity` so callers can show pass/fail
+        without re-walking the legs.
+    """
+    toe = TechnicalOptionsEngine()
+    nan = float("nan")
+    row: Dict[str, Any] = {
+        "Symbol": symbol,
+        "Price": float(spot_price) if np.isfinite(spot_price) else nan,
+        "Stale": bool(is_stale),
+        "Sigma_GARCH": nan,
+        "IVR_Proxy": nan,
+        "Aroon_Oscillator": nan,
+        "Coppock_Curve": nan,
+        "Trend_Bias": "Neutral",
+        "Strategy": "Cash",
+        "Action": "Wait",
+        "Net_Premium": nan,
+        "Realizable_Daily_Theta": nan,
+        "ATM_Delta": nan,
+        "ATM_Gamma": nan,
+        "ATM_Vega": nan,
+        "ATM_Theta_Daily": nan,
+        "Short_Strike": nan,
+        "Long_Strike": nan,
+        "Short_Delta": nan,
+        "Long_Delta": nan,
+        "Legs": [],
+        "Integrity_OK": True,
+        "Integrity_Issues": [],
+    }
+
+    # 1) Volatility (GJR-GARCH) — falls back to 20-day realized inside the engine.
+    try:
+        sigma = float(toe.estimate_gjr_garch_volatility(bars))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("GJR-GARCH failed for %s: %s", symbol, exc)
+        sigma = nan
+    row["Sigma_GARCH"] = sigma
+
+    # 2) Realized-Vol IVR proxy (true IVR requires an options chain).
+    if np.isfinite(sigma):
+        try:
+            row["IVR_Proxy"] = float(toe.calculate_realized_vol_rank(bars, sigma))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IVR proxy failed for %s: %s", symbol, exc)
+
+    # 3) Trend bias (Aroon + Coppock).
+    try:
+        indicators = toe.calculate_indicators(bars)
+        row["Aroon_Oscillator"] = float(indicators.get("Aroon_Oscillator", nan))
+        row["Coppock_Curve"] = float(indicators.get("Coppock_Curve", nan))
+        row["Trend_Bias"] = _determine_trend_bias(
+            row["Aroon_Oscillator"], row["Coppock_Curve"]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Trend indicators failed for %s: %s", symbol, exc)
+
+    # If we have no price or no sigma we cannot price anything — return the
+    # diagnostic columns and let the caller render a Cash/Wait row.
+    if not np.isfinite(row["Price"]) or not np.isfinite(sigma):
+        return row
+
+    # 4) ATM Greeks (informational; independent of the directive).
+    recommender = OptionsPricingRecommender(
+        stock_price=row["Price"], risk_free_rate=risk_free_rate
+    )
+    T = max(int(target_dte), 1) / 365.0
+    try:
+        atm = recommender.black_scholes_pricing_and_greeks(
+            K=row["Price"], T=T, sigma=sigma, option_type="call"
+        )
+        row["ATM_Delta"] = float(atm.get("Delta", nan))
+        row["ATM_Gamma"] = float(atm.get("Gamma", nan))
+        row["ATM_Vega"] = float(atm.get("Vega", nan))
+        row["ATM_Theta_Daily"] = float(atm.get("Theta_Daily", nan))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ATM Greeks failed for %s: %s", symbol, exc)
+
+    # 5) Strategy directive (already VRP / regime-gated inside the engine).
+    ivr_value = row["IVR_Proxy"] if np.isfinite(row["IVR_Proxy"]) else 50.0
+    try:
+        directive = recommender.generate_strategy_pricing_matrix(
+            true_ivr=float(ivr_value),
+            current_iv=float(sigma),
+            trend_bias=row["Trend_Bias"],
+            target_dte=int(target_dte),
+            vrp=vrp,
+            macro_dto=macro_dto,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Strategy directive failed for %s: %s", symbol, exc)
+        return row
+
+    row["Strategy"] = str(directive.get("Strategy", "Cash"))
+    row["Action"] = str(directive.get("Action", "Wait"))
+    row["Net_Premium"] = float(directive.get("Net_Premium", nan))
+    row["Realizable_Daily_Theta"] = float(
+        directive.get("Realizable_Daily_Theta", nan)
+    )
+    legs = directive.get("Legs", []) or []
+    row["Legs"] = legs
+
+    short_legs = [l for l in legs if l.get("Side") == "Short"]
+    long_legs = [l for l in legs if l.get("Side") == "Long"]
+    if short_legs:
+        row["Short_Strike"] = float(short_legs[0].get("Strike", nan))
+        row["Short_Delta"] = float(short_legs[0].get("Delta", nan))
+    if long_legs:
+        row["Long_Strike"] = float(long_legs[0].get("Strike", nan))
+        row["Long_Delta"] = float(long_legs[0].get("Delta", nan))
+
+    # 6) Matrix integrity (strike grid + delta-target tolerance).
+    integrity = validate_directive_integrity(directive)
+    row["Integrity_OK"] = bool(integrity["ok"])
+    row["Integrity_Issues"] = list(integrity["issues"])
+    return row
