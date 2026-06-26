@@ -607,3 +607,56 @@ No Gravity step needed — this is a docs-only change. No new functions, no new 
 
 ### No new env vars / dependencies
 This task introduced no new environment variables and no new Python dependencies.
+
+## Tier 5.3 — Kill Switch as Pause Recommendations Gate (2026-06)
+
+### File-Based Sentinel Protocol
+- **`main.run_once()`** — after Stage B (universe build), before Stage C (macro compute): checks `GlobalKillSwitch().is_active()`. When active, logs `"Advisory paused by kill-switch sentinel — skipping evaluation cycle"` (with reason + universe preview) and returns an early `RunResult` with empty `recommendations` and one error entry at `stage="kill_switch_gate"`. The account snapshot is still populated so the observability dashboard continues displaying holdings.
+- **`main_orchestrator._main_body()`** — after data fetch, before `run_pipeline()`: same sentinel check. When active, logs the canonical pause message and `return`s immediately. The last written `state_snapshot.json` is untouched so the GUI shows the last known state.
+- Both checks import `GlobalKillSwitch` at call time (inside the function, not at module top) so tests that monkeypatch the class resolve correctly.
+
+### Macro-Triggered Advisory Gating (`engine/advisory.py`)
+New **Step 8b** block between the StrategyEngine call and the holding-aware overlay:
+
+| Condition | Effect |
+|---|---|
+| `market_regime in ("RECESSION", "CREDIT EVENT")` | Hard gate: raw STRONG BUY / BUY → HOLD; `raw_signal` and `adjusted_score` both overridden |
+| `vix_value > 30.0` OR `sahm_rule_indicator ≥ 0.5` | Soft gate: `adjusted_score = max(0, score - 25)` |
+| Finance/Financial Services/Real Estate sector AND (`yield_curve_10y_2y < 0` OR `high_yield_oas > 6`) | Sector veto: BUY → HOLD for structurally-exposed sectors |
+
+`macro_gate_reason` string is assembled and:
+- Passed to `_build_rationale()` (new kwarg, default `""`).
+- Prepended as "Driver 0" in the rationale when non-empty so it is the first thing the operator reads.
+- The holding-aware overlay Case B threshold now uses `adjusted_score` (post-penalty) instead of the raw `score`.
+
+All six CONFIG keys added (see table in architecture section above). No magic numbers in decision logic — every threshold lives in `CONFIG`.
+
+### New CONFIG entries (`engine/advisory.py`)
+| Key | Default | Description |
+|---|---|---|
+| `macro_vix_gate_threshold` | `30.0` | VIX above this → soft gate fires |
+| `macro_sahm_gate_threshold` | `0.5` | Sahm Rule at/above this → soft gate fires |
+| `macro_score_penalty` | `25` | Points subtracted under soft gate |
+| `macro_veto_sectors` | `["Financials","Financial Services","Real Estate"]` | Sectors blocked from fresh buys under adverse conditions |
+| `macro_veto_yield_curve_threshold` | `0.0` | Yield curve below this → sector veto applies |
+| `macro_veto_oas_threshold` | `6.0` | HY OAS above this → sector veto applies |
+
+### Test surface
+- **`tests/test_advisory_pause_gate.py`** (new, 3 test classes, ≈22 tests):
+  - `TestKillSwitchPauseGate` — `run_once()` with active/inactive sentinel; pause reason in `errors`; inactive → pipeline runs
+  - `TestOrchestratorKillSwitchGate` — `_main_body` skips `run_pipeline`; source-grep check
+  - `TestMacroTriggeredGating` — RECESSION, CREDIT EVENT, RISK ON, NEUTRAL, VIX > 30, Sahm ≥ 0.5, sector veto Finance, sector veto Real Estate, non-vetoed Tech, macro_gate_reason in rationale, no gate noise in clean runs
+  - `TestMacroGateConfig` — all six CONFIG keys present, correct types, canonical defaults, veto sector membership
+
+### Gravity step 55
+`run_advisory_pause_gate_audit()` — 10 checks: CONFIG keys, threshold defaults (30.0 / 0.5 / 25), veto sectors, Step 8b + `macro_gate_reason` in source, `main.py` pause strings, `main_orchestrator.py` pause string, test file exists, `_build_rationale` signature, functional RECESSION→HOLD via minimal mock.
+
+### Operational flow (unchanged CLI)
+```bash
+python -m execution.kill_switch --activate --reason "advisory pause — investigating anomaly"
+# Expected next run: INFO — advisory paused by kill-switch sentinel; skipping evaluation cycle
+python -m execution.kill_switch --deactivate
+```
+
+### No new env vars / dependencies
+This task introduced no new environment variables and no new Python dependencies.

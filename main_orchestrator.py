@@ -58,6 +58,7 @@ from allocators.dual_momentum import DualMomentumAllocator
 from signals import global_registry
 from signals.base import SignalContext
 from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
+from execution.kill_switch import GlobalKillSwitch
 from diagnostics_and_visuals import (
     telemetry, 
     generate_plotly_volatility_bands, 
@@ -969,6 +970,20 @@ async def _main_body(effective_dry_run: bool) -> None:
         macro_raw = de.fetch_macro_raw()
         fund_raw = de.fetch_fundamentals_raw(tickers)
         tech_raw = de.fetch_technical_raw(tickers)
+
+    # 1b. Kill-switch advisory pause gate
+    # Checked after data fetch but before the expensive pipeline so the
+    # observability dashboard continues displaying the last written snapshot.
+    _ks = GlobalKillSwitch()
+    if _ks.is_active():
+        _ks_reason = _ks.reason() or "(no reason recorded)"
+        telemetry.info(
+            "Advisory paused by kill-switch sentinel — skipping pipeline. "
+            "Reason: %s  |  Deactivate with: "
+            "python -m execution.kill_switch --deactivate",
+            _ks_reason,
+        )
+        return
 
     # 2. Run Pipeline
     try:
