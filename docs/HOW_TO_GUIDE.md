@@ -522,6 +522,12 @@ The harness also runs walk-forward analysis (rolling train/test splits) and repo
 
 ## 11. Paper Trading Workflow
 
+> **Advisory mode is the project default (`ADVISORY_ONLY=true`).** In this mode no orders
+> are submitted to any broker — the pipeline is purely informational. This section
+> documents the paper-trading workflow that applies once you have explicitly set
+> `ADVISORY_ONLY=false`. See [Advisory-Only Mode](#advisory-only-mode) for the
+> procedure and implications.
+
 Paper trading = running with real market data and real logic, but simulated money (no real orders). This is mandatory before going live.
 
 ### Start paper trading
@@ -615,21 +621,29 @@ If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt
 python scripts/preflight_check.py
 ```
 
-Runs 11 checks. **All must pass (exit code 0) before going live.** Here's what each check does and how to fix failures:
+Runs 13 checks total. Behaviour depends on `ADVISORY_ONLY`:
 
-| Check | Passes when | How to fix a failure |
-|-------|------------|---------------------|
-| `fred_key_configured` | `FRED_API_KEY` is set and is not the old leaked key | Add key to `.env` |
-| `alpaca_configured` | Both `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` are set | Add keys to `.env` |
-| `alpaca_paper_mode` | `ALPACA_PAPER=true` — **warning only, not blocking** | Change to `false` only when ready to go live |
-| `dry_run_disabled` | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
-| `env_not_committed` | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
-| `kill_switch_inactive` | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
-| `heartbeat_fresh` | `output/heartbeat.txt` is < 2 hours old | Run `python3 main_orchestrator.py` to generate it |
-| `db_exists` | `quant_platform.db` exists and is non-empty | Run `python3 database_setup.py` |
-| `paper_trading_duration` | ≥ 90 days since `PAPER_TRADING_START_DATE` | Wait — this is intentional; set your start date when you begin |
-| `validation_reports` | At least one report exists, all are deployable, and all are < 30 days old | Run `python -m validation.harness --strategy main_pipeline --start 2015-01-01 --end 2024-12-31` |
-| `no_unexpected_risk_blocks` | No `minimum_validation` blocks in `risk_gate_blocks.jsonl` in the last 24h | Generate a validation report — the minimum_validation risk gate is blocking orders because no deployable reports exist |
+* **`ADVISORY_ONLY=true` (default)**: four broker-dependent checks are automatically
+  skipped (shown as PASS with an "advisory mode" note); `advisory_only_active` passes
+  loudly. Exit 0 when the remaining checks pass.
+* **`ADVISORY_ONLY=false`**: all 13 checks run. Exit 0 only when ALL pass (required
+  before going live).
+
+| Check | Advisory skip? | Passes when | How to fix a failure |
+|-------|:--------------:|------------|---------------------|
+| `fred_key_configured` | No | `FRED_API_KEY` is set | Add key to `.env` |
+| `advisory_only_active` | No | Always — PASS-loud when `true`, PASS-with-warning when `false` | Set `ADVISORY_ONLY=true` to return to advisory mode |
+| `alpaca_configured` | **Yes** | Both Alpaca keys are set | Add keys to `.env` |
+| `macro_regime_gate_enabled` | No | `MACRO_REGIME_GATE_ENABLED=true` (blocks in live mode when off) | Set `MACRO_REGIME_GATE_ENABLED=true` in `.env` |
+| `alpaca_paper_mode` | **Yes** | `ALPACA_PAPER=true` — warning only | Change to `false` only when ready to go live |
+| `dry_run_disabled` | **Yes** | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
+| `env_not_committed` | No | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
+| `kill_switch_inactive` | No | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
+| `heartbeat_fresh` | No | `output/heartbeat.txt` is < 2 hours old | Run `python3 main_orchestrator.py` to generate it |
+| `db_exists` | No | `quant_platform.db` exists and is non-empty | Run `python3 database_setup.py` |
+| `paper_trading_duration` | **Yes** | ≥ 90 days since `PAPER_TRADING_START_DATE` | Wait — this is intentional; set your start date when you begin |
+| `validation_reports` | No | At least one report exists, deployable, and < 30 days old | Run `python -m validation.harness --strategy main_pipeline --start 2015-01-01 --end 2024-12-31` |
+| `no_unexpected_risk_blocks` | No | No `minimum_validation` blocks in last 24 h | Generate a validation report — the minimum_validation risk gate is blocking because no deployable reports exist |
 
 ### JSON output (for automation)
 
@@ -751,9 +765,15 @@ For Gmail: use an App Password (not your main password). Google account → Secu
 
 ---
 
-## 15. The Kill Switch
+## 15. The Kill Switch / Pause Gate
 
-The kill switch immediately halts all new order submissions. Use it in an emergency.
+In **advisory mode** (`ADVISORY_ONLY=true`) the kill switch sentinel (`output/KILL_SWITCH`)
+repurposes as a **pause-recommendations gate**: when the file exists, `main.run_once()`
+logs `"advisory paused by kill-switch sentinel"` and skips evaluation for that cycle.
+No broker interaction exists to halt — this is purely a signal-generation pause.
+
+In **live-execution mode** (`ADVISORY_ONLY=false`) the sentinel also causes `OrderManager`
+to raise `KillSwitchActiveError` before any order reaches the broker.
 
 ### Check status
 
@@ -761,15 +781,19 @@ The kill switch immediately halts all new order submissions. Use it in an emerge
 python -m execution.kill_switch --status
 ```
 
-### Activate (block all orders now)
+### Activate (pause advisory / block live orders)
 
 ```bash
-python -m execution.kill_switch --activate "manual emergency halt"
+python -m execution.kill_switch --activate "investigating anomaly"
 ```
 
-Once active, `OrderManager` raises `KillSwitchActiveError` before even looking at any order. The pipeline continues running and producing signals — only order submission is blocked.
+In advisory mode: next pipeline run skips evaluation and logs the pause.
+In live mode: `OrderManager` raises `KillSwitchActiveError` before any order. The pipeline
+continues to run and produce signals — only order submission is blocked.
 
-### Deactivate (resume orders)
+The Launcher tab → Safety Controls also exposes a toggle button.
+
+### Deactivate (resume)
 
 ```bash
 python -m execution.kill_switch --deactivate
@@ -777,7 +801,9 @@ python -m execution.kill_switch --deactivate
 
 ### How it works
 
-The kill switch is a file: `output/KILL_SWITCH`. Its presence = active. The platform checks for file existence on every order attempt — no database, no network call, no race condition. To activate from code:
+The kill switch is a file: `output/KILL_SWITCH`. Its presence = active. The platform
+checks for file existence on every evaluation or order attempt — no database, no network
+call, no race condition. To activate from code:
 
 ```python
 from execution.kill_switch import GlobalKillSwitch
@@ -785,11 +811,17 @@ ks = GlobalKillSwitch()
 ks.activate("VIX spiked above 45")
 ```
 
-### Automatic kill switch
+### Automatic kill switch (live mode only)
 
-The platform auto-fires the kill switch in the macro kill switch check within the rules-based regime. You don't need to trigger this manually — it fires when:
+In live-execution mode, the platform auto-fires the kill switch when the macro regime
+becomes extreme. You don't need to trigger this manually — it fires when:
+
 - `vix > 30` AND `sahm_rule >= 0.5` (base condition), OR
-- The regime is RECESSION AND HMM agrees risk-off > 70% AND `vix > 25` OR `sahm >= 0.3` (faster trigger with HMM agreement)
+- The regime is RECESSION AND HMM agrees risk-off > 70% AND `vix > 25` OR `sahm >= 0.3`
+  (faster trigger with HMM agreement)
+
+In advisory mode, this auto-fire has no practical effect (no orders to block) but the
+sentinel is still written so the GUI pause indicator activates and the operator is alerted.
 
 ---
 
@@ -1014,7 +1046,7 @@ This creates `reports/main_pipeline_validation_summary.json`. The preflight chec
 
 ---
 
-*Last updated: 2026-06-25. Reflects: Sheet2 column-A universe fallback in `main.py`, the `.env`→`os.environ` `load_dotenv()` fix, and the `arch ≥ 8.0` GJR-GARCH `fit()` API fix.*
+*Last updated: 2026-06-26. Reflects: Tier 5.1 `ADVISORY_ONLY=true` default (broker quarantine), advisory-mode preflight auto-skip (§13), kill-switch repurposed as pause-recommendations gate (§15), Strategy Matrix mode toggle suppressed under advisory mode, new Advisory-Only Mode section. Prior: Sheet2 column-A universe fallback, `load_dotenv()` placement fix, `arch ≥ 8.0` GJR-GARCH API fix.*
 
 ## Safety tab (formerly Gravity Audit) — what to check when an order is blocked
 
@@ -1042,9 +1074,49 @@ When the orchestrator vetoes orders unexpectedly:
 4. If it's a risk-gate block, read the `threshold` / `observed` columns and the
    raw payload — those tell you *which check* fired and *by how much*.
 
+## Advisory-Only Mode
+
+`settings.ADVISORY_ONLY=true` is the project default. It quarantines the entire broker-
+execution surface so the pipeline can run safely without ever touching a live or paper
+account.
+
+### What changes when ADVISORY_ONLY=true
+
+| Layer | Behaviour |
+|-------|-----------|
+| `main_orchestrator._execute_broker_orders` | Returns immediately with an INFO log — no broker imports reached |
+| `gui/app.py` header | Shows `📋 ADVISORY MODE` banner instead of Simulation / Paper / Live badge |
+| Strategy Matrix mode toggle | Suppressed — replaced by a read-only caption showing underlying flags |
+| `scripts/preflight_check.py` | Four broker checks auto-skip; `advisory_only_active` = PASS-loud |
+| Kill switch sentinel | Repurposes as a pause-recommendations gate (see §15) |
+
+### Re-enabling broker execution
+
+```bash
+# 1. Set in .env
+ADVISORY_ONLY=false
+DRY_RUN=false
+ALPACA_PAPER=true    # start with paper; change to false only for live
+
+# 2. Verify preflight (all 13 checks must pass)
+python scripts/preflight_check.py
+
+# 3. Launch pipeline (paper mode)
+python3 main_orchestrator.py
+```
+
+All three flags must be consistent: `ADVISORY_ONLY=false AND DRY_RUN=false AND
+ALPACA_PAPER=false` is required to reach a live submission. The GUI mode toggle
+reappears automatically once `ADVISORY_ONLY=false`.
+
+---
+
 ## Strategy Matrix tab — Global Execution Mode toggle
 
-The Strategy Matrix (Control) tab now leads with a **🎚️ Global Execution Mode**
+> **Suppressed while `ADVISORY_ONLY=true`.** The toggle reappears automatically
+> when `ADVISORY_ONLY=false`. See [Advisory-Only Mode](#advisory-only-mode) above.
+
+The Strategy Matrix (Control) tab leads with a **🎚️ Global Execution Mode**
 selector backed by `gui/strategy_registry.py`. Three modes:
 
 | Mode | DRY_RUN | ALPACA_PAPER | What happens |
