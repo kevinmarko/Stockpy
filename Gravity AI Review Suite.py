@@ -4318,6 +4318,10 @@ class GravityAIAuditor:
         self.step_62_historical_persistence_audit_phase3()
         # Task 3 — Operator ergonomics (daily briefing, mobile CSS, key rotation, watchlist)
         self.step_63_operator_ergonomics_audit()
+        # Tier 4.1 — Live-vs-recommendation tracking
+        self.step_64_recommendation_tracking_audit()
+        # Tier 4.2 — Walk-forward validation cadence
+        self.step_65_refresh_validations_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -9462,6 +9466,352 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_63_operator_ergonomics_audit"] = audit
+
+    def step_64_recommendation_tracking_audit(self) -> None:
+        """Step 64 — Tier 4.1 Live-vs-recommendation tracking audit.
+
+        Checks:
+          1.  ``evaluation_engine.recommendation_tracking_report`` is importable.
+          2.  ``_TRACKING_EMPTY`` sentinel dict has all required keys.
+          3.  ``_DEFAULT_DECISION_LOG_PATH`` is a ``pathlib.Path``.
+          4.  ``_price_at_or_before(empty_df, now)`` returns NaN — no fabrication.
+          5.  Empty log → ``n_signals=0`` and all floats NaN (CONSTRAINT #4).
+          6.  A single "passed" BUY entry is counted in ``n_signals``, not ``n_acted``.
+          7.  ``n_completed=0`` when the horizon has not yet elapsed.
+          8.  HistoricalStore failure degrades gracefully (CONSTRAINT #6).
+          9.  ``gui/panels.py`` source references ``recommendation_tracking_report``.
+         10.  ``tests/test_recommendation_tracking.py`` exists.
+        """
+        audit = {
+            "step": "step_64_recommendation_tracking_audit",
+            "description": "Tier 4.1 — Live-vs-recommendation tracking (model return vs. operator return)",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": passed, "detail": str(detail)})
+            return passed
+
+        try:
+            import math
+            import tempfile
+            import json as _json
+            from pathlib import Path
+            from datetime import date, timedelta, datetime
+
+            _repo = Path(__file__).resolve().parent
+            import sys
+            if str(_repo) not in sys.path:
+                sys.path.insert(0, str(_repo))
+
+            all_pass = True
+
+            # 1. Function importable
+            try:
+                from evaluation_engine import recommendation_tracking_report
+                ok1 = callable(recommendation_tracking_report)
+            except Exception as exc:
+                ok1 = False
+            all_pass = _chk("recommendation_tracking_report importable", ok1) and all_pass
+
+            # 2. _TRACKING_EMPTY has all required keys
+            try:
+                from evaluation_engine import _TRACKING_EMPTY
+                required_keys = {
+                    "rows", "model_return_30d", "operator_return_30d",
+                    "delta", "n_signals", "n_acted", "n_completed",
+                    "n_with_exit", "horizon_days",
+                }
+                ok2 = required_keys.issubset(set(_TRACKING_EMPTY.keys()))
+            except Exception:
+                ok2 = False
+            all_pass = _chk("_TRACKING_EMPTY has all 9 required keys", ok2) and all_pass
+
+            # 3. _DEFAULT_DECISION_LOG_PATH is a Path
+            try:
+                from evaluation_engine import _DEFAULT_DECISION_LOG_PATH
+                ok3 = isinstance(_DEFAULT_DECISION_LOG_PATH, Path)
+            except Exception:
+                ok3 = False
+            all_pass = _chk("_DEFAULT_DECISION_LOG_PATH is pathlib.Path", ok3) and all_pass
+
+            # 4. _price_at_or_before on empty DF → NaN (no fabrication)
+            try:
+                import pandas as pd
+                from evaluation_engine import _price_at_or_before
+                result_nan = _price_at_or_before(pd.DataFrame(), datetime.now())
+                ok4 = math.isnan(result_nan)
+            except Exception:
+                ok4 = False
+            all_pass = _chk("_price_at_or_before(empty, now) returns NaN — CONSTRAINT #4", ok4) and all_pass
+
+            # 5. Empty log → n_signals=0 and floats NaN
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    result = recommendation_tracking_report(
+                        log_path=Path(td) / "missing.jsonl"
+                    )
+                ok5 = (
+                    result["n_signals"] == 0
+                    and math.isnan(result["model_return_30d"])
+                    and math.isnan(result["operator_return_30d"])
+                    and math.isnan(result["delta"])
+                )
+            except Exception:
+                ok5 = False
+            all_pass = _chk("Missing log → n_signals=0, all returns NaN (CONSTRAINT #4/#6)", ok5) and all_pass
+
+            # 6. Single passed BUY entry → n_signals=1, n_acted=0
+            try:
+                import dataclasses
+                with tempfile.TemporaryDirectory() as td:
+                    log_path = Path(td) / "log.jsonl"
+                    sig_date = date.today() - timedelta(days=40)
+                    entry = {
+                        "symbol": "AAPL",
+                        "action_taken": "passed",
+                        "signal_action": "BUY",
+                        "conviction": 0.8,
+                        "notes": "",
+                        "timestamp": datetime(sig_date.year, sig_date.month, sig_date.day, 12).isoformat(),
+                        "signal_ts": datetime(sig_date.year, sig_date.month, sig_date.day, 12).isoformat(),
+                        "trade_id": None,
+                    }
+                    log_path.write_text(_json.dumps(entry) + "\n")
+                    result = recommendation_tracking_report(log_path=log_path)
+                ok6 = result["n_signals"] == 1 and result["n_acted"] == 0
+            except Exception:
+                ok6 = False
+            all_pass = _chk("Passed BUY → n_signals=1, n_acted=0", ok6) and all_pass
+
+            # 7. Recent signal (5 days ago, horizon=30) → n_completed=0
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    log_path = Path(td) / "log.jsonl"
+                    sig_date = date.today() - timedelta(days=5)
+                    entry = {
+                        "symbol": "AAPL", "action_taken": "passed", "signal_action": "BUY",
+                        "conviction": 1.0, "notes": "",
+                        "timestamp": datetime(sig_date.year, sig_date.month, sig_date.day, 12).isoformat(),
+                        "signal_ts": datetime(sig_date.year, sig_date.month, sig_date.day, 12).isoformat(),
+                        "trade_id": None,
+                    }
+                    log_path.write_text(_json.dumps(entry) + "\n")
+                    result = recommendation_tracking_report(log_path=log_path, horizon_days=30)
+                ok7 = result["n_completed"] == 0
+            except Exception:
+                ok7 = False
+            all_pass = _chk("Recent signal (5 days ago, horizon=30) → n_completed=0", ok7) and all_pass
+
+            # 8. HistoricalStore failure degrades gracefully (CONSTRAINT #6)
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    log_path = Path(td) / "log.jsonl"
+                    sig_date = date.today() - timedelta(days=40)
+                    entry = {
+                        "symbol": "AAPL", "action_taken": "passed", "signal_action": "BUY",
+                        "conviction": 1.0, "notes": "",
+                        "timestamp": datetime(sig_date.year, sig_date.month, sig_date.day, 12).isoformat(),
+                        "signal_ts": datetime(sig_date.year, sig_date.month, sig_date.day, 12).isoformat(),
+                        "trade_id": None,
+                    }
+                    log_path.write_text(_json.dumps(entry) + "\n")
+
+                    class _BrokenStore:
+                        def get_bars(self, *a, **kw):
+                            raise RuntimeError("DB crash")
+
+                    result = recommendation_tracking_report(
+                        log_path=log_path, historical_store=_BrokenStore()
+                    )
+                ok8 = result["n_signals"] == 1 and math.isnan(result["model_return_30d"])
+            except Exception:
+                ok8 = False
+            all_pass = _chk("HistoricalStore failure degrades gracefully (CONSTRAINT #6)", ok8) and all_pass
+
+            # 9. gui/panels.py references recommendation_tracking_report
+            try:
+                panels_src = (_repo / "gui" / "panels.py").read_text(encoding="utf-8")
+                ok9 = "recommendation_tracking_report" in panels_src
+            except Exception:
+                ok9 = False
+            all_pass = _chk("gui/panels.py references recommendation_tracking_report", ok9) and all_pass
+
+            # 10. Test file exists
+            ok10 = (_repo / "tests" / "test_recommendation_tracking.py").exists()
+            all_pass = _chk("tests/test_recommendation_tracking.py exists", ok10) and all_pass
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_64_recommendation_tracking_audit"] = audit
+
+    def step_65_refresh_validations_audit(self) -> None:
+        """Step 65 — Tier 4.2 Walk-forward validation cadence audit.
+
+        Checks:
+          1.  ``scripts.refresh_validations`` module importable.
+          2.  ``STRATEGY_REGISTRY`` contains both registered strategies.
+          3.  Each registry entry is a (callable, positive_float) pair.
+          4.  RSI(2) adapter returns (X, y, precomputed) with expected columns.
+          5.  TSMOM adapter returns 4 precomputed series.
+          6.  ``_make_strategy_fn`` closure returns list with required keys.
+          7.  ``run_validations`` dead-letters unknown strategy (CONSTRAINT #6).
+          8.  ``main([])`` exit code 0 when all pass, 1 when any fail.
+          9.  ``scripts/refresh_validations.sh`` exists and is executable.
+         10.  ``tests/test_refresh_validations.py`` exists.
+        """
+        audit = {
+            "step": "step_65_refresh_validations_audit",
+            "description": "Tier 4.2 — Walk-forward validation cadence (monthly refresh script)",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": passed, "detail": str(detail)})
+            return passed
+
+        try:
+            import os
+            import numpy as np
+            import pandas as pd
+            from pathlib import Path
+            from unittest.mock import patch, MagicMock
+
+            _repo = Path(__file__).resolve().parent
+            import sys
+            if str(_repo) not in sys.path:
+                sys.path.insert(0, str(_repo))
+
+            all_pass = True
+
+            # 1. Module importable
+            try:
+                import scripts.refresh_validations as _rv
+                ok1 = True
+            except Exception as exc:
+                ok1 = False
+            all_pass = _chk("scripts.refresh_validations importable", ok1) and all_pass
+
+            # 2. STRATEGY_REGISTRY contains both strategies
+            try:
+                reg = _rv.STRATEGY_REGISTRY
+                ok2 = "rsi2_mean_reversion" in reg and "timeseries_momentum" in reg
+            except Exception:
+                ok2 = False
+            all_pass = _chk("STRATEGY_REGISTRY contains rsi2 and tsmom", ok2) and all_pass
+
+            # 3. Each entry is (callable, positive float)
+            try:
+                ok3 = all(callable(fn) and isinstance(t, float) and t > 0
+                          for fn, t in _rv.STRATEGY_REGISTRY.values())
+            except Exception:
+                ok3 = False
+            all_pass = _chk("Registry entries are (callable, positive_turnover)", ok3) and all_pass
+
+            # 4. RSI(2) adapter returns (X, y, precomputed) with expected columns
+            try:
+                rng = np.random.default_rng(seed=1)
+                prices = 300.0 * np.cumprod(1 + rng.normal(0.0004, 0.01, 500))
+                idx = pd.bdate_range(end="2024-12-31", periods=500)
+                spy = pd.Series(prices, index=idx)
+                X_r, y_r, pre_r = _rv._build_rsi2_adapter(spy)
+                ok4 = (
+                    "RSI_2" in X_r.columns
+                    and "SMA_200" in X_r.columns
+                    and "RSI2_Gated" in pre_r
+                    and isinstance(y_r, pd.Series)
+                )
+            except Exception as exc:
+                ok4 = False
+            all_pass = _chk("_build_rsi2_adapter returns (X with RSI_2/SMA_200, y, precomputed)", ok4) and all_pass
+
+            # 5. TSMOM adapter returns 4 precomputed series
+            try:
+                _, _, pre_t = _rv._build_tsmom_adapter(spy)
+                ok5 = len(pre_t) == 4
+            except Exception:
+                ok5 = False
+            all_pass = _chk("_build_tsmom_adapter returns 4 precomputed variants", ok5) and all_pass
+
+            # 6. _make_strategy_fn closure returns list with required keys
+            try:
+                n = 200
+                idx2 = pd.bdate_range("2020-01-01", periods=n)
+                pre_s = {"A": pd.Series(np.zeros(n), index=idx2)}
+                fn = _rv._make_strategy_fn(pre_s)
+                Xf = pd.DataFrame({"f": np.zeros(n)}, index=idx2)
+                yf = pd.Series(np.zeros(n), index=idx2)
+                res = fn(Xf[:100], yf[:100], Xf[100:], yf[100:])
+                required = {"params", "train_returns", "test_returns", "turnover"}
+                ok6 = isinstance(res, list) and required.issubset(set(res[0].keys()))
+            except Exception:
+                ok6 = False
+            all_pass = _chk("_make_strategy_fn returns list with required harness keys", ok6) and all_pass
+
+            # 7. run_validations dead-letters unknown strategy (CONSTRAINT #6)
+            try:
+                import tempfile
+                with tempfile.TemporaryDirectory() as td:
+                    with patch("scripts.refresh_validations._download_spy", return_value=spy), \
+                         patch("scripts.refresh_validations.TieredCostModel", return_value=MagicMock()):
+                        results = _rv.run_validations(
+                            strategies=["__no_such_strategy__"],
+                            output_dir=Path(td),
+                        )
+                r = results.get("__no_such_strategy__", {})
+                ok7 = r.get("deployable") is False and "error" in r
+            except Exception:
+                ok7 = False
+            all_pass = _chk("Unknown strategy dead-lettered (CONSTRAINT #6)", ok7) and all_pass
+
+            # 8. main exit code 0 on all-pass, 1 on any-fail
+            try:
+                def _fake_run_pass(**kw):
+                    return {"rsi2_mean_reversion": {"deployable": True}}
+
+                def _fake_run_fail(**kw):
+                    return {"rsi2_mean_reversion": {"deployable": False}}
+
+                import tempfile
+                with tempfile.TemporaryDirectory() as td:
+                    with patch("scripts.refresh_validations.run_validations", _fake_run_pass):
+                        code_pass = _rv.main(["--output-dir", td])
+                    with patch("scripts.refresh_validations.run_validations", _fake_run_fail):
+                        code_fail = _rv.main(["--output-dir", td])
+                ok8 = code_pass == 0 and code_fail == 1
+            except Exception:
+                ok8 = False
+            all_pass = _chk("main exit-code 0 on all-pass, 1 on any-fail", ok8) and all_pass
+
+            # 9. scripts/refresh_validations.sh exists and is executable
+            try:
+                sh_path = _repo / "scripts" / "refresh_validations.sh"
+                ok9 = sh_path.exists() and os.access(str(sh_path), os.X_OK)
+            except Exception:
+                ok9 = False
+            all_pass = _chk("scripts/refresh_validations.sh exists and is executable", ok9) and all_pass
+
+            # 10. test file exists
+            ok10 = (_repo / "tests" / "test_refresh_validations.py").exists()
+            all_pass = _chk("tests/test_refresh_validations.py exists", ok10) and all_pass
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_65_refresh_validations_audit"] = audit
 
 
 # =============================================================================

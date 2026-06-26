@@ -936,3 +936,101 @@ After the multifactor writeback block, reads `shared_context.news_sentiment_scor
 
 ### Gravity step 63 (`step_63_operator_ergonomics_audit`)
 10 checks: `scripts.daily_briefing` importable + `generate_briefing` callable; `generate_briefing` returns Markdown with regime section; `write_briefing` produces `briefing_YYYY-MM-DD.md`; `HTML_REPORT_TEMPLATE` has `@media (max-width: 600px)` block; mobile CSS has 44px tap target + `overflow-x:auto`; `check_key_rotation_recent` in `ALL_CHECKS`; `check_key_rotation_recent` is always warning-only (never `passed=False`); `Settings.FRED_KEY_ROTATED_DATE` declared; `render_live_inventory` references `watchlist.txt` quick-add; `tests/test_operator_ergonomics.py` exists.
+
+## Tier 4 — Validation & Honesty (2026-06)
+
+### 4.1 Live-vs-Recommendation Tracking
+
+"If you'd taken every BUY at the published conviction-weighted size, the paper-equivalent return over 30 days would be X%; actual decisions returned Y%." Measures whether operator judgement adds or subtracts alpha relative to the raw model signal.
+
+#### `evaluation_engine.recommendation_tracking_report()` (module-level function)
+```python
+recommendation_tracking_report(
+    log_path: Optional[Path] = None,
+    transactions_store=None,
+    horizon_days: int = 30,
+    *,
+    historical_store=None,
+    _today=None,          # injectable for tests
+) -> Dict[str, Any]
+```
+- Reads the 1.3 decision log (`output/decision_log.jsonl`) via `gui.decision_log.read_decisions()` (lazy import — no circular import).
+- Filters to entries where `signal_action` contains `"BUY"` (catches `"STRONG BUY"` too).
+- For each BUY entry computes:
+  - **Model price**: `HistoricalStore.get_bars(symbol, lookback_days=756)` → `_price_at_or_before(bars, signal_dt)` for entry price and `_price_at_or_before(bars, exit_dt)` for exit price (where `exit_dt = signal_date + timedelta(days=horizon_days)`).
+  - **Model return**: `(exit − entry) / entry` when `completed` (i.e. `exit_date <= today`) and both prices are available; `NaN` otherwise — **CONSTRAINT #4, never fabricated**.
+  - **Actual return**: for `action_taken=="acted"` entries with a `trade_id`, reads `TransactionsStore.get_trade_history(symbol)` for `entry_price` and `exit_price`. When `exit_ts` is `None` (still open), uses the latest available bar close as a surrogate (still reported as `n_with_exit++`).
+- Aggregation:
+  - `model_return_30d` = conviction-weighted mean of all completed BUY signals that have a model return.
+  - `operator_return_30d` = simple mean of actual returns for `action_taken=="acted"` with a closed or surrogate exit.
+  - `delta` = `operator_return_30d − model_return_30d` (positive = operator adds value). `NaN` when either is unavailable.
+- Returns a dict with keys: `rows` (per-signal breakdown), `model_return_30d`, `operator_return_30d`, `delta`, `n_signals`, `n_acted`, `n_completed`, `n_with_exit`, `horizon_days`.
+- Module-level constants exported for tests: `_TRACKING_EMPTY` (sentinel), `_DEFAULT_DECISION_LOG_PATH`.
+- Helper function `_price_at_or_before(bars: pd.DataFrame, target: datetime) -> float` — slices bars to last Close ≤ target date; `NaN` on empty/no-match.
+- All I/O in try/except; dead-letter tolerant (CONSTRAINT #6). HistoricalStore is imported lazily (inside function body) to avoid circular imports.
+
+#### GUI: Reports tab (`gui/panels.py`)
+- **`_render_recommendation_tracking_section()`** — inserted in `render_report_viewer()` between `_render_decision_journal_section()` and `_render_brinson_fachler_section()`.
+- Horizon slider (5–90 days, default 30, session-key `rec_tracking_horizon`).
+- `@st.cache_data(ttl=300)` wraps the `recommendation_tracking_report()` call.
+- Four KPI columns: BUY Signals Logged / Model {N}d Return / Operator Return / Delta (Δ).
+- Plain-English narrative block summarizing whether the operator added or subtracted alpha.
+- Expandable per-signal breakdown table.
+- Fully wrapped in try/except (CONSTRAINT #6).
+
+#### Tests
+- **`tests/test_recommendation_tracking.py`** (≥ 30 tests, 8 classes):
+  - `TestEmptyLog` — missing/empty/corrupt log, horizon preserved in result.
+  - `TestNoBuySignals` — HOLD/SELL entries not counted; STRONG BUY counted.
+  - `TestModelReturn` — correct model return from synthetic bars; NaN when no bars.
+  - `TestActualReturn` — closed trade → correct actual_return; open trade → surrogate exit; missing trade_id → NaN.
+  - `TestPassedSignal` — "passed" counted in n_signals but not n_acted; still included in model return.
+  - `TestHorizonNotElapsed` — recent signal → n_completed=0; completed flag per-row.
+  - `TestConvictionWeighting` — high-conviction winner + low-conviction loser → positive weighted result.
+  - `TestDelta` — delta = operator − model; NaN when only model available.
+  - `TestDeadLetterResilience` — HistoricalStore/TransactionsStore failures degrade gracefully.
+  - `TestModuleSurface` — importable; sentinel structure; Path type; `_price_at_or_before` corner cases.
+
+#### Gravity step 64 (`step_64_recommendation_tracking_audit`)
+10 checks: `recommendation_tracking_report` importable; `_TRACKING_EMPTY` has all 9 required keys; `_DEFAULT_DECISION_LOG_PATH` is `pathlib.Path`; `_price_at_or_before(empty, now)` returns NaN (CONSTRAINT #4); missing log → n_signals=0 and all returns NaN; passed BUY → n_signals=1, n_acted=0; recent signal (5 days, horizon=30) → n_completed=0; HistoricalStore failure degrades gracefully (CONSTRAINT #6); `gui/panels.py` references `recommendation_tracking_report`; `tests/test_recommendation_tracking.py` exists.
+
+---
+
+### 4.2 Walk-Forward Validation Cadence
+
+Monthly runner that re-validates every registered strategy against recent history to ensure validation reports never go stale.
+
+#### `scripts/refresh_validations.py` (new module, runnable as `python -m scripts.refresh_validations`)
+- **Strategy adapters** — pure functions `adapter_fn(spy_close: pd.Series) -> (X, y, precomputed)`:
+  - `_build_rsi2_adapter(spy_close)` — mirrors `tests/test_validation_rsi2.py`; RSI(2) + SMA-200 long-only trend filter + crash/recession RISK-OFF gate; returns `X[RSI_2, SMA_200]`, `y=daily_ret`, `precomputed={RSI2_Gated, RSI2_Ungated}`.
+  - `_build_tsmom_adapter(spy_close)` — mirrors `tests/test_validation_ts_momentum.py`; four variants (12M/6M × 10%/20% vol target); returns `X[ROC_12M, ROC_6M, Vol]`, `y=daily_ret`, `precomputed` dict with 4 series.
+- **`_make_strategy_fn(precomputed, turnover)`** — closure returning a `StrategyValidationHarness`-compatible `strategy_fn(X_train, y_train, X_test, y_test) -> list[dict]` where each dict has `params`, `train_returns`, `test_returns`, `turnover`.
+- **`STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float]]`** — maps `strategy_id → (adapter_fn, turnover)`; currently contains `"rsi2_mean_reversion"` and `"timeseries_momentum"`.
+- **`_download_spy(start_date, end_date)`** — downloads via `yfinance` (same library as existing test harnesses); raises `RuntimeError` on empty result.
+- **`run_validations(strategies, start_date, end_date, output_dir, n_cpcv_splits, n_test_splits)`** — downloads SPY once, loops over strategies, runs `StrategyValidationHarness`, saves JSON summaries. Per-strategy failure → dead-letter entry with `deployable=False` and `error` key (CONSTRAINT #6). Returns `Dict[strategy_id, summary_dict]`.
+- **`_print_summary_table(results)`** — ASCII pass/fail table to stdout.
+- **`main(argv)`** — argparse CLI; exit code 0 = all pass, 1 = any failure. Flags: `--strategies`, `--start`, `--end`, `--output-dir`, `--n-cpcv-splits`, `--n-test-splits`.
+
+#### `scripts/refresh_validations.sh` (new, executable)
+Bash wrapper that verifies `.venv` exists and Python is 3.12.x, then runs `python3 -m scripts.refresh_validations "$@"`. Designed for cron scheduling:
+```
+0 6 1 * * cd /path/to/stockpy && ./scripts/refresh_validations.sh >> logs/validations.log 2>&1
+```
+
+#### Design constraints (CONSTRAINT #4, #6, #7)
+- No fabricated synthetic returns passed to the harness — if an adapter cannot build valid X/y (insufficient history), the strategy is dead-lettered with an error.
+- Data fetching uses yfinance — no new data providers.
+- Each strategy wrapped in try/except so one failure never aborts the run.
+
+#### Tests
+- **`tests/test_refresh_validations.py`** (≥ 40 tests, 7 classes):
+  - `TestModuleSurface` — importable, public callables exist.
+  - `TestRegistryStructure` — STRATEGY_REGISTRY shape, entries are (callable, positive float), turnover in range.
+  - `TestBuildRsi2Adapter` — returns 3-tuple; X has RSI_2/SMA_200; X and y share index; precomputed keys; SMA-200 warmup trimmed; RSI bounded [0, 100].
+  - `TestBuildTsmomAdapter` — returns 3-tuple; X has ROC_12M/ROC_6M/Vol; 4 precomputed variants; variant names contain "TSMOM\_".
+  - `TestMakeStrategyFn` — returns callable; result is list; required keys present; turnover propagated; one result per precomputed series.
+  - `TestRunValidations` — returns dict; unknown strategy dead-lettered; SPY download failure marks all as failed; adapter exception dead-lettered; single-strategy filter.
+  - `TestMainCLI` — all-pass → exit 0; any-fail → exit 1; error entry → exit 1; `--strategies` forwarded; `--start`/`--end` forwarded; `--n-cpcv-splits` forwarded.
+
+#### Gravity step 65 (`step_65_refresh_validations_audit`)
+10 checks: `scripts.refresh_validations` importable; `STRATEGY_REGISTRY` contains both strategies; entries are (callable, positive turnover); RSI(2) adapter returns (X with RSI_2/SMA_200, y, precomputed); TSMOM adapter returns 4 variants; `_make_strategy_fn` closure returns list with required harness keys; unknown strategy dead-lettered (CONSTRAINT #6); main exit-code 0 on all-pass / 1 on any-fail; `scripts/refresh_validations.sh` exists and is executable; `tests/test_refresh_validations.py` exists.

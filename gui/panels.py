@@ -675,6 +675,159 @@ def _render_correlation_cluster_section(signals: list) -> None:
 
 
 # ===========================================================================
+# Recommendation Tracking — Streamlit section (Tier 4.1)
+# ===========================================================================
+
+def _render_recommendation_tracking_section() -> None:
+    """Tier 4.1 — Recommendation tracking error: model vs. operator decisions.
+
+    Joins the 1.3 decision journal with historical prices to compare:
+    * **Model return** — paper-equivalent return for every logged BUY signal
+      held exactly ``horizon_days``, weighted by published conviction.
+    * **Operator return** — actual return from closed trades where the operator
+      chose to act (``action_taken="acted"``).
+
+    The delta tells the operator whether their judgment additions to the model
+    (e.g. "I passed on that BUY because earnings were next week") are helping
+    or hurting alpha over the model's mechanical baseline.
+    """
+    import math as _math
+
+    st.markdown("---")
+    st.markdown("### 📊 Recommendation Tracking vs. Actual Decisions")
+    st.caption(
+        "Model return = conviction-weighted paper return had you taken every BUY signal "
+        "and held for the horizon.  Operator return = average actual closed-trade return "
+        "from acted signals.  **Delta > 0 → your judgment adds alpha over the model.**"
+    )
+
+    try:
+        from evaluation_engine import recommendation_tracking_report
+        from transactions_store import TransactionsStore
+        from gui.decision_log import DEFAULT_LOG_PATH
+    except ImportError as exc:
+        st.caption(f"(recommendation tracking unavailable: {exc})")
+        return
+
+    horizon = st.slider(
+        "Return horizon (calendar days)",
+        min_value=5, max_value=90, value=30, step=5,
+        key="rec_tracking_horizon",
+        help="How many calendar days after the signal to measure the model's paper return.",
+    )
+
+    @st.cache_data(ttl=300)
+    def _load_tracking(h: int) -> Dict[str, Any]:
+        try:
+            store = TransactionsStore()
+            return recommendation_tracking_report(
+                log_path=DEFAULT_LOG_PATH,
+                transactions_store=store,
+                horizon_days=h,
+            )
+        except Exception as exc:
+            logger.warning("_render_recommendation_tracking_section: %s", exc)
+            return {
+                "rows": [], "model_return_30d": float("nan"),
+                "operator_return_30d": float("nan"), "delta": float("nan"),
+                "n_signals": 0, "n_acted": 0, "n_completed": 0,
+                "n_with_exit": 0, "horizon_days": h,
+            }
+
+    rpt = _load_tracking(horizon)
+
+    n_sig = rpt["n_signals"]
+    if n_sig == 0:
+        st.info(
+            "No BUY signals in the decision log yet.  "
+            "Use the **Signal Decision Journal** section above to log decisions, "
+            "then return here after the horizon elapses to see the tracking report."
+        )
+        return
+
+    model_ret = rpt["model_return_30d"]
+    op_ret = rpt["operator_return_30d"]
+    delta = rpt["delta"]
+    n_completed = rpt["n_completed"]
+    n_with_exit = rpt["n_with_exit"]
+
+    def _pct(v: float) -> str:
+        return "—" if _math.isnan(v) else f"{v * 100:+.2f}%"
+
+    def _delta_label(d: float) -> str:
+        if _math.isnan(d):
+            return "— (insufficient data)"
+        if d > 0.005:
+            return f"{d * 100:+.2f}% ✅ judgment adds value"
+        if d < -0.005:
+            return f"{d * 100:+.2f}% ⚠️ judgment costs alpha"
+        return f"{d * 100:+.2f}% ≈ neutral"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "BUY Signals Logged", n_sig,
+        help=f"{n_completed} completed (horizon elapsed); {n_sig - n_completed} pending.",
+    )
+    c2.metric(
+        f"Model {horizon}d Return", _pct(model_ret),
+        help=(
+            f"Conviction-weighted {horizon}-day paper return across {n_completed} "
+            "completed BUY signals (acted + passed)."
+        ),
+    )
+    c3.metric(
+        "Operator Return", _pct(op_ret),
+        help=f"Simple-mean actual return from {n_with_exit} acted+closed trades.",
+    )
+    c4.metric("Delta (Op − Model)", _delta_label(delta))
+
+    # Narrative summary
+    if not _math.isnan(model_ret) and not _math.isnan(op_ret):
+        st.markdown(
+            f"> **If you'd taken every BUY signal at the published conviction-weighted "
+            f"size and held {horizon} days:** paper return = **{_pct(model_ret)}**  \n"
+            f"> **Your actual closed-trade decisions returned:** **{_pct(op_ret)}**  \n"
+            f"> **Judgment edge:** **{_delta_label(delta)}**"
+        )
+    elif n_completed == 0:
+        st.info(
+            f"No BUY signals have reached the {horizon}-day horizon yet.  "
+            "Check back once the horizon elapses for the first signals you logged."
+        )
+    elif n_with_exit == 0:
+        st.info(
+            "Model returns are ready but no acted signals have closed trades yet.  "
+            "Once linked trades are closed in the Transactions Store the operator "
+            "return will populate automatically."
+        )
+
+    # Per-signal breakdown table
+    if rpt["rows"]:
+        with st.expander(f"Per-signal breakdown ({len(rpt['rows'])} BUY signals logged)"):
+            raw_df = pd.DataFrame(rpt["rows"])
+            display_cols = [
+                "symbol", "signal_action", "conviction", "action_taken",
+                "model_return", "actual_return", "days_held", "completed",
+            ]
+            show_cols = [c for c in display_cols if c in raw_df.columns]
+            fmt = raw_df[show_cols].copy()
+            for col in ("model_return", "actual_return"):
+                if col in fmt.columns:
+                    fmt[col] = fmt[col].apply(
+                        lambda v: (
+                            f"{v * 100:+.2f}%"
+                            if isinstance(v, float) and not _math.isnan(v)
+                            else "—"
+                        )
+                    )
+            if "conviction" in fmt.columns:
+                fmt["conviction"] = fmt["conviction"].apply(
+                    lambda v: f"{v:.2f}" if isinstance(v, float) else str(v)
+                )
+            st.dataframe(fmt, use_container_width=True, hide_index=True)
+
+
+# ===========================================================================
 # Conviction Calibration — Streamlit section (consumed by Reports tab, 1.2)
 # ===========================================================================
 
@@ -1485,6 +1638,9 @@ def render_report_viewer() -> None:
 
     # ── Signal decision journal (1.3) ────────────────────────────────────────
     _render_decision_journal_section(signals)
+
+    # ── Recommendation tracking: model vs. operator (4.1) ───────────────────
+    _render_recommendation_tracking_section()
 
     # ── Brinson-Fachler attribution (interactive section) ───────────────────
     _render_brinson_fachler_section()
