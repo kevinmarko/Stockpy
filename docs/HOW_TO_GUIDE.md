@@ -296,6 +296,19 @@ Open either in any browser. The advisory report (`daily_report.html`)
   BUY/HOLD/SELL tally. Sourced from your Robinhood account snapshot
   (`cache/account_snapshot.json`); shows an "ACCOUNT DATA STALE" pill when the
   snapshot is older than 24 h. Hidden when no account data is available.
+- **Δ Since Last Run band**: at the very top of the report, immediately under
+  the portfolio summary band, the report now shows what changed compared to
+  the previous run — **new BUYs**, **action flips** (e.g. `JNJ: BUY → HOLD`),
+  **conviction moves** with `|Δ| ≥ 0.20` (tunable via
+  `SNAPSHOT_CONVICTION_DELTA_THRESHOLD` in `.env`), **holdings added/dropped**,
+  and **regime changes** (e.g. `RISK ON → RECESSION`). On the very first run
+  every BUY is treated as "new" and every held symbol as "added"; on subsequent
+  runs only material changes appear. The band is hidden entirely when no prior
+  snapshot exists or rotation failed (it never blocks the report). Powered by
+  rotated state snapshots in `output/history/state_snapshot_<UTC>.json`
+  (pruned after `SNAPSHOT_HISTORY_DAYS=30` days). Inspect any run manually:
+  `python -m scripts.snapshot_diff` (markdown) or
+  `python -m scripts.snapshot_diff --format json output/history/old.json output/history/new.json`.
 - **Macro regime + portfolio-heat cards** and a BUY/HOLD/SELL doughnut.
 - **Holdings, Action Signals & Rationale table**: per symbol — shares, average
   cost, current price, market value, signed unrealized P&L ($ and %), suggested
@@ -315,7 +328,7 @@ never fabricated). The report contains no credentials.
 
 ### State snapshot (for the dashboard)
 
-`output/state_snapshot.json` — machine-readable summary consumed by the Streamlit observability dashboard. Updated every pipeline run.
+`output/state_snapshot.json` — machine-readable summary consumed by the Streamlit observability dashboard. Updated every pipeline run. A timestamped copy is ALSO written to `output/history/state_snapshot_<UTC>.json` and pruned after `SNAPSHOT_HISTORY_DAYS` (default 30); the daily HTML report's "Δ Since Last Run" band reads the two most recent rotated copies via `scripts/snapshot_diff.py`.
 
 ### Database
 

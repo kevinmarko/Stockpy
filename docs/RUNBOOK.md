@@ -31,6 +31,8 @@ Then double-click `launch.command` again.
 
 The **Launcher tab** now exposes two distinct entry points: **▶️ Launch Pipeline** (orchestrator, broker on) and **🔄 Refresh Data (Advisory)** (`main.py`, broker-free, fastest path to refresh `output/state_snapshot.json`). A pre-launch readiness check warns about missing required env vars (e.g. `FRED_API_KEY`) *before* the subprocess starts, so a silently-degraded run cannot be missed. The tab tails BOTH the active run log AND the platform-wide structured telemetry stream (`logs/investyo.log` from `alerting.setup_logging()`) so one window covers diagnostics across both entry points. The **Reports tab** includes an interactive **Brinson-Fachler Attribution Analysis** section: edit a GICS-11 sector matrix directly or bulk-paste TSV/CSV from a spreadsheet, click *Compute attribution*, and see allocation / selection / interaction effects with per-sector breakdown and CSV downloads.
 
+The **daily HTML report** now leads with a **"Δ Since Last Run" band** (between the portfolio summary band and the macro/regime cards): new BUYs, action flips, conviction moves with `|Δ| ≥ SNAPSHOT_CONVICTION_DELTA_THRESHOLD` (default 0.20), holdings added/dropped, and regime changes. Powered by rotated state snapshots in `output/history/state_snapshot_<UTC>.json` (pruned after `SNAPSHOT_HISTORY_DAYS=30` days). To inspect the diff between any two runs directly: `python -m scripts.snapshot_diff` (or pass two file paths). The band is hidden whenever no prior rotated snapshot exists — it never blocks the report.
+
 ---
 
 ## 1. Switching from Paper to Live

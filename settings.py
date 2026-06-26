@@ -319,6 +319,31 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Snapshot rotation & Δ-band diff (scripts/snapshot_diff.py) ---
+    # Each orchestrator/advisory run writes output/state_snapshot.json AND
+    # a rotated copy under output/history/state_snapshot_<UTC>.json. The
+    # daily HTML report reads the two most-recent rotated snapshots and
+    # renders a "Δ Since Last Run" band at the top of the report so the
+    # operator sees, at a glance, which signals flipped, which holdings
+    # were added/dropped, and which conviction scores moved materially.
+    # Rotation pruning, the conviction-delta threshold for "material", and
+    # the on-disk history directory name are operator-tunable.
+    SNAPSHOT_HISTORY_DAYS: int = Field(
+        default=30,
+        description=(
+            "Rotated state-snapshot files older than this many days are "
+            "pruned from OUTPUT_DIR/history on every run. 0 disables pruning."
+        ),
+    )
+    SNAPSHOT_CONVICTION_DELTA_THRESHOLD: float = Field(
+        default=0.2,
+        description=(
+            "Per-symbol conviction (advisory_conviction) deltas with absolute "
+            "value at or above this threshold are surfaced in the Δ Since Last "
+            "Run band. Smaller moves are suppressed as noise."
+        ),
+    )
+
     # --- Dual Momentum allocator overlay ---
     USE_DUAL_MOMENTUM_OVERLAY: bool = Field(
         default=False,
