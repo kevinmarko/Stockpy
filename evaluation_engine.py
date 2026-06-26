@@ -7,9 +7,12 @@
 
 import json
 import logging
+import math
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, Any, List, Optional
 from diagnostics_and_visuals import telemetry
 
 # Configure module logger
@@ -702,6 +705,283 @@ def calibration_curve(
     result = pd.DataFrame(records)
     result["count"] = result["count"].astype(int)
     return result
+
+
+# =============================================================================
+# MODULE-LEVEL: Recommendation Tracking Report (4.1 — model vs. operator)
+# =============================================================================
+
+_DEFAULT_DECISION_LOG_PATH = Path("output/decision_log.jsonl")
+
+# Sentinel returned when no data is available (CONSTRAINT #4 — never fabricate).
+_TRACKING_EMPTY: Dict[str, Any] = {
+    "rows": [],
+    "model_return_30d": float("nan"),
+    "operator_return_30d": float("nan"),
+    "delta": float("nan"),
+    "n_signals": 0,
+    "n_acted": 0,
+    "n_completed": 0,
+    "n_with_exit": 0,
+    "horizon_days": 30,
+}
+
+
+def _price_at_or_before(bars: pd.DataFrame, target: datetime) -> float:
+    """Return the Close price at or before *target*; NaN when no bars available."""
+    if bars is None or bars.empty:
+        return float("nan")
+    ts = pd.Timestamp(target).normalize()
+    subset = bars.loc[bars.index <= ts]
+    if subset.empty:
+        return float("nan")
+    return float(subset["Close"].iloc[-1])
+
+
+def recommendation_tracking_report(
+    log_path: Optional[Path] = None,
+    transactions_store=None,
+    horizon_days: int = 30,
+    *,
+    historical_store=None,
+    _today=None,
+) -> Dict[str, Any]:
+    """Join the 1.3 decision log to 1.2 calibration data for recommendation tracking.
+
+    For every BUY / STRONG BUY signal logged in ``output/decision_log.jsonl``:
+
+    * **Model return** — paper-equivalent return at ``horizon_days``, conviction-
+      weighted, computed from ``HistoricalStore.get_bars()`` closing prices.
+    * **Actual return** — return from the linked ``TransactionsStore`` trade
+      (``action_taken="acted"`` entries only).
+
+    Insight rendered:
+    "If you'd taken every BUY at the published conviction-weighted size and held
+    for 30 days: model return = X%; actual closed-trade decisions returned Y%;
+    judgment edge = Δ%."
+
+    Parameters
+    ----------
+    log_path:
+        Path to ``output/decision_log.jsonl``.  Defaults to that path.
+    transactions_store:
+        A ``TransactionsStore`` instance.  When supplied, "acted" entries are
+        enriched with actual entry/exit prices via ``trade_id``.
+    horizon_days:
+        Calendar-day look-forward window for the model paper return.
+    historical_store:
+        Injected ``HistoricalStore`` for tests.  Real code creates one lazily.
+    _today:
+        Injectable ``datetime.date`` (for tests).
+
+    Returns
+    -------
+    dict with keys
+        rows                — ``list[dict]`` per-signal comparison
+        model_return_30d    — conviction-weighted model return (completed signals)
+        operator_return_30d — simple mean actual return (acted + closed trades)
+        delta               — operator_return_30d − model_return_30d
+        n_signals           — total BUY signals in log
+        n_acted             — signals where action_taken == "acted"
+        n_completed         — model signals where horizon has elapsed
+        n_with_exit         — actual signals with a closed trade exit
+        horizon_days        — the horizon used
+    """
+    from datetime import date
+
+    if log_path is None:
+        log_path = _DEFAULT_DECISION_LOG_PATH
+
+    result: Dict[str, Any] = {**_TRACKING_EMPTY, "horizon_days": horizon_days}
+
+    # --- Read decision log (lazy import to avoid circular dependency) -----------
+    try:
+        from gui.decision_log import read_decisions
+        entries = read_decisions(log_path)
+    except Exception as exc:
+        logger.warning("recommendation_tracking_report: cannot read decision log: %s", exc)
+        return result
+
+    # Filter for BUY-type signals (covers "BUY", "STRONG BUY", etc.)
+    buy_entries = [e for e in entries if "BUY" in (e.signal_action or "").upper()]
+    result["n_signals"] = len(buy_entries)
+    if not buy_entries:
+        return result
+
+    today = _today or date.today()
+
+    # --- Lazy-import HistoricalStore ------------------------------------------
+    if historical_store is None:
+        try:
+            from data.historical_store import HistoricalStore
+            historical_store = HistoricalStore()
+        except Exception as exc:
+            logger.warning("recommendation_tracking_report: HistoricalStore unavailable: %s", exc)
+            historical_store = None
+
+    # Per-symbol bar cache (avoid redundant fetches)
+    _bars_cache: Dict[str, pd.DataFrame] = {}
+
+    def _get_bars(sym: str) -> pd.DataFrame:
+        if sym not in _bars_cache:
+            if historical_store is None:
+                _bars_cache[sym] = pd.DataFrame()
+            else:
+                try:
+                    # 756 days ≈ 3 years — covers signals logged up to 2 years ago
+                    _bars_cache[sym] = historical_store.get_bars(sym, lookback_days=756)
+                except Exception:
+                    _bars_cache[sym] = pd.DataFrame()
+        return _bars_cache[sym]
+
+    # Per-trade cache keyed by (symbol_upper, trade_id)
+    _trade_cache: Dict[tuple, Optional[dict]] = {}
+
+    def _get_trade(sym: str, trade_id: int) -> Optional[dict]:
+        key = (sym.upper(), int(trade_id))
+        if key not in _trade_cache:
+            if transactions_store is None:
+                _trade_cache[key] = None
+            else:
+                try:
+                    th = transactions_store.get_trade_history(sym.upper())
+                    if th.empty or int(trade_id) not in th["trade_id"].values:
+                        _trade_cache[key] = None
+                    else:
+                        _trade_cache[key] = th[th["trade_id"] == int(trade_id)].iloc[0].to_dict()
+                except Exception:
+                    _trade_cache[key] = None
+        return _trade_cache[key]
+
+    rows: List[dict] = []
+    n_acted = 0
+    n_completed = 0
+    n_with_exit = 0
+    model_weighted: List[tuple] = []   # (conviction, model_return) for completed signals
+    actual_returns: List[float] = []   # actual return for acted + closed trades
+
+    for entry in buy_entries:
+        try:
+            sym = entry.symbol.upper()
+            conviction = entry.conviction if entry.conviction is not None else 1.0
+
+            # Parse signal timestamp (prefer signal_ts; fall back to operator timestamp)
+            raw_ts = entry.signal_ts or entry.timestamp
+            signal_dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).replace(tzinfo=None)
+            signal_date = signal_dt.date()
+
+            exit_date = signal_date + timedelta(days=horizon_days)
+            completed = exit_date <= today
+
+            # --- Model (paper-equivalent) prices --------------------------------
+            bars = _get_bars(sym)
+            model_entry = _price_at_or_before(bars, signal_dt)
+            model_exit = float("nan")
+            model_return = float("nan")
+
+            if completed and not math.isnan(model_entry):
+                exit_dt = datetime.combine(exit_date, datetime.min.time())
+                model_exit = _price_at_or_before(bars, exit_dt)
+                if not math.isnan(model_exit) and model_entry > 0:
+                    model_return = (model_exit - model_entry) / model_entry
+
+            # --- Actual prices (acted entries only) ------------------------------
+            actual_entry = float("nan")
+            actual_exit = float("nan")
+            actual_return = float("nan")
+            days_held: Optional[int] = None
+            trade_id = entry.trade_id
+
+            if entry.action_taken == "acted":
+                n_acted += 1
+                if trade_id is not None:
+                    trade = _get_trade(sym, trade_id)
+                    if trade is not None:
+                        ep = trade.get("entry_price")
+                        xp = trade.get("exit_price")
+                        entry_ts_raw = trade.get("entry_ts")
+                        exit_ts_raw = trade.get("exit_ts")
+
+                        if ep is not None and not math.isnan(float(ep)):
+                            actual_entry = float(ep)
+
+                        if xp is not None and not math.isnan(float(xp)):
+                            actual_exit = float(xp)
+                        elif not bars.empty:
+                            # Trade still open — use latest bar close as surrogate exit
+                            actual_exit = float(bars["Close"].iloc[-1])
+
+                        if (
+                            not math.isnan(actual_entry)
+                            and not math.isnan(actual_exit)
+                            and actual_entry > 0
+                        ):
+                            actual_return = (actual_exit - actual_entry) / actual_entry
+                            n_with_exit += 1
+                            actual_returns.append(actual_return)
+
+                        if entry_ts_raw is not None and exit_ts_raw is not None:
+                            try:
+                                et = pd.to_datetime(entry_ts_raw).tz_localize(None)
+                                xt = pd.to_datetime(exit_ts_raw).tz_localize(None)
+                                days_held = (xt - et).days
+                            except Exception:
+                                pass
+
+            if completed:
+                n_completed += 1
+                if not math.isnan(model_return):
+                    model_weighted.append((conviction, model_return))
+
+            rows.append({
+                "symbol": sym,
+                "signal_ts": raw_ts,
+                "signal_action": entry.signal_action,
+                "conviction": conviction,
+                "action_taken": entry.action_taken,
+                "model_entry_price": model_entry,
+                "model_exit_price": model_exit,
+                "model_return": model_return,
+                "actual_entry_price": actual_entry,
+                "actual_exit_price": actual_exit,
+                "actual_return": actual_return,
+                "days_held": days_held,
+                "trade_id": trade_id,
+                "completed": completed,
+            })
+
+        except Exception as exc:
+            logger.debug(
+                "recommendation_tracking_report: skipping entry %s: %s",
+                getattr(entry, "symbol", "?"), exc,
+            )
+
+    # --- Aggregate metrics -------------------------------------------------------
+    model_return_30d = float("nan")
+    if model_weighted:
+        total_w = sum(w for w, _ in model_weighted)
+        if total_w > 0:
+            model_return_30d = sum(w * r for w, r in model_weighted) / total_w
+
+    operator_return_30d = float("nan")
+    if actual_returns:
+        operator_return_30d = float(np.mean(actual_returns))
+
+    delta = float("nan")
+    if not math.isnan(model_return_30d) and not math.isnan(operator_return_30d):
+        delta = operator_return_30d - model_return_30d
+
+    return {
+        "rows": rows,
+        "model_return_30d": model_return_30d,
+        "operator_return_30d": operator_return_30d,
+        "delta": delta,
+        "n_signals": len(buy_entries),
+        "n_acted": n_acted,
+        "n_completed": n_completed,
+        "n_with_exit": n_with_exit,
+        "horizon_days": horizon_days,
+    }
 
 
 if __name__ == "__main__":
