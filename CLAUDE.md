@@ -135,7 +135,7 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 - **scripts/__init__.py** — Package marker for the `scripts/` directory.
 - **scripts/preflight_check.py** — Programmatic pre-live readiness gate. Each of 12 checks returns a `CheckResult(name, passed, reason, warning)`. Exits code **0** only when ALL checks pass. CLI: `python scripts/preflight_check.py [--json] [--skip check1 check2 ...]`. Checks: `fred_key_configured`, `alpaca_configured`, **`macro_regime_gate_enabled`** (blocking failure when `MACRO_REGIME_GATE_ENABLED=false` AND `ALPACA_PAPER=false`; warning-only in paper mode), `alpaca_paper_mode` (warning-only, not blocking), `dry_run_disabled`, `env_not_committed`, `kill_switch_inactive`, `heartbeat_fresh` (< 2 h), `db_exists`, `paper_trading_duration` (≥ 90 days — requires `PAPER_TRADING_START_DATE` in `.env`), `validation_reports` (all deployable + < 30 days old), `no_unexpected_risk_blocks` (no `minimum_validation` blocks in last 24 h). All checks catch exceptions rather than propagating them.
 - **docs/GO_LIVE_CHECKLIST.md** — Markdown go-live checklist. `python scripts/preflight_check.py` covers all automatable items; manual items are marked `(manual)`. Sections: Security, Strategy Validation, Paper-Trading Track Record, Kill Switch & Risk Gate, Alerts & Observability, Data Integrity, Capital & Sizing, Final Sign-Off.
-- **docs/RUNBOOK.md** — Operational runbook. Covers: paper→live switch procedure (pre-switch T-1 and day-of), pre-market checklist (first 5 live days), 6 incident response scenarios (reconciliation drift, kill switch bypass, broker lost, missing validation report, portfolio heat, HMM risk-off block), contacts, regular maintenance schedule, emergency shutdown procedure.
+- **docs/RUNBOOK.md** — Operational runbook (Tier 5.2 rewrite, 2026-06). Advisory-mode default is foregrounded at the top. §0 everyday startup. §1 paper→live switch (marked **⚠ N/A in advisory mode** while `ADVISORY_ONLY=true`; procedure retained for when quarantine is lifted). §1.1 ntfy push alerts. §2 daily pre-market advisory checklist. §3 incident response — **§3.1 stale account snapshot, §3.2 missing recommendation for held symbol, §3.3 calibration score dropping below threshold** (three advisory-relevant playbooks) + §3.4 validation report missing, §3.5 portfolio heat, §3.5b RH_USERNAME env bug, §3.6 HMM risk-off, §3.7 GJR-GARCH warning, §3.8–3.10 broker incidents (retained with **⚠ N/A in advisory mode** markers for completeness). §4 contacts. §5 maintenance schedule. §6 advisory pause-and-restart procedure (replaces the broker emergency-shutdown; uses the kill-switch sentinel as a pause-recommendations gate).
 - **validation/purged_cv.py** — Combinatorial Purged Cross Validation (CPCV) logic with purging and embargo support.
 - **validation/metrics.py** — Deflated Sharpe Ratio (DSR), Probability of Backtest Overfitting (PBO), and CPCV path evaluation runner.
 - **validation/harness.py** — Master Strategy Validation Harness. Evaluates walk-forward stability, CPCV path metrics, and generates Jinja2 HTML validation reports. `StrategyValidationHarness.__init__` accepts `is_options_selling: bool = False` and `stress_returns_fn: Optional[Callable[[str,str], pd.Series]] = None`; when options-selling, `run()` replays the strategy across the tail scenarios (`validation/stress_scenarios.py`), attaches them to the report, prints the stress summary at the top, and renders a stress section in the HTML. `ValidationReport` carries `is_options_selling` + `stress_test_results` and exposes `stress_gate_passed`; its `deployable` property ANDs the existing PBO/DSR/Sharpe/MaxDD gates with the stress gate (the latter only applies to options-selling strategies and fails closed when stress results are missing).
@@ -579,3 +579,31 @@ Headlessly testable (no streamlit imports). Public API:
 ### Operator notes
 - The kill-switch sentinel (`output/KILL_SWITCH`) and `MACRO_REGIME_GATE_ENABLED` flag are NOT changed by this tier. They remain in place and continue to gate `OrderManager` behaviour when ADVISORY_ONLY is lifted in the future.
 - Re-enabling broker execution is a deliberate two-step operation: (1) flip `ADVISORY_ONLY=false` in `.env`; (2) launch the orchestrator; (3) verify the preflight check now runs the broker-readiness gate. The GUI Strategy Matrix mode toggle reappears automatically once ADVISORY_ONLY is False.
+
+## Tier 5.2 — RUNBOOK.md Advisory-Platform Rewrite (2026-06)
+
+Pure docs change. No new code, no new module, no schema change.
+
+### What changed
+- `docs/RUNBOOK.md` fully rewritten for advisory-mode operation (see the `docs/RUNBOOK.md` entry in the Architecture section above for the full table of contents).
+- `docs/HOW_TO_GUIDE.md` updated: §11 advisory caveat, §13 preflight table updated to show auto-skip under `ADVISORY_ONLY=true`, §15 kill-switch repurposed as pause-recommendations gate, new **Advisory-Only Mode** section added before the Strategy Matrix tab section.
+
+### Incident playbooks added (§3.1–3.3 of RUNBOOK.md)
+1. **Stale account snapshot** — `python3 main.py --refresh-account`, root-causes table, held-symbol safety rule.
+2. **Missing recommendation for held symbol** — Dead-Letter Queue workflow, stage/cause/fix table, EQUITY_ONLY escalation.
+3. **Calibration score dropping below threshold** — `evaluation_engine.calibration_curve()` diagnostic, MAE severity table (< 0.10 monitor / 0.10–0.15 harness re-run / > 0.15 disable module), minimum 30-trade data requirement.
+
+### Advisory pause procedure (§6 of RUNBOOK.md)
+The kill-switch sentinel (`output/KILL_SWITCH`) repurposes in advisory mode as a pause-recommendations gate. `main.run_once()` already checks `GlobalKillSwitch.is_active()` and logs "advisory paused by kill-switch sentinel" when the file exists — this is enforced by **Tier 5.1** code, not docs. The runbook documents the operator flow:
+
+```bash
+python -m execution.kill_switch --activate --reason "advisory pause — investigating anomaly"
+# Expected next run: INFO — advisory paused by kill-switch sentinel; skipping evaluation cycle
+python -m execution.kill_switch --deactivate
+```
+
+### Gravity step
+No Gravity step needed — this is a docs-only change. No new functions, no new schema, no audit criteria were added.
+
+### No new env vars / dependencies
+This task introduced no new environment variables and no new Python dependencies.
