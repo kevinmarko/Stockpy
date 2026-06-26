@@ -1180,3 +1180,152 @@ The project ships with **`settings.ADVISORY_ONLY=true`** as the default. In this
 - Preflight: a new `advisory_only_active` row at position #2; the four broker-dependent rows (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`, `paper_trading_duration`) show as PASS with reason `"(skipped: ADVISORY_ONLY=True — broker check not applicable)"`.
 
 **To re-enable broker execution:** set `ADVISORY_ONLY=false` in `.env`, then restart the orchestrator. See §1 of `docs/RUNBOOK.md` for the paper→live switch checklist.
+
+## Symbol Watch Alerts (Tier 1.4)
+
+The platform can send proactive ntfy push notifications whenever a symbol's advisory action flips or conviction crosses a threshold — without you needing to poll the dashboard.
+
+### Prerequisites
+
+1. **ntfy app** — install on your phone from the App Store or Google Play (search "ntfy").
+2. **NTFY_TOPIC** must already be set in `.env` (see §14 of this guide for the one-time setup). Watch alerts piggyback on the same topic; no second subscription is needed.
+
+### How it works
+
+At the end of every `run_once()` cycle, `watch_engine.py`:
+1. Loads rules from `watch_rules.yaml` (project root).
+2. Loads the previous run's state from `output/watch_state.json`.
+3. Compares the current advisory output against the previous state.
+4. Fires alerts for any matched rules.
+5. Saves updated state atomically for the next run.
+
+### Rule schema (`watch_rules.yaml`)
+
+```yaml
+rules:
+  - symbol: "*"          # "*" = all symbols in the current universe
+    alert_on: conviction_above
+    threshold: 0.85      # [0.0 – 1.0]  required for conviction_above / conviction_below
+    priority: high       # high | default | low  (maps to ntfy X-Priority header)
+    label: "High conviction"   # optional free-text label in the notification
+
+  - symbol: "AAPL"
+    alert_on: action_change
+    priority: default
+```
+
+**`alert_on` values:**
+| Value | Fires when… |
+|---|---|
+| `action_change` | Action flips (e.g. HOLD→BUY, BUY→SELL). **Never fires on the very first run** (no prior state to compare). |
+| `conviction_above` | Conviction rises to ≥ threshold for the first time. Stays silent while the condition persists. Resets when conviction drops back below threshold. |
+| `conviction_below` | Mirror of `conviction_above` — fires on the first run where conviction falls below threshold. |
+
+### Environment variables
+
+| Variable | Default | Notes |
+|---|---|---|
+| `WATCH_RULES_FILE` | `watch_rules.yaml` | Path to the YAML rule file. Relative paths are resolved from the working directory where `main.py` is launched. |
+| `NTFY_DASHBOARD_URL` | *(empty)* | Optional URL appended to every alert body (e.g. `http://localhost:8501`). Tap the notification to open the GUI directly. |
+
+### Adding or editing rules
+
+1. Open `watch_rules.yaml` in any text editor.
+2. Add, remove, or modify `rules` entries.
+3. The changes take effect on the **next** `run_once()` cycle — no restart needed.
+
+### Resetting alert state
+
+Conviction-above/below alerts use edge-triggering to avoid notification spam. If you want an alert to fire again immediately (e.g. after adjusting the threshold), delete `output/watch_state.json`. The next run treats all symbols as first-run and re-evaluates from scratch.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| No alerts ever fire | `NTFY_TOPIC` is unset or empty | Set `NTFY_TOPIC=your-topic` in `.env` |
+| Rule in YAML but no alert | `alert_on` value not recognised, or threshold out of `[0, 1]` | Check `logs/investyo.log` for a WARNING "Skipping rule…" line |
+| `conviction_above` never re-fires | Edge suppression is working as intended | Delete `output/watch_state.json` to reset |
+| Stale symbol keeps alerting | Symbol was removed from universe but `watch_state.json` still has its entry | Automatic: state is pruned to the current universe each run; wait one cycle |
+
+---
+
+## Verbose Advisory Rationale (Tier 1.5)
+
+By default the per-symbol rationale is a single terse paragraph suitable for dashboards and phone notifications. Set `RATIONALE_VERBOSITY=verbose` in `.env` to unlock a four-section institutional-grade narrative.
+
+### Prerequisites
+- `.env` must exist (copy from `.env.example`).
+- No additional dependencies.
+
+### How it works
+Every time `run_once()` evaluates a symbol it calls `engine.advisory.evaluate()`. When `RATIONALE_VERBOSITY=verbose`:
+
+1. `evaluate()` pre-computes win-rate data from `TransactionsStore` (same database used by Kelly sizing).
+2. It also pulls first-line `__doc__` strings from all signal modules that are active in the current macro regime.
+3. Both data blobs are passed to `_build_rationale()` which appends four labelled sections after the standard paragraph.
+
+### The four verbose sections
+
+| Label | What it shows |
+|---|---|
+| **[A] Regime context** | HMM probability level and FRED macro snapshot (VIX, Sahm Rule, yield-curve spread) so you immediately understand whether macro filters are active or bypassed. |
+| **[B] Calibration** | Strategy win-rate and Kelly edge estimate from closed trades, so conviction is grounded in a real track record rather than a single signal. Falls back gracefully when fewer than 30 trades exist. |
+| **[C] Invalidation** | Explicit "flip points" that would void the current recommendation: RSI reversal levels, score breakdowns, VIX/Sahm macro gate tripwires, sector-veto conditions, and SMA-200 trend break. |
+| **[D] Theory notes** | First-line docstring of each regime-active signal module, so an analyst can understand the theoretical basis without reading source code. |
+
+### Enabling verbose mode
+
+```bash
+# In .env
+RATIONALE_VERBOSITY=verbose
+```
+
+Then restart the platform (`.env` is loaded at entry-point startup):
+
+```bash
+python3 main.py         # advisory orchestrator (fastest refresh)
+# or
+python3 main_orchestrator.py  # full async pipeline
+```
+
+The `rationale` field in the HTML report and Google Sheet will now show the extended narrative.
+
+### Switching back to standard mode
+
+```bash
+# In .env
+RATIONALE_VERBOSITY=standard   # or just remove the line; 'standard' is the default
+```
+
+### Example verbose rationale
+
+```
+AAPL: Accumulate a new position. The multi-signal composite score is 72/100
+(moderately bullish; regime: RISK ON); the 30-day blended forecast implies
+5.0% upside (target $105.00 vs current $100.00); Aroon oscillator (72) indicates
+a strong uptrend. (Raw strategy signal: BUY.)
+
+[A] Regime context: RISK ON — HMM strongly confirms risk-on (p=0.82).
+VIX=18.4, Sahm Rule=0.10, 10y-2y spread=+0.32.
+[B] Calibration: This multi-signal setup has shown a 64% win rate over 169 closed
+trades (payoff ratio 1.8:1; Kelly edge 0.45 — positive — edge exists).
+[C] Invalidation: score drop below 35 converts signal to RISK REDUCE; RSI rising
+above 35 (currently 22) voids the oversold entry; VIX > 30 or Sahm Rule ≥ 0.5
+applies a −25pt macro penalty; close below SMA-200 ($95.00) invalidates the
+uptrend filter.
+[D] Indicator notes: Aroon Trend: Aroon Oscillator chop-filtering for trend
+detection; Macd Momentum: MACD Bullish/Bearish crossover scoring; Timeseries
+Momentum: Moskowitz/Ooi/Pedersen time-series momentum.
+```
+
+### Compliance and audit use
+
+The `[A]–[D]` markers are stable labels — compliance reviewers can cite "section [C] invalidation thresholds" without parsing the full text. The verbose rationale is entirely data-driven; no new thresholds are hard-coded (all flip points reference the `CONFIG` dict in `engine/advisory.py`).
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| No verbose sections even after setting `RATIONALE_VERBOSITY=verbose` | `.env` was not reloaded | Restart `main.py` / `main_orchestrator.py` — settings are loaded once at startup. |
+| `[B]` shows "Insufficient closed-trade history" | Fewer than 30 closed trades in `quant_platform.db` | Expected on fresh installations. Run for several weeks to accumulate trade history. |
+| `[D]` section absent | All signal modules filtered out by `is_active_in_regime()` (e.g. RECESSION regime) | Expected in extreme macro regimes where most signals are suppressed. Check the `[A]` section for the regime name. |

@@ -4302,6 +4302,10 @@ class GravityAIAuditor:
         self.run_advisory_only_audit()
         # Tier 5.3 — Advisory pause gate + macro-triggered gating
         self.run_advisory_pause_gate_audit()
+        # Tier 1.4 — Symbol Watch with Threshold Alerts
+        self.run_watch_alerts_audit()
+        # Tier 1.5 — Plain-English "Why" for Every Recommendation (Expanded)
+        self.run_rationale_verbosity_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -7980,6 +7984,484 @@ class GravityAIAuditor:
             _logging.getLogger(__name__).warning(
                 "Failed to write gravity_verification_report.json: %s", exc
             )
+
+    def run_watch_alerts_audit(self) -> None:
+        """Step 56 — Symbol Watch with Threshold Alerts audit (Tier 1.4).
+
+        Background
+        ----------
+        ``watch_engine.py`` evaluates ``watch_rules.yaml`` rules against the
+        advisory pipeline output at the end of every ``run_once()`` cycle and
+        dispatches ntfy push notifications for matched rules.
+
+        Three alert types are supported:
+        * ``action_change``   — fires when the advisory action flips (HOLD→BUY etc.)
+        * ``conviction_above`` — edge-triggered: fires once on first run where
+          conviction ≥ threshold; silent while condition persists.
+        * ``conviction_below`` — mirror edge-trigger for falling conviction.
+
+        No-lookahead invariant
+        ----------------------
+        ``evaluate_watch_rules`` must compare ONLY:
+        * ``prev_state`` (data from the END of the previous run), and
+        * ``recommendations`` (advisory output from the JUST-COMPLETED run).
+        It must NOT call any market-data provider, forecasting engine, or any
+        function that reads future-dated data.
+
+        Checks
+        ------
+        1.  ``watch_engine`` module is importable.
+        2.  ``WatchRule`` and ``WatchAlert`` are frozen dataclasses with the
+            required fields.
+        3.  ``SymbolWatchState`` serialises/deserialises via to_dict/from_dict.
+        4.  ``load_watch_rules`` returns [] for a missing file (never raises).
+        5.  ``load_watch_rules`` returns [] for malformed YAML (never raises).
+        6.  ``load_watch_rules`` parses a valid ``conviction_above`` rule
+            including threshold and priority.
+        7.  ``load_watch_state`` returns {} for a missing file (never raises).
+        8.  ``evaluate_watch_rules`` fires an ``action_change`` alert on HOLD→BUY.
+        9.  ``evaluate_watch_rules`` edge-trigger: ``conviction_above`` fires on
+            first breach (alerted_above=False → True) but NOT on second run
+            (alerted_above=True → still True).
+        10. ``evaluate_watch_rules`` does NOT invoke any market-data fetching
+            (no-lookahead structural check via monkeypatching get_provider).
+        11. ``settings.WATCH_RULES_FILE`` exists with a default of
+            ``"watch_rules.yaml"``.
+        12. ``main.py`` source references ``watch_engine``, ``evaluate_watch_rules``,
+            and ``save_watch_state``.
+        13. ``watch_rules.yaml`` exists at the project root.
+        14. ``tests/test_watch_alerts.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_56_watch_alerts_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            # ── Check 1: module importable ────────────────────────────────────
+            import importlib
+            wmod = importlib.import_module("watch_engine")
+            audit["checks"].append({
+                "check": "watch_engine module is importable",
+                "passed": True,
+            })
+
+            # ── Check 2: frozen dataclasses with required fields ──────────────
+            WatchRule = wmod.WatchRule
+            WatchAlert = wmod.WatchAlert
+            _r_fields = {"symbol", "alert_on", "threshold", "priority", "label"}
+            _a_fields = {"symbol", "rule_type", "priority", "title", "message", "trigger_detail"}
+            rule_ok = (
+                hasattr(WatchRule, "__dataclass_fields__")
+                and _r_fields.issubset(WatchRule.__dataclass_fields__)
+            )
+            alert_ok = (
+                hasattr(WatchAlert, "__dataclass_fields__")
+                and _a_fields.issubset(WatchAlert.__dataclass_fields__)
+            )
+            # Verify frozen (attempt mutation raises)
+            try:
+                _tmp_r = WatchRule(symbol="X", alert_on="action_change")
+                _tmp_r.symbol = "Y"  # type: ignore[misc]
+                rule_frozen = False
+            except (AttributeError, TypeError):
+                rule_frozen = True
+            dc_pass = rule_ok and alert_ok and rule_frozen
+            if not dc_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "WatchRule and WatchAlert are frozen dataclasses with required fields",
+                "passed": dc_pass,
+                "detail": f"rule_fields_ok={rule_ok} alert_fields_ok={alert_ok} rule_frozen={rule_frozen}",
+            })
+
+            # ── Check 3: SymbolWatchState round-trip ──────────────────────────
+            SWS = wmod.SymbolWatchState
+            _s = SWS(
+                action="BUY",
+                conviction=0.75,
+                alerted_conviction_above={"0.85": False},
+                alerted_conviction_below={},
+                timestamp="2026-06-26T10:00:00+00:00",
+            )
+            _d = _s.to_dict()
+            _s2 = SWS.from_dict(_d)
+            rt_pass = _s2.action == "BUY" and abs(_s2.conviction - 0.75) < 1e-6
+            if not rt_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "SymbolWatchState.to_dict / from_dict round-trip",
+                "passed": rt_pass,
+            })
+
+            # ── Check 4: load_watch_rules missing file → [] ───────────────────
+            import tempfile, os as _os
+            _no_rules = wmod.load_watch_rules(_os.path.join(tempfile.gettempdir(), "no_such_file_gravity.yaml"))
+            miss_pass = _no_rules == []
+            if not miss_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "load_watch_rules returns [] for missing file",
+                "passed": miss_pass,
+            })
+
+            # ── Check 5: load_watch_rules malformed YAML → [] ────────────────
+            import tempfile as _tf
+            with _tf.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as _tmp:
+                _tmp.write("{broken yaml: [\n")
+                _tmp_path = _tmp.name
+            try:
+                _bad_rules = wmod.load_watch_rules(_tmp_path)
+                bad_pass = _bad_rules == []
+            finally:
+                _os.unlink(_tmp_path)
+            if not bad_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "load_watch_rules returns [] for malformed YAML",
+                "passed": bad_pass,
+            })
+
+            # ── Check 6: valid conviction_above rule parsed ───────────────────
+            import textwrap as _tw
+            with _tf.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as _tmp:
+                _tmp.write(_tw.dedent("""\
+                    rules:
+                      - symbol: "*"
+                        alert_on: conviction_above
+                        threshold: 0.85
+                        priority: high
+                        label: Siren
+                """))
+                _valid_path = _tmp.name
+            try:
+                _valid_rules = wmod.load_watch_rules(_valid_path)
+                valid_parse_pass = (
+                    len(_valid_rules) == 1
+                    and _valid_rules[0].symbol == "*"
+                    and _valid_rules[0].alert_on == "conviction_above"
+                    and abs(_valid_rules[0].threshold - 0.85) < 1e-6
+                    and _valid_rules[0].priority == "high"
+                )
+            finally:
+                _os.unlink(_valid_path)
+            if not valid_parse_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "load_watch_rules parses a valid conviction_above rule",
+                "passed": valid_parse_pass,
+            })
+
+            # ── Check 7: load_watch_state missing file → {} ───────────────────
+            from pathlib import Path as _P
+            _no_state = wmod.load_watch_state(_P(tempfile.gettempdir()) / "no_watch_state_gravity.json")
+            miss_state_pass = _no_state == {}
+            if not miss_state_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "load_watch_state returns {} for missing file",
+                "passed": miss_state_pass,
+            })
+
+            # ── Check 8: action_change fires on HOLD→BUY ─────────────────────
+            from unittest.mock import MagicMock
+            _rule_ac = WatchRule(symbol="AAPL", alert_on="action_change")
+            _prev_ac = {"AAPL": SWS(action="HOLD", conviction=0.5)}
+            _rec_ac = MagicMock()
+            _rec_ac.symbol = "AAPL"
+            _rec_ac.action = "BUY"
+            _rec_ac.conviction = 0.80
+            _rec_ac.suggested_position_pct = 0.04
+            _rec_ac.rationale = "Strong signal."
+            _alerts_ac, _ = wmod.evaluate_watch_rules([_rule_ac], [_rec_ac], _prev_ac)
+            ac_pass = len(_alerts_ac) == 1 and _alerts_ac[0].rule_type == "action_change"
+            if not ac_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "evaluate_watch_rules fires action_change on HOLD→BUY",
+                "passed": ac_pass,
+                "detail": f"n_alerts={len(_alerts_ac)}",
+            })
+
+            # ── Check 9: conviction_above edge-trigger (no spam) ──────────────
+            _rule_ca = WatchRule(symbol="AAPL", alert_on="conviction_above", threshold=0.85)
+            # First breach: was below (False) → fires
+            _prev_below = {"AAPL": SWS(action="BUY", conviction=0.70, alerted_conviction_above={"0.85": False})}
+            _rec_high = MagicMock()
+            _rec_high.symbol = "AAPL"
+            _rec_high.action = "BUY"
+            _rec_high.conviction = 0.90
+            _rec_high.suggested_position_pct = 0.05
+            _rec_high.rationale = ""
+            _alerts1, _state1 = wmod.evaluate_watch_rules([_rule_ca], [_rec_high], _prev_below)
+            # Second run: still above, was above (True) → no fire
+            _alerts2, _ = wmod.evaluate_watch_rules([_rule_ca], [_rec_high], _state1)
+            edge_pass = len(_alerts1) == 1 and len(_alerts2) == 0
+            if not edge_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "conviction_above edge-trigger fires once, silent while sustained",
+                "passed": edge_pass,
+                "detail": f"first_run_alerts={len(_alerts1)} second_run_alerts={len(_alerts2)}",
+            })
+
+            # ── Check 10: no-lookahead — evaluate_watch_rules never fetches market data ──
+            from unittest.mock import patch as _patch
+            _rule_nla = WatchRule(symbol="AAPL", alert_on="action_change")
+            _prev_nla = {"AAPL": SWS(action="HOLD", conviction=0.5)}
+            _rec_nla = MagicMock()
+            _rec_nla.symbol = "AAPL"
+            _rec_nla.action = "BUY"
+            _rec_nla.conviction = 0.80
+            _rec_nla.suggested_position_pct = 0.04
+            _rec_nla.rationale = ""
+            _no_lookahead_pass = True
+            try:
+                with _patch("data.market_data.get_provider", side_effect=RuntimeError("NO_FETCH")):
+                    _nla_alerts, _ = wmod.evaluate_watch_rules([_rule_nla], [_rec_nla], _prev_nla)
+                # Should succeed (alert fires without touching market data)
+                _no_lookahead_pass = len(_nla_alerts) == 1
+            except Exception as _exc:
+                _no_lookahead_pass = False
+                audit["checks"].append({
+                    "check": "evaluate_watch_rules does not call market-data provider (no-lookahead)",
+                    "passed": False,
+                    "detail": str(_exc),
+                })
+            else:
+                audit["checks"].append({
+                    "check": "evaluate_watch_rules does not call market-data provider (no-lookahead)",
+                    "passed": _no_lookahead_pass,
+                    "detail": f"alert_fired={len(_nla_alerts) == 1}",
+                })
+            if not _no_lookahead_pass:
+                all_pass = False
+
+            # ── Check 11: settings.WATCH_RULES_FILE ──────────────────────────
+            from settings import settings as _sett
+            wr_file_pass = (
+                hasattr(_sett, "WATCH_RULES_FILE")
+                and isinstance(_sett.WATCH_RULES_FILE, str)
+                and "watch_rules" in _sett.WATCH_RULES_FILE
+            )
+            if not wr_file_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "settings.WATCH_RULES_FILE exists and defaults to watch_rules.yaml path",
+                "passed": wr_file_pass,
+                "detail": getattr(_sett, "WATCH_RULES_FILE", "MISSING"),
+            })
+
+            # ── Check 12: main.py references watch_engine ─────────────────────
+            _main_src = _P("main.py").read_text(encoding="utf-8")
+            _main_watch_pass = (
+                "watch_engine" in _main_src
+                and "evaluate_watch_rules" in _main_src
+                and "save_watch_state" in _main_src
+            )
+            if not _main_watch_pass:
+                all_pass = False
+            audit["checks"].append({
+                "check": "main.py references watch_engine, evaluate_watch_rules, save_watch_state",
+                "passed": _main_watch_pass,
+            })
+
+            # ── Check 13: watch_rules.yaml exists at project root ─────────────
+            _yaml_exists = _P("watch_rules.yaml").exists()
+            if not _yaml_exists:
+                all_pass = False
+            audit["checks"].append({
+                "check": "watch_rules.yaml exists at project root",
+                "passed": _yaml_exists,
+            })
+
+            # ── Check 14: tests/test_watch_alerts.py exists ───────────────────
+            _test_exists = _P("tests/test_watch_alerts.py").exists()
+            if not _test_exists:
+                all_pass = False
+            audit["checks"].append({
+                "check": "tests/test_watch_alerts.py exists",
+                "passed": _test_exists,
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_56_watch_alerts_audit"] = audit
+
+    def run_rationale_verbosity_audit(self) -> None:
+        """Step 57 — Plain-English "Why" for Every Recommendation (Expanded).
+
+        Task 1.5 adds a ``RATIONALE_VERBOSITY`` setting that gates four
+        institutional-grade narrative sections behind an env-var flag.
+
+        Invariants
+        ----------
+        1.  ``settings.RATIONALE_VERBOSITY`` exists and defaults to ``"standard"``.
+        2.  ``engine.advisory.CONFIG`` contains the two new RSI invalidation-
+            level keys: ``rsi_mean_reversion_exit_level`` and
+            ``rsi_2_mean_reversion_exit_level``.
+        3.  ``_build_rationale`` signature accepts all four verbose-mode kwargs:
+            ``hmm_risk_on_probability``, ``win_rate_data``, ``active_module_docs``,
+            ``rsi_2``.
+        4.  Standard mode produces output with NO ``[A/B/C/D]`` section markers.
+        5.  Verbose mode produces output containing ``[A]``, ``[B]``, and ``[C]``
+            markers when data is present.
+        6.  HMM probability ≥ 0.70 yields "strongly confirms" in section [A].
+        7.  HMM probability < 0.30 yields "risk-off" in section [A].
+        8.  Missing ``win_rate_data`` (None) yields the calibration-fallback text
+            in section [B].
+        9.  Sector veto appears in section [C] only for vetoed sectors.
+        10. ``tests/test_rationale_verbosity.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_57_rationale_verbosity_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+        try:
+            from settings import settings as _s
+            from engine.advisory import _build_rationale, CONFIG
+
+            # 1. Setting exists with correct default
+            _has_setting = hasattr(_s, "RATIONALE_VERBOSITY") and _s.RATIONALE_VERBOSITY == "standard"
+            all_pass = all_pass and _has_setting
+            audit["checks"].append({
+                "check": "settings.RATIONALE_VERBOSITY exists and defaults to 'standard'",
+                "passed": _has_setting,
+                "detail": getattr(_s, "RATIONALE_VERBOSITY", "<missing>"),
+            })
+
+            # 2. New CONFIG keys for RSI invalidation levels
+            _rsi_keys_ok = (
+                "rsi_mean_reversion_exit_level" in CONFIG
+                and "rsi_2_mean_reversion_exit_level" in CONFIG
+            )
+            all_pass = all_pass and _rsi_keys_ok
+            audit["checks"].append({
+                "check": "CONFIG contains rsi_mean_reversion_exit_level and rsi_2_mean_reversion_exit_level",
+                "passed": _rsi_keys_ok,
+                "detail": {k: CONFIG.get(k) for k in ("rsi_mean_reversion_exit_level", "rsi_2_mean_reversion_exit_level")},
+            })
+
+            # 3. _build_rationale accepts all verbose kwargs
+            import inspect as _inspect
+            _sig = _inspect.signature(_build_rationale)
+            _verbose_params = {"hmm_risk_on_probability", "win_rate_data", "active_module_docs", "rsi_2"}
+            _sig_ok = _verbose_params.issubset(_sig.parameters.keys())
+            all_pass = all_pass and _sig_ok
+            audit["checks"].append({
+                "check": "_build_rationale signature contains all four verbose-mode parameters",
+                "passed": _sig_ok,
+                "detail": list(_sig.parameters.keys()),
+            })
+
+            # Helper: build a minimal valid kwargs dict
+            def _base_kwargs(**overrides):
+                kw = dict(
+                    symbol="TEST", action="BUY", score=70, raw_signal="BUY",
+                    macro_regime="RISK ON", forecast_price=105.0, current_price=100.0,
+                    unrealized_pl_pct=0.0, dividend_yield=0.01, dividends_received=0.0,
+                    is_holding=False, holding_override_reason="", rsi=55.0,
+                    aroon_osc=60.0, garch_vol=0.18, macro_gate_reason="",
+                )
+                kw.update(overrides)
+                return kw
+
+            # 4. Standard mode: no [A/B/C/D] markers
+            _s.RATIONALE_VERBOSITY = "standard"
+            _std = _build_rationale(**_base_kwargs())
+            _std_ok = all(m not in _std for m in ("[A]", "[B]", "[C]", "[D]"))
+            all_pass = all_pass and _std_ok
+            audit["checks"].append({
+                "check": "Standard mode produces no [A/B/C/D] section markers",
+                "passed": _std_ok,
+            })
+
+            # 5. Verbose mode: [A], [B], [C] present with data
+            _s.RATIONALE_VERBOSITY = "verbose"
+            _vrb = _build_rationale(**_base_kwargs(
+                hmm_risk_on_probability=0.82,
+                win_rate_data=(0.64, 1.8, 169),
+            ))
+            _vrb_ok = all(m in _vrb for m in ("[A]", "[B]", "[C]"))
+            all_pass = all_pass and _vrb_ok
+            audit["checks"].append({
+                "check": "Verbose mode produces [A], [B], [C] section markers",
+                "passed": _vrb_ok,
+            })
+
+            # 6. HMM >= 0.70 → "strongly confirms"
+            _hmm_high = _build_rationale(**_base_kwargs(hmm_risk_on_probability=0.82))
+            _hmm_high_ok = "strongly confirms" in _hmm_high
+            all_pass = all_pass and _hmm_high_ok
+            audit["checks"].append({
+                "check": "HMM probability ≥ 0.70 yields 'strongly confirms' in section [A]",
+                "passed": _hmm_high_ok,
+            })
+
+            # 7. HMM < 0.30 → "risk-off"
+            _hmm_low = _build_rationale(**_base_kwargs(hmm_risk_on_probability=0.20))
+            _hmm_low_ok = "risk-off" in _hmm_low
+            all_pass = all_pass and _hmm_low_ok
+            audit["checks"].append({
+                "check": "HMM probability < 0.30 yields 'risk-off' in section [A]",
+                "passed": _hmm_low_ok,
+            })
+
+            # 8. Missing win_rate_data → calibration fallback text
+            _no_wr = _build_rationale(**_base_kwargs(win_rate_data=None))
+            _no_wr_ok = "Insufficient" in _no_wr or "< 30" in _no_wr
+            all_pass = all_pass and _no_wr_ok
+            audit["checks"].append({
+                "check": "win_rate_data=None produces calibration-fallback text in section [B]",
+                "passed": _no_wr_ok,
+            })
+
+            # 9. Sector veto in [C] for Financials; absent for Technology
+            _fin = _build_rationale(**_base_kwargs(sector="Financials"))
+            _tech = _build_rationale(**_base_kwargs(sector="Technology"))
+            _veto_ok = ("OAS" in _fin or "yield curve inversion" in _fin) and "yield curve inversion" not in _tech
+            all_pass = all_pass and _veto_ok
+            audit["checks"].append({
+                "check": "Sector veto appears for Financials but not Technology in section [C]",
+                "passed": _veto_ok,
+            })
+
+            # 10. Test file exists
+            import os as _os
+            _test_exists = _os.path.exists("tests/test_rationale_verbosity.py")
+            all_pass = all_pass and _test_exists
+            audit["checks"].append({
+                "check": "tests/test_rationale_verbosity.py exists",
+                "passed": _test_exists,
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+        finally:
+            # Restore the setting to its default so subsequent audit steps are
+            # unaffected by the verbose-mode writes above.
+            try:
+                from settings import settings as _s2
+                _s2.RATIONALE_VERBOSITY = "standard"
+            except Exception:
+                pass
+
+        self.report["step_57_rationale_verbosity_audit"] = audit
 
     def run_robinhood_watchlist_noise_audit(self) -> None:
         """Step 39 — Robinhood watchlist 400-noise suppression audit.

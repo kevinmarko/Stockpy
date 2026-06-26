@@ -660,3 +660,101 @@ python -m execution.kill_switch --deactivate
 
 ### No new env vars / dependencies
 This task introduced no new environment variables and no new Python dependencies.
+
+## Tier 1.4 — Symbol Watch with Threshold Alerts (2026-06)
+
+### Overview
+Fills the critical visibility gap between manual system runs: `watch_engine.py` evaluates `watch_rules.yaml` rule definitions against advisory pipeline output at the end of every `run_once()` cycle, then dispatches ntfy push notifications for matched rules. Operators who monitor the platform via their phone now receive proactive, intraday alerts without polling the dashboard.
+
+### New module: `watch_engine.py`
+Headlessly testable (no Streamlit imports). Public API:
+- `WatchRule` — frozen dataclass: `symbol`, `alert_on`, `threshold`, `priority`, `label`.
+- `WatchAlert` — frozen dataclass: `symbol`, `rule_type`, `priority`, `title`, `message`, `trigger_detail`.
+- `SymbolWatchState` — mutable dataclass: `action`, `conviction`, `alerted_conviction_above`, `alerted_conviction_below`, `timestamp`. Serialises via `.to_dict()` / `.from_dict()`.
+- `load_watch_rules(path) -> list[WatchRule]` — parses YAML; returns `[]` on missing/malformed file, never raises. Validates symbol, alert_on, threshold, priority; skips invalid rules with WARNING.
+- `load_watch_state(path) -> dict[str, SymbolWatchState]` — reads `output/watch_state.json`; returns `{}` on missing/corrupt, never raises (CONSTRAINT #6).
+- `save_watch_state(state, path) -> None` — atomic write-then-rename; swallows failures (CONSTRAINT #6).
+- `evaluate_watch_rules(rules, recommendations, prev_state) -> (list[WatchAlert], dict[str, SymbolWatchState])` — pure comparison logic; never fetches market data (no-lookahead invariant).
+- `dispatch_watch_alerts(alerts, *, dashboard_url=None) -> None` — calls `alerting.notify()` per alert; per-alert try/except; silent when `NTFY_TOPIC` is unset.
+
+### Alert types
+| `alert_on` | Semantics |
+|---|---|
+| `action_change` | Fires once per action flip (HOLD→BUY, BUY→SELL, etc.). Never fires on first run (no prior action). |
+| `conviction_above` | Edge-triggered: fires on the first run where `conviction ≥ threshold`. Silent while condition persists. Resets when conviction drops back below threshold. |
+| `conviction_below` | Mirror edge-trigger: fires on the first run where `conviction < threshold`. |
+
+### No-lookahead invariant (Gravity Step 56)
+`evaluate_watch_rules` compares `prev_state` (data from the END of the previous run) against `recommendations` (advisory output from the just-completed run). No market-data fetching, forecasting, or model inference occurs inside this function. Verified by Gravity step 56 via monkeypatching `data.market_data.get_provider`.
+
+### State file
+`output/watch_state.json` — per-symbol JSON record written atomically. Tracks `action`, `conviction`, `alerted_conviction_above` (dict of threshold → bool), `alerted_conviction_below`, and `timestamp`. Missing file = first run (empty state). Symbols that leave the universe are dropped from state on the next run so stale state cannot produce phantom alerts on re-entry.
+
+### watch_rules.yaml
+Default config file at the project root. Two active rules out of the box:
+1. Universe-wide conviction siren (`"*"`, `conviction_above`, threshold 0.85, high priority).
+2. Universe-wide action-change tracker (`"*"`, `action_change`, default priority).
+
+### Integration in `main.py`
+Added inside `run_once()`, immediately after the advisory evaluation loop completes (before Sheet/HTML sinks), wrapped in an outer try/except (CONSTRAINT #6). Always saves state even on quiet runs.
+
+### New settings (`settings.py`)
+- `WATCH_RULES_FILE: str = "watch_rules.yaml"` — path to the YAML rule file.
+
+### New env vars
+- `WATCH_RULES_FILE` — override the rule-file path (default `"watch_rules.yaml"`).
+- `NTFY_DASHBOARD_URL` — optional deep-link URL appended to every watch notification body (e.g. `http://localhost:8501`). Read directly from `os.environ` in `dispatch_watch_alerts`, consistent with the `NTFY_TOPIC` pattern in `alerting.py`.
+
+### Test surface
+- **`tests/test_watch_alerts.py`** (60 tests, 7 classes): `TestWatchRule` (frozen, defaults, all fields); `TestWatchAlert` (frozen, fields); `TestSymbolWatchState` (round-trip, from_dict defaults); `TestLoadWatchRules` (missing/malformed/empty/valid/threshold-missing/unknown-alert_on/out-of-range/invalid-priority/uppercase-normalised/multiple/bad-rule-doesnt-block); `TestLoadSaveWatchState` (missing/corrupt/non-object/round-trip/atomic/uppercase-on-load/parent-dir-creation); `TestEvaluateWatchRules` (no-rules/no-recs/action_change-flip/same-action/first-run/conviction-rising-edge/no-spam/reset+refire/first-run-above/first-run-below/conviction-below-falling/no-spam/reset+refire/wildcard-all/wildcard-skip-absent/specific-symbol/bad-rule-resilience/PARTIAL-quality/no-lookahead-structural/multi-rule-independent); `TestDispatchWatchAlerts` (empty-noop/one-per-alert/title/dashboard-url/failure-doesnt-raise/priority); `TestMainPyIntegration` (source guards + settings field + yaml exists).
+
+### Gravity step 56 (`run_watch_alerts_audit`)
+14 checks: module importable; frozen dataclasses with required fields; SymbolWatchState round-trip; `load_watch_rules` → `[]` for missing/malformed; valid conviction_above rule parsed; `load_watch_state` → `{}` for missing; action_change fires on HOLD→BUY; conviction_above edge-trigger (no spam); no-lookahead structural verify (market-data monkeypatched); `settings.WATCH_RULES_FILE`; `main.py` source guards; `watch_rules.yaml` exists; `tests/test_watch_alerts.py` exists.
+
+## Tier 1.5 — Plain-English "Why" for Every Recommendation (Expanded) (2026-06)
+
+### Overview
+Extends `engine/advisory._build_rationale()` with four institutional-grade narrative sections, gated behind a new `RATIONALE_VERBOSITY` env var. Standard mode (`"standard"`, the default) is a single terse paragraph — unchanged from pre-1.5 behavior. Verbose mode (`"verbose"`) appends four labelled sections immediately after the standard paragraph, separated by a blank line.
+
+### `RATIONALE_VERBOSITY` setting (`settings.py`)
+```
+RATIONALE_VERBOSITY: str = Field(default="standard", ...)
+```
+Valid values: `"standard"` (default) | `"verbose"`. Any other value is treated as standard.
+
+### `engine/advisory.py` changes
+**`_build_rationale()` extended signature** — all new params are keyword-only with safe defaults so existing call sites are unaffected:
+- `hmm_risk_on_probability: Optional[float] = None` — from `macro_dto.hmm_risk_on_probability`
+- `vix_value: float = 18.0`, `sahm_rule_indicator: float = 0.0`, `yield_curve: float = 0.50` — macro snapshot for section [A]
+- `win_rate_data: Optional[tuple] = None` — `(p, b, n_trades)` pre-computed in `evaluate()` from `TransactionsStore.closed_trades_df()`
+- `active_module_docs: Optional[Dict[str, str]] = None` — `{module_name: first_doc_line}` pre-fetched from `signals.registry.global_registry`
+- `strategy_explainer_notes: str = ""` — from `strategy_out.get("Strategy Explainer Notes", "")`
+- `rsi_2: Optional[float] = None`, `sma_200: Optional[float] = None`, `sector: str = ""` — for section [C] invalidation conditions
+
+**Two new CONFIG entries** (prevent literal magic numbers in logic):
+- `"rsi_mean_reversion_exit_level": 35` — RSI(14) flip point for oversold mean-reversion entry
+- `"rsi_2_mean_reversion_exit_level": 35` — RSI(2) flip point for ultra-short mean-reversion entry
+
+**`evaluate()` Step 10b** — verbose pre-computation block (inside `if settings.RATIONALE_VERBOSITY == "verbose":`):
+1. Calls `estimate_win_rate_and_payoff(closed_trades_df, lookback_trades=100)` on the already-bound `transactions_store`. Sets `_verbose_win_rate = (p, b, n)` when not NaN, else `None`.
+2. Lazy-imports `signals.registry.global_registry`, filters by `module.is_active_in_regime(macro_dto)`, extracts first non-boilerplate line of each module's `type(mod).__doc__` into `_verbose_module_docs`. Both steps wrapped in bare `except Exception: pass` per CONSTRAINT #6.
+
+**Four verbose sections (emitted only when `settings.RATIONALE_VERBOSITY == "verbose"`):**
+
+| Label | Content |
+|---|---|
+| `[A] Regime context` | `{macro_regime} — HMM {confirms/uncertain/risk-off pressure} (p=X.XX). VIX=X, Sahm Rule=X, 10y-2y spread=±X.` |
+| `[B] Calibration` | `{p*100:.0f}% win rate over N closed trades (payoff X:1; Kelly edge X — positive/negative).` OR fallback when win_rate_data is None. |
+| `[C] Invalidation` | Score flip point, RSI/RSI(2) mean-reversion voids (conditional), VIX/Sahm macro gate tripwires (always), sector-veto conditions (when applicable), SMA-200 trend break (when provided). |
+| `[D] Indicator notes` | First-line `__doc__` of ≤4 regime-active signal modules from `global_registry`, title-cased. Omitted entirely when `active_module_docs` is empty. |
+
+**No-lookahead invariant**: `_build_rationale()` contains no I/O. All data (`win_rate_data`, `active_module_docs`, `strategy_explainer_notes`) is gathered by `evaluate()` and passed as arguments.
+
+### New env var
+- `RATIONALE_VERBOSITY` — `"standard"` (default) | `"verbose"`. Set in `.env`.
+
+### Test surface
+- **`tests/test_rationale_verbosity.py`** (49 tests, 7 classes): `TestSettingsField` (field exists, default "standard"); `TestStandardMode` (no verbose markers, single paragraph, backward-compat for score/regime/macro-gate/dividend text); `TestVerboseModePresence` (standard para still present, [A]/[B]/[C] markers, double-newline separator); `TestRegimeContextSection` (high/mid/low/None HMM → correct prose, VIX and Sahm appear); `TestCalibrationSection` (win% / trade count / payoff ratio / positive/negative edge label / None fallback); `TestInvalidationSection` (BUY score flip, SELL recovery, VIX/Sahm always present, RSI oversold void conditional, RSI-2 void conditional, sector veto for Financials not Technology, SMA-200 void); `TestIndicatorTheorySection` ([D] present with docs, absent with empty/None, title-casing, doc text appears, cap at 4 modules); `TestGracefulDegradation` (all-None does not raise, extreme values don't crash, unknown verbosity string falls back to standard); `TestEndToEndIntegration` (5 end-to-end tests through evaluate() with patched engines: standard no markers, verbose [A/B/C] present, HMM probability in section A, action/conviction unchanged across modes).
+
+### Gravity step 57 (`run_rationale_verbosity_audit`)
+10 checks: `settings.RATIONALE_VERBOSITY` exists and defaults to `"standard"`; CONFIG contains both RSI invalidation-level keys; `_build_rationale` signature includes all four verbose-mode kwargs; standard mode produces no [A/B/C/D] markers; verbose mode produces [A/B/C]; HMM ≥ 0.70 → "strongly confirms"; HMM < 0.30 → "risk-off"; `win_rate_data=None` → calibration fallback; sector veto for Financials but not Technology; `tests/test_rationale_verbosity.py` exists.

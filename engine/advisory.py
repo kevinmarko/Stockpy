@@ -48,6 +48,7 @@ from forecasting_engine import ForecastingEngine
 from technical_options_engine import TechnicalOptionsEngine
 from strategy_engine import StrategyEngine
 from transactions_store import TransactionsStore
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,13 @@ CONFIG: Dict[str, Any] = {
     "macro_veto_yield_curve_threshold": 0.0,
     # HY OAS above this → veto macro_veto_sectors from fresh buys.
     "macro_veto_oas_threshold": 6.0,
+
+    # ── Verbose-rationale invalidation levels (Task 1.5) ─────────────────────
+    # RSI levels used in section [C] to name mean-reversion void conditions.
+    # Kept in CONFIG so the invalidation narrative stays consistent with the
+    # signal-module parameters that produced the entry signal.
+    "rsi_mean_reversion_exit_level": 35,     # RSI(14) above this → oversold bounce gone
+    "rsi_2_mean_reversion_exit_level": 35,   # RSI(2) above this → ultra-short bounce gone
 }
 
 
@@ -663,7 +671,50 @@ def evaluate(
         )
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Step 11 — Plain-English rationale (top 2-3 drivers)
+    # Step 10b — Task 1.5: verbose-rationale pre-computation
+    # Runs only when RATIONALE_VERBOSITY=verbose; a single attribute read on
+    # the standard path makes the overhead immeasurable.
+    # All data gathered here is passed into _build_rationale() so that function
+    # remains a pure string-builder with no I/O of its own.
+    # ──────────────────────────────────────────────────────────────────────────
+    _verbose_win_rate: Optional[tuple] = None   # (p, b, n_trades)
+    _verbose_module_docs: Dict[str, str] = {}
+
+    if settings.RATIONALE_VERBOSITY == "verbose":
+        # Win-rate calibration — reuses the transactions_store already bound
+        # by _compute_kelly_sizing; pre-computing here so _build_rationale is I/O-free.
+        try:
+            _ts_v = transactions_store if transactions_store is not None else TransactionsStore()
+            _cdf = _ts_v.closed_trades_df()
+            _vp, _vb, _vn = estimate_win_rate_and_payoff(_cdf, lookback_trades=100)
+            if not (math.isnan(_vp) or math.isnan(_vb)):
+                _verbose_win_rate = (_vp, _vb, _vn)
+        except Exception:
+            pass  # CONSTRAINT #6 — calibration failure must never abort the rationale
+
+        # Active signal-module docstrings (lazy import to avoid circular imports)
+        try:
+            from signals.registry import global_registry as _gr
+            for _mn, _mod in _gr.get_all().items():
+                if not _mod.is_active_in_regime(macro_dto):
+                    continue
+                _cdoc = type(_mod).__doc__ or ""
+                for _dl in _cdoc.splitlines():
+                    _dl = _dl.strip()
+                    # Skip empty lines, the boilerplate heading, and separator lines
+                    if (
+                        _dl
+                        and "InvestYo Quant Platform" not in _dl
+                        and not set(_dl).issubset(set("=-"))
+                    ):
+                        _verbose_module_docs[_mn] = _dl
+                        break
+        except Exception:
+            pass  # CONSTRAINT #6 — docstring collection must never crash the pipeline
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 11 — Plain-English rationale (top 2-3 drivers in standard mode;
+    # four annotated verbose sections appended when RATIONALE_VERBOSITY=verbose)
     # ──────────────────────────────────────────────────────────────────────────
     rationale = _build_rationale(
         symbol=symbol,
@@ -682,6 +733,17 @@ def evaluate(
         aroon_osc=tech.get("Aroon Oscillator"),
         garch_vol=garch_vol,
         macro_gate_reason=macro_gate_reason,
+        # ── Task 1.5 verbose-rationale additions ────────────────────────────
+        hmm_risk_on_probability=macro_dto.hmm_risk_on_probability,
+        vix_value=macro_dto.vix,
+        sahm_rule_indicator=macro_dto.sahm_rule_indicator,
+        yield_curve=macro_dto.yield_curve,
+        win_rate_data=_verbose_win_rate,
+        active_module_docs=_verbose_module_docs,
+        strategy_explainer_notes=strategy_out.get("Strategy Explainer Notes", ""),
+        rsi_2=tech.get("RSI_2"),
+        sma_200=tech.get("SMA_200"),
+        sector=fund_dto.sector or "",
     )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -856,15 +918,52 @@ def _build_rationale(
     aroon_osc: Optional[float],
     garch_vol: Optional[float],
     macro_gate_reason: str = "",
+    # ── Task 1.5 — verbose-mode additions (all optional, safe defaults) ────────
+    hmm_risk_on_probability: Optional[float] = None,
+    vix_value: float = 18.0,
+    sahm_rule_indicator: float = 0.0,
+    yield_curve: float = 0.50,
+    win_rate_data: Optional[tuple] = None,      # (p, b, n_trades) or None
+    active_module_docs: Optional[Dict[str, str]] = None,
+    strategy_explainer_notes: str = "",         # from StrategyEngine (informational)
+    rsi_2: Optional[float] = None,
+    sma_200: Optional[float] = None,
+    sector: str = "",
 ) -> str:
-    """Build a one-paragraph plain-English rationale citing the top 2-3 drivers.
+    """Build a plain-English rationale for the advisory recommendation.
 
-    The rationale intentionally reads like analyst prose rather than a
-    dump of indicator values — it picks the most decision-relevant factors
-    and describes their direction and implication.  When a macro gate
-    overrode the signal, ``macro_gate_reason`` is prepended so the operator
-    understands why a bullish individual signal resulted in a HOLD.
+    Standard mode (``RATIONALE_VERBOSITY=standard``, the default):
+        One paragraph citing the top 2-3 drivers — composite score,
+        30-day forecast direction, and the most decisive holding-aware
+        condition (if the symbol is held).
+
+    Verbose mode (``RATIONALE_VERBOSITY=verbose``):
+        The standard paragraph PLUS four annotated sections:
+
+        ``[A] Regime context`` — HMM probability and FRED macro snapshot
+        so an analyst can immediately understand whether the defensive filters
+        are active or bypassed and why.
+
+        ``[B] Historical calibration`` — strategy win-rate and Kelly edge
+        estimate derived from closed trades in ``TransactionsStore``, so
+        position-sizing conviction is grounded in a track record rather than
+        a single-cycle signal.
+
+        ``[C] Signal invalidation thresholds`` — explicit "flip points" that
+        would void the current recommendation: RSI reversal levels, score
+        breakdowns, macro gate triggers, and sector-veto conditions.
+
+        ``[D] Indicator theory notes`` — first-line ``__doc__`` of each
+        active signal module pulled dynamically via ``signals.registry``,
+        providing the theoretical basis of each contributing model.
+
+    When a macro gate overrode the signal, ``macro_gate_reason`` is
+    prepended so the operator understands why a bullish individual signal
+    resulted in a HOLD before reading anything else.
     """
+    # ─────────────────────────────────────────────────────────────────────────
+    # STANDARD PARAGRAPH — identical to pre-1.5 behaviour
+    # ─────────────────────────────────────────────────────────────────────────
     drivers: list[str] = []
 
     # Driver 0 — macro gate (prepended when active so it is the first thing
@@ -915,13 +1014,17 @@ def _build_rationale(
             )
     else:
         if aroon_osc is not None:
-            trend_desc = "strong uptrend" if aroon_osc > 50 else "downtrend" if aroon_osc < -50 else "choppy/neutral trend"
+            trend_desc = (
+                "strong uptrend" if aroon_osc > 50
+                else "downtrend" if aroon_osc < -50
+                else "choppy/neutral trend"
+            )
             drivers.append(f"Aroon oscillator ({aroon_osc:.0f}) indicates a {trend_desc}")
         elif garch_vol is not None:
             vol_desc = "elevated" if garch_vol > 0.30 else "moderate" if garch_vol > 0.15 else "low"
             drivers.append(f"GARCH vol of {garch_vol * 100:.1f}% is {vol_desc}")
 
-    # Assemble
+    # Assemble the standard one-paragraph rationale
     drivers_text = "; ".join(drivers[:3])  # cap at 3 for readability
     action_phrase = {
         "BUY":  "accumulate a new position",
@@ -929,11 +1032,131 @@ def _build_rationale(
         "HOLD": "maintain existing exposure without adding capital",
     }.get(action, action)
 
-    return (
+    standard_para = (
         f"{symbol}: {action_phrase.capitalize()}. "
         f"{drivers_text.rstrip('.')}. "
         f"(Raw strategy signal: {raw_signal}.)"
     )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # VERBOSE SECTIONS (appended only when RATIONALE_VERBOSITY=verbose)
+    # Each section is labelled [A]–[D] so compliance reviewers can cite them.
+    # ─────────────────────────────────────────────────────────────────────────
+    if settings.RATIONALE_VERBOSITY != "verbose":
+        return standard_para
+
+    verbose_parts: list[str] = []
+
+    # ── [A] Regime Context ────────────────────────────────────────────────────
+    # Explains whether the HMM and rules-based regime agree and surfaces the
+    # key macro variables that drive or suppress the risk filters.
+    if hmm_risk_on_probability is not None:
+        if hmm_risk_on_probability >= 0.70:
+            hmm_desc = f"HMM strongly confirms risk-on (p={hmm_risk_on_probability:.2f})"
+        elif hmm_risk_on_probability >= 0.30:
+            hmm_desc = f"HMM is uncertain (p={hmm_risk_on_probability:.2f})"
+        else:
+            hmm_desc = (
+                f"HMM signals elevated risk-off pressure (p={hmm_risk_on_probability:.2f})"
+                f" — RISK ON classification may be fleeting"
+            )
+    else:
+        hmm_desc = "HMM regime estimate unavailable (insufficient FRED history or first run)"
+
+    verbose_parts.append(
+        f"[A] Regime context: {macro_regime} — {hmm_desc}. "
+        f"VIX={vix_value:.1f}, Sahm Rule={sahm_rule_indicator:.2f}, "
+        f"10y-2y spread={yield_curve:+.2f}."
+    )
+
+    # ── [B] Historical Calibration ────────────────────────────────────────────
+    # Grounds position sizing in the strategy's actual closed-trade track record
+    # so the operator can distinguish a high-conviction edge from a cold start.
+    if win_rate_data is not None:
+        _p, _b, _n = win_rate_data
+        _edge = _p * _b - (1.0 - _p)
+        _edge_desc = "positive — edge exists" if _edge > 0 else "negative — edge absent"
+        verbose_parts.append(
+            f"[B] Calibration: This multi-signal setup has shown a {_p * 100:.0f}% win rate "
+            f"over {_n} closed trades (payoff ratio {_b:.1f}:1; "
+            f"Kelly edge {_edge:.2f} — {_edge_desc})."
+        )
+    else:
+        verbose_parts.append(
+            "[B] Calibration: Insufficient closed-trade history (< 30 trades); "
+            "position sizing defaults to volatility targeting."
+        )
+
+    # ── [C] Signal Invalidation Thresholds ───────────────────────────────────
+    # Defines the explicit 'flip points' that would void or reverse the current
+    # recommendation — essential for compliance review and stop-loss logic.
+    _void: list[str] = []
+
+    # Score-based action flip
+    if action in ("BUY", "HOLD"):
+        _void.append(
+            f"score drop below {CONFIG['sell_score_threshold']} converts signal to RISK REDUCE"
+        )
+    else:
+        _void.append(
+            f"score recovery above {CONFIG['buy_score_threshold']} warrants re-evaluation"
+        )
+
+    # RSI mean-reversion void for oversold BUY entries
+    if rsi is not None and rsi < 30 and action == "BUY":
+        _rsi_exit = CONFIG["rsi_mean_reversion_exit_level"]
+        _void.append(
+            f"RSI rising above {_rsi_exit} (currently {rsi:.0f}) voids the oversold entry"
+        )
+
+    # RSI-2 void for ultra-short mean-reversion entries
+    if rsi_2 is not None and rsi_2 < 10 and action == "BUY":
+        _rsi2_exit = CONFIG["rsi_2_mean_reversion_exit_level"]
+        _void.append(
+            f"RSI(2) recovery above {_rsi2_exit} (currently {rsi_2:.0f}) voids the "
+            f"ultra-oversold mean-reversion entry"
+        )
+
+    # Macro soft-gate flip points (always shown — operator must know the tripwires)
+    _void.append(
+        f"VIX > {CONFIG['macro_vix_gate_threshold']:.0f} or "
+        f"Sahm Rule ≥ {CONFIG['macro_sahm_gate_threshold']:.1f} applies a "
+        f"−{CONFIG['macro_score_penalty']}pt macro penalty"
+    )
+
+    # Sector-veto flip point (only surfaced for the affected sectors)
+    _sector_lower = sector.lower()
+    _veto_lower = {s.lower() for s in CONFIG.get("macro_veto_sectors", [])}
+    if _sector_lower in _veto_lower:
+        _void.append(
+            f"yield curve inversion < 0 with HY OAS > "
+            f"{CONFIG['macro_veto_oas_threshold']:.0f}% blocks fresh BUYs "
+            f"in {sector or 'this'} sector"
+        )
+
+    # SMA-200 trend-filter break
+    if sma_200 is not None and sma_200 > 0:
+        _void.append(f"close below SMA-200 (${sma_200:.2f}) invalidates the uptrend filter")
+
+    verbose_parts.append(
+        "[C] Invalidation: " + "; ".join(_void) + "."
+    )
+
+    # ── [D] Active Indicator Theory Notes ────────────────────────────────────
+    # Dynamically pulls the first-line __doc__ of each regime-active signal
+    # module from signals.registry so the rationale is self-documenting.
+    # Capped at 4 entries to remain readable; pre-filtered in evaluate().
+    _mods = active_module_docs or {}
+    _theory_items: list[str] = []
+    for _mname, _mdoc in list(_mods.items())[:4]:
+        _display = _mname.replace("_", " ").title()
+        _theory_items.append(f"{_display}: {_mdoc}")
+    if _theory_items:
+        verbose_parts.append(
+            "[D] Indicator notes: " + "; ".join(_theory_items) + "."
+        )
+
+    return f"{standard_para}\n\n" + "\n".join(verbose_parts)
 
 
 def _derive_strategy_name(

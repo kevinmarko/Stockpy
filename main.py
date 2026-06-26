@@ -1254,6 +1254,49 @@ def main() -> None:
             _clean_notified = True
         # ─────────────────────────────────────────────────────────────────────
 
+        # ── Symbol watch alerts (Tier 1.4) — non-fatal ───────────────────────────
+        # Evaluated immediately after run_once() so alerts reflect the freshest
+        # signal output.  State is loaded from the PREVIOUS run, compared
+        # against the CURRENT recommendations, and saved AFTER dispatch.
+        # This is the shift-adjusted, no-lookahead contract: no market data
+        # is re-fetched inside watch_engine; it only compares already-computed
+        # advisory outputs.
+        try:
+            from watch_engine import (
+                dispatch_watch_alerts,
+                evaluate_watch_rules,
+                load_watch_rules,
+                load_watch_state,
+                save_watch_state,
+            )
+
+            _watch_rules = load_watch_rules(settings.WATCH_RULES_FILE)
+            _watch_state_path = settings.OUTPUT_DIR / "watch_state.json"
+            _prev_watch_state = load_watch_state(_watch_state_path)
+            _watch_alerts, _new_watch_state = evaluate_watch_rules(
+                _watch_rules,
+                result.recommendations,
+                _prev_watch_state,
+            )
+            dispatch_watch_alerts(
+                _watch_alerts,
+                dashboard_url=os.environ.get("NTFY_DASHBOARD_URL"),
+            )
+            # Always save — keeps edge-trigger state current even on quiet runs.
+            save_watch_state(_new_watch_state, _watch_state_path)
+            if _watch_alerts:
+                logger.info(
+                    "Symbol watch: %d alert(s) dispatched across %d rule(s).",
+                    len(_watch_alerts),
+                    len(_watch_rules),
+                )
+        except Exception as _watch_exc:
+            logger.warning(
+                "Symbol watch alert evaluation failed (non-critical): %s",
+                _watch_exc,
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
         market = get_provider()
         _write_to_sheet(result, market=market)
 
