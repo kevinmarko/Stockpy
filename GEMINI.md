@@ -1,5 +1,13 @@
 Project Context: Stock Dashboard Py (InvestYo Quant Platform)
 
+## Key documentation files (Tier 6 — added 2026-06-26)
+| File | Purpose |
+|------|---------|
+| `docs/architecture.md` | Mermaid data-flow diagram: Engines → DTOs → Signals → Strategy → Advisory → Broker [quarantined] |
+| `docs/signals/README.md` | Index of all 16 registered SignalModule implementations |
+| `docs/signals/<name>.md` | Per-strategy README with rationale, logic, failure modes, empirical findings |
+| `docs/incident_log.md` | Incident log template (referenced by RUNBOOK.md §6) |
+
 1. Overview
 
 Purpose: An automated, institutional-grade quantitative analysis pipeline that fetches financial data, calculates technical/fundamental indicators, performs multi-horizon forecasting, simulates trading strategies via backtesting, stores historical signals and runs locally, updates a Google Sheets dashboard, and validates architecture via a 6-step AI Verification Suite.
