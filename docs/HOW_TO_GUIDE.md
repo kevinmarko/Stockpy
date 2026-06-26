@@ -1078,3 +1078,14 @@ Each MFE/MAE/Edge Ratio entry now has a **🔬 Drill down by symbol** expander:
 pick a ticker → see the full signal row + recent closed trades for that symbol
 from `transactions_store.TransactionsStore`. Use this to answer "why is this
 score what it is" without exporting the CSV.
+
+## Advisory-Only Mode (Tier 5.1, default-on)
+
+The project ships with **`settings.ADVISORY_ONLY=true`** as the default. In this mode the platform runs the full quant pipeline — fetches data, computes indicators, runs forecasts, sizes positions, writes the HTML report and JSON payload — but **never submits orders to any broker**.
+
+**What you will see:**
+- GUI: a persistent blue `📋 ADVISORY MODE` banner above the tab bar; the Strategy Matrix `Global Execution Mode` toggle shows `📋 Advisory mode — broker execution disabled` instead of the Simulation/Paper/Live radio.
+- Orchestrator: an INFO log line `"ADVISORY_ONLY=True — broker execution surface is quarantined; skipping all order submission, reconciliation, and broker imports."`
+- Preflight: a new `advisory_only_active` row at position #2; the four broker-dependent rows (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`, `paper_trading_duration`) show as PASS with reason `"(skipped: ADVISORY_ONLY=True — broker check not applicable)"`.
+
+**To re-enable broker execution:** set `ADVISORY_ONLY=false` in `.env`, then restart the orchestrator. See §1 of `docs/RUNBOOK.md` for the paper→live switch checklist.

@@ -339,3 +339,20 @@ When a data source (Alpaca, Finnhub, FRED, Robinhood) is reporting errors:
 5. After remediation, refresh the Safety tab; the dashboard derives its
    state from files (`output/KILL_SWITCH`, `output/risk_gate_blocks.jsonl`),
    so there is no in-process cache to invalidate.
+
+## Advisory-Only Mode (Tier 5.1, default-on)
+
+As of Tier 5.1 the platform defaults to **`settings.ADVISORY_ONLY=true`**, which quarantines the entire broker-execution surface:
+
+- `main_orchestrator._execute_broker_orders` returns immediately with an INFO log (no broker imports).
+- The GUI Strategy Matrix `🎚️ Global Execution Mode` toggle is replaced with a `📋 Advisory mode — broker execution disabled` placeholder.
+- A persistent `📋 ADVISORY MODE` banner appears above the tab bar in every GUI session.
+- `python scripts/preflight_check.py` adds a new `advisory_only_active` row and auto-skips `alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`, and `paper_trading_duration` (broker-dependent checks become non-applicable).
+
+**Implications for §1 (paper→live switch), §3.1 (reconciliation drift), §3.2 (kill switch fails to block), §3.3 (broker connection lost), §6 (emergency shutdown):** these sections describe broker-execution behaviour that does NOT run while `ADVISORY_ONLY=true`. They are retained for the case where an operator deliberately lifts the quarantine. **Tier 5.2** will replace those sections with advisory-relevant incident playbooks (stale account snapshot, missing recommendation for held symbol, calibration drop). **Tier 5.3** will repurpose the `output/KILL_SWITCH` sentinel as a "pause recommendations" gate.
+
+**To lift the quarantine (broker-execution path):**
+1. Set `ADVISORY_ONLY=false` in `.env`.
+2. Re-run `python scripts/preflight_check.py` — the broker checks now run; resolve any failures.
+3. Decide on `DRY_RUN` and `ALPACA_PAPER`. Live submission requires **all three** flags (`ADVISORY_ONLY=false`, `DRY_RUN=false`, `ALPACA_PAPER=false`).
+4. Restart the orchestrator. The GUI Strategy Matrix mode toggle re-appears once `ADVISORY_ONLY=false` is loaded.

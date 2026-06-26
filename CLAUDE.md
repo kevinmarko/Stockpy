@@ -548,3 +548,34 @@ Headlessly testable (no streamlit imports). Public API:
 
 ### Gravity step 53
 - **`step_53_decision_log_audit`** — 10 checks: import, frozen dataclass + fields, round-trip, empty schema, corrupt line skip, join within window, join returns None outside, passed skips join, acted joins, test file exists.
+
+## Tier 5.1 — ADVISORY_ONLY Mode Quarantine (2026-06)
+
+### Summary
+- New flag `settings.ADVISORY_ONLY: bool = True` (project default). When `True`, the entire broker-execution surface is quarantined: `main_orchestrator._execute_broker_orders` returns immediately (no broker imports), the GUI Strategy Matrix mode toggle is suppressed, and `scripts/preflight_check.py` drops the broker-readiness checks (`alpaca_configured` / `alpaca_paper_mode` / `dry_run_disabled` / `paper_trading_duration`) in favour of a new `advisory_only_active` check.
+- ADVISORY_ONLY is a HARDER gate than `DRY_RUN`: `DRY_RUN` is enforced inside `OrderManager` (one method, future callers could bypass), while ADVISORY_ONLY is enforced at the `_execute_broker_orders` boundary AND surfaced in every GUI tab as a persistent banner, so an operator cannot click into Live by mistake. Both flags must agree (`ADVISORY_ONLY=false` AND `DRY_RUN=false` AND `ALPACA_PAPER=false`) to reach a live submission.
+
+### Wiring
+- **`settings.py`** — adds `ADVISORY_ONLY: bool = Field(default=True, ...)`.
+- **`main_orchestrator._execute_broker_orders`** — adds the early-return guard at the very top of the function body (BEFORE the broker-stack imports), emitting an INFO log: `"ADVISORY_ONLY=True — broker execution surface is quarantined; skipping all order submission, reconciliation, and broker imports."`
+- **`main_orchestrator._main_body`** (call site of `_execute_broker_orders`) — when `ADVISORY_ONLY=True`, logs `"📋 ADVISORY_ONLY=True — pipeline produced N signals; broker execution is disabled for this run."` and does NOT check `ALPACA_API_KEY`/`SECRET_KEY` — so an operator who happens to have keys in `.env` from an earlier paper-trading phase does NOT trigger any broker import.
+- **`gui/app.py`** — the persistent run-mode header now branches on ADVISORY_ONLY first; when `True`, renders a single `st.info` "📋 **ADVISORY MODE** — no orders will be submitted to any broker." banner above the tab bar instead of the Simulation/Paper/Live badge (which would be misleading while the broker is quarantined).
+- **`gui/panels._render_strategy_mode_toggle`** — when `ADVISORY_ONLY=True` does NOT render the radio + confirm button; renders an `st.warning` "📋 **Advisory mode — broker execution disabled.**" placeholder + a read-only caption showing the underlying `DRY_RUN` / `ALPACA_PAPER` flags. Set `ADVISORY_ONLY=false` in `.env` to restore the live mode-switcher.
+- **`scripts/preflight_check.py`** —
+  - New `check_advisory_only_active()` function. PASS (loud) when `ADVISORY_ONLY=True`; PASS with `warning=True` when False so the operator confirms they deliberately lifted the quarantine.
+  - New module-level constant `_ADVISORY_AUTO_SKIP = ("alpaca_configured", "alpaca_paper_mode", "dry_run_disabled", "paper_trading_duration")`.
+  - `run_checks()` reads `settings.ADVISORY_ONLY` once; when True, each check in `_ADVISORY_AUTO_SKIP` is recorded as PASS with reason `"(skipped: ADVISORY_ONLY=True — broker check not applicable)"`. The `--skip` flag still takes precedence (operator-explicit skip wins over auto-skip).
+  - `ALL_CHECKS` order: `check_fred_key_configured` → `check_advisory_only_active` → broker checks → runtime/state checks → validation checks.
+
+### New env vars / settings
+- **`ADVISORY_ONLY: bool = True`** — the project default; set `ADVISORY_ONLY=false` in `.env` to re-enable broker execution.
+
+### Test surface
+- **`tests/test_advisory_only.py`** (9 tests): orchestrator early-return + INFO log under `ADVISORY_ONLY=True`; no early-return log under `False`; AST/source guards that `gui/panels.py` and `gui/app.py` reference the flag and the banner strings; preflight auto-skip under True; preflight broker checks run under False; `advisory_only_active` row appears in results; warning flag when ADVISORY_ONLY is disabled; default `settings.ADVISORY_ONLY is True`.
+
+### Gravity step 54
+- **`step_54_advisory_only_audit`** — 9 checks: default ADVISORY_ONLY=True; `main_orchestrator.py` source references ADVISORY_ONLY + the quarantine log message; `gui/panels.py` source has the ADVISORY_ONLY guard + "Advisory mode — broker execution disabled" banner string; `gui/app.py` source renders the "ADVISORY MODE" banner; `preflight_check.check_advisory_only_active` exists; `_ADVISORY_AUTO_SKIP` contains exactly the four broker-dependent check names; functional skip path under `ADVISORY_ONLY=True`; `check_advisory_only_active` warns under `ADVISORY_ONLY=False`; `tests/test_advisory_only.py` exists.
+
+### Operator notes
+- The kill-switch sentinel (`output/KILL_SWITCH`) and `MACRO_REGIME_GATE_ENABLED` flag are NOT changed by this tier. They remain in place and continue to gate `OrderManager` behaviour when ADVISORY_ONLY is lifted in the future.
+- Re-enabling broker execution is a deliberate two-step operation: (1) flip `ADVISORY_ONLY=false` in `.env`; (2) launch the orchestrator; (3) verify the preflight check now runs the broker-readiness gate. The GUI Strategy Matrix mode toggle reappears automatically once ADVISORY_ONLY is False.

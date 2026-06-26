@@ -113,17 +113,31 @@ if st.sidebar.button("🔄 Clear cached reads"):
 # ---------------------------------------------------------------------------
 st.title("InvestYo Command Center")
 
-# Persistent banner derived from DRY_RUN + ALPACA_PAPER + session run handle.
-# Shown above the tab bar so the operator always knows what mode they're in.
-_mode_state = run_mode.read_active_run_mode(session_state=st.session_state)
-_mode_colors = {"Simulation": "blue", "Paper": "orange", "Live": "red"}
-_banner_color = _mode_colors.get(_mode_state.mode, "gray")
-if _mode_state.mode == "Live":
-    st.error(_mode_state.run_mode_label, icon="🔴")
-elif _mode_state.mode == "Paper":
-    st.warning(_mode_state.run_mode_label, icon="🟡")
+# --- Tier 5.1: persistent advisory-only banner ---
+# When settings.ADVISORY_ONLY is True (the project default) we render a single,
+# unambiguous banner above the tab bar so the operator cannot miss the
+# quarantine.  In that mode we deliberately suppress the simulation/paper/live
+# mode badge because the DRY_RUN / ALPACA_PAPER toggle is no-op'd downstream;
+# showing a Live badge while the broker is quarantined would be misleading.
+if getattr(settings, "ADVISORY_ONLY", True):
+    st.info(
+        "📋 **ADVISORY MODE** — no orders will be submitted to any broker. "
+        "The pipeline produces signals, sizing, and reports only. "
+        "Set `ADVISORY_ONLY=false` in `.env` to re-enable broker execution.",
+        icon="📋",
+    )
 else:
-    st.info(_mode_state.run_mode_label, icon="⚪")
+    # Persistent banner derived from DRY_RUN + ALPACA_PAPER + session run handle.
+    # Shown above the tab bar so the operator always knows what mode they're in.
+    _mode_state = run_mode.read_active_run_mode(session_state=st.session_state)
+    _mode_colors = {"Simulation": "blue", "Paper": "orange", "Live": "red"}
+    _banner_color = _mode_colors.get(_mode_state.mode, "gray")
+    if _mode_state.mode == "Live":
+        st.error(_mode_state.run_mode_label, icon="🔴")
+    elif _mode_state.mode == "Paper":
+        st.warning(_mode_state.run_mode_label, icon="🟡")
+    else:
+        st.info(_mode_state.run_mode_label, icon="⚪")
 
 tab_labels = [
     "🚀 Launcher",

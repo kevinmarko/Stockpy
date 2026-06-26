@@ -741,7 +741,17 @@ async def _execute_broker_orders(
     * Kill-switch active → ``KillSwitchActiveError`` is raised inside
       ``submit_order_with_idempotency``; caught here and logged as CRITICAL.
     * ``dry_run=True`` logs intent but never reaches the broker network.
+    * ``settings.ADVISORY_ONLY=True`` (the project default in Tier 5.1) makes
+      this function a no-op: the broker stack is not even imported and an
+      INFO log is emitted so the operator sees the quarantine in the run log.
     """
+    if getattr(settings, "ADVISORY_ONLY", True):
+        telemetry.info(
+            "ADVISORY_ONLY=True — broker execution surface is quarantined; "
+            "skipping all order submission, reconciliation, and broker imports. "
+            "Set settings.ADVISORY_ONLY=false in .env to re-enable."
+        )
+        return
     try:
         from execution.alpaca_broker import AlpacaBroker
         from execution.broker_base import OrderIntent, OrderSide, OrderType
@@ -1135,10 +1145,20 @@ async def _main_body(effective_dry_run: bool) -> None:
         print("================================================\n")
 
     # 6. Broker Execution — submit delta orders and reconcile state
-    # Only runs when Alpaca credentials are configured; silently skipped otherwise.
-    # Uses macro_dto returned by run_pipeline() (carries hmm_risk_on_probability
-    # for the HMM regime gate in PreTradeRiskGate.run_all()).
-    if not final_df.empty and settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
+    # Tier 5.1: when ADVISORY_ONLY is True (the default) the broker surface is
+    # quarantined entirely — we do not even check Alpaca credentials, so an
+    # operator who happens to have keys in .env from an earlier paper-trading
+    # phase does NOT trigger any broker import.  Only when ADVISORY_ONLY is
+    # explicitly False AND Alpaca credentials are configured do we reach
+    # ``_execute_broker_orders``.  Uses macro_dto returned by run_pipeline()
+    # (carries hmm_risk_on_probability for the HMM regime gate).
+    if getattr(settings, "ADVISORY_ONLY", True):
+        telemetry.info(
+            "📋 ADVISORY_ONLY=True — pipeline produced %d signals; broker "
+            "execution is disabled for this run.",
+            0 if final_df is None else len(final_df),
+        )
+    elif not final_df.empty and settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
         await _execute_broker_orders(final_df, effective_dry_run, macro_dto=macro_dto)
     elif not final_df.empty:
         telemetry.info(
