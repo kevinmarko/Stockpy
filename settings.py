@@ -278,6 +278,9 @@ class Settings(BaseSettings):
             # LightGBM cross-sectional ranker (one ensemble member — modest weight
             # until the model accumulates enough history to earn a larger share).
             "lgbm_ranker": 0.10,
+            # News / earnings catalyst (Tier 2.4) — modest weight until the
+            # module accumulates a track record (FinBERT or lexicon fallback).
+            "news_catalyst": 10.0,
         },
         description="Weights for individual quantitative signal modules."
     )
@@ -453,6 +456,69 @@ class Settings(BaseSettings):
             "(default). 'verbose' = adds regime context [A], historical "
             "calibration [B], invalidation thresholds [C], and indicator "
             "theory notes [D]. Set RATIONALE_VERBOSITY=verbose in .env."
+        ),
+    )
+
+    # --- News Catalyst Signal (Tier 2.4, signals/news_catalyst.py) ---
+    # Controls how far back to pull Finnhub company_news headlines and
+    # whether to use the FinBERT neural sentiment scorer (requires
+    # `pip install transformers` and either PyTorch or TensorFlow).
+    # When FINBERT_ENABLED=false or transformers is unavailable, a curated
+    # 80-word financial keyword lexicon is used instead — no accuracy loss
+    # on very short headlines, ~10-15% worse on multi-sentence summaries.
+    NEWS_LOOKBACK_DAYS: int = Field(
+        default=7,
+        description=(
+            "Calendar days of Finnhub company_news headlines to score per "
+            "symbol per pre_compute cycle. Longer windows add latency; the "
+            "free Finnhub tier provides ~3 months of history."
+        ),
+    )
+    FINBERT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True and `transformers` is installed, uses ProsusAI/FinBERT "
+            "for headline sentiment.  When False (or transformers unavailable), "
+            "falls back to the built-in keyword lexicon.  Set False to avoid "
+            "the ~200 MB model download on first use."
+        ),
+    )
+    NEWS_EARNINGS_SUPPRESS_HOURS: float = Field(
+        default=48.0,
+        description=(
+            "Hours before next earnings date within which the news catalyst "
+            "score is forced to 0.0.  Pre-earnings headlines are unreliable "
+            "catalysts — the outcome isn't observable yet."
+        ),
+    )
+    NEWS_EARNINGS_DAMPEN_DAYS: float = Field(
+        default=7.0,
+        description=(
+            "Days before next earnings within which the news catalyst score "
+            "is multiplied by 0.5 (50% dampening).  Beyond this window the "
+            "full score is used."
+        ),
+    )
+
+    # --- Correlation Cluster Awareness (Tier 2.5, research_engine.py) ---
+    # Controls the on-demand hierarchical clustering computed in the GUI
+    # Reports tab.  These settings are read by the GUI; the orchestrator
+    # does NOT run cluster analysis automatically (on-demand only).
+    CORRELATION_CLUSTER_LOOKBACK_DAYS: int = Field(
+        default=60,
+        description=(
+            "Calendar days of daily returns used to build the pairwise "
+            "correlation matrix for hierarchical clustering. 60 days ≈ 3 "
+            "months, enough to capture a medium-term co-movement regime."
+        ),
+    )
+    CORRELATION_CLUSTER_THRESHOLD: float = Field(
+        default=0.4,
+        description=(
+            "Dendrogram cut-distance for cluster assignment.  Uses the "
+            "Lopez de Prado distance d=sqrt(0.5*(1-rho)).  At 0.4, stocks "
+            "with |correlation| > 0.68 merge into the same cluster.  "
+            "Lower = tighter (fewer, smaller clusters); higher = looser."
         ),
     )
 

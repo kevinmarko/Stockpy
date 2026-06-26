@@ -49,6 +49,13 @@ class SignalContext:
     # Per-ticker LGBM cross-sectional rank percentiles (populated by
     # LGBMRankerSignal.pre_compute; empty dict = module did not run this cycle).
     lgbm_scores: Dict[str, float] = field(default_factory=dict)
+    # News sentiment scores (Tier 2.4) keyed by symbol (float in [-1, +1]).
+    # Populated by NewsCatalystSignal.pre_compute(); empty when Finnhub is
+    # not configured or the module hasn't run this cycle.
+    news_sentiment_scores: Dict[str, float] = field(default_factory=dict)
+    # Next earnings dates as ISO-date strings keyed by symbol ("" = unknown).
+    # Populated by NewsCatalystSignal.pre_compute() alongside news_sentiment_scores.
+    earnings_dates: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

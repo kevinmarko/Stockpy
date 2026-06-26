@@ -144,7 +144,23 @@ COLUMN_SCHEMA = [
     # ==========================================================
     # --- HMM REGIME SECOND OPINION (Hamilton 1989) ---
     # ==========================================================
-    {"header": "HMM Risk-On Probability", "key": "HMM_Risk_On_Probability", "format": "percent"}
+    {"header": "HMM Risk-On Probability", "key": "HMM_Risk_On_Probability", "format": "percent"},
+
+    # ==========================================================
+    # --- NEWS CATALYST (Tier 2.4, signals/news_catalyst.py) ---
+    # Populated by NewsCatalystSignal.pre_compute() via orchestrator
+    # writeback; NaN / "" when Finnhub is not configured or the
+    # module hasn't run for a symbol this cycle.
+    # ==========================================================
+    {"header": "News Sentiment", "key": "News_Sentiment", "format": "number"},
+    {"header": "Earnings Date", "key": "Earnings_Date", "format": "string"},
+
+    # ==========================================================
+    # --- CORRELATION CLUSTER (Tier 2.5, research_engine.py) ---
+    # Populated on-demand by the GUI Reports tab; NaN in the main
+    # orchestrator run (no historical batch fetch required).
+    # ==========================================================
+    {"header": "Cluster", "key": "Correlation_Cluster", "format": "number"},
 ]
 
 def get_headers():
