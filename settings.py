@@ -239,6 +239,26 @@ class Settings(BaseSettings):
         description="Weights for individual quantitative signal modules."
     )
 
+    # --- Macro Regime Gate (execution/risk_gate.py + gui/ Observability tab) ---
+    # When True (default), the macro kill-switch check in PreTradeRiskGate blocks
+    # all new BUY orders whenever MacroEconomicDTO.killSwitch is True (i.e. Sahm
+    # Rule ≥ 0.5 OR VIX > 30 OR credit spread > 6%).  Setting False disables the
+    # veto so technical signals can run freely — useful when idiosyncratic
+    # volatility triggers a false-positive systemic alarm.
+    #
+    # WARNING: disabling this gate bypasses recession/credit-event protection.
+    # The GUI Observability tab shows a persistent warning banner when it is off.
+    # Always re-enable before deploying to live trading (preflight_check.py
+    # raises if MACRO_REGIME_GATE_ENABLED=false AND ALPACA_PAPER=false).
+    MACRO_REGIME_GATE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True, MacroEconomicDTO.killSwitch vetoes new BUY orders during "
+            "RECESSION/CREDIT EVENT regimes. Set False to let technical signals "
+            "run without macro override (idiosyncratic-volatility hybrid mode)."
+        ),
+    )
+
     # --- Signal module enable/disable (gui/ command center, signals/aggregator.py) ---
     # Names of signal modules that the operator has disabled (e.g. via the GUI
     # Strategy Matrix tab). SignalAggregator.aggregate() skips any module whose

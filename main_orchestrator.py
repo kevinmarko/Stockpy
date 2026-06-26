@@ -799,7 +799,14 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
             "market_regime": str(macro_raw.get("market_regime", "UNKNOWN")),
             "vix": float(macro_raw.get("VIXCLS", 0.0) or 0.0),
             "yield_curve": float(macro_raw.get("T10Y2Y", 0.0) or 0.0),
+            # Sahm Rule and HY OAS are surfaced so the GUI Observability tab can
+            # display live recession-indicator telemetry without a live FRED call.
+            "sahm_rule": float(macro_raw.get("SAHMREALTIME", 0.0) or 0.0),
+            "high_yield_oas": float(macro_raw.get("BAMLH0A0HYM2", 0.0) or 0.0),
             "kill_switch_active": (settings.OUTPUT_DIR / "KILL_SWITCH").exists(),
+            # Persist the current gate state so the dashboard reflects the
+            # operator's choice without re-importing settings at read time.
+            "macro_regime_gate_enabled": settings.MACRO_REGIME_GATE_ENABLED,
             "signals": signals,
         }
         snap_path = settings.OUTPUT_DIR / "state_snapshot.json"

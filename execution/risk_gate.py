@@ -269,17 +269,31 @@ class PreTradeRiskGate:
     def macro_kill_switch_check(
         self, intent: OrderIntent, context: RiskContext
     ) -> RiskCheckResult:
-        """Block all new BUY orders when MacroEconomicDTO.killSwitch is True."""
+        """Block all new BUY orders when MacroEconomicDTO.killSwitch is True.
+
+        The check is skipped entirely when ``settings.MACRO_REGIME_GATE_ENABLED``
+        is ``False`` — the operator has selected hybrid mode (technical signals
+        run without macro veto).  The GUI Observability tab controls this flag
+        and displays a persistent warning when it is off.
+        """
         name = "macro_kill_switch"
+        # Operator override: gate disabled → always pass (hybrid mode).
+        if not settings.MACRO_REGIME_GATE_ENABLED:
+            return RiskCheckResult(
+                name, True,
+                "macro regime gate disabled by operator (MACRO_REGIME_GATE_ENABLED=false)"
+            )
         if context.macro is None:
             return RiskCheckResult(name, True, "no macro context — skipping")
         if intent.side != OrderSide.BUY:
             return RiskCheckResult(name, True, "SELL — macro kill switch skipped")
         if context.macro.killSwitch:
+            sahm = getattr(context.macro, "sahm_rule_indicator", None)
+            sahm_str = f", sahm={sahm:.2f}" if isinstance(sahm, (int, float)) else ""
             return RiskCheckResult(
                 name, False,
                 f"macro kill switch active (regime={context.macro.market_regime}, "
-                f"vix={context.macro.vix:.1f})",
+                f"vix={context.macro.vix:.1f}{sahm_str})",
             )
         return RiskCheckResult(
             name, True, f"macro kill switch inactive (regime={context.macro.market_regime})"
