@@ -137,7 +137,7 @@ DATA TRANSFER OBJECTS (dto_models.py): All market data, fundamental sheets, and 
 
 SYSTEM DECOUPLING (data_engine.py): Decoupling is enforced via the IDataProvider abstract interface. Any modification to data acquisition or parsing patterns must implement IDataProvider.
 
-VECTORIZATION (processing_engine.py): Iterative for loops or .iterrows() calculations over price series are strictly banned. All technical indicators, moving averages, and momentum parameters MUST be computed as vector expressions over whole Pandas/NumPy series.
+VECTORIZATION (processing_engine.py): Iterative for loops or .iterrows() calculations over price series are strictly banned. All technical indicators, moving averages, and momentum parameters MUST be computed as vector expressions over whole Pandas/NumPy series. Furthermore, all DataFrame mutations that occurred inside .iterrows() loops in orchestrator or evaluation code (such as main_orchestrator.py or evaluation_engine.py) must be refactored to use dictionary collection and vectorized series/index mapping (e.g. mapping by Symbol or index) to satisfy Constraint #3.
 
 SYSTEM INTEGRITY: Any code alteration MUST be accompanied by a corresponding validation suite addition in pytest. Algorithmic drift of indicators is bounded strictly below 0.00001.
 

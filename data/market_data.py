@@ -320,15 +320,15 @@ class YFinanceProvider(MarketDataProvider):
             import yfinance as yf  # type: ignore
 
             # Map lookback to yfinance period strings to avoid overfetching
-            if lookback_days <= 30:
+            if lookback_days <= 20:
                 period = "1mo"
-            elif lookback_days <= 90:
+            elif lookback_days <= 60:
                 period = "3mo"
-            elif lookback_days <= 180:
+            elif lookback_days <= 120:
                 period = "6mo"
-            elif lookback_days <= 365:
+            elif lookback_days <= 240:
                 period = "1y"
-            elif lookback_days <= 730:
+            elif lookback_days <= 500:
                 period = "2y"
             else:
                 period = "5y"

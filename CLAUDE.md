@@ -254,5 +254,13 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 
 **PyYAML** added to `requirements.txt` (needed for `ml/registry.yaml` round-trip tests).
 
+## Lookback & Vectorization Enhancements (Bug Fixes)
+- **Lookback pricing history**: Fetch lookback changed from `"1y"` to `"2y"` (~504 trading days) in `data_engine.py` and `data_ingestion.py` to ensure all cross-sectional and momentum engines have sufficient history (requires at least 275 trading days). In `data/market_data.py`, yfinance lookback threshold mapping is adjusted so that `lookback_days <= 500` maps to `"2y"`.
+- **DataFrame vectorization**: All mutations in `main_orchestrator.py` and `evaluation_engine.py` that occurred inside `.iterrows()` loops have been refactored to use dictionary collection and vectorized `.map()` operations, satisfying Constraint #3.
+- **Gravity AI Review Suite extensions**:
+  - **Step 1 dynamic schema validation**: covered dynamic `DashboardSchema` validation in `run_schema_audit()`.
+  - **Step 8 multi-indicator perturbation**: added lookahead perturbation check for all technical indicators (`RSI`, `RSI_2`, `MACD`, `ATR`, `Aroon`, `Coppock`, `Chandelier_Exit`) in `run_lookahead_audit()`, verifying the actual `ProcessingEngine` calculations.
+  - **Step 35 portfolio heat limit audit**: added `run_risk_gates_portfolio_heat_audit()` verifying that `PreTradeRiskGate` with 6% limit blocks BUY orders and allows SELL orders in mock mode.
+
 
 
