@@ -54,7 +54,7 @@ class ProcessingEngine:
     def calculate_gordon_fair_value(self, current_price: float, dividend_yield: float, div_growth_rate: float) -> float:
         """
         Calculates the Gordon Growth Model (Dividend Discount Model) Fair Value.
-        Formula: D1 / (r - g)
+        Formula: D1 / (r - g)  where D1 = D0 * (1 + g) and g is the capped growth rate.
         """
         try:
             if dividend_yield is None or pd.isna(dividend_yield) or dividend_yield <= 0:
@@ -62,14 +62,18 @@ class ProcessingEngine:
             if div_growth_rate is None or pd.isna(div_growth_rate):
                 div_growth_rate = 0.0
 
-            annual_dividend = current_price * dividend_yield
-            expected_dividend_next_year = annual_dividend * (1 + div_growth_rate)
-
-            # Cap the growth rate to prevent infinite or negative valuations (g must be < r)
+            # BUG-FIX: Cap the growth rate BEFORE using it anywhere.
+            # Previously g was capped for the denominator but div_growth_rate
+            # (uncapped) was used for D1 in the numerator — an asymmetry that
+            # inflated the Gordon value when g > r-0.01. Both D1 and the
+            # denominator must use the same capped g.
             g = min(div_growth_rate, self.required_return_rate - 0.01)
 
             if self.required_return_rate <= g:
-                return 0.0 
+                return 0.0
+
+            annual_dividend = current_price * dividend_yield
+            expected_dividend_next_year = annual_dividend * (1 + g)
 
             gordon_value = expected_dividend_next_year / (self.required_return_rate - g)
             return round(gordon_value, 2)
@@ -481,15 +485,21 @@ class ProcessingEngine:
         Also computes realized 60-day volatility and Momentum_Vol_Scaled.
         """
         if df.empty or len(df) < 253:
-            df['ROC_12M'] = 0.0
-            df['ROC_6M'] = 0.0
-            df['ROC_3M'] = 0.0
-            df['ROC_1M'] = 0.0
-            df['ROC_12M_skip'] = 0.0
-            df['ROC_6M_skip'] = 0.0
-            df['ROC_3M_skip'] = 0.0
-            df['ROC_1M_skip'] = 0.0
-            df['Momentum_Vol_Scaled'] = 0.0
+            # BUG-FIX: was 0.0 — but 0% momentum is a FABRICATED value for
+            # securities with insufficient history. Downstream signal modules
+            # (CrossSectionalMomentum, TimeSeriesMomentum) must see NaN and
+            # treat these as "no opinion", not "flat". Constraint #4.
+            _nan = float('nan')
+            df['ROC_12M'] = _nan
+            df['ROC_6M'] = _nan
+            df['ROC_3M'] = _nan
+            df['ROC_1M'] = _nan
+            df['ROC_12M_skip'] = _nan
+            df['ROC_6M_skip'] = _nan
+            df['ROC_3M_skip'] = _nan
+            df['ROC_1M_skip'] = _nan
+            df['Realized_Vol_60D'] = _nan
+            df['Momentum_Vol_Scaled'] = _nan
             return df
 
         df = df.sort_index()

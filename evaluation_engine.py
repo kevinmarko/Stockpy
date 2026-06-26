@@ -426,10 +426,14 @@ class EvaluationEngine:
             return 0.0
 
     def evaluate_portfolio(
-        self, 
-        df: pd.DataFrame, 
-        benchmark_df: pd.DataFrame = pd.DataFrame(),
-        data_provider = None
+        self,
+        df: pd.DataFrame,
+        # BUG-FIX: mutable default argument `pd.DataFrame()` is created once at
+        # class-definition time and shared across every call that omits the arg.
+        # Any mutation of that object would persist between invocations. Use None
+        # and create an empty DataFrame inside the function body instead.
+        benchmark_df: Optional[pd.DataFrame] = None,
+        data_provider=None,
     ) -> pd.DataFrame:
         """
         Main execution method mapping MAE, MFE, Portfolio Heat, and Brinson-Fachler 
@@ -439,7 +443,10 @@ class EvaluationEngine:
         """
         logger.info("Running post-trade execution analytics...")
         from transactions_store import TransactionsStore
-        
+
+        if benchmark_df is None:
+            benchmark_df = pd.DataFrame()
+
         df = df.copy()
         
         # Ensure target columns exist in the DataFrame

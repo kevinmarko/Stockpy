@@ -228,6 +228,7 @@ class GravityAIAuditor:
             "step_32_html_report_audit": {},
             "step_33_gui_command_center_audit": {},
             "step_34_macro_regime_gate_toggle_audit": {},
+            "step_35_portfolio_sync_audit": {},
         }
         self.data_engine = GravityTestEngine()
         self.test_df = self.data_engine.fetch_historical_prices()
@@ -4186,7 +4187,9 @@ class GravityAIAuditor:
         self.run_html_report_audit()
         self.run_gui_command_center_audit()
         self.run_macro_regime_gate_toggle_audit()
+        self.run_portfolio_sync_audit()
         self.run_risk_gates_portfolio_heat_audit()
+        self.run_six_bug_regression_audit()
         self.run_options_matrix_integrity_audit()
         return json.dumps(self.report, indent=4)
 
@@ -4412,8 +4415,193 @@ class GravityAIAuditor:
         audit["overall_pass"] = all_pass
         self.report["step_34_macro_regime_gate_toggle_audit"] = audit
 
+    def run_portfolio_sync_audit(self) -> None:
+        """Step 35 — Validates Task 1.4 portfolio & watchlist synchronization.
+
+        All checks are fully offline. The market-data provider and Robinhood
+        client are monkey-patched so this audit never touches the network.
+
+        Audits (in order):
+          (a) Module is importable + public API present
+              (CoverageStatus, SymbolStatus, SyncReport, build_sync_report,
+              async_sync_now, write_cache, read_cache).
+          (b) CoverageStatus carries the five mandated values
+              (FULL/QUOTES_ONLY/EQUITY_ONLY/UNCOVERED/UNKNOWN).
+          (c) SymbolStatus + SyncReport are frozen dataclasses.
+          (d) Discovery helpers exist on data.robinhood_client
+              (discover_watchlists, discover_universe, _file_tickers,
+              _watchlist_files_from_env).
+          (e) discover_universe deduplicates a holdings + watchlist + file
+              union into one sorted, case-normalised list.
+          (f) build_sync_report's "held but uncovered" path upgrades to
+              EQUITY_ONLY (NEVER drops the symbol — CONSTRAINT for the equity
+              view stays accurate even when market data is missing).
+          (g) build_sync_report fabricates no metrics: a held position with no
+              live quote has current_price=NaN AND market_value=NaN.
+          (h) No order/execution function names appear in the
+              data/portfolio_sync.py source (it MUST be advisory only — the
+              orchestrator owns broker contact via execution/order_manager.py).
+          (i) async_sync_now(persist_default_tickers=False) does NOT call
+              gui.env_io.write_setting (dry-run honours the flag).
+        """
+        audit: dict = {
+            "step": "step_35_portfolio_sync_audit",
+            "status": "PENDING",
+            "checks": {},
+        }
+        try:
+            # ── (a) Public API ────────────────────────────────────────────
+            from data.portfolio_sync import (
+                CoverageStatus, SymbolStatus, SyncReport,
+                build_sync_report, async_sync_now, write_cache, read_cache,
+            )
+            audit["checks"]["module_importable"] = {"status": "PASSED"}
+
+            # ── (b) CoverageStatus values ────────────────────────────────
+            expected = {"full", "quotes_only", "equity_only", "uncovered", "unknown"}
+            actual = {c.value for c in CoverageStatus}
+            audit["checks"]["coverage_status_values"] = {
+                "status": "PASSED" if expected == actual else "FAILED",
+                "missing": list(expected - actual),
+                "unexpected": list(actual - expected),
+            }
+
+            # ── (c) Frozen dataclasses ───────────────────────────────────
+            import dataclasses
+            ss_frozen = (
+                dataclasses.is_dataclass(SymbolStatus)
+                and SymbolStatus.__dataclass_params__.frozen
+            )
+            sr_frozen = (
+                dataclasses.is_dataclass(SyncReport)
+                and SyncReport.__dataclass_params__.frozen
+            )
+            audit["checks"]["frozen_dataclasses"] = {
+                "status": "PASSED" if (ss_frozen and sr_frozen) else "FAILED",
+                "symbol_status_frozen": ss_frozen,
+                "sync_report_frozen": sr_frozen,
+            }
+
+            # ── (d) Discovery helpers on robinhood_client ────────────────
+            import data.robinhood_client as rc
+            has_helpers = all(hasattr(rc, name) for name in (
+                "discover_watchlists",
+                "discover_universe",
+                "_file_tickers",
+                "_watchlist_files_from_env",
+            ))
+            audit["checks"]["discovery_helpers_present"] = {
+                "status": "PASSED" if has_helpers else "FAILED",
+            }
+
+            # ── (e) Dedup + sort across sources ──────────────────────────
+            from unittest.mock import patch
+
+            class _FakeClient:
+                is_authenticated = True
+                def __init__(self): self._wl = {"L1": ["msft", "AAPL"], "L2": ["aapl", "nvda"]}
+                def fetch_positions(self): return {"AAPL": object()}
+                def list_watchlist_names(self): return list(self._wl)
+
+            fc = _FakeClient()
+            with patch.object(rc, "_watchlist_tickers",
+                              side_effect=lambda n: fc._wl.get(n, [])):
+                uni = rc.discover_universe(fc)
+            dedup_ok = uni == ["AAPL", "MSFT", "NVDA"]
+            audit["checks"]["discover_universe_dedup_sort"] = {
+                "status": "PASSED" if dedup_ok else "FAILED",
+                "got": uni,
+            }
+
+            # ── (f) Held-but-uncovered → EQUITY_ONLY (never dropped) ─────
+            class _FakePos:
+                def __init__(self): self.symbol="OBSC"; self.quantity=10; self.average_cost=5.0; self.market_value=0.0
+            class _FakeSnap:
+                positions = {"OBSC": _FakePos()}
+            class _FakeProv:
+                quote_source = "test"
+                def get_latest_quote(self, s): raise RuntimeError("no")
+                def get_intraday_bars(self, s, lookback_days=5): raise RuntimeError("no")
+                def get_fundamentals(self, s): return {}
+            import data.market_data as md
+            with patch.object(md, "get_provider", lambda: _FakeProv()):
+                rpt = build_sync_report(_FakeSnap(), client=None)
+            sym = rpt.symbols.get("OBSC")
+            held_upgrade = (
+                sym is not None
+                and sym.held is True
+                and sym.coverage is CoverageStatus.EQUITY_ONLY
+            )
+            audit["checks"]["held_uncovered_equity_only"] = {
+                "status": "PASSED" if held_upgrade else "FAILED",
+                "coverage": getattr(sym, "coverage", None).value if sym else None,
+            }
+
+            # ── (g) No fabricated metrics ────────────────────────────────
+            no_fab = (
+                sym is not None
+                and sym.current_price != sym.current_price   # NaN
+                and sym.market_value  != sym.market_value    # NaN
+            )
+            audit["checks"]["no_fabricated_metrics"] = {
+                "status": "PASSED" if no_fab else "FAILED",
+                "current_price_is_nan": (
+                    sym.current_price != sym.current_price if sym else False
+                ),
+            }
+
+            # ── (h) No order/execution function names in the module ─────
+            import ast, pathlib
+            src = (pathlib.Path(__file__).resolve().parent
+                   / "data" / "portfolio_sync.py").read_text(encoding="utf-8")
+            tree = ast.parse(src)
+            forbidden = {
+                "submit_order", "buy_order", "sell_order",
+                "place_order", "place_equity_order", "place_option_order",
+            }
+            offenders: list[str] = []
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name in forbidden or node.name.startswith("place_"):
+                        offenders.append(node.name)
+            audit["checks"]["no_order_functions"] = {
+                "status": "PASSED" if not offenders else "FAILED",
+                "offenders": offenders,
+            }
+
+            # ── (i) Dry-run sync skips env writes ────────────────────────
+            import asyncio
+            import gui.env_io as env_io
+
+            write_calls: list = []
+            class _FakeSnap2:
+                positions = {}
+
+            with patch.object(md, "get_provider", lambda: _FakeProv()), \
+                 patch.object(env_io, "write_setting",
+                              side_effect=lambda k, v: write_calls.append(k)):
+                asyncio.run(async_sync_now(
+                    _FakeSnap2(), client=None, persist_default_tickers=False,
+                ))
+            audit["checks"]["dry_run_skips_env_write"] = {
+                "status": "PASSED" if write_calls == [] else "FAILED",
+                "unexpected_writes": write_calls,
+            }
+
+            all_pass = all(
+                v.get("status") == "PASSED"
+                for v in audit["checks"].values()
+            )
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:  # noqa: BLE001 - audit must never raise
+            audit["status"] = "ERROR"
+            audit["error"] = f"{type(exc).__name__}: {exc}"
+
+        self.report["step_35_portfolio_sync_audit"] = audit
+
     def run_risk_gates_portfolio_heat_audit(self) -> None:
-        """Step 35 — Pre-trade risk gate portfolio heat limit audit.
+        """Step 36 — Pre-trade risk gate portfolio heat limit audit.
         
         Verifies that:
         1. PreTradeRiskGate(max_portfolio_heat=0.06) blocks a BUY order when heat > 6%.
@@ -4422,7 +4610,7 @@ class GravityAIAuditor:
         4. Conservative-pass behavior handles missing or empty context gracefully.
         """
         audit = {
-            "step": "step_35_portfolio_heat_risk_gate_audit",
+            "step": "step_36_portfolio_heat_risk_gate_audit",
             "description": "Pre-trade risk gate portfolio heat limit (6% halt)",
             "checks": [],
             "overall_pass": False
@@ -4557,7 +4745,236 @@ class GravityAIAuditor:
             audit["error"] = str(exc)
             audit["overall_pass"] = False
             
-        self.report["step_35_portfolio_heat_risk_gate_audit"] = audit
+        self.report["step_36_portfolio_heat_risk_gate_audit"] = audit
+
+    # -------------------------------------------------------------------------
+    # STEP 37 — Six-Bug Regression Audit (2026-06 bug-hunt session)
+    # -------------------------------------------------------------------------
+    def run_six_bug_regression_audit(self) -> None:
+        """Verify the six production bugs found in the 2026-06 bug-hunt session
+        are fixed and cannot regress.
+
+        BUG-1 / BUG-2: Sahm Rule calculation & wiring in run_pipeline
+        BUG-3: Gordon Growth Model asymmetric g cap
+        BUG-4: Momentum early-return emits 0.0 instead of NaN
+        BUG-5: Mutable default argument in evaluate_portfolio
+        BUG-6: Fallback forecast used naive linear formula instead of Monte Carlo
+        """
+        import inspect
+        import math
+        import numpy as np
+        import pandas as pd
+
+        audit: dict = {
+            "step": "step_37_six_bug_regression_audit",
+            "description": "Regression guard for the six bugs fixed in 2026-06",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        try:
+            # ------------------------------------------------------------------
+            # BUG-1: _fallback_sentiment must NOT be used as the Sahm proxy
+            # ------------------------------------------------------------------
+            from macro_engine import MacroEngine
+            from data_engine import MockDataEngine
+
+            me = MacroEngine(data_engine=MockDataEngine())
+            sentinel = object()
+            result_fs = me._fallback_sentiment("")
+            # _fallback_sentiment("") returns 0.0 — it is an NLP helper, NOT Sahm
+            fs_check = result_fs == 0.0
+            audit["checks"].append({
+                "check": "BUG-1: _fallback_sentiment('') returns 0.0 (NLP helper, not Sahm)",
+                "passed": fs_check,
+                "detail": f"_fallback_sentiment('')={result_fs!r}",
+            })
+            all_pass = all_pass and fs_check
+
+            # calculate_sahm_rule must exist and be callable (not _fallback_sentiment)
+            has_sahm_method = callable(getattr(me, "calculate_sahm_rule", None))
+            audit["checks"].append({
+                "check": "BUG-1: calculate_sahm_rule() method exists on MacroEngine",
+                "passed": has_sahm_method,
+                "detail": str(has_sahm_method),
+            })
+            all_pass = all_pass and has_sahm_method
+
+            # ------------------------------------------------------------------
+            # BUG-2: MacroEconomicDTO.killSwitch fires at sahm_rule_indicator >= 0.5
+            # ------------------------------------------------------------------
+            from dto_models import MacroEconomicDTO
+
+            dto_high = MacroEconomicDTO(
+                yield_curve_10y_2y=0.5, high_yield_oas=3.0,
+                inflation_rate=2.0, vix_value=18.0, sahm_rule_indicator=0.52,
+            )
+            bug2a = dto_high.killSwitch is True
+            audit["checks"].append({
+                "check": "BUG-2: MacroEconomicDTO.killSwitch fires when sahm_rule_indicator=0.52",
+                "passed": bug2a,
+                "detail": f"killSwitch={dto_high.killSwitch!r}, regime={dto_high.market_regime!r}",
+            })
+            all_pass = all_pass and bug2a
+
+            dto_low = MacroEconomicDTO(
+                yield_curve_10y_2y=0.5, high_yield_oas=3.0,
+                inflation_rate=2.0, vix_value=18.0, sahm_rule_indicator=0.0,
+            )
+            bug2b = dto_low.killSwitch is False
+            audit["checks"].append({
+                "check": "BUG-2: MacroEconomicDTO.killSwitch is False when sahm_rule_indicator=0.0 and VIX<30",
+                "passed": bug2b,
+                "detail": f"killSwitch={dto_low.killSwitch!r}",
+            })
+            all_pass = all_pass and bug2b
+
+            # Verify main_orchestrator.py passes sahm_rule_indicator to MacroEconomicDTO
+            import ast, pathlib
+            orch_src = pathlib.Path("main_orchestrator.py").read_text()
+            tree = ast.parse(orch_src)
+            sahm_wired = False
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    for kw in getattr(node, "keywords", []):
+                        if kw.arg == "sahm_rule_indicator":
+                            sahm_wired = True
+                            break
+            audit["checks"].append({
+                "check": "BUG-2: main_orchestrator.py passes sahm_rule_indicator= to MacroEconomicDTO",
+                "passed": sahm_wired,
+                "detail": "AST found sahm_rule_indicator= keyword in a Call node" if sahm_wired
+                          else "MISSING: sahm_rule_indicator= keyword not found in any Call node",
+            })
+            all_pass = all_pass and sahm_wired
+
+            # Verify main_orchestrator.py calls calculate_sahm_rule (not _fallback_sentiment)
+            uses_sahm = "calculate_sahm_rule()" in orch_src
+            uses_fallback_as_sahm = "_fallback_sentiment" in orch_src and "sahm_val" in orch_src
+            # The fix: calculate_sahm_rule() should appear; _fallback_sentiment used as sahm_val is the bug
+            orch_src_lines = orch_src.splitlines()
+            fallback_sahm_proxy = any(
+                "_fallback_sentiment" in line and "sahm_val" in line
+                for line in orch_src_lines
+            )
+            bug1_fixed = uses_sahm and not fallback_sahm_proxy
+            audit["checks"].append({
+                "check": "BUG-1 (AST): main_orchestrator.py uses calculate_sahm_rule(), not _fallback_sentiment for sahm_val",
+                "passed": bug1_fixed,
+                "detail": f"calculate_sahm_rule present={uses_sahm}, _fallback_sentiment used as sahm_val={fallback_sahm_proxy}",
+            })
+            all_pass = all_pass and bug1_fixed
+
+            # ------------------------------------------------------------------
+            # BUG-3: Gordon Growth Model symmetric g cap
+            # ------------------------------------------------------------------
+            from processing_engine import ProcessingEngine
+            pe = ProcessingEngine()
+            pe.required_return_rate = 0.10
+
+            # With g_raw=0.14 > r-0.01=0.09, both D1 and denominator must use capped g=0.09
+            price, dy, g_raw = 100.0, 0.05, 0.14
+            g_capped = 0.10 - 0.01
+            result_gordon = pe.calculate_gordon_fair_value(price, dy, g_raw)
+            expected_correct = (price * dy * (1 + g_capped)) / (0.10 - g_capped)
+            bug3_numerator = math.isclose(result_gordon, expected_correct, rel_tol=1e-4)
+            audit["checks"].append({
+                "check": "BUG-3: Gordon numerator uses capped g (not raw g_raw=14%)",
+                "passed": bug3_numerator,
+                "detail": f"result={result_gordon:.4f}, expected={expected_correct:.4f} (both use g_capped={g_capped})",
+            })
+            all_pass = all_pass and bug3_numerator
+
+            # ------------------------------------------------------------------
+            # BUG-4: calculate_momentum_metrics returns NaN for <253 bars
+            # ------------------------------------------------------------------
+            short_dates = pd.date_range("2024-01-01", periods=100, freq="B")
+            short_df = pd.DataFrame({
+                "Open": [100.0] * 100, "High": [100.0] * 100,
+                "Low": [100.0] * 100, "Close": [100.0] * 100,
+                "Volume": [1_000_000] * 100,
+            }, index=short_dates)
+            out_mom = pe.calculate_momentum_metrics(short_df)
+            roc_nan = math.isnan(out_mom["ROC_12M"].iloc[-1])
+            audit["checks"].append({
+                "check": "BUG-4: calculate_momentum_metrics returns NaN (not 0.0) for ROC_12M when len(df)<253",
+                "passed": roc_nan,
+                "detail": f"ROC_12M value={out_mom['ROC_12M'].iloc[-1]!r}",
+            })
+            all_pass = all_pass and roc_nan
+
+            vol_nan = math.isnan(out_mom["Realized_Vol_60D"].iloc[-1])
+            audit["checks"].append({
+                "check": "BUG-4: calculate_momentum_metrics returns NaN (not 0.0) for Realized_Vol_60D when len(df)<253",
+                "passed": vol_nan,
+                "detail": f"Realized_Vol_60D value={out_mom['Realized_Vol_60D'].iloc[-1]!r}",
+            })
+            all_pass = all_pass and vol_nan
+
+            # ------------------------------------------------------------------
+            # BUG-5: evaluate_portfolio benchmark_df default is None (not mutable)
+            # ------------------------------------------------------------------
+            from evaluation_engine import EvaluationEngine
+
+            sig = inspect.signature(EvaluationEngine.evaluate_portfolio)
+            default_val = sig.parameters["benchmark_df"].default
+            bug5 = default_val is None
+            audit["checks"].append({
+                "check": "BUG-5: evaluate_portfolio benchmark_df default is None (not mutable pd.DataFrame())",
+                "passed": bug5,
+                "detail": f"default type={type(default_val).__name__!r}, value={default_val!r}",
+            })
+            all_pass = all_pass and bug5
+
+            # ------------------------------------------------------------------
+            # BUG-6: Fallback forecast in main_orchestrator uses Monte Carlo
+            # ------------------------------------------------------------------
+            # Verify the source of the exception-path uses run_monte_carlo not linear
+            orch_lines = orch_src.splitlines()
+            linear_pattern = "(1.0 + mu * 10)"  # the old naive formula
+            has_linear_fallback = any(linear_pattern in line for line in orch_lines)
+            bug6 = not has_linear_fallback
+            audit["checks"].append({
+                "check": "BUG-6: main_orchestrator fallback forecast does NOT use naive linear formula price*(1+mu*N)",
+                "passed": bug6,
+                "detail": f"Linear formula '{linear_pattern}' present in source: {has_linear_fallback}",
+            })
+            all_pass = all_pass and bug6
+
+            # Also verify run_monte_carlo is actually called in orchestrator
+            mc_in_fallback = "run_monte_carlo" in orch_src
+            audit["checks"].append({
+                "check": "BUG-6: run_monte_carlo() appears in main_orchestrator.py",
+                "passed": mc_in_fallback,
+                "detail": f"run_monte_carlo present in orchestrator source: {mc_in_fallback}",
+            })
+            all_pass = all_pass and mc_in_fallback
+
+            # Verify ForecastingEngine.run_monte_carlo produces distinct values per horizon
+            from forecasting_engine import ForecastingEngine
+            fe = ForecastingEngine()
+            m10, _, _ = fe.run_monte_carlo(100.0, 0.0002, 0.015, 10, simulations=2000)
+            m60, _, _ = fe.run_monte_carlo(100.0, 0.0002, 0.015, 60, simulations=2000)
+            distinct_horizons = m10 != m60
+            audit["checks"].append({
+                "check": "BUG-6: Monte Carlo gives distinct means for different horizons (10d vs 60d)",
+                "passed": distinct_horizons,
+                "detail": f"mc_10={m10:.4f}, mc_60={m60:.4f}, distinct={distinct_horizons}",
+            })
+            all_pass = all_pass and distinct_horizons
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            import traceback
+            audit["status"] = f"Execution Error: {str(exc)}"
+            audit["error"] = traceback.format_exc()
+            audit["overall_pass"] = False
+
+        self.report["step_37_six_bug_regression_audit"] = audit
+
 
     def run_options_matrix_integrity_audit(self) -> None:
         """Step 38 — Technical Options Matrix integrity audit.
