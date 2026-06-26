@@ -4306,6 +4306,10 @@ class GravityAIAuditor:
         self.run_watch_alerts_audit()
         # Tier 1.5 — Plain-English "Why" for Every Recommendation (Expanded)
         self.run_rationale_verbosity_audit()
+        # Tier 2.1 — Regime-conditional signal weights
+        self.run_regime_weights_audit()
+        # Tier 2.2 — Forecast ensemble weighted by recent skill
+        self.run_forecast_skill_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -8547,6 +8551,297 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_39_robinhood_watchlist_noise_audit"] = audit
+
+    def run_regime_weights_audit(self) -> None:
+        """Step 58 — Tier 2.1 Regime-conditional signal weights audit.
+
+        Checks
+        ------
+        1.  ``resolve_regime_weights`` is importable from ``signals.aggregator``.
+        2.  Empty ``regime_weights`` returns ``default_weights`` object unchanged.
+        3.  Exact regime match (``"RECESSION"``) applies override, inherits defaults.
+        4.  ``_default`` fallback fires for an unmapped regime.
+        5.  Unknown regime with no ``_default`` returns defaults unchanged.
+        6.  ``settings.REGIME_SIGNAL_WEIGHTS`` default is ``{}`` (empty dict).
+        7.  ``SignalAggregator.aggregate`` docstring references regime-resolved weights.
+        8.  ``tests/test_regime_weights.py`` exists.
+        """
+        audit: dict = {"step": "step_58_regime_weights_audit", "checks": [], "status": "PENDING"}
+        all_pass = True
+
+        try:
+            from signals.aggregator import resolve_regime_weights
+
+            # 1. Importable
+            audit["checks"].append({
+                "check": "resolve_regime_weights importable from signals.aggregator",
+                "passed": callable(resolve_regime_weights),
+            })
+
+            flat = {"macro_regime": 45.0, "rsi2_mean_reversion": 10.0, "timeseries_momentum": 25.0}
+
+            # 2. Empty regime_weights returns defaults unchanged (same object)
+            result = resolve_regime_weights("RECESSION", {}, flat)
+            same_obj = result is flat
+            audit["checks"].append({
+                "check": "Empty regime_weights returns default_weights object unchanged",
+                "passed": same_obj,
+            })
+            all_pass = all_pass and same_obj
+
+            # 3. Exact regime match applies override + inherits other defaults
+            overrides = {"RECESSION": {"rsi2_mean_reversion": 0.0, "macro_regime": 60.0}}
+            result = resolve_regime_weights("RECESSION", overrides, flat)
+            override_ok = (
+                result["rsi2_mean_reversion"] == 0.0
+                and result["macro_regime"] == 60.0
+                and result["timeseries_momentum"] == 25.0  # inherited
+            )
+            audit["checks"].append({
+                "check": "Exact regime match overrides listed keys; uninvolved keys inherit defaults",
+                "passed": override_ok,
+                "detail": str(result),
+            })
+            all_pass = all_pass and override_ok
+
+            # 4. _default fallback for unmapped regime
+            overrides_with_default = {
+                "RECESSION": {"rsi2_mean_reversion": 0.0},
+                "_default": {"rsi2_mean_reversion": 5.0},
+            }
+            result_neutral = resolve_regime_weights("NEUTRAL", overrides_with_default, flat)
+            default_fallback_ok = result_neutral["rsi2_mean_reversion"] == 5.0
+            audit["checks"].append({
+                "check": "_default fallback fires for unmapped regime 'NEUTRAL'",
+                "passed": default_fallback_ok,
+                "detail": str(result_neutral),
+            })
+            all_pass = all_pass and default_fallback_ok
+
+            # 5. Unknown regime + no _default → returns defaults unchanged
+            overrides_no_default = {"RECESSION": {"rsi2_mean_reversion": 0.0}}
+            result_unknown = resolve_regime_weights("NEUTRAL", overrides_no_default, flat)
+            no_default_ok = result_unknown is flat
+            audit["checks"].append({
+                "check": "Unknown regime with no _default returns default_weights unchanged",
+                "passed": no_default_ok,
+            })
+            all_pass = all_pass and no_default_ok
+
+            # 6. settings.REGIME_SIGNAL_WEIGHTS default is empty dict
+            from settings import settings as _s
+            regime_weights_default_empty = _s.REGIME_SIGNAL_WEIGHTS == {}
+            audit["checks"].append({
+                "check": "settings.REGIME_SIGNAL_WEIGHTS default is empty dict {}",
+                "passed": regime_weights_default_empty,
+                "detail": repr(_s.REGIME_SIGNAL_WEIGHTS),
+            })
+            all_pass = all_pass and regime_weights_default_empty
+
+            # 7. SignalAggregator.aggregate docstring references regime weights
+            from signals.aggregator import SignalAggregator
+            agg_doc = SignalAggregator.aggregate.__doc__ or ""
+            doc_ok = "resolve_regime_weights" in agg_doc or "regime" in agg_doc.lower()
+            audit["checks"].append({
+                "check": "SignalAggregator.aggregate docstring references regime-resolved weights",
+                "passed": doc_ok,
+            })
+            all_pass = all_pass and doc_ok
+
+            # 8. Test file exists
+            import os
+            test_exists = os.path.isfile("tests/test_regime_weights.py")
+            audit["checks"].append({
+                "check": "tests/test_regime_weights.py exists",
+                "passed": test_exists,
+            })
+            all_pass = all_pass and test_exists
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_58_regime_weights_audit"] = audit
+
+    def run_forecast_skill_audit(self) -> None:
+        """Step 59 — Tier 2.2 Forecast ensemble skill-weighting audit.
+
+        Checks
+        ------
+        1.  ``ForecastTracker`` is importable from ``forecasting.forecast_tracker``.
+        2.  ``forecast_errors`` table DDL contains all required columns.
+        3.  Cold-start returns equal weights when below ``min_obs``.
+        4.  Warm-path inverse-RMSE: better-accuracy model gets higher weight.
+        5.  ``_MIN_RMSE`` guard is positive (no zero-division on perfect predictions).
+        6.  ``ForecastingEngine.__init__`` accepts a ``tracker`` keyword argument.
+        7.  ``ForecastingEngine._blend_with_skill`` static method exists.
+        8.  ``settings.FORECAST_SKILL_WINDOW_DAYS`` and ``FORECAST_SKILL_MIN_OBS`` exist.
+        9.  ``forecasting/__init__.py`` re-exports ``ForecastTracker``.
+        10. ``tests/test_forecast_tracker.py`` exists.
+        """
+        audit: dict = {"step": "step_59_forecast_skill_audit", "checks": [], "status": "PENDING"}
+        all_pass = True
+
+        try:
+            import os, math, tempfile, sqlite3
+            from datetime import datetime, timedelta
+
+            # 1. ForecastTracker importable
+            from forecasting.forecast_tracker import ForecastTracker, _MIN_RMSE, MODEL_ARIMA, MODEL_MONTE_CARLO
+            audit["checks"].append({
+                "check": "ForecastTracker importable from forecasting.forecast_tracker",
+                "passed": True,
+            })
+
+            # 2. DDL contains required columns
+            required_cols = {
+                "id", "symbol", "model_name", "horizon_days", "forecast_ts",
+                "forecast_price", "actual_price", "squared_error", "recorded_at",
+            }
+            ddl = ForecastTracker._TABLE_DDL
+            ddl_ok = all(col in ddl for col in required_cols)
+            audit["checks"].append({
+                "check": "forecast_errors DDL contains all required columns",
+                "passed": ddl_ok,
+                "detail": f"missing={required_cols - {c for c in required_cols if c in ddl}}",
+            })
+            all_pass = all_pass and ddl_ok
+
+            # 3. Cold-start equal weights
+            with tempfile.TemporaryDirectory() as tmpdir:
+                db = os.path.join(tmpdir, "skill_test.db")
+                tracker = ForecastTracker(db_path=db)
+                # Insert only 3 completed rows (below any reasonable min_obs)
+                old_ts = (datetime.utcnow() - timedelta(days=35)).isoformat()
+                now_iso = datetime.utcnow().isoformat()
+                with sqlite3.connect(db) as conn:
+                    for model in (MODEL_ARIMA, MODEL_MONTE_CARLO):
+                        for _ in range(3):
+                            conn.execute(
+                                "INSERT INTO forecast_errors (symbol, model_name, horizon_days, "
+                                "forecast_ts, forecast_price, actual_price, squared_error, recorded_at) "
+                                "VALUES (?,?,?,?,?,?,?,?)",
+                                ("AAPL", model, 30, old_ts, 100.0, 105.0, 25.0, now_iso),
+                            )
+                    conn.commit()
+                weights = tracker.get_skill_weights("AAPL", 30, window_days=60, min_obs=30)
+                cold_start_ok = (
+                    len(weights) == 2
+                    and all(abs(w - 0.5) < 1e-9 for w in weights.values())
+                )
+                audit["checks"].append({
+                    "check": "Cold-start (< min_obs) returns equal weights for all models",
+                    "passed": cold_start_ok,
+                    "detail": str(weights),
+                })
+                all_pass = all_pass and cold_start_ok
+
+                # 4. Warm path: model with lower RMSE gets higher weight
+                db2 = os.path.join(tmpdir, "skill_test2.db")
+                tracker2 = ForecastTracker(db_path=db2)
+                # arima_delta=0 (perfect), mc_delta=5 (bad)
+                for _ in range(35):
+                    ts = (datetime.utcnow() - timedelta(days=40)).isoformat()
+                    with sqlite3.connect(db2) as conn:
+                        conn.execute(
+                            "INSERT INTO forecast_errors (symbol, model_name, horizon_days, "
+                            "forecast_ts, forecast_price, actual_price, squared_error, recorded_at) "
+                            "VALUES (?,?,?,?,?,?,?,?)",
+                            ("AAPL", MODEL_ARIMA, 30, ts, 100.0, 100.0, 0.0, now_iso),
+                        )
+                        conn.execute(
+                            "INSERT INTO forecast_errors (symbol, model_name, horizon_days, "
+                            "forecast_ts, forecast_price, actual_price, squared_error, recorded_at) "
+                            "VALUES (?,?,?,?,?,?,?,?)",
+                            ("AAPL", MODEL_MONTE_CARLO, 30, ts, 95.0, 100.0, 25.0, now_iso),
+                        )
+                        conn.commit()
+                weights2 = tracker2.get_skill_weights("AAPL", 30, window_days=60, min_obs=30)
+                warm_ok = (
+                    MODEL_ARIMA in weights2
+                    and MODEL_MONTE_CARLO in weights2
+                    and weights2[MODEL_ARIMA] > weights2[MODEL_MONTE_CARLO]
+                )
+                audit["checks"].append({
+                    "check": "Warm path: lower-RMSE model (arima=perfect) gets higher weight than higher-RMSE model",
+                    "passed": warm_ok,
+                    "detail": str(weights2),
+                })
+                all_pass = all_pass and warm_ok
+
+            # 5. _MIN_RMSE guard is positive
+            min_rmse_ok = _MIN_RMSE > 0
+            audit["checks"].append({
+                "check": "_MIN_RMSE > 0 (prevents zero-division on perfect predictions)",
+                "passed": min_rmse_ok,
+                "detail": f"_MIN_RMSE={_MIN_RMSE}",
+            })
+            all_pass = all_pass and min_rmse_ok
+
+            # 6. ForecastingEngine.__init__ accepts tracker kwarg
+            from forecasting_engine import ForecastingEngine
+            import inspect
+            sig = inspect.signature(ForecastingEngine.__init__)
+            tracker_param_ok = "tracker" in sig.parameters
+            audit["checks"].append({
+                "check": "ForecastingEngine.__init__ accepts 'tracker' keyword argument",
+                "passed": tracker_param_ok,
+                "detail": str(list(sig.parameters.keys())),
+            })
+            all_pass = all_pass and tracker_param_ok
+
+            # 7. _blend_with_skill static method exists and is callable
+            blend_ok = callable(getattr(ForecastingEngine, "_blend_with_skill", None))
+            audit["checks"].append({
+                "check": "ForecastingEngine._blend_with_skill static method exists and is callable",
+                "passed": blend_ok,
+            })
+            all_pass = all_pass and blend_ok
+
+            # 8. New settings exist
+            from settings import settings as _s
+            skill_window_ok = hasattr(_s, "FORECAST_SKILL_WINDOW_DAYS") and _s.FORECAST_SKILL_WINDOW_DAYS > 0
+            skill_min_obs_ok = hasattr(_s, "FORECAST_SKILL_MIN_OBS") and _s.FORECAST_SKILL_MIN_OBS > 0
+            audit["checks"].append({
+                "check": "settings.FORECAST_SKILL_WINDOW_DAYS exists and > 0",
+                "passed": skill_window_ok,
+                "detail": getattr(_s, "FORECAST_SKILL_WINDOW_DAYS", "MISSING"),
+            })
+            audit["checks"].append({
+                "check": "settings.FORECAST_SKILL_MIN_OBS exists and > 0",
+                "passed": skill_min_obs_ok,
+                "detail": getattr(_s, "FORECAST_SKILL_MIN_OBS", "MISSING"),
+            })
+            all_pass = all_pass and skill_window_ok and skill_min_obs_ok
+
+            # 9. forecasting/__init__.py re-exports ForecastTracker
+            from forecasting import ForecastTracker as FT2
+            reexport_ok = FT2 is ForecastTracker
+            audit["checks"].append({
+                "check": "forecasting/__init__.py re-exports ForecastTracker",
+                "passed": reexport_ok,
+            })
+            all_pass = all_pass and reexport_ok
+
+            # 10. Test file exists
+            test_exists = os.path.isfile("tests/test_forecast_tracker.py")
+            audit["checks"].append({
+                "check": "tests/test_forecast_tracker.py exists",
+                "passed": test_exists,
+            })
+            all_pass = all_pass and test_exists
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_59_forecast_skill_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

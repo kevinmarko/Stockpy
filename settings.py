@@ -282,6 +282,56 @@ class Settings(BaseSettings):
         description="Weights for individual quantitative signal modules."
     )
 
+    # --- Regime-Conditional Signal Weights (Tier 2.1) ---
+    # Optional per-regime weight overrides.  When non-empty, SignalAggregator
+    # merges these on top of the flat SIGNAL_WEIGHTS for the current macro
+    # regime, so e.g. mean-reversion can be boosted in RISK ON and suppressed
+    # in RECESSION without touching the default dict.
+    #
+    # Format (JSON in .env):
+    #   REGIME_SIGNAL_WEIGHTS={
+    #     "RISK ON":      {"rsi2_mean_reversion": 20.0, "timeseries_momentum": 25.0},
+    #     "RECESSION":    {"rsi2_mean_reversion": 0.0, "macro_regime": 60.0},
+    #     "CREDIT EVENT": {"rsi2_mean_reversion": 0.0, "macro_regime": 60.0},
+    #     "_default":     {}
+    #   }
+    #
+    # Only keys listed in a regime dict are overridden; all other modules
+    # keep their SIGNAL_WEIGHTS values.  An empty dict (the project default)
+    # preserves the flat-dict behavior exactly — fully backward-compatible.
+    # "_default" is used as a catch-all when the current regime has no entry.
+    REGIME_SIGNAL_WEIGHTS: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-regime signal weight overrides merged onto SIGNAL_WEIGHTS. "
+            "Keys are macro regime names ('RISK ON', 'RECESSION', etc.) or "
+            "'_default' for catch-all. Empty dict (default) = flat weights for "
+            "all regimes (backward-compatible)."
+        ),
+    )
+
+    # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
+    # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
+    # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.
+    # Persisted to forecast_errors table in quant_platform.db.
+    FORECAST_SKILL_WINDOW_DAYS: int = Field(
+        default=60,
+        description=(
+            "Rolling window (calendar days) over which per-model RMSE is computed "
+            "for inverse-skill forecast blending. Increase for stability; decrease "
+            "for faster adaptation. Cold-start equal weighting applies when fewer "
+            "than FORECAST_SKILL_MIN_OBS completed observations exist."
+        ),
+    )
+    FORECAST_SKILL_MIN_OBS: int = Field(
+        default=30,
+        description=(
+            "Minimum number of completed (actualized) forecast rows required per "
+            "model before skill-based weighting activates. Below this threshold, "
+            "all models receive equal weight (cold-start fallback)."
+        ),
+    )
+
     # --- Macro Regime Gate (execution/risk_gate.py + gui/ Observability tab) ---
     # When True (default), the macro kill-switch check in PreTradeRiskGate blocks
     # all new BUY orders whenever MacroEconomicDTO.killSwitch is True (i.e. Sahm

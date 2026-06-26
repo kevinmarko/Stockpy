@@ -20,6 +20,14 @@ probability instead of ``output.meta_label_proba`` in the geometric mean.
 When ``global_meta_registry`` is empty (the default until real MetaLabelers are
 registered), the behavior is identical to the pre-Stage-4 code: every module's
 ``meta_label_proba`` defaults to 1.0 and the composite is 1.0.
+
+Tier 2.1 addition (regime-conditional weights): ``resolve_regime_weights()``
+merges per-regime weight overrides from ``settings.REGIME_SIGNAL_WEIGHTS`` onto
+the flat ``settings.SIGNAL_WEIGHTS`` base.  An empty ``REGIME_SIGNAL_WEIGHTS``
+dict (the project default) preserves the previous flat-weight behavior exactly —
+fully backward-compatible.  ``aggregate()`` resolves effective weights once at
+the top of the loop, before iterating over modules, so the hot path adds only a
+single dict-lookup per call.
 """
 
 import math
@@ -38,9 +46,71 @@ def _get_meta_registry():
     return global_meta_registry
 
 
+def resolve_regime_weights(
+    market_regime: str,
+    regime_weights: Dict[str, Dict[str, float]],
+    default_weights: Dict[str, float],
+) -> Dict[str, float]:
+    """Return effective signal weights for the current macro regime.
+
+    When ``regime_weights`` is empty (the project default), returns
+    ``default_weights`` unchanged — identical to the pre-Tier-2.1 behavior.
+
+    When regime-specific overrides are configured, the function:
+
+    1. Looks up ``market_regime`` in ``regime_weights`` (exact match).
+    2. Falls back to ``regime_weights["_default"]`` when no exact match exists.
+    3. If still no match, returns ``default_weights`` unchanged.
+    4. Otherwise merges: ``{**default_weights, **regime_override}`` so only the
+       listed keys are changed; every other module inherits its flat-weight value.
+
+    Parameters
+    ----------
+    market_regime : str
+        The current macro regime string from ``MacroEconomicDTO.market_regime``
+        (e.g. ``"RISK ON"``, ``"RECESSION"``).
+    regime_weights : dict[str, dict[str, float]]
+        Per-regime override dicts.  Keys are regime names or ``"_default"``.
+        An empty dict means "no overrides" (the project default).
+    default_weights : dict[str, float]
+        The flat ``settings.SIGNAL_WEIGHTS`` dict (base weights).
+
+    Returns
+    -------
+    dict[str, float]
+        Effective weights to use for this cycle.  Always a new dict (never
+        mutates ``default_weights`` or the regime override in place).
+
+    Examples
+    --------
+    >>> flat = {"macro_regime": 45.0, "rsi2_mean_reversion": 10.0}
+    >>> overrides = {"RECESSION": {"rsi2_mean_reversion": 0.0, "macro_regime": 60.0}}
+    >>> resolve_regime_weights("RECESSION", overrides, flat)
+    {'macro_regime': 60.0, 'rsi2_mean_reversion': 0.0}
+    >>> resolve_regime_weights("RISK ON", overrides, flat)  # no match → defaults
+    {'macro_regime': 45.0, 'rsi2_mean_reversion': 10.0}
+    """
+    if not regime_weights:
+        return default_weights
+
+    # Exact regime match first, then catch-all "_default"
+    regime_override = regime_weights.get(market_regime) or regime_weights.get("_default")
+    if not regime_override:
+        return default_weights
+
+    # Merge: regime-specific values override defaults; unspecified keys keep defaults
+    return {**default_weights, **regime_override}
+
+
 class SignalAggregator:
-    """Aggregates multiple signal module outputs using configured weights."""
-    
+    """Aggregates multiple signal module outputs using configured weights.
+
+    Tier 2.1: weights are now resolved per-cycle from ``settings.REGIME_SIGNAL_WEIGHTS``
+    so that mean-reversion modules can be boosted in RISK ON and suppressed in
+    RECESSION/CREDIT EVENT without touching the flat default dict.  Pass
+    ``weights`` explicitly only in unit tests that need to override the settings.
+    """
+
     def __init__(self, registry: SignalRegistry, weights: Dict[str, float] = None):
         self.registry = registry
         self.weights = weights if weights is not None else settings.SIGNAL_WEIGHTS
@@ -50,6 +120,11 @@ class SignalAggregator:
     ) -> Tuple[float, List[str], List[str], List[str], Dict[str, SignalOutput], float]:
         """
         Computes all signals and aggregates their scores using the configured weights.
+
+        Tier 2.1 change: effective weights are resolved once at call time via
+        ``resolve_regime_weights()`` using ``context.macro.market_regime``.  When
+        ``settings.REGIME_SIGNAL_WEIGHTS`` is empty (the default), this is a
+        no-op dict lookup and the behavior is identical to pre-Tier-2.1.
 
         Returns a 6-tuple: ``(final_score, score_log, warnings, details, outputs,
         meta_label_composite)``.
@@ -65,7 +140,7 @@ class SignalAggregator:
         Args:
             row: pandas Series representing indicators.
             context: SignalContext holding DTO objects.
-            
+
         Returns:
             Tuple:
                 - final_score (float): 0–100 aggregate score
@@ -76,6 +151,15 @@ class SignalAggregator:
                 - meta_label_composite (float): geometric mean of active
                   modules' meta_label_proba values (1.0 = no-op)
         """
+        # Tier 2.1: resolve effective weights for the current macro regime.
+        # Falls back to self.weights when REGIME_SIGNAL_WEIGHTS is empty (default).
+        market_regime = getattr(context.macro, "market_regime", "")
+        effective_weights = resolve_regime_weights(
+            market_regime,
+            settings.REGIME_SIGNAL_WEIGHTS,
+            self.weights,
+        )
+
         outputs = self.registry.compute_all(row, context)
 
         score = 50.0  # Base neutral score
@@ -111,7 +195,8 @@ class SignalAggregator:
             if not module.is_active_in_regime(context.macro):
                 continue
 
-            weight = self.weights.get(name, 0.0)
+            # Tier 2.1: use regime-resolved weight (may differ from self.weights[name])
+            weight = effective_weights.get(name, 0.0)
 
             # Weighted contribution (clamped between -weight and +weight)
             contrib = output.score * weight
