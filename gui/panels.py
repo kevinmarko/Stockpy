@@ -38,6 +38,8 @@ import streamlit as st
 
 from settings import settings
 from gui import env_io, orchestrator_runner
+from gui.symbol_search import filter_by_symbol
+from gui.orchestrator_runner import StageStatus
 
 logger = logging.getLogger(__name__)
 
@@ -692,11 +694,33 @@ def render_launcher() -> None:
     if handle is None or handle.mode == "orchestrator":
         st.markdown("**Pipeline stages**")
         stage_status = orchestrator_runner.compute_stage_status(handle)
-        icon = {"done": "✅", "active": "🟡", "pending": "⚪", "idle": "⚪"}
+        _stage_icons: dict = {
+            StageStatus.SUCCESS: "✅",
+            StageStatus.ACTIVE:  "🟡",
+            StageStatus.ERROR:   "🔴",
+            StageStatus.PENDING: "⚪",
+            StageStatus.SKIPPED: "⏭️",
+            # Legacy string literals for callers that haven't updated yet.
+            "done":    "✅",
+            "active":  "🟡",
+            "pending": "⚪",
+            "idle":    "⚪",
+            "error":   "🔴",
+            "skipped": "⏭️",
+        }
         stage_cols = st.columns(len(stage_status))
         for col, (label, status) in zip(stage_cols, stage_status.items()):
             with col:
-                st.metric(label, f"{icon.get(status, '⚪')} {status}")
+                ico = _stage_icons.get(status, "⚪")
+                st.metric(label, f"{ico} {status.value if isinstance(status, StageStatus) else status}")
+
+    # ── Safety controls (kill switch + safe-mode toggle) ──────────────────
+    st.divider()
+    _render_launcher_safety_controls()
+    st.divider()
+
+    # ── Preflight readiness gate ───────────────────────────────────────────
+    _render_preflight_panel()
 
     # ── Active run log (kind picked from the active handle) ────────────────
     log_label = "📜 Advisory log tail" if (handle and handle.mode == "advisory") else "📜 Orchestrator log tail"
@@ -719,6 +743,138 @@ def render_launcher() -> None:
     if running and auto_refresh:
         time.sleep(5)
         st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Launcher — Safety Controls
+# ---------------------------------------------------------------------------
+
+def _render_launcher_safety_controls() -> None:
+    """Kill-switch toggle + Safe Mode composite indicator for the Launcher tab.
+
+    Safe Mode is DERIVED (not stored):
+        ``is_active(kill_switch) AND DRY_RUN=true``.
+
+    The toggle writes BOTH the kill-switch sentinel AND ``DRY_RUN`` together
+    so the composite state is always consistent — there is no intermediate
+    "half-safe" window (CONSTRAINT #3 — no new env var).
+
+    UI
+    --
+    *   **🔴 Kill switch** toggle → activates/deactivates the sentinel file.
+    *   **🔵 DRY RUN** checkbox → writes ``DRY_RUN`` to ``.env`` via
+        :func:`gui.env_io.write_setting` (allowlist-bounded).
+    *   **Safe Mode status** chip — green when both are off (normal),
+        amber when DRY_RUN alone, red when kill switch active.
+    """
+    from execution.kill_switch import GlobalKillSwitch
+
+    ks = GlobalKillSwitch()
+    ks_active = ks.is_active()
+    dry_run_active = settings.DRY_RUN
+
+    safe_mode = ks_active and dry_run_active
+
+    st.markdown("**🛡️ Safety Controls**")
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        if ks_active:
+            st.error("🔴 Kill switch: **ACTIVE**")
+            if st.button("✅ Deactivate kill switch", key="launcher_ks_deactivate"):
+                ks.deactivate()
+                st.success("Kill switch deactivated.")
+                st.rerun()
+        else:
+            st.success("🟢 Kill switch: inactive")
+            reason = st.text_input(
+                "Activation reason (optional)",
+                key="launcher_ks_reason",
+                placeholder="e.g. manual safety stop",
+            )
+            if st.button("🔴 Activate kill switch", key="launcher_ks_activate"):
+                ks.activate(reason=reason or "Activated from GUI Launcher tab")
+                st.warning("Kill switch activated.")
+                st.rerun()
+
+    with c2:
+        new_dry = st.checkbox(
+            "DRY RUN (no orders submitted)",
+            value=bool(dry_run_active),
+            key="launcher_dry_run_toggle",
+            help="Writes DRY_RUN to .env — takes effect on the next launch.",
+        )
+        if new_dry != bool(dry_run_active):
+            try:
+                env_io.write_setting("DRY_RUN", "true" if new_dry else "false")
+                st.info("DRY_RUN updated in .env — takes effect on the next launch.")
+            except Exception as exc:
+                st.error(f"Could not write DRY_RUN: {exc}")
+
+    with c3:
+        if safe_mode:
+            st.error("🔴 Safe Mode: **ON** — kill switch + dry run active")
+        elif ks_active:
+            st.warning("🟡 Safe Mode: kill switch active, DRY_RUN off")
+        elif dry_run_active:
+            st.info("🔵 Safe Mode: DRY_RUN active, kill switch off")
+        else:
+            st.success("🟢 Safe Mode: OFF — normal operation")
+
+
+# ---------------------------------------------------------------------------
+# Launcher — Preflight Panel
+# ---------------------------------------------------------------------------
+
+def _render_preflight_panel() -> None:
+    """On-demand preflight readiness gate.
+
+    Runs ``scripts/preflight_check.py --json`` in a subprocess and renders
+    the per-check pass/fail table.  Timeout and missing-script errors are
+    shown as ``all_passed=False`` — CONSTRAINT #4, never fabricate success.
+    """
+    from gui.preflight_runner import run_preflight
+
+    st.markdown("**🏁 Pre-Launch Readiness Gate**")
+    st.caption(
+        "Click to run the 12-check preflight gate (FRED key, kill switch, "
+        "heartbeat freshness, validation reports, DB existence, etc.)."
+    )
+
+    if st.button("🏁 Run preflight checks", key="launcher_preflight_run"):
+        with st.spinner("Running preflight checks…"):
+            preflight_report = run_preflight()
+        st.session_state["preflight_report"] = preflight_report
+
+    pr = st.session_state.get("preflight_report")
+    if pr is None:
+        st.caption("No preflight run yet this session.")
+        return
+
+    if pr.error:
+        st.error(f"Preflight failed to run: `{pr.error}`")
+        return
+
+    if pr.all_passed:
+        st.success(f"✅ All {len(pr.checks)} checks passed — cleared for launch.")
+    else:
+        failed = [c for c in pr.checks if not c.passed and not c.warning]
+        warn_only = [c for c in pr.checks if not c.passed and c.warning]
+        st.error(
+            f"❌ {len(failed)} blocking check(s) failed, "
+            f"{len(warn_only)} warning(s). Review before launching."
+        )
+
+    if pr.checks:
+        rows = []
+        for c in pr.checks:
+            icon = "✅" if c.passed else ("⚠️" if c.warning else "❌")
+            rows.append({
+                "Check": c.name,
+                "Status": f"{icon} {'PASS' if c.passed else ('WARN' if c.warning else 'FAIL')}",
+                "Reason": c.reason,
+            })
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -906,10 +1062,19 @@ def render_report_viewer() -> None:
     st.markdown("**MFE / MAE / Edge Ratio (latest signals)**")
     if signals:
         sig_df = pd.DataFrame(signals)
-        chart_cols = [c for c in ["symbol", "score", "kelly_target"] if c in sig_df.columns]
-        if chart_cols:
-            st.bar_chart(sig_df.set_index("symbol")[[c for c in chart_cols if c != "symbol"]])
-        st.dataframe(sig_df, width="stretch")
+        # Symbol search filter
+        report_sym_query = st.text_input(
+            "🔍 Filter by symbol",
+            value="",
+            key="report_symbol_search",
+            placeholder="e.g. AAPL",
+            help="Case-insensitive prefix/contains match — leave blank to show all.",
+        )
+        sig_df_display = filter_by_symbol(sig_df, report_sym_query, column="symbol")
+        chart_cols = [c for c in ["symbol", "score", "kelly_target"] if c in sig_df_display.columns]
+        if chart_cols and not sig_df_display.empty:
+            st.bar_chart(sig_df_display.set_index("symbol")[[c for c in chart_cols if c != "symbol"]])
+        st.dataframe(sig_df_display, width="stretch")
 
         # ── Drill-down: pick a symbol → see its full signal row + recent
         #    closed trades from the TransactionsStore. Click-to-explain "why
@@ -1508,22 +1673,102 @@ def _render_dependency_map() -> None:
         st.dataframe(edge_df, width="stretch", hide_index=True)
 
 
+def _render_strategy_health() -> None:
+    """Strategy Health view from ``output/gravity_verification_report.json``.
+
+    Reads the verification report written by :func:`Gravity AI Review
+    Suite._write_gravity_verification_report` and evaluates each strategy
+    against :mod:`validation.thresholds` — the canonical single source of
+    truth shared with :mod:`validation.harness`.
+
+    Missing file → informational hint (CONSTRAINT #4 — no fabricated rows).
+    Corrupt JSON → same hint. Each strategy shows a gate-by-gate table with
+    the observed value, threshold, direction, and pass/fail status.
+    """
+    from gui.strategy_health import DeployabilityGate, evaluate_gate, read_gravity_report
+    from validation.thresholds import DSR_MIN, MAX_DRAWDOWN_MAX, NET_SHARPE_MIN, PBO_MAX
+
+    st.markdown("### 📊 Strategy Health — Deployability Gates")
+    st.caption(
+        "Sourced from `output/gravity_verification_report.json` (written by the "
+        "Gravity AI Review Suite). Evaluated against thresholds in "
+        "`validation/thresholds.py` — the same constants used by "
+        "`validation/harness.py`."
+    )
+
+    strategies = read_gravity_report()
+
+    if not strategies:
+        st.info(
+            "No strategy health data yet. Run the Gravity AI Review Suite below "
+            "to populate `output/gravity_verification_report.json`."
+        )
+        return
+
+    # Summary row
+    total = len(strategies)
+    deployable_count = sum(1 for s in strategies if s.get("deployable") is True)
+    not_deployable = sum(1 for s in strategies if s.get("deployable") is False)
+    unknown = total - deployable_count - not_deployable
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("Strategies", total)
+    sc2.metric("✅ Deployable", deployable_count)
+    sc3.metric("❌ Not Deployable", not_deployable)
+    sc4.metric("❓ Unknown", unknown)
+
+    for strategy_dict in strategies:
+        health = evaluate_gate(strategy_dict)
+        with st.expander(
+            f"{'✅' if health.deployable else ('❌' if health.deployable is False else '❓')} "
+            f"`{health.strategy_id}` — "
+            f"{'Deployable' if health.deployable else ('NOT deployable' if health.deployable is False else 'Unknown')}",
+            expanded=health.deployable is False,
+        ):
+            if health.last_audited_at:
+                st.caption(f"Last audited: {health.last_audited_at}")
+
+            gate_rows = []
+            for g in health.gates:
+                icon = "✅" if g.passed is True else ("❌" if g.passed is False else "—")
+                gate_rows.append({
+                    "Metric": g.metric,
+                    "Observed": f"{g.value:.4f}" if g.value is not None else "—",
+                    "Threshold": f"{g.threshold}",
+                    "Direction": f"must be {g.direction} {g.threshold}",
+                    "Gate": f"{icon} {'PASS' if g.passed else ('FAIL' if g.passed is False else 'N/A')}",
+                })
+            st.dataframe(pd.DataFrame(gate_rows), width="stretch", hide_index=True)
+
+            if health.is_options_selling:
+                stress_label = (
+                    "✅ Stress passed"
+                    if health.stress_passed is True
+                    else ("❌ Stress FAILED" if health.stress_passed is False else "— Not run")
+                )
+                st.caption(f"Options-selling strategy — tail-scenario stress gate: {stress_label}")
+
+
 def render_gravity_audit() -> None:
     """Render the Safety tab: Circuit Breakers + Dependency Map + Gravity audit.
 
     Sections (top to bottom):
 
-    1.  **Circuit Breaker Dashboard** — every tripped breaker derived from the
+    1.  **Strategy Health** — deployability gate table from
+        ``output/gravity_verification_report.json``.
+    2.  **Circuit Breaker Dashboard** — every tripped breaker derived from the
         existing kill-switch sentinel + risk-gate block log. See
         :mod:`gui.circuit_breakers`.
-    2.  **Dependency Map** — declarative source → consumer graph from
+    3.  **Dependency Map** — declarative source → consumer graph from
         :mod:`gui.dependency_map`. The operator picks the degraded sources
         and the panel shows which strategies / tabs / reports lose coverage.
-    3.  **Gravity AI Review Suite** — full audit subprocess (the original
+    4.  **Gravity AI Review Suite** — full audit subprocess (the original
         behavior, kept verbatim).
     """
     st.subheader("🛡️ Safety — Circuit Breakers, Dependencies, Gravity Audit")
 
+    _render_strategy_health()
+    st.divider()
     _render_circuit_breaker_dashboard()
     st.divider()
     _render_dependency_map()
@@ -2771,6 +3016,14 @@ def render_live_inventory() -> None:
         st.info("Sync report is empty.")
         return
 
+    inventory_sym_query = st.text_input(
+        "🔍 Filter by symbol",
+        value="",
+        key="inventory_symbol_search",
+        placeholder="e.g. TSLA",
+        help="Case-insensitive prefix/contains match — leave blank to show all.",
+    )
+
     df = pd.DataFrame(rows)
     # Pretty column names + ordering for the visible inventory.
     display_cols = [
@@ -2792,6 +3045,9 @@ def render_live_inventory() -> None:
     keep = [src for src, _ in display_cols if src in df.columns]
     rename = {src: lbl for src, lbl in display_cols if src in df.columns}
     df = df[keep].rename(columns=rename).copy()
+
+    # Apply symbol search filter (uses the "Symbol" column after rename).
+    df = filter_by_symbol(df, inventory_sym_query, column="Symbol")
 
     # Convert the watchlists list-of-strings to a comma-joined string so the
     # built-in dataframe renderer doesn't truncate to "[...]" text.

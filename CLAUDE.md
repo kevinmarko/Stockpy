@@ -408,3 +408,48 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 - **`tests/test_dead_letter.py`** (16 tests) — DeadLetterEntry frozen, DeadLetterReport.is_clean/.symbols, read_dead_letter (missing, corrupt, partial entry, empty file, valid payload, run_id preservation).
 - **`tests/test_heartbeat_trend.py`** (33 tests) — HeartbeatSample frozen/NaN, HeartbeatTrendStore ring-buffer roll-off/clear/invalid-capacity/to_dataframe, extract_symbol_from_message (7 positive patterns + false-positive exclusions), classify_log_entry (systemic/symbol_specific/unknown, priority ordering, unparsed continuation).
 - **Gravity:** `step_46_enhanced_observability_audit` — 10 checks covering all three features: dead-letter read API, contextual classification priority, ring-buffer roll-off, `launch_symbol_retry` callable, `run_pipeline` dead-letter write and `_stage` tracker.
+
+## GUI Operational Efficiency, UX & Architectural Integration (2026-06)
+
+### Pipeline StageStatus enum (gui/orchestrator_runner.py)
+- **`StageStatus(str, enum.Enum)`** — five members: `SUCCESS/"success"`, `ACTIVE/"active"`, `ERROR/"error"`, `PENDING/"pending"`, `SKIPPED/"skipped"`. Inherits from `str` so legacy callers doing `if status == "active"` continue to work without modification.
+- **`compute_stage_status(handle) -> Dict[str, StageStatus]`** now returns typed `StageStatus` values. New behaviour: `DRY_RUN=true` on an orchestrator run forces the `"Execution"` stage to `SKIPPED`; a non-zero exit code on the last-active stage emits `ERROR`; prior stages on an error run stay `SUCCESS`.
+- **`STAGES`** list has exactly 4 pipeline stages: Data Acquisition, Processing, Forecasting, Execution.
+- Launcher stage indicator rendering updated: uses `StageStatus`-aware icon map (`✅`/`🟡`/`🔴`/`⚪`/`⏭️`) and displays `.value` for enum instances.
+- **Test surface:** `tests/test_pipeline_stage_status.py` (12 tests) — enum str-subclass, all 5 members, string equality, 4-stage count, compute_stage_status variants (None handle, no log, finished-clean, dry-run-skipped, error-path).
+
+### Preflight Runner (gui/preflight_runner.py)
+- **`PreflightCheck`** (frozen dataclass: `name, passed, reason, warning`). **`PreflightReport`** (frozen: `all_passed, checks, error, returncode`).
+- **`run_preflight(timeout, skip) -> PreflightReport`** — subprocess wrapper around `scripts/preflight_check.py --json`. **CONSTRAINT #4**: timeout/missing-script/corrupt-JSON/empty-stdout → `all_passed=False` — never fabricates success.
+- **`gui/panels._render_preflight_panel()`** — on-demand gate button in the Launcher tab; renders per-check pass/fail table; uses `st.session_state["preflight_report"]` for persistence across reruns.
+- **Test surface:** `tests/test_preflight_runner.py` (16 tests) — import, frozen fields, good path, non-zero exit, timeout, missing script, corrupt JSON, empty stdout, subprocess exception, wiring checks.
+
+### Launcher Safety Controls (gui/panels._render_launcher_safety_controls)
+- **`_render_launcher_safety_controls()`** — kill-switch toggle + DRY_RUN checkbox + Safe Mode composite indicator in the Launcher tab. Safe Mode is **DERIVED** (no new env var): `ks.is_active() AND settings.DRY_RUN`. Writes `DRY_RUN` via the allowlist-bounded `gui.env_io.write_setting`. Wired into `render_launcher()` between stage indicators and the log expanders.
+- **Test surface:** `tests/test_launcher_safety_controls.py` (12 tests) — helper exists/callable, SAFE_MODE not in ALLOWED_KEYS/SECRET_KEYS, DRY_RUN in ALLOWED_KEYS, write round-trips, kill-switch activate/deactivate, safe-mode derivation logic.
+
+### Persistent Run-Mode Header (gui/run_mode.py + gui/app.py)
+- **`RunModeState`** (frozen dataclass: `mode, process, dry_run, alpaca_paper, icon, color, pid, run_mode_label`). **`read_active_run_mode(session_state={}) -> RunModeState`** — Streamlit-free derivation (testable headlessly). Mode truth table: `(DRY_RUN=T,*) → Simulation`; `(False,PAPER=T) → Paper`; `(False,False) → Live`.
+- **`gui/app.py`** renders a persistent colored banner above the tab bar on every Streamlit render: `st.error` (red) for Live, `st.warning` (amber) for Paper, `st.info` (blue) for Simulation.
+- **Test surface:** `tests/test_run_mode.py` (15 tests) — import, frozen, idle/running/finished process derivation, mode truth table, icon/color/label non-empty, app.py references run_mode.
+
+### Symbol Search (gui/symbol_search.py)
+- **`filter_by_symbol(df, query, *, column="Symbol") -> pd.DataFrame`** — Streamlit-free, case-insensitive contains match on the symbol column. Empty/None/whitespace query returns the full DataFrame unchanged. NaN symbol rows always pass through (never silently dropped for EQUITY_ONLY sentinels). Falls back to first column when `"Symbol"` absent.
+- Wired into **`render_report_viewer`** (🔍 Filter by symbol above the signals table) and **`render_live_inventory`** (🔍 Filter by symbol above the inventory table).
+- **Test surface:** `tests/test_symbol_search.py` (15 tests) — passthrough, exact/partial/case-insensitive match, no-match empty, NaN pass-through, custom column, fallback column, empty DataFrame, returns-same-object.
+
+### Strategy Health View (gui/strategy_health.py + gui/panels._render_strategy_health)
+- **`DeployabilityGate`** (frozen: `metric, value, threshold, direction, passed`). **`StrategyHealth`** (frozen: `strategy_id, deployable, gates, is_options_selling, stress_passed, last_audited_at`).
+- **`read_gravity_report(path) -> list[dict]`** — tolerant reader of `output/gravity_verification_report.json`. Missing → `[]`, corrupt JSON → `[]`, wrong schema → `[]` (CONSTRAINT #4 — never fabricate).
+- **`evaluate_gate(strategy_dict) -> StrategyHealth`** — evaluates one strategy dict against thresholds from `validation.thresholds` (single source of truth). Missing/NaN metric → `gate.passed=None`. `deployable` mirrors the report field rather than re-deriving.
+- **`gui/panels._render_strategy_health()`** — top section of `render_gravity_audit` showing per-strategy gate table with PASS/FAIL/N/A indicators. Wired first (before circuit breakers / dependency map).
+- **`Gravity AI Review Suite._write_gravity_verification_report()`** — writes `output/gravity_verification_report.json` atomically (write-then-rename) at the end of every audit run.
+- **Test surface:** `tests/test_strategy_health.py` (20 tests) — import, frozen fields, read_gravity_report failure modes (missing/corrupt/non-dict/non-list), valid-file happy path, evaluate_gate all-pass/individual-gate-fail/missing-metric-None/NaN-metric-None/deployable-mirrors-report/options-selling-stress.
+
+### Gravity Audit steps 47-50
+- **`step_47_launcher_safety_bundle_audit`** — verifies `_render_launcher_safety_controls` exists, touches DRY_RUN + kill-switch together, SAFE_MODE not in ALLOWED_KEYS.
+- **`step_48_preflight_runner_audit`** — verifies `run_preflight` returns typed report; timeout → `all_passed=False`; `_render_preflight_panel` wired into `render_launcher`.
+- **`step_49_dual_mode_header_audit`** — verifies `gui.run_mode` importable, `read_active_run_mode({})` returns `process="idle"`, `gui/app.py` references `run_mode`.
+- **`step_50_strategy_health_audit`** — verifies `validation.thresholds` exports 5 constants; `validation.harness` imports from it; `read_gravity_report` → `[]` on missing/corrupt file; `tests/test_strategy_health.py` exists.
+- **`_extend_launcher_telemetry_audit_stage_status`** — appends StageStatus enum checks to step_41: `StageStatus` is `str`-subclassed, 5 members, string equality, `STAGES` has 4 elements.
+- **`_extend_safety_control_audit_launcher`** — appends Launcher-tab safety-control checks to step_44: `_render_launcher_safety_controls` exists and `render_launcher` calls it.

@@ -59,7 +59,7 @@ except Exception:  # pragma: no cover - dotenv always present per requirements.t
 import streamlit as st
 
 from settings import settings
-from gui import panels
+from gui import panels, run_mode
 
 logging.basicConfig(level=getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO))
 logger = logging.getLogger("gui.app")
@@ -109,9 +109,21 @@ if st.sidebar.button("🔄 Clear cached reads"):
     st.rerun()
 
 # ---------------------------------------------------------------------------
-# Main title + tabs
+# Main title + persistent run-mode header
 # ---------------------------------------------------------------------------
 st.title("InvestYo Command Center")
+
+# Persistent banner derived from DRY_RUN + ALPACA_PAPER + session run handle.
+# Shown above the tab bar so the operator always knows what mode they're in.
+_mode_state = run_mode.read_active_run_mode(session_state=st.session_state)
+_mode_colors = {"Simulation": "blue", "Paper": "orange", "Live": "red"}
+_banner_color = _mode_colors.get(_mode_state.mode, "gray")
+if _mode_state.mode == "Live":
+    st.error(_mode_state.run_mode_label, icon="🔴")
+elif _mode_state.mode == "Paper":
+    st.warning(_mode_state.run_mode_label, icon="🟡")
+else:
+    st.info(_mode_state.run_mode_label, icon="⚪")
 
 tab_labels = [
     "🚀 Launcher",

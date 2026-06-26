@@ -25,6 +25,12 @@ from validation.stress_scenarios import (
     passes_stress_gate,
     format_stress_summary,
 )
+from validation.thresholds import (
+    PBO_MAX,
+    DSR_MIN,
+    NET_SHARPE_MIN,
+    MAX_DRAWDOWN_MAX,
+)
 
 # Configure module logger
 logger = logging.getLogger("Validation_Harness")
@@ -108,11 +114,14 @@ class ValidationReport:
            < 50% AND account survives in EVERY dated shock window
            (validation/stress_scenarios.py). Fails closed if an
            options-selling strategy was never stress-tested.
+
+        Thresholds are imported from :mod:`validation.thresholds` so the GUI
+        and harness always share the same values.
         """
-        pbo_pass = self.pbo < 0.5
-        dsr_pass = self.dsr > 0.95
-        sharpe_pass = (not np.isnan(self.sharpe)) and (self.sharpe > 0.5)
-        max_dd_pass = (not np.isnan(self.max_dd)) and (self.max_dd < 0.30)
+        pbo_pass = self.pbo < PBO_MAX
+        dsr_pass = self.dsr > DSR_MIN
+        sharpe_pass = (not np.isnan(self.sharpe)) and (self.sharpe > NET_SHARPE_MIN)
+        max_dd_pass = (not np.isnan(self.max_dd)) and (self.max_dd < MAX_DRAWDOWN_MAX)
         return bool(pbo_pass and dsr_pass and sharpe_pass and max_dd_pass and self.stress_gate_passed)
 
     def to_summary_dict(self) -> dict:

@@ -34,6 +34,7 @@ is a stage shows "pending" slightly longer; it never blocks or crashes the GUI.
 
 from __future__ import annotations
 
+import enum
 import logging
 import os
 import subprocess
@@ -44,6 +45,29 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from settings import settings
+
+
+class StageStatus(str, enum.Enum):
+    """Pipeline-stage status values.
+
+    Inherits from ``str`` so legacy callers that compare with plain string
+    literals (e.g. ``if status == "active"``) continue to work without
+    modification.
+
+    Values
+    ------
+    SUCCESS : Finished cleanly — a later stage's markers appeared or run exited 0.
+    ACTIVE  : This is the furthest stage whose log markers have been seen.
+    ERROR   : Run exited non-zero and this stage was the last active one.
+    PENDING : Launched but this stage's markers not yet seen.
+    SKIPPED : Execution was intentionally skipped (e.g. ``DRY_RUN=true``).
+    """
+
+    SUCCESS = "success"
+    ACTIVE = "active"
+    ERROR = "error"
+    PENDING = "pending"
+    SKIPPED = "skipped"
 
 logger = logging.getLogger(__name__)
 
@@ -415,22 +439,31 @@ def launch_symbol_retry(
     )
 
 
-def compute_stage_status(handle: Optional[RunHandle]) -> Dict[str, str]:
+def compute_stage_status(
+    handle: Optional[RunHandle],
+) -> Dict[str, StageStatus]:
     """Derive per-stage status from the run log + heartbeat + snapshot mtime.
 
-    Returns a mapping ``{stage_label: "done"|"active"|"pending"|"idle"}``.
+    Returns a mapping ``{stage_label: StageStatus}``.
 
-    *   ``idle``    — no run handle / no log (nothing launched this session).
-    *   ``pending`` — launched but this stage's markers not yet seen.
-    *   ``active``  — this is the latest stage whose markers have appeared.
-    *   ``done``    — a later stage's markers have appeared, or the run finished
-                      and a snapshot was written.
+    *   ``PENDING`` — launched but this stage's markers not yet seen.
+    *   ``ACTIVE``  — this is the latest stage whose markers have appeared.
+    *   ``SUCCESS`` — a later stage's markers appeared or run finished cleanly.
+    *   ``ERROR``   — run exited non-zero and this was the last active stage.
+    *   ``SKIPPED`` — Execution stage when the run handle was ``dry_run=True``
+                      (orchestrator logs intent but never calls the broker).
+
+    Note
+    ----
+    The legacy string values (``"pending"``, ``"active"``, etc.) are still
+    valid because :class:`StageStatus` subclasses ``str``.  Callers that
+    previously compared against bare string literals continue to work.
     """
     labels = [label for label, _ in STAGES]
     if handle is None:
-        return {label: "idle" for label in labels}
+        return {label: StageStatus.PENDING for label in labels}
     if not handle.log_path.exists():
-        return {label: "idle" for label in labels}
+        return {label: StageStatus.PENDING for label in labels}
 
     log_text = read_log_tail(max_lines=2000, handle=handle).lower()
     reached: List[bool] = []
@@ -440,18 +473,29 @@ def compute_stage_status(handle: Optional[RunHandle]) -> Dict[str, str]:
     # Index of the furthest stage reached (-1 if none).
     last_reached = max((i for i, r in enumerate(reached) if r), default=-1)
 
-    finished = (handle is not None) and (not handle.is_running())
+    finished = not handle.is_running()
+    rc = handle.returncode()
+    run_errored = finished and rc is not None and rc != 0
     snapshot = settings.OUTPUT_DIR / "state_snapshot.json"
     snapshot_fresh = snapshot.exists() and (snapshot.stat().st_mtime >= handle.started_at)
 
-    status: Dict[str, str] = {}
+    status: Dict[str, StageStatus] = {}
     for i, label in enumerate(labels):
-        if finished and snapshot_fresh:
-            status[label] = "done"
+        # "Execution" stage is SKIPPED when dry_run=True on an orchestrator run.
+        if label == "Execution" and handle.dry_run and handle.mode == "orchestrator":
+            status[label] = StageStatus.SKIPPED
+            continue
+
+        if finished and snapshot_fresh and not run_errored:
+            status[label] = StageStatus.SUCCESS
+        elif run_errored and i == last_reached:
+            status[label] = StageStatus.ERROR
+        elif run_errored and i < last_reached:
+            status[label] = StageStatus.SUCCESS
         elif i < last_reached:
-            status[label] = "done"
+            status[label] = StageStatus.SUCCESS
         elif i == last_reached:
-            status[label] = "active"
+            status[label] = StageStatus.ACTIVE
         else:
-            status[label] = "pending"
+            status[label] = StageStatus.PENDING
     return status
