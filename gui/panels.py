@@ -721,12 +721,75 @@ def render_launcher() -> None:
 # Tab 2 — Interactive Report Viewer
 # ===========================================================================
 
+# Distinct colour cues for Live vs Backtested data, applied via inline Markdown.
+# Streamlit doesn't expose a primary-colour API per-element, so we use
+# ``st.info`` (blue) for Live and a Markdown blockquote with a grey diamond
+# for Backtested — both are clearly visually distinct at a glance.
+
+_LIVE_TAG = "🔵 Live data"
+_BACKTEST_TAG = "⚪ Backtested / simulated"
+
+
+def _render_report_provenance_banner(snap: dict) -> None:
+    """One-line banner classifying the data feeding this tab as Live vs Backtested.
+
+    Rules:
+      * Snapshot present + execution mode is PAPER or LIVE → Live (blue).
+      * Snapshot present but mode is SIMULATION (``DRY_RUN=true``) → Backtested (grey).
+      * Snapshot absent → Backtested (grey) with a hint about the Launcher.
+    """
+    from gui.strategy_registry import ExecutionMode, read_active_mode
+
+    mode_state = read_active_mode()
+    has_snap = bool(snap.get("signals") or snap.get("timestamp"))
+
+    is_live = has_snap and mode_state.mode in (ExecutionMode.PAPER, ExecutionMode.LIVE)
+    last_ts = snap.get("timestamp", "—")
+
+    if is_live:
+        st.info(
+            f"{_LIVE_TAG} — sourced from `output/state_snapshot.json` "
+            f"(mode: {mode_state.mode.label}; last run: {last_ts}).",
+            icon="🔵",
+        )
+    else:
+        reason = (
+            "No state snapshot yet — run the orchestrator or `main.py`."
+            if not has_snap
+            else f"DRY_RUN active — every value here is simulated (mode: {mode_state.mode.label})."
+        )
+        st.markdown(
+            f"> {_BACKTEST_TAG} — {reason}"
+        )
+
+
 def render_report_viewer() -> None:
-    """Surface evaluation_engine / research_engine analytics + report exports."""
+    """Surface evaluation_engine / research_engine analytics + report exports.
+
+    Visual cues
+    -----------
+    Every section of this tab is tagged Blue (Live) or Grey (Backtested /
+    Simulated) so the operator cannot mistake one for the other. The
+    classification rules:
+
+    * **Blue / Live** — data sourced from ``output/state_snapshot.json``
+      written by the most recent orchestrator / advisory run AND the active
+      execution mode is :data:`ExecutionMode.PAPER` or
+      :data:`ExecutionMode.LIVE`.
+    * **Grey / Backtested** — data sourced from CSV uploads, validation
+      reports, or anything authored under ``DRY_RUN=true`` (simulation mode).
+
+    Drill-down: every metric tile has a "🔬 Inspect" expander revealing the
+    underlying trade log, per-symbol contribution table, or raw signal row so
+    the operator can see *why* a number is what it is rather than only *what*
+    it is.
+    """
     st.subheader("📈 Interactive Report Viewer")
 
     snap = load_state_snapshot()
     signals = snap.get("signals", [])
+
+    _render_report_provenance_banner(snap)
 
     # ── Portfolio heat + edge from the engine ────────────────────────────────
     from evaluation_engine import EvaluationEngine
@@ -768,6 +831,48 @@ def render_report_viewer() -> None:
         if chart_cols:
             st.bar_chart(sig_df.set_index("symbol")[[c for c in chart_cols if c != "symbol"]])
         st.dataframe(sig_df, width="stretch")
+
+        # ── Drill-down: pick a symbol → see its full signal row + recent
+        #    closed trades from the TransactionsStore. Click-to-explain "why
+        #    is this score what it is" rather than scrolling the wide table.
+        with st.expander("🔬 Drill down by symbol"):
+            if "symbol" in sig_df.columns:
+                pick = st.selectbox(
+                    "Symbol",
+                    options=sorted(sig_df["symbol"].astype(str).unique()),
+                    key="report_drilldown_symbol",
+                )
+                if pick:
+                    row = sig_df[sig_df["symbol"].astype(str) == pick].iloc[0].to_dict()
+                    st.markdown(f"**Signal row for `{pick}`**")
+                    st.json(row)
+
+                    # Trade-log drill-down via TransactionsStore (CONSTRAINT
+                    # #7: integrate, don't reinvent — read the existing
+                    # ledger directly).
+                    try:
+                        from transactions_store import TransactionsStore
+                        ts = TransactionsStore()
+                        closed = ts.closed_trades_df()
+                        if (not closed.empty
+                                and "symbol" in closed.columns):
+                            sym_trades = closed[
+                                closed["symbol"].astype(str) == pick
+                            ].sort_values("exit_ts", ascending=False).head(20)
+                            if not sym_trades.empty:
+                                st.markdown(f"**Closed trades for `{pick}` "
+                                            f"(latest {len(sym_trades)})**")
+                                st.dataframe(sym_trades, width="stretch",
+                                             hide_index=True)
+                            else:
+                                st.caption(
+                                    f"No closed trades for `{pick}` yet — "
+                                    "score-only drill-down."
+                                )
+                    except Exception as exc:  # noqa: BLE001 — degrade
+                        st.caption(f"(transactions store unavailable: {exc})")
+            else:
+                st.caption("Signal frame has no `symbol` column to drill into.")
     else:
         st.caption("MFE/MAE/Edge populate once closed trades and signals exist.")
 
@@ -906,9 +1011,129 @@ def render_settings_manager() -> None:
 # Tab 4 — Strategy Matrix & Risk Gating
 # ===========================================================================
 
+def _render_strategy_mode_toggle() -> None:
+    """Global Simulation / Paper / Live selector.
+
+    Backed by :func:`gui.strategy_registry.set_active_mode`, which writes
+    ``DRY_RUN`` and ``ALPACA_PAPER`` to ``.env`` via the allowlist-bounded
+    :mod:`gui.env_io` writer. Effect on the **next** orchestrator launch — we
+    never patch a running ``settings`` instance.
+    """
+    from gui.strategy_registry import (
+        ExecutionMode,
+        mode_banner_text,
+        read_active_mode,
+        set_active_mode,
+    )
+
+    st.markdown("### 🎚️ Global Execution Mode")
+    state = read_active_mode()
+
+    if state.is_live:
+        st.error(f"🔴 **{state.mode.label}** — orders WILL hit the live broker.",
+                 icon="⚠️")
+    elif state.mode is ExecutionMode.PAPER:
+        st.info(f"📝 **{state.mode.label}** — orders route to the Alpaca paper sandbox.",
+                icon="ℹ️")
+    else:
+        st.success(f"🧪 **{state.mode.label}** — OrderManager intercepts before broker contact.",
+                   icon="🧪")
+    st.caption(mode_banner_text(state))
+
+    options: list[ExecutionMode] = list(ExecutionMode)
+    labels = [m.label for m in options]
+    current_idx = options.index(state.mode)
+    chosen_label = st.radio(
+        "Switch mode",
+        options=labels,
+        index=current_idx,
+        horizontal=True,
+        key="strategy_mode_radio",
+    )
+    chosen_mode = options[labels.index(chosen_label)]
+
+    if chosen_mode is not state.mode:
+        col_confirm, col_cancel = st.columns([1, 1])
+        with col_confirm:
+            confirm_label = (
+                "🔴 CONFIRM LIVE PRODUCTION"
+                if chosen_mode is ExecutionMode.LIVE
+                else f"Apply {chosen_mode.label}"
+            )
+            if st.button(confirm_label, type="primary", key="apply_mode"):
+                try:
+                    new_state = set_active_mode(chosen_mode)
+                    st.success(
+                        f"Mode written to `.env` → {new_state.mode.label}. "
+                        "Takes effect on the next orchestrator / advisory launch."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to persist mode: {exc}")
+        with col_cancel:
+            st.caption(
+                "ALPACA_PAPER and DRY_RUN are written together so the mode is "
+                "fully consistent — no half-flips."
+            )
+
+
+def _render_strategy_version_registry() -> None:
+    """Show each signal module's deployment fingerprint (sha256 prefix + mtime).
+
+    Backed by :func:`gui.strategy_registry.list_strategy_versions`. Useful for
+    answering "did I really redeploy the meta-labeler since last week's run?"
+    without having to scroll git log.
+    """
+    from gui.strategy_registry import list_strategy_versions
+
+    st.markdown("### 📜 Strategy Version Registry")
+    st.caption(
+        "Each module's deployment fingerprint — sha256 prefix + file mtime — "
+        "joined with live enable/weight state from `settings`."
+    )
+    records = list_strategy_versions()
+    if not records:
+        st.info("No registered signal modules detected.")
+        return
+
+    rows = []
+    for r in records:
+        rows.append({
+            "Module": r.name,
+            "Enabled": "✅" if r.enabled else "⏸",
+            "Weight": round(r.weight, 4),
+            "Version": r.version_hash or "—",
+            "Last modified (UTC)": (r.last_modified.isoformat(timespec="seconds")
+                                    if r.last_modified else "—"),
+            "Source file": (str(r.file_path.relative_to(_REPO_ROOT))
+                            if r.file_path else "—"),
+        })
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+
 def render_strategy_matrix() -> None:
-    """Toggle signal modules, edit weights, and control the macro kill switch."""
+    """Strategy Matrix & Risk Gating — module toggles, weights, kill switch, version registry.
+
+    Sections
+    --------
+    1.  **Global Execution Mode** — Simulation / Paper / Live selector backed
+        by :mod:`gui.strategy_registry`. Writes ``DRY_RUN`` + ``ALPACA_PAPER``
+        to ``.env`` via the allowlist-bounded :mod:`gui.env_io` writer.
+        Effect on next orchestrator launch.
+    2.  **Strategy Version Registry** — sha256-prefix fingerprint + file mtime
+        of every signal module so the operator can see at a glance whether a
+        strategy file has been redeployed since the last run.
+    3.  **Signal modules** — existing per-module enable/weight form.
+    4.  **Manual macro kill switch** — existing GlobalKillSwitch wrapper.
+    5.  **Recent risk-gate blocks** — existing block log table.
+    """
     st.subheader("🧩 Strategy Matrix & Risk Gating")
+
+    _render_strategy_mode_toggle()
+    st.divider()
+
+    _render_strategy_version_registry()
+    st.divider()
 
     # ── Module enable/disable + weights ──────────────────────────────────────
     st.markdown("**Signal modules** — disable a module or adjust its weight; "
@@ -1094,9 +1319,138 @@ def render_paper_monitor() -> None:
 # Tab 6 — Gravity AI Audit Logs
 # ===========================================================================
 
+def _render_circuit_breaker_dashboard() -> None:
+    """Render every tripped breaker — kill switch + recent risk-gate blocks.
+
+    Read-only derivation via :mod:`gui.circuit_breakers`. Adding a new
+    breaker means adding a check inside ``execution/risk_gate.py``; this
+    panel auto-picks-up the new tag via the ``_KNOWN_CHECKS`` table over there.
+    """
+    from gui.circuit_breakers import (
+        collect_circuit_breaker_trips,
+        summarise_trips,
+    )
+
+    st.markdown("### 🚧 Circuit Breaker Dashboard")
+    st.caption(
+        "Trips derived from `output/KILL_SWITCH` and `output/risk_gate_blocks.jsonl` "
+        "(last 24 h). Most recent per (breaker, strategy) shown."
+    )
+
+    trips = collect_circuit_breaker_trips(
+        kill_switch_sentinel=settings.OUTPUT_DIR / "KILL_SWITCH",
+        block_log_path=settings.OUTPUT_DIR / "risk_gate_blocks.jsonl",
+    )
+    summary = summarise_trips(trips)
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric("CRITICAL trips", summary["CRITICAL"])
+    k2.metric("WARNING trips", summary["WARNING"])
+    k3.metric("Total", summary["TOTAL"])
+
+    if not trips:
+        st.success("✅ No active circuit-breaker trips in the last 24 h.")
+        return
+
+    rows = []
+    for t in trips:
+        rows.append({
+            "Severity": ("🔴 CRITICAL" if t.severity == "CRITICAL"
+                         else "🟡 WARNING"),
+            "Breaker": t.name,
+            "Summary": t.summary,
+            "Triggered (UTC)": (t.triggered_at.isoformat(timespec="seconds")
+                                if t.triggered_at else "—"),
+            "Threshold": (f"{t.threshold:.4g}" if t.threshold is not None else "—"),
+            "Observed": (f"{t.observed:.4g}" if t.observed is not None else "—"),
+        })
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+    with st.expander("🔬 Inspect raw trip payloads"):
+        for t in trips:
+            st.markdown(f"**{t.name}** — {t.severity}")
+            st.json(dict(t.detail))
+
+
+def _render_dependency_map() -> None:
+    """Pick degraded sources → list every impacted strategy/tab/report."""
+    from gui.dependency_map import (
+        CONSUMERS,
+        DataSource,
+        impacted_consumers,
+        render_edges,
+    )
+
+    st.markdown("### 🕸️ Dependency Map")
+    st.caption(
+        "Declarative source → consumer graph. Pick the sources that are "
+        "degraded right now and the panel projects which strategies, tabs, "
+        "and reports lose coverage. The map itself lives in "
+        "`gui/dependency_map.py`; extend it there as new consumers come online."
+    )
+
+    options = [s for s in DataSource if s is not DataSource.UNKNOWN]
+    labels = {s.label: s for s in options}
+    chosen_labels = st.multiselect(
+        "Degraded data sources",
+        options=list(labels.keys()),
+        default=[],
+        help="Pick zero or more sources to simulate / acknowledge an outage.",
+    )
+    chosen = [labels[name] for name in chosen_labels]
+
+    if chosen:
+        impact = impacted_consumers(chosen)
+        rows = []
+        for record in impact:
+            for c in record.consumers:
+                rows.append({
+                    "Degraded source": record.source.label,
+                    "Impacted": c.name,
+                    "Kind": c.kind,
+                    "Why": c.description,
+                })
+        if rows:
+            st.warning(
+                f"⚠️ {len(rows)} downstream consumer(s) impacted across "
+                f"{len(impact)} source(s).",
+                icon="⚠️",
+            )
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        else:
+            st.info("Selected source(s) have no registered consumers — "
+                    "verify `gui/dependency_map.py` is current.")
+    else:
+        st.caption("No degraded sources selected. Showing the full graph below.")
+
+    with st.expander("🔬 Full dependency graph"):
+        edges = render_edges()
+        edge_df = pd.DataFrame(edges, columns=["Source", "Consumer", "Kind"])
+        st.dataframe(edge_df, width="stretch", hide_index=True)
+
+
 def render_gravity_audit() -> None:
-    """Run the Gravity AI Review Suite as a subprocess and render its JSON report."""
-    st.subheader("🛡️ Gravity AI Audit Logs")
+    """Render the Safety tab: Circuit Breakers + Dependency Map + Gravity audit.
+
+    Sections (top to bottom):
+
+    1.  **Circuit Breaker Dashboard** — every tripped breaker derived from the
+        existing kill-switch sentinel + risk-gate block log. See
+        :mod:`gui.circuit_breakers`.
+    2.  **Dependency Map** — declarative source → consumer graph from
+        :mod:`gui.dependency_map`. The operator picks the degraded sources
+        and the panel shows which strategies / tabs / reports lose coverage.
+    3.  **Gravity AI Review Suite** — full audit subprocess (the original
+        behavior, kept verbatim).
+    """
+    st.subheader("🛡️ Safety — Circuit Breakers, Dependencies, Gravity Audit")
+
+    _render_circuit_breaker_dashboard()
+    st.divider()
+    _render_dependency_map()
+    st.divider()
+
+    st.markdown("### 🧪 Gravity AI Review Suite")
     st.caption(
         "Runs `Gravity AI Review Suite.py` — Pandera schema conformance, "
         "lookahead-bias perturbation, signal-registry health, sizing/risk gates. "
@@ -1342,46 +1696,187 @@ def render_options_matrix() -> None:
 # ===========================================================================
 
 def render_market_data() -> None:
-    """Show the active market-data provider, quote freshness, and cache controls."""
+    """Market Data Provider tab — diagnostic-rich quote fetcher.
+
+    Improvements over the legacy panel
+    ----------------------------------
+    *   **Connectivity badge** — sliding-window success rate from
+        :class:`gui.market_data_diagnostics.FetchHealthTracker` (Healthy /
+        Degraded / Down), persisted across reruns in ``st.session_state``.
+    *   **Throttled batch fetch** — uses
+        :class:`gui.market_data_diagnostics.BatchQuoteFetcher` with default
+        100 ms spacing so a 50-symbol watchlist sync stops triggering
+        yfinance / Finnhub rate-limit storms.
+    *   **Progress bar + per-symbol streaming** — operator sees ``i/N``
+        feedback rather than a frozen "Running" spinner.
+    *   **Typed error feedback** — failed fetches surface a specific category
+        ("API Rate Limited", "Symbol Not Found", "Network Timeout",
+        "Malformed Response", "Unknown Error") via
+        :func:`classify_market_error`, never an opaque ``None``.
+    *   **Quote validation** — :func:`validate_quote` flags NaN price, missing
+        timestamp, or inverted bid/ask with a ⚠ icon BEFORE the row is
+        considered usable by the rest of the pipeline (CONSTRAINT #4).
+    """
     st.subheader("🛰️ Market Data Provider")
 
     from data.market_data import get_provider, reset_provider
+    from gui.market_data_diagnostics import (
+        BatchQuoteFetcher,
+        FetchHealthTracker,
+        category_label,
+        summarise_categories,
+    )
+    from gui.observability_telemetry import LatencySampleStore
 
     provider = get_provider()
     src = getattr(provider, "quote_source", "unknown")
     realtime = getattr(provider, "is_realtime", False)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Provider", str(src))
-    c2.metric("Mode", "🟢 real-time" if realtime else "🟡 delayed")
-    c3.metric("Quote TTL", f"{settings.MARKET_DATA_QUOTE_TTL_SECONDS}s")
 
-    if st.button("♻️ Reset provider singleton"):
-        try:
-            reset_provider()
-            st.success("Provider singleton reset — re-selected on next quote.")
-        except Exception as exc:
-            st.error(f"Reset failed: {exc}")
+    # Persist the health tracker across Streamlit reruns so the badge survives
+    # tab switches and the "Fetch quotes" button click cycle.
+    tracker_key = "md_health_tracker"
+    if tracker_key not in st.session_state:
+        st.session_state[tracker_key] = FetchHealthTracker()
+    health: FetchHealthTracker = st.session_state[tracker_key]
+    report = health.status()
+
+    # Shared latency store — also consumed by render_observability's heatmap so
+    # one fetch in this tab updates the Observability view too.
+    latency_key = "obs_latency_store"
+    if latency_key not in st.session_state:
+        st.session_state[latency_key] = LatencySampleStore()
+    latency_store: LatencySampleStore = st.session_state[latency_key]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Provider", str(src))
+    c2.metric("Mode", "🟢 real-time" if realtime else "🟡 delayed (~15 min)")
+    c3.metric("Quote TTL", f"{settings.MARKET_DATA_QUOTE_TTL_SECONDS}s")
+    c4.metric("Connection", report.badge(),
+              help="Sliding window of the last 20 fetches. Healthy ≥ 90% success, "
+                   "Degraded ≥ 50%, otherwise Down.")
+
+    if not realtime:
+        st.info(
+            "🟡 yfinance is delayed by ~15 minutes and marked `is_stale=True` "
+            "on every quote. Set `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` in `.env` "
+            "to upgrade to the free IEX real-time feed.",
+            icon="ℹ️",
+        )
+
+    bcol1, bcol2 = st.columns([1, 1])
+    with bcol1:
+        if st.button("♻️ Reset provider singleton",
+                     help="Drops the cached provider so the next fetch re-evaluates env vars."):
+            try:
+                reset_provider()
+                st.success("Provider singleton reset — re-selected on next quote.")
+            except Exception as exc:
+                st.error(f"Reset failed: {exc}")
+    with bcol2:
+        if st.button("🩺 Reset connection health",
+                     help="Clear the success/failure ledger (badge returns to Healthy)."):
+            st.session_state[tracker_key] = FetchHealthTracker()
+            st.rerun()
 
     snap = load_state_snapshot()
-    symbols = _signal_symbols(snap)
-    sym_text = st.text_input("Quote symbols", value=", ".join(symbols[:10]), key="md_syms")
-    symbols = [s.strip().upper() for s in sym_text.split(",") if s.strip()]
+    symbols_default = _signal_symbols(snap)
+    sym_text = st.text_input(
+        "Quote symbols",
+        value=", ".join(symbols_default[:10]),
+        key="md_syms",
+        help="Comma- or space-separated tickers. Each fetch is throttled to "
+             "≥100 ms apart to avoid free-tier rate limits.",
+    )
+    symbols = [s.strip().upper() for s in sym_text.replace(",", " ").split() if s.strip()]
 
-    if st.button("Fetch quotes"):
-        rows = []
-        for sym in symbols:
-            try:
-                q = provider.get_latest_quote(sym)
+    spacing_ms = st.slider(
+        "Throttle (ms between fetches)", min_value=0, max_value=1000,
+        value=100, step=25,
+        help="Sliding gap between consecutive provider calls. 100 ms is safe "
+             "for both yfinance and Alpaca free tiers.",
+    )
+
+    if st.button("Fetch quotes", type="primary"):
+        if not symbols:
+            st.warning("Enter at least one symbol.")
+            return
+
+        fetcher = BatchQuoteFetcher(
+            fetch_fn=provider.get_latest_quote,
+            spacing_seconds=spacing_ms / 1000.0,
+            health_tracker=health,
+        )
+
+        progress = st.progress(0.0, text=f"Fetching 0/{len(symbols)}…")
+        rows: List[Dict[str, Any]] = []
+        results = []
+        n = len(symbols)
+        for result in fetcher.iter_fetch(symbols):
+            results.append(result)
+            if result.quote is not None:
+                q = result.quote
+                v = result.validation
+                if q.timestamp is not None:
+                    latency_store.record(
+                        symbol=q.symbol, source=q.source,
+                        quote_timestamp=q.timestamp, is_stale=q.is_stale,
+                    )
                 rows.append({
-                    "Symbol": q.symbol, "Price": round(float(q.price), 2),
-                    "Bid": q.bid, "Ask": q.ask,
-                    "Stale": q.is_stale, "Source": q.source,
+                    "Status": (v.label if v is not None else "OK"),
+                    "Symbol": q.symbol,
+                    "Price": round(float(q.price), 2) if v and v.ok else q.price,
+                    "Bid": q.bid,
+                    "Ask": q.ask,
+                    "Stale": q.is_stale,
+                    "Source": q.source,
+                    "Error": "",
                     "Timestamp (UTC)": q.timestamp.isoformat() if q.timestamp else "—",
                 })
-            except Exception as exc:
-                rows.append({"Symbol": sym, "Price": None, "Bid": None, "Ask": None,
-                             "Stale": None, "Source": f"error: {exc}", "Timestamp (UTC)": "—"})
-        st.dataframe(pd.DataFrame(rows), width="stretch")
+            else:
+                rows.append({
+                    "Status": "❌ ERROR",
+                    "Symbol": result.symbol,
+                    "Price": None,
+                    "Bid": None,
+                    "Ask": None,
+                    "Stale": None,
+                    "Source": str(src),
+                    "Error": (
+                        f"{category_label(result.category)}: {result.error}"
+                        if result.category is not None
+                        else f"Unknown Error: {result.error}"
+                    ),
+                    "Timestamp (UTC)": "—",
+                })
+            progress.progress(
+                (result.index + 1) / n,
+                text=f"Fetching {result.index + 1}/{n} — {result.symbol}",
+            )
+
+        progress.empty()
+        st.session_state["md_last_results"] = rows
+        tally = summarise_categories(results)
+        ok_count = tally.get("ok", 0)
+        bad_count = sum(v for k, v in tally.items() if k != "ok")
+
+        if bad_count == 0:
+            st.success(f"✅ Fetched {ok_count}/{n} symbols cleanly.", icon="✅")
+        else:
+            breakdown = ", ".join(f"{k}: {v}" for k, v in tally.items() if k != "ok")
+            st.warning(
+                f"⚠️ {ok_count}/{n} ok • {bad_count} failed → {breakdown}",
+                icon="⚠️",
+            )
+
+    rows = st.session_state.get("md_last_results")
+    if rows:
+        df = pd.DataFrame(rows)
+        st.dataframe(df, width="stretch", hide_index=True)
+        st.caption(
+            "⚠ icons in **Status** mark malformed quotes (NaN price, missing "
+            "timestamp, inverted bid/ask). These rows are never silently "
+            "promoted into the quant pipeline."
+        )
 
 
 # ===========================================================================
@@ -1619,6 +2114,237 @@ def render_observability() -> None:
             st.caption("No closed trades in transactions store yet.")
     except Exception as exc:
         st.caption(f"(transactions store unavailable: {exc})")
+
+    st.divider()
+    _render_observability_system_telemetry()
+
+    st.divider()
+    _render_observability_latency_heatmap()
+
+    st.divider()
+    _render_observability_error_log()
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 5: System Telemetry
+# ---------------------------------------------------------------------------
+
+def _render_observability_system_telemetry() -> None:
+    """CPU / memory / disk metrics for the host AND the current Python process.
+
+    Backed by :func:`gui.observability_telemetry.collect_system_telemetry`,
+    which falls back to NaN-shaped output when ``psutil`` is unavailable
+    (CONSTRAINT #4 — no fabricated zeros).
+    """
+    from gui.observability_telemetry import collect_system_telemetry, format_bytes
+
+    st.markdown("### 🖥️ System Telemetry")
+    st.caption(
+        "Resource usage for the host machine and the current Python process. "
+        "Refresh the page to re-sample (CPU% is averaged since last call)."
+    )
+    telemetry = collect_system_telemetry()
+
+    if not telemetry.psutil_available:
+        st.warning(
+            "`psutil` is not available — telemetry shown as `—`. "
+            "Add `psutil` to requirements.txt to re-enable.",
+            icon="ℹ️",
+        )
+
+    host_col, proc_col = st.columns(2)
+    with host_col:
+        st.markdown("**Host**")
+        h1, h2, h3 = st.columns(3)
+        h1.metric("CPU %",
+                  f"{telemetry.cpu_percent:.1f}%" if telemetry.psutil_available else "—",
+                  help=f"{telemetry.cpu_count_logical} logical cores"
+                       if telemetry.cpu_count_logical > 0 else "—")
+        h2.metric("Memory %",
+                  f"{telemetry.memory_percent:.1f}%" if telemetry.psutil_available else "—",
+                  delta=f"{format_bytes(telemetry.memory_used_bytes)} / "
+                        f"{format_bytes(telemetry.memory_total_bytes)}",
+                  delta_color="off")
+        h3.metric("Disk %",
+                  f"{telemetry.disk_percent:.1f}%" if telemetry.psutil_available else "—",
+                  delta=f"{format_bytes(telemetry.disk_used_bytes)} / "
+                        f"{format_bytes(telemetry.disk_total_bytes)}",
+                  delta_color="off")
+        if not (telemetry.load_avg_1m != telemetry.load_avg_1m):  # not NaN
+            st.caption(f"Load avg (1 min): {telemetry.load_avg_1m:.2f}")
+
+    with proc_col:
+        st.markdown("**Process (this Python)**")
+        p1, p2, p3 = st.columns(3)
+        p1.metric("RSS",
+                  format_bytes(telemetry.process_rss_bytes)
+                  if telemetry.process_rss_bytes >= 0 else "—")
+        p2.metric("Process CPU %",
+                  f"{telemetry.process_cpu_percent:.1f}%"
+                  if telemetry.psutil_available else "—")
+        p3.metric("Threads",
+                  str(telemetry.process_threads)
+                  if telemetry.process_threads >= 0 else "—")
+
+    # Visual saturation cues — only when the host metric is available.
+    if telemetry.psutil_available:
+        if telemetry.cpu_percent >= 90:
+            st.error(f"🔴 CPU saturated at {telemetry.cpu_percent:.0f}% — "
+                     "strategy backtests may be queuing.", icon="🔥")
+        elif telemetry.cpu_percent >= 75:
+            st.warning(f"🟡 CPU at {telemetry.cpu_percent:.0f}% — watch for slowdowns.")
+
+        if telemetry.memory_percent >= 90:
+            st.error(f"🔴 Memory at {telemetry.memory_percent:.0f}% — "
+                     "consider releasing caches (Reset provider / Reset health).")
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 6: Data Latency Heatmap
+# ---------------------------------------------------------------------------
+
+def _render_observability_latency_heatmap() -> None:
+    """Per-symbol fetch-to-ingest latency heatmap fed by Market Data tab.
+
+    Source: ``st.session_state['obs_latency_store']`` — a shared
+    :class:`gui.observability_telemetry.LatencySampleStore` populated each time
+    the operator clicks **Fetch quotes** on the Market Data tab.
+    """
+    from gui.observability_telemetry import LatencySampleStore, summarise_latency
+
+    st.markdown("### ⏱️ Data Latency Heatmap")
+    st.caption(
+        "End-to-end latency from provider quote timestamp to local ingestion. "
+        "Fed by the Market Data tab's `Fetch quotes` action — high latency or "
+        "stale flags here indicate the strategies are being fed delayed data."
+    )
+
+    latency_key = "obs_latency_store"
+    if latency_key not in st.session_state:
+        st.session_state[latency_key] = LatencySampleStore()
+    store: LatencySampleStore = st.session_state[latency_key]
+    samples = store.samples()
+
+    if not samples:
+        st.info(
+            "No latency samples yet. Open the **Market Data** tab and click "
+            "**Fetch quotes** to populate.",
+            icon="ℹ️",
+        )
+        return
+
+    summary = summarise_latency(samples)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Samples", summary["count"])
+    c2.metric("Median (p50)", f"{summary['p50']:.2f} s")
+    c3.metric("p95", f"{summary['p95']:.2f} s")
+    if summary["worst_symbol"]:
+        c4.metric("Worst symbol",
+                  summary["worst_symbol"],
+                  delta=f"p95 {summary['worst_p95']:.2f} s",
+                  delta_color="inverse")
+    else:
+        c4.metric("Worst symbol", "—")
+
+    rows = []
+    for s in samples:
+        rows.append({
+            "Symbol": s.symbol,
+            "Source": s.source,
+            "Quote (UTC)": s.quote_timestamp.isoformat(timespec="seconds"),
+            "Ingested (UTC)": s.ingested_at.isoformat(timespec="seconds"),
+            "Latency (s)": round(max(0.0, s.latency_seconds), 3),
+            "Stale": s.is_stale,
+        })
+    df = pd.DataFrame(rows)
+
+    try:
+        styled = df.style.background_gradient(
+            subset=["Latency (s)"], cmap="RdYlGn_r",
+            vmin=0, vmax=max(df["Latency (s)"].max(), 1.0),
+        )
+        st.dataframe(styled, width="stretch", hide_index=True)
+    except Exception as exc:  # noqa: BLE001 — fall back to plain table
+        logger.debug("Latency heatmap gradient failed (%s); rendering plain table", exc)
+        st.dataframe(df, width="stretch", hide_index=True)
+
+    if st.button("🧹 Clear latency samples", key="obs_clear_latency"):
+        store.clear()
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 7: Error / Log Aggregation
+# ---------------------------------------------------------------------------
+
+def _render_observability_error_log() -> None:
+    """Centralised log viewer with level filter + free-text search.
+
+    Reads ``logs/investyo.log`` (the rotating handler configured by
+    :func:`alerting.setup_logging`) via
+    :func:`gui.observability_telemetry.read_log_tail`.
+    """
+    from gui.observability_telemetry import (
+        VALID_LEVELS,
+        filter_log_entries,
+        parse_log_lines,
+        read_log_tail,
+        tally_levels,
+    )
+    from gui.orchestrator_runner import TELEMETRY_LOG_PATH
+
+    st.markdown("### 🗂️ Error Aggregation")
+    st.caption(
+        f"Tail of `{TELEMETRY_LOG_PATH}`. "
+        "Filter by minimum level and substring; multi-line tracebacks are "
+        "preserved so context isn't lost."
+    )
+
+    raw_lines = read_log_tail(TELEMETRY_LOG_PATH, max_lines=1000)
+    if not raw_lines:
+        st.info(
+            f"No log file yet at `{TELEMETRY_LOG_PATH}`. "
+            "Launch the orchestrator or `main.py` once to populate "
+            "(`alerting.setup_logging()` writes the file).",
+            icon="ℹ️",
+        )
+        return
+
+    entries = parse_log_lines(raw_lines)
+    tally = tally_levels(entries)
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("CRITICAL", tally.get("CRITICAL", 0))
+    k2.metric("ERROR", tally.get("ERROR", 0))
+    k3.metric("WARNING", tally.get("WARNING", 0))
+    k4.metric("INFO", tally.get("INFO", 0))
+    k5.metric("Total lines", len(entries))
+
+    f1, f2 = st.columns([1, 2])
+    with f1:
+        min_level = st.selectbox(
+            "Minimum level", options=list(VALID_LEVELS), index=1,  # default INFO
+            key="obs_log_min_level",
+        )
+    with f2:
+        needle = st.text_input(
+            "Filter (substring, case-insensitive)",
+            value="", key="obs_log_filter",
+            placeholder="e.g. ALPACA, KILL_SWITCH, AAPL",
+        )
+
+    filtered = filter_log_entries(entries, min_level=min_level,
+                                  contains=needle or None)
+    if not filtered:
+        st.caption("No log lines match the current filter.")
+        return
+
+    st.caption(f"Showing {len(filtered)} of {len(entries)} lines (most recent last).")
+    # ``st.code`` keeps the monospace + alignment, which matters for
+    # log-grep-style scanning. Cap the rendered block so a runaway run does
+    # not freeze the browser.
+    body = "\n".join(e.raw for e in filtered[-300:])
+    st.code(body, language="log")
 
 
 # ===========================================================================

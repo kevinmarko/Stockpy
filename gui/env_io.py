@@ -83,6 +83,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "DASHBOARD_REFRESH_SECONDS",
     "LOG_LEVEL",
     "DRY_RUN",
+    # Execution mode toggle — paper sandbox vs. live endpoint. Writeable from
+    # the Strategy Matrix tab's global Simulation/Paper/Live selector. Never a
+    # secret: the broker keys themselves are SECRET_KEYS.
+    "ALPACA_PAPER",
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
     # Universe / signals (JSON-encoded)
