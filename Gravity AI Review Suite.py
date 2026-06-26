@@ -4292,6 +4292,8 @@ class GravityAIAuditor:
         self.run_preflight_runner_audit()
         self.run_dual_mode_header_audit()
         self.run_strategy_health_audit()
+        # Tier 1 Decision Support — step 51 (Δ Since Last Run band)
+        self.run_snapshot_diff_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -6849,6 +6851,204 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_50_strategy_health_audit"] = audit
+
+    def run_snapshot_diff_audit(self) -> None:
+        """Step 51 — Δ Since Last Run snapshot rotation + diff audit.
+
+        Pins the wiring of the Tier 1 "what changed since yesterday"
+        decision-support band so a future refactor cannot silently break
+        the report-time diff render.
+
+        Checks
+        ------
+        1.  ``scripts.snapshot_diff`` is importable and exports
+            ``SnapshotDiff``, ``compute_diff``, ``rotate_snapshot``,
+            ``compute_diff_from_history``, ``DEFAULT_CONVICTION_DELTA_THRESHOLD``.
+        2.  Default conviction threshold equals 0.2 (the documented
+            "material movement" floor — also pinned in
+            ``tests/test_snapshot_diff.py`` and ``settings.py``).
+        3.  ``settings.SNAPSHOT_HISTORY_DAYS`` defaults to 30 and
+            ``settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD`` to 0.2.
+        4.  ``diagnostics_and_visuals.generate_html_report`` accepts a
+            ``snapshot_diff`` kwarg (signature inspection).
+        5.  ``main_orchestrator._write_state_snapshot`` writes a
+            ``holdings`` field and calls ``rotate_snapshot`` (AST scan
+            so we don't have to execute the orchestrator).
+        6.  ``main._write_state_snapshot`` exists and also calls
+            ``rotate_snapshot``.
+        7.  ``rotate_snapshot`` round-trips: writing a snapshot, then
+            reading it back via ``list_rotated_snapshots`` returns the
+            written file (no on-disk state pollution — uses ``tmp_path``).
+        8.  ``compute_diff(None, {…})`` (first-run case) classifies BUYs
+            as ``new_buys`` rather than ``action_flips``.
+        9.  Corrupt snapshot file → ``load_snapshot`` returns ``None``
+            (CONSTRAINT #4 + #6 — never raises).
+        10. ``tests/test_snapshot_diff.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_51_snapshot_diff_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+        try:
+            import ast
+            import inspect
+            import json as _json
+            import tempfile
+            from pathlib import Path
+
+            # Check 1: module surface
+            from scripts.snapshot_diff import (
+                SnapshotDiff, compute_diff, rotate_snapshot,
+                compute_diff_from_history, load_snapshot,
+                list_rotated_snapshots,
+                DEFAULT_CONVICTION_DELTA_THRESHOLD,
+            )
+            c1 = True
+            audit["checks"].append({
+                "check": "scripts.snapshot_diff exports core symbols",
+                "passed": c1,
+            })
+
+            # Check 2: default threshold = 0.2
+            c2 = abs(DEFAULT_CONVICTION_DELTA_THRESHOLD - 0.2) < 1e-9
+            audit["checks"].append({
+                "check": "DEFAULT_CONVICTION_DELTA_THRESHOLD == 0.2",
+                "passed": c2,
+                "detail": f"value={DEFAULT_CONVICTION_DELTA_THRESHOLD}",
+            })
+            all_pass = all_pass and c2
+
+            # Check 3: settings defaults
+            import settings as _settings_mod
+            _settings = _settings_mod.Settings() if hasattr(_settings_mod, "Settings") else None
+            try:
+                from settings import settings as _settings_singleton
+                _s = _settings_singleton
+            except Exception:
+                _s = _settings
+            c3 = (
+                getattr(_s, "SNAPSHOT_HISTORY_DAYS", None) == 30
+                and abs(getattr(_s, "SNAPSHOT_CONVICTION_DELTA_THRESHOLD", 0.0) - 0.2) < 1e-9
+            )
+            audit["checks"].append({
+                "check": "settings.SNAPSHOT_HISTORY_DAYS=30 and SNAPSHOT_CONVICTION_DELTA_THRESHOLD=0.2",
+                "passed": c3,
+            })
+            all_pass = all_pass and c3
+
+            # Check 4: generate_html_report accepts snapshot_diff kwarg
+            from diagnostics_and_visuals import generate_html_report
+            sig = inspect.signature(generate_html_report)
+            c4 = "snapshot_diff" in sig.parameters
+            audit["checks"].append({
+                "check": "generate_html_report(snapshot_diff=...) kwarg exists",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # Check 5: main_orchestrator wiring (AST scan)
+            orch_src = Path("main_orchestrator.py").read_text(encoding="utf-8")
+            c5 = (
+                'rotate_snapshot' in orch_src
+                and '"holdings"' in orch_src
+                and 'compute_diff_from_history' in orch_src
+            )
+            audit["checks"].append({
+                "check": "main_orchestrator wires rotate_snapshot + holdings + compute_diff_from_history",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            # Check 6: main.py advisory wiring
+            main_src = Path("main.py").read_text(encoding="utf-8")
+            c6 = (
+                'def _write_state_snapshot' in main_src
+                and 'rotate_snapshot' in main_src
+                and 'snapshot_diff=' in main_src
+            )
+            audit["checks"].append({
+                "check": "main.py _write_state_snapshot + rotate_snapshot + snapshot_diff= wired",
+                "passed": c6,
+            })
+            all_pass = all_pass and c6
+
+            # Check 7: rotation round-trip (sandboxed)
+            with tempfile.TemporaryDirectory() as td:
+                tdp = Path(td)
+                snap = {
+                    "timestamp": "2026-06-26T12:00:00+00:00",
+                    "market_regime": "RISK ON",
+                    "holdings": [],
+                    "signals": [],
+                }
+                written = rotate_snapshot(snap, tdp)
+                listed = list_rotated_snapshots(tdp)
+                c7 = (
+                    written is not None
+                    and written.exists()
+                    and written in listed
+                )
+            audit["checks"].append({
+                "check": "rotate_snapshot round-trips through history/ dir",
+                "passed": c7,
+            })
+            all_pass = all_pass and c7
+
+            # Check 8: first-run BUYs land in new_buys (not action_flips)
+            first_run_curr = {
+                "timestamp": "2026-06-26T12:00:00+00:00",
+                "market_regime": "RISK ON",
+                "signals": [{
+                    "symbol": "AAPL", "action": "BUY",
+                    "advisory_action": "BUY", "advisory_conviction": 0.7,
+                }],
+                "holdings": ["AAPL"],
+            }
+            diff = compute_diff(None, first_run_curr)
+            c8 = (
+                "AAPL" in diff.new_buys
+                and not any(f["symbol"] == "AAPL" for f in diff.action_flips)
+            )
+            audit["checks"].append({
+                "check": "compute_diff(None, curr) classifies BUYs as new_buys",
+                "passed": c8,
+            })
+            all_pass = all_pass and c8
+
+            # Check 9: corrupt file → None (CONSTRAINT #4 + #6)
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, encoding="utf-8"
+            ) as tf:
+                tf.write("{not json")
+                tf_path = Path(tf.name)
+            try:
+                c9 = load_snapshot(tf_path) is None
+            finally:
+                tf_path.unlink(missing_ok=True)
+            audit["checks"].append({
+                "check": "load_snapshot(corrupt_file) returns None (never raises)",
+                "passed": c9,
+            })
+            all_pass = all_pass and c9
+
+            # Check 10: test file exists
+            c10 = Path("tests/test_snapshot_diff.py").exists()
+            audit["checks"].append({
+                "check": "tests/test_snapshot_diff.py exists",
+                "passed": c10,
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_51_snapshot_diff_audit"] = audit
 
     def _extend_launcher_telemetry_audit_stage_status(self) -> None:
         """Extend step_41 to also verify StageStatus enum and four-stage map.

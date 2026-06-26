@@ -740,6 +740,97 @@ def _apply_conditional_formatting(
 # HTML report (Stage G)
 # ---------------------------------------------------------------------------
 
+def _write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO]) -> None:
+    """Persist OUTPUT_DIR/state_snapshot.json + rotate into history/.
+
+    Mirrors ``main_orchestrator._write_state_snapshot`` so the
+    ``scripts.snapshot_diff`` reader sees a consistent schema across both
+    entry points. Errors are swallowed (CONSTRAINT #6) — the daily report
+    must always render.
+    """
+    try:
+        import json
+        from datetime import datetime, timezone
+
+        snap = result.snapshot
+        positions = getattr(snap, "positions", {}) or {}
+        holdings = sorted(
+            sym.upper() for sym, p in positions.items()
+            if float(getattr(p, "quantity", 0.0) or 0.0) > 0
+        )
+
+        signals: List[Dict[str, Any]] = []
+        for rec in result.recommendations:
+            pos = positions.get(rec.symbol)
+            ki = rec.key_indicators or {}
+            shares = float(getattr(pos, "quantity", 0.0) or 0.0) if pos else 0.0
+            signals.append({
+                "symbol": rec.symbol,
+                # advisory entry point: action == advisory_action (single source).
+                "action": rec.action,
+                "advisory_action": rec.action,
+                "advisory_conviction": float(rec.conviction or 0.0),
+                "advisory_position_pct": float(rec.suggested_position_pct or 0.0),
+                "advisory_rationale": rec.rationale or "",
+                "kelly_target": float(rec.suggested_position_pct or 0.0),
+                "score": float(ki.get("score", 0.0) or 0.0),
+                "price": float(getattr(pos, "current_price", 0.0) or 0.0) if pos else 0.0,
+                "shares": shares,
+            })
+
+        regime = "UNKNOWN"
+        vix = 0.0
+        if macro_dto is not None:
+            regime = getattr(macro_dto, "market_regime", "UNKNOWN") or "UNKNOWN"
+            vix = float(getattr(macro_dto, "vix_value", 0.0) or 0.0)
+
+        snapshot = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tickers": [r.symbol for r in result.recommendations],
+            "holdings": holdings,
+            "market_regime": str(regime),
+            "vix": vix,
+            "kill_switch_active": (settings.OUTPUT_DIR / "KILL_SWITCH").exists(),
+            "macro_regime_gate_enabled": settings.MACRO_REGIME_GATE_ENABLED,
+            "signals": signals,
+        }
+        snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
+        snap_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        try:
+            from scripts.snapshot_diff import rotate_snapshot
+            rotate_snapshot(
+                snapshot,
+                settings.OUTPUT_DIR,
+                max_age_days=settings.SNAPSHOT_HISTORY_DAYS,
+            )
+        except Exception as rot_exc:
+            logger.debug("Snapshot rotation skipped: %s", rot_exc)
+    except Exception as exc:
+        logger.warning("State snapshot write failed (non-critical): %s", exc)
+
+
+def _load_snapshot_diff_for_report() -> Optional[Dict[str, Any]]:
+    """Return the latest Δ Since Last Run diff dict (or ``None`` if unavailable).
+
+    Always called AFTER ``_write_state_snapshot`` so the just-written
+    snapshot is the "curr" side of the comparison; the prior rotated
+    snapshot is "prev". Returns ``None`` on any failure or first ever run
+    so the report template hides the band entirely.
+    """
+    try:
+        from scripts.snapshot_diff import compute_diff_from_history
+        diff = compute_diff_from_history(
+            settings.OUTPUT_DIR,
+            conviction_delta_threshold=settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD,
+        )
+        if diff.prev_ts is None and diff.curr_ts is None:
+            return None
+        return diff.to_dict()
+    except Exception as exc:
+        logger.debug("Δ-band diff unavailable: %s", exc)
+        return None
+
+
 def _write_html_report(result: RunResult, macro_dto: Optional[MacroEconomicDTO] = None) -> None:
     """Generate the daily HTML report from RunResult (non-fatal on error)."""
     try:
@@ -827,8 +918,16 @@ def _write_html_report(result: RunResult, macro_dto: Optional[MacroEconomicDTO] 
             account_summary = None
 
         out_path = str(settings.OUTPUT_DIR / "daily_report.html")
+        # Δ Since Last Run band: write+rotate the snapshot for THIS run first,
+        # then load the diff against the previously-rotated snapshot. The
+        # template hides the band entirely when snapshot_diff is None.
+        _write_state_snapshot(result, macro_dto)
+        snapshot_diff = _load_snapshot_diff_for_report()
         generate_html_report(
-            portfolio_dicts, regime, out_path, account_summary=account_summary, **kw
+            portfolio_dicts, regime, out_path,
+            account_summary=account_summary,
+            snapshot_diff=snapshot_diff,
+            **kw,
         )
         logger.info("HTML report written to %s.", out_path)
 

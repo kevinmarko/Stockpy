@@ -847,21 +847,29 @@ async def _execute_broker_orders(
 def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: list) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
-    The Streamlit observability dashboard reads this file to display the
-    last-known macro state without requiring a live FRED/broker connection.
-    Errors are swallowed so a snapshot failure never crashes the pipeline.
+    Also writes a timestamped rotated copy under OUTPUT_DIR/history/ via
+    :func:`scripts.snapshot_diff.rotate_snapshot` so the daily HTML report
+    can render a "Δ Since Last Run" band. Errors in the live-snapshot
+    write OR the rotation are swallowed so a snapshot failure never
+    crashes the pipeline.
     """
     import json
     try:
         signals = []
+        held_symbols = set()
         if not final_df.empty:
             for _, row in final_df.iterrows():
+                shares = float(row.get("Shares", 0.0) or row.get("Robinhood Shares", 0.0) or 0.0)
+                sym = str(row.get("Symbol", "")).upper().strip()
+                if sym and shares > 0:
+                    held_symbols.add(sym)
                 signals.append({
                     "symbol": str(row.get("Symbol", "")),
                     "action": str(row.get("Action Signal", "")),
                     "kelly_target": float(row.get("Kelly Target", 0.0) or 0.0),
                     "score": float(row.get("Score", 0.0) or 0.0),
                     "price": float(row.get("Price", 0.0) or 0.0),
+                    "shares": shares,
                     "macro_status": str(row.get("Macro Status", "")),
                     "hmm_risk_on": float(row.get("HMM_Risk_On_Probability", 0.0) or 0.0),
                     # Buy- and sell-side execution corridors surfaced so the
@@ -878,6 +886,9 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tickers": tickers,
+            # Sorted list of symbols where the account holds qty > 0; consumed
+            # by scripts.snapshot_diff to compute added_holdings / dropped_holdings.
+            "holdings": sorted(held_symbols),
             "market_regime": str(macro_raw.get("market_regime", "UNKNOWN")),
             "vix": float(macro_raw.get("VIXCLS", 0.0) or 0.0),
             "yield_curve": float(macro_raw.get("T10Y2Y", 0.0) or 0.0),
@@ -893,6 +904,17 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
         }
         snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
         snap_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        # Rotate into history/ (write-then-rename + prune > SNAPSHOT_HISTORY_DAYS).
+        # Failure is non-fatal — the live snapshot is already on disk.
+        try:
+            from scripts.snapshot_diff import rotate_snapshot
+            rotate_snapshot(
+                snapshot,
+                settings.OUTPUT_DIR,
+                max_age_days=settings.SNAPSHOT_HISTORY_DAYS,
+            )
+        except Exception as rot_exc:
+            telemetry.debug("Snapshot rotation skipped: %s", rot_exc)
     except Exception as exc:
         telemetry.warning("Failed to write state snapshot: %s", exc)
 
@@ -1050,6 +1072,13 @@ async def _main_body(effective_dry_run: bool) -> None:
             except Exception as plot_err:
                 telemetry.warning(f"Failed to generate interactive Plotly chart: {plot_err}")
 
+        # State snapshot rotation precedes BOTH the HTML report and the JSON
+        # payload so the Δ Since Last Run band always reflects "this run vs.
+        # previous run", never "previous run vs. one-before-that". Wrapped
+        # try/except inside _write_state_snapshot so a failure here cannot
+        # abort report generation.
+        _write_state_snapshot(macro_raw, final_df, tickers)
+
         # Jinja2 HTML Report Generation
         try:
             portfolio_dicts = final_df.to_dict(orient="records")
@@ -1061,6 +1090,20 @@ async def _main_body(effective_dry_run: bool) -> None:
             sahm_rule_val = float(macro_raw.get('SAHMREALTIME', 0.3))
             real_yield_val = float(macro_raw.get('DGS10', 4.0)) - float(macro_raw.get('CPIAUCSL_YoY', 2.0))
             regime_val = final_df["Macro Status"].iloc[0] if "Macro Status" in final_df.columns else "NEUTRAL"
+            # Δ Since Last Run band: read the two most-recent rotated snapshots
+            # (the just-rotated current run + the previous one). Degrades to
+            # None on first ever run or any error so the template hides the band.
+            snapshot_diff_payload: Optional[Dict[str, Any]] = None
+            try:
+                from scripts.snapshot_diff import compute_diff_from_history
+                _diff = compute_diff_from_history(
+                    settings.OUTPUT_DIR,
+                    conviction_delta_threshold=settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD,
+                )
+                if _diff.prev_ts is not None or _diff.curr_ts is not None:
+                    snapshot_diff_payload = _diff.to_dict()
+            except Exception as diff_exc:
+                telemetry.debug("Δ-band diff unavailable: %s", diff_exc)
             generate_html_report(
                 portfolio_dicts,
                 regime_val,
@@ -1068,7 +1111,8 @@ async def _main_body(effective_dry_run: bool) -> None:
                 yield_curve=yield_curve_val,
                 credit_spread=credit_spread_val,
                 sahm_rule=sahm_rule_val,
-                real_yield=real_yield_val
+                real_yield=real_yield_val,
+                snapshot_diff=snapshot_diff_payload,
             )
         except Exception as html_err:
             telemetry.warning(f"Failed to generate daily HTML report: {html_err}")
@@ -1102,8 +1146,8 @@ async def _main_body(effective_dry_run: bool) -> None:
             "Set them in .env to enable live/paper order submission."
         )
 
-    # Write a machine-readable state snapshot for the observability dashboard.
-    _write_state_snapshot(macro_raw, final_df, tickers)
+    # State snapshot for the observability dashboard is written above (line
+    # ~1076) so the Δ-band diff sees this run BEFORE the report renders.
     telemetry.info("✅ Master Orchestration finished successfully.")
 
 
