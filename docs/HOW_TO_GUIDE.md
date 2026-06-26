@@ -968,3 +968,66 @@ This creates `reports/main_pipeline_validation_summary.json`. The preflight chec
 ---
 
 *Last updated: 2026-06-25. Reflects: Sheet2 column-A universe fallback in `main.py`, the `.env`→`os.environ` `load_dotenv()` fix, and the `arch ≥ 8.0` GJR-GARCH `fit()` API fix.*
+
+## Safety tab (formerly Gravity Audit) — what to check when an order is blocked
+
+The Safety tab now leads with two new sections before the Gravity audit launcher:
+
+1. **🚧 Circuit Breaker Dashboard** — every active trip derived from
+   `output/KILL_SWITCH` and the last 24 hours of `output/risk_gate_blocks.jsonl`.
+   CRITICAL severity halts everything (kill switch, daily loss limit, portfolio
+   heat, macro kill switch, minimum_validation gate); WARNING covers per-symbol
+   blocks (max position size, max correlation, market hours, etc.). Click
+   **🔬 Inspect raw trip payloads** to see the original JSON-line block — that's
+   the source of truth.
+
+2. **🕸️ Dependency Map** — pick the data source(s) that are degraded right
+   now (Alpaca, Finnhub, FRED, Robinhood, etc.) and the panel lists every
+   strategy/tab/report that loses coverage. Useful both as documentation
+   (read-only) and as triage during an outage. The map lives in
+   `gui/dependency_map.py`; extend it there as new consumers come online.
+
+When the orchestrator vetoes orders unexpectedly:
+1. Open the Safety tab.
+2. Look at the Circuit Breaker Dashboard for the most recent CRITICAL trip.
+3. If it's the kill switch, check Strategy Matrix → Manual Kill Switch panel to
+   deactivate (the sentinel file is `output/KILL_SWITCH`).
+4. If it's a risk-gate block, read the `threshold` / `observed` columns and the
+   raw payload — those tell you *which check* fired and *by how much*.
+
+## Strategy Matrix tab — Global Execution Mode toggle
+
+The Strategy Matrix (Control) tab now leads with a **🎚️ Global Execution Mode**
+selector backed by `gui/strategy_registry.py`. Three modes:
+
+| Mode | DRY_RUN | ALPACA_PAPER | What happens |
+|---|---|---|---|
+| 🧪 Simulation | true | true | OrderManager intercepts every intent before any broker contact. Safe default. |
+| 📝 Paper | false | true | Orders route to the Alpaca paper sandbox. No real money. |
+| 🔴 Live | false | false | Orders hit the live broker. Requires a **CONFIRM LIVE PRODUCTION** click. |
+
+**Setting takes effect on the next orchestrator/advisory launch.** We never
+mutate a running `settings.Settings`. The writer goes through the allowlist-
+bounded `gui/env_io.write_setting` so the GUI cannot flip a half-state (only
+ALPACA_PAPER without DRY_RUN, for example) — both flags are written together.
+
+Below the mode selector is the **📜 Strategy Version Registry**: a table of
+each registered signal module with its sha256 prefix (first 12 hex chars) and
+file mtime. If you redeployed a strategy file but the version hash and mtime
+haven't moved, the file did not actually change on disk — useful when
+"obviously I deployed this" disagrees with the dashboard.
+
+## Reports tab — Live vs Backtested provenance + drill-down
+
+The Reports tab now opens with a colour-coded banner:
+
+* **🔵 Live data** (blue `st.info`) — sourced from `output/state_snapshot.json`
+  written by the most recent orchestrator/advisory run AND the active execution
+  mode is Paper or Live.
+* **⚪ Backtested / simulated** (grey Markdown blockquote) — either no snapshot
+  exists yet, or `DRY_RUN=true` is active so every number is simulated.
+
+Each MFE/MAE/Edge Ratio entry now has a **🔬 Drill down by symbol** expander:
+pick a ticker → see the full signal row + recent closed trades for that symbol
+from `transactions_store.TransactionsStore`. Use this to answer "why is this
+score what it is" without exporting the CSV.

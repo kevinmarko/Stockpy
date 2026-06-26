@@ -292,3 +292,46 @@ Do NOT restart the orchestrator until:
 - Root cause is identified.
 - All positions are either closed or reconciled.
 - `preflight_check.py` exits 0.
+
+## Paper → Live switch via the GUI (Strategy Matrix tab)
+
+The Command Center GUI now exposes a global execution-mode selector
+(`gui/strategy_registry.py`) on the Strategy Matrix tab. Use it instead of
+hand-editing `.env` so the two relevant flags (`DRY_RUN` and `ALPACA_PAPER`)
+are guaranteed to flip together.
+
+Pre-flip checklist (T-1):
+1. Run `python scripts/preflight_check.py` — must exit 0.
+2. Open Safety tab → Circuit Breaker Dashboard → confirm no CRITICAL trips.
+3. Open Reports tab → verify the provenance banner is 🔵 Live data and the
+   `state_snapshot.json` timestamp is recent.
+4. Confirm the desired mode is selected on Strategy Matrix → Global Execution
+   Mode. The radio reads from `.env` so any drift is visible immediately.
+
+Day-of switch to Live:
+1. On Strategy Matrix → Global Execution Mode pick **🔴 Live production**.
+2. Click the **🔴 CONFIRM LIVE PRODUCTION** button (deliberately distinct
+   styling from Apply Paper / Apply Simulation to prevent accidental clicks).
+3. `gui/env_io.write_setting` writes `DRY_RUN=false` and
+   `ALPACA_PAPER=false` to `.env`.
+4. Launch the orchestrator from the Launcher tab (the running settings
+   instance is NOT patched — the new mode applies at process start).
+5. Watch Safety tab → Circuit Breaker Dashboard for the first 30 minutes.
+
+Switching back to Paper / Simulation works identically — just pick the other
+mode. Simulation forces `DRY_RUN=true`, so OrderManager intercepts every
+intent before broker contact regardless of `ALPACA_PAPER`.
+
+## Incident response: data source degraded mid-session
+
+When a data source (Alpaca, Finnhub, FRED, Robinhood) is reporting errors:
+1. Open Safety tab → Dependency Map (`gui/dependency_map.py`).
+2. Multi-select the degraded sources.
+3. Read the impacted-consumers table — this is the authoritative list of
+   strategies/tabs/reports that lose coverage right now.
+4. If a CRITICAL consumer (e.g. `processing_engine`, `forecasting_engine`)
+   appears in the list AND the run is in Live mode → halt via the kill
+   switch from the Strategy Matrix tab.
+5. After remediation, refresh the Safety tab; the dashboard derives its
+   state from files (`output/KILL_SWITCH`, `output/risk_gate_blocks.jsonl`),
+   so there is no in-process cache to invalidate.

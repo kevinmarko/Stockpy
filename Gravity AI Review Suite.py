@@ -4282,6 +4282,9 @@ class GravityAIAuditor:
         self.run_robinhood_watchlist_noise_audit()
         self.run_brinson_fachler_attribution_audit()
         self.run_launcher_telemetry_audit()
+        self.run_market_data_diagnostics_audit()
+        self.run_observability_telemetry_audit()
+        self.run_safety_analytics_control_audit()
         return json.dumps(self.report, indent=4)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
@@ -5540,6 +5543,525 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_41_launcher_telemetry_audit"] = audit
+
+    def run_market_data_diagnostics_audit(self) -> None:
+        """Step 42 — Market Data tab diagnostics audit (2026-06).
+
+        Background
+        ----------
+        The Market Data Provider tab previously surfaced provider exceptions
+        as opaque "None" cells.  The 2026-06 UI task introduced
+        ``gui/market_data_diagnostics.py`` with four operator-facing helpers
+        and rewrote ``render_market_data`` on top of them.  This audit pins
+        the four-surface contract so a refactor can't silently regress any of
+        them.
+
+        Checks
+        ------
+        1.  ``classify_market_error`` returns the right category for canonical
+            yfinance / Alpaca / Finnhub error strings and ``status_code=429``.
+        2.  ``validate_quote`` returns ok=True for a clean Quote and ok=False
+            for one with a NaN price.
+        3.  ``FetchHealthTracker``: empty state HEALTHY-neutral; mixed window
+            yields DEGRADED; all-failure yields DOWN.
+        4.  ``BatchQuoteFetcher``: one ``BatchResult`` per symbol; honours the
+            injected ``sleep_fn`` for spacing; tags failures with the correct
+            ``ErrorCategory``.
+        """
+        audit: dict = {"step": "step_42_market_data_diagnostics_audit",
+                       "checks": [], "status": "PENDING"}
+        all_pass = True
+        try:
+            from datetime import datetime, timezone
+
+            from data.market_data import MarketDataError, Quote
+            from gui.market_data_diagnostics import (
+                BatchQuoteFetcher,
+                ErrorCategory,
+                FetchHealthTracker,
+                HealthStatus,
+                classify_market_error,
+                validate_quote,
+            )
+
+            # 1. Error classification matrix
+            class _StatusExc(Exception):
+                def __init__(self, msg: str, status_code: int) -> None:
+                    super().__init__(msg)
+                    self.status_code = status_code
+
+            classification_cases = [
+                (MarketDataError("429 Too Many Requests"), ErrorCategory.RATE_LIMIT),
+                (MarketDataError("No data found, symbol may be delisted"), ErrorCategory.NOT_FOUND),
+                (MarketDataError("HTTPSConnectionPool: read timeout=5"), ErrorCategory.NETWORK_TIMEOUT),
+                (MarketDataError("json.decoder.JSONDecodeError"), ErrorCategory.MALFORMED),
+                (_StatusExc("API request failed", status_code=429), ErrorCategory.RATE_LIMIT),
+                (RuntimeError("something weird"), ErrorCategory.UNKNOWN),
+            ]
+            classify_results = [
+                (str(exc)[:40], expected, classify_market_error(exc))
+                for exc, expected in classification_cases
+            ]
+            classify_ok = all(got is expected for _, expected, got in classify_results)
+            audit["checks"].append({
+                "check": "classify_market_error matrix (rate/not-found/timeout/malformed/429-status/unknown)",
+                "passed": classify_ok,
+                "detail": [f"{msg!r}: expected={exp.value}, got={got.value}"
+                           for msg, exp, got in classify_results
+                           if exp is not got] or "all cases matched",
+            })
+            all_pass = all_pass and classify_ok
+
+            # 2. validate_quote happy + sad
+            now_utc = datetime.now(timezone.utc)
+            good_q = Quote("AAPL", 150.0, 149.95, 150.05, now_utc, False, "test")
+            bad_q = Quote("AAPL", float("nan"), 149.95, 150.05, now_utc, False, "test")
+            v_ok = validate_quote(good_q).ok is True
+            v_bad = validate_quote(bad_q).ok is False
+            validate_ok = v_ok and v_bad
+            audit["checks"].append({
+                "check": "validate_quote: ok=True for clean Quote, ok=False for NaN-price",
+                "passed": validate_ok,
+                "detail": f"good.ok={v_ok}, bad.ok={validate_quote(bad_q).ok}",
+            })
+            all_pass = all_pass and validate_ok
+
+            # 3. FetchHealthTracker tri-state
+            h_empty = FetchHealthTracker(window=10)
+            empty_ok = h_empty.status().status is HealthStatus.HEALTHY
+
+            h_mixed = FetchHealthTracker(window=5)
+            for _ in range(3):
+                h_mixed.record_success()
+            for _ in range(2):
+                h_mixed.record_failure()
+            mixed_ok = h_mixed.status().status is HealthStatus.DEGRADED
+
+            h_down = FetchHealthTracker(window=4)
+            for _ in range(4):
+                h_down.record_failure()
+            down_ok = h_down.status().status is HealthStatus.DOWN
+
+            tracker_ok = empty_ok and mixed_ok and down_ok
+            audit["checks"].append({
+                "check": "FetchHealthTracker: empty=HEALTHY, mixed=DEGRADED, all-fail=DOWN",
+                "passed": tracker_ok,
+                "detail": f"empty={empty_ok}, mixed={mixed_ok}, down={down_ok}",
+            })
+            all_pass = all_pass and tracker_ok
+
+            # 4. BatchQuoteFetcher streaming + throttling + classification
+            sleeps: list = []
+            tracker = FetchHealthTracker(window=10)
+
+            def _fetch(sym: str):
+                if sym == "BAD":
+                    raise MarketDataError("429 rate limit")
+                return Quote(sym, 100.0, 99.95, 100.05, now_utc, False, "test")
+
+            fetcher = BatchQuoteFetcher(
+                fetch_fn=_fetch, spacing_seconds=0.05,
+                health_tracker=tracker, sleep_fn=lambda d: sleeps.append(d),
+            )
+            results = fetcher.fetch_all(["A", "B", "BAD"])
+            n_ok = sum(1 for r in results if r.ok)
+            spacing_ok = len(sleeps) >= 1 and all(d > 0 for d in sleeps)
+            classify_failure_ok = (
+                results[2].error is not None
+                and results[2].category is ErrorCategory.RATE_LIMIT
+            )
+            tracker_updated_ok = tracker.status().successes == 2 and tracker.status().failures == 1
+            batch_ok = (
+                len(results) == 3
+                and n_ok == 2
+                and spacing_ok
+                and classify_failure_ok
+                and tracker_updated_ok
+            )
+            audit["checks"].append({
+                "check": "BatchQuoteFetcher: one BatchResult per symbol, throttles, classifies, updates tracker",
+                "passed": batch_ok,
+                "detail": (
+                    f"len={len(results)}, n_ok={n_ok}, sleeps={sleeps}, "
+                    f"bad.category={results[2].category}, "
+                    f"successes={tracker.status().successes}, failures={tracker.status().failures}"
+                ),
+            })
+            all_pass = all_pass and batch_ok
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_42_market_data_diagnostics_audit"] = audit
+
+    def run_observability_telemetry_audit(self) -> None:
+        """Step 43 — Observability Health-tab helpers audit (2026-06).
+
+        Background
+        ----------
+        The Observability tab gained three new sections — System Telemetry,
+        Data Latency Heatmap, Error Aggregation — all backed by
+        ``gui/observability_telemetry.py``.  Each section's helper has a
+        non-obvious invariant that, if regressed, would silently degrade the
+        operator's view of platform health.
+
+        Checks
+        ------
+        1.  ``collect_system_telemetry()`` returns ``psutil_available=True``
+            with finite host metrics when psutil is installed (the project's
+            pinned dep).
+        2.  When psutil is forced absent via a monkey-patched importer, the
+            function still returns a SystemTelemetry with NaN floats /
+            -1 byte counts — CONSTRAINT #4 (no fabricated zeros).
+        3.  ``LatencySampleStore`` is a ring buffer (capacity enforced), and
+            ``summarise_latency`` flags the worst-p95 symbol.
+        4.  ``parse_log_lines`` + ``filter_log_entries`` round-trip a canonical
+            ``alerting.setup_logging`` line AND preserve traceback
+            continuations (``parsed=False``) under a level filter.
+        """
+        audit: dict = {"step": "step_43_observability_telemetry_audit",
+                       "checks": [], "status": "PENDING"}
+        all_pass = True
+        try:
+            import math as _math
+            import sys as _sys
+            from datetime import datetime, timedelta, timezone
+
+            from gui import observability_telemetry as ot
+
+            # 1. Happy-path telemetry has finite host metrics.
+            t = ot.collect_system_telemetry()
+            telemetry_ok = (
+                t.psutil_available is True
+                and 0.0 <= t.cpu_percent <= 100.0 + 1e-6
+                and 0.0 <= t.memory_percent <= 100.0
+                and t.memory_total_bytes > 0
+                and t.process_rss_bytes > 0
+            )
+            audit["checks"].append({
+                "check": "collect_system_telemetry returns finite host + process metrics",
+                "passed": telemetry_ok,
+                "detail": (
+                    f"psutil={t.psutil_available}, cpu={t.cpu_percent}, "
+                    f"mem%={t.memory_percent}, rss={t.process_rss_bytes}"
+                ),
+            })
+            all_pass = all_pass and telemetry_ok
+
+            # 2. psutil-absent path returns NaN-shaped degraded output.
+            #    Simulate by monkey-patching builtins.__import__ to raise
+            #    ImportError on "psutil" — the same pattern the unit test
+            #    uses. Restore on the way out so later audits aren't broken.
+            import builtins as _bi
+            real_import = _bi.__import__
+            real_psutil = _sys.modules.pop("psutil", None)
+
+            def _fake_import(name, *a, **kw):
+                if name == "psutil":
+                    raise ImportError("simulated for audit")
+                return real_import(name, *a, **kw)
+
+            _bi.__import__ = _fake_import  # type: ignore[assignment]
+            try:
+                t2 = ot.collect_system_telemetry()
+            finally:
+                _bi.__import__ = real_import  # type: ignore[assignment]
+                if real_psutil is not None:
+                    _sys.modules["psutil"] = real_psutil
+
+            degraded_ok = (
+                t2.psutil_available is False
+                and _math.isnan(t2.cpu_percent)
+                and t2.memory_total_bytes == -1
+                and t2.process_rss_bytes == -1
+            )
+            audit["checks"].append({
+                "check": "psutil-absent path returns NaN-shaped SystemTelemetry (CONSTRAINT #4)",
+                "passed": degraded_ok,
+                "detail": (
+                    f"psutil_available={t2.psutil_available}, "
+                    f"cpu_percent_is_nan={_math.isnan(t2.cpu_percent)}, "
+                    f"memory_total_bytes={t2.memory_total_bytes}"
+                ),
+            })
+            all_pass = all_pass and degraded_ok
+
+            # 3. LatencySampleStore: roll-off + worst-p95 summary
+            store = ot.LatencySampleStore(max_samples=3)
+            base = datetime(2026, 6, 26, tzinfo=timezone.utc)
+            for i in range(5):
+                store.record(f"S{i}", "alpaca",
+                             base + timedelta(seconds=i),
+                             ingested_at=base + timedelta(seconds=i + 1))
+            roll_off_ok = (
+                len(store) == 3
+                and [s.symbol for s in store.samples()] == ["S2", "S3", "S4"]
+            )
+            # Worst-symbol summary
+            store2 = ot.LatencySampleStore()
+            for _ in range(3):
+                store2.record("AAPL", "alpaca", base,
+                              ingested_at=base + timedelta(seconds=1))
+            for _ in range(3):
+                store2.record("MSFT", "alpaca", base,
+                              ingested_at=base + timedelta(seconds=60))
+            summary = ot.summarise_latency(store2.samples())
+            worst_ok = summary["worst_symbol"] == "MSFT" and summary["count"] == 6
+            audit["checks"].append({
+                "check": "LatencySampleStore ring-buffer rolls off + summarise_latency picks worst-p95",
+                "passed": roll_off_ok and worst_ok,
+                "detail": (
+                    f"after_roll={[s.symbol for s in store.samples()]}, "
+                    f"worst_symbol={summary['worst_symbol']}, "
+                    f"count={summary['count']}"
+                ),
+            })
+            all_pass = all_pass and roll_off_ok and worst_ok
+
+            # 4. Log parser + filter preserves traceback continuations
+            line = ("2026-06-26 08:40:28,615  ERROR     "
+                    "engine.advisory — boom")
+            traceback = "  File 'x.py', line 1, in <module>"
+            entries = ot.parse_log_lines([line, traceback])
+            parser_ok = (
+                len(entries) == 2
+                and entries[0].parsed is True
+                and entries[0].level == "ERROR"
+                and entries[1].parsed is False
+            )
+            kept_under_critical = ot.filter_log_entries(
+                entries, min_level="CRITICAL",
+            )
+            # The ERROR drops, but the unparsed traceback continuation stays.
+            preserve_ok = (
+                any(not e.parsed for e in kept_under_critical)
+                and not any(e.level == "ERROR" for e in kept_under_critical)
+            )
+            audit["checks"].append({
+                "check": "parse_log_lines + filter_log_entries preserve traceback continuations under level filter",
+                "passed": parser_ok and preserve_ok,
+                "detail": (
+                    f"parsed_levels={[e.level for e in entries]}, "
+                    f"kept_under_CRITICAL={[(e.level, e.parsed) for e in kept_under_critical]}"
+                ),
+            })
+            all_pass = all_pass and parser_ok and preserve_ok
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_43_observability_telemetry_audit"] = audit
+
+    def run_safety_analytics_control_audit(self) -> None:
+        """Step 44 — Safety / Analytics / Control tabs audit (2026-06).
+
+        Pins the contract of the three helper modules backing the rebuilt
+        Safety (Gravity), Analytics (Reports), and Control (Strategy Matrix)
+        tabs.
+
+        Checks
+        ------
+        1.  ``derive_kill_switch_trip`` emits a CRITICAL trip when the
+            sentinel file is present, and ``None`` when it's absent.
+        2.  ``derive_block_log_trips`` keeps the NEWEST trip per
+            ``(check_name, strategy_id)`` AND bubbles unknown check_name
+            values through tagged ``WARNING`` (so a new risk-gate check
+            surfaces in the panel before its row is added to ``_KNOWN_CHECKS``).
+        3.  ``dependency_map.impacted_consumers`` does NOT fabricate impact
+            when a mystery source name is passed — it resolves to
+            ``DataSource.UNKNOWN`` with an empty consumer list. Every
+            non-UNKNOWN ``DataSource`` has at least one consumer.
+        4.  ``strategy_registry.list_strategy_versions`` returns a stable
+            sha256 prefix that CHANGES when the file content changes.
+        5.  ``strategy_registry.read_active_mode`` resolves the mode truth
+            table correctly (DRY_RUN > ALPACA_PAPER).
+        6.  ``gui.env_io.ALLOWED_KEYS`` includes ``ALPACA_PAPER`` so the
+            Strategy Matrix mode toggle can persist the flag.
+        """
+        audit: dict = {"step": "step_44_safety_analytics_control_audit",
+                       "checks": [], "status": "PENDING"}
+        all_pass = True
+        try:
+            from datetime import datetime, timedelta, timezone
+            from pathlib import Path
+            import json as _json
+            import tempfile
+
+            from gui import circuit_breakers as cb
+            from gui import dependency_map as dm
+            from gui import env_io
+            from gui import strategy_registry as sr
+
+            # 1. Kill switch derivation
+            with tempfile.TemporaryDirectory() as td:
+                ks_path = Path(td) / "KILL_SWITCH"
+                absent_ok = cb.derive_kill_switch_trip(ks_path) is None
+                ks_path.write_text("Manual halt by Gravity")
+                trip = cb.derive_kill_switch_trip(ks_path)
+                present_ok = (
+                    trip is not None
+                    and trip.severity == "CRITICAL"
+                    and trip.name == "global_kill_switch"
+                    and "Manual halt" in trip.summary
+                )
+            ks_ok = absent_ok and present_ok
+            audit["checks"].append({
+                "check": "derive_kill_switch_trip absent→None, present→CRITICAL with reason",
+                "passed": ks_ok,
+                "detail": f"absent_ok={absent_ok}, present_ok={present_ok}",
+            })
+            all_pass = all_pass and ks_ok
+
+            # 2. Block-log dedup + unknown-bubble-through
+            now = datetime(2026, 6, 26, 12, 0, 0, tzinfo=timezone.utc)
+            blocks = [
+                {"check_name": "daily_loss_limit", "strategy_id": "x",
+                 "timestamp": (now - timedelta(hours=2)).isoformat(),
+                 "observed": 0.04},
+                {"check_name": "daily_loss_limit", "strategy_id": "x",
+                 "timestamp": (now - timedelta(minutes=1)).isoformat(),
+                 "observed": 0.06},
+                {"check_name": "future_unknown_check", "strategy_id": "y",
+                 "timestamp": now.isoformat()},
+            ]
+            trips = cb.derive_block_log_trips(blocks, now=now)
+            dlim = [t for t in trips if t.name == "daily_loss_limit"]
+            unknown = [t for t in trips if t.name == "future_unknown_check"]
+            dedup_ok = len(dlim) == 1 and dlim[0].observed == 0.06
+            unknown_ok = (
+                len(unknown) == 1
+                and unknown[0].severity == "WARNING"
+            )
+            audit["checks"].append({
+                "check": "block-log: newest-per-(name,strategy) dedup + unknown-check WARNING bubble-through",
+                "passed": dedup_ok and unknown_ok,
+                "detail": (
+                    f"dedup_ok={dedup_ok}, unknown_ok={unknown_ok}, "
+                    f"observed={dlim[0].observed if dlim else None}"
+                ),
+            })
+            all_pass = all_pass and dedup_ok and unknown_ok
+
+            # 3. Dependency map: every real source has consumers; UNKNOWN
+            #    string yields empty impact (no fabrication).
+            missing_sources = [
+                s.value for s in dm.DataSource
+                if s is not dm.DataSource.UNKNOWN
+                and not dm.CONSUMERS.get(s)
+            ]
+            map_ok = not missing_sources
+            mystery_records = dm.impacted_consumers(["mystery_feed"])
+            mystery_ok = (
+                len(mystery_records) == 1
+                and mystery_records[0].source is dm.DataSource.UNKNOWN
+                and mystery_records[0].consumer_count == 0
+            )
+            audit["checks"].append({
+                "check": "dependency_map: every real source has consumers; UNKNOWN → empty impact (no fabrication)",
+                "passed": map_ok and mystery_ok,
+                "detail": (
+                    f"missing_sources={missing_sources}, "
+                    f"mystery_consumer_count="
+                    f"{mystery_records[0].consumer_count if mystery_records else None}"
+                ),
+            })
+            all_pass = all_pass and map_ok and mystery_ok
+
+            # 4. Strategy version: hash changes on file edit
+            with tempfile.TemporaryDirectory() as td:
+                sig_dir = Path(td) / "signals"
+                sig_dir.mkdir()
+                f = sig_dir / "demo.py"
+                f.write_text("# v1\n")
+                v1 = sr.list_strategy_versions(
+                    module_names=["demo"], weights={}, disabled=[],
+                    signals_dir=sig_dir,
+                )[0].version_hash
+                f.write_text("# v2 totally different content\n")
+                v2 = sr.list_strategy_versions(
+                    module_names=["demo"], weights={}, disabled=[],
+                    signals_dir=sig_dir,
+                )[0].version_hash
+            version_ok = (
+                v1 is not None and v2 is not None
+                and v1 != v2 and len(v1) == 12
+            )
+            audit["checks"].append({
+                "check": "strategy_registry: version hash changes when file content changes",
+                "passed": version_ok,
+                "detail": f"v1={v1}, v2={v2}",
+            })
+            all_pass = all_pass and version_ok
+
+            # 5. Mode truth table (DRY_RUN wins over ALPACA_PAPER)
+            #    Patch settings on the fly, sample, restore.
+            import settings as _settings
+            real_settings = _settings.settings
+
+            class _Fake:
+                def __init__(self, ap, dr):
+                    self.ALPACA_PAPER = ap
+                    self.DRY_RUN = dr
+
+            cases = [
+                (_Fake(True, False),  sr.ExecutionMode.PAPER),
+                (_Fake(False, False), sr.ExecutionMode.LIVE),
+                (_Fake(False, True),  sr.ExecutionMode.SIMULATION),
+                (_Fake(True, True),   sr.ExecutionMode.SIMULATION),
+            ]
+            mode_results = []
+            try:
+                for fake, expected in cases:
+                    _settings.settings = fake  # type: ignore[assignment]
+                    got = sr.read_active_mode().mode
+                    mode_results.append((expected, got))
+            finally:
+                _settings.settings = real_settings  # type: ignore[assignment]
+
+            mode_ok = all(e is g for e, g in mode_results)
+            audit["checks"].append({
+                "check": "strategy_registry.read_active_mode truth table (DRY_RUN wins over ALPACA_PAPER)",
+                "passed": mode_ok,
+                "detail": [
+                    f"expected={e.value}, got={g.value}"
+                    for e, g in mode_results if e is not g
+                ] or "all 4 cases matched",
+            })
+            all_pass = all_pass and mode_ok
+
+            # 6. env_io allowlist contract
+            allowlist_ok = (
+                "ALPACA_PAPER" in env_io.ALLOWED_KEYS
+                and "DRY_RUN" in env_io.ALLOWED_KEYS
+                and not env_io.is_secret("ALPACA_PAPER")
+            )
+            audit["checks"].append({
+                "check": "env_io.ALLOWED_KEYS includes ALPACA_PAPER + DRY_RUN; ALPACA_PAPER is NOT secret",
+                "passed": allowlist_ok,
+                "detail": (
+                    f"ALPACA_PAPER_in_allowlist={'ALPACA_PAPER' in env_io.ALLOWED_KEYS}, "
+                    f"DRY_RUN_in_allowlist={'DRY_RUN' in env_io.ALLOWED_KEYS}, "
+                    f"ALPACA_PAPER_is_secret={env_io.is_secret('ALPACA_PAPER')}"
+                ),
+            })
+            all_pass = all_pass and allowlist_ok
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_44_safety_analytics_control_audit"] = audit
 
     def run_robinhood_watchlist_noise_audit(self) -> None:
         """Step 39 — Robinhood watchlist 400-noise suppression audit.
