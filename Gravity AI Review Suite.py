@@ -4300,6 +4300,8 @@ class GravityAIAuditor:
         self.run_decision_log_audit()
         # Tier 5.1 — Advisory-only mode quarantine audit
         self.run_advisory_only_audit()
+        # Tier 5.3 — Advisory pause gate + macro-triggered gating
+        self.run_advisory_pause_gate_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -7359,6 +7361,249 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_53_decision_log_audit"] = audit
+
+    def run_advisory_pause_gate_audit(self) -> None:
+        """Step 55 — Advisory pause gate + macro-triggered gating (Tier 5.3).
+
+        The kill-switch sentinel (``output/KILL_SWITCH``) is repurposed in
+        advisory mode as a "Pause Recommendations" gate.  When the file
+        exists, ``main.run_once()`` and ``main_orchestrator._main_body``
+        must skip the evaluation pipeline entirely and return/exit cleanly.
+
+        Macro-triggered gating is also verified: systemic macro conditions
+        apply conservative overrides to individual security signals BEFORE
+        the holding-aware overlay runs in ``engine.advisory.evaluate``.
+
+        Checks
+        ------
+        1.  ``engine.advisory.CONFIG`` contains all six macro-gate keys.
+        2.  ``macro_vix_gate_threshold`` == 30.0 and
+            ``macro_sahm_gate_threshold`` == 0.5 (canonical defaults).
+        3.  ``macro_score_penalty`` == 25 (25-pt soft-gate deduction).
+        4.  ``macro_veto_sectors`` contains "Financials" and "Real Estate"
+            (case-insensitive substring match).
+        5.  Source of ``engine/advisory.py`` references Step 8b macro gate
+            comment and the macro_gate_reason variable.
+        6.  Source of ``main.py`` references "kill-switch sentinel" pause log
+            and the "kill_switch_gate" stage string.
+        7.  Source of ``main_orchestrator.py`` references the same pause log
+            sentinel string.
+        8.  ``tests/test_advisory_pause_gate.py`` exists.
+        9.  ``_build_rationale`` function signature in ``engine/advisory.py``
+            accepts a ``macro_gate_reason`` kwarg.
+        10. Functional: RECESSION regime → ``evaluate()`` returns HOLD
+            (not BUY) when the raw strategy signal is BUY (via a minimal
+            mock of heavy engines).
+        """
+        audit: dict = {
+            "step": "step_55_advisory_pause_gate_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            from pathlib import Path
+            import inspect
+
+            # Check 1: CONFIG macro-gate keys
+            from engine.advisory import CONFIG
+            required_keys = [
+                "macro_vix_gate_threshold",
+                "macro_sahm_gate_threshold",
+                "macro_score_penalty",
+                "macro_veto_sectors",
+                "macro_veto_yield_curve_threshold",
+                "macro_veto_oas_threshold",
+            ]
+            c1 = all(k in CONFIG for k in required_keys)
+            audit["checks"].append({
+                "check": "engine.advisory.CONFIG contains all six macro-gate keys",
+                "passed": c1,
+                "detail": [k for k in required_keys if k not in CONFIG],
+            })
+            all_pass = all_pass and c1
+
+            # Check 2: canonical threshold defaults
+            c2 = (
+                CONFIG.get("macro_vix_gate_threshold") == 30.0
+                and CONFIG.get("macro_sahm_gate_threshold") == 0.5
+            )
+            audit["checks"].append({
+                "check": "macro_vix_gate_threshold==30.0 and macro_sahm_gate_threshold==0.5",
+                "passed": c2,
+                "detail": {
+                    "vix": CONFIG.get("macro_vix_gate_threshold"),
+                    "sahm": CONFIG.get("macro_sahm_gate_threshold"),
+                },
+            })
+            all_pass = all_pass and c2
+
+            # Check 3: macro_score_penalty == 25
+            c3 = CONFIG.get("macro_score_penalty") == 25
+            audit["checks"].append({
+                "check": "macro_score_penalty == 25",
+                "passed": c3,
+                "detail": CONFIG.get("macro_score_penalty"),
+            })
+            all_pass = all_pass and c3
+
+            # Check 4: veto sectors include Financials and Real Estate
+            veto_lower = [s.lower() for s in CONFIG.get("macro_veto_sectors", [])]
+            has_financials = any("financ" in s for s in veto_lower)
+            has_real_estate = any("real estate" in s for s in veto_lower)
+            c4 = has_financials and has_real_estate
+            audit["checks"].append({
+                "check": "macro_veto_sectors contains Financials and Real Estate",
+                "passed": c4,
+                "detail": CONFIG.get("macro_veto_sectors"),
+            })
+            all_pass = all_pass and c4
+
+            # Check 5: engine/advisory.py source references macro gate structures
+            advisory_src = Path("engine/advisory.py").read_text(encoding="utf-8")
+            c5 = (
+                "Step 8b" in advisory_src
+                and "macro_gate_reason" in advisory_src
+            )
+            audit["checks"].append({
+                "check": "engine/advisory.py references Step 8b and macro_gate_reason",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            # Check 6: main.py references kill-switch pause log strings
+            main_src = Path("main.py").read_text(encoding="utf-8")
+            c6 = (
+                "Advisory paused by kill-switch sentinel" in main_src
+                and "kill_switch_gate" in main_src
+            )
+            audit["checks"].append({
+                "check": "main.py references advisory pause log and kill_switch_gate stage",
+                "passed": c6,
+            })
+            all_pass = all_pass and c6
+
+            # Check 7: main_orchestrator.py references the same pause sentinel string
+            orch_src = Path("main_orchestrator.py").read_text(encoding="utf-8")
+            c7 = "Advisory paused by kill-switch sentinel" in orch_src
+            audit["checks"].append({
+                "check": "main_orchestrator.py references advisory pause sentinel log",
+                "passed": c7,
+            })
+            all_pass = all_pass and c7
+
+            # Check 8: test file exists
+            c8 = Path("tests/test_advisory_pause_gate.py").exists()
+            audit["checks"].append({
+                "check": "tests/test_advisory_pause_gate.py exists",
+                "passed": c8,
+            })
+            all_pass = all_pass and c8
+
+            # Check 9: _build_rationale accepts macro_gate_reason kwarg
+            from engine.advisory import _build_rationale
+            sig = inspect.signature(_build_rationale)
+            c9 = "macro_gate_reason" in sig.parameters
+            audit["checks"].append({
+                "check": "_build_rationale accepts macro_gate_reason kwarg",
+                "passed": c9,
+            })
+            all_pass = all_pass and c9
+
+            # Check 10: functional — RECESSION regime suppresses BUY to HOLD
+            try:
+                from dto_models import MacroEconomicDTO
+                from engine.advisory import evaluate as _adv_eval
+                import types, pandas as _pd
+                from unittest import mock as _mock
+
+                _bars = _pd.DataFrame(
+                    {"Open": [100.0]*60, "High": [105.0]*60,
+                     "Low":  [95.0]*60,  "Close": [102.0]*60, "Volume": [1e6]*60},
+                    index=_pd.date_range("2024-01-01", periods=60, freq="B"),
+                )
+                _quote = types.SimpleNamespace(price=102.0, is_stale=False)
+
+                class _FM:
+                    def get_latest_quote(self, s): return _quote
+                    def get_intraday_bars(self, s, lookback_days=252): return _bars
+                    def get_fundamentals(self, s): return {"sector": "Technology"}
+
+                from data.robinhood_portfolio import AccountSnapshot
+                import datetime
+                _snap = AccountSnapshot(
+                    positions={}, buying_power=0.0, total_equity=0.0,
+                    total_dividends=0.0,
+                    fetched_at=datetime.datetime.now(datetime.timezone.utc),
+                )
+                _macro = MacroEconomicDTO(
+                    yield_curve_10y_2y=-0.5, high_yield_oas=5.0,
+                    inflation_rate=3.0, nominal_10y=4.5,
+                    vix_value=38.0, sahm_rule_indicator=0.7,
+                    market_regime="RECESSION",
+                )
+
+                with (
+                    _mock.patch("engine.advisory.ProcessingEngine") as _pe,
+                    _mock.patch("engine.advisory.TechnicalOptionsEngine") as _toe,
+                    _mock.patch("engine.advisory.ForecastingEngine") as _fe,
+                    _mock.patch("engine.advisory.StrategyEngine") as _se,
+                    _mock.patch("engine.advisory.TransactionsStore"),
+                    _mock.patch("engine.advisory.estimate_win_rate_and_payoff",
+                                return_value=(0.55, 1.8, 50)),
+                    _mock.patch("engine.advisory.fractional_kelly", return_value=0.03),
+                ):
+                    _pe.return_value.calculate_technical_metrics.return_value = {
+                        "TEST": {"RSI": 55.0, "RSI_2": 30.0, "MACD_Line": 0.5,
+                                 "MACD_Signal": 0.3, "ATR": 2.0,
+                                 "Aroon Oscillator": 40.0, "Sortino Ratio": 1.2,
+                                 "Max Drawdown": -0.12, "RS vs SPY": 0.05,
+                                 "Chandelier Exit": 98.0, "ROC_12M": 0.08,
+                                 "SMA_200": 95.0, "SMA_5": 101.0, "RS-MACD": 0.2}
+                    }
+                    _toe.return_value.estimate_gjr_garch_volatility.return_value = 0.20
+                    _fe.return_value.generate_forecast.return_value = {
+                        "Forecast_30": 106.0,
+                    }
+                    _se.return_value.evaluate_security.return_value = {
+                        "Action Signal": "BUY", "Score": 70, "Kelly Target": 0.03,
+                        "buyRange": "$98-$105", "sellRange": "...",
+                    }
+
+                    _rec = _adv_eval(
+                        symbol="TEST",
+                        position=None,
+                        market=_FM(),
+                        snapshot=_snap,
+                        macro_dto=_macro,
+                    )
+                c10 = _rec.action == "HOLD"
+            except Exception as exc:
+                c10 = False
+                audit["checks"].append({
+                    "check": "functional: RECESSION regime suppresses BUY → HOLD",
+                    "passed": c10,
+                    "detail": f"Exception: {exc}",
+                })
+                all_pass = all_pass and c10
+            else:
+                audit["checks"].append({
+                    "check": "functional: RECESSION regime suppresses BUY → HOLD",
+                    "passed": c10,
+                    "detail": f"actual action={_rec.action}",
+                })
+                all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_55_advisory_pause_gate_audit"] = audit
 
     def run_advisory_only_audit(self) -> None:
         """Step 54 — Advisory-only mode quarantine (Tier 5.1).

@@ -769,8 +769,10 @@ For Gmail: use an App Password (not your main password). Google account → Secu
 
 In **advisory mode** (`ADVISORY_ONLY=true`) the kill switch sentinel (`output/KILL_SWITCH`)
 repurposes as a **pause-recommendations gate**: when the file exists, `main.run_once()`
-logs `"advisory paused by kill-switch sentinel"` and skips evaluation for that cycle.
-No broker interaction exists to halt — this is purely a signal-generation pause.
+logs `"Advisory paused by kill-switch sentinel — skipping evaluation cycle"` and returns
+an empty RunResult for that cycle.  `main_orchestrator._main_body()` returns immediately
+before `run_pipeline()` so the last written `state_snapshot.json` and HTML report are
+preserved.  No broker interaction exists to halt — this is purely a signal-generation pause.
 
 In **live-execution mode** (`ADVISORY_ONLY=false`) the sentinel also causes `OrderManager`
 to raise `KillSwitchActiveError` before any order reaches the broker.
@@ -784,10 +786,10 @@ python -m execution.kill_switch --status
 ### Activate (pause advisory / block live orders)
 
 ```bash
-python -m execution.kill_switch --activate "investigating anomaly"
+python -m execution.kill_switch --activate --reason "investigating anomaly"
 ```
 
-In advisory mode: next pipeline run skips evaluation and logs the pause.
+In advisory mode: next pipeline run skips evaluation and logs the pause reason.
 In live mode: `OrderManager` raises `KillSwitchActiveError` before any order. The pipeline
 continues to run and produce signals — only order submission is blocked.
 
@@ -822,6 +824,23 @@ becomes extreme. You don't need to trigger this manually — it fires when:
 
 In advisory mode, this auto-fire has no practical effect (no orders to block) but the
 sentinel is still written so the GUI pause indicator activates and the operator is alerted.
+
+### Macro-triggered advisory gating (independent of the kill switch)
+
+Even when the kill switch is **not** active, the advisory engine applies conservative
+overrides when macro conditions deteriorate.  These are applied per-symbol inside
+`engine/advisory.evaluate()` before the holding-aware overlay:
+
+| Condition | Effect on advisory signal |
+|---|---|
+| `market_regime = RECESSION` or `CREDIT EVENT` | Hard gate: all BUY / STRONG BUY → HOLD |
+| `VIX > 30` OR `Sahm Rule ≥ 0.5` | Soft gate: composite score penalised by 25 pts |
+| Finance / Financial Services / Real Estate sector AND yield curve inverted (`< 0`) OR HY OAS > 6% | Sector veto: BUY → HOLD for structurally exposed sectors |
+
+When a gate fires, the advisory rationale explains the override (e.g. "Macro regime is
+RECESSION: systemic risk gate halts fresh equity allocations").  Existing holders may
+still receive a SELL from the loss-cut rule even when a macro gate is active — the gate
+only suppresses *new* BUY allocations.
 
 ---
 
@@ -1046,7 +1065,7 @@ This creates `reports/main_pipeline_validation_summary.json`. The preflight chec
 
 ---
 
-*Last updated: 2026-06-26. Reflects: Tier 5.1 `ADVISORY_ONLY=true` default (broker quarantine), advisory-mode preflight auto-skip (§13), kill-switch repurposed as pause-recommendations gate (§15), Strategy Matrix mode toggle suppressed under advisory mode, new Advisory-Only Mode section. Prior: Sheet2 column-A universe fallback, `load_dotenv()` placement fix, `arch ≥ 8.0` GJR-GARCH API fix.*
+*Last updated: 2026-06-26. Reflects: Tier 5.3 kill-switch pause gate wired into `main.run_once()` and `main_orchestrator._main_body()`, macro-triggered advisory gating (RECESSION hard gate, VIX/Sahm soft gate, sector veto) added to §15. Prior: Tier 5.1 `ADVISORY_ONLY=true` default (broker quarantine), advisory-mode preflight auto-skip (§13), Strategy Matrix mode toggle suppressed under advisory mode, new Advisory-Only Mode section, Sheet2 column-A universe fallback, `load_dotenv()` placement fix.*
 
 ## Safety tab (formerly Gravity Audit) — what to check when an order is blocked
 

@@ -484,6 +484,12 @@ In advisory mode there is no broker to halt, so an "emergency shutdown" means
 **pausing the recommendation engine** so the pipeline produces no new signals while
 you investigate an anomaly.
 
+The pause gate is implemented in `main.run_once()` (after universe build, before macro
+compute) and in `main_orchestrator._main_body()` (after data fetch, before `run_pipeline()`).
+When the sentinel is active, `RunResult.recommendations` is empty and the error list
+records `stage="kill_switch_gate"`.  The last written `state_snapshot.json` and HTML
+report are untouched so the observability dashboard continues displaying the last known state.
+
 ### How to pause recommendations
 
 ```bash
@@ -491,13 +497,22 @@ you investigate an anomaly.
 python -m execution.kill_switch --activate --reason "advisory pause — investigating anomaly"
 
 # 2. Confirm the pipeline sees the pause on next run
-#    (main.run_once() logs "advisory paused" and skips evaluation)
 python3 main.py
-# Expected: INFO — advisory paused by kill-switch sentinel; skipping evaluation cycle
+# Expected: INFO — Advisory paused by kill-switch sentinel — skipping evaluation cycle.
+#           Reason: advisory pause — investigating anomaly  |  Universe would have been: ...
 ```
 
 The GUI also exposes the kill switch toggle in the Launcher tab → Safety Controls. While
 the sentinel is active, the GUI safety indicator shows `🔴 PAUSED`.
+
+> **Note — macro-triggered advisory gating (automatic, always active):** Separately from
+> the manual kill switch, `engine/advisory.evaluate()` applies conservative overrides when
+> macro conditions deteriorate.  Three tiers: (1) RECESSION / CREDIT EVENT regime → all
+> BUY signals suppressed to HOLD; (2) VIX > 30 OR Sahm ≥ 0.5 → -25 pt score penalty;
+> (3) Finance / Financial Services / Real Estate sector AND yield curve inverted OR HY OAS
+> > 6% → sector veto (BUY → HOLD).  These fire automatically per-symbol; the operator
+> does not need to activate the kill switch for them to take effect.  Each override is
+> documented in the advisory rationale so the HTML report explains the gate to the operator.
 
 ### How to resume
 

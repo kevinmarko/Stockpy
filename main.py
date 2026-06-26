@@ -112,6 +112,7 @@ from signals.base import SignalContext
 # inside main() — do NOT call logging.basicConfig() at module level here).
 # ---------------------------------------------------------------------------
 from alerting import notify, setup_logging, summarize_run
+from execution.kill_switch import GlobalKillSwitch
 
 logger = logging.getLogger("InvestYo.main")
 
@@ -1065,6 +1066,38 @@ def run_once(force_account: bool = False) -> RunResult:
             snapshot=snapshot,
             recommendations=[],
             errors=[],
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=(finished_at - started_at).total_seconds(),
+        )
+
+    # ── Kill-switch advisory pause gate ──────────────────────────────────────
+    # Checked after Stage B so the universe is known (for telemetry), but
+    # BEFORE Stage C (macro) and the expensive per-symbol pipeline.
+    # When the sentinel is active we return an empty RunResult rather than
+    # crashing or producing stale recommendations.  The observability dashboard
+    # continues reading the last state_snapshot.json written by a normal run.
+    _ks = GlobalKillSwitch()
+    if _ks.is_active():
+        _ks_reason = _ks.reason() or "(no reason recorded)"
+        logger.info(
+            "Advisory paused by kill-switch sentinel — skipping evaluation cycle. "
+            "Reason: %s  |  Universe would have been: %s  |  "
+            "Deactivate with: python -m execution.kill_switch --deactivate",
+            _ks_reason,
+            ", ".join(symbols[:10]) + ("..." if len(symbols) > 10 else ""),
+        )
+        finished_at = datetime.now(timezone.utc)
+        return RunResult(
+            snapshot=snapshot,
+            recommendations=[],
+            errors=[{
+                "symbol": "_advisory",
+                "stage": "kill_switch_gate",
+                "error_type": "AdvisoryPaused",
+                "message": f"Kill-switch sentinel active: {_ks_reason}",
+                "timestamp": finished_at.isoformat(),
+            }],
             started_at=started_at,
             finished_at=finished_at,
             duration_seconds=(finished_at - started_at).total_seconds(),

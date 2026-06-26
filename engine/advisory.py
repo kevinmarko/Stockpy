@@ -122,6 +122,38 @@ CONFIG: Dict[str, Any] = {
     # Minimum bars required before running full technical indicators / strategy
     # engine; below this we still return a recommendation but with PARTIAL quality.
     "min_history_bars": 30,
+
+    # ── Macro-triggered advisory gating ──────────────────────────────────────
+    # WHY: Systemic macro stress is a separate risk dimension from individual
+    # security signals.  When macro conditions deteriorate past these thresholds
+    # the advisory layer applies conservative overrides BEFORE the holding-aware
+    # overlay runs — holding overlays can still escalate to SELL, but no new BUY
+    # signals are issued into a regime-flagged environment.
+    #
+    # Hard gate (RECESSION or CREDIT EVENT macro regime):
+    #   Any raw STRONG BUY / BUY → downgraded to HOLD so the platform never
+    #   recommends fresh equity allocations into a systemic crisis.
+    #
+    # Soft gate (VIX > macro_vix_gate_threshold OR Sahm ≥ macro_sahm_gate_threshold):
+    #   Apply a -macro_score_penalty pt penalty to the composite score before
+    #   mapping it to a base action.  A score that was marginally bullish may
+    #   become neutral or mildly bearish under stress.
+    #
+    # Sector veto (Finance / Real Estate under inverted curve or blown spreads):
+    #   These sectors face direct structural headwinds from an inverted yield
+    #   curve (net-interest-margin compression) or extreme HY OAS (credit market
+    #   seizure).  Any BUY signal for a vetoed sector is suppressed to HOLD.
+    "macro_vix_gate_threshold": 30.0,        # VIX above this → soft gate fires
+    "macro_sahm_gate_threshold": 0.5,        # Sahm Rule at/above this → soft gate fires
+    "macro_score_penalty": 25,               # pts subtracted from score under soft gate
+    # Sectors with structural exposure to yield-curve / credit-spread stress:
+    "macro_veto_sectors": [
+        "Financials", "Financial Services", "Real Estate",
+    ],
+    # Yield curve (10y-2y spread) below this → veto macro_veto_sectors from fresh buys.
+    "macro_veto_yield_curve_threshold": 0.0,
+    # HY OAS above this → veto macro_veto_sectors from fresh buys.
+    "macro_veto_oas_threshold": 6.0,
 }
 
 
@@ -430,6 +462,95 @@ def evaluate(
         partial_flags.append("strategy_engine_failed")
 
     # ──────────────────────────────────────────────────────────────────────────
+    # Step 8b — Macro-triggered advisory gating
+    # Systemic macro risk gates applied BEFORE the holding-aware overlay so
+    # risk-off conditions consistently reduce position signals for all holders.
+    # The gates never escalate a signal — they only suppress or penalise.
+    # Existing holders may still receive a SELL from the overlay (Case A) even
+    # when a macro gate is in place; this function only blocks fresh BUYs.
+    # ──────────────────────────────────────────────────────────────────────────
+    macro_gate_reason: str = ""
+    adjusted_score: int = score  # may be reduced by soft gate below
+
+    if macro_dto.market_regime in ("RECESSION", "CREDIT EVENT"):
+        # Hard gate: any fresh BUY recommendation is a systemic-risk signal
+        # that the advisory layer refuses to issue during a crisis regime.
+        if raw_signal in ("STRONG BUY", "BUY"):
+            raw_signal = "HOLD"
+            adjusted_score = min(adjusted_score, CONFIG["buy_score_threshold"] - 1)
+        macro_gate_reason = (
+            f"Macro regime is {macro_dto.market_regime}: systemic risk gate "
+            f"halts fresh equity allocations."
+        )
+        logger.info(
+            "advisory[%s]: macro hard gate — regime=%s → signal capped at HOLD",
+            symbol, macro_dto.market_regime,
+        )
+    elif (
+        macro_dto.vix > CONFIG["macro_vix_gate_threshold"]
+        or macro_dto.sahm_rule_indicator >= CONFIG["macro_sahm_gate_threshold"]
+    ):
+        # Soft gate: elevated systemic stress → penalty on composite score.
+        adjusted_score = max(0, adjusted_score - CONFIG["macro_score_penalty"])
+        _vix_part = f"VIX={macro_dto.vix:.1f}" if macro_dto.vix else ""
+        _sahm_part = (
+            f"Sahm={macro_dto.sahm_rule_indicator:.2f}"
+            if macro_dto.sahm_rule_indicator else ""
+        )
+        _stress_desc = ", ".join(x for x in [_vix_part, _sahm_part] if x)
+        macro_gate_reason = (
+            f"Systemic stress indicators elevated ({_stress_desc}) — "
+            f"-{CONFIG['macro_score_penalty']}pt score penalty applied."
+        )
+        logger.info(
+            "advisory[%s]: macro soft gate — %s, score %d → %d",
+            symbol, _stress_desc, score, adjusted_score,
+        )
+
+    # Sector-specific veto: Finance / Real Estate when yield curve is inverted
+    # or HY credit spreads are at systemic-crisis levels.  These sectors face
+    # direct structural headwinds that override individual security signals.
+    # MacroEconomicDTO stores init param yield_curve_10y_2y as self.yield_curve
+    # and high_yield_oas as self.credit_spread.
+    _veto_sectors_lower = {s.lower() for s in CONFIG["macro_veto_sectors"]}
+    _sector_lower = (fund_dto.sector or "").lower()
+    _yield_inverted = (
+        macro_dto.yield_curve < CONFIG["macro_veto_yield_curve_threshold"]
+    )
+    _spreads_extreme = (
+        macro_dto.credit_spread > CONFIG["macro_veto_oas_threshold"]
+    )
+    if (
+        _sector_lower in _veto_sectors_lower
+        and (_yield_inverted or _spreads_extreme)
+        and raw_signal in ("STRONG BUY", "BUY")
+    ):
+        raw_signal = "HOLD"
+        adjusted_score = min(adjusted_score, CONFIG["buy_score_threshold"] - 1)
+        _veto_conditions: list[str] = []
+        if _yield_inverted:
+            _veto_conditions.append(
+                f"yield curve inverted ({macro_dto.yield_curve:.2f})"
+            )
+        if _spreads_extreme:
+            _veto_conditions.append(
+                f"HY OAS={macro_dto.credit_spread:.1f}%"
+            )
+        _veto_reason = (
+            f"{fund_dto.sector} sector vetoed: "
+            f"{' and '.join(_veto_conditions)} "
+            f"create structural headwinds for this sector."
+        )
+        macro_gate_reason = (
+            f"{macro_gate_reason} {_veto_reason}".strip()
+            if macro_gate_reason else _veto_reason
+        )
+        logger.info(
+            "advisory[%s]: sector veto — %s under %s",
+            symbol, fund_dto.sector, " + ".join(_veto_conditions),
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
     # Step 9 — Holding-aware overlay
     # ──────────────────────────────────────────────────────────────────────────
     is_holding = position is not None and position.quantity > 0
@@ -505,9 +626,10 @@ def evaluate(
         # should retain the position rather than triggering a sale or adding more
         # capital on a sub-threshold signal.
         elif _high_yield_holder and final_action in ("BUY", "HOLD"):
-            # If the signal is genuinely strong (score ≥ buy_score_threshold),
+            # If the signal is genuinely strong (adjusted_score ≥ buy_score_threshold),
             # the BUY stands — only suppress on weak/neutral readings.
-            if score < CONFIG["buy_score_threshold"]:
+            # adjusted_score already incorporates any macro score penalty.
+            if adjusted_score < CONFIG["buy_score_threshold"]:
                 final_action = "HOLD"
                 final_conviction = max(final_conviction, CONFIG["conviction_hold"])
                 holding_override_reason = (
@@ -546,7 +668,7 @@ def evaluate(
     rationale = _build_rationale(
         symbol=symbol,
         action=final_action,
-        score=score,
+        score=adjusted_score,
         raw_signal=raw_signal,
         macro_regime=macro_dto.market_regime,
         forecast_price=forecast_price,
@@ -559,6 +681,7 @@ def evaluate(
         rsi=tech.get("RSI"),
         aroon_osc=tech.get("Aroon Oscillator"),
         garch_vol=garch_vol,
+        macro_gate_reason=macro_gate_reason,
     )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -732,14 +855,22 @@ def _build_rationale(
     rsi: Optional[float],
     aroon_osc: Optional[float],
     garch_vol: Optional[float],
+    macro_gate_reason: str = "",
 ) -> str:
     """Build a one-paragraph plain-English rationale citing the top 2-3 drivers.
 
     The rationale intentionally reads like analyst prose rather than a
     dump of indicator values — it picks the most decision-relevant factors
-    and describes their direction and implication.
+    and describes their direction and implication.  When a macro gate
+    overrode the signal, ``macro_gate_reason`` is prepended so the operator
+    understands why a bullish individual signal resulted in a HOLD.
     """
     drivers: list[str] = []
+
+    # Driver 0 — macro gate (prepended when active so it is the first thing
+    # the operator reads, not buried after the technical score).
+    if macro_gate_reason:
+        drivers.append(macro_gate_reason)
 
     # Driver 1 — composite signal score
     score_descriptor = "neutral"
