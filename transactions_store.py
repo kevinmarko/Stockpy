@@ -1,9 +1,12 @@
+import logging
 import os
 import pandas as pd
 from datetime import datetime
 from typing import Optional, Union
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(DB_DIR, "quant_platform.db")
@@ -24,12 +27,25 @@ class Trade(Base):
     shares = Column(Float, nullable=False)
     strategy = Column(String(50), nullable=True)
     notes = Column(String(255), nullable=True)
+    conviction = Column(Float, nullable=True)  # advisory signal conviction [0,1] at entry
 
 class TransactionsStore:
     def __init__(self, db_url: str = DATABASE_URL):
         self.engine = create_engine(db_url, echo=False)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
+        self._ensure_conviction_column()
+
+    def _ensure_conviction_column(self) -> None:
+        """Add conviction column to existing DBs that predate this feature."""
+        try:
+            insp = inspect(self.engine)
+            existing = {c["name"] for c in insp.get_columns("trades")}
+            if "conviction" not in existing:
+                with self.engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE trades ADD COLUMN conviction REAL"))
+        except Exception as exc:
+            logger.debug("_ensure_conviction_column: %s", exc)
 
     def record_trade(
         self,
@@ -39,7 +55,8 @@ class TransactionsStore:
         entry_price: float,
         shares: float,
         strategy: Optional[str] = None,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        conviction: Optional[float] = None,
     ) -> int:
         """Records a new open trade. Returns the trade_id."""
         session = self.Session()
@@ -53,7 +70,8 @@ class TransactionsStore:
                 entry_price=float(entry_price),
                 shares=float(shares),
                 strategy=strategy,
-                notes=notes
+                notes=notes,
+                conviction=float(conviction) if conviction is not None else None,
             )
             session.add(trade)
             session.commit()

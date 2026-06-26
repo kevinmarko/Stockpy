@@ -481,3 +481,35 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 
 ### Gravity step 51
 - **`step_51_snapshot_diff_audit`** — 10 checks: module surface (`SnapshotDiff`, `compute_diff`, `rotate_snapshot`, `compute_diff_from_history`, `load_snapshot`, `list_rotated_snapshots`, `DEFAULT_CONVICTION_DELTA_THRESHOLD`); default threshold = 0.2; `settings.SNAPSHOT_HISTORY_DAYS == 30` AND `settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD == 0.2`; `generate_html_report` accepts `snapshot_diff` kwarg (signature inspection); `main_orchestrator.py` references `rotate_snapshot` + `"holdings"` + `compute_diff_from_history`; `main.py` defines `_write_state_snapshot` AND references `rotate_snapshot` AND passes `snapshot_diff=`; `rotate_snapshot()` round-trip via tempdir; first-run BUYs land in `new_buys` not `action_flips`; `load_snapshot(corrupt_file)` returns `None` (CONSTRAINT #4 + #6); `tests/test_snapshot_diff.py` exists.
+
+## Tier 1 / 1.2 — Conviction Calibration Tracker (2026-06)
+
+### Overview
+"When the system says 0.80, does it actually win 80% of the time?" Bins closed trades with recorded conviction scores into equal-width buckets, computes actual win rate per bucket, and renders a reliability diagram in the GUI Reports tab.
+
+### Schema migration (`transactions_store.py`)
+- `Trade.conviction = Column(Float, nullable=True)` — advisory signal conviction [0, 1] at entry time.
+- `TransactionsStore._ensure_conviction_column()` runs on every `__init__`: inspects existing columns via SQLAlchemy `inspect`, issues `ALTER TABLE trades ADD COLUMN conviction REAL` only when missing. Safe to call on new or legacy databases.
+- `record_trade()` gains `conviction: Optional[float] = None` kwarg (backward-compatible; existing callers unaffected).
+
+### `evaluation_engine.calibration_curve()` (module-level function)
+```
+calibration_curve(transactions_store, n_bins=10, min_trades_per_bin=5) -> pd.DataFrame
+```
+- Reads `closed_trades_df()`, drops rows missing `conviction`/`entry_price`/`exit_price` (CONSTRAINT #4).
+- Win definition (side-aware): long → `exit_price > entry_price`; short → `exit_price < entry_price`.
+- Bins by conviction using `pd.cut` over `np.linspace(0, 1, n_bins+1)`.
+- `win_rate=NaN` for bins with fewer than `min_trades_per_bin` trades (never fabricated).
+- Returns empty DataFrame with correct 7-column schema (`bin_low`, `bin_high`, `bin_center`, `conviction_mean`, `win_rate`, `count`, `perfect_calibration`) on any failure — dead-letter tolerant (CONSTRAINT #6).
+
+### GUI: Reports tab (`gui/panels.py`)
+- `_render_calibration_section()` — inserted after Brinson-Fachler, before report exports.
+- KPI strip: Trades w/ Conviction / Overall Win Rate / Calibration Error (MAE) / Bins w/ Data.
+- Reliability diagram via matplotlib (`st.pyplot`): bars = actual win rate per bin, dashed diagonal = perfect calibration.
+- "No conviction data yet" info box when no conviction-annotated closed trades exist.
+
+### Test surface
+- **`tests/test_calibration.py`** (24 tests, 5 classes): `TestSchema` (empty store, no conviction column, all-null, store read failure, count dtype); `TestWinRateLogic` (long win/loss, short win/loss, mixed, exit==entry is not a win); `TestBinning` (n_bins, bin bounds, center=midpoint, perfect_calibration=center, trades in correct bins); `TestMinTradesGate` (below threshold→NaN, at threshold OK, empty bin mean→NaN); `TestRecordTradeConviction` (kwarg accepted, persisted, None→null, column in open trades).
+
+### Gravity step 52
+- **`step_52_calibration_audit`** — 10 checks: import, schema constant, empty store, no conviction column, all-null, long win logic, short win logic, min_trades gate, dead-letter read failure, record_trade persistence.

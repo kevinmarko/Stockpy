@@ -4294,6 +4294,8 @@ class GravityAIAuditor:
         self.run_strategy_health_audit()
         # Tier 1 Decision Support — step 51 (Δ Since Last Run band)
         self.run_snapshot_diff_audit()
+        # Tier 1 / 1.2 — Conviction calibration tracker
+        self.run_calibration_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -7049,6 +7051,153 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_51_snapshot_diff_audit"] = audit
+
+    def run_calibration_audit(self) -> None:
+        """Step 52 — Conviction calibration tracker (Tier 1 / 1.2).
+
+        Checks
+        ------
+        1.  ``calibration_curve`` is importable from ``evaluation_engine``.
+        2.  ``_CALIBRATION_COLUMNS`` constant defines the expected schema.
+        3.  Empty store → empty DataFrame with correct column schema.
+        4.  No ``conviction`` column in closed_trades_df → empty DataFrame.
+        5.  All-null conviction → empty DataFrame.
+        6.  Long-side win logic: exit > entry → win_rate 1.0 (n=10, min=1).
+        7.  Short-side win logic: exit < entry → win_rate 1.0 (n=10, min=1).
+        8.  ``min_trades_per_bin`` gate: < threshold → win_rate NaN.
+        9.  Store read failure → empty DataFrame (dead-letter, no exception).
+        10. ``record_trade`` accepts and persists ``conviction`` kwarg.
+        """
+        audit: dict = {
+            "step": "step_52_calibration_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import math
+            from datetime import datetime, timedelta
+            import numpy as np
+            import pandas as pd
+
+            # ── 1. Import ────────────────────────────────────────────────────
+            try:
+                from evaluation_engine import calibration_curve, _CALIBRATION_COLUMNS
+                import_ok = True
+            except ImportError as exc:
+                import_ok = False
+                audit["checks"].append({"check": "calibration_curve importable", "passed": False, "detail": str(exc)})
+                audit["status"] = "FAILED"
+                self.report["step_52_calibration_audit"] = audit
+                return
+            audit["checks"].append({"check": "calibration_curve importable from evaluation_engine", "passed": True})
+
+            # ── 2. Column schema constant ────────────────────────────────────
+            expected_cols = ["bin_low", "bin_high", "bin_center", "conviction_mean", "win_rate", "count", "perfect_calibration"]
+            cols_ok = _CALIBRATION_COLUMNS == expected_cols
+            audit["checks"].append({
+                "check": "_CALIBRATION_COLUMNS defines expected 7-column schema",
+                "passed": cols_ok,
+                "detail": str(_CALIBRATION_COLUMNS),
+            })
+            all_pass = all_pass and cols_ok
+
+            from transactions_store import TransactionsStore
+
+            def _mem_store():
+                return TransactionsStore(db_url="sqlite:///:memory:")
+
+            def _add_closed(store, *, side="long", entry=100.0, exit_p=110.0, conv=0.75):
+                now = datetime.utcnow()
+                tid = store.record_trade(
+                    symbol="TST", side=side,
+                    entry_ts=now - timedelta(days=2), entry_price=entry, shares=1.0,
+                    conviction=conv,
+                )
+                store.close_trade(tid, exit_ts=now - timedelta(days=1), exit_price=exit_p)
+
+            # ── 3. Empty store → empty DataFrame ────────────────────────────
+            empty_df = calibration_curve(_mem_store())
+            empty_ok = empty_df.empty and list(empty_df.columns) == _CALIBRATION_COLUMNS
+            audit["checks"].append({"check": "empty store → empty DataFrame with correct columns", "passed": empty_ok})
+            all_pass = all_pass and empty_ok
+
+            # ── 4. No conviction column → empty ──────────────────────────────
+            store4 = _mem_store()
+            no_conv_df = pd.DataFrame({"exit_price": [110.0], "entry_price": [100.0], "side": ["long"]})
+
+            class _PatchedStore:
+                def closed_trades_df(self):
+                    return no_conv_df
+
+            result4 = calibration_curve(_PatchedStore())
+            no_col_ok = result4.empty and list(result4.columns) == _CALIBRATION_COLUMNS
+            audit["checks"].append({"check": "closed_trades_df without conviction column → empty", "passed": no_col_ok})
+            all_pass = all_pass and no_col_ok
+
+            # ── 5. All-null conviction → empty ───────────────────────────────
+            store5 = _mem_store()
+            _add_closed(store5, conv=None)
+            result5 = calibration_curve(store5)
+            all_null_ok = result5.empty
+            audit["checks"].append({"check": "all-null conviction → empty DataFrame", "passed": all_null_ok})
+            all_pass = all_pass and all_null_ok
+
+            # ── 6. Long win logic ─────────────────────────────────────────────
+            store6 = _mem_store()
+            for _ in range(10):
+                _add_closed(store6, side="long", entry=100.0, exit_p=110.0, conv=0.75)
+            df6 = calibration_curve(store6, n_bins=1, min_trades_per_bin=1)
+            long_win_ok = (len(df6) == 1) and abs(df6.iloc[0]["win_rate"] - 1.0) < 1e-9
+            audit["checks"].append({"check": "long exit>entry → win_rate=1.0", "passed": long_win_ok, "detail": str(df6.iloc[0]["win_rate"] if len(df6) else "empty")})
+            all_pass = all_pass and long_win_ok
+
+            # ── 7. Short win logic ────────────────────────────────────────────
+            store7 = _mem_store()
+            for _ in range(10):
+                _add_closed(store7, side="short", entry=100.0, exit_p=90.0, conv=0.65)
+            df7 = calibration_curve(store7, n_bins=1, min_trades_per_bin=1)
+            short_win_ok = (len(df7) == 1) and abs(df7.iloc[0]["win_rate"] - 1.0) < 1e-9
+            audit["checks"].append({"check": "short exit<entry → win_rate=1.0", "passed": short_win_ok, "detail": str(df7.iloc[0]["win_rate"] if len(df7) else "empty")})
+            all_pass = all_pass and short_win_ok
+
+            # ── 8. min_trades_per_bin gate ────────────────────────────────────
+            store8 = _mem_store()
+            for _ in range(3):  # below default min=5
+                _add_closed(store8, conv=0.55, exit_p=110.0)
+            df8 = calibration_curve(store8, n_bins=1, min_trades_per_bin=5)
+            gate_ok = len(df8) == 1 and math.isnan(df8.iloc[0]["win_rate"])
+            audit["checks"].append({"check": "3 trades < min=5 → win_rate NaN", "passed": gate_ok})
+            all_pass = all_pass and gate_ok
+
+            # ── 9. Store read failure → empty (dead-letter) ──────────────────
+            class _FailStore:
+                def closed_trades_df(self):
+                    raise RuntimeError("DB down")
+
+            result9 = calibration_curve(_FailStore())
+            dl_ok = result9.empty and list(result9.columns) == _CALIBRATION_COLUMNS
+            audit["checks"].append({"check": "store read failure → empty DataFrame (no exception)", "passed": dl_ok})
+            all_pass = all_pass and dl_ok
+
+            # ── 10. record_trade persists conviction ──────────────────────────
+            store10 = _mem_store()
+            _add_closed(store10, conv=0.88)
+            df10 = store10.closed_trades_df()
+            persist_ok = "conviction" in df10.columns and abs(df10["conviction"].iloc[0] - 0.88) < 1e-9
+            audit["checks"].append({"check": "record_trade conviction kwarg persisted to DB", "passed": persist_ok})
+            all_pass = all_pass and persist_ok
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_52_calibration_audit"] = audit
 
     def _extend_launcher_telemetry_audit_stage_status(self) -> None:
         """Extend step_41 to also verify StageStatus enum and four-stage map.

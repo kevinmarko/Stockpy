@@ -383,6 +383,74 @@ def validate_brinson_fachler_weights(
 
 
 # ===========================================================================
+# Conviction Calibration — Streamlit section (consumed by Reports tab, 1.2)
+# ===========================================================================
+
+def _render_calibration_section() -> None:
+    """Reliability diagram: conviction score vs actual win rate.
+
+    "When the system says 0.80, does it actually win 80% of the time?"
+    Uses matplotlib embedded via st.pyplot for the diagonal reference line
+    that a native st.bar_chart cannot render.
+    """
+    st.markdown("**Conviction Calibration** — does model confidence track real outcomes?")
+
+    try:
+        from evaluation_engine import calibration_curve
+        from transactions_store import TransactionsStore
+        cal_df = calibration_curve(TransactionsStore())
+    except Exception as exc:
+        st.caption(f"(calibration unavailable: {exc})")
+        return
+
+    scored = cal_df.dropna(subset=["win_rate"])
+    if cal_df.empty or scored.empty:
+        st.info(
+            "No conviction data yet. Conviction scores are stored when trades are recorded "
+            "via `TransactionsStore.record_trade(conviction=...)`. They will appear here "
+            "after the advisory engine has closed trades with conviction annotations."
+        )
+        return
+
+    total = int(cal_df["count"].sum())
+    total_wins = float((cal_df["win_rate"].fillna(0) * cal_df["count"]).sum())
+    overall_wr = total_wins / total if total > 0 else float("nan")
+    cal_error = float((scored["win_rate"] - scored["bin_center"]).abs().mean())
+
+    kc1, kc2, kc3, kc4 = st.columns(4)
+    kc1.metric("Trades w/ Conviction", str(total))
+    kc2.metric("Overall Win Rate", f"{overall_wr:.1%}" if overall_wr == overall_wr else "—")
+    kc3.metric(
+        "Calibration Error (MAE)", f"{cal_error:.3f}",
+        help="Mean |actual_win_rate − conviction_bin_center|. 0 = perfect calibration.",
+    )
+    kc4.metric("Bins w/ Data", str(len(scored)))
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(
+        scored["bin_center"], scored["win_rate"],
+        width=0.09, alpha=0.75, color="#4c8cff", label="Actual win rate",
+    )
+    ax.plot([0, 1], [0, 1], "k--", linewidth=1.2, label="Perfect calibration")
+    ax.set_xlabel("Conviction (model output)")
+    ax.set_ylabel("Win rate (actual)")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_title("Reliability Diagram")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+    with st.expander("📊 Calibration table"):
+        st.dataframe(cal_df, hide_index=True)
+
+
+# ===========================================================================
 # Brinson-Fachler attribution — Streamlit section (consumed by Reports tab)
 # ===========================================================================
 
@@ -1122,6 +1190,9 @@ def render_report_viewer() -> None:
 
     # ── Brinson-Fachler attribution (interactive section) ───────────────────
     _render_brinson_fachler_section()
+
+    # ── Conviction calibration (1.2) ─────────────────────────────────────────
+    _render_calibration_section()
 
     # ── Existing HTML report export ──────────────────────────────────────────
     st.markdown("**Generated reports**")

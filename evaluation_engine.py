@@ -621,6 +621,89 @@ class EvaluationEngine:
         return df
 
 
+# =============================================================================
+# MODULE-LEVEL: Conviction Calibration (1.2 — "when 0.80, does it win 80%?")
+# =============================================================================
+
+_CALIBRATION_COLUMNS = [
+    "bin_low", "bin_high", "bin_center",
+    "conviction_mean", "win_rate", "count", "perfect_calibration",
+]
+
+def _empty_calibration_df() -> pd.DataFrame:
+    dtypes = {c: (int if c == "count" else float) for c in _CALIBRATION_COLUMNS}
+    return pd.DataFrame({c: pd.Series(dtype=dt) for c, dt in dtypes.items()})
+
+
+def calibration_curve(
+    transactions_store,
+    n_bins: int = 10,
+    min_trades_per_bin: int = 5,
+) -> pd.DataFrame:
+    """Reliability diagram: bins closed trades by conviction, computes actual win rate.
+
+    Args:
+        transactions_store: A ``TransactionsStore`` instance.
+        n_bins: Number of equal-width conviction bins spanning [0, 1].
+        min_trades_per_bin: Bins with fewer trades receive ``win_rate=NaN``
+            (insufficient sample; never fabricated — CONSTRAINT #4).
+
+    Returns:
+        DataFrame with columns ``bin_low``, ``bin_high``, ``bin_center``,
+        ``conviction_mean``, ``win_rate``, ``count``, ``perfect_calibration``.
+        Empty (correct schema, zero rows) when no conviction-annotated closed
+        trades exist or any read fails (dead-letter tolerant — CONSTRAINT #6).
+
+    Win definition (side-aware, never fabricated):
+        * long  — ``exit_price > entry_price``
+        * short — ``exit_price < entry_price``
+    """
+    try:
+        df = transactions_store.closed_trades_df()
+    except Exception as exc:
+        logger.warning("calibration_curve: failed to read closed trades: %s", exc)
+        return _empty_calibration_df()
+
+    if df.empty or "conviction" not in df.columns:
+        return _empty_calibration_df()
+
+    df = df.dropna(subset=["conviction", "entry_price", "exit_price"]).copy()
+    if df.empty:
+        return _empty_calibration_df()
+
+    df["side"] = df["side"].fillna("long").str.lower().str.strip()
+    df["win"] = (
+        ((df["side"] == "long") & (df["exit_price"] > df["entry_price"]))
+        | ((df["side"] == "short") & (df["exit_price"] < df["entry_price"]))
+    )
+
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    df["_bin"] = pd.cut(df["conviction"], bins=bins, include_lowest=True)
+
+    records = []
+    for interval in sorted(df["_bin"].cat.categories):
+        bucket = df[df["_bin"] == interval]
+        count = len(bucket)
+        bin_low = float(interval.left)
+        bin_high = float(interval.right)
+        bin_center = (bin_low + bin_high) / 2.0
+        conviction_mean = float(bucket["conviction"].mean()) if count > 0 else float("nan")
+        win_rate = float(bucket["win"].mean()) if count >= min_trades_per_bin else float("nan")
+        records.append({
+            "bin_low": bin_low,
+            "bin_high": bin_high,
+            "bin_center": bin_center,
+            "conviction_mean": conviction_mean,
+            "win_rate": win_rate,
+            "count": count,
+            "perfect_calibration": bin_center,
+        })
+
+    result = pd.DataFrame(records)
+    result["count"] = result["count"].astype(int)
+    return result
+
+
 if __name__ == "__main__":
     # EXECUTABLE TEST SUITE
     test_df = pd.DataFrame({
