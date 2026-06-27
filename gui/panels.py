@@ -3799,8 +3799,9 @@ def render_help() -> None:
                 if entry.guide_anchor:
                     _section = _load_guide_section(entry.guide_anchor)
                     if _section:
-                        with st.expander("📖 Read more in How-To Guide"):
-                            st.markdown(_section)
+                        st.divider()
+                        st.markdown("**📖 From the How-To Guide:**")
+                        st.markdown(_section)
                     else:
                         st.caption(
                             f"_(Guide section `{entry.guide_anchor}` not found — "
