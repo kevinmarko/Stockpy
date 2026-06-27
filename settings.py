@@ -221,6 +221,15 @@ class Settings(BaseSettings):
             "Unset = key-age check skipped (warning-level PASS, not blocking)."
         ),
     )
+    ALPACA_KEY_ROTATED_DATE: Optional[str] = Field(
+        default=None,
+        description=(
+            "ISO date (YYYY-MM-DD) when ALPACA_API_KEY was last rotated. "
+            "Auto-skipped by preflight when ADVISORY_ONLY=True (paper keys have "
+            "no blast-radius risk when the broker surface is quarantined). "
+            "Unset = key-age check skipped (warning-level PASS, not blocking)."
+        ),
+    )
 
     # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py) ---
     # These three variables feed the TOTP-based read-only portfolio fetch.

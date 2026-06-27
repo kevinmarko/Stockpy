@@ -15,11 +15,11 @@
 - [ ] All secrets stored in `.env` — NOT committed to git.
 - [ ] `.env` is in `.gitignore`; verified with `git status --short`.
 - [ ] `FRED_API_KEY` rotated within the last **90 days**.  
-  Set `FRED_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` to enable automated check.
-  (check wired in Stage 3 of the 2026-06-26 cleanup plan)
+  Set `FRED_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` to enable `check_key_rotation_recent`
+  (preflight check #2 — warning-only, never blocking).
 - [ ] `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` rotated within the last **90 days**.  
-  Set `ALPACA_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` to enable automated check.
-  (check wired in Stage 3 of the 2026-06-26 cleanup plan)
+  Set `ALPACA_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` to enable `check_alpaca_key_rotation_recent`
+  (preflight check #3 — warning-only; auto-skipped when `ADVISORY_ONLY=true`).
 - [ ] *(manual)* No sensitive data (account numbers, SSN, trade history) stored unencrypted on disk.
 - [ ] *(manual)* Broker account uses 2-factor authentication.
 

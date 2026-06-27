@@ -4324,6 +4324,8 @@ class GravityAIAuditor:
         self.step_65_refresh_validations_audit()
         # Stage 2 — Advisory false-positive preflight fixes (state_snapshot_fresh + expanded _ADVISORY_AUTO_SKIP)
         self.step_66_advisory_false_positive_audit()
+        # Stage 3 — Alpaca key-rotation reminder check
+        self.step_67_key_rotation_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -7637,10 +7639,14 @@ class GravityAIAuditor:
            (no broker imports) when the flag is True.
         2. ``gui/panels._render_strategy_mode_toggle`` does NOT render the
            Simulation/Paper/Live radio + confirm button when the flag is True.
-        3. ``scripts.preflight_check.run_checks`` auto-skips the four broker-
-           dependent checks (alpaca_configured, alpaca_paper_mode,
-           dry_run_disabled, paper_trading_duration) and the new
-           ``advisory_only_active`` check appears in the result set.
+        3. ``scripts.preflight_check.run_checks`` auto-skips eight checks when
+           ADVISORY_ONLY=True — four broker-stack checks (alpaca_configured,
+           alpaca_paper_mode, dry_run_disabled, paper_trading_duration), one
+           key-rotation check (alpaca_key_rotation_recent — Stage 3 addition),
+           and three runtime-state false-positive checks (heartbeat_fresh,
+           validation_reports, no_unexpected_risk_blocks).  Each skipped check
+           gets a distinct per-check reason string (Stages 2+3, 2026-06-26
+           cleanup).
 
         Checks
         ------
@@ -7652,8 +7658,11 @@ class GravityAIAuditor:
         4.  Source of ``gui/app.py`` references ADVISORY_ONLY and the
             "ADVISORY MODE" banner string.
         5.  ``scripts.preflight_check`` exports ``check_advisory_only_active``.
-        6.  ``scripts.preflight_check._ADVISORY_AUTO_SKIP`` lists exactly
-            the four broker-dependent check names.
+        6.  ``scripts.preflight_check._ADVISORY_AUTO_SKIP`` is a dict that
+            contains all 8 expected advisory-mode auto-skip entries (5 broker-
+            dependent including alpaca_key_rotation_recent, plus 3 advisory
+            false-positives: heartbeat_fresh, validation_reports,
+            no_unexpected_risk_blocks).
         7.  Functional: when ADVISORY_ONLY=True, ``run_checks`` PASSes each
             check in ``_ADVISORY_AUTO_SKIP`` with reason naming ADVISORY_ONLY.
         8.  Functional: when ADVISORY_ONLY=False, the ``advisory_only_active``
@@ -7721,12 +7730,13 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c5
 
-            # Check 6: auto-skip list contents — expanded in Stage 2 to cover advisory
-            # false-positive checks (heartbeat_fresh, validation_reports,
-            # no_unexpected_risk_blocks) in addition to the original four broker checks.
+            # Check 6: auto-skip dict — 8 entries (5 broker-dependent including
+            # alpaca_key_rotation_recent from Stage 3, plus 3 advisory false-positives
+            # added in Stage 2).
             broker_checks = {
                 "alpaca_configured", "alpaca_paper_mode",
                 "dry_run_disabled", "paper_trading_duration",
+                "alpaca_key_rotation_recent",
             }
             advisory_fp_checks = {
                 "heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks",
@@ -7737,7 +7747,7 @@ class GravityAIAuditor:
             # so that future additions to _ADVISORY_AUTO_SKIP don't break this check).
             c6 = broker_checks.issubset(actual_skip) and advisory_fp_checks.issubset(actual_skip)
             audit["checks"].append({
-                "check": "_ADVISORY_AUTO_SKIP contains all 7 advisory-mode auto-skip checks",
+                "check": "_ADVISORY_AUTO_SKIP contains all 8 advisory-mode auto-skip checks (5 broker-dependent + 3 false-positives)",
                 "passed": c6,
                 "detail": f"actual={sorted(actual_skip)}, expected_subset={sorted(expected_skip)}",
             })
@@ -7760,7 +7770,7 @@ class GravityAIAuditor:
                 except Exception:
                     pass
             audit["checks"].append({
-                "check": "run_checks auto-skips all 7 advisory checks under ADVISORY_ONLY=True",
+                "check": "run_checks auto-skips all 8 advisory checks under ADVISORY_ONLY=True",
                 "passed": c7,
             })
             all_pass = all_pass and c7
@@ -9828,8 +9838,9 @@ class GravityAIAuditor:
 
         Verifies that:
         1. ``check_state_snapshot_fresh`` exists and is in ``ALL_CHECKS``.
-        2. ``_ADVISORY_AUTO_SKIP`` contains all 7 expected entries (4 broker +
-           3 advisory false-positives: heartbeat_fresh, validation_reports,
+        2. ``_ADVISORY_AUTO_SKIP`` contains all 8 expected entries (5 broker-
+           dependent including alpaca_key_rotation_recent, plus 3 advisory
+           false-positives: heartbeat_fresh, validation_reports,
            no_unexpected_risk_blocks).
         3. ``state_snapshot_fresh`` is NOT in ``_ADVISORY_AUTO_SKIP`` — it is
            the advisory liveness indicator and must always run.
@@ -9841,7 +9852,7 @@ class GravityAIAuditor:
            (auto-skip behaviour confirmed via ``run_checks``).
         7. ``validation_reports`` is skipped under ``ADVISORY_ONLY=True``.
         8. ``no_unexpected_risk_blocks`` is skipped under ``ADVISORY_ONLY=True``.
-        9. Total ``ALL_CHECKS`` count is 15 (14 original + 1 new).
+        9. Total ``ALL_CHECKS`` count is 16 (15 from Stage 2 + 1 from Stage 3).
         10. ``tests/test_preflight.py`` contains ``TestStateSnapshotFresh``
             and ``TestAdvisoryAutoSkip`` class definitions.
         """
@@ -9880,14 +9891,19 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c2
 
-            # Check 3: _ADVISORY_AUTO_SKIP contains all 7 expected entries
+            # Check 3: _ADVISORY_AUTO_SKIP contains all 8 expected entries
+            # (4 broker + alpaca_key_rotation_recent + 3 advisory false-positives)
             actual_skip = set(getattr(preflight_check, "_ADVISORY_AUTO_SKIP", ()))
-            broker_checks = {"alpaca_configured", "alpaca_paper_mode", "dry_run_disabled", "paper_trading_duration"}
+            broker_checks = {
+                "alpaca_configured", "alpaca_paper_mode",
+                "dry_run_disabled", "paper_trading_duration",
+                "alpaca_key_rotation_recent",
+            }
             fp_checks = {"heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks"}
             all_expected = broker_checks | fp_checks
             c3 = all_expected.issubset(actual_skip)
             audit["checks"].append({
-                "check": "_ADVISORY_AUTO_SKIP contains all 7 advisory-mode auto-skip entries",
+                "check": "_ADVISORY_AUTO_SKIP contains all 8 advisory-mode auto-skip entries",
                 "passed": c3,
                 "detail": f"actual={sorted(actual_skip)}, missing={sorted(all_expected - actual_skip)}",
             })
@@ -9997,10 +10013,10 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: total ALL_CHECKS count is 15
-            c9 = len(preflight_check.ALL_CHECKS) == 15
+            # Check 9: total ALL_CHECKS count is 16 (15 from Stage 2 + alpaca_key_rotation_recent from Stage 3)
+            c9 = len(preflight_check.ALL_CHECKS) == 16
             audit["checks"].append({
-                "check": f"ALL_CHECKS has 15 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "check": f"ALL_CHECKS has 16 entries (got {len(preflight_check.ALL_CHECKS)})",
                 "passed": c9,
             })
             all_pass = all_pass and c9
@@ -10026,6 +10042,169 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_66_advisory_false_positive_audit"] = audit
+
+    def step_67_key_rotation_audit(self) -> None:
+        """Step 67 — Alpaca key-rotation reminder check (Stage 3, 2026-06-26 cleanup).
+
+        ``check_alpaca_key_rotation_recent`` mirrors ``check_key_rotation_recent``
+        for the Alpaca key pair, with one critical difference: it is auto-skipped
+        under ADVISORY_ONLY=True because Alpaca paper keys have no blast-radius
+        risk while the broker surface is quarantined.
+
+        Checks
+        ------
+        1. ``check_alpaca_key_rotation_recent`` is importable and callable.
+        2. ``settings.ALPACA_KEY_ROTATED_DATE`` field exists (Optional[str]).
+        3. Unset date → warning-level PASS (not blocking).
+        4. Fresh date (30 days ago) → clean PASS, no warning.
+        5. Stale date (100 days ago) → warning-level PASS (never ``passed=False``).
+        6. Invalid ISO format → warning-level PASS.
+        7. ``alpaca_key_rotation_recent`` appears in ``_ADVISORY_AUTO_SKIP``.
+        8. Auto-skip fires when ADVISORY_ONLY=True (verified via run_checks).
+        9. Both key_rotation_recent and alpaca_key_rotation_recent in ALL_CHECKS in order.
+        10. ``tests/test_preflight.py`` includes ``TestKeyRotationChecks``.
+        """
+        audit: dict = {
+            "step": "step_67_key_rotation_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            from scripts import preflight_check
+            from datetime import date as _date, timedelta as _td
+            from unittest.mock import MagicMock, patch as _patch
+
+            # Check 1: importable
+            c1 = hasattr(preflight_check, "check_alpaca_key_rotation_recent")
+            audit["checks"].append({
+                "check": "check_alpaca_key_rotation_recent exists and is callable",
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            # Check 2: settings field exists
+            from settings import settings as _s
+            c2 = hasattr(_s, "ALPACA_KEY_ROTATED_DATE")
+            audit["checks"].append({
+                "check": "settings.ALPACA_KEY_ROTATED_DATE field exists",
+                "passed": c2,
+            })
+            all_pass = all_pass and c2
+
+            def _mock_s(**kwargs):
+                m = MagicMock()
+                m.ALPACA_KEY_ROTATED_DATE = kwargs.get("ALPACA_KEY_ROTATED_DATE", None)
+                return m
+
+            # Check 3: unset → warning PASS
+            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=None)):
+                r3 = preflight_check.check_alpaca_key_rotation_recent()
+            c3 = r3.passed and r3.warning
+            audit["checks"].append({
+                "check": "Unset ALPACA_KEY_ROTATED_DATE → warning-level PASS",
+                "passed": c3,
+            })
+            all_pass = all_pass and c3
+
+            # Check 4: fresh date → clean PASS
+            fresh = (_date.today() - _td(days=30)).isoformat()
+            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=fresh)):
+                r4 = preflight_check.check_alpaca_key_rotation_recent(max_age_days=90)
+            c4 = r4.passed and not r4.warning
+            audit["checks"].append({
+                "check": "Fresh rotation date → clean PASS without warning",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # Check 5: stale date → warning PASS (never False)
+            stale = (_date.today() - _td(days=100)).isoformat()
+            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=stale)):
+                r5 = preflight_check.check_alpaca_key_rotation_recent(max_age_days=90)
+            c5 = r5.passed and r5.warning
+            audit["checks"].append({
+                "check": "Stale rotation date → warning-level PASS (never passed=False)",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            # Check 6: invalid ISO format → warning PASS
+            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE="not-a-date")):
+                r6 = preflight_check.check_alpaca_key_rotation_recent()
+            c6 = r6.passed and r6.warning
+            audit["checks"].append({
+                "check": "Invalid ISO format → warning-level PASS",
+                "passed": c6,
+            })
+            all_pass = all_pass and c6
+
+            # Check 7: appears in _ADVISORY_AUTO_SKIP
+            auto_skip = getattr(preflight_check, "_ADVISORY_AUTO_SKIP", {})
+            c7 = "alpaca_key_rotation_recent" in auto_skip
+            audit["checks"].append({
+                "check": "alpaca_key_rotation_recent in _ADVISORY_AUTO_SKIP",
+                "passed": c7,
+            })
+            all_pass = all_pass and c7
+
+            # Check 8: functional auto-skip under ADVISORY_ONLY=True
+            prior = getattr(preflight_check.settings, "ADVISORY_ONLY", True)
+            try:
+                preflight_check.settings.ADVISORY_ONLY = True
+                results = preflight_check.run_checks(skip=[])
+                by_name = {r.name: r for r in results}
+                skip_r = by_name.get("alpaca_key_rotation_recent")
+                c8 = (
+                    skip_r is not None
+                    and skip_r.passed
+                    and "ADVISORY_ONLY" in skip_r.reason
+                )
+            finally:
+                try:
+                    preflight_check.settings.ADVISORY_ONLY = prior
+                except Exception:
+                    pass
+            audit["checks"].append({
+                "check": "auto-skip fires for alpaca_key_rotation_recent under ADVISORY_ONLY=True",
+                "passed": c8,
+            })
+            all_pass = all_pass and c8
+
+            # Check 9: both key_rotation_recent and alpaca_key_rotation_recent in ALL_CHECKS in order
+            all_check_names = [fn.__name__.replace("check_", "") for fn in preflight_check.ALL_CHECKS]
+            has_both = ("key_rotation_recent" in all_check_names
+                        and "alpaca_key_rotation_recent" in all_check_names)
+            idx_fred = all_check_names.index("key_rotation_recent") if "key_rotation_recent" in all_check_names else -1
+            idx_alpaca = all_check_names.index("alpaca_key_rotation_recent") if "alpaca_key_rotation_recent" in all_check_names else -1
+            c9 = has_both and idx_fred < idx_alpaca
+            audit["checks"].append({
+                "check": "key_rotation_recent and alpaca_key_rotation_recent both in ALL_CHECKS (in order)",
+                "passed": c9,
+                "detail": f"order={all_check_names[:5]}",
+            })
+            all_pass = all_pass and c9
+
+            # Check 10: test file contains TestKeyRotationChecks
+            from pathlib import Path as _Path
+            test_src = _Path("tests/test_preflight.py").read_text(encoding="utf-8")
+            c10 = "TestKeyRotationChecks" in test_src and "check_alpaca_key_rotation_recent" in test_src
+            audit["checks"].append({
+                "check": "tests/test_preflight.py contains TestKeyRotationChecks class",
+                "passed": c10,
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_67_key_rotation_audit"] = audit
 
 
 # =============================================================================
