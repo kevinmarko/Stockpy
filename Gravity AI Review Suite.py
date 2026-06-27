@@ -19,6 +19,20 @@ from pandera.typing import Series, DateTime
 from datetime import datetime, timedelta, timezone  # Timezone-aware UTC operations to prevent time-drift bugs
 import pandera.pandas as pa
 import json                          # Used to output the final report so the AI can read it easily
+
+
+class _NumpyEncoder(json.JSONEncoder):
+    """Serialise numpy scalars that the default encoder rejects."""
+    def default(self, o: Any) -> Any:
+        if isinstance(o, np.bool_):
+            return bool(o)
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.floating):
+            return float(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        return super().default(o)
 import math
 import logging                       # Used for tracking background errors safely
 from abc import ABC, abstractmethod  # Used for Dependency Injection (creating interchangeable templates)
@@ -4326,12 +4340,16 @@ class GravityAIAuditor:
         self.step_66_advisory_false_positive_audit()
         # Stage 3 — Alpaca key-rotation reminder check
         self.step_67_key_rotation_audit()
+        # Prompt 1–5 — GUI Help Explainers content store (incremental build-up)
+        self.step_68_help_content_audit()
+        # Prompt 6 — final consolidated help-explainers audit (10 checks from plan §7)
+        self.step_68_help_explainers_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
         # Write the gravity verification report (contract for gui/strategy_health.py).
         self._write_gravity_verification_report()
-        return json.dumps(self.report, indent=4)
+        return json.dumps(self.report, indent=4, cls=_NumpyEncoder)
 
     def run_macro_regime_gate_toggle_audit(self) -> None:
         """Step 34 — Macro Regime Gate toggle safety audit.
@@ -10205,6 +10223,253 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_67_key_rotation_audit"] = audit
+
+    def step_68_help_content_audit(self) -> None:
+        """Step 68a — GUI Help Explainers content store smoke check (Prompts 1–5).
+
+        Verifies that the three help-content modules are importable and expose
+        the expected public API surfaces.  This is the lightweight predecessor
+        to ``step_68_help_explainers_audit`` which runs the full 10-check suite.
+        """
+        audit: Dict[str, Any] = {"checks": [], "overall_pass": True}
+        all_pass = True
+        try:
+            # C1 — gui.help_content importable
+            from gui.help_content import GLOSSARY, TAB_HELP, METRIC_HELP, metric_help
+            c1 = bool(GLOSSARY) and bool(TAB_HELP) and callable(metric_help)
+            audit["checks"].append({"check": "help_content_importable", "pass": c1})
+            all_pass = all_pass and c1
+
+            # C2 — gui.help_widgets importable
+            from gui.help_widgets import explain, metric_with_help, why_callout
+            c2 = callable(explain) and callable(metric_with_help) and callable(why_callout)
+            audit["checks"].append({"check": "help_widgets_importable", "pass": c2})
+            all_pass = all_pass and c2
+
+            # C3 — gui.onboarding importable
+            from gui.onboarding import should_show_tour, mark_onboarded
+            c3 = callable(should_show_tour) and callable(mark_onboarded)
+            audit["checks"].append({"check": "onboarding_importable", "pass": c3})
+            all_pass = all_pass and c3
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_68_help_content_audit"] = audit
+
+    def step_68_help_explainers_audit(self) -> None:
+        """Step 68b — GUI Help Explainers consolidated audit (10 checks, plan §7).
+
+        Checks (from docs/GUI_HELP_EXPLAINERS_PLAN.md §7)
+        ---------------------------------------------------
+        1.  ``gui.help_content`` exports: GLOSSARY, TAB_HELP, SECTION_HELP,
+            METRIC_HELP, metric_help.
+        2.  All 10 tab IDs present in TAB_HELP.
+        3.  Every guide_anchor in GLOSSARY + TAB_HELP resolves to a real heading
+            slug in docs/HOW_TO_GUIDE.md (anchor-contract invariant).
+        4.  ``metric_help("__nonexistent__")`` returns exactly ``""`` (never raises,
+            no fabricated fallback — CONSTRAINT #6 / #4).
+        5.  Nine required glossary terms present: kelly target, pbo, dsr, sahm rule,
+            iv rank (or ivr), hmm, advisory mode, conviction, calibration.
+        6.  No duplicate keys in GLOSSARY.
+        7.  ``gui.help_widgets.explain`` is callable.
+        8.  ``gui.onboarding.mark_onboarded`` / ``should_show_tour`` round-trip:
+            True → mark → False, marker file created, ``.tmp`` sibling gone.
+        9.  ``gui/panels.py`` contains ≥ 10 ``help_widgets.explain(`` calls and
+            each of the 10 tab IDs appears in at least one such call.
+        10. ``tests/test_help_content.py`` exists.
+        """
+        import re
+        import tempfile
+        audit: Dict[str, Any] = {"checks": [], "overall_pass": True}
+        all_pass = True
+
+        try:
+            from pathlib import Path
+
+            # ----------------------------------------------------------------
+            # C1 — help_content exports
+            # ----------------------------------------------------------------
+            from gui.help_content import (
+                GLOSSARY, TAB_HELP, SECTION_HELP, METRIC_HELP, metric_help,
+            )
+            c1 = (
+                isinstance(GLOSSARY, dict)
+                and isinstance(TAB_HELP, dict)
+                and isinstance(SECTION_HELP, dict)
+                and isinstance(METRIC_HELP, dict)
+                and callable(metric_help)
+            )
+            audit["checks"].append({"check": "help_content_exports", "pass": bool(c1)})
+            all_pass = all_pass and c1
+
+            # ----------------------------------------------------------------
+            # C2 — all 10 tab IDs in TAB_HELP
+            # ----------------------------------------------------------------
+            expected_tabs = {
+                "launcher", "reports", "settings", "strategy_matrix",
+                "paper_monitor", "gravity", "options", "market_data",
+                "observability", "live_inventory",
+            }
+            missing_tabs = expected_tabs - set(TAB_HELP.keys())
+            c2 = len(missing_tabs) == 0
+            audit["checks"].append({
+                "check": "all_10_tab_ids_in_tab_help",
+                "pass": bool(c2),
+                "missing": sorted(missing_tabs),
+            })
+            all_pass = all_pass and c2
+
+            # ----------------------------------------------------------------
+            # C3 — anchor-contract: every guide_anchor resolves to a real slug
+            # ----------------------------------------------------------------
+            guide_path = Path("docs/HOW_TO_GUIDE.md")
+            valid_slugs: set = set()
+            if guide_path.exists():
+                for line in guide_path.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("## ") or line.startswith("### "):
+                        heading = line.lstrip("#").strip()
+                        slug = heading.lower()
+                        slug = re.sub(r"[^\w\s-]", "", slug)
+                        slug = "#" + slug.replace(" ", "-")
+                        valid_slugs.add(slug)
+
+            bad_anchors = []
+            for k, entry in GLOSSARY.items():
+                if entry.guide_anchor and entry.guide_anchor not in valid_slugs:
+                    bad_anchors.append(f"GLOSSARY[{k!r}]={entry.guide_anchor!r}")
+            for k, tab in TAB_HELP.items():
+                if tab.guide_anchor and tab.guide_anchor not in valid_slugs:
+                    bad_anchors.append(f"TAB_HELP[{k!r}]={tab.guide_anchor!r}")
+            c3 = len(bad_anchors) == 0
+            audit["checks"].append({
+                "check": "guide_anchors_resolve",
+                "pass": bool(c3),
+                "bad_anchors": bad_anchors[:5],
+            })
+            all_pass = all_pass and c3
+
+            # ----------------------------------------------------------------
+            # C4 — metric_help missing key → "" (CONSTRAINT #4 / #6)
+            # ----------------------------------------------------------------
+            result_missing = metric_help("__nonexistent_gravity_probe__")
+            c4 = result_missing == ""
+            audit["checks"].append({
+                "check": "metric_help_missing_returns_empty",
+                "pass": bool(c4),
+                "got": repr(result_missing),
+            })
+            all_pass = all_pass and c4
+
+            # ----------------------------------------------------------------
+            # C5 — required glossary terms present
+            # ----------------------------------------------------------------
+            required_terms = {
+                "kelly target", "pbo", "dsr", "sahm rule",
+                "iv rank",  # plan says "ivr"; actual GLOSSARY key is "iv rank"
+                "hmm", "advisory mode", "conviction", "calibration",
+            }
+            glossary_keys = set(GLOSSARY.keys())
+            # Accept "ivr" as well in case the key changes
+            if "ivr" in glossary_keys and "iv rank" not in required_terms:
+                pass  # ivr is an acceptable substitute
+            missing_terms = required_terms - glossary_keys
+            # ivr is an acceptable alias for iv rank
+            if "iv rank" in missing_terms and "ivr" in glossary_keys:
+                missing_terms.discard("iv rank")
+            c5 = len(missing_terms) == 0
+            audit["checks"].append({
+                "check": "required_glossary_terms_present",
+                "pass": bool(c5),
+                "missing": sorted(missing_terms),
+            })
+            all_pass = all_pass and c5
+
+            # ----------------------------------------------------------------
+            # C6 — no duplicate GLOSSARY keys
+            # ----------------------------------------------------------------
+            keys_list = list(GLOSSARY.keys())
+            c6 = len(keys_list) == len(set(keys_list))
+            audit["checks"].append({"check": "no_duplicate_glossary_keys", "pass": bool(c6)})
+            all_pass = all_pass and c6
+
+            # ----------------------------------------------------------------
+            # C7 — gui.help_widgets.explain is callable
+            # ----------------------------------------------------------------
+            from gui.help_widgets import explain
+            c7 = callable(explain)
+            audit["checks"].append({"check": "explain_callable", "pass": bool(c7)})
+            all_pass = all_pass and c7
+
+            # ----------------------------------------------------------------
+            # C8 — mark_onboarded / should_show_tour round-trip
+            # ----------------------------------------------------------------
+            from gui.onboarding import should_show_tour, mark_onboarded
+            with tempfile.TemporaryDirectory() as td:
+                marker = Path(td) / ".gui_onboarded"
+                tmp_sibling = marker.with_suffix(".tmp")
+                before = should_show_tour({}, marker)
+                mark_onboarded(marker)
+                after = should_show_tour({}, marker)
+                marker_exists = marker.exists()
+                tmp_gone = not tmp_sibling.exists()
+            c8 = (
+                isinstance(before, bool) and before is True
+                and isinstance(after, bool) and after is False
+                and marker_exists
+                and tmp_gone
+            )
+            audit["checks"].append({
+                "check": "onboarding_roundtrip",
+                "pass": bool(c8),
+                "before": before,
+                "after": after,
+                "marker_exists": marker_exists,
+                "tmp_gone": tmp_gone,
+            })
+            all_pass = all_pass and c8
+
+            # ----------------------------------------------------------------
+            # C9 — panels.py has ≥10 explain() calls, all 10 tab IDs covered
+            # ----------------------------------------------------------------
+            panels_path = Path("gui/panels.py")
+            panels_src = panels_path.read_text(encoding="utf-8") if panels_path.exists() else ""
+            total_calls = panels_src.count("help_widgets.explain(")
+            tab_ids_in_panels = [
+                t for t in expected_tabs
+                if f'help_widgets.explain("{t}"' in panels_src
+                or f"help_widgets.explain('{t}'" in panels_src
+            ]
+            missing_tab_calls = sorted(expected_tabs - set(tab_ids_in_panels))
+            c9 = total_calls >= 10 and len(missing_tab_calls) == 0
+            audit["checks"].append({
+                "check": "panels_explain_calls_gte10",
+                "pass": bool(c9),
+                "total_calls": total_calls,
+                "missing_tab_calls": missing_tab_calls,
+            })
+            all_pass = all_pass and c9
+
+            # ----------------------------------------------------------------
+            # C10 — tests/test_help_content.py exists
+            # ----------------------------------------------------------------
+            c10 = Path("tests/test_help_content.py").exists()
+            audit["checks"].append({"check": "test_help_content_exists", "pass": bool(c10)})
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_68_help_explainers_audit"] = audit
 
 
 # =============================================================================

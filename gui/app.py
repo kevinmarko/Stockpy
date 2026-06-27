@@ -108,6 +108,26 @@ if st.sidebar.button("🔄 Clear cached reads"):
     st.cache_data.clear()
     st.rerun()
 
+# Sidebar quick-help widget (3 most-common questions)
+try:
+    with st.sidebar.expander("❓ Quick help"):
+        st.markdown(
+            "**What do action signals mean?**  \n"
+            "STRONG BUY / BUY / HOLD / RISK REDUCE / SELL — directional "
+            "recommendations derived from a weighted blend of signal modules. "
+            "All are *informational only* — no orders are submitted.\n\n"
+            "**What is Kelly Target?**  \n"
+            "Fractional-Kelly position size as a % of capital, calibrated from "
+            "your actual closed-trade history and volatility. 0 % means "
+            "insufficient data or a sell signal.\n\n"
+            "**Why is everything in advisory mode?**  \n"
+            "`ADVISORY_ONLY=true` in `.env` quarantines all broker execution "
+            "(the default). Set it to `false` only when you are ready to connect "
+            "a live or paper broker."
+        )
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Main title + persistent run-mode header
 # ---------------------------------------------------------------------------
@@ -150,6 +170,7 @@ tab_labels = [
     "🛰️ Market Data",
     "📊 Observability",
     "📡 Live Inventory",
+    "❓ Help",
 ]
 tabs = st.tabs(tab_labels)
 
@@ -173,5 +194,7 @@ with tabs[8]:
     safe_panel(panels.render_observability)
 with tabs[9]:
     safe_panel(panels.render_live_inventory)
+with tabs[10]:
+    safe_panel(panels.render_help)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")
