@@ -3707,6 +3707,48 @@ def render_live_inventory() -> None:
                 st.code(", ".join(syms_list) or "(empty)", language="text")
 
 
+@st.cache_data(ttl=300)
+def _load_guide_section(anchor: str) -> str:
+    """Extract the markdown body of the section whose heading slug == ``anchor``.
+
+    Returns "" when the file is missing or no section matches (CONSTRAINT #6
+    — never raises). The returned string excludes the heading line itself and
+    stops at the next heading of equal or higher level.
+    """
+    import re as _re
+    if not anchor or not anchor.startswith("#"):
+        return ""
+    target = anchor.lstrip("#")
+    guide = _REPO_ROOT / "docs" / "HOW_TO_GUIDE.md"
+    try:
+        lines = guide.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return ""
+
+    def _slug(text: str) -> str:
+        t = text.lower()
+        t = _re.sub(r"[^\w\s-]", "", t)
+        return t.replace(" ", "-")
+
+    in_section = False
+    section_level = 0
+    body: list[str] = []
+    for line in lines:
+        heading_match = _re.match(r"^(#+)\s+(.*)$", line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            heading_text = heading_match.group(2).strip()
+            if in_section and level <= section_level:
+                break
+            if not in_section and _slug(heading_text) == target:
+                in_section = True
+                section_level = level
+                continue
+        if in_section:
+            body.append(line)
+    return "\n".join(body).strip()
+
+
 def render_help() -> None:
     """❓ Help tab — searchable glossary, onboarding tour, and tab descriptions."""
     from gui.onboarding import read_onboarding_state, mark_onboarded, DEFAULT_MARKER
@@ -3755,9 +3797,15 @@ def render_help() -> None:
             with st.expander(f"**{entry.term}**"):
                 st.markdown(entry.plain_english)
                 if entry.guide_anchor:
-                    st.caption(
-                        f"[Read more in How-To Guide →](docs/HOW_TO_GUIDE.md{entry.guide_anchor})"
-                    )
+                    _section = _load_guide_section(entry.guide_anchor)
+                    if _section:
+                        with st.expander("📖 Read more in How-To Guide"):
+                            st.markdown(_section)
+                    else:
+                        st.caption(
+                            f"_(Guide section `{entry.guide_anchor}` not found — "
+                            f"see `docs/HOW_TO_GUIDE.md` in the repo.)_"
+                        )
 
     st.divider()
     st.subheader("Tab descriptions")
