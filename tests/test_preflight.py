@@ -534,6 +534,27 @@ class TestKeyRotationChecks:
         assert r.warning
         assert "120" in r.reason
 
+    def test_alpaca_rotation_fresh_passes(self, tmp_path):
+        """Alpaca key rotated 30 days ago → clean PASS (no warning)."""
+        from scripts.preflight_check import check_alpaca_key_rotation_recent
+        fresh = (date.today() - timedelta(days=30)).isoformat()
+        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE=fresh)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_alpaca_key_rotation_recent(max_age_days=90)
+        assert r.passed
+        assert not r.warning
+        assert "30" in r.reason
+
+    def test_alpaca_rotation_invalid_iso_warns(self, tmp_path):
+        """Invalid ALPACA_KEY_ROTATED_DATE format → warning-level PASS (never blocking)."""
+        from scripts.preflight_check import check_alpaca_key_rotation_recent
+        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE="not-a-date")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_alpaca_key_rotation_recent()
+        assert r.passed  # warning-only — NEVER False
+        assert r.warning
+        assert "invalid" in r.reason.lower() or "format" in r.reason.lower()
+
     def test_alpaca_rotation_auto_skipped_advisory_mode(self, tmp_path):
         """alpaca_key_rotation_recent is auto-skipped under ADVISORY_ONLY=True."""
         from scripts.preflight_check import run_checks
@@ -806,12 +827,14 @@ class TestStateSnapshotFresh:
 # ---------------------------------------------------------------------------
 
 class TestAdvisoryAutoSkip:
-    """Verify that all 7 expected checks are in _ADVISORY_AUTO_SKIP.
+    """Verify that all 8 expected checks are in _ADVISORY_AUTO_SKIP.
 
-    Three broker-dependent checks were always there (alpaca_configured,
+    Four broker-dependent checks were always there (alpaca_configured,
     alpaca_paper_mode, dry_run_disabled, paper_trading_duration).  Stage 2
     added three advisory false-positive checks to eliminate spurious failures
-    on a correctly-running advisory deployment.
+    on a correctly-running advisory deployment.  Stage 3 added a fifth
+    broker-dependent check (alpaca_key_rotation_recent), bringing the total
+    to 8 (5 broker + 3 false-positives).
     """
 
     def test_original_broker_checks_present(self):
@@ -840,10 +863,10 @@ class TestAdvisoryAutoSkip:
         from scripts.preflight_check import _ADVISORY_AUTO_SKIP
         assert "no_unexpected_risk_blocks" in _ADVISORY_AUTO_SKIP
 
-    def test_auto_skip_has_seven_entries(self):
-        """Exactly 7 checks are in _ADVISORY_AUTO_SKIP (4 broker + 3 false-positives)."""
+    def test_auto_skip_has_eight_entries(self):
+        """Exactly 8 checks are in _ADVISORY_AUTO_SKIP (5 broker + 3 false-positives)."""
         from scripts.preflight_check import _ADVISORY_AUTO_SKIP
-        assert len(_ADVISORY_AUTO_SKIP) == 7
+        assert len(_ADVISORY_AUTO_SKIP) == 8
 
     def test_state_snapshot_not_auto_skipped(self):
         """state_snapshot_fresh must remain active in advisory mode (it IS the liveness check)."""
