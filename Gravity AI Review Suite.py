@@ -9798,8 +9798,11 @@ class GravityAIAuditor:
             try:
                 import tempfile
                 with tempfile.TemporaryDirectory() as td:
+                    # TieredCostModel is imported lazily inside run_validations(),
+                    # so it lives at execution.cost_model — patching the local
+                    # alias would raise AttributeError before run_validations runs.
                     with patch("scripts.refresh_validations._download_spy", return_value=spy), \
-                         patch("scripts.refresh_validations.TieredCostModel", return_value=MagicMock()):
+                         patch("execution.cost_model.TieredCostModel", return_value=MagicMock()):
                         results = _rv.run_validations(
                             strategies=["__no_such_strategy__"],
                             output_dir=Path(td),
@@ -9818,12 +9821,19 @@ class GravityAIAuditor:
                 def _fake_run_fail(**kw):
                     return {"rsi2_mean_reversion": {"deployable": False}}
 
+                import contextlib
+                import io
                 import tempfile
+                # Suppress _print_summary_table() output from the fake runs so the
+                # fixture's pass/fail table doesn't leak into the audit's stdout
+                # and confuse the operator (it would otherwise appear as a duplicate
+                # "rsi2_mean_reversion ✅ PASS … ❌ FAIL" pair in the suite output).
                 with tempfile.TemporaryDirectory() as td:
-                    with patch("scripts.refresh_validations.run_validations", _fake_run_pass):
-                        code_pass = _rv.main(["--output-dir", td])
-                    with patch("scripts.refresh_validations.run_validations", _fake_run_fail):
-                        code_fail = _rv.main(["--output-dir", td])
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        with patch("scripts.refresh_validations.run_validations", _fake_run_pass):
+                            code_pass = _rv.main(["--output-dir", td])
+                        with patch("scripts.refresh_validations.run_validations", _fake_run_fail):
+                            code_fail = _rv.main(["--output-dir", td])
                 ok8 = code_pass == 0 and code_fail == 1
             except Exception:
                 ok8 = False
