@@ -37,7 +37,7 @@ import pandas as pd
 import streamlit as st
 
 from settings import settings
-from gui import env_io, orchestrator_runner
+from gui import env_io, orchestrator_runner, help_widgets
 from gui.symbol_search import filter_by_symbol
 from gui.orchestrator_runner import StageStatus
 
@@ -1107,6 +1107,7 @@ def render_launcher() -> None:
         flight and an opt-in **auto-refresh** ticker (5 s) keeps the tail
         scrolling without manual clicks.
     """
+    help_widgets.explain("launcher")
     st.subheader("🚀 Program Launcher & Orchestration")
     st.caption(
         "Two entry points: the async `main_orchestrator.py` (full pipeline + "
@@ -1532,6 +1533,7 @@ def render_report_viewer() -> None:
     the operator can see *why* a number is what it is rather than only *what*
     it is.
     """
+    help_widgets.explain("reports")
     st.subheader("📈 Interactive Report Viewer")
 
     snap = load_state_snapshot()
@@ -1715,6 +1717,7 @@ def _current_scalar(key: str, fallback: Any) -> Any:
 
 def render_settings_manager() -> None:
     """Edit NON-secret tunables and persist them to ``.env`` (secrets masked)."""
+    help_widgets.explain("settings")
     st.subheader("⚙️ Dynamic Settings Manager")
     st.caption(
         "Edit non-secret runtime tunables. Changes are written to `.env` and take "
@@ -1920,6 +1923,7 @@ def render_strategy_matrix() -> None:
     4.  **Manual macro kill switch** — existing GlobalKillSwitch wrapper.
     5.  **Recent risk-gate blocks** — existing block log table.
     """
+    help_widgets.explain("strategy_matrix")
     st.subheader("🧩 Strategy Matrix & Risk Gating")
 
     _render_strategy_mode_toggle()
@@ -2032,6 +2036,7 @@ def render_paper_monitor() -> None:
     market-data-driven snapshot. Columns are explicitly source-labeled so the
     two are never conflated.
     """
+    help_widgets.explain("paper_monitor")
     st.subheader("📒 Paper-Trading Monitor")
     st.caption(
         "Left: **Robinhood account truth** (account state only). "
@@ -2314,6 +2319,7 @@ def render_gravity_audit() -> None:
     4.  **Gravity AI Review Suite** — full audit subprocess (the original
         behavior, kept verbatim).
     """
+    help_widgets.explain("gravity")
     st.subheader("🛡️ Safety — Circuit Breakers, Dependencies, Gravity Audit")
 
     _render_strategy_health()
@@ -2425,6 +2431,7 @@ def render_options_matrix() -> None:
     :func:`_active_symbols` (held Robinhood positions ∪ watchlist ∪ last
     pipeline signals) so no premium-selling opportunity is silently dropped.
     """
+    help_widgets.explain("options")
     st.subheader("🧮 Technical Options Matrix")
     st.caption(
         "Hydrated premium-selling matrix: GJR-GARCH σ, realized-vol IVR proxy, "
@@ -2590,6 +2597,7 @@ def render_market_data() -> None:
         timestamp, or inverted bid/ask with a ⚠ icon BEFORE the row is
         considered usable by the rest of the pipeline (CONSTRAINT #4).
     """
+    help_widgets.explain("market_data")
     st.subheader("🛰️ Market Data Provider")
 
     from data.market_data import get_provider, reset_provider
@@ -2770,6 +2778,7 @@ def render_observability() -> None:
                                  a "Risk Off" trigger is genuine or idiosyncratic.
     4.  Strategy P&L           — realized P&L by strategy from TransactionsStore.
     """
+    help_widgets.explain("observability")
     st.subheader("📊 Observability — Mission Control")
     st.caption(
         "Summary of the file-backed state last written by the orchestrator. "
@@ -3418,6 +3427,7 @@ def render_live_inventory() -> None:
     allowlist-bounded :mod:`gui.env_io` writer, and refreshes the panel — all
     without restarting the orchestrator.
     """
+    help_widgets.explain("live_inventory")
     st.subheader("📡 Live Inventory & Synchronization")
     st.caption(
         "Holdings ∪ Robinhood watchlists ∪ file watchlists, reconciled against "
@@ -3695,6 +3705,69 @@ def render_live_inventory() -> None:
                 syms_list = list(syms) if isinstance(syms, (list, tuple)) else []
                 st.markdown(f"**{name}** — {len(syms_list)} symbol(s)")
                 st.code(", ".join(syms_list) or "(empty)", language="text")
+
+
+def render_help() -> None:
+    """❓ Help tab — searchable glossary, onboarding tour, and tab descriptions."""
+    from gui.onboarding import read_onboarding_state, mark_onboarded, DEFAULT_MARKER
+    from gui.help_content import GLOSSARY, search_glossary
+
+    _ob_state = read_onboarding_state(st.session_state, DEFAULT_MARKER)
+
+    if _ob_state.should_show:
+        st.info(
+            "👋 **Welcome to InvestYo Command Center!** This is an advisory-only "
+            "platform — it generates signals and recommendations but **never submits "
+            "orders to any broker** while `ADVISORY_ONLY=true`.",
+            icon="📋",
+        )
+        with st.expander("✅ Start here — 4-step checklist", expanded=True):
+            st.markdown(
+                "1. Set `FRED_API_KEY` in `.env` (free key from "
+                "[fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html)).\n"
+                "2. Click **🔄 Refresh Data (Advisory)** in the Launcher tab.\n"
+                "3. Open the HTML report (`output/daily_report_*.html`).\n"
+                "4. Review the Conviction Calibration chart (Reports tab) once "
+                "closed trades accumulate."
+            )
+            if st.button("✅ Got it — don't show again"):
+                mark_onboarded(DEFAULT_MARKER)
+                st.session_state[__import__("gui.onboarding", fromlist=["SESSION_KEY"]).SESSION_KEY] = True
+                st.rerun()
+        st.divider()
+
+    st.subheader("❓ In-App Help & Glossary")
+    st.caption(
+        "Plain-English definitions for every concept the platform uses. "
+        "All information here is **informational only** — no orders are sent."
+    )
+
+    query = st.text_input("🔍 Search glossary", placeholder="e.g. Kelly, PBO, HMM …")
+    if query.strip():
+        results = search_glossary(query)
+    else:
+        results = list(GLOSSARY.values())
+
+    if not results:
+        st.info("No matching terms found.")
+    else:
+        for entry in results:
+            with st.expander(f"**{entry.term}**"):
+                st.markdown(entry.plain_english)
+                if entry.guide_anchor:
+                    st.caption(
+                        f"[Read more in How-To Guide →](docs/HOW_TO_GUIDE.md{entry.guide_anchor})"
+                    )
+
+    st.divider()
+    st.subheader("Tab descriptions")
+    tab_ids = [
+        "launcher", "reports", "settings", "strategy_matrix",
+        "paper_monitor", "gravity", "options", "market_data",
+        "observability", "live_inventory",
+    ]
+    for tab_id in tab_ids:
+        help_widgets.explain(tab_id, expanded=False)
 
 
 def utcnow_str() -> str:

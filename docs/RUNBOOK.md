@@ -65,6 +65,11 @@ holdings added/dropped, and regime changes. Powered by rotated state snapshots i
 `output/history/` (pruned after `SNAPSHOT_HISTORY_DAYS=30` days). The band is hidden
 on first ever run.
 
+**Not sure what a term means?** The **❓ Help tab** has a searchable glossary of 60+ terms
+(Kelly Target, PBO, DSR, Sahm Rule, IVR, HMM, …) and plain-English tab descriptions —
+no page switch needed.  Every tab also carries a collapsible
+`❓ What is this & how do I use it?` expander at the top.
+
 The **Reports tab** includes:
 
 * **Decision Journal** — log "acted / passed / modified" per signal; entries go to

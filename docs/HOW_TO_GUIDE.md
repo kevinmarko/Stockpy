@@ -1336,3 +1336,50 @@ The `[A]–[D]` markers are stable labels — compliance reviewers can cite "sec
 | No verbose sections even after setting `RATIONALE_VERBOSITY=verbose` | `.env` was not reloaded | Restart `main.py` / `main_orchestrator.py` — settings are loaded once at startup. |
 | `[B]` shows "Insufficient closed-trade history" | Fewer than 30 closed trades in `quant_platform.db` | Expected on fresh installations. Run for several weeks to accumulate trade history. |
 | `[D]` section absent | All signal modules filtered out by `is_active_in_regime()` (e.g. RECESSION regime) | Expected in extreme macro regimes where most signals are suppressed. Check the `[A]` section for the regime name. |
+
+---
+
+## In-App Help & Glossary
+
+The **❓ Help tab** in the Command Center (`streamlit run gui/app.py`) gives instant access
+to every concept in this guide without leaving the browser window.
+
+### What you'll find
+
+| Widget | Where | What it does |
+|---|---|---|
+| `❓ What is this & how do I use it?` expander | Top of every tab | Plain-English summary of the tab's purpose and controls |
+| Metric tooltips | VIX, HMM Risk-On, Sahm Rule, Macro Regime KPI chips | Hover-over definition — never a bare number |
+| Glossary | Help tab → search box | 60+ terms (Kelly Target, PBO, DSR, Sahm Rule, IVR, HMM, …) with plain-English definitions and "Read more →" links back to this guide |
+| Section help expanders | Reports, Options, Live Inventory | Inline context for Brinson-Fachler, VRP gate, Coverage Status |
+
+### First-run onboarding tour
+
+On the **very first launch** of the Command Center the Help tab shows a 4-step
+"Start here" checklist (and the Launcher tab's how-to expander opens automatically):
+
+1. Set `FRED_API_KEY` in `.env` (free API key from FRED at `https://fred.stlouisfed.org/docs/api/api_key.html`).
+2. Click **🔄 Refresh Data (Advisory)** in the Launcher tab.
+3. Open the HTML report (`output/daily_report_*.html`).
+4. Review the Conviction Calibration chart (Reports tab) once closed trades accumulate.
+
+Click **✅ Got it — don't show again** to dismiss permanently. The tour writes a marker
+file (`output/.gui_onboarded`). Delete that file to reset the tour.
+
+### Help-key convention
+
+Metric tooltips are looked up via keys of the form `"<tab>.<metric_name>"` in
+`gui/help_content.METRIC_HELP`. A missing key returns `""` and renders no tooltip
+— it **never raises** (CONSTRAINT #6). All operator-facing definitions live in
+`gui/help_content.py`; never hard-code explainer prose directly in `gui/panels.py`.
+
+### Anchor-contract invariant
+
+Every glossary entry's `guide_anchor` field **must** resolve to a real heading slug in
+this file. The contract is enforced by:
+
+- `tests/test_help_content.py::TestAnchorValidity` (runs in CI on every push).
+- Gravity step 68 check 3.
+
+If you rename any heading in this file, search for the old slug in `gui/help_content.py`
+and update it to match the new slug; otherwise the anchor test will fail.
