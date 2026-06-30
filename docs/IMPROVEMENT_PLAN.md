@@ -188,10 +188,18 @@ dissolved; comment where a genuine cycle remains.
 
 | **Branch** | `agent/claude-code/deps-low-risk` (+ separate `deps-pandas3-spike`) |
 
-1. **Batch 1 (low-risk):** `yfinance 1.4→1.5`, `numpy 2.2→2.5`, loosen `pandera==0.31.1`
-   → `>=0.31,<0.33` then 0.32.1. Full suite must stay green.
+1. **Batch 1 (low-risk):** ✅ **Done.**
+   - `yfinance 1.4.1 → 1.5.1` (pin `>=1.5,<1.6`) ✅
+   - `pandera 0.31.1 → 0.32.1` (pin loosened `==0.31.1` → `>=0.32,<0.33`) ✅
+   - **`numpy` held at 2.2.6 — NOT upgraded.** numpy 2.5 install surfaced
+     `numba 0.61.2 requires numpy<2.3`; numba is a **hard transitive dep of
+     `pandas-ta` + `vectorbt`** and compiles against the numpy ABI, so 2.5 would
+     risk JIT/array failures. Instead the misleading `numpy>=2.0,<2.5` pin was
+     **tightened to `<2.3`** (numba's real ceiling) with a comment so a future
+     `pip install -U` can't silently break numba. Full suite **1574 passed**.
 2. **pandas 3.0 — separate spike, do not merge speculatively.** Major breaking release
-   (copy-on-write default). Triage failures, go/no-go.
+   (copy-on-write default). Triage failures, go/no-go. NOTE: pandas 3.0 is itself
+   likely gated by the same numba `<2.3` numpy ceiling — confirm during the spike.
 3. **FinBERT preload (optional):** warm the `transformers` singleton at orchestrator
    startup when `FINBERT_ENABLED`, so the ~30s cold start is visible-at-launch.
 
@@ -244,5 +252,5 @@ Phase 6  aggregator ─────► PR (conditional — profile first)
 | 4a Panels split | ⬜ planned | — | ⚠️ Antigravity |
 | 4b Gravity split | ⬜ planned | — | |
 | 4c Lazy imports | ⬜ planned | — | ⚠️ Antigravity |
-| 5 Deps | ⬜ planned | — | pandas3 separate |
+| 5 Deps (batch 1) | ✅ done | — | yfinance 1.5.1, pandera 0.32.1; numpy held @2.2.6 (numba <2.3 cap); 1574 passed |
 | 6 Aggregator | ⬜ conditional | — | profile first |
