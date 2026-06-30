@@ -1327,6 +1327,36 @@ def _run_agent_loop(run_cycle) -> None:
             except Exception as exc:
                 logger.warning("Backlog reminder dispatch failed (%s); skipping", exc)
 
+            # ── (4b) Trade-signal abilities (conviction momentum + price triggers)
+            try:
+                from engine.trade_signals import (  # noqa: PLC0415
+                    detect_conviction_momentum,
+                    detect_price_triggers,
+                    dispatch_trade_alerts,
+                    update_conviction_history,
+                )
+                recs = result.recommendations
+                # Ability A — conviction momentum (cross-cycle trajectory).
+                state.conviction_history = update_conviction_history(
+                    state.conviction_history, recs,
+                )
+                mom_alerts, state.momentum_alerted = detect_conviction_momentum(
+                    state.conviction_history, recs, state.momentum_alerted,
+                )
+                # Ability B — stop / take-profit proximity for held positions.
+                price_alerts, state.price_trigger_alerted = detect_price_triggers(
+                    result.snapshot, recs, state.price_trigger_alerted,
+                )
+                trade_alerts = mom_alerts + price_alerts
+                if trade_alerts:
+                    dispatch_trade_alerts(trade_alerts, dashboard_url=dashboard_url)
+                    logger.info(
+                        "Agent dispatched %d trade alert(s) — momentum=%d price=%d.",
+                        len(trade_alerts), len(mom_alerts), len(price_alerts),
+                    )
+            except Exception as exc:
+                logger.warning("Trade-signal abilities failed (%s); skipping", exc)
+
         # ── (5) Persist state regardless of cycle outcome ─────────────────────
         try:
             save_agent_state(state, state_path)

@@ -4345,6 +4345,7 @@ class GravityAIAuditor:
         self.step_68_help_explainers_audit()
         # Robinhood agent trader — option 2 (autonomous advisory loop, no orders)
         self.step_69_advisory_agent_audit()
+        self.step_70_trade_signals_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -10752,3 +10753,205 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_69_advisory_agent_audit"] = audit
+
+    def step_70_trade_signals_audit(self) -> None:
+        """Step 70 — Trade-signal abilities (engine/trade_signals.py) audit.
+
+        Background
+        ----------
+        Two advisory trading abilities layered on the autonomous agent, both
+        derived purely from the per-cycle ``RunResult`` (recommendations +
+        account snapshot):
+          * Ability A — CONVICTION MOMENTUM: cross-cycle conviction trajectory;
+            "building" (early entry heads-up below the 0.85 backlog siren) and
+            "fading" (early exit warning) edge-triggered alerts.
+          * Ability B — STOP / TARGET PROXIMITY: ATR-scaled stop below cost and
+            forecast/ATR take-profit target for HELD positions.
+
+        ADVISORY-ONLY invariant: no order code, no broker import; every output
+        is a ``TradeAlert`` pushed through ``alerting.notify()``.
+
+        Checks
+        ------
+        1.  ``engine.trade_signals`` importable.
+        2.  ``CONFIG`` carries every momentum + price-trigger threshold.
+        3.  ``update_conviction_history`` appends, trims to lookback, prunes the
+            universe, and does not mutate its input.
+        4.  ``detect_conviction_momentum`` flags a steady "building" climb once
+            and debounces the repeat.
+        5.  "building" is suppressed at/above the backlog ceiling (0.85).
+        6.  ``detect_conviction_momentum`` flags a "fading" decline (HIGH) on a
+            non-BUY name.
+        7.  ``detect_price_triggers`` fires an ATR-scaled stop alert (HIGH) when
+            price approaches the stop.
+        8.  ``detect_price_triggers`` fires a forecast-based target alert when
+            price reaches the take-profit zone, and debounces the repeat.
+        9.  Dust positions (< min_position_value_usd) are ignored — no
+            fabricated alert (CONSTRAINT #4).
+        10. ADVISORY-ONLY — no order-submission keywords in the source; main.py
+            wires both detectors; tests/test_trade_signals.py exists.
+        """
+        audit: dict = {
+            "step": "step_70_trade_signals_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import importlib
+            from dataclasses import dataclass as _dc, field as _field
+            from pathlib import Path
+            from typing import Dict as _Dict, Optional as _Opt
+
+            mod = importlib.import_module("engine.trade_signals")
+            audit["checks"].append({"check": "engine.trade_signals importable", "passed": True})
+
+            # ── 2: CONFIG keys ───────────────────────────────────────────
+            required_cfg = {
+                "momentum_lookback_cycles", "momentum_min_cycles",
+                "momentum_rising_delta", "momentum_building_floor",
+                "momentum_building_ceiling", "momentum_falling_delta",
+                "stop_atr_multiple", "stop_fallback_pct", "stop_proximity_pct",
+                "target_atr_multiple", "target_proximity_pct",
+                "min_position_value_usd",
+            }
+            cfg_ok = required_cfg.issubset(set(mod.CONFIG.keys()))
+            all_pass = all_pass and cfg_ok
+            audit["checks"].append({
+                "check": "CONFIG dict contains all required thresholds",
+                "passed": bool(cfg_ok),
+                "detail": f"missing={sorted(required_cfg - set(mod.CONFIG.keys()))}",
+            })
+
+            # ── duck-typed fixtures ──────────────────────────────────────
+            @_dc
+            class _R:
+                symbol: str; action: str; conviction: float
+                forecast: _Opt[float] = None
+                key_indicators: dict = _field(default_factory=dict)
+
+            @_dc
+            class _P:
+                symbol: str; quantity: float; average_cost: float
+                current_price: float; market_value: float
+                unrealized_pl_pct: float = 0.0
+
+            @_dc
+            class _S:
+                positions: dict
+
+            def _hist(series, sym="AAPL", act="BUY"):
+                h = {}
+                for c in series:
+                    h = mod.update_conviction_history(h, [_R(sym, act, c)])
+                return h
+
+            # ── 3: history append + trim + prune + immutability ──────────
+            lookback = int(mod.CONFIG["momentum_lookback_cycles"])
+            long_hist = _hist([0.1 * i for i in range(lookback + 5)])
+            original = {"OLD": [0.5]}
+            pruned = mod.update_conviction_history(original, [_R("NEW", "BUY", 0.7)])
+            c3 = (
+                len(long_hist["AAPL"]) == lookback
+                and "OLD" not in pruned and pruned["NEW"] == [0.7]
+                and original == {"OLD": [0.5]}  # input not mutated
+            )
+            all_pass = all_pass and c3
+            audit["checks"].append({
+                "check": "update_conviction_history appends/trims/prunes; input immutable",
+                "passed": bool(c3),
+            })
+
+            # ── 4: building fires once + debounce ────────────────────────
+            hb = _hist([0.55, 0.63, 0.72, 0.80])
+            a1, flag1 = mod.detect_conviction_momentum(hb, [_R("AAPL", "BUY", 0.80)], {})
+            a2, _ = mod.detect_conviction_momentum(hb, [_R("AAPL", "BUY", 0.80)], flag1)
+            c4 = (len(a1) == 1 and a1[0].kind == "momentum_building" and a2 == [])
+            all_pass = all_pass and c4
+            audit["checks"].append({
+                "check": "detect_conviction_momentum flags 'building' once and debounces",
+                "passed": bool(c4),
+            })
+
+            # ── 5: building suppressed at/above ceiling ──────────────────
+            hc = _hist([0.70, 0.80, 0.88])
+            a5, _ = mod.detect_conviction_momentum(hc, [_R("AAPL", "BUY", 0.88)], {})
+            c5 = (a5 == [])
+            all_pass = all_pass and c5
+            audit["checks"].append({
+                "check": "'building' suppressed at/above backlog ceiling (0.85)",
+                "passed": bool(c5),
+            })
+
+            # ── 6: fading fires HIGH on non-BUY ──────────────────────────
+            hf = _hist([0.80, 0.65, 0.50], act="SELL")
+            a6, _ = mod.detect_conviction_momentum(hf, [_R("AAPL", "SELL", 0.50)], {})
+            c6 = (len(a6) == 1 and a6[0].kind == "momentum_fading" and a6[0].priority == "high")
+            all_pass = all_pass and c6
+            audit["checks"].append({
+                "check": "detect_conviction_momentum flags 'fading' (HIGH) on non-BUY name",
+                "passed": bool(c6),
+            })
+
+            # ── 7: ATR stop approach (HIGH) ──────────────────────────────
+            rec = _R("NVDA", "HOLD", 0.5, forecast=130.0, key_indicators={"atr": 3.0})
+            snap_stop = _S({"NVDA": _P("NVDA", 10, 100.0, 92.5, 925.0, -7.5)})
+            a7, _ = mod.detect_price_triggers(snap_stop, [rec], {})
+            c7 = (len(a7) == 1 and a7[0].kind == "approaching_stop"
+                  and a7[0].priority == "high"
+                  and abs(a7[0].detail["stop_level"] - 92.5) < 1e-6)
+            all_pass = all_pass and c7
+            audit["checks"].append({
+                "check": "detect_price_triggers fires ATR-scaled stop alert (HIGH)",
+                "passed": bool(c7),
+            })
+
+            # ── 8: forecast target approach + debounce ───────────────────
+            snap_tgt = _S({"NVDA": _P("NVDA", 10, 100.0, 129.0, 1290.0, 29.0)})
+            a8, flag8 = mod.detect_price_triggers(snap_tgt, [rec], {})
+            a8b, _ = mod.detect_price_triggers(snap_tgt, [rec], flag8)
+            c8 = (len(a8) == 1 and a8[0].kind == "approaching_target"
+                  and abs(a8[0].detail["target_level"] - 130.0) < 1e-6 and a8b == [])
+            all_pass = all_pass and c8
+            audit["checks"].append({
+                "check": "detect_price_triggers fires forecast target alert and debounces",
+                "passed": bool(c8),
+            })
+
+            # ── 9: dust position ignored (no fabrication) ────────────────
+            dust = _S({"NVDA": _P("NVDA", 0.5, 100.0, 92.0, 46.0, -8.0)})
+            a9, flag9 = mod.detect_price_triggers(dust, [rec], {})
+            c9 = (a9 == [] and flag9 == {})
+            all_pass = all_pass and c9
+            audit["checks"].append({
+                "check": "dust position (< min_position_value_usd) yields no alert (CONSTRAINT #4)",
+                "passed": bool(c9),
+            })
+
+            # ── 10: ADVISORY-ONLY source + wiring + test file ────────────
+            src = Path("engine/trade_signals.py").read_text(encoding="utf-8").lower()
+            forbidden = ["submit_order", "place_order", "place_equity_order",
+                         "place_option_order", "buy_order", "sell_order"]
+            present = [kw for kw in forbidden if kw in src]
+            main_src = Path("main.py").read_text(encoding="utf-8")
+            wired = ("detect_conviction_momentum" in main_src
+                     and "detect_price_triggers" in main_src)
+            test_exists = Path("tests/test_trade_signals.py").exists()
+            c10 = (present == [] and wired and test_exists)
+            all_pass = all_pass and c10
+            audit["checks"].append({
+                "check": "ADVISORY-ONLY source; main.py wires both detectors; test file exists",
+                "passed": bool(c10),
+                "detail": f"forbidden={present} wired={wired} test={test_exists}",
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_70_trade_signals_audit"] = audit
