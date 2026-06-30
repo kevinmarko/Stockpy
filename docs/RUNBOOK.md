@@ -589,3 +589,71 @@ broker surface quarantined:
 `ADVISORY_ONLY=false AND DRY_RUN=false AND ALPACA_PAPER=false`. Follow the procedure in
 §1 above and ensure `preflight_check.py` exits 0 with all broker checks passing before
 any live run.
+
+---
+
+## Robinhood Execution Bridge (Tier 8) — paper-first rollout
+
+The Robinhood Trading MCP lets a **Claude Code agent** (not the headless pipeline) place
+equity trades into a dedicated, separately-funded **Agentic account**. The platform only
+emits a gated, dry-run queue (`output/execution_queue.json`); the agent is the only actor
+that calls the MCP. This is **independent of `ADVISORY_ONLY`** — it never arms the Alpaca
+surface.
+
+### One-time setup (operator, local — cannot be done headless)
+
+```bash
+# 1. Add the MCP (in your own terminal / Claude Code, not a remote session)
+claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mcp/trading
+# 2. Authenticate: in Claude Code run  /mcp  → robinhood-trading → authorize (OAuth)
+# 3. In the Robinhood app: open + fund a dedicated AGENTIC account with a small, capped
+#    amount. This is the blast radius — keep your main account out of execution.
+# 4. Smoke-test READ-ONLY first (ask Claude Code to call get_accounts / get_portfolio).
+#    Do NOT place anything yet.
+```
+
+### Staged rollout — strictly `off → review → live`
+
+```bash
+# Stage A — PAPER / DRY-RUN (review): emit the queue; the agent only simulates.
+#   .env:
+ROBINHOOD_EXECUTION_MODE=review
+python3 main.py                 # writes output/execution_queue.json (allow_place=false on all)
+# In Claude Code:  /rh-execute  → previews each order via review_equity_order, then STOPS.
+
+# Stage B — LIVE (only after reviewing paper output and you are satisfied):
+#   .env:
+ROBINHOOD_EXECUTION_MODE=live
+ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500     # REQUIRED > 0 for live; preflight fails otherwise
+python scripts/preflight_check.py        # check_robinhood_execution_mode warns (live) / fails (no cap)
+python3 main.py                          # queue now carries allow_place=true where gated-OK
+# In Claude Code:  /rh-execute  → previews, then for each allow_place=true intent asks for an
+#   explicit per-order confirmation before calling place_equity_order.
+```
+
+### Safety controls (all enforced)
+
+- **`off` is the default** — nothing is written, zero behavior change.
+- **`review` never places** — the agent calls only `review_equity_order`.
+- **`allow_place`** is `true` only when `mode=live AND risk-gate passed AND kill switch clear
+  AND a notional cap is set` — structurally false otherwise.
+- **Kill switch** pauses everything: `python -m execution.kill_switch --activate --reason "..."`
+  blocks queue placement (checked at emit time and again before each order). The advisory
+  pause gate (§6) also short-circuits `run_once()`, so a paused cycle emits no queue.
+- **Per-trade human confirmation** is mandatory in `live`; the agent never batch-confirms and
+  never operates against the non-Agentic account.
+- **Notional ceilings**: `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` (platform) + the Agentic account's
+  funded balance (Robinhood).
+
+### Pausing / disabling
+
+```bash
+# Immediate stop (blocks placement; queue still previews):
+python -m execution.kill_switch --activate --reason "halt robinhood execution"
+# Full disable (next run emits nothing):
+#   set ROBINHOOD_EXECUTION_MODE=off in .env
+```
+
+Outcomes the agent placed/previewed/skipped are appended to `output/execution_receipts.jsonl`
+(agent-authored); the platform owns `output/execution_queue.json` (Python-authored intents).
+Both are gitignored.

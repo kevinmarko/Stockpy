@@ -567,3 +567,21 @@ class TestNoOrderFunctions:
             "Order-submission function(s) found outside execution/:\n"
             + "\n".join(f"  {v}" for v in violations)
         )
+
+    def test_queue_builder_defines_no_order_function(self) -> None:
+        """Belt-and-suspenders for the Tier 8 Robinhood execution bridge.
+
+        ``execution/queue_builder.py`` lives inside the excluded ``execution/``
+        zone, so the repo-wide scan above skips it.  But the bridge is, by
+        design, the seam closest to live execution — it must NEVER define a
+        ``place_*`` / ``submit_order`` / ``*_order`` function (it only emits a
+        gated JSON queue; the Robinhood MCP placement happens in a Claude Code
+        agent, not in committed Python).  Assert that explicitly.
+        """
+        builder = Path(__file__).parent.parent / "execution" / "queue_builder.py"
+        assert builder.exists(), "execution/queue_builder.py is missing"
+        hits = self._order_function_names_in(builder)
+        assert not hits, (
+            "execution/queue_builder.py must define no order-submission function; "
+            f"found: {hits}"
+        )

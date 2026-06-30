@@ -1547,6 +1547,26 @@ def main() -> None:
             )
         # ─────────────────────────────────────────────────────────────────────
 
+        # ── Robinhood execution queue (Tier 8) — non-fatal, advisory-only ─────
+        # Emits a GATED, DRY-RUN proposed-order queue to
+        # output/execution_queue.json for the Claude Code "robinhood-execution"
+        # agent to consume.  This NEVER contacts a broker or places an order —
+        # the headless pipeline cannot call the Robinhood MCP.  When
+        # ROBINHOOD_EXECUTION_MODE=off (the default) nothing is written and this
+        # block is a no-op.  The kill-switch advisory-pause gate above already
+        # short-circuits run_once(), so a paused cycle emits nothing.
+        try:
+            from execution.queue_builder import emit_execution_queue  # noqa: PLC0415
+
+            _queue_path = emit_execution_queue(result)
+            if _queue_path is not None:
+                logger.info("Robinhood execution queue emitted → %s", _queue_path)
+        except Exception as _queue_exc:
+            logger.warning(
+                "Execution queue emit failed (non-critical): %s", _queue_exc,
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
         market = get_provider()
         _write_to_sheet(result, market=market)
 

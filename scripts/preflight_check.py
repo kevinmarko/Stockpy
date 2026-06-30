@@ -324,6 +324,50 @@ def check_advisory_only_active() -> CheckResult:
     )
 
 
+def check_robinhood_execution_mode() -> CheckResult:
+    """Surface the Robinhood execution-bridge mode (Tier 8).
+
+    Independent of ADVISORY_ONLY (which gates the Alpaca surface).  Three modes:
+      * ``off``    — (default) the bridge emits nothing; PASS, no warning.
+      * ``review`` — paper/dry-run; the queue is emitted but only
+        ``review_equity_order`` simulations run downstream; PASS, no warning.
+      * ``live``   — real placement is possible via the Claude Code agent; PASS
+        with a WARNING so the operator confirms it is intentional, and a FAIL
+        only when ``live`` is set without a per-order notional cap configured
+        (``ROBINHOOD_MAX_NOTIONAL_PER_ORDER<=0``) — going live with no dollar
+        ceiling is unsafe.
+
+    Never auto-skipped under ADVISORY_ONLY — the Robinhood path is orthogonal to
+    the Alpaca quarantine.
+    """
+    name = "robinhood_execution_mode"
+    mode = str(getattr(settings, "ROBINHOOD_EXECUTION_MODE", "off") or "off").lower()
+    cap = float(getattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0) or 0.0)
+    if mode in ("off", "review"):
+        return CheckResult(
+            name, True,
+            f"ROBINHOOD_EXECUTION_MODE={mode} — "
+            + ("bridge inert (no queue emitted)." if mode == "off"
+               else "paper/dry-run; review_equity_order only, no placement."),
+        )
+    if mode == "live":
+        if cap <= 0:
+            return CheckResult(
+                name, False,
+                "ROBINHOOD_EXECUTION_MODE=live but ROBINHOOD_MAX_NOTIONAL_PER_ORDER "
+                "is unset (<=0). Configure a per-order dollar ceiling before going live.",
+            )
+        return CheckResult(
+            name, True,
+            f"⚠️  ROBINHOOD_EXECUTION_MODE=live — real Robinhood placement is "
+            f"possible (cap ${cap:,.0f}/order, agentic account, per-trade human "
+            f"confirm). Confirm this is intentional.",
+            warning=True,
+        )
+    # Unknown values are coerced to 'off' by the settings validator, but guard anyway.
+    return CheckResult(name, True, f"ROBINHOOD_EXECUTION_MODE={mode!r} treated as off.")
+
+
 def check_alpaca_configured() -> CheckResult:
     """Verify that broker credentials are present.
 
@@ -749,6 +793,7 @@ ALL_CHECKS = [
     check_key_rotation_recent,
     check_alpaca_key_rotation_recent,
     check_advisory_only_active,
+    check_robinhood_execution_mode,
     check_alpaca_configured,
     check_macro_regime_gate_enabled,
     check_alpaca_paper_mode,

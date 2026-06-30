@@ -679,6 +679,78 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "order if the broker were active.",
         "#safety-tab-formerly-gravity-audit--what-to-check-when-an-order-is-blocked",
     ),
+
+    # ── Autonomous agent + trade-signal alerts (Tier 6 / 6.1) ──────────────────
+    "autonomous advisory agent": _g(
+        "Autonomous Advisory Agent",
+        "The self-pacing advisory loop (run with `python3 main.py --agent`).  It "
+        "re-runs the analysis on an adaptive schedule — faster around the open/"
+        "close and during volatility, slower overnight — and re-pings you about "
+        "high-conviction signals you have not acted on.  It is still advisory: it "
+        "never places an order on your behalf.",
+        "#autonomous-advisory-agent",
+    ),
+    "backlog reminder": _g(
+        "Backlog Reminder",
+        "A push notification the autonomous agent sends when a high-conviction "
+        "BUY/SELL has gone unactioned, escalating over time (roughly hourly, then "
+        "every few hours, then daily).  It stops once you log a decision for that "
+        "symbol, the signal goes stale, or the reminder cap is reached.",
+        "#autonomous-advisory-agent",
+    ),
+    "conviction momentum": _g(
+        "Conviction Momentum",
+        "An early heads-up from the agent based on a symbol's conviction "
+        "*trajectory* across cycles: 'building' when conviction is climbing "
+        "steadily toward an entry, 'fading' when it is deteriorating on a name no "
+        "longer rated a buy.  Each trend alerts once.  Informational only.",
+        "#trade-signal-alerts",
+    ),
+    "stop and target proximity": _g(
+        "Stop / Target Proximity Alert",
+        "For your held positions the agent derives a volatility-based stop below "
+        "your cost and a take-profit target from the forecast, and alerts you when "
+        "the live price approaches or breaches either level.  A position-"
+        "management nudge — it does not place or modify any order.",
+        "#trade-signal-alerts",
+    ),
+
+    # ── Robinhood execution bridge (Tier 8) ────────────────────────────────────
+    "robinhood execution bridge": _g(
+        "Robinhood Execution Bridge",
+        "The opt-in, paper-first path that lets the platform act on its advice via "
+        "the Robinhood Trading MCP.  It is OFF by default.  The pipeline only "
+        "writes a gated, dry-run proposed-order queue; a separate Claude Code "
+        "agent (`/rh-execute`) is the only thing that ever contacts Robinhood, and "
+        "in live mode it asks you to confirm every single order.",
+        "#robinhood-execution-bridge",
+    ),
+    "execution mode": _g(
+        "Robinhood Execution Mode",
+        "The `ROBINHOOD_EXECUTION_MODE` setting, rolled out strictly off → review "
+        "→ live.  'off' writes nothing (default); 'review' is paper/dry-run — the "
+        "agent only simulates orders; 'live' can place real orders, but only when "
+        "the risk gate passes, the kill switch is clear, a per-order dollar cap is "
+        "set, and you confirm each one.",
+        "#robinhood-execution-bridge",
+    ),
+    "agentic account": _g(
+        "Agentic Account",
+        "A dedicated, separately-funded Robinhood account that AI agents are "
+        "allowed to trade in.  All your other Robinhood accounts stay read-only.  "
+        "Fund it with a small, capped amount — it is the blast radius for any "
+        "agent-placed order.",
+        "#robinhood-execution-bridge",
+    ),
+    "execution queue": _g(
+        "Execution Queue",
+        "The `output/execution_queue.json` file the pipeline writes in review/live "
+        "mode: a list of proposed orders, each already run through the risk gate "
+        "and kill-switch in dry-run.  An order is marked placeable only in live "
+        "mode with the gate passed and the kill switch clear.  The Claude Code "
+        "agent reads it; it never auto-executes.",
+        "#robinhood-execution-bridge",
+    ),
 }
 
 # ---------------------------------------------------------------------------

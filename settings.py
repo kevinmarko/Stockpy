@@ -186,6 +186,31 @@ class Settings(BaseSettings):
             "Set False ONLY when broker execution is intentionally re-enabled."
         ),
     )
+    # --- Robinhood execution bridge (Tier 8, 2026-06) ---
+    # Independent of ADVISORY_ONLY (which gates the Alpaca surface).  The
+    # Robinhood Trading MCP is consumed by a Claude Code agent, NOT the headless
+    # pipeline, so this flag only governs whether `execution/queue_builder.py`
+    # emits a gated, dry-run `output/execution_queue.json` for that agent.
+    #   off    — (default) emit nothing; zero behaviour change.
+    #   review — paper/dry-run: emit the queue; the agent only ever calls the
+    #            MCP `review_equity_order` (simulate), never `place_equity_order`.
+    #   live   — the queue marks `allow_place=true` only when the risk gate passes
+    #            AND the kill switch is clear; the agent STILL requires per-trade
+    #            human confirmation before calling `place_equity_order`.
+    # Rollout is strictly off -> review -> live; you never start at live.  An
+    # unrecognised value coerces to `off` (fail-safe) via the validator below.
+    ROBINHOOD_EXECUTION_MODE: str = Field(
+        default="off",
+        description="Robinhood execution-queue mode: off | review | live (default off).",
+    )
+    # Hard per-order notional ceiling (USD) applied when building the queue.
+    # 0.0 means "unset" — the execution agent treats 0.0 as 'must configure a
+    # cap before any live placement'.
+    ROBINHOOD_MAX_NOTIONAL_PER_ORDER: float = Field(
+        default=0.0,
+        description="Max USD notional per Robinhood order when building the queue (0 = unset).",
+    )
+
     # Slack / Discord incoming-webhook URL for reconciliation drift alerts.
     ALERT_WEBHOOK_URL: Optional[str] = Field(
         default=None,
@@ -652,6 +677,17 @@ class Settings(BaseSettings):
         path = Path(value)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @field_validator("ROBINHOOD_EXECUTION_MODE")
+    @classmethod
+    def _coerce_robinhood_mode(cls, value: str) -> str:
+        """Fail-safe: any value outside {off, review, live} collapses to ``off``.
+
+        A typo, stale env value, or injection can never accidentally arm
+        execution — the worst case is the inert default.
+        """
+        v = str(value or "").strip().lower()
+        return v if v in {"off", "review", "live"} else "off"
 
     @property
     def fred_key_is_leaked(self) -> bool:
