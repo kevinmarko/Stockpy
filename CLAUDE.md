@@ -37,7 +37,7 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
 | File | Purpose |
 |------|---------|
 | `docs/architecture.md` | Mermaid data-flow diagram (Engines → DTOs → Signals → Strategy → Advisory → Broker [quarantined]) |
-| `docs/signals/README.md` | Index of all 16 registered `SignalModule` implementations with academic references, logic, and failure modes |
+| `docs/signals/README.md` | Index of all 17 registered `SignalModule` implementations with academic references, logic, and failure modes |
 | `docs/signals/<name>.md` | Per-strategy README for each signal module |
 | `docs/incident_log.md` | Template + log for production incidents (referenced by RUNBOOK.md §6) |
 | `docs/HOW_TO_GUIDE.md` | End-user guide for every platform feature |

@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from signals.base import SignalContext, SignalModule, SignalOutput
+from signals.registry import global_registry
 
 logger = logging.getLogger("Signals.LGBMRanker")
 
@@ -57,8 +58,20 @@ class LGBMRankerSignal(SignalModule):
         try:
             ranker = LGBMCrossSectionalRanker.load_latest()
         except Exception as exc:
-            logger.warning("LGBMRankerSignal.pre_compute: could not load model: %s. Neutral.", exc)
+            # Shipping without a trained LGBM model is the documented default
+            # state (ml/registry.yaml: deployable=false) — INFO, not WARNING,
+            # so this never spams the per-cycle logs on a vanilla deployment.
+            logger.info(
+                "LGBMRankerSignal.pre_compute: no persisted model available "
+                "(%s); contributing neutral scores this cycle.", exc,
+            )
             ranker = None
+
+        # No model → neutral for the whole cross-section; skip the (wasted)
+        # feature build entirely.
+        if ranker is None:
+            context.lgbm_scores = {t: 0.5 for t in universe_df.index}
+            return
 
         vix = getattr(getattr(context, "macro", None), "vix", None)
 
@@ -71,10 +84,6 @@ class LGBMRankerSignal(SignalModule):
         except Exception as exc:
             logger.warning("LGBMRankerSignal.pre_compute: feature build failed: %s. Neutral.", exc)
             context.lgbm_scores = {t: 0.5 for t in universe_df.index}
-            return
-
-        if ranker is None:
-            context.lgbm_scores = {t: 0.5 for t in feat_df.index}
             return
 
         try:
@@ -98,9 +107,12 @@ class LGBMRankerSignal(SignalModule):
         score = float(np.clip(score, -1.0, 1.0))
 
         return SignalOutput(
-            name=_NAME,
             score=score,
-            weight=self.default_weight,
-            explanation=f"LGBM cross-sectional rank={rank:.3f}",
             confidence=1.0,
+            explanation=f"LGBM cross-sectional rank={rank:.3f}",
         )
+
+
+# Auto-register module (one input among many to SignalAggregator.aggregate();
+# contributes a neutral 0.0 score until a model is trained and deployed).
+global_registry.register(LGBMRankerSignal())
