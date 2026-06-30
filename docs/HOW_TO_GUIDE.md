@@ -1339,6 +1339,134 @@ The `[A]–[D]` markers are stable labels — compliance reviewers can cite "sec
 
 ---
 
+## Autonomous Advisory Agent
+
+The autonomous agent (Tier 6) replaces `--interval N`'s fixed timer with a
+self-pacing loop. It still only produces advisory output — it never places an
+order — but it decides *when* to re-run and re-pings you about high-conviction
+signals you have not acted on.
+
+```bash
+python3 main.py --agent          # takes precedence over --interval
+```
+
+### What it does each cycle
+
+1. Runs one full advisory cycle (same as `--interval`): signals, sizing, HTML
+   report, Sheets, and the per-cycle Symbol Watch alerts.
+2. **Adaptive cadence** — picks the next sleep based on US market hours, VIX,
+   macro regime, and recent errors: fast around the open/close and during
+   volatility spikes, slow overnight/weekends, and it backs off after errors.
+3. **Actionable backlog** — a high-conviction BUY/SELL you have not logged a
+   decision for is re-pinged on escalating tiers (≈1 h / 4 h / 24 h) via ntfy,
+   then stops once you act (a matching "acted" entry in the Decision Journal),
+   the signal expires, or the reminder cap is reached.
+4. **Persistent state** — the backlog and conviction history survive restarts
+   in `output/agent_state.json`.
+
+### Stopping it
+
+Press Ctrl-C (or send SIGTERM). The loop finishes the current cycle, dispatches
+any pending reminders, saves state, and exits cleanly.
+
+### Configuration
+
+`NTFY_TOPIC` enables push reminders (unset = silent). `NTFY_DASHBOARD_URL`
+appends a one-click dashboard link to each push. All cadence/backlog thresholds
+live in `engine.advisory_agent.CONFIG`.
+
+---
+
+## Trade-Signal Alerts
+
+Two advisory trading abilities (Tier 6.1) layer on the autonomous agent. Both
+are derived purely from data the agent already has each cycle (recommendations
++ your Robinhood snapshot) and both are pushed as ntfy alerts — no order code.
+
+### Conviction momentum
+
+The agent uniquely tracks each symbol's conviction *trajectory* across cycles:
+
+- **Building** — conviction is climbing steadily but has not yet reached the
+  backlog siren, so you get an *early* heads-up before the move matures.
+- **Fading** — conviction is deteriorating on a name no longer rated BUY, an
+  *early* exit warning.
+
+Each trend pings once (debounced); it re-alerts only if the trend breaks and
+re-forms, or flips direction.
+
+### Stop / target proximity
+
+For your held positions, the agent derives a volatility-scaled (ATR) stop below
+your cost basis and a take-profit target from the 30-day forecast, then alerts
+when the live price approaches (or breaches) either level — turning the agent
+into a position-management assistant. Dust positions and rows with bad price
+data are skipped (no fabricated levels).
+
+All thresholds live in `engine.trade_signals.CONFIG`.
+
+---
+
+## Robinhood Execution Bridge
+
+The Robinhood Execution Bridge (Tier 8) is the **opt-in, paper-first** path that
+lets the platform act on its advisory output through the Robinhood Trading MCP.
+It is **off by default** and independent of `ADVISORY_ONLY` (which governs the
+separate Alpaca surface).
+
+Because the MCP is consumed by a **Claude Code agent** — not the headless
+Python pipeline — the platform only writes a gated, dry-run proposed-order queue
+(`output/execution_queue.json`); a Claude Code agent (`/rh-execute`) is the only
+actor that ever calls the MCP. *Python writes intents; the agent writes
+outcomes* to `output/execution_receipts.jsonl`.
+
+### One-time setup (local, interactive)
+
+```bash
+claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mcp/trading
+# then in Claude Code:  /mcp  → robinhood-trading → authenticate (OAuth)
+```
+
+Open and fund a dedicated Robinhood **Agentic account** with a small, capped
+amount — agent orders only ever touch that account; your main account stays
+read-only. Smoke-test the read tools (`get_accounts`, `get_portfolio`) before
+enabling any placement.
+
+### Execution modes
+
+Set `ROBINHOOD_EXECUTION_MODE` in `.env`. Roll out strictly `off → review → live`.
+
+| Mode | What happens |
+|------|--------------|
+| `off` (default) | Nothing is written. Zero behavior change. |
+| `review` | The queue is emitted; `/rh-execute` only *simulates* via `review_equity_order` and stops. This is the paper/dry-run stage. |
+| `live` | An intent may be placed **only** when the risk gate passed, the kill switch is clear, and a per-order notional cap is set — and `/rh-execute` still asks you to confirm each order individually. |
+
+`ROBINHOOD_MAX_NOTIONAL_PER_ORDER` is a hard per-order dollar ceiling; `live`
+requires it `> 0` or `preflight_check.py` fails.
+
+### Running it
+
+```bash
+python3 main.py                  # writes output/execution_queue.json when mode != off
+# then in Claude Code:
+/rh-execute                      # previews every order; in live mode, places with confirmation
+```
+
+### Stopping placement immediately
+
+The kill switch blocks all placement (checked when the queue is built and again
+before each order):
+
+```bash
+python -m execution.kill_switch --activate --reason "halt robinhood execution"
+```
+
+Or set `ROBINHOOD_EXECUTION_MODE=off` so the next run emits nothing. Full
+operating procedure: see `docs/RUNBOOK.md` → "Robinhood Execution Bridge".
+
+---
+
 ## In-App Help & Glossary
 
 The **❓ Help tab** in the Command Center (`streamlit run gui/app.py`) gives instant access

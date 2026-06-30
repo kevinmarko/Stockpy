@@ -11391,6 +11391,33 @@ class GravityAIAuditor:
                 "detail": f"forbidden={present} wired={wired} skill={skill_ok} cmd={cmd_ok}",
             })
 
+            # ── 11: operator docs + in-app help reflect the bridge ───────
+            # Pin the HOW_TO_GUIDE sections (the anchor targets for the help
+            # glossary) and the help_content glossary terms so docs cannot
+            # silently drift from the code.  Pure source-grep — no imports.
+            guide = Path("docs/HOW_TO_GUIDE.md").read_text(encoding="utf-8")
+            help_src = Path("gui/help_content.py").read_text(encoding="utf-8")
+            guide_ok = all(h in guide for h in (
+                "## Autonomous Advisory Agent",
+                "## Trade-Signal Alerts",
+                "## Robinhood Execution Bridge",
+            ))
+            help_terms_ok = all(t in help_src for t in (
+                '"robinhood execution bridge"', '"execution mode"',
+                '"conviction momentum"', '"autonomous advisory agent"',
+            ))
+            help_anchors_ok = all(a in help_src for a in (
+                "#autonomous-advisory-agent", "#trade-signal-alerts",
+                "#robinhood-execution-bridge",
+            ))
+            c11 = guide_ok and help_terms_ok and help_anchors_ok
+            all_pass = all_pass and c11
+            audit["checks"].append({
+                "check": "HOW_TO_GUIDE sections + help_content glossary/anchors cover the bridge & agent",
+                "passed": bool(c11),
+                "detail": f"guide={guide_ok} terms={help_terms_ok} anchors={help_anchors_ok}",
+            })
+
             audit["overall_pass"] = all_pass
             audit["status"] = "PASSED" if all_pass else "FAILED"
 
