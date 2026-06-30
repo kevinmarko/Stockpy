@@ -164,7 +164,14 @@ Three independent sub-PRs, any order.
 | **Branch** | `agent/antigravity/streamlit-cache-mtime` |
 | **Risk** | Low | **Effort** 1 h |
 
-Key the `state_snapshot.json` cache on file `mtime` so it invalidates exactly on change
+**Done.** Both `state_snapshot.json` loaders (`gui/panels.load_state_snapshot` and
+`observability/dashboard._load_state_snapshot`) now key their `@st.cache_data` on the
+file's `mtime` via a `_load_state_snapshot_cached(path, _mtime)` inner fn — a changed file
+is a cache miss (fresh read on the next render) instead of up to 30 min stale. TTL kept as
+an upper bound. 3 tests (`tests/test_snapshot_cache_freshness.py`); 1577 passed. ⚠️ touches
+Antigravity-domain files (`gui/`, `observability/`) — flagged in PR.
+
+Original sketch: Key the `state_snapshot.json` cache on file `mtime` so it invalidates exactly on change
 instead of a fixed 300s TTL (currently shows up to 4-cycle-stale data on a 60s refresh).
 
 ---
@@ -257,7 +264,7 @@ Phase 6  aggregator ─────► PR (conditional — profile first)
 | 2 Settings (A) | ✅ done | — | section index + deduped accidental RH_* triple; 73 fields, flat names preserved |
 | 3a Advisory parallel | ✅ done | — | ThreadPoolExecutor (sync run_once preserved); +SQLite busy_timeout; 3 equivalence tests; 1574 passed |
 | 3b Pandera tier | ✅ done | — | _validate_dashboard helper, lazy=True prod / --strict fatal; 5 tests; 1579 passed |
-| 3c Streamlit cache | ⬜ planned | — | ⚠️ Antigravity |
+| 3c Streamlit cache | ✅ done | — | mtime-keyed snapshot loaders; 3 tests; ⚠️ Antigravity files |
 | 4a Panels split | ⬜ planned | — | ⚠️ Antigravity |
 | 4b Gravity split | ⬜ planned | — | |
 | 4c Lazy imports | ⬜ planned | — | ⚠️ Antigravity |

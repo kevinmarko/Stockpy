@@ -84,13 +84,30 @@ _BF_EDITOR_COLUMNS: Tuple[str, ...] = (
 # Shared file-backed loaders (cached) — mirror observability/dashboard.py
 # ===========================================================================
 
-@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
 def load_state_snapshot() -> dict:
-    """Load the orchestrator's last ``state_snapshot.json`` (empty dict if absent)."""
+    """Load the orchestrator's last ``state_snapshot.json`` (empty dict if absent).
+
+    The cache is keyed on the file's **mtime** (not just a TTL), so a fresh
+    orchestrator / advisory run is reflected on the NEXT render instead of after
+    up to ``DASHBOARD_REFRESH_SECONDS`` (default 30 min) of staleness. The TTL
+    remains as an upper bound for the case where mtime is unavailable.
+    """
     snap = settings.OUTPUT_DIR / "state_snapshot.json"
-    if snap.exists():
+    try:
+        mtime = snap.stat().st_mtime if snap.exists() else 0.0
+    except OSError:
+        mtime = 0.0
+    return _load_state_snapshot_cached(str(snap), mtime)
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_state_snapshot_cached(path: str, _mtime: float) -> dict:
+    """Read + parse the snapshot JSON. ``_mtime`` participates in the cache key
+    only — a changed mtime is a cache miss and forces a fresh read."""
+    p = Path(path)
+    if p.exists():
         try:
-            return json.loads(snap.read_text(encoding="utf-8"))
+            return json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             return {}
     return {}
