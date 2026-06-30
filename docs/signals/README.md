@@ -31,6 +31,7 @@ See [`docs/architecture.md`](../architecture.md) for the full data-flow context.
 | [`sortino_drawdown`](sortino_drawdown.md) | 10.0 | `signals/sortino_drawdown.py` | Sortino Ratio quality reward + max drawdown penalty |
 | [`rsi2_mean_reversion`](rsi2_mean_reversion.md) | 10.0 | `signals/rsi2_mean_reversion.py` | Connors RSI(2) long-only mean reversion (regime-gated) |
 | [`news_catalyst`](news_catalyst.md) | 10.0 | `signals/news_catalyst.py` | FinBERT / lexicon headline sentiment (earnings-proximity gated) |
+| [`lgbm_ranker`](lgbm_ranker.md) | 0.10 | `signals/lgbm_ranker.py` | LightGBM cross-sectional rank (dormant — contributes 0.0 until a model is trained) |
 | [`regime_multiplier`](regime_multiplier.md) | **0.0** | `signals/regime_multiplier.py` | HMM risk-on probability carried as Kelly-size scalar only |
 
 ---
