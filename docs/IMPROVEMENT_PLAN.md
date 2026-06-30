@@ -265,8 +265,8 @@ Phase 6  aggregator ─────► PR (conditional — profile first)
 | 3a Advisory parallel | ✅ done | — | ThreadPoolExecutor (sync run_once preserved); +SQLite busy_timeout; 3 equivalence tests; 1574 passed |
 | 3b Pandera tier | ✅ done | — | _validate_dashboard helper, lazy=True prod / --strict fatal; 5 tests; 1579 passed |
 | 3c Streamlit cache | ✅ done | — | mtime-keyed snapshot loaders; 3 tests; ⚠️ Antigravity files |
-| 4a Panels split | ⬜ planned | — | ⚠️ Antigravity |
-| 4b Gravity split | ⬜ planned | — | |
-| 4c Lazy imports | ⬜ planned | — | ⚠️ Antigravity |
+| 4a Panels split | ✅ done | #structural-phases | `gui/panels.py` → `gui/panels/` package + `_shared.py`; 1634 passed |
+| 4b Gravity split | ✅ done | #structural-phases | `GravityAIAuditor` → `gravity/__init__.py`; launcher is 23-line shim; `gravity/` in `_EXCLUDED_PATH_PARTS` for AST scan; 1634 passed |
+| 4c Lazy imports | ✅ n/a | — | 54 lazy imports in `gui/panels/__init__.py` are intentional Streamlit cold-start optimizations — no circular deps; no changes needed |
 | 5 Deps (batch 1) | ✅ done | — | yfinance 1.5.1, pandera 0.32.1; numpy held @2.2.6 (numba <2.3 cap); 1574 passed |
 | 6 Aggregator | ⬜ conditional | — | profile first |
