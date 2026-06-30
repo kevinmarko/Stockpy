@@ -77,7 +77,7 @@ Everything else has a working default. See [Section 3](#3-configuring-your-envir
 python3 database_setup.py
 ```
 
-This creates `quant_platform.db` (SQLite) with the correct schema for storing daily signals and execution logs. The file already exists in the repo with 169 seeded trades — you only need to re-run this if you want to reset it or if the schema has changed.
+This creates `quant_platform.db` (SQLite) with the correct schema for storing daily signals and execution logs. The file already exists in the repo but **ships with an empty `trades` table** — you only need to re-run this if you want to reset it or if the schema has changed. The closed-trade population that powers Kelly sizing and the calibration tracker is reconstructed on demand from your Robinhood filled-order history by `data/robinhood_orders.py` (Tier 7) and accumulates live as advisory runs record trades.
 
 ### Step 4 — Verify your setup
 
@@ -362,7 +362,7 @@ The **Conviction Calibration** section in the Reports tab renders a reliability 
 Bars above the diagonal → conviction underestimates actual skill in that range.
 Bars below the diagonal → conviction is overconfident in that range.
 
-**Important:** win rates are only shown for bins with ≥ 5 trades (configurable). The 169 seeded trades from the Robinhood order history have no conviction scores, so the chart starts empty and fills in as `record_trade(conviction=...)` calls accumulate from live advisory runs.
+**Important:** win rates are only shown for bins with ≥ 5 trades (configurable). Closed trades reconstructed from your Robinhood order history (via `data/robinhood_orders.py`) have no conviction scores, so the chart starts empty and fills in as `record_trade(conviction=...)` calls accumulate from live advisory runs.
 
 ### Database
 
@@ -417,7 +417,7 @@ Where:
 - `KELLY_FRACTION` = 0.5 (half-Kelly — halves the bet for safety)
 - Result is capped at `KELLY_CAP` = 0.20 (max 20% from this formula)
 
-The database ships with 169 real closed trades seeded from a Robinhood account, so you start on the real Kelly path immediately.
+The database ships with an empty `trades` table, so sizing starts on the vol-target fallback path. Once at least 30 closed trades accumulate — reconstructed from your Robinhood filled-order history via `data/robinhood_orders.py`, or recorded live by advisory runs — `_calculate_kelly_sizing()` switches to the real fractional-Kelly path automatically.
 
 **If you have fewer than 30 trades for a strategy:**
 Falls back to volatility targeting:
@@ -1314,7 +1314,7 @@ a strong uptrend. (Raw strategy signal: BUY.)
 
 [A] Regime context: RISK ON — HMM strongly confirms risk-on (p=0.82).
 VIX=18.4, Sahm Rule=0.10, 10y-2y spread=+0.32.
-[B] Calibration: This multi-signal setup has shown a 64% win rate over 169 closed
+[B] Calibration: This multi-signal setup has shown a 64% win rate over 84 closed
 trades (payoff ratio 1.8:1; Kelly edge 0.45 — positive — edge exists).
 [C] Invalidation: score drop below 35 converts signal to RISK REDUCE; RSI rising
 above 35 (currently 22) voids the oversold entry; VIX > 30 or Sahm Rule ≥ 0.5
