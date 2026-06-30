@@ -44,12 +44,16 @@ multitasking==0.0.13
 mypy_extensions==1.1.0
 narwhals==2.22.1
 numba==0.61.2
-numpy>=2.0,<2.5
+# numpy ceiling is bounded by numba 0.61.2 (requires numpy<2.3), which is a
+# hard transitive dep of pandas-ta + vectorbt. Do NOT raise to 2.3+ without
+# first upgrading numba to a release that supports it, or the JIT paths in
+# vectorbt/pandas-ta will break at runtime.
+numpy>=2.0,<2.3
 oauthlib==3.3.1
 packaging==26.0
 pandas==2.3.3
 pandas-ta-classic==0.6.20
-pandera==0.31.1
+pandera>=0.32,<0.33
 parso==0.8.7
 patsy==1.0.2
 peewee==4.1.0
@@ -101,7 +105,7 @@ wcwidth==0.8.1
 websockets==16.0
 wheel==0.46.3
 widgetsnbextension==4.0.15
-yfinance==1.4.1
+yfinance>=1.5,<1.6
 arch>=7.0.0
 pandas-ta>=0.3.14b
 prophet>=1.1.5
