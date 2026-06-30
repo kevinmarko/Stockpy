@@ -86,13 +86,37 @@ def _fresh_fake_sdks():
     ``llm.router`` would orphan references captured at collection time in
     sibling test files (notably ``test_advisory_llm_enrichment.py``), so
     later monkeypatches there would land on the wrong module object.
+
+    Teardown removes the fake ``anthropic`` and ``google.*`` entries from
+    ``sys.modules`` so sibling test files (e.g. ``test_run_once.py``'s
+    Google Sheets path) can import the REAL google-auth / gspread stack.
+    Without this teardown a fake-google module persists across files and
+    poisons every later import of the real package.
     """
+    # Remember which keys we're injecting so teardown can roll them back
+    # without touching anything pre-existing.
+    _injected = ("anthropic", "google", "google.genai", "google.genai.types")
+    _prior = {k: sys.modules.get(k) for k in _injected}
+
     _install_fake_anthropic()
     _install_fake_google_genai()
     # Force re-import of llm.providers so it picks up the fake SDKs.  Do NOT
     # touch llm.commentary or llm.router — see docstring above.
     sys.modules.pop("llm.providers", None)
-    yield
+    try:
+        yield
+    finally:
+        # Restore prior sys.modules entries — for each fake we injected,
+        # either drop it (if nothing was there before) or put the original
+        # back.  This unblocks later test files that need the real packages.
+        for k, prior in _prior.items():
+            if prior is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = prior
+        # Also pop llm.providers so the next file's fresh import resolves
+        # the real (or absent) SDKs, not the fakes.
+        sys.modules.pop("llm.providers", None)
 
 
 # Test schema used across all provider tests.

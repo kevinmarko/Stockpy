@@ -672,6 +672,34 @@ class Settings(BaseSettings):
             "alert LLM disabled, template fallback kicks in."
         ),
     )
+
+    # --- Tier 9 / Scope 2: Gravity AI audit runner (engine/gravity_ai_runner.py) ---
+    # A separate opt-in master switch from LLM_COMMENTARY_ENABLED so an
+    # operator can run on-demand AI audits (uses both Claude + Gemini) without
+    # having to also enable per-symbol rationale commentary.  Default False:
+    # the existing Python-only Gravity steps in gravity/__init__.py continue
+    # to run unchanged.  When True AND both API keys are set, the CLI
+    # `python -m engine.gravity_ai_runner [STEP]` calls Claude as the primary
+    # auditor and Gemini as the cross-checker; both responses are validated
+    # against `llm.schemas.GravityAuditStepResult` and disagreement on
+    # status is surfaced explicitly (the runner never picks a winner).
+    GRAVITY_AI_RUNNER_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the AI Gravity audit runner (Claude auditor + "
+            "Gemini cross-checker).  Off by default — the existing Python-only "
+            "Gravity audit pipeline is unchanged when False.  When True, on-"
+            "demand CLI runs both models against the 7 audit prompts in "
+            "ai_verification_prompts.py and writes output/gravity_ai_audit.json."
+        ),
+    )
+    GRAVITY_AI_RUNNER_OUTPUT_PATH: str = Field(
+        default="output/gravity_ai_audit.json",
+        description=(
+            "Where the runner writes the per-step Claude + Gemini verdicts.  "
+            "Lives under output/ which is gitignored."
+        ),
+    )
     NEWS_EARNINGS_SUPPRESS_HOURS: float = Field(
         default=48.0,
         description=(

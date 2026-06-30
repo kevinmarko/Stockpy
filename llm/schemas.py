@@ -92,3 +92,50 @@ class AlertCommentary(BaseModel):
             "TradeAlert.priority — those remain the deterministic SoT."
         ),
     )
+
+
+class GravityAuditStepResult(BaseModel):
+    """One AI-rendered Gravity audit step verdict.
+
+    Mirrors the JSON shape that the SYSTEM_PROMPT in
+    ``ai_verification_prompts.py`` already forces on every step prompt
+    (``{"status": "PASSED/FAILED", "score": 0-100, "findings": [],
+    "missing_elements": []}``).  Using a strict schema means a Claude or
+    Gemini response that drifts off-shape gets rejected at schema-validation
+    time, the provider returns ``None``, and the runner records a soft
+    failure for that step rather than fabricating a verdict
+    (CONSTRAINT #4 + #6).
+
+    Both Claude (primary auditor) and Gemini (cross-checker) return the
+    same shape.  The runner records both verdicts side-by-side and flags
+    a disagreement when their ``status`` fields differ — the operator
+    sees the conflict explicitly instead of being asked to trust one
+    model's verdict over the other.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["PASSED", "FAILED"] = Field(
+        description="Verdict for this audit step. PASSED/FAILED only — no in-between.",
+    )
+    score: int = Field(
+        ge=0,
+        le=100,
+        description="Integer score 0-100; 0 = total failure, 100 = perfect adherence.",
+    )
+    findings: List[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "Short bullets describing what the model observed in the code. "
+            "Each ≤500 chars; max 20 bullets to keep the response bounded."
+        ),
+    )
+    missing_elements: List[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "Short bullets naming criteria the code FAILED to meet. Each "
+            "≤500 chars; an empty list is valid (PASSED with nothing missing)."
+        ),
+    )

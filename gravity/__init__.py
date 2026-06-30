@@ -4352,6 +4352,8 @@ class GravityAIAuditor:
         self.step_73_prompt_registry_audit()
         # Tier 9 — Claude + Gemini commentary integration audit
         self.step_74_llm_commentary_audit()
+        # Tier 9 Scope 2 — AI Gravity audit runner (Claude auditor + Gemini cross-checker)
+        self.step_75_gravity_ai_runner_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -11868,3 +11870,204 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_74_llm_commentary_audit"] = audit
+
+    def step_75_gravity_ai_runner_audit(self) -> None:
+        """Step 75 — Tier 9 Scope 2 AI Gravity audit runner (2026-06-30).
+
+        9 checks pinning the contract for ``engine/gravity_ai_runner.py``:
+
+        1.  Module importable; ``run_step``, ``run_all``, ``write_report``,
+            ``RunReport``, ``StepRunResult`` all exist.
+        2.  ``settings.GRAVITY_AI_RUNNER_ENABLED`` default is ``False``
+            (opt-in, master switch independent of LLM_COMMENTARY_ENABLED).
+        3.  ``engine/gravity_ai_runner.py`` top-of-file imports contain no
+            ``anthropic`` / ``google`` reach (lazy only).
+        4.  ``llm.schemas.GravityAuditStepResult`` exists with the four
+            required fields (``status``, ``score``, ``findings``,
+            ``missing_elements``) and rejects an out-of-bounds ``score``.
+        5.  ``_STEP_FILE_MAP`` covers all 7 steps from
+            ``ai_verification_prompts.ALL_PROMPTS``.
+        6.  ``run_all()`` with the master switch off (default) returns a
+            ``RunReport`` whose every step has ``claude_verdict=None`` AND
+            ``gemini_verdict=None`` (no provider instantiation).
+        7.  ``run_step()`` with injected providers — one PASSED, one FAILED —
+            correctly flags ``disagreement=True``.
+        8.  ``run_step()`` with a raising provider does NOT propagate the
+            exception (CONSTRAINT #6 — soft-fail to None on that side only).
+        9.  Module source has no order-submission verbs (advisory-only
+            invariant, mirrors step_70 source guard).
+        """
+        from pathlib import Path as _Path
+
+        audit: dict = {
+            "step": "step_75_gravity_ai_runner_audit",
+            "description": "Tier 9 Scope 2 — AI Gravity audit runner",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parents[1]
+
+        try:
+            # ── Check 1: module surface ─────────────────────────────────────
+            from engine import gravity_ai_runner as _runner
+            c1 = all(
+                hasattr(_runner, n)
+                for n in ("run_step", "run_all", "write_report", "RunReport", "StepRunResult",
+                          "_STEP_FILE_MAP")
+            )
+            audit["checks"].append({
+                "check": "engine.gravity_ai_runner exposes the required public surface",
+                "passed": bool(c1),
+            })
+            all_pass = all_pass and c1
+
+            # ── Check 2: settings.GRAVITY_AI_RUNNER_ENABLED defaults False ──
+            from settings import Settings as _Settings
+            _fresh = _Settings()
+            c2 = getattr(_fresh, "GRAVITY_AI_RUNNER_ENABLED", True) is False
+            audit["checks"].append({
+                "check": "settings.GRAVITY_AI_RUNNER_ENABLED default is False (opt-in)",
+                "passed": bool(c2),
+                "detail": f"default={getattr(_fresh, 'GRAVITY_AI_RUNNER_ENABLED', '<missing>')}",
+            })
+            all_pass = all_pass and c2
+
+            # ── Check 3: no top-level anthropic/google reach ────────────────
+            runner_src = (repo_root / "engine" / "gravity_ai_runner.py").read_text(encoding="utf-8")
+            top_level_lines = [
+                ln for ln in runner_src.splitlines()
+                if (not ln.startswith(" ") and not ln.startswith("\t"))
+            ]
+            top_joined = "\n".join(top_level_lines)
+            c3 = (
+                "import anthropic" not in top_joined
+                and "from anthropic" not in top_joined
+                and "import google" not in top_joined
+                and "from google" not in top_joined
+            )
+            audit["checks"].append({
+                "check": "engine/gravity_ai_runner.py top-level has no SDK reach (lazy only)",
+                "passed": bool(c3),
+            })
+            all_pass = all_pass and c3
+
+            # ── Check 4: GravityAuditStepResult schema fields ────────────────
+            from llm.schemas import GravityAuditStepResult
+            required = {"status", "score", "findings", "missing_elements"}
+            present = set(GravityAuditStepResult.model_fields.keys())
+            c4a = required.issubset(present)
+            # Out-of-bounds score must be rejected.
+            try:
+                GravityAuditStepResult(status="PASSED", score=999)
+                c4b = False
+            except Exception:
+                c4b = True
+            c4 = c4a and c4b
+            audit["checks"].append({
+                "check": "llm.schemas.GravityAuditStepResult has required fields + enforces score bounds",
+                "passed": bool(c4),
+                "detail": f"fields={sorted(present)} bounds_enforced={c4b}",
+            })
+            all_pass = all_pass and c4
+
+            # ── Check 5: _STEP_FILE_MAP covers all 7 steps ──────────────────
+            from ai_verification_prompts import ALL_PROMPTS
+            expected = sorted(int(p.step_number) for p in ALL_PROMPTS)
+            actual = sorted(_runner._STEP_FILE_MAP.keys())
+            c5 = expected == actual
+            audit["checks"].append({
+                "check": "engine.gravity_ai_runner._STEP_FILE_MAP covers every prompt step",
+                "passed": bool(c5),
+                "detail": f"expected={expected} actual={actual}",
+            })
+            all_pass = all_pass and c5
+
+            # ── Check 6: run_all() disabled by default → no provider call ───
+            report = _runner.run_all()
+            c6 = (
+                isinstance(report, _runner.RunReport)
+                and report.enabled is False
+                and all(s.claude_verdict is None and s.gemini_verdict is None for s in report.steps)
+            )
+            audit["checks"].append({
+                "check": "run_all() with master switch off returns all-None verdicts",
+                "passed": bool(c6),
+                "detail": f"enabled={report.enabled} steps={len(report.steps)}",
+            })
+            all_pass = all_pass and c6
+
+            # ── Check 7: disagreement flag triggers on status mismatch ──────
+            from llm.schemas import GravityAuditStepResult as _GR
+
+            class _FakeProv:
+                name = "fake"
+
+                def __init__(self, status):
+                    self._status = status
+
+                def call_structured(self, system, user, schema_model):
+                    return _GR(status=self._status, score=80, findings=[], missing_elements=[])
+
+            res = _runner.run_step(
+                1,
+                claude=_FakeProv("PASSED"),
+                gemini=_FakeProv("FAILED"),
+                target_code="# stub",
+            )
+            c7 = (
+                res.claude_verdict is not None
+                and res.gemini_verdict is not None
+                and res.disagreement is True
+            )
+            audit["checks"].append({
+                "check": "run_step() flags disagreement when Claude PASSED ≠ Gemini FAILED",
+                "passed": bool(c7),
+            })
+            all_pass = all_pass and c7
+
+            # ── Check 8: provider that raises must soft-fail to None ────────
+            class _Raises:
+                name = "raises"
+
+                def call_structured(self, system, user, schema_model):
+                    raise RuntimeError("synthetic")
+
+            res2 = _runner.run_step(
+                2,
+                claude=_Raises(),
+                gemini=_FakeProv("PASSED"),
+                target_code="# stub",
+            )
+            c8 = (
+                res2.claude_verdict is None
+                and res2.gemini_verdict is not None
+                and res2.disagreement is False
+            )
+            audit["checks"].append({
+                "check": "Provider exception → that side None, other side survives (CONSTRAINT #6)",
+                "passed": bool(c8),
+            })
+            all_pass = all_pass and c8
+
+            # ── Check 9: no order-submission verbs in runner source ─────────
+            forbidden = ("submit_order", "place_order", "buy_order", "sell_order",
+                         "place_equity_order", "place_option_order")
+            forbidden_hit = next((p for p in forbidden if p in runner_src), None)
+            c9 = forbidden_hit is None
+            audit["checks"].append({
+                "check": "engine/gravity_ai_runner.py contains no order-submission verbs (advisory-only)",
+                "passed": bool(c9),
+                "detail": f"forbidden_hit={forbidden_hit}",
+            })
+            all_pass = all_pass and c9
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_75_gravity_ai_runner_audit"] = audit

@@ -1368,6 +1368,59 @@ Two specialised commentary agents that ENRICH (never replace) the deterministic 
 - The `gui/panels.py` Reports tab button is **deferred to a follow-up Antigravity PR** per the domain split. The CLI (`python -m engine.llm_commentary SYMBOL`) is the on-demand entry point in this PR.
 - New optional dependency: `google-genai>=0.3.0` (added to `requirements.txt`). `anthropic>=0.25.0` was already present.
 
+## Tier 9 Scope 2 — AI Gravity Audit Runner (`engine/gravity_ai_runner.py`, 2026-06)
+
+### Overview
+The 7 step prompts in `ai_verification_prompts.py` were designed for an external LLM to consume but never had a runner. Scope 2 adds **`engine/gravity_ai_runner.py`** — an on-demand AI audit runner that uses Tier 9's `llm.providers` to send each step to **Claude (primary auditor)** AND **Gemini (independent cross-checker)** in parallel. Both responses are validated through the new `llm.schemas.GravityAuditStepResult` schema (`status: PASSED|FAILED`, `score: int 0-100`, `findings: list[str]`, `missing_elements: list[str]`); when both verdicts are present and the `status` fields differ, the runner flags `disagreement=true` — but it NEVER picks a winner. The operator sees both verdicts and decides.
+
+### Public API
+- **`run_step(step_number, *, claude=None, gemini=None, target_code=None) -> StepRunResult`** — run a single audit step (1-7). Provider injection is for tests; the auto-construction path is lazy and respects the master switch.
+- **`run_all(*, claude=None, gemini=None) -> RunReport`** — sweep all 7 steps, return an aggregate report with per-step verdicts + a roll-up `summary` dict (`{total_steps, claude:{passed,failed,skipped}, gemini:{passed,failed,skipped}, disagreements}`).
+- **`write_report(report, *, path=None) -> Optional[Path]`** — atomic write-then-rename JSON persist to `settings.GRAVITY_AI_RUNNER_OUTPUT_PATH` (default `output/gravity_ai_audit.json`, gitignored). Soft-fails to `None` on any IO error.
+- **`StepRunResult`** (frozen dataclass) — `step_number, step_title, claude_verdict: Optional[dict], gemini_verdict: Optional[dict], disagreement: bool, notes: list[str], timestamp: str`.
+- **`RunReport`** (frozen dataclass) — `generated_at, enabled, steps: list[StepRunResult], summary: dict`.
+
+### Step → file map (`_STEP_FILE_MAP`)
+Hand-curated mapping of audit-step number to the per-layer file(s) the model reads. Each file's read is capped at 32 KB so the multi-file steps stay within model context windows. Refactoring the audit scope is a single-diff edit to this map:
+| Step | Files audited |
+|---|---|
+| 1 | `config.py`, `database_setup.py`, `processing_engine.py` |
+| 2 | `strategy_engine.py`, `processing_engine.py` |
+| 3 | `technical_options_engine.py` |
+| 4 | `forecasting_engine.py` |
+| 5 | `macro_engine.py` |
+| 6 | `evaluation_engine.py`, `research_engine.py`, `sizing/kelly.py`, `sizing/vol_target.py` |
+| 7 | `execution/risk_gate.py`, `execution/kill_switch.py`, `execution/order_manager.py`, `main_orchestrator.py` |
+
+### CLI
+`python -m engine.gravity_ai_runner [STEP] [--json] [--output PATH]`:
+- No `STEP`: runs all 7.
+- Integer 1-7: runs that single step.
+- `--json`: emit JSON only (suitable for piping); otherwise a human summary plus the report-file path.
+
+### Safety contract (audited by Gravity step_75 — 9 checks)
+1. **Opt-in master switch** — `settings.GRAVITY_AI_RUNNER_ENABLED=False` by default. Independent of `LLM_COMMENTARY_ENABLED` so the operator can enable AI audits without enabling per-symbol rationale commentary (or vice versa). When False, ZERO provider instantiation, ZERO network calls — verified by step_75 check 6.
+2. **No order code** — module source has no `submit_order`/`place_order`/`buy_order`/`sell_order`/`place_equity_order`/`place_option_order` verbs (step_75 check 9). The runner is a pure verdict aggregator.
+3. **No top-level SDK reach** in `engine/gravity_ai_runner.py` — all `anthropic`/`google.genai` imports are lazy inside provider factories. Step_75 check 3 source-greps the module's top-level lines.
+4. **Soft-fail end-to-end** — every provider/parse/schema failure → that model's verdict is `None` and the step is recorded with operator-facing notes. The runner never raises. Step_75 check 8 verifies via a `RuntimeError`-raising fake provider.
+5. **No fabricated metrics (CONSTRAINT #4)** — numeric pipeline scalars (`score`, `conviction`, `forecast`, `suggested_position_pct`, `key_indicators`, ATR levels, …) are never written from a runner output. The runner only writes audit verdicts to its own JSON file. Step_75 check 1 verifies the public surface contains no setters into pipeline scalars.
+6. **Schema-bounded** — `GravityAuditStepResult` rejects out-of-bounds `score` (>100 or <0) and any `status` outside `{PASSED, FAILED}` (step_75 check 4). A schema-mismatched provider response is treated as a soft failure, never a fabricated verdict.
+
+### New settings
+- **`GRAVITY_AI_RUNNER_ENABLED: bool = False`** — runner master switch (independent of `LLM_COMMENTARY_ENABLED`).
+- **`GRAVITY_AI_RUNNER_OUTPUT_PATH: str = "output/gravity_ai_audit.json"`** — where `write_report()` persists the run.
+
+### Test surface
+**`tests/test_gravity_ai_runner.py`** (19 tests, 9 classes): `TestSchemaSurface` (canonical payload accepted, bad status rejected, score bounds), `TestStepFileMap` (7 steps mapped + compose_target_code reads each successfully), `TestRunStepDisabled` (master switch off → no provider instantiated), `TestRunStepAgreement` (both PASSED → no disagreement), `TestRunStepDisagreement` (PASSED vs FAILED → disagreement=True), `TestRunStepProviderRaises` (Claude raises → Gemini survives, Gemini raises → Claude survives, both raise → no crash), `TestRunStepUnknownStep` (step 999 → notes record it, never raises), `TestRunAll` (sweeps every step + summary counts add up + disabled-by-default → all-None verdicts), `TestSummarise` (mixed PASSED/FAILED/None counts roll up correctly), `TestWriteReport` (round-trip through JSON + parent dir creation + write-failure soft-fail), `TestSourceGuards` (no top-level anthropic/google import + no order-submission verbs).
+
+### Gravity step 75 (`step_75_gravity_ai_runner_audit`)
+9 checks: module surface (run_step/run_all/write_report/RunReport/StepRunResult/_STEP_FILE_MAP); `GRAVITY_AI_RUNNER_ENABLED` default False; no top-level SDK reach; `GravityAuditStepResult` has required 4 fields + enforces score bounds; `_STEP_FILE_MAP` covers all 7 prompts; `run_all()` disabled → all-None verdicts; disagreement flag triggers on status mismatch; provider exception → that side None (CONSTRAINT #6); no order-submission verbs in source (advisory-only invariant).
+
+### Operator notes
+- Setting `GRAVITY_AI_RUNNER_ENABLED=true` without `ANTHROPIC_API_KEY` AND `GEMINI_API_KEY` produces a useful — but degraded — report: each step has `claude_verdict=None` / `gemini_verdict=None` with `notes` explaining which side was unavailable. There is no failure path that aborts the run.
+- The runner reads files from disk fresh on every call — no caching across runs. To re-audit after a code change, just re-run the CLI; the report file is atomically replaced.
+- The `gui/panels.py` Safety tab integration (rendering the runner JSON with red/green per-step badges) is **deferred to a follow-up Antigravity PR**, mirroring the Scope 1 deferral pattern.
+
 ## Prompt Registry (`prompt_registry/`, 2026-06)
 
 Versioned, cryptographically-signed, remotely-updatable store for every AI-facing instruction
