@@ -23,6 +23,8 @@ Tabs
 9.  Observability             — compact macro/regime/P&L summary
 10. Live Inventory            — synchronized portfolio + watchlist coverage map
                                 with on-demand "Sync Now" (Task 1.4)
+11. Prompts                   — Prompt Registry: resolved version/source per ID,
+                                🔄 Sync, diff viewer, ↩ Rollback/pin (Stage 7)
 
 Design
 ------
@@ -171,6 +173,7 @@ tab_labels = [
     "📊 Observability",
     "📡 Live Inventory",
     "❓ Help",
+    "📝 Prompts",
 ]
 tabs = st.tabs(tab_labels)
 
@@ -196,5 +199,7 @@ with tabs[9]:
     safe_panel(panels.render_live_inventory)
 with tabs[10]:
     safe_panel(panels.render_help)
+with tabs[11]:
+    safe_panel(panels.render_prompt_registry)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")

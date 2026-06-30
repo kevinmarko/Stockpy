@@ -93,6 +93,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "DEFAULT_TICKERS",
     "SIGNAL_WEIGHTS",
     "DISABLED_SIGNAL_MODULES",
+    # Prompt Registry tunables (non-secret; credentials live in SECRET_KEYS below).
+    # See docs/PROMPT_REGISTRY_PLAN.md §8 and settings.PROMPT_REGISTRY_*.
+    "PROMPT_REGISTRY_ENABLED",   # bool master switch (baseline-only when False)
+    "PROMPT_REGISTRY_BACKEND",   # "http" | "local" | "firestore"
+    "PROMPT_REGISTRY_PINS",      # JSON dict {"prompt_id": "version"} — rollback lever
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -116,11 +121,22 @@ SECRET_KEYS: tuple[str, ...] = (
     "ALERT_SMTP_HOST",
     "ALERT_SMTP_USER",
     "ALERT_SMTP_PASSWORD",
+    # Prompt Registry credentials — 4 separate roles (read / publish / sign / url).
+    # Never GUI-writable; edit .env by hand only (CONSTRAINT #3).
+    "PROMPT_REGISTRY_URL",           # protected HTTPS manifest endpoint
+    "PROMPT_REGISTRY_TOKEN",         # bearer read-token
+    "PROMPT_REGISTRY_PUBLISH_TOKEN", # higher-privilege publish credential
+    "PROMPT_REGISTRY_SIGNING_KEY",   # HMAC-SHA256 verification key
 )
 
 # Keys whose values are JSON-encoded structures (lists/dicts) in .env.
 _JSON_KEYS: frozenset[str] = frozenset(
-    {"DEFAULT_TICKERS", "SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES"}
+    {
+        "DEFAULT_TICKERS",
+        "SIGNAL_WEIGHTS",
+        "DISABLED_SIGNAL_MODULES",
+        "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}
+    }
 )
 
 _MASK_SET = "•••• set"

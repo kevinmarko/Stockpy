@@ -1306,3 +1306,81 @@ A GUI banner surfacing the Robinhood execution mode (red on `live`) belongs in `
 - `ROBINHOOD_EXECUTION_MODE` — `off` (default) | `review` | `live`.
 - `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` — USD per-order ceiling (default `0.0`; required `> 0` for live).
 New output artifacts (gitignored): `output/execution_queue.json` (Python-written intents), `output/execution_receipts.jsonl` (agent-written outcomes).
+
+## Prompt Registry (`prompt_registry/`, 2026-06)
+
+Versioned, cryptographically-signed, remotely-updatable store for every AI-facing instruction
+(master pre-prompt, Gravity step bodies, etc.).
+
+### Security boundary — MUST NEVER BE VIOLATED
+
+**Fetched prompts are advisory text only.** The registry can change what an AI is *told*; it
+cannot change what the platform is *permitted to do*. Order submission, advisory quarantine,
+risk gates, and the kill switch are enforced in Python code — never in prompt bodies.
+This invariant is audited on every Gravity run (step 69, check 7).
+
+### Package structure
+
+| Module | Role |
+|---|---|
+| `prompt_registry/models.py` | `PromptRecord`, `PromptVersion`, `RegistryManifest` frozen dataclasses |
+| `prompt_registry/signing.py` | HMAC-SHA256 `sign()` / `verify()` + `compute_sha256()` |
+| `prompt_registry/guardrails.py` | `validate_prompt()` — rejects `ADVISORY_ONLY=false`, `submit_order`, size overflow |
+| `prompt_registry/cache.py` | `CacheManager` — signed-version disk cache + `read_baseline()` / `list_baseline_ids()` |
+| `prompt_registry/store.py` | `PromptStore` ABC + `LocalJSONStore` + `HTTPStore` (stdlib `urllib`, no new dep) |
+| `prompt_registry/registry.py` | `PromptRegistry` — resolution chain, `sync()`, `rollback()`, `get_registry()` singleton |
+| `prompt_registry/__main__.py` | CLI: `list`, `get`, `sync`, `pin`, `rollback`, `diff`, `verify`, `publish` |
+| `prompt_registry/baseline/` | Git-committed fallback bodies (always available, zero network) |
+
+### Resolution chain (CONSTRAINT #4 — never `""`)
+
+```
+Pin (PROMPT_REGISTRY_PINS) → Remote latest (verified) → Disk cache (verified) → Baseline → sentinel
+```
+
+### Secret keys (CONSTRAINT #3)
+
+Four `PROMPT_REGISTRY_*` credentials live in `gui/env_io.SECRET_KEYS` and are **never**
+GUI-writable. Set them by hand in `.env` only:
+
+| Key | Role |
+|---|---|
+| `PROMPT_REGISTRY_URL` | Protected HTTPS URL of the signed manifest |
+| `PROMPT_REGISTRY_TOKEN` | Bearer read-token (runtime platform) |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | Higher-privilege publish credential (author machine only) |
+| `PROMPT_REGISTRY_SIGNING_KEY` | HMAC-SHA256 verification key |
+
+Three non-secret tunables (`PROMPT_REGISTRY_ENABLED`, `PROMPT_REGISTRY_BACKEND`,
+`PROMPT_REGISTRY_PINS`) are in `gui/env_io.ALLOWED_KEYS` and writable from the GUI Prompts tab.
+
+### Constraints enforced by this codebase
+
+- **CONSTRAINT #3** — 4 secret keys masked + raise `SecretWriteError` on GUI write attempt.
+- **CONSTRAINT #4** — `get()` never returns `""`; fails closed to baseline then sentinel.
+- **CONSTRAINT #5** — `PROMPT_REGISTRY_REFRESH_SECONDS` defaults to `0`; sync is explicit only
+  (CLI or GUI "🔄 Sync" button, never on a timer or at table render).
+- **CONSTRAINT #6** — every fetch/verify/parse path in `registry.py` and `__main__.py` degrades
+  gracefully; no exception propagates past the GUI boundary.
+
+### Gravity step 69 (`step_69_prompt_registry_audit`)
+
+10 checks:
+1. `prompt_registry` importable; `get_registry`, `PromptRegistry`, `PromptRecord` exist.
+2. Fail-closed: with no URL/cache, `get("gravity.system")` returns the baseline (non-empty).
+3. `verify(tampered_body)` is `False`; `verify(signed_body)` is `True`.
+4. Guardrail rejects `ADVISORY_ONLY=false` body and `submit_order` body.
+5. Four `PROMPT_REGISTRY_*` secret keys in `SECRET_KEYS` AND not in `ALLOWED_KEYS`.
+6. Disabling registry leaves Gravity prompts byte-identical to baseline.
+7. No `eval`/`exec`/`import` in `prompt_registry/` source or `ai_verification_prompts.py`.
+8. `PROMPT_REGISTRY_REFRESH_SECONDS` default is `0` (CONSTRAINT #5).
+9. CLI `verify` exits non-zero on a corrupt cache fixture.
+10. `tests/test_prompt_registry_resolution.py` exists.
+
+### Operational notes
+
+- `python -m prompt_registry get master_preprompt` — fetch and print the resolved body.
+- `python -m prompt_registry sync` — explicit pull from remote manifest.
+- `python -m prompt_registry rollback <id>` — pin to previous cached version.
+- Publishing v1.1.0 and moving the "latest" pointer is the "update over the internet" mechanism.
+- See `docs/HOW_TO_GUIDE.md §16` for the full operator workflow.
+- See `docs/RUNBOOK.md §7` for the publish/rollback incident playbooks.
