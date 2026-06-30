@@ -657,3 +657,118 @@ python -m execution.kill_switch --activate --reason "halt robinhood execution"
 Outcomes the agent placed/previewed/skipped are appended to `output/execution_receipts.jsonl`
 (agent-authored); the platform owns `output/execution_queue.json` (Python-authored intents).
 Both are gitignored.
+
+## §7 Prompt Registry — Publish & Rollback Playbooks
+
+> **Security boundary:** Prompt-registry operations touch advisory text only.
+> They cannot alter order submission logic, advisory quarantine, risk gates, or the kill switch.
+> All safety enforcement stays in Python code — this invariant is audited in Gravity step 69 check 7.
+
+### 7.1 Normal publish flow (author machine)
+
+Use when a revised AI instruction is ready to roll out to all running instances.
+
+```bash
+# 1. Draft the new prompt body and confirm it passes guardrails locally
+python -m prompt_registry verify       # must exit 0 on current cache
+
+# 2. Publish (requires PROMPT_REGISTRY_PUBLISH_TOKEN + PROMPT_REGISTRY_SIGNING_KEY in .env)
+python -m prompt_registry publish <prompt_id> <new_version> /path/to/body.txt
+
+# 3. Confirm remote manifest now lists the new version
+python -m prompt_registry list         # should show source=remote, version=<new_version>
+
+# 4. On every platform, sync explicitly (never automatic — CONSTRAINT #5)
+python -m prompt_registry sync
+```
+
+Expected log output on success:
+```
+INFO  prompt_registry.registry — sync: fetched manifest registry_version=<new_version>
+INFO  prompt_registry.registry — _safe_adopt: cached <prompt_id> v<new_version>
+```
+
+### 7.2 Emergency rollback — bad prompt body deployed
+
+**Symptoms:** advisory rationale contains incorrect thresholds; AI-facing step body produces
+wrong output; `verify` exits non-zero on the remote-fetched version.
+
+**Rollback steps:**
+
+```bash
+# Step 1: Identify the bad version
+python -m prompt_registry list         # shows resolved_version per ID
+
+# Step 2: Roll back to the previous cached version (in-memory pin)
+python -m prompt_registry rollback <prompt_id>
+
+# Step 3: Confirm pin is set
+python -m prompt_registry list         # source should now show "pin"
+
+# Step 4: Persist the pin to .env so it survives restarts
+#   The rollback command does this automatically via gui/env_io.
+#   Verify:
+grep PROMPT_REGISTRY_PINS .env
+
+# Step 5: If the bad version is also in the remote manifest, publish a fixed version
+#   and update the "latest" pointer before running sync again.
+python -m prompt_registry publish <prompt_id> <fixed_version> /path/to/fixed_body.txt
+python -m prompt_registry sync
+python -m prompt_registry rollback <prompt_id>   # pin to fixed version
+
+# Step 6: Document in docs/incident_log.md
+```
+
+**Resolution:** pin cleared automatically once a verified fixed version is set as latest and
+synced.  Remove the pin entry from `PROMPT_REGISTRY_PINS` in `.env` to resume automatic
+"latest" resolution.
+
+### 7.3 Cache corruption / verify failure
+
+**Symptoms:** `python -m prompt_registry verify` exits non-zero; HMAC signature mismatch in
+logs.
+
+```bash
+# Step 1: Identify which ID/version failed
+python -m prompt_registry verify       # prints per-check pass/fail
+
+# Step 2: Delete the corrupt cache entry (safe — baseline is always the fallback)
+rm output/prompt_cache/<prompt_id>/<version>.json
+
+# Step 3: Re-sync from remote
+python -m prompt_registry sync
+
+# Step 4: Re-verify
+python -m prompt_registry verify       # must exit 0
+```
+
+If remote also fails verification, the signing key may be mismatched.
+Confirm `PROMPT_REGISTRY_SIGNING_KEY` matches the key used at publish time and retry.
+
+### 7.4 Registry completely disabled (baseline-only mode)
+
+When `PROMPT_REGISTRY_ENABLED=false` (the default), the platform uses the `prompt_registry/baseline/`
+files committed in the repo.  No network calls, no key required.
+
+To re-enable:
+```bash
+# In .env
+PROMPT_REGISTRY_ENABLED=true
+PROMPT_REGISTRY_URL=<manifest-url>
+PROMPT_REGISTRY_TOKEN=<read-token>
+PROMPT_REGISTRY_SIGNING_KEY=<hmac-key>
+
+# Then sync explicitly
+python -m prompt_registry sync
+```
+
+### 7.5 Key indicators a prompt-registry incident is NOT a safety incident
+
+| Observation | What it means | Action |
+|---|---|---|
+| Advisory rationale text changed unexpectedly | Prompt body was updated; narrative changed | Rollback prompt body (§7.2) |
+| Order submission behavior changed | Code change, NOT registry | Investigate `execution/`, `engine/advisory.py`, git log |
+| Kill switch logic changed | Code change, NOT registry | Investigate `execution/kill_switch.py`, git log |
+| Risk gate thresholds changed | Code change or settings change, NOT registry | Check `.env` and `execution/risk_gate.py` |
+
+The registry can never change code behavior — only text shown to an AI assistant.

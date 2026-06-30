@@ -1511,3 +1511,145 @@ this file. The contract is enforced by:
 
 If you rename any heading in this file, search for the old slug in `gui/help_content.py`
 and update it to match the new slug; otherwise the anchor test will fail.
+
+## §16 Remote Prompt Updates (Prompt Registry)
+
+> **Security boundary (must never be overridden):** Fetched prompts are advisory text only.
+> They can change what an AI is *told* — they cannot change what the platform is *permitted to do*.
+> Order submission, advisory quarantine, risk gates, and the kill switch are enforced in Python code,
+> not in any prompt. This invariant is verified on every Gravity audit run (step 69, check 7).
+
+### What the registry is
+
+`prompt_registry/` is a versioned, cryptographically-signed store for every AI-facing instruction
+(master pre-prompt, Gravity step bodies, etc.).  Publishing a new version and moving the "latest"
+pointer is the *only* over-the-internet update mechanism — it never touches Python modules, settings,
+or the broker execution surface.
+
+| File / path | Role |
+|---|---|
+| `prompt_registry/baseline/` | Git-committed fallback bodies (always available, no network) |
+| `output/prompt_cache/` | Signed on-disk cache of fetched versions (rollback depth = 5 by default) |
+| `prompt_registry/__main__.py` | CLI: `list`, `get`, `sync`, `pin`, `rollback`, `diff`, `verify`, `publish` |
+| `gui/app.py` tab "📝 Prompts" | GUI: resolved version / source per ID, Sync, diff viewer, Rollback |
+
+### Resolution order (CONSTRAINT #4 — never empty)
+
+```
+Pin (PROMPT_REGISTRY_PINS) → Remote latest (verified) → Disk cache (verified) → Baseline → sentinel
+```
+
+The sentinel body is a one-line placeholder; `get()` never returns `""`.
+
+### Day-to-day operator workflow
+
+#### Fetching the latest master pre-prompt to paste
+
+```bash
+python -m prompt_registry get master_preprompt
+```
+
+The body is printed to stdout.  Pipe to `pbcopy` on macOS to copy directly to the clipboard:
+
+```bash
+python -m prompt_registry get master_preprompt | pbcopy
+```
+
+#### Checking what version is resolved for every ID
+
+```bash
+python -m prompt_registry list
+```
+
+Output columns: `prompt_id`, `resolved_version`, `source` (pin / remote / cache / baseline).
+
+#### Syncing all IDs from the remote manifest
+
+```bash
+python -m prompt_registry sync
+```
+
+Fetches the manifest, verifies HMAC-SHA256 signatures, writes to `output/prompt_cache/`.
+Requires `PROMPT_REGISTRY_URL` and `PROMPT_REGISTRY_SIGNING_KEY` set in `.env`.
+**CONSTRAINT #5 — never called on a timer.**  Sync is explicit (CLI or the GUI "🔄 Sync" button).
+
+#### Pinning a specific version
+
+```bash
+python -m prompt_registry pin master_preprompt 1.1.0
+```
+
+Writes `PROMPT_REGISTRY_PINS={"master_preprompt": "1.1.0"}` to `.env` (via `gui/env_io`).
+Effective on the **next** launch — never hot-swaps a running process.
+
+#### Rolling back to the previous cached version
+
+```bash
+python -m prompt_registry rollback master_preprompt
+```
+
+Sets the pin to the second-newest entry in `output/prompt_cache/master_preprompt/`.
+Fails gracefully (non-zero exit, clear message) when fewer than two versions are cached.
+
+#### Verifying cache integrity
+
+```bash
+python -m prompt_registry verify
+```
+
+Re-checks HMAC-SHA256 signatures and guardrail constraints for every cached version.
+Non-zero exit if any file fails — useful in CI or after a manual cache edit.
+
+#### Diffing two versions
+
+```bash
+python -m prompt_registry diff master_preprompt 1.0.0 1.1.0
+```
+
+Prints a unified diff to stdout.  The GUI "Prompts" tab renders the same diff inline.
+
+### Publishing a new version (author machine only)
+
+Publishing requires `PROMPT_REGISTRY_PUBLISH_TOKEN` and `PROMPT_REGISTRY_SIGNING_KEY` in `.env`.
+The runtime platform **never** needs `PUBLISH_TOKEN` — only the author's machine does.
+
+```bash
+# 1. Write the new prompt body to a file
+echo "Updated master pre-prompt body …" > /tmp/master_preprompt_v1.1.0.txt
+
+# 2. Publish to the registry backend (signs with SIGNING_KEY, uploads with PUBLISH_TOKEN)
+python -m prompt_registry publish master_preprompt 1.1.0 /tmp/master_preprompt_v1.1.0.txt
+```
+
+After publish, any platform with `PROMPT_REGISTRY_ENABLED=true` will pick up the new version on
+the next explicit `sync`.  Platforms with the registry disabled continue using their baseline copies
+unchanged.
+
+### Environment variables
+
+| Variable | Secret? | Default | Purpose |
+|---|---|---|---|
+| `PROMPT_REGISTRY_ENABLED` | No | `false` | Master switch; baseline-only when `false` |
+| `PROMPT_REGISTRY_BACKEND` | No | `http` | Storage backend (`http` / `local` / `firestore`) |
+| `PROMPT_REGISTRY_URL` | **Yes** | — | Protected HTTPS URL of the signed manifest |
+| `PROMPT_REGISTRY_TOKEN` | **Yes** | — | Bearer read-token for `PROMPT_REGISTRY_URL` |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | **Yes** | — | Higher-privilege publish credential (author only) |
+| `PROMPT_REGISTRY_SIGNING_KEY` | **Yes** | — | HMAC-SHA256 key for body verification |
+| `PROMPT_REGISTRY_PINS` | No | `{}` | Version pins JSON dict |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | No | `0` | Refresh cadence (0 = on-demand only) |
+| `PROMPT_CACHE_DIR` | No | `output/prompt_cache` | On-disk cache path |
+| `PROMPT_CACHE_KEEP_VERSIONS` | No | `5` | Rollback depth per prompt ID |
+| `PROMPT_MAX_CHARS` | No | `50000` | Max body size enforced by guardrails |
+
+The four secret keys are masked in the GUI Settings tab and raise `SecretWriteError` if a write
+is attempted through the `gui/env_io` path (CONSTRAINT #3).  Edit them by hand in `.env` only.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `get()` always returns baseline | `PROMPT_REGISTRY_ENABLED=false` or no `PROMPT_REGISTRY_URL` | Set both in `.env`, run `sync` |
+| Signature verification failed | `PROMPT_REGISTRY_SIGNING_KEY` mismatch | Confirm the key matches the one used at publish time |
+| `publish` exits non-zero immediately | `PROMPT_REGISTRY_PUBLISH_TOKEN` absent | Set the token in `.env` on the author machine only |
+| `rollback` says "fewer than 2 versions" | Only one version in cache | Run `sync` to fetch the remote manifest, then retry |
+| GUI "Prompts" tab shows all sources as "baseline" | Registry disabled or never synced | Enable registry and click "🔄 Sync" in the Prompts tab |

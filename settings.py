@@ -670,6 +670,105 @@ class Settings(BaseSettings):
         description="Risky ETFs compared in the Dual Momentum cross-sectional filter.",
     )
 
+    # ── Prompt Registry (prompt_registry/ package) ───────────────────────────
+    # Versioned, cryptographically-signed, remotely-updatable store for every
+    # AI-facing instruction.  Default: disabled (baseline-only, zero network).
+    # See docs/PROMPT_REGISTRY_PLAN.md §8 for the full security model.
+    #
+    # CONSTRAINT #3 — the four credential fields are Optional[str] secrets:
+    # they are masked by gui/env_io.read_settings() and raise SecretWriteError
+    # on any GUI write attempt.  Only ENABLED / BACKEND / PINS are in
+    # ALLOWED_KEYS (GUI-writable tunables).
+
+    PROMPT_REGISTRY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch.  False (default) → baseline-only, zero network calls. "
+            "Set True to enable remote manifest fetch and cache."
+        ),
+    )
+    PROMPT_REGISTRY_BACKEND: str = Field(
+        default="http",
+        description=(
+            "Storage backend: 'http' (default, protected HTTPS endpoint), "
+            "'local' (LocalJSONStore from a file path), or 'firestore' (lazy import)."
+        ),
+    )
+    PROMPT_REGISTRY_URL: Optional[str] = Field(
+        default=None,
+        description=(
+            "HTTPS URL of the protected registry manifest endpoint "
+            "(e.g. a private GitHub raw URL or S3 presigned object).  "
+            "SECRET — never GUI-writable, never logged."
+        ),
+    )
+    PROMPT_REGISTRY_TOKEN: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bearer token sent as Authorization header to PROMPT_REGISTRY_URL.  "
+            "Read-only credential; the publish token is separate.  "
+            "SECRET — never GUI-writable, never logged."
+        ),
+    )
+    PROMPT_REGISTRY_PUBLISH_TOKEN: Optional[str] = Field(
+        default=None,
+        description=(
+            "Higher-privilege credential required by 'python -m prompt_registry publish'. "
+            "The platform runtime never needs this.  "
+            "SECRET — never GUI-writable, never logged."
+        ),
+    )
+    PROMPT_REGISTRY_SIGNING_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Shared HMAC-SHA256 key used by signing.verify() to authenticate every "
+            "fetched prompt version.  A failed verification falls through to the "
+            "disk cache → committed baseline (fail-closed).  "
+            "SECRET — never GUI-writable, never logged."
+        ),
+    )
+    PROMPT_REGISTRY_PINS: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "JSON object mapping prompt IDs to pinned version strings "
+            '(e.g. {"master_preprompt": "1.2.0"}).  '
+            "Overrides the remote \'latest\' pointer for each pinned ID.  "
+            "GUI-writable from the Prompts tab (ALLOWED_KEYS); persisted to .env "
+            "via gui/env_io.write_setting."
+        ),
+    )
+    PROMPT_REGISTRY_REFRESH_SECONDS: int = Field(
+        default=0,
+        description=(
+            "0 (default) = fetch only at launch / on explicit sync() call "
+            "(CONSTRAINT #5 — no always-on daemon).  "
+            "Positive value: long-running processes may re-sync on this interval."
+        ),
+    )
+    PROMPT_CACHE_DIR: str = Field(
+        default="output/prompt_cache",
+        description=(
+            "Directory for the signed-version disk cache.  "
+            "Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS "
+            "signed .json files are kept per ID for offline rollback."
+        ),
+    )
+    PROMPT_CACHE_KEEP_VERSIONS: int = Field(
+        default=5,
+        description=(
+            "Number of signed versions to retain on disk per prompt ID.  "
+            "Older versions are pruned by CacheManager.write() so rollback works "
+            "offline up to this depth."
+        ),
+    )
+    PROMPT_MAX_CHARS: int = Field(
+        default=50_000,
+        description=(
+            "Hard upper bound on prompt body size enforced by guardrails.validate_prompt(). "
+            "Bodies exceeding this are rejected as a denial-of-service mitigation."
+        ),
+    )
+
     @field_validator("OUTPUT_DIR")
     @classmethod
     def _ensure_output_dir(cls, value: Path) -> Path:
