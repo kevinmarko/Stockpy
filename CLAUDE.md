@@ -136,6 +136,7 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 - **execution/kill_switch.py** — File-based global kill switch. `KILL_SWITCH_FILE = settings.OUTPUT_DIR / "KILL_SWITCH"` is the sentinel. `GlobalKillSwitch.is_active()` checks file presence; `activate(reason)` writes atomically (write-then-rename); `deactivate()` removes the file. `KillSwitchActiveError(RuntimeError)` is raised by `OrderManager.submit_order_with_idempotency` BEFORE any pre-trade check when the file exists. CLI: `python -m execution.kill_switch --activate/--deactivate/--status`. `FLATTEN_ON_KILL=true` logs a CRITICAL reminder (automatic flattening is a future extension).
 - **execution/risk_gate.py** — Synchronous ten-check pre-trade risk pipeline. `RiskContext` dataclass holds per-call live state (account, open_positions, macro DTO, returns_df, start_of_day_equity, validation_reports, is_premium_sell_strategy, current_prices, timestamp). `PreTradeRiskGate.run_all(intent, context)` short-circuits at the first failure; the tenth check (`max_order_rate_check`) is always last so blocked orders never consume rate-limit budget. Checks in order: (1) max_position_size, (2) portfolio_heat, (3) max_correlation, (4) daily_loss_limit, (5) macro_kill_switch, (6) hmm_regime, (7) stress_scenario, (8) market_hours (NYSE RTH 09:30–16:00 ET via `zoneinfo`), (9) minimum_validation, (10) max_order_rate. Missing context → conservative pass (never blocks on missing data). Thresholds injectable at construction; default to `settings.*` counterparts.
 - **execution/order_manager.py** — `OrderManager` sitting between the signal pipeline and the broker adapter. Responsibilities: (1) kill-switch gate (raises `KillSwitchActiveError` BEFORE dedup); (2) deterministic `client_order_id` via SHA-256 of `(strategy_id, symbol, side, qty, 60s-bucket)` for idempotency; (3) `PreTradeRiskGate.run_all()` — returns `ERROR` OrderResult if blocked; (4) single linear-back-off retry on transient broker errors; (5) `reconcile_state(transactions_store)` — compares broker ground truth vs. internal `TransactionsStore`; logs CRITICAL + fires webhook on drift. `make_client_order_id()` is module-level (usable by callers independently). Dry-run: intercepted in `_submit_with_retry` before broker contact.
+- **execution/queue_builder.py** — **Tier 8 Robinhood execution bridge.** Emits a GATED, DRY-RUN proposed-order queue (`output/execution_queue.json`) for a Claude Code agent that consumes the Robinhood Trading MCP (the headless pipeline cannot call MCP tools). NEVER contacts a broker. Reuses `OrderIntent`/`PreTradeRiskGate.run_all`/`GlobalKillSwitch`/`make_client_order_id` to gate each intent in dry-run. `emit_execution_queue` returns `None` (writes nothing) when `settings.ROBINHOOD_EXECUTION_MODE=off`; `build_execution_queue` computes `allow_place = mode=="live" AND gate_allowed AND not kill_switch_active AND notional-cap-set` (structurally False otherwise); `gate_intent` fails CLOSED on exception. AST-safe function names (no `place_*`/`submit_order`). See the Tier 8 section below.
 - **observability/__init__.py** — Empty package marker.
 - **observability/alerts.py** — `send_alert(level, message, channels=None, extra=None) -> None` dispatches to zero or more output channels: `console` (always active via Python logging), `file` (JSONL at `settings.ALERT_FILE_PATH`), `discord` (`settings.DISCORD_WEBHOOK_URL`), `slack` (`settings.SLACK_WEBHOOK_URL`), `email` (SMTP via `settings.ALERT_SMTP_*`). `_active_channels()` auto-detects configured channels. Discord payload: `{"content": "🚨/⚠️/ℹ️ **[LEVEL]** \`timestamp\`\nmessage"}`. Slack payload: `{"text": "..."}`. Email: MIMEText via `smtplib.SMTP` STARTTLS. All channel failures are caught and logged — a broken webhook must never crash the pipeline. Alert rules: CRITICAL for kill switch, reconciliation drift, broker lost, missing validation report; WARNING for heat >5%, correlation concentration, large slippage; INFO for fills, rebalance. `send_daily_summary(pnl_summary, warnings)` composes a multi-line INFO alert with P&L and warnings.
 - **observability/dashboard.py** — Streamlit dashboard (`streamlit run observability/dashboard.py`). Refresh interval: `settings.DASHBOARD_REFRESH_SECONDS` (default 30). Reads: `output/state_snapshot.json` (live macro + signals), `output/risk_gate_blocks.jsonl` (last 100 blocks), `output/heartbeat.txt` (staleness check), `reports/*_validation_summary.json` (deployability), `quant_platform.db` (trades + positions), and **`cache/account_snapshot.json`** (Robinhood holdings + P&L, via `_load_account_snapshot()`). Panels: kill switch status banner (red/green), macro regime + VIX + HMM risk-on, **Account Holdings & P&L** (Total Equity / Buying Power / Unrealized P&L / Dividends metrics + per-position table with green/red-coloured unrealized P&L via the `_style_holdings()`/`_color_pnl()` pandas `Styler`), strategy P&L, open positions vs. pipeline signals, portfolio heat/gross/net exposure, validation report status, recent closed trades, risk gate block log. Sidebar has a **🔄 Refresh now** button (`st.cache_data.clear()` + `st.rerun()`) for on-demand refresh without waiting for the TTL. `@st.cache_data(ttl=...)` gates all data loads. Auto-refreshes via `time.sleep(N)` + `st.rerun()`. **Streamlit API note:** all `st.dataframe` calls use `width='stretch'` (the `use_container_width` kwarg is deprecated and removed after 2025-12-31).
@@ -1249,3 +1250,59 @@ New step (4b), after the backlog-reminder step and before state persistence: laz
 
 ### No new env vars / dependencies
 Reuses the existing `RH_USERNAME`/`RH_PASSWORD`/`RH_MFA_SECRET` credentials and `robin_stocks` dependency. New cache file: `cache/robinhood_orders.json` (never committed; under the existing `cache/` ignore).
+
+## Tier 8 — Robinhood Execution Bridge (2026-06)
+
+### Overview
+Integrates the **Robinhood Trading MCP** (`https://agent.robinhood.com/mcp/trading`) so the platform can act on its advisory output — **paper/dry-run first**. The MCP is an **LLM-agent tool surface** (consumed by Claude Code: `review_equity_order`, `place_equity_order`, `cancel_equity_order`, plus read tools), NOT a Python SDK, so the headless pipeline **cannot** call it. Integration is therefore a **seam**: the Python pipeline emits a gated, dry-run order queue; a Claude Code agent is the only actor that calls the MCP. Robinhood's blast-radius control is a dedicated, separately-funded **Agentic account**; its dry-run primitive is `review_equity_order` (simulate, no execution).
+
+**Relationship to ADVISORY_ONLY:** independent. `ADVISORY_ONLY` (default `True`) stays the master quarantine of the **Alpaca** surface (`main_orchestrator._execute_broker_orders`). Robinhood gets its own `ROBINHOOD_EXECUTION_MODE` so one flag never arms two brokers. Robinhood-live does **not** require lifting `ADVISORY_ONLY`.
+
+### Two-phase ledger invariant
+*Python writes intents; the human-driven Claude agent writes outcomes.* No component both decides and executes. Headless Python has no MCP access and defines no `place_*`/`submit_order` function (enforced by `TestNoOrderFunctions` + Gravity).
+
+### `execution/queue_builder.py` (NEW — inside the AST-excluded `execution/` zone)
+Reuses the existing decision stack (`OrderIntent`, `PreTradeRiskGate.run_all`, `GlobalKillSwitch`, `make_client_order_id`) to translate actionable advisory `Recommendation`s into a gated, dry-run queue — it **never contacts a broker or the MCP**. Public API (AST-safe names — no `place_*`/`submit_order`/`*_order`):
+- `build_execution_queue(run_result, *, mode, config, now) -> dict` — gated payload.
+- `gate_intent(intent, context, gate=None) -> (allowed, reasons)` — runs `PreTradeRiskGate`; **fails CLOSED** on exception (never marks allowed).
+- `emit_execution_queue(run_result, *, mode=None, output_dir=None) -> Optional[Path]` — atomically writes `output/execution_queue.json`; returns `None` and writes nothing when mode is `off`; never raises (CONSTRAINT #6).
+- `CONFIG` (`min_conviction=0.85`, `strategy_id="advisory"`), `VALID_MODES=("off","review","live")`.
+
+**Intent mapping:** BUY → `qty=null` + capped `target_notional` (equity × `suggested_position_pct`, capped by `ROBINHOOD_MAX_NOTIONAL_PER_ORDER`); the agent computes shares from a live MCP quote. SELL → only for HELD symbols, `qty` = held quantity (a SELL of an unheld symbol is dropped — no fabricated position). HOLD / below-`min_conviction` / not-held-SELL are dropped.
+
+**Safety invariant:** `allow_place = (mode=="live") AND gate_allowed AND (not kill_switch_active) AND (notional cap configured)` — structurally `False` in every non-live posture and whenever the cap is unset or the kill switch is active.
+
+### Staged execution mode (`settings.ROBINHOOD_EXECUTION_MODE`, default `off`)
+| Mode | Behavior |
+|------|----------|
+| `off` (default) | `emit_execution_queue` returns `None`; nothing written; zero behavior change. |
+| `review` (paper/dry-run) | Queue emitted; the agent calls **only** `review_equity_order`; every intent `allow_place=False`. |
+| `live` | `allow_place=True` only when gate passed + kill switch clear + cap set; the agent still requires per-trade human confirmation. |
+
+Rollout is strictly `off → review → live`. A `field_validator` coerces any unknown value → `off` (fail-safe). New setting `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` (default `0.0`; `live` requires it `> 0`).
+
+### Wiring
+`main.py::_run_cycle` calls `emit_execution_queue(result)` in a best-effort, non-fatal block (next to the Tier 1.4 watch-engine block). It only writes a file — never contacts a broker. The kill-switch advisory-pause gate already short-circuits `run_once()`, so a paused cycle emits nothing. `output/` is gitignored, so the queue + receipts are never committed.
+
+### Claude Code execution surface (the only MCP caller)
+- `.claude/skills/robinhood-execution/SKILL.md` — the runbook: verify MCP connected + queue fresh; honor hard stops (kill switch, `mode: off`, stale queue, no confirmed Agentic account); `get_accounts` → confirm Agentic account; **always `review_equity_order` first**; in `review` stop after preview; in `live` place only `allow_place=true` intents, one at a time, with explicit per-order human confirmation, re-checking the kill switch before each placement; append outcomes to `output/execution_receipts.jsonl`.
+- `.claude/commands/rh-execute.md` — `/rh-execute` entry point.
+
+### Setup (operator, local — cannot be done headless)
+`claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mcp/trading`, then `/mcp` → authenticate (OAuth). Fund a dedicated Agentic account. This is interactive and must run in the operator's own Claude Code.
+
+### Guards / audits
+- `tests/test_pipeline_smoke.py::TestNoOrderFunctions` — set unchanged (bridge is in `execution/`); added a positive assertion that `queue_builder` defines no order-submission function.
+- `scripts/preflight_check.py` — new `check_robinhood_execution_mode` (PASS for off/review; **FAIL** for `live` without a notional cap; warning-only PASS for `live` with a cap). NOT in `_ADVISORY_AUTO_SKIP`. `ALL_CHECKS` is now 17 (Gravity step_66 count updated).
+- `gravity/__init__.py` — `step_72_robinhood_execution_bridge_audit` (10 checks): off emits nothing; review never placeable; live+cap+clear-KS allows; kill-switch blocks; cap-unset blocks; drop rules + held-SELL qty; settings default+fail-safe; preflight live-without-cap fails + not auto-skipped; no order defs + main.py wiring + agent skill/command exist.
+
+### Test surface
+- `tests/test_queue_builder.py` (19 tests): mode staging (off→no file, review→file+never-placeable), allow_place gating (live+cap allows, no-cap blocks, kill-switch blocks all, gate-failure fails closed), intent construction + drop rules + held-SELL qty + capped notional + deterministic client_order_id, payload schema + atomic write + emit-failure swallowed, `gate_intent` unit.
+
+### Domain note (follow-up)
+A GUI banner surfacing the Robinhood execution mode (red on `live`) belongs in `gui/app.py` / `gui/panels.py` (Antigravity-owned per the domain split) and is intentionally left as a follow-up for the GUI owner — it is informational, not a guard.
+
+### New env vars / settings
+- `ROBINHOOD_EXECUTION_MODE` — `off` (default) | `review` | `live`.
+- `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` — USD per-order ceiling (default `0.0`; required `> 0` for live).
+New output artifacts (gitignored): `output/execution_queue.json` (Python-written intents), `output/execution_receipts.jsonl` (agent-written outcomes).

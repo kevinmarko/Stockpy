@@ -4347,6 +4347,7 @@ class GravityAIAuditor:
         self.step_69_advisory_agent_audit()
         self.step_70_trade_signals_audit()
         self.step_71_robinhood_orders_audit()
+        self.step_72_robinhood_execution_bridge_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -10044,10 +10045,10 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: total ALL_CHECKS count is 16 (15 from Stage 2 + alpaca_key_rotation_recent from Stage 3)
-            c9 = len(preflight_check.ALL_CHECKS) == 16
+            # Check 9: total ALL_CHECKS count is 17 (16 prior + robinhood_execution_mode from Tier 8)
+            c9 = len(preflight_check.ALL_CHECKS) == 17
             audit["checks"].append({
-                "check": f"ALL_CHECKS has 16 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "check": f"ALL_CHECKS has 17 entries (got {len(preflight_check.ALL_CHECKS)})",
                 "passed": c9,
             })
             all_pass = all_pass and c9
@@ -11157,3 +11158,245 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_71_robinhood_orders_audit"] = audit
+
+    def step_72_robinhood_execution_bridge_audit(self) -> None:
+        """Step 72 — Robinhood execution bridge (execution/queue_builder.py) audit.
+
+        Background
+        ----------
+        Tier 8 seam between the headless advisory pipeline and the Robinhood
+        Trading MCP. The pipeline cannot call MCP tools, so `queue_builder`
+        emits a GATED, DRY-RUN `output/execution_queue.json`; a Claude Code agent
+        is the only actor that calls the MCP. The bridge never contacts a broker.
+
+        Safety invariant: `allow_place` is structurally False unless
+        mode==live AND the risk gate passed AND the kill switch is clear AND a
+        per-order notional cap is configured.
+
+        Checks
+        ------
+        1.  `execution.queue_builder` importable with full surface.
+        2.  mode==`off` → `emit_execution_queue` returns None and writes nothing.
+        3.  mode==`review` → queue built, every intent `allow_place=False`.
+        4.  mode==`live` + cap + clear kill switch + RTH → a gated intent is
+            `allow_place=True`.
+        5.  Kill switch active → all `allow_place=False` and `kill_switch_active`.
+        6.  mode==`live` + cap UNSET → `allow_place=False` (notional_cap_unset).
+        7.  HOLD / below-conviction / not-held-SELL recommendations are dropped;
+            a held SELL carries the held qty.
+        8.  `settings.ROBINHOOD_EXECUTION_MODE` defaults to `off` and coerces
+            unknown values to `off` (fail-safe).
+        9.  preflight `check_robinhood_execution_mode`: live without a cap FAILS;
+            the check is NOT in `_ADVISORY_AUTO_SKIP`.
+        10. ADVISORY-ONLY: no order-submission function names in the bridge
+            source; `.claude` skill + `/rh-execute` command exist; `main.py`
+            wires `emit_execution_queue`.
+        """
+        audit: dict = {
+            "step": "step_72_robinhood_execution_bridge_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import importlib
+            import tempfile
+            from dataclasses import dataclass as _dc, field as _field
+            from datetime import datetime, timezone
+            from pathlib import Path
+            from typing import Dict as _Dict
+
+            mod = importlib.import_module("execution.queue_builder")
+            surface_ok = all(hasattr(mod, n) for n in (
+                "build_execution_queue", "emit_execution_queue", "gate_intent",
+                "CONFIG", "VALID_MODES",
+            ))
+            all_pass = all_pass and surface_ok
+            audit["checks"].append({
+                "check": "execution.queue_builder importable with full surface",
+                "passed": bool(surface_ok),
+            })
+
+            # ── duck-typed advisory shapes ───────────────────────────────
+            @_dc
+            class _R:
+                symbol: str; action: str; conviction: float
+                suggested_position_pct: float = 0.0
+                strategy: str = "x"; rationale: str = "r"
+
+            @_dc
+            class _P:
+                symbol: str; quantity: float; average_cost: float
+                current_price: float; market_value: float; unrealized_pl: float = 0.0
+
+            @_dc
+            class _S:
+                positions: dict; total_equity: float; buying_power: float
+
+            @_dc
+            class _RR:
+                snapshot: object; recommendations: list
+
+            snap = _S({"NVDA": _P("NVDA", 10, 100.0, 120.0, 1200.0, 200.0)}, 10000.0, 3000.0)
+            recs = [
+                _R("AAPL", "BUY", 0.90, suggested_position_pct=0.05),
+                _R("NVDA", "SELL", 0.90),
+                _R("MSFT", "BUY", 0.50, suggested_position_pct=0.05),  # low conv → drop
+                _R("TSLA", "SELL", 0.99),                              # not held → drop
+                _R("IBM", "HOLD", 0.99),                               # HOLD → drop
+            ]
+            rr = _RR(snap, recs)
+            rth = datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc)  # Tue ~1pm ET
+
+            # ── 2: off → emit returns None, nothing written ──────────────
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td)
+                ret = mod.emit_execution_queue(rr, mode="off", output_dir=out, now=rth)
+                c2 = (ret is None and not (out / "execution_queue.json").exists())
+            all_pass = all_pass and c2
+            audit["checks"].append({
+                "check": "mode=off emits nothing (returns None, no file)",
+                "passed": bool(c2),
+            })
+
+            # ── 3: review → built, all allow_place False ─────────────────
+            pr = mod.build_execution_queue(rr, mode="review", now=rth)
+            c3 = (pr["n_intents"] == 2 and all(not i["allow_place"] for i in pr["intents"]))
+            all_pass = all_pass and c3
+            audit["checks"].append({
+                "check": "mode=review builds queue with allow_place=False on every intent",
+                "passed": bool(c3),
+            })
+
+            # ── monkeypatch the notional cap (settings singleton already loaded)
+            _orig_max = mod._max_notional
+            mod._max_notional = lambda: 5000.0
+            try:
+                # ── 4: live + cap + clear KS + RTH → a placeable intent ──
+                pl = mod.build_execution_queue(rr, mode="live", now=rth)
+                c4 = (pl["n_placeable"] >= 1
+                      and any(i["allow_place"] for i in pl["intents"]))
+                all_pass = all_pass and c4
+                audit["checks"].append({
+                    "check": "mode=live + cap + clear kill switch + RTH → allow_place True",
+                    "passed": bool(c4),
+                })
+
+                # ── 5: kill switch active → all False ────────────────────
+                with tempfile.TemporaryDirectory() as td:
+                    from execution.kill_switch import GlobalKillSwitch
+                    ks = GlobalKillSwitch(sentinel_file=Path(td) / "KILL_SWITCH")
+                    ks.activate("audit")
+                    # Patch the builder's kill-switch construction to use our sentinel.
+                    import execution.queue_builder as _qb
+                    _orig_ks = _qb.GlobalKillSwitch
+                    _qb.GlobalKillSwitch = lambda: ks
+                    try:
+                        pk = mod.build_execution_queue(rr, mode="live", now=rth)
+                    finally:
+                        _qb.GlobalKillSwitch = _orig_ks
+                        ks.deactivate()
+                    c5 = (pk["kill_switch_active"] is True
+                          and all(not i["allow_place"] for i in pk["intents"]))
+                all_pass = all_pass and c5
+                audit["checks"].append({
+                    "check": "kill switch active → all allow_place False",
+                    "passed": bool(c5),
+                })
+            finally:
+                mod._max_notional = _orig_max
+
+            # ── 6: live + cap unset → allow_place False (cap guard) ───────
+            mod._max_notional = lambda: 0.0
+            try:
+                pc = mod.build_execution_queue(rr, mode="live", now=rth)
+                c6 = all(
+                    (not i["allow_place"]) and ("notional_cap_unset" in i["gate_reasons"])
+                    for i in pc["intents"]
+                )
+            finally:
+                mod._max_notional = _orig_max
+            all_pass = all_pass and c6
+            audit["checks"].append({
+                "check": "mode=live with no notional cap → allow_place False (cap guard)",
+                "passed": bool(c6),
+            })
+
+            # ── 7: drop rules + held SELL qty ────────────────────────────
+            syms = {i["symbol"]: i for i in pr["intents"]}
+            c7 = (
+                set(syms) == {"AAPL", "NVDA"}
+                and syms["AAPL"]["qty"] is None and syms["AAPL"]["target_notional"] == 500.0
+                and syms["NVDA"]["qty"] == 10.0
+            )
+            all_pass = all_pass and c7
+            audit["checks"].append({
+                "check": "HOLD/low-conviction/not-held-SELL dropped; held SELL carries held qty",
+                "passed": bool(c7),
+            })
+
+            # ── 8: settings default off + fail-safe coercion ─────────────
+            from settings import Settings
+            import os as _os
+            c8a = (Settings().ROBINHOOD_EXECUTION_MODE == "off")
+            _os.environ["ROBINHOOD_EXECUTION_MODE"] = "garbage"
+            try:
+                c8b = (Settings().ROBINHOOD_EXECUTION_MODE == "off")
+            finally:
+                _os.environ.pop("ROBINHOOD_EXECUTION_MODE", None)
+            c8 = c8a and c8b
+            all_pass = all_pass and c8
+            audit["checks"].append({
+                "check": "settings ROBINHOOD_EXECUTION_MODE defaults off; unknown coerces to off",
+                "passed": bool(c8),
+            })
+
+            # ── 9: preflight check — live w/o cap FAILS; not auto-skipped ─
+            import scripts.preflight_check as _pf
+            _os.environ["ROBINHOOD_EXECUTION_MODE"] = "live"
+            _os.environ["ROBINHOOD_MAX_NOTIONAL_PER_ORDER"] = "0"
+            try:
+                import settings as _S
+                importlib.reload(_S)
+                importlib.reload(_pf)
+                res = _pf.check_robinhood_execution_mode()
+                c9 = (res.passed is False
+                      and "robinhood_execution_mode" not in _pf._ADVISORY_AUTO_SKIP)
+            finally:
+                _os.environ.pop("ROBINHOOD_EXECUTION_MODE", None)
+                _os.environ.pop("ROBINHOOD_MAX_NOTIONAL_PER_ORDER", None)
+                importlib.reload(_S)
+                importlib.reload(_pf)
+            all_pass = all_pass and c9
+            audit["checks"].append({
+                "check": "preflight: live without cap FAILS; check not in _ADVISORY_AUTO_SKIP",
+                "passed": bool(c9),
+            })
+
+            # ── 10: ADVISORY-ONLY source + wiring + agent surface ────────
+            src = Path("execution/queue_builder.py").read_text(encoding="utf-8").lower()
+            forbidden = ["submit_order", "place_order", "place_equity_order",
+                         "place_option_order", "buy_order", "sell_order"]
+            present = [kw for kw in forbidden if f"def {kw}" in src]
+            main_src = Path("main.py").read_text(encoding="utf-8")
+            wired = "emit_execution_queue" in main_src
+            skill_ok = Path(".claude/skills/robinhood-execution/SKILL.md").exists()
+            cmd_ok = Path(".claude/commands/rh-execute.md").exists()
+            c10 = (present == [] and wired and skill_ok and cmd_ok)
+            all_pass = all_pass and c10
+            audit["checks"].append({
+                "check": "no order-submission defs in bridge; main.py wires emit; agent skill+command exist",
+                "passed": bool(c10),
+                "detail": f"forbidden={present} wired={wired} skill={skill_ok} cmd={cmd_ok}",
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_72_robinhood_execution_bridge_audit"] = audit
