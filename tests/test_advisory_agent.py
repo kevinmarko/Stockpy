@@ -626,6 +626,25 @@ class TestModuleSurface:
         # Corrupt entries are silently dropped — never raise.
         assert s.backlog == {}
 
+    def test_agent_state_roundtrips_trade_signal_fields(self):
+        # New Tier 6.1 state: conviction history + per-ability debounce flags.
+        s = AgentState(
+            conviction_history={"AAPL": [0.5, 0.6, 0.7]},
+            momentum_alerted={"AAPL": "building"},
+            price_trigger_alerted={"NVDA": "stop"},
+        )
+        rt = AgentState.from_dict(s.to_dict())
+        assert rt.conviction_history == {"AAPL": [0.5, 0.6, 0.7]}
+        assert rt.momentum_alerted == {"AAPL": "building"}
+        assert rt.price_trigger_alerted == {"NVDA": "stop"}
+
+    def test_agent_state_from_dict_drops_corrupt_history(self):
+        # A non-numeric history value must not crash rehydration (CONSTRAINT #6).
+        s = AgentState.from_dict({"conviction_history": {"X": ["bad", 0.5]},
+                                  "momentum_alerted": None})
+        assert "X" not in s.conviction_history
+        assert s.momentum_alerted == {}
+
     def test_config_has_expected_keys(self):
         required = {
             "rth_normal_delay_s", "rth_high_vol_delay_s",

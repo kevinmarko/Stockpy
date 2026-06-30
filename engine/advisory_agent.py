@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -190,6 +190,15 @@ class AgentState:
     # Free-form mtime tracker so the next run can compute time-since-last-event
     # without re-parsing the on-disk file.
     last_summary_iso: str = ""
+    # ── Trade-signal abilities (engine/trade_signals.py) state ──────────
+    # Rolling per-symbol conviction window (oldest first) feeding the
+    # conviction-momentum detector.
+    conviction_history: Dict[str, List[float]] = field(default_factory=dict)
+    # Per-symbol debounce flags so each ability pings once per trend, not per
+    # cycle.  momentum_alerted: symbol -> "building"|"fading"; price_trigger_
+    # alerted: symbol -> "stop"|"target".
+    momentum_alerted: Dict[str, str] = field(default_factory=dict)
+    price_trigger_alerted: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -199,6 +208,9 @@ class AgentState:
             "consecutive_error_cycles": self.consecutive_error_cycles,
             "backlog": {k: v.to_dict() for k, v in self.backlog.items()},
             "last_summary_iso": self.last_summary_iso,
+            "conviction_history": {k: list(v) for k, v in self.conviction_history.items()},
+            "momentum_alerted": dict(self.momentum_alerted),
+            "price_trigger_alerted": dict(self.price_trigger_alerted),
         }
 
     @classmethod
@@ -210,6 +222,25 @@ class AgentState:
                 backlog[str(k).upper()] = BacklogEntry.from_dict(v)
             except Exception as exc:
                 logger.debug("agent_state: dropped corrupt backlog entry %s (%s)", k, exc)
+
+        # Tolerant rehydration of the trade-signal state (CONSTRAINT #6).
+        hist_raw = payload.get("conviction_history", {}) or {}
+        conviction_history: Dict[str, List[float]] = {}
+        for k, v in hist_raw.items():
+            try:
+                conviction_history[str(k).upper()] = [float(x) for x in (v or [])]
+            except Exception as exc:
+                logger.debug("agent_state: dropped corrupt conviction history %s (%s)", k, exc)
+
+        def _str_map(raw: Any) -> Dict[str, str]:
+            out: Dict[str, str] = {}
+            for k, v in (raw or {}).items():
+                try:
+                    out[str(k).upper()] = str(v)
+                except Exception:
+                    continue
+            return out
+
         return cls(
             cycle_count=int(payload.get("cycle_count", 0)),
             last_cycle_iso=str(payload.get("last_cycle_iso", "")),
@@ -217,6 +248,9 @@ class AgentState:
             consecutive_error_cycles=int(payload.get("consecutive_error_cycles", 0)),
             backlog=backlog,
             last_summary_iso=str(payload.get("last_summary_iso", "")),
+            conviction_history=conviction_history,
+            momentum_alerted=_str_map(payload.get("momentum_alerted")),
+            price_trigger_alerted=_str_map(payload.get("price_trigger_alerted")),
         )
 
 
@@ -456,7 +490,6 @@ def update_backlog(
     now_iso = now_utc.isoformat()
 
     # ── (1) INSERT new high-conviction actionable signals ────────────────
-    seen_now: set[str] = set()
     for rec in recommendations or []:
         try:
             action = str(getattr(rec, "action", "")).upper()
@@ -469,8 +502,8 @@ def update_backlog(
         if conv < conv_threshold:
             continue
         key = f"{symbol}:{action}"
-        seen_now.add(key)
-        if key not in state.backlog:
+        existing = state.backlog.get(key)
+        if existing is None:
             state.backlog[key] = BacklogEntry(
                 symbol=symbol,
                 action=action,
@@ -479,19 +512,11 @@ def update_backlog(
                 last_pinged_iso="",
                 reminders_sent=0,
             )
-        # If already in backlog, keep the original first_seen_iso so the
-        # tier escalation reflects time since the operator was FIRST told.
-        # We do update the recorded conviction so dashboard text stays fresh.
         else:
-            existing = state.backlog[key]
-            state.backlog[key] = BacklogEntry(
-                symbol=existing.symbol,
-                action=existing.action,
-                conviction=conv,
-                first_seen_iso=existing.first_seen_iso,
-                last_pinged_iso=existing.last_pinged_iso,
-                reminders_sent=existing.reminders_sent,
-            )
+            # Already in backlog: keep the original first_seen_iso so the tier
+            # escalation reflects time since the operator was FIRST told.  Only
+            # refresh the recorded conviction so dashboard text stays current.
+            state.backlog[key] = replace(existing, conviction=conv)
 
     # ── (2) ACTIONED — drop entries where the operator logged "acted" ────
     # Pre-compute the youngest "acted" timestamp per symbol so the inner
@@ -516,14 +541,18 @@ def update_backlog(
         first_seen = _parse_iso(b.first_seen_iso)
         if first_seen is None:
             continue
-        # (2a) ACTIONED clear — any "acted" log entry AFTER first_seen
-        #      and within the match window resolves the backlog item.
+        # (2a) ACTIONED clear — any "acted" log entry at or after first_seen
+        #      and within `match_window_h` of it resolves the backlog item.
+        #      The lower bound (acted_ts >= first_seen) already prevents a
+        #      stale prior action from clearing a freshly re-surfaced signal;
+        #      the upper bound guards against an implausibly late match.
         acted_ts = youngest_acted_ts.get(b.symbol)
-        if acted_ts is not None and acted_ts >= first_seen:
-            window_end = first_seen + timedelta(hours=match_window_h)
-            if acted_ts <= window_end + timedelta(hours=match_window_h):
-                to_drop.append(key)
-                continue
+        if (
+            acted_ts is not None
+            and first_seen <= acted_ts <= first_seen + timedelta(hours=match_window_h)
+        ):
+            to_drop.append(key)
+            continue
         # (2b) EXPIRED — silent drop after expiry_hours.
         if (now_utc - first_seen).total_seconds() / 3600.0 > expiry_hours:
             to_drop.append(key)
@@ -632,18 +661,16 @@ def apply_reminder_dispatch(
     if now_utc.tzinfo is None:
         now_utc = now_utc.replace(tzinfo=timezone.utc)
     now_iso = now_utc.isoformat()
+    max_reminders = int(CONFIG["backlog_max_reminders"])
     for r in reminders:
         key = f"{r.symbol}:{r.action}"
-        if key not in state.backlog:
+        old = state.backlog.get(key)
+        if old is None:
             continue
-        old = state.backlog[key]
-        state.backlog[key] = BacklogEntry(
-            symbol=old.symbol,
-            action=old.action,
-            conviction=old.conviction,
-            first_seen_iso=old.first_seen_iso,
+        state.backlog[key] = replace(
+            old,
             last_pinged_iso=now_iso,
-            reminders_sent=min(old.reminders_sent + 1, int(CONFIG["backlog_max_reminders"])),
+            reminders_sent=min(old.reminders_sent + 1, max_reminders),
         )
     return state
 

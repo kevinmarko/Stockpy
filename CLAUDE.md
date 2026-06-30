@@ -1158,3 +1158,65 @@ Corrupt or missing file → fresh `AgentState()` on next launch (CONSTRAINT #6).
 - `NTFY_DASHBOARD_URL` (unchanged from Tier 1.4) — when set, every reminder message ends with a deep-link to the GUI for one-click context.
 - Stopping the agent: SIGINT (Ctrl-C) or SIGTERM — the loop catches the signal, finishes the current cycle + reminder dispatch + state save, then exits cleanly.
 - Backlog tuning: drop `backlog_tier_hours` to `(0.5, 2.0, 8.0)` to be more aggressive intraday; raise `backlog_conviction_threshold` to 0.90 to reduce reminder volume.
+
+## Tier 6.1 — Trade-Signal Abilities (Conviction Momentum + Stop/Target Proximity) (2026-06)
+
+### Overview
+Two advisory trading abilities layered on top of the Tier 6 autonomous agent, both derived **purely** from the per-cycle `RunResult` the agent already produces (`recommendations` + Robinhood `AccountSnapshot`). **ADVISORY ONLY** — no order code, no broker import; every output is a `TradeAlert` pushed through the existing `alerting.notify()` ntfy channel (no-op when `NTFY_TOPIC` unset). Pinned by Gravity step 70 check 10 (source-grep for `submit_order`/`place_order`/etc.).
+
+### New module: `engine/trade_signals.py`
+Headless, dependency-free (stdlib only). Public API:
+- **`TradeAlert`** — frozen dataclass: `symbol`, `kind` (`"momentum_building"`|`"momentum_fading"`|`"approaching_stop"`|`"approaching_target"`), `priority` (`"default"`|`"high"`), `title`, `message`, `detail: dict[str,float]` (numeric context; NaN where unavailable, never fabricated).
+- **`update_conviction_history(history, recommendations, *, config) -> dict`** — pure; appends each symbol's current conviction, trims to `momentum_lookback_cycles`, prunes symbols absent from the current universe (history can't grow unbounded), returns a NEW dict (input not mutated).
+- **`detect_conviction_momentum(history, recommendations, alerted, *, config) -> (alerts, new_alerted)`** — Ability A. Edge-triggered per symbol via the `alerted` debounce map (`symbol -> "building"|"fading"`).
+- **`detect_price_triggers(snapshot, recommendations, alerted, *, config) -> (alerts, new_alerted)`** — Ability B. Edge-triggered via `alerted` (`symbol -> "stop"|"target"`).
+- **`dispatch_trade_alerts(alerts, *, dashboard_url=None)`** — mirrors `advisory_agent.dispatch_backlog_reminders` (inline `alerting.notify` import, per-alert try/except, dashboard deep-link append).
+
+### Ability A — Conviction Momentum
+The autonomous agent uniquely holds cross-cycle state; the static backlog only fires at the 0.85 siren. This watches each symbol's conviction *trajectory*:
+- **"building"** (`default` priority) — conviction climbed ≥ `momentum_rising_delta` (0.10) monotonically over the last `momentum_min_cycles` (3), with the latest value in `[momentum_building_floor=0.60, momentum_building_ceiling=0.85)` and action not SELL. An EARLY entry heads-up *below* the backlog siren (so it never double-alerts with the backlog).
+- **"fading"** (`high` priority) — conviction fell ≥ `momentum_falling_delta` (0.15) monotonically on a name whose action is no longer BUY. An EARLY exit warning.
+- A sustained trend pings ONCE; the debounce flag clears when the trend breaks (choppy window) so a later move re-alerts; a direction flip (building→fading) re-fires immediately.
+
+### Ability B — Stop / Target Proximity
+For HELD positions only (`quantity > 0`, `market_value ≥ min_position_value_usd=100`):
+- **Stop** (`high`) — volatility-scaled level `average_cost − stop_atr_multiple*ATR` (ATR from `rec.key_indicators["atr"]`), fallback `average_cost*(1 − stop_fallback_pct=0.08)` when ATR missing. Fires when `price ≤ stop*(1 + stop_proximity_pct=0.02)` — within the band above the stop OR already breached (title says "breached" vs "approaching").
+- **Target** (`default`) — the 30-day forecast price (`rec.forecast`) when usable, fallback `average_cost + target_atr_multiple*ATR`. Fires when `price ≥ target*(1 − target_proximity_pct=0.02)` — at/near the target, including price already past the forecast.
+- Stop is checked before target. No fabricated levels (CONSTRAINT #4): a position with neither a usable ATR nor forecast yields no target alert; dust positions and bad-data rows (price/cost ≤ 0) are skipped.
+
+### `AgentState` additions (`engine/advisory_agent.py`)
+Three new serialized fields (tolerant rehydration — corrupt entries dropped, never raise, CONSTRAINT #6):
+- `conviction_history: Dict[str, List[float]]` — rolling per-symbol conviction window.
+- `momentum_alerted: Dict[str, str]` — Ability A debounce.
+- `price_trigger_alerted: Dict[str, str]` — Ability B debounce.
+
+### Wiring in `main._run_agent_loop`
+New step (4b), after the backlog-reminder step and before state persistence: lazily imports the four `engine.trade_signals` callables; updates `state.conviction_history`; runs both detectors (Ability B reads `result.snapshot`); concatenates and dispatches the alerts; advances the debounce maps on `state`. Wrapped in its own try/except so a failure degrades the cycle gracefully without affecting cadence or backlog.
+
+### `engine/advisory_agent.py` refinements (same task)
+- Removed the dead `seen_now` set in `update_backlog` (computed, never read).
+- Fixed a doubled match-window in the "actioned" backlog clear: the upper bound was `first_seen + 2*match_window_h` (48 h) instead of the intended `+ match_window_h` (24 h).
+- Replaced three hand-rolled `BacklogEntry` reconstructions with `dataclasses.replace`.
+
+### CONFIG (`engine.trade_signals.CONFIG`)
+| Key | Default | Purpose |
+|---|---|---|
+| `momentum_lookback_cycles` | 5 | Rolling conviction window length |
+| `momentum_min_cycles` | 3 | Min points before a trend is judged |
+| `momentum_rising_delta` | 0.10 | Rise across window to flag "building" |
+| `momentum_building_floor` | 0.60 | Min conviction for a "building" flag |
+| `momentum_building_ceiling` | 0.85 | Upper bound (= backlog siren; avoids double-alert) |
+| `momentum_falling_delta` | 0.15 | Drop across window to flag "fading" |
+| `stop_atr_multiple` | 2.5 | ATR stop distance below cost |
+| `stop_fallback_pct` | 0.08 | Stop distance when ATR missing |
+| `stop_proximity_pct` | 0.02 | Band above stop that triggers |
+| `target_atr_multiple` | 3.0 | ATR target distance above cost (no-forecast fallback) |
+| `target_proximity_pct` | 0.02 | Band below target that triggers |
+| `min_position_value_usd` | 100.0 | Dust-position floor |
+
+### Test surface
+- **`tests/test_trade_signals.py`** (41 tests, 5 classes): `TestConvictionHistory` (append/trim/prune/immutability/NaN-skip), `TestConvictionMomentum` (building once+debounce, ceiling/floor/min-rise suppression, SELL block, not-enough-history, fading HIGH, BUY block, trend-reset clears debounce, direction flip re-fires, immutability), `TestPriceTriggers` (ATR stop, breach, % fallback, forecast target, already-exceeded, ATR target fallback, midrange no-trigger, debounce, dust/zero-qty/bad-data filtering, no-rec % stop, empty/missing positions, immutability), `TestDispatch` (empty no-op, one-per-alert, dashboard URL, broken-notify swallowed, priority forwarded), `TestModuleSurface` (CONFIG keys, frozen dataclass, no order keywords).
+- **`tests/test_advisory_agent.py`** — extended with `test_agent_state_roundtrips_trade_signal_fields` and `test_agent_state_from_dict_drops_corrupt_history`.
+
+### Gravity step 70 (`step_70_trade_signals_audit`)
+10 checks: module importable; CONFIG keys; history append/trim/prune/immutability; building once+debounce; ceiling suppression; fading HIGH; ATR stop HIGH; forecast target + debounce; dust ignored (CONSTRAINT #4); ADVISORY-ONLY source + main.py wiring + test file exists.
