@@ -1,0 +1,32 @@
+ticker,company,delisting_date,reason
+LEH,Lehman Brothers,2008-09-17,Bankruptcy
+BSC,Bear Stearns,2008-05-30,Acquired by JPMorgan Chase
+ENRNQ,Enron,2001-11-30,Bankruptcy / Accounting Scandal
+WCOEQ,WorldCom,2002-07-30,Bankruptcy / Scandal
+WAMUQ,Washington Mutual,2008-09-25,Receiver/Bankruptcy
+MER,Merrill Lynch,2009-01-01,Acquired by Bank of America
+CFC,Countrywide Financial,2008-07-01,Acquired by Bank of America
+EK,Eastman Kodak,2010-12-21,Removed from index / restructuring
+RAD,Rite Aid,2023-10-16,Bankruptcy
+SOLY,Solera Holdings,2016-03-03,Acquired
+FIT,Fitbit,2021-01-14,Acquired by Google
+ALTR,Altera,2015-12-28,Acquired by Intel
+CELG,Celgene,2019-11-20,Acquired by Bristol Myers Squibb
+MON,Monsanto,2018-06-07,Acquired by Bayer
+YHOO,Yahoo,2017-06-16,Acquired by Verizon
+S,Sprint,2020-04-01,Acquired by T-Mobile
+TSO,Tesoro,2017-06-01,Acquired by Andeavor
+RAX,Rackspace,2016-11-03,Acquired
+SCSS,Sealy,2013-03-18,Acquired
+SOLR,GT Advanced Technologies,2014-10-06,Bankruptcy
+NYX,NYSE Euronext,2013-11-13,Acquired by Intercontinental Exchange
+DELL,Dell Inc,2013-10-29,Taken Private
+HNZ,H.J. Heinz Company,2013-06-07,Taken Private / Merger
+LIFE,Life Technologies,2014-02-03,Acquired by Thermo Fisher Scientific
+FRX,Forest Laboratories,2014-07-01,Acquired by Actavis
+COV,Covidien,2015-01-26,Acquired by Medtronic
+SAFM,Sanderson Farms,2022-07-22,Acquired
+TWTR,Twitter,2022-10-27,Acquired by Elon Musk
+ATVI,Activision Blizzard,2023-10-13,Acquired by Microsoft
+VMW,VMware,2023-11-22,Acquired by Broadcom
+FTR,Frontier Communications,2020-05-04,Bankruptcy/Restructuring
