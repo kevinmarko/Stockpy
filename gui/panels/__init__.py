@@ -2287,6 +2287,139 @@ def _render_strategy_health() -> None:
                 st.caption(f"Options-selling strategy — tail-scenario stress gate: {stress_label}")
 
 
+# ===========================================================================
+# Tier 9 Scope 2 — AI Gravity audit runner section (Safety tab)
+# ===========================================================================
+
+def _render_gravity_ai_runner_section() -> None:
+    """Render the Safety-tab section that surfaces ``engine.gravity_ai_runner``.
+
+    Four render paths driven by :func:`gui.gravity_ai_panel.runner_status`:
+
+    * ``disabled`` — master switch off.  Renders an info caption with the
+      ``.env`` knob needed to enable; no button.
+    * ``missing_key`` — switch on but neither key set.  Renders a warning
+      + a disabled button so the seam is visible.
+    * ``partial_key`` — exactly one of the two keys set.  Renders a
+      yellow caution + an enabled button (the runner soft-fails the
+      missing side and records it as ``skipped``).
+    * ``ready`` — both keys + switch on.  Renders the full panel:
+      health colour band + 5-metric KPI strip + "▶️ Run AI Gravity audit"
+      button + per-step table with Claude vs Gemini badges +
+      raw-report expander.
+
+    Soft-fail (CONSTRAINT #6): every code path that touches the runner
+    or the on-disk report is wrapped in try/except.  A missing /
+    corrupt / wrong-shape report renders as the "no audit yet"
+    sentinel — never an exception bubble.
+    """
+    st.markdown("### 🤖 AI Gravity audit — Claude auditor + Gemini cross-checker")
+    try:
+        from gui.gravity_ai_panel import (
+            health_caption,
+            load_audit_report,
+            runner_status,
+            step_rows,
+            summarise_run,
+        )
+    except Exception as exc:  # pragma: no cover - import-time degrade
+        st.caption(f"(AI Gravity helpers unavailable: {exc})")
+        return
+
+    status = runner_status(settings)
+
+    if status == "disabled":
+        st.caption(
+            "AI Gravity runner is off.  Set `GRAVITY_AI_RUNNER_ENABLED=true` plus "
+            "`ANTHROPIC_API_KEY` AND `GEMINI_API_KEY` in `.env`, then relaunch the "
+            "GUI.  The structural Python-only Gravity audit above is unaffected."
+        )
+        return
+
+    if status == "missing_key":
+        st.warning(
+            "`GRAVITY_AI_RUNNER_ENABLED=true` but neither `ANTHROPIC_API_KEY` nor "
+            "`GEMINI_API_KEY` is set — provide at least one and relaunch."
+        )
+        st.button(
+            "▶️ Run AI Gravity audit",
+            key="gravity_ai_run_btn",
+            disabled=True,
+            width="stretch",
+        )
+        return
+
+    if status == "partial_key":
+        st.warning(
+            "Only one provider key is configured.  The runner will record the "
+            "missing side as `skipped` — disagreement detection requires both."
+        )
+
+    # status ∈ {"ready", "partial_key"}
+    report = load_audit_report()
+    summary = summarise_run(report)
+
+    # Health colour band.
+    caption = health_caption(summary)
+    if summary.health == "fail":
+        st.error(caption)
+    elif summary.health == "warn":
+        st.warning(caption)
+    elif summary.health == "clean":
+        st.success(caption)
+    else:
+        st.info(caption)
+
+    # KPI strip.
+    cols = st.columns(5)
+    cols[0].metric("Steps", summary.total_steps)
+    cols[1].metric("Claude ✅", summary.claude_passed,
+                   delta=(-summary.claude_failed) if summary.claude_failed else None,
+                   delta_color="inverse")
+    cols[2].metric("Gemini ✅", summary.gemini_passed,
+                   delta=(-summary.gemini_failed) if summary.gemini_failed else None,
+                   delta_color="inverse")
+    cols[3].metric("⚠ Disagreements", summary.disagreements)
+    cols[4].metric("Last run (UTC)", summary.generated_at[:19] if summary.generated_at else "—")
+
+    if st.button("▶️ Run AI Gravity audit (Claude + Gemini)",
+                 key="gravity_ai_run_btn", type="primary", width="stretch"):
+        with st.spinner("Calling Claude + Gemini for each of the 7 audit steps…"):
+            try:
+                from engine.gravity_ai_runner import run_all, write_report  # noqa: PLC0415
+
+                fresh = run_all()
+                write_report(fresh)
+                # Refresh the loaded view from disk so the table updates in-place.
+                report = load_audit_report()
+                summary = summarise_run(report)
+            except Exception as exc:
+                st.error(f"AI Gravity runner failed: {exc}")
+
+    rows = step_rows(report)
+    if rows:
+        df = pd.DataFrame(rows)
+        # Friendlier column titles for the operator-facing table.
+        df = df.rename(columns={
+            "step_number": "Step",
+            "step_title": "Title",
+            "claude": "Claude",
+            "gemini": "Gemini",
+            "disagreement": "⚠ Disagree",
+            "score_claude": "Score (C)",
+            "score_gemini": "Score (G)",
+            "notes": "Notes",
+        })
+        st.dataframe(df, width="stretch", hide_index=True)
+        with st.expander("🔬 Full AI audit JSON"):
+            st.json(report)
+    else:
+        st.caption(
+            "No AI Gravity audit yet — click ▶️ above to run all 7 steps.  "
+            "Results persist to `output/gravity_ai_audit.json`."
+        )
+
+
 def render_gravity_audit() -> None:
     """Render the Safety tab: Circuit Breakers + Dependency Map + Gravity audit.
 
@@ -2311,6 +2444,8 @@ def render_gravity_audit() -> None:
     _render_circuit_breaker_dashboard()
     st.divider()
     _render_dependency_map()
+    st.divider()
+    _render_gravity_ai_runner_section()
     st.divider()
 
     st.markdown("### 🧪 Gravity AI Review Suite")
