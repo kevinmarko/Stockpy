@@ -4350,6 +4350,8 @@ class GravityAIAuditor:
         self.step_72_robinhood_execution_bridge_audit()
         # Stage 8 — Prompt Registry security + wiring audit
         self.step_73_prompt_registry_audit()
+        # Tier 9 — Claude + Gemini commentary integration audit
+        self.step_74_llm_commentary_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -11697,3 +11699,172 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_73_prompt_registry_audit"] = audit
+
+    def step_74_llm_commentary_audit(self) -> None:
+        """Step 74 — Tier 9 Claude + Gemini commentary integration audit (2026-06-30).
+
+        Eight checks (from /root/.claude/plans/let-s-plan-out-this-zippy-liskov.md §8):
+
+        1.  ``engine/advisory.py`` top-of-file imports contain neither
+            ``import anthropic`` nor ``import google`` (SDK reach is lazy only).
+        2.  ``settings.LLM_COMMENTARY_ENABLED`` default is ``False``
+            (CONSTRAINT: operator opt-in).
+        3.  ``gui/env_io.SECRET_KEYS`` contains BOTH ``ANTHROPIC_API_KEY``
+            and ``GEMINI_API_KEY``; neither is in ``ALLOWED_KEYS``
+            (CONSTRAINT #3).
+        4.  ``llm.commentary`` source contains ``try:`` + ``return None`` —
+            soft-fail contract (CONSTRAINT #6).
+        5.  Both dispatch sites (``watch_engine.dispatch_watch_alerts`` and
+            ``engine.trade_signals.dispatch_trade_alerts``) preserve the
+            template ``msg`` base before any LLM augmentation
+            (append-never-replace).
+        6.  ``Recommendation.llm_rationale`` exists with default ``None``
+            (so LLM output never replaces deterministic ``rationale``).
+        7.  No call site assigns LLM output to a numeric pipeline scalar
+            (``score``, ``conviction``, ``suggested_position_pct``,
+            ``forecast``, ``key_indicators``) — source-grep
+            ``llm/commentary.py`` for assignment patterns to those names
+            (CONSTRAINT #4).
+        8.  ``tests/test_llm_providers.py`` AND
+            ``tests/test_advisory_llm_enrichment.py`` exist.
+        """
+        from pathlib import Path as _Path
+        import re as _re
+
+        audit: dict = {
+            "step": "step_74_llm_commentary_audit",
+            "description": "Tier 9 Claude + Gemini commentary integration audit",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parents[1]
+
+        try:
+            # ── Check 1: advisory.py has no top-level anthropic/google import ─
+            advisory_src = (repo_root / "engine" / "advisory.py").read_text(encoding="utf-8")
+            top_level_lines = [
+                ln for ln in advisory_src.splitlines()
+                if (not ln.startswith(" ") and not ln.startswith("\t"))
+            ]
+            top_joined = "\n".join(top_level_lines)
+            c1 = (
+                "import anthropic" not in top_joined
+                and "from anthropic" not in top_joined
+                and "import google" not in top_joined
+                and "from google" not in top_joined
+            )
+            audit["checks"].append({
+                "check": "engine/advisory.py has NO top-level anthropic/google imports (lazy only)",
+                "passed": bool(c1),
+            })
+            all_pass = all_pass and c1
+
+            # ── Check 2: settings.LLM_COMMENTARY_ENABLED default is False ────
+            from settings import Settings as _Settings
+            _fresh = _Settings()
+            c2 = getattr(_fresh, "LLM_COMMENTARY_ENABLED", True) is False
+            audit["checks"].append({
+                "check": "settings.LLM_COMMENTARY_ENABLED default is False (opt-in)",
+                "passed": bool(c2),
+                "detail": f"default={getattr(_fresh, 'LLM_COMMENTARY_ENABLED', '<missing>')}",
+            })
+            all_pass = all_pass and c2
+
+            # ── Check 3: SECRET_KEYS / ALLOWED_KEYS classification ───────────
+            from gui.env_io import ALLOWED_KEYS as _AK, SECRET_KEYS as _SK
+            c3a = "ANTHROPIC_API_KEY" in _SK and "GEMINI_API_KEY" in _SK
+            c3b = "ANTHROPIC_API_KEY" not in _AK and "GEMINI_API_KEY" not in _AK
+            c3 = c3a and c3b
+            audit["checks"].append({
+                "check": "ANTHROPIC_API_KEY + GEMINI_API_KEY are SECRET_KEYS only (CONSTRAINT #3)",
+                "passed": bool(c3),
+            })
+            all_pass = all_pass and c3
+
+            # ── Check 4: llm/commentary.py contains try: + return None ───────
+            commentary_src = (repo_root / "llm" / "commentary.py").read_text(encoding="utf-8")
+            c4 = "try:" in commentary_src and "return None" in commentary_src
+            audit["checks"].append({
+                "check": "llm/commentary.py implements soft-fail (try: + return None) per CONSTRAINT #6",
+                "passed": bool(c4),
+            })
+            all_pass = all_pass and c4
+
+            # ── Check 5: dispatch sites preserve template msg as base ────────
+            watch_src = (repo_root / "watch_engine.py").read_text(encoding="utf-8")
+            trade_src = (repo_root / "engine" / "trade_signals.py").read_text(encoding="utf-8")
+            c5_watch = (
+                "msg = alert.message" in watch_src
+                and 'msg = f"{msg}\\n\\n📝' in watch_src
+            )
+            c5_trade = (
+                "msg = a.message" in trade_src
+                and 'msg = f"{msg}\\n\\n📝' in trade_src
+            )
+            c5 = c5_watch and c5_trade
+            audit["checks"].append({
+                "check": "Both dispatch sites APPEND (never replace) LLM body to template msg",
+                "passed": bool(c5),
+                "detail": f"watch_engine_ok={c5_watch} trade_signals_ok={c5_trade}",
+            })
+            all_pass = all_pass and c5
+
+            # ── Check 6: Recommendation.llm_rationale exists, default None ──
+            from engine.advisory import Recommendation as _Rec
+            from dataclasses import fields as _fields
+            llm_field = next((f for f in _fields(_Rec) if f.name == "llm_rationale"), None)
+            c6 = llm_field is not None and llm_field.default is None
+            audit["checks"].append({
+                "check": "Recommendation.llm_rationale field exists with default None",
+                "passed": bool(c6),
+            })
+            all_pass = all_pass and c6
+
+            # ── Check 7: llm/commentary.py never assigns to numeric fields ──
+            # Source-grep for assignment patterns that would route LLM output
+            # into a deterministic numeric scalar.  CONSTRAINT #4 forbids it.
+            forbidden = [
+                r"\bscore\s*=\s*result\.",
+                r"\bconviction\s*=\s*result\.",
+                r"\bsuggested_position_pct\s*=\s*result\.",
+                r"\bforecast\s*=\s*result\.",
+                r"\bkey_indicators\s*=\s*result\.",
+                r"\bscore\s*=\s*out\.",
+                r"\bconviction\s*=\s*out\.",
+            ]
+            forbidden_hit = next(
+                (p for p in forbidden if _re.search(p, commentary_src)),
+                None,
+            )
+            c7 = forbidden_hit is None
+            audit["checks"].append({
+                "check": "llm/commentary.py never assigns LLM output to numeric pipeline scalar",
+                "passed": bool(c7),
+                "detail": f"forbidden_pattern_matched={forbidden_hit}",
+            })
+            all_pass = all_pass and c7
+
+            # ── Check 8: required test files exist ──────────────────────────
+            t1 = (repo_root / "tests" / "test_llm_providers.py").exists()
+            t2 = (repo_root / "tests" / "test_advisory_llm_enrichment.py").exists()
+            t3 = (repo_root / "tests" / "test_llm_commentary.py").exists()
+            t4 = (repo_root / "tests" / "test_alert_dispatch_llm.py").exists()
+            t5 = (repo_root / "tests" / "test_gui_env_io_secret_llm_keys.py").exists()
+            c8 = t1 and t2 and t3 and t4 and t5
+            audit["checks"].append({
+                "check": "All five Tier-9 test files exist",
+                "passed": bool(c8),
+                "detail": f"providers={t1} enrichment={t2} commentary={t3} alerts={t4} secrets={t5}",
+            })
+            all_pass = all_pass and c8
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_74_llm_commentary_audit"] = audit

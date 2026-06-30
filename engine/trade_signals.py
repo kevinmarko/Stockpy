@@ -42,6 +42,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -447,6 +449,32 @@ def dispatch_trade_alerts(
     for a in alerts:
         try:
             msg = a.message
+            # Tier 9 — append (never replace) LLM-generated commentary when
+            # the master switch is on AND a key is configured.  Mirrors the
+            # watch_engine.dispatch_watch_alerts pattern; soft-fail to the
+            # deterministic template message.  CONSTRAINT #4 + #6.
+            if getattr(settings, "LLM_COMMENTARY_ENABLED", False):
+                try:
+                    from llm.commentary import generate_alert_commentary  # noqa: PLC0415
+
+                    enrich = generate_alert_commentary(
+                        alert_skeleton={
+                            "symbol": a.symbol,
+                            "kind": a.kind,
+                            "priority": a.priority,
+                            "trigger_detail": a.detail,
+                            "template": a.message,
+                        },
+                        context={},
+                    )
+                    if enrich is not None:
+                        msg = f"{msg}\n\n📝 {enrich.body}"
+                except Exception as exc:
+                    logger.debug(
+                        "LLM trade-alert augmentation soft-failed for %s: %s",
+                        a.symbol,
+                        exc,
+                    )
             if dashboard_url:
                 msg = f"{msg}\n\n📊 Dashboard: {dashboard_url}"
             notify(title=a.title, message=msg, priority=a.priority)

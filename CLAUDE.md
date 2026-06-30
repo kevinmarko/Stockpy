@@ -1307,6 +1307,67 @@ A GUI banner surfacing the Robinhood execution mode (red on `live`) belongs in `
 - `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` — USD per-order ceiling (default `0.0`; required `> 0` for live).
 New output artifacts (gitignored): `output/execution_queue.json` (Python-written intents), `output/execution_receipts.jsonl` (agent-written outcomes).
 
+## Tier 9 — Claude + Gemini Commentary Integration (`llm/`, 2026-06)
+
+### Overview
+Two specialised commentary agents that ENRICH (never replace) the deterministic template narrative. **Claude** (Anthropic) generates analyst-grade per-symbol "why" prose for advisory recommendations. **Gemini** (Google) generates concise alert-text bodies for ntfy push notifications. ADVISORY-ONLY: LLM output flows into the `rationale` string, the new `Recommendation.llm_rationale` dict, and ntfy `message` bodies — never into numeric pipeline scalars (`score`, `conviction`, `suggested_position_pct`, `forecast`, `key_indicators`). Pure routing (Claude=rationale, Gemini=alerts, no cross-check). On-demand cadence only — `evaluate()` never calls an LLM in-cycle.
+
+### Package layout (`llm/`)
+- **`llm/schemas.py`** — Pydantic v2 schemas. `AnalystRationale` (headline≤120 chars, why_now 2-3 sentences ≤800 chars, 1-3 key_risks ≤140 chars each, invalidation ≤240 chars). `AlertCommentary` (body ≤280 chars to fit ntfy push limits, urgency_hint `low|normal|high` advisory-only — never overrides `WatchAlert.priority` / `TradeAlert.priority`).
+- **`llm/providers.py`** — `LLMProvider` ABC + `ClaudeProvider` (Anthropic Messages API with `tool_use` structured-output forcing; single emitter tool whose `input_schema` is `schema_model.model_json_schema()`; `tool_choice={"type":"tool","name":"emit_structured_output"}` for strict JSON) + `GeminiProvider` (Google `google.genai` with `response_mime_type='application/json'` + `response_schema=schema_model`). **Both SDKs lazy-imported inside provider `__init__`** so the package costs zero when the master switch is off; missing SDK → `_client=None` → all calls return `None` silently. Hard 8 s timeout via `settings.LLM_COMMENTARY_TIMEOUT_SECONDS`. Every method wraps the call+parse in try/except; any exception → `None` (CONSTRAINT #6).
+- **`llm/router.py`** — `get_rationale_provider()` / `get_alert_provider()`. Pure routing — Claude for rationale, Gemini for alerts. Returns `None` when the master switch is off, when the relevant API key is unset, or when the operator pinned the provider to `"none"`.
+- **`llm/commentary.py`** — public entry points `generate_analyst_rationale(rec_skeleton, context) -> Optional[AnalystRationale]` and `generate_alert_commentary(alert_skeleton, context) -> Optional[AlertCommentary]`. Each: derive cache key → check cache → on miss call provider → validate via schema → store cache → return. Baseline system prompts inlined; when `PROMPT_REGISTRY_ENABLED=True`, `_registry_prompt()` pulls `llm.rationale.system` / `llm.alert.system` from the signed registry (falls back to the baseline on any registry failure).
+- **`llm/cache.py`** — JSON-file day-bucketed cache at `output/llm_commentary_cache.json` (gitignored). Key = `sha256(provider + schema_name + symbol + iso_date_utc + score_bucket + action)` where `score_bucket = floor(score/5)` so small numeric jitter doesn't invalidate but a meaningful move (47→52) does. TTL = end of UTC trading day. Atomic write via temp-rename. Corrupt JSON / missing file → empty dict silently (CONSTRAINT #6).
+
+### `engine/advisory.py` integration
+- **`Recommendation.llm_rationale: Optional[Dict[str, Any]] = None`** — new field at the end of the frozen dataclass. Typed as `Dict[str, Any]` (not the pydantic model) so `engine/advisory.py` never imports `llm.schemas` — keeps the SDK reach lazy. Default `None` keeps positional construction stable.
+- **`_build_rationale()` (line 904) stays template-pure.** No LLM call from `evaluate()`. Per-cycle behavior is byte-identical to pre-Tier-9.
+- **New sibling `enrich_with_llm_rationale(rec, context=None) -> Recommendation`** at the end of `engine/advisory.py`. Calls `llm.commentary.generate_analyst_rationale(asdict(rec), ...)` and on success returns `dataclasses.replace(rec, llm_rationale=result.model_dump())`. On `None` (or any exception) returns `rec` unchanged — the deterministic `rec.rationale` template text is ALWAYS preserved. Used by the CLI and any future GUI button.
+
+### Alert dispatch integration (`watch_engine.dispatch_watch_alerts`, `engine/trade_signals.dispatch_trade_alerts`)
+- Both sites APPEND-NEVER-REPLACE: after `msg = alert.message` (line 736 in `watch_engine`) / `msg = a.message` (line 449 in `trade_signals`), a `if getattr(settings, "LLM_COMMENTARY_ENABLED", False):` guard lazily imports `llm.commentary.generate_alert_commentary` and `msg = f"{msg}\n\n📝 {enrich.body}"` on success. Soft-fail = template message unchanged. The deterministic `alert.priority` is the source of truth for ntfy dispatch and is never overridden by `AlertCommentary.urgency_hint`.
+
+### CLI: `engine/llm_commentary.py`
+`python -m engine.llm_commentary SYMBOL [--alert]`:
+- Default: builds a `Recommendation` via `engine.advisory.evaluate(...)`, calls `enrich_with_llm_rationale`, pretty-prints both the deterministic template paragraph and the `AnalystRationale` fields (or "LLM commentary unavailable" on `None`). Exit 0 on soft-fail.
+- `--alert`: constructs a synthetic `WatchAlert` and runs the real `dispatch_watch_alerts` path with `alerting.notify` stubbed to capture (no ntfy traffic), so the operator can preview the augmented body.
+
+### New env vars / settings
+- **`LLM_COMMENTARY_ENABLED: bool = False`** — master switch, default `False`. When off, ZERO SDK imports and ZERO network calls.
+- **`LLM_COMMENTARY_RATIONALE_PROVIDER: str = "claude"`** — `"claude"` | `"none"`.
+- **`LLM_COMMENTARY_ALERT_PROVIDER: str = "gemini"`** — `"gemini"` | `"none"`.
+- **`LLM_COMMENTARY_CACHE_PATH: str = "output/llm_commentary_cache.json"`** — JSON cache path (gitignored).
+- **`LLM_COMMENTARY_TIMEOUT_SECONDS: int = 8`** — hard wall-clock per provider call.
+- **`ANTHROPIC_API_KEY: Optional[str] = None`** — Claude key. **In `gui/env_io.SECRET_KEYS` only — NEVER GUI-writable (CONSTRAINT #3).**
+- **`GEMINI_API_KEY: Optional[str] = None`** — Gemini key. **In `gui/env_io.SECRET_KEYS` only — NEVER GUI-writable (CONSTRAINT #3).**
+- The three `LLM_COMMENTARY_*` toggles (master switch + two provider names) are in `gui/env_io.ALLOWED_KEYS` so the Strategy Matrix tab can flip them without touching credentials.
+
+### Test surface
+- **`tests/test_llm_providers.py`** (25 tests) — fake `anthropic` / `google.genai` modules in `sys.modules`; tool_use happy path; missing tool_use block; schema-mismatched payload; network exception; timeout; missing SDK → `_client=None` → call returns `None`. Soft-fail contract: every provider's `call_structured` NEVER raises.
+- **`tests/test_llm_commentary.py`** (22 tests) — cache key determinism (same UTC day + same score bucket → same key; bucket boundary at 47/52 invalidates; provider/action/date changes invalidate); cache put/get round-trip; corrupt JSON → empty; provider returns valid → schema-validated; second call hits cache (`call_count == 1`); `LLM_COMMENTARY_ENABLED=False` → provider NEVER instantiated; provider returns `None`/raises → returns `None`; corrupt cached payload → re-fetched.
+- **`tests/test_advisory_llm_enrichment.py`** (10 tests) — `Recommendation.llm_rationale` default `None` and field accepts dict; dataclass remains frozen; master switch off → `enrich_with_llm_rationale` returns rec unchanged (identity); valid provider → `llm_rationale` populated AND deterministic `rationale` PRESERVED; provider returns `None` or raises → rec unchanged; numeric-fields invariant (every numeric field byte-identical after enrichment, only `llm_rationale` changed); `engine/advisory.py` top-of-file has no `import anthropic` / `import google`.
+- **`tests/test_alert_dispatch_llm.py`** (8 tests) — both `dispatch_watch_alerts` and `dispatch_trade_alerts`: master switch off → template msg unchanged; LLM success → msg starts with template AND contains `\n\n📝 ...`; LLM `None` → msg unchanged; commentary raises → dispatch still fires with template msg; priority always comes from the alert, never from `AlertCommentary.urgency_hint`.
+- **`tests/test_gui_env_io_secret_llm_keys.py`** (8 tests) — `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` are in `SECRET_KEYS` AND NOT in `ALLOWED_KEYS`; three toggles are in `ALLOWED_KEYS`; `write_setting("ANTHROPIC_API_KEY", "x")` raises `SecretWriteError`.
+
+### Gravity step 74 (`step_74_llm_commentary_audit`)
+8 checks: (1) `engine/advisory.py` top-level imports have no anthropic/google reach (lazy only); (2) `settings.LLM_COMMENTARY_ENABLED` default is `False`; (3) both API keys are `SECRET_KEYS` only (CONSTRAINT #3); (4) `llm/commentary.py` contains `try:` + `return None` (CONSTRAINT #6); (5) both dispatch sites preserve the template `msg` base then APPEND with the 📝 marker (append-never-replace); (6) `Recommendation.llm_rationale` field exists with default `None`; (7) `llm/commentary.py` never assigns LLM output to a numeric pipeline scalar (regex source-grep over forbidden patterns — CONSTRAINT #4); (8) all five Tier-9 test files exist.
+
+### Critical invariants (must never regress)
+- **No fabricated metrics (CONSTRAINT #4)** — LLM output flows ONLY into `rationale` strings, `llm_rationale` dict, and ntfy `message` bodies. Never into `score`, `conviction`, `suggested_position_pct`, `forecast`, `key_indicators`, or any `state_snapshot.json` numeric field. Enforced by Gravity step 74 check 7.
+- **Dead-letter resilience (CONSTRAINT #6)** — every provider/commentary/enrich path is wrapped in try/except. Any failure (network, auth, timeout, ValidationError, parse error, missing SDK) returns `None`/unchanged-rec. Zero exceptions propagate past `llm/commentary.py`. Enforced by Gravity step 74 check 4.
+- **ADVISORY_ONLY preserved** — LLM cannot cause an order. The broker quarantine in `main_orchestrator._execute_broker_orders` is untouched. The new commentary surface adds no order-submission code.
+- **Operator opt-in** — `LLM_COMMENTARY_ENABLED=False` by default. When False, ZERO SDK imports and ZERO network calls (providers' `__init__` is lazy). Enforced by Gravity step 74 check 2.
+- **No GUI-writable secrets (CONSTRAINT #3)** — both API keys live in `gui/env_io.SECRET_KEYS` only. `write_setting("ANTHROPIC_API_KEY", ...)` raises `SecretWriteError`. Enforced by Gravity step 74 check 3.
+- **No top-level LLM SDK reach** in `engine/advisory.py` — all `anthropic` / `google.genai` imports are lazy (inside provider `__init__` or function bodies). Enforced by Gravity step 74 check 1 AND `tests/test_advisory_llm_enrichment.py::TestNoTopLevelLLMImport`.
+- **Append-never-replace alert dispatch** — both `watch_engine.dispatch_watch_alerts` and `engine/trade_signals.dispatch_trade_alerts` keep `msg = alert.message` (or `a.message`) as the base, then append `\n\n📝 {enrich.body}` only on LLM success. Enforced by Gravity step 74 check 5.
+
+### Operator notes
+- Setting `LLM_COMMENTARY_ENABLED=true` in `.env` without setting `ANTHROPIC_API_KEY` AND `GEMINI_API_KEY` is harmless: the providers' constructors return early (no key → `_client=None`), the commentary functions return `None`, and the template fallback kicks in transparently.
+- The cache key is bucketed by UTC date AND `floor(score/5)`. To force a re-fetch on the same day, delete `output/llm_commentary_cache.json` (it's gitignored).
+- For ntfy push limits, `AlertCommentary.body` is hard-capped at 280 chars by the schema. A provider response longer than that fails validation → soft-fail → template message goes out unchanged.
+- The `gui/panels.py` Reports tab button is **deferred to a follow-up Antigravity PR** per the domain split. The CLI (`python -m engine.llm_commentary SYMBOL`) is the on-demand entry point in this PR.
+- New optional dependency: `google-genai>=0.3.0` (added to `requirements.txt`). `anthropic>=0.25.0` was already present.
+
 ## Prompt Registry (`prompt_registry/`, 2026-06)
 
 Versioned, cryptographically-signed, remotely-updatable store for every AI-facing instruction

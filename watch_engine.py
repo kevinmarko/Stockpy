@@ -104,6 +104,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -734,6 +736,33 @@ def dispatch_watch_alerts(
     for alert in alerts:
         try:
             msg = alert.message
+            # Tier 9 — append (never replace) LLM-generated commentary when
+            # the master switch is on AND a key is configured.  Soft-fail
+            # contract: enrich is None → msg is the unchanged template.
+            # CONSTRAINT #4 + #6.  Lazy import keeps the SDK reach off the
+            # module's top level.
+            if getattr(settings, "LLM_COMMENTARY_ENABLED", False):
+                try:
+                    from llm.commentary import generate_alert_commentary  # noqa: PLC0415
+
+                    enrich = generate_alert_commentary(
+                        alert_skeleton={
+                            "symbol": alert.symbol,
+                            "rule_type": alert.rule_type,
+                            "priority": alert.priority,
+                            "trigger_detail": alert.trigger_detail,
+                            "template": alert.message,
+                        },
+                        context={},
+                    )
+                    if enrich is not None:
+                        msg = f"{msg}\n\n📝 {enrich.body}"
+                except Exception as exc:
+                    logger.debug(
+                        "LLM watch-alert augmentation soft-failed for %s: %s",
+                        alert.symbol,
+                        exc,
+                    )
             if dashboard_url:
                 msg = f"{msg}\n\n📊 Dashboard: {dashboard_url}"
             notify(title=alert.title, message=msg, priority=alert.priority)
