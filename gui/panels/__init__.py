@@ -273,6 +273,93 @@ def validate_brinson_fachler_weights(
 
 
 # ===========================================================================
+# Tier 9 — Claude analyst commentary button (Reports tab drill-down)
+# ===========================================================================
+
+def _render_llm_commentary_button(row: dict, symbol: str) -> None:
+    """Render the on-demand Claude analyst commentary control.
+
+    Three render paths driven by :func:`gui.llm_commentary_panel.commentary_status`:
+
+    * ``disabled`` — master switch off; renders a single info caption with the
+      .env knob needed to enable.  No button shown.
+    * ``missing_key`` — master switch on but ANTHROPIC_API_KEY unset; renders
+      a warning + a disabled button so the operator sees the seam exists.
+    * ``ready`` — master switch on AND key configured; renders an enabled
+      button.  On click, results are cached in ``st.session_state`` keyed by
+      the same UTC-day + score-bucket convention as :mod:`llm.cache`, so
+      repeat clicks within the same trading day never re-spend tokens.
+
+    Soft-fail (CONSTRAINT #6): every failure path (enricher raises, provider
+    returns None, schema mismatch) ends in
+    :func:`gui.llm_commentary_panel.format_rationale_markdown` rendering the
+    "unavailable" sentinel.  The deterministic ``row["advisory_rationale"]``
+    above this button is the source of truth and is never replaced.
+    """
+    try:
+        from gui.llm_commentary_panel import (
+            commentary_state_key,
+            commentary_status,
+            format_rationale_markdown,
+            generate_for_symbol_row,
+        )
+    except Exception as exc:  # pragma: no cover - import-time degrade
+        st.caption(f"(LLM commentary helpers unavailable: {exc})")
+        return
+
+    status = commentary_status(settings)
+    st.markdown("---")
+    st.markdown("**🤖 Claude analyst commentary**")
+
+    if status == "disabled":
+        st.caption(
+            "LLM commentary is off.  Set `LLM_COMMENTARY_ENABLED=true` and "
+            "`ANTHROPIC_API_KEY=…` in `.env`, then relaunch the GUI."
+        )
+        return
+
+    if status == "missing_key":
+        st.warning(
+            "`LLM_COMMENTARY_ENABLED=true` but `ANTHROPIC_API_KEY` is unset — "
+            "set the key in `.env` and relaunch."
+        )
+        st.button(
+            "🤖 Generate analyst commentary",
+            key=f"llm_cmt_btn_{symbol}",
+            disabled=True,
+            width="stretch",
+        )
+        return
+
+    # status == "ready"
+    score_for_key = 0.0
+    try:
+        score_for_key = float(row.get("score", row.get("advisory_score", 0.0)) or 0.0)
+    except Exception:
+        pass
+    action_for_key = str(
+        row.get("action", row.get("advisory_action", "HOLD")) or "HOLD"
+    ).upper()
+    cache_key = commentary_state_key(
+        symbol=symbol, score=score_for_key, action=action_for_key
+    )
+    session_slot = f"llm_cmt_payload_{cache_key}"
+
+    if st.button(
+        "🤖 Generate analyst commentary",
+        key=f"llm_cmt_btn_{cache_key}",
+        width="stretch",
+    ):
+        with st.spinner(f"Asking Claude about {symbol}…"):
+            payload = generate_for_symbol_row(row)
+        st.session_state[session_slot] = payload
+
+    cached = st.session_state.get(session_slot)
+    if cached is not None or session_slot in st.session_state:
+        st.markdown(format_rationale_markdown(cached))
+
+
+# ===========================================================================
 # Signal Decision Journal — Streamlit section (Reports tab, Tier 1 / 1.3)
 # ===========================================================================
 
@@ -1520,6 +1607,13 @@ def render_report_viewer() -> None:
                                 )
                     except Exception as exc:  # noqa: BLE001 — degrade
                         st.caption(f"(transactions store unavailable: {exc})")
+
+                    # Tier 9 — on-demand Claude analyst commentary button.
+                    # Renders the same `enrich_with_llm_rationale` seam the
+                    # CLI exposes, with a session-state cache keyed by the
+                    # same UTC date + score bucket as llm.cache so repeat
+                    # clicks within a trading day are free.
+                    _render_llm_commentary_button(row, pick)
             else:
                 st.caption("Signal frame has no `symbol` column to drill into.")
     else:
