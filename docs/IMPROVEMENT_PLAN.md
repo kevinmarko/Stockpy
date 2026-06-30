@@ -145,8 +145,17 @@ Three independent sub-PRs, any order.
 | **Branch** | `agent/claude-code/pandera-two-tier` |
 | **Risk** | Low | **Effort** 1 h | **Domain** Shared |
 
-`DashboardSchema.validate(final_df, lazy=True)` in production (`main_orchestrator.py:1022`);
-full strict validate behind `--strict` and in tests/CI.
+**Done.** Extracted the inline validation block into a testable
+`main_orchestrator._validate_dashboard(final_df, *, strict)` helper:
+- **Production (default):** `DashboardSchema.validate(final_df, lazy=True)` — aggregates
+  *all* violations across the wide frame into one report (vs. aborting at the first bad
+  column), logs them, and **continues** (the report still has value; CONSTRAINT #6).
+- **`--strict` (CI / schema-drift gate):** a validation failure is fatal (`sys.exit(1)`).
+- Threaded `strict` through `main(strict=...)` → `_main_body(..., strict=...)` and added the
+  `--strict` CLI flag.
+- 5 new tests (`tests/test_dashboard_validation.py`): empty-frame valid, conformant-frame
+  passes strict, invalid-frame non-strict returns False (never raises), invalid-frame
+  strict exits 1, and the flag is wired through `main`/`_main_body`/CLI. Full suite 1579.
 
 ### 3c — Streamlit cache freshness ⚠️ Antigravity
 
@@ -239,7 +248,7 @@ Phase 6  aggregator ─────► PR (conditional — profile first)
 | 1.3 Stale CLAUDE notes | ✅ n/a | — | not in committed file |
 | 2 Settings (A) | ✅ done | — | section index + deduped accidental RH_* triple; 73 fields, flat names preserved |
 | 3a Advisory parallel | ✅ done | — | ThreadPoolExecutor (sync run_once preserved); +SQLite busy_timeout; 3 equivalence tests; 1574 passed |
-| 3b Pandera tier | ⬜ planned | — | |
+| 3b Pandera tier | ✅ done | — | _validate_dashboard helper, lazy=True prod / --strict fatal; 5 tests; 1579 passed |
 | 3c Streamlit cache | ⬜ planned | — | ⚠️ Antigravity |
 | 4a Panels split | ⬜ planned | — | ⚠️ Antigravity |
 | 4b Gravity split | ⬜ planned | — | |

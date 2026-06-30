@@ -949,7 +949,53 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
         telemetry.warning("Failed to write state snapshot: %s", exc)
 
 
-async def _main_body(effective_dry_run: bool) -> None:
+def _validate_dashboard(final_df, *, strict: bool) -> bool:
+    """Validate the compiled dashboard against ``config.DashboardSchema``.
+
+    Two-tier validation (Phase 3b of docs/IMPROVEMENT_PLAN.md):
+
+    * **Production (strict=False, default):** validate with ``lazy=True`` so
+      *every* schema violation across the wide 50+ column frame is reported in
+      one pass (rather than aborting at the first bad column). Failures are
+      logged and the pipeline CONTINUES — the HTML report / JSON payload still
+      carry value and must not be held hostage to a single coerced column.
+    * **CI / --strict (strict=True):** a validation failure is FATAL
+      (``sys.exit(1)``) so schema drift can never silently ship.
+
+    Returns ``True`` when the frame validates (or is empty), ``False`` on any
+    violation in non-strict mode. Never raises in non-strict mode (CONSTRAINT #6).
+    """
+    import pandera as pa  # already loaded transitively via `import config`
+
+    if final_df.empty:
+        return True
+    try:
+        config.DashboardSchema.validate(final_df, lazy=True)
+        telemetry.info("✅ Final compiled DataFrame successfully validated against DashboardSchema.")
+        return True
+    except pa.errors.SchemaErrors as schema_errs:
+        # lazy=True aggregates ALL failures into .failure_cases (a DataFrame).
+        try:
+            n_cases = len(schema_errs.failure_cases)
+        except Exception:
+            n_cases = -1
+        telemetry.error(
+            "❌ DashboardSchema validation found %s failure case(s):\n%s",
+            n_cases, schema_errs,
+        )
+        if strict:
+            telemetry.critical("Strict mode (--strict): aborting on schema validation failure.")
+            sys.exit(1)
+        return False
+    except Exception as schema_err:
+        telemetry.error(f"❌ Final compiled DataFrame failed DashboardSchema validation: {schema_err}")
+        if strict:
+            telemetry.critical("Strict mode (--strict): aborting on schema validation failure.")
+            sys.exit(1)
+        return False
+
+
+async def _main_body(effective_dry_run: bool, strict: bool = False) -> None:
     """Core pipeline logic — separated from main() so the heartbeat try/finally is clean."""
     # Surface a CRITICAL alert if the previously leaked FRED key is still in use.
     settings.warn_if_fred_key_leaked(telemetry)
@@ -1016,13 +1062,8 @@ async def _main_body(effective_dry_run: bool) -> None:
         telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}", exc_info=True)
         sys.exit(1)
 
-    # 3. Schema Validation
-    if not final_df.empty:
-        try:
-            config.DashboardSchema.validate(final_df)
-            telemetry.info("✅ Final compiled DataFrame successfully validated against DashboardSchema.")
-        except Exception as schema_err:
-            telemetry.error(f"❌ Final compiled DataFrame failed DashboardSchema validation: {schema_err}")
+    # 3. Schema Validation (two-tier: lazy/non-fatal in prod, fatal under --strict)
+    _validate_dashboard(final_df, strict=strict)
 
     # 3b. Advisory Evaluation — holding-aware BUY/SELL/HOLD overlay
     # Uses the full pipeline's macro_dto (with HMM probability), xsec ranks,
@@ -1205,9 +1246,13 @@ async def _main_body(effective_dry_run: bool) -> None:
     telemetry.info("✅ Master Orchestration finished successfully.")
 
 
-async def main(dry_run: bool = False):  # --dry-run flag propagated from CLI
+async def main(dry_run: bool = False, strict: bool = False):  # CLI flags propagated
     """Master async entry point.  Starts a heartbeat background task and
-    always cancels it (even on crash) via try/finally."""
+    always cancels it (even on crash) via try/finally.
+
+    ``strict`` (``--strict``) makes DashboardSchema validation FATAL so CI can
+    gate on schema drift; the default (False) logs all violations and continues.
+    """
     # Load .env into os.environ.  See module-top comment on python-dotenv:
     # the loader is deliberately invoked here (not at import) so the test
     # suite's Settings()-default assertions aren't polluted by .env values
@@ -1222,7 +1267,7 @@ async def main(dry_run: bool = False):  # --dry-run flag propagated from CLI
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
     try:
-        await _main_body(effective_dry_run)
+        await _main_body(effective_dry_run, strict=strict)
     finally:
         _hb_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -1239,5 +1284,11 @@ if __name__ == "__main__":
         default=False,
         help="Log intended orders but do not submit to broker.",
     )
+    _parser.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help="Treat DashboardSchema validation failures as fatal (exit 1). For CI / schema-drift gating.",
+    )
     _args = _parser.parse_args()
-    asyncio.run(main(dry_run=_args.dry_run))
+    asyncio.run(main(dry_run=_args.dry_run, strict=_args.strict))
