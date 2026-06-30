@@ -47,7 +47,40 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Secrets / credentials (resolved from the environment) ---
+    # =========================================================================
+    # FIELD SECTIONS (in declaration order below)
+    # -------------------------------------------------------------------------
+    #   1.  Secrets / credentials .............. FRED, Alpaca
+    #   2.  Market-data layer .................. provider, Finnhub, cache TTLs
+    #   3.  Robinhood — legacy SMS login ....... ROBINHOOD_USERNAME/PASSWORD
+    #   4.  Robinhood — portfolio TOTP ......... RH_USERNAME/PASSWORD/MFA_SECRET
+    #   5.  Order management / broker .......... DRY_RUN, ADVISORY_ONLY, webhook
+    #   6.  Pre-trade risk gate ................ correlation, loss limit, HMM
+    #   7.  Kill switch ........................ FLATTEN_ON_KILL
+    #   8.  Observability / alerts ............. Discord/Slack/email/SMTP, dash
+    #   9.  Key rotation / preflight dates ..... paper-start, FRED/Alpaca rotated
+    #   10. Financial constants ................ risk-free, premium, heat
+    #   11. Position sizing .................... Kelly, vol-target, leverage caps
+    #   12. Runtime / IO ....................... OUTPUT_DIR, tickers, log level
+    #   13. Signal weights ..................... flat + regime overrides + disabled
+    #   14. Multifactor ........................ microcap threshold
+    #   15. Meta-labeling ...................... min-confidence hard gate
+    #   16. Historical persistence ............. store flag, backfill, refresh
+    #   17. Forecast skill weighting ........... window, min-obs
+    #   18. Macro regime gate .................. MACRO_REGIME_GATE_ENABLED
+    #   19. Snapshot diff / Δ-band ............. history days, conviction delta
+    #   20. Symbol watch alerts ................ WATCH_RULES_FILE
+    #   21. Rationale verbosity ................ standard | verbose
+    #   22. News catalyst ...................... lookback, FinBERT, earnings gate
+    #   23. Correlation clusters ............... lookback, threshold
+    #   24. Dual-momentum overlay .............. safe/risky assets
+    #
+    # NOTE: field names are intentionally FLAT (e.g. settings.KELLY_CAP). The
+    # sections are documentation only — do NOT nest fields into sub-models, as
+    # ~200 call sites and the .env contract depend on the flat names.
+    # =========================================================================
+
+    # --- 1. Secrets / credentials (resolved from the environment) ---
     # FRED is required for *live* macro data. It is left empty by default so the
     # platform can still import and fall back to MockDataEngine; the live path
     # calls ``ensure_fred_configured()`` to fail clearly when it is missing.
@@ -104,10 +137,25 @@ class Settings(BaseSettings):
     ROBINHOOD_USERNAME: Optional[str] = Field(default=None, description="Robinhood username (email).")
     ROBINHOOD_PASSWORD: Optional[str] = Field(default=None, description="Robinhood password.")
     # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py — TOTP login) ---
-    # Read-only; used for account state only. No order functions anywhere in that module.
-    RH_USERNAME: Optional[str] = Field(default=None, description="Robinhood account email for TOTP-authenticated read-only portfolio snapshot.")
-    RH_PASSWORD: Optional[str] = Field(default=None, description="Robinhood account password for TOTP-authenticated read-only portfolio snapshot.")
-    RH_MFA_SECRET: Optional[str] = Field(default=None, description="Base32 TOTP secret from the Robinhood MFA setup page. Never logged or cached.")
+    # Read-only; used for account state only. No order functions anywhere in that
+    # module. data/robinhood_portfolio.py reads these directly from os.environ so
+    # they are never stored in a Settings object (avoiding accidental logging);
+    # they are declared here for .env documentation + pydantic-settings consistency.
+    RH_USERNAME: Optional[str] = Field(
+        default=None,
+        description="Robinhood account email for TOTP-authenticated read-only portfolio snapshot.",
+    )
+    RH_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="Robinhood account password for TOTP-authenticated read-only portfolio snapshot.",
+    )
+    RH_MFA_SECRET: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base32 TOTP secret from the Robinhood MFA setup page. Used to generate "
+            "the 6-digit code via pyotp.TOTP(RH_MFA_SECRET).now() — never logged or cached."
+        ),
+    )
     # --- Order management (execution/order_manager.py) ---
     # When True the orchestrator logs intended orders but never submits them.
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.
@@ -228,29 +276,6 @@ class Settings(BaseSettings):
             "Auto-skipped by preflight when ADVISORY_ONLY=True (paper keys have "
             "no blast-radius risk when the broker surface is quarantined). "
             "Unset = key-age check skipped (warning-level PASS, not blocking)."
-        ),
-    )
-
-    # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py) ---
-    # These three variables feed the TOTP-based read-only portfolio fetch.
-    # data/robinhood_portfolio.py reads them directly from os.environ so that
-    # they are never stored in a Settings object (avoiding accidental logging).
-    # They are declared here for .env documentation and pydantic-settings
-    # auto-loading consistency only.
-    RH_USERNAME: Optional[str] = Field(
-        default=None,
-        description="Robinhood account email for read-only portfolio snapshot.",
-    )
-    RH_PASSWORD: Optional[str] = Field(
-        default=None,
-        description="Robinhood account password for read-only portfolio snapshot.",
-    )
-    RH_MFA_SECRET: Optional[str] = Field(
-        default=None,
-        description=(
-            "Base32 TOTP secret from the Robinhood MFA setup page. "
-            "Used by data/robinhood_portfolio.py to generate the 6-digit code "
-            "via pyotp.TOTP(RH_MFA_SECRET).now() — never logged or cached."
         ),
     )
 
