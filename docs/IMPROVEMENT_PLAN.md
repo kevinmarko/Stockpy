@@ -113,14 +113,30 @@ Three independent sub-PRs, any order.
 | **Effort** | 2–3 h |
 | **Domain** | Shared (`main.py`) |
 
-1. Independence confirmed: xsec ranks + multifactor composites are pre-computed once
-   before the loop (`main.py::_build_context_extras`); each `evaluate()` writes only its
-   own `Recommendation`.
-2. Wrap per-symbol call in `asyncio.to_thread` + `asyncio.gather` with a bounded
-   semaphore. New optional `ADVISORY_MAX_CONCURRENCY` (default preserves current behavior).
-3. Preserve dead-letter: `return_exceptions=True`, route to `RunResult.errors` as today.
-4. Verify: `pytest tests/test_run_once.py tests/test_pipeline_smoke.py -v` +
-   `time main.py` vs Phase 0 baseline.
+**Done.** Implementation notes / deviations from the original sketch:
+1. Independence confirmed: engines are constructed **per-call** inside
+   `engine.advisory.evaluate` (not shared singletons); the advisory path is **read-only**
+   for trades; shared inputs (snapshot, market, macro_dto, context_extras) are read-only
+   during the loop. Bars + macro are fetched **before** the loop, so the only concurrent
+   DB writer is fundamentals caching.
+2. **Chose `ThreadPoolExecutor` over asyncio.** `run_once` is synchronous and called
+   synchronously everywhere (`main()`, `make verify`, tests). A thread pool keeps the
+   signature unchanged (zero blast radius) and is the right tool for parallelizing N
+   independent **sync** I/O+native-compute calls — asyncio would have forced `run_once`
+   async and rippled to every caller for no benefit.
+3. **Enabling fix:** added `PRAGMA busy_timeout=5000` to `HistoricalStore._connect` so
+   concurrent fundamentals writers WAIT for the WAL write-lock instead of immediately
+   raising `SQLITE_BUSY`. Small, broadly-beneficial robustness fix.
+4. **Determinism preserved:** results are collected then reassembled in original symbol
+   order, so Sheet/HTML/snapshot output and logs are byte-identical to the sequential
+   path. New `ADVISORY_MAX_CONCURRENCY` (default 8; `1` = original sequential path).
+5. Dead-letter preserved exactly: `_eval_one` never raises; per-symbol failures become
+   `RunResult.errors` entries in order.
+6. **Verification:** 3 new equivalence tests (`TestAdvisoryConcurrency`) prove
+   sequential (workers=1) and parallel (workers=8) produce identical ordered
+   recommendations + identical dead-lettering; full suite **1574 passed**. Live latency
+   benchmark deferred to the operator (a real `main.py` run can block on a Robinhood MFA
+   prompt — unsafe to run unattended).
 
 ### 3b — Two-tier Pandera validation
 
@@ -222,7 +238,7 @@ Phase 6  aggregator ─────► PR (conditional — profile first)
 | 1.2 TODO reword | ✅ done | — | forecasting_engine Stage-4 note |
 | 1.3 Stale CLAUDE notes | ✅ n/a | — | not in committed file |
 | 2 Settings (A) | ✅ done | — | section index + deduped accidental RH_* triple; 73 fields, flat names preserved |
-| 3a Advisory async | ⬜ planned | — | |
+| 3a Advisory parallel | ✅ done | — | ThreadPoolExecutor (sync run_once preserved); +SQLite busy_timeout; 3 equivalence tests; 1574 passed |
 | 3b Pandera tier | ⬜ planned | — | |
 | 3c Streamlit cache | ⬜ planned | — | ⚠️ Antigravity |
 | 4a Panels split | ⬜ planned | — | ⚠️ Antigravity |

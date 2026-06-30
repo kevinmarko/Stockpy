@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     #   9.  Key rotation / preflight dates ..... paper-start, FRED/Alpaca rotated
     #   10. Financial constants ................ risk-free, premium, heat
     #   11. Position sizing .................... Kelly, vol-target, leverage caps
-    #   12. Runtime / IO ....................... OUTPUT_DIR, tickers, log level
+    #   12. Runtime / IO ....................... OUTPUT_DIR, tickers, log, concurrency
     #   13. Signal weights ..................... flat + regime overrides + disabled
     #   14. Multifactor ........................ microcap threshold
     #   15. Meta-labeling ...................... min-confidence hard gate
@@ -302,6 +302,21 @@ class Settings(BaseSettings):
     OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
     LOG_LEVEL: str = "INFO"
+    # Number of worker threads for the per-symbol advisory loop in main.run_once().
+    # Each engine.advisory.evaluate() call is independent (per-call engine
+    # construction, read-only shared inputs), so the loop parallelizes safely.
+    # The win is mostly network I/O (per-symbol quote fetch) plus native-compute
+    # sections (numpy/pandas/statsmodels/arch release the GIL). Concurrent
+    # HistoricalStore fundamentals writes are serialized by its busy_timeout.
+    # Set to 1 to force the original sequential, fully-deterministic path.
+    ADVISORY_MAX_CONCURRENCY: int = Field(
+        default=8,
+        description=(
+            "Worker-thread count for the per-symbol advisory loop in "
+            "main.run_once(). 1 = sequential (original behavior). Results are "
+            "always reassembled in deterministic symbol order regardless of value."
+        ),
+    )
     SIGNAL_WEIGHTS: dict[str, float] = Field(
         default_factory=lambda: {
             "macro_regime": 45.0,
