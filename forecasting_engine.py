@@ -401,8 +401,9 @@ class ForecastingEngine:
         is specified. When TensorFlow is absent the engine degrades gracefully
         to zeros (never fabricated values).
 
-        TODO(Stage 4): Move to a single cross-ticker model. Per-ticker retraining
-        is acceptable for ~4 tickers but will not scale.
+        Future direction (Stage 4): move to a single cross-ticker model.
+        Per-ticker retraining is acceptable for ~4 tickers but will not scale to
+        a large universe — tracked as a deliberate design decision, not a defect.
         """
         if days_forward is not None:
             horizons = (int(days_forward),)

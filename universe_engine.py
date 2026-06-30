@@ -23,8 +23,13 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
-CACHE_PATH = "data/universe_cache.parquet"
-DELISTED_PATH = "data/delisted_tickers.csv"
+# Anchor data paths to this module's directory, not the process CWD, so that
+# get_delisted_tickers() / fetch_and_cache_universe() resolve the same files
+# regardless of where the platform (or a test that changed CWD) is invoked from.
+# Mirrors the Path(__file__)-anchored pattern in data/robinhood_portfolio.py.
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_PATH = os.path.join(_MODULE_DIR, "data", "universe_cache.parquet")
+DELISTED_PATH = os.path.join(_MODULE_DIR, "data", "delisted_tickers.csv")
 
 def clean_ticker(ticker: Any) -> Optional[str]:
     """Clean and standardize a ticker symbol for yfinance compatibility."""
