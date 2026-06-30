@@ -273,6 +273,93 @@ def validate_brinson_fachler_weights(
 
 
 # ===========================================================================
+# Tier 9 — Claude analyst commentary button (Reports tab drill-down)
+# ===========================================================================
+
+def _render_llm_commentary_button(row: dict, symbol: str) -> None:
+    """Render the on-demand Claude analyst commentary control.
+
+    Three render paths driven by :func:`gui.llm_commentary_panel.commentary_status`:
+
+    * ``disabled`` — master switch off; renders a single info caption with the
+      .env knob needed to enable.  No button shown.
+    * ``missing_key`` — master switch on but ANTHROPIC_API_KEY unset; renders
+      a warning + a disabled button so the operator sees the seam exists.
+    * ``ready`` — master switch on AND key configured; renders an enabled
+      button.  On click, results are cached in ``st.session_state`` keyed by
+      the same UTC-day + score-bucket convention as :mod:`llm.cache`, so
+      repeat clicks within the same trading day never re-spend tokens.
+
+    Soft-fail (CONSTRAINT #6): every failure path (enricher raises, provider
+    returns None, schema mismatch) ends in
+    :func:`gui.llm_commentary_panel.format_rationale_markdown` rendering the
+    "unavailable" sentinel.  The deterministic ``row["advisory_rationale"]``
+    above this button is the source of truth and is never replaced.
+    """
+    try:
+        from gui.llm_commentary_panel import (
+            commentary_state_key,
+            commentary_status,
+            format_rationale_markdown,
+            generate_for_symbol_row,
+        )
+    except Exception as exc:  # pragma: no cover - import-time degrade
+        st.caption(f"(LLM commentary helpers unavailable: {exc})")
+        return
+
+    status = commentary_status(settings)
+    st.markdown("---")
+    st.markdown("**🤖 Claude analyst commentary**")
+
+    if status == "disabled":
+        st.caption(
+            "LLM commentary is off.  Set `LLM_COMMENTARY_ENABLED=true` and "
+            "`ANTHROPIC_API_KEY=…` in `.env`, then relaunch the GUI."
+        )
+        return
+
+    if status == "missing_key":
+        st.warning(
+            "`LLM_COMMENTARY_ENABLED=true` but `ANTHROPIC_API_KEY` is unset — "
+            "set the key in `.env` and relaunch."
+        )
+        st.button(
+            "🤖 Generate analyst commentary",
+            key=f"llm_cmt_btn_{symbol}",
+            disabled=True,
+            width="stretch",
+        )
+        return
+
+    # status == "ready"
+    score_for_key = 0.0
+    try:
+        score_for_key = float(row.get("score", row.get("advisory_score", 0.0)) or 0.0)
+    except Exception:
+        pass
+    action_for_key = str(
+        row.get("action", row.get("advisory_action", "HOLD")) or "HOLD"
+    ).upper()
+    cache_key = commentary_state_key(
+        symbol=symbol, score=score_for_key, action=action_for_key
+    )
+    session_slot = f"llm_cmt_payload_{cache_key}"
+
+    if st.button(
+        "🤖 Generate analyst commentary",
+        key=f"llm_cmt_btn_{cache_key}",
+        width="stretch",
+    ):
+        with st.spinner(f"Asking Claude about {symbol}…"):
+            payload = generate_for_symbol_row(row)
+        st.session_state[session_slot] = payload
+
+    cached = st.session_state.get(session_slot)
+    if cached is not None or session_slot in st.session_state:
+        st.markdown(format_rationale_markdown(cached))
+
+
+# ===========================================================================
 # Signal Decision Journal — Streamlit section (Reports tab, Tier 1 / 1.3)
 # ===========================================================================
 
@@ -1520,6 +1607,13 @@ def render_report_viewer() -> None:
                                 )
                     except Exception as exc:  # noqa: BLE001 — degrade
                         st.caption(f"(transactions store unavailable: {exc})")
+
+                    # Tier 9 — on-demand Claude analyst commentary button.
+                    # Renders the same `enrich_with_llm_rationale` seam the
+                    # CLI exposes, with a session-state cache keyed by the
+                    # same UTC date + score bucket as llm.cache so repeat
+                    # clicks within a trading day are free.
+                    _render_llm_commentary_button(row, pick)
             else:
                 st.caption("Signal frame has no `symbol` column to drill into.")
     else:
@@ -2193,6 +2287,139 @@ def _render_strategy_health() -> None:
                 st.caption(f"Options-selling strategy — tail-scenario stress gate: {stress_label}")
 
 
+# ===========================================================================
+# Tier 9 Scope 2 — AI Gravity audit runner section (Safety tab)
+# ===========================================================================
+
+def _render_gravity_ai_runner_section() -> None:
+    """Render the Safety-tab section that surfaces ``engine.gravity_ai_runner``.
+
+    Four render paths driven by :func:`gui.gravity_ai_panel.runner_status`:
+
+    * ``disabled`` — master switch off.  Renders an info caption with the
+      ``.env`` knob needed to enable; no button.
+    * ``missing_key`` — switch on but neither key set.  Renders a warning
+      + a disabled button so the seam is visible.
+    * ``partial_key`` — exactly one of the two keys set.  Renders a
+      yellow caution + an enabled button (the runner soft-fails the
+      missing side and records it as ``skipped``).
+    * ``ready`` — both keys + switch on.  Renders the full panel:
+      health colour band + 5-metric KPI strip + "▶️ Run AI Gravity audit"
+      button + per-step table with Claude vs Gemini badges +
+      raw-report expander.
+
+    Soft-fail (CONSTRAINT #6): every code path that touches the runner
+    or the on-disk report is wrapped in try/except.  A missing /
+    corrupt / wrong-shape report renders as the "no audit yet"
+    sentinel — never an exception bubble.
+    """
+    st.markdown("### 🤖 AI Gravity audit — Claude auditor + Gemini cross-checker")
+    try:
+        from gui.gravity_ai_panel import (
+            health_caption,
+            load_audit_report,
+            runner_status,
+            step_rows,
+            summarise_run,
+        )
+    except Exception as exc:  # pragma: no cover - import-time degrade
+        st.caption(f"(AI Gravity helpers unavailable: {exc})")
+        return
+
+    status = runner_status(settings)
+
+    if status == "disabled":
+        st.caption(
+            "AI Gravity runner is off.  Set `GRAVITY_AI_RUNNER_ENABLED=true` plus "
+            "`ANTHROPIC_API_KEY` AND `GEMINI_API_KEY` in `.env`, then relaunch the "
+            "GUI.  The structural Python-only Gravity audit above is unaffected."
+        )
+        return
+
+    if status == "missing_key":
+        st.warning(
+            "`GRAVITY_AI_RUNNER_ENABLED=true` but neither `ANTHROPIC_API_KEY` nor "
+            "`GEMINI_API_KEY` is set — provide at least one and relaunch."
+        )
+        st.button(
+            "▶️ Run AI Gravity audit",
+            key="gravity_ai_run_btn",
+            disabled=True,
+            width="stretch",
+        )
+        return
+
+    if status == "partial_key":
+        st.warning(
+            "Only one provider key is configured.  The runner will record the "
+            "missing side as `skipped` — disagreement detection requires both."
+        )
+
+    # status ∈ {"ready", "partial_key"}
+    report = load_audit_report()
+    summary = summarise_run(report)
+
+    # Health colour band.
+    caption = health_caption(summary)
+    if summary.health == "fail":
+        st.error(caption)
+    elif summary.health == "warn":
+        st.warning(caption)
+    elif summary.health == "clean":
+        st.success(caption)
+    else:
+        st.info(caption)
+
+    # KPI strip.
+    cols = st.columns(5)
+    cols[0].metric("Steps", summary.total_steps)
+    cols[1].metric("Claude ✅", summary.claude_passed,
+                   delta=(-summary.claude_failed) if summary.claude_failed else None,
+                   delta_color="inverse")
+    cols[2].metric("Gemini ✅", summary.gemini_passed,
+                   delta=(-summary.gemini_failed) if summary.gemini_failed else None,
+                   delta_color="inverse")
+    cols[3].metric("⚠ Disagreements", summary.disagreements)
+    cols[4].metric("Last run (UTC)", summary.generated_at[:19] if summary.generated_at else "—")
+
+    if st.button("▶️ Run AI Gravity audit (Claude + Gemini)",
+                 key="gravity_ai_run_btn", type="primary", width="stretch"):
+        with st.spinner("Calling Claude + Gemini for each of the 7 audit steps…"):
+            try:
+                from engine.gravity_ai_runner import run_all, write_report  # noqa: PLC0415
+
+                fresh = run_all()
+                write_report(fresh)
+                # Refresh the loaded view from disk so the table updates in-place.
+                report = load_audit_report()
+                summary = summarise_run(report)
+            except Exception as exc:
+                st.error(f"AI Gravity runner failed: {exc}")
+
+    rows = step_rows(report)
+    if rows:
+        df = pd.DataFrame(rows)
+        # Friendlier column titles for the operator-facing table.
+        df = df.rename(columns={
+            "step_number": "Step",
+            "step_title": "Title",
+            "claude": "Claude",
+            "gemini": "Gemini",
+            "disagreement": "⚠ Disagree",
+            "score_claude": "Score (C)",
+            "score_gemini": "Score (G)",
+            "notes": "Notes",
+        })
+        st.dataframe(df, width="stretch", hide_index=True)
+        with st.expander("🔬 Full AI audit JSON"):
+            st.json(report)
+    else:
+        st.caption(
+            "No AI Gravity audit yet — click ▶️ above to run all 7 steps.  "
+            "Results persist to `output/gravity_ai_audit.json`."
+        )
+
+
 def render_gravity_audit() -> None:
     """Render the Safety tab: Circuit Breakers + Dependency Map + Gravity audit.
 
@@ -2217,6 +2444,8 @@ def render_gravity_audit() -> None:
     _render_circuit_breaker_dashboard()
     st.divider()
     _render_dependency_map()
+    st.divider()
+    _render_gravity_ai_runner_section()
     st.divider()
 
     st.markdown("### 🧪 Gravity AI Review Suite")
