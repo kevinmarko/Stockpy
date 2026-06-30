@@ -1057,3 +1057,104 @@ Bash wrapper that verifies `.venv` exists and Python is 3.12.x, then runs `pytho
 
 #### Gravity step 65 (`step_65_refresh_validations_audit`)
 10 checks: `scripts.refresh_validations` importable; `STRATEGY_REGISTRY` contains both strategies; entries are (callable, positive turnover); RSI(2) adapter returns (X with RSI_2/SMA_200, y, precomputed); TSMOM adapter returns 4 variants; `_make_strategy_fn` closure returns list with required harness keys; unknown strategy dead-lettered (CONSTRAINT #6); main exit-code 0 on all-pass / 1 on any-fail; `scripts/refresh_validations.sh` exists and is executable; `tests/test_refresh_validations.py` exists.
+
+## Tier 6 — Autonomous Advisory Agent (2026-06)
+
+### Overview
+"Robinhood agent trader" option 2: a self-pacing loop that wraps `main.run_once()` with adaptive cadence, actionable-backlog reminders, and persistent state. **ADVISORY ONLY** — no order-submission code, no broker imports. Composes on top of the existing `engine/advisory.evaluate()` per-symbol path, `alerting.notify()` ntfy channel, `watch_engine` per-cycle alerts, and `gui/decision_log.py` operator decision tracking.
+
+### New module: `engine/advisory_agent.py`
+Headless, dependency-free policy layer (stdlib + `zoneinfo` only). Public API:
+- **`AgentState`** — mutable dataclass: `cycle_count`, `last_cycle_iso`, `last_error_count`, `consecutive_error_cycles`, `backlog: dict[str, BacklogEntry]`, `last_summary_iso`. Round-trips via `.to_dict()` / `.from_dict()`.
+- **`BacklogEntry`** — frozen dataclass: `symbol`, `action` (BUY/SELL only — HOLD never enters), `conviction`, `first_seen_iso`, `last_pinged_iso`, `reminders_sent`.
+- **`BacklogReminder`** — frozen dataclass: one reminder ready for `alerting.notify()`. Carries `tier` (1/2/3), `age_hours`, `priority`, `title`, `message`.
+- **`is_us_market_open(now_utc) -> bool`** — NYSE RTH 09:30–16:00 ET Mon–Fri. Holiday calendar NOT applied (would require `pandas_market_calendars`); operator owns the half-day judgement.
+- **`is_extended_hours(now_utc) -> bool`** — 04:00–20:00 ET weekday window (RTH is a strict subset).
+- **`compute_next_run_delay(now_utc, *, state, vix, market_regime, config=None) -> int`** — adaptive cadence policy. Decision tree, first match wins:
+  1. **Error back-off** — `consecutive_error_cycles > 0` → `min(base * N, max)`.
+  2. **Open/close 30-min boost** — inside RTH AND within `rth_open_close_window_minutes` of either boundary → `rth_open_close_delay_s` (default 60 s).
+  3. **High-vol RTH** — inside RTH AND (`vix ≥ vol_spike_vix_threshold` OR `market_regime in high_vol_regimes`) → `rth_high_vol_delay_s` (default 120 s).
+  4. **Normal RTH** — `rth_normal_delay_s` (default 300 s).
+  5. **Extended hours** — `extended_hours_delay_s` (default 1 h).
+  6. **Off-hours / weekend** — `off_hours_delay_s` (default 4 h).
+  Always clamped ≥ `min_delay_s` (default 60 s) to prevent hot-looping the yfinance API.
+- **`update_backlog(state, recommendations, decision_log_entries, now_utc) -> AgentState`** — three-stage update (in place): INSERT high-conviction BUY/SELL recommendations; CLEAR entries whose symbol has a matching "acted" `decision_log` record dated after `first_seen_iso`; EXPIRE entries older than `backlog_expiry_hours` (default 72 h). Conviction threshold = `backlog_conviction_threshold` (default 0.85, mirrors `watch_rules.yaml`'s default siren).
+- **`compute_backlog_reminders(state, now_utc) -> list[BacklogReminder]`** — walks each backlog entry against `backlog_tier_hours` ladder (default 1 h / 4 h / 24 h); emits AT MOST one reminder per entry per call (the highest tier crossed since the last dispatch). Capped at `backlog_max_reminders` (default 3) per `(symbol, action)`.
+- **`apply_reminder_dispatch(state, reminders, now_utc) -> AgentState`** — advances `last_pinged_iso` + `reminders_sent` for every reminder that was dispatched. Call AFTER `dispatch_backlog_reminders`.
+- **`process_run_result(state, run_result, now_utc) -> AgentState`** — bumps `cycle_count`, sets `last_cycle_iso`, advances or resets `consecutive_error_cycles` based on `run_result.errors`. Pure with respect to wall-clock.
+- **`dispatch_backlog_reminders(reminders, *, dashboard_url=None) -> None`** — mirrors `watch_engine.dispatch_watch_alerts` contract: per-reminder try/except, no-op when `NTFY_TOPIC` unset, optional dashboard URL appended to message body. Imports `alerting.notify` inline.
+- **`load_agent_state(path) / save_agent_state(state, path)`** — atomic write-then-rename (same pattern as `watch_engine.save_watch_state`). Missing / corrupt / empty file → fresh `AgentState()` (CONSTRAINT #6 — never raises). Save failures logged at WARNING and swallowed.
+
+### CONFIG (`engine.advisory_agent.CONFIG`)
+Single source of truth for every threshold. No magic numbers in the logic functions. Keys:
+| Key | Default | Purpose |
+|---|---|---|
+| `rth_normal_delay_s` | 300 | Midday RTH refresh cadence |
+| `rth_high_vol_delay_s` | 120 | RTH under VIX spike / risk-off regime |
+| `rth_open_close_delay_s` | 60 | RTH inside open/close 30-min window |
+| `rth_open_close_window_minutes` | 30 | Half-width of the boost windows |
+| `extended_hours_delay_s` | 3600 | Premarket / aftermarket weekday |
+| `off_hours_delay_s` | 14400 | Overnight / weekend heartbeat |
+| `error_backoff_base_s` | 60 | Linear back-off step |
+| `error_backoff_max_s` | 900 | Back-off ceiling |
+| `vol_spike_vix_threshold` | 25.0 | VIX threshold for high-vol cadence |
+| `high_vol_regimes` | `("RISK OFF", "RECESSION", "CREDIT EVENT")` | Regimes that also trigger high-vol cadence |
+| `min_delay_s` | 60 | Cadence floor — never ping faster |
+| `backlog_conviction_threshold` | 0.85 | Min conviction to enter backlog |
+| `backlog_tier_hours` | `(1.0, 4.0, 24.0)` | Reminder escalation ladder |
+| `backlog_tier_priorities` | `("default", "high", "high")` | Per-tier ntfy priority |
+| `backlog_max_reminders` | 3 | Per-`(symbol, action)` reminder cap |
+| `backlog_expiry_hours` | 72.0 | Silent drop after this |
+| `decision_log_match_window_hours` | 24.0 | Window for matching `decision_log` "acted" entries |
+
+### `main.py --agent` flag
+New CLI flag that replaces `--interval N`'s fixed timer with the agent policy. Takes precedence over `--interval`. Loop (per cycle):
+1. Run `run_once()` (same code path as `--interval`; preserves all existing watch_engine + ntfy + sheet + HTML report behaviour — the agent layer adds, never replaces).
+2. `process_run_result` → update cycle count and error streak.
+3. Read fresh `gui/decision_log.read_decisions()` entries.
+4. `update_backlog` — insert new high-conviction signals, drop actioned/expired entries.
+5. `compute_backlog_reminders` + `dispatch_backlog_reminders` + `apply_reminder_dispatch`.
+6. `save_agent_state` (always — even on a failed cycle).
+7. `compute_next_run_delay` with `vix` + `market_regime` sourced from the just-written `output/state_snapshot.json` (via `_read_macro_snapshot_hint` — never re-hits FRED).
+8. Sleep in 1 s slices so SIGINT/SIGTERM are caught promptly.
+
+`_run_agent_loop` is a module-level helper in `main.py`; the agent module is imported lazily inside it so test imports of `main.py` stay cheap.
+
+### Persistent state
+`output/agent_state.json` — atomic write-then-rename. Schema:
+```json
+{
+  "cycle_count": 42,
+  "last_cycle_iso": "2026-06-30T18:30:00+00:00",
+  "last_error_count": 0,
+  "consecutive_error_cycles": 0,
+  "backlog": {
+    "AAPL:BUY": {
+      "symbol": "AAPL", "action": "BUY", "conviction": 0.91,
+      "first_seen_iso": "2026-06-30T14:00:00+00:00",
+      "last_pinged_iso": "2026-06-30T15:00:00+00:00",
+      "reminders_sent": 1
+    }
+  },
+  "last_summary_iso": ""
+}
+```
+Corrupt or missing file → fresh `AgentState()` on next launch (CONSTRAINT #6).
+
+### Composition rules
+- The agent layer **never** mutates `engine.advisory.evaluate()`'s output — it observes recommendations + decision log, derives a backlog, and emits ntfy reminders. The advisory pipeline is unchanged.
+- The agent layer **never** imports `execution/*` or any broker module — `ADVISORY_ONLY=True` is the project default and the agent stays inside that quarantine (CONSTRAINT enforced by Gravity step 69 check 13, source-grepping for `submit_order` / `place_order` / etc.).
+- The watch_engine and the agent fire INDEPENDENTLY each cycle: watch_engine is edge-triggered (action flips, conviction crossings); the agent is time-based (escalating reminders). They are complementary, not redundant.
+
+### Tests
+**`tests/test_advisory_agent.py`** (52 tests, 8 classes): `TestMarketHours` (RTH bounds + weekend + extended-hours window + naive→UTC promotion); `TestCadence` (RTH normal / open boost / close boost / high-vol VIX / high-vol regime / extended / off-hours / weekend / error back-off / cap / floor); `TestBacklog` (insert above threshold / skip below threshold / skip HOLD / preserve first_seen on resurface / acted clears / passed does NOT clear / expired drops / BUY+SELL separate keys); `TestReminders` (no-fire-too-young / tier-1@1h / tier-2@4h / cap behavior / dispatch advances counter); `TestStateIO` (round-trip / missing→fresh / corrupt→fresh / empty→fresh / unwritable-dir tolerated / no stray .tmp); `TestProcessRunResult` (cycle bump / error streak / reset / naive-now); `TestDispatch` (empty no-op / one-per-reminder / failure-doesn't-block / dashboard-url appended); `TestModuleSurface` (dataclass round-trips / corrupt backlog dropped / CONFIG keys complete).
+
+### Gravity step 69
+**`step_69_advisory_agent_audit`** — 15 checks: importable; CONFIG has all required keys; dataclass field sets; RTH-normal cadence; high-VIX tightens cadence; weekend → off-hours; error back-off short-circuits; `update_backlog` inserts high-conviction BUY; `update_backlog` clears after "acted"; tier-1 reminder fires after 1 h + counter advances; state save/load round-trip; corrupt JSON → fresh state; ADVISORY-ONLY source check (no `submit_order`/`place_order`/etc. keywords in `engine/advisory_agent.py`); `main.py` registers `--agent` flag + `_run_agent_loop`; `tests/test_advisory_agent.py` exists.
+
+### Operational notes
+- `--agent` shares the `output/state_snapshot.json` write path with `--interval` and one-shot mode, so the Streamlit dashboard, daily briefing, and snapshot-diff Δ band all light up identically — no separate observability work needed.
+- `NTFY_TOPIC` unset → reminder dispatch is silently inert (operator can run the agent purely as a logger).
+- `NTFY_DASHBOARD_URL` (unchanged from Tier 1.4) — when set, every reminder message ends with a deep-link to the GUI for one-click context.
+- Stopping the agent: SIGINT (Ctrl-C) or SIGTERM — the loop catches the signal, finishes the current cycle + reminder dispatch + state save, then exits cleanly.
+- Backlog tuning: drop `backlog_tier_hours` to `(0.5, 2.0, 8.0)` to be more aggressive intraday; raise `backlog_conviction_threshold` to 0.90 to reduce reminder volume.

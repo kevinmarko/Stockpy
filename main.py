@@ -1208,6 +1208,158 @@ def run_once(force_account: bool = False) -> RunResult:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _read_macro_snapshot_hint() -> Dict[str, Any]:
+    """Return ``{"vix": float|None, "market_regime": str|None}`` from the last
+    ``output/state_snapshot.json`` write — or empty values when missing.
+
+    Used by ``_run_agent_loop`` to inform the adaptive cadence policy without
+    re-running ``_build_macro_dto`` (which would re-hit FRED).  Returns a
+    neutral hint dict (both keys ``None``) on any error so the policy falls
+    back to its default time-of-day cadence.
+    """
+    try:
+        import json
+        snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
+        if not snap_path.exists():
+            return {"vix": None, "market_regime": None}
+        payload = json.loads(snap_path.read_text(encoding="utf-8"))
+        vix_raw = payload.get("vix")
+        regime_raw = payload.get("market_regime")
+        return {
+            "vix": float(vix_raw) if vix_raw not in (None, 0, 0.0) else None,
+            "market_regime": str(regime_raw) if regime_raw else None,
+        }
+    except Exception as exc:
+        logger.debug("Could not read macro hint from state_snapshot.json: %s", exc)
+        return {"vix": None, "market_regime": None}
+
+
+def _run_agent_loop(run_cycle) -> None:
+    """Autonomous advisory loop driver.
+
+    Replaces ``--interval N``'s fixed timer with the policy in
+    ``engine.advisory_agent``:
+      * adaptive cadence (RTH-aware, VIX/regime-adaptive, error back-off)
+      * actionable-backlog reminders for high-conviction signals the operator
+        has not yet logged a decision for
+      * persistent state at ``OUTPUT_DIR/agent_state.json`` so the backlog
+        survives restarts
+
+    The ``run_cycle`` callable is the same closure used by ``--interval`` mode;
+    it must return the ``RunResult`` of one full cycle.  All ntfy push behavior
+    inside ``run_cycle`` is preserved (errors → high-priority push, clean run →
+    one default push per launch, watch_engine alerts per cycle).
+
+    SIGINT / SIGTERM are caught and the loop exits cleanly after the current
+    cycle plus any post-cycle reminder dispatch — never mid-sleep.
+    """
+    # Lazy import keeps test imports of main.py cheap.
+    from engine.advisory_agent import (  # noqa: PLC0415
+        apply_reminder_dispatch,
+        compute_backlog_reminders,
+        compute_next_run_delay,
+        dispatch_backlog_reminders,
+        load_agent_state,
+        process_run_result,
+        save_agent_state,
+        update_backlog,
+    )
+
+    state_path = settings.OUTPUT_DIR / "agent_state.json"
+    state = load_agent_state(state_path)
+    logger.info(
+        "Agent mode starting — state path=%s loaded backlog=%d cycle_count=%d",
+        state_path, len(state.backlog), state.cycle_count,
+    )
+
+    _shutdown = False
+
+    def _handle_signal(signum: int, frame: Any) -> None:
+        nonlocal _shutdown
+        logger.info("Shutdown signal received; finishing current cycle then exiting.")
+        _shutdown = True
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    dashboard_url = os.environ.get("NTFY_DASHBOARD_URL")
+
+    while not _shutdown:
+        # ── (1) Run one full advisory cycle (sheet + html + watch_engine) ────
+        cycle_started_at = datetime.now(timezone.utc)
+        try:
+            result = run_cycle()
+        except Exception as exc:
+            logger.exception("Agent cycle failed unexpectedly: %s", exc)
+            result = None
+
+        # ── (2) Update agent state with cycle outcome ────────────────────────
+        if result is not None:
+            try:
+                process_run_result(state, result, datetime.now(timezone.utc))
+            except Exception as exc:
+                logger.warning("process_run_result failed (%s); skipping", exc)
+
+            # ── (3) Refresh backlog from latest recommendations + decision log
+            decision_entries: List[Any] = []
+            try:
+                from gui.decision_log import read_decisions  # noqa: PLC0415
+                decision_entries = read_decisions()
+            except Exception as exc:
+                logger.debug("decision_log read failed (%s); backlog clear step skipped", exc)
+            try:
+                update_backlog(
+                    state, result.recommendations, decision_entries,
+                    datetime.now(timezone.utc),
+                )
+            except Exception as exc:
+                logger.warning("update_backlog failed (%s); skipping", exc)
+
+            # ── (4) Compute and dispatch backlog reminders ───────────────────
+            try:
+                reminders = compute_backlog_reminders(state, datetime.now(timezone.utc))
+                if reminders:
+                    dispatch_backlog_reminders(reminders, dashboard_url=dashboard_url)
+                    apply_reminder_dispatch(state, reminders, datetime.now(timezone.utc))
+                    logger.info(
+                        "Agent dispatched %d backlog reminder(s).", len(reminders),
+                    )
+            except Exception as exc:
+                logger.warning("Backlog reminder dispatch failed (%s); skipping", exc)
+
+        # ── (5) Persist state regardless of cycle outcome ─────────────────────
+        try:
+            save_agent_state(state, state_path)
+        except Exception as exc:
+            logger.warning("save_agent_state failed (%s); skipping", exc)
+
+        if _shutdown:
+            break
+
+        # ── (6) Compute adaptive sleep duration ──────────────────────────────
+        macro_hint = _read_macro_snapshot_hint()
+        delay_s = compute_next_run_delay(
+            datetime.now(timezone.utc),
+            state=state,
+            vix=macro_hint.get("vix"),
+            market_regime=macro_hint.get("market_regime"),
+        )
+        logger.info(
+            "Agent sleeping %ds (cycle #%d, backlog=%d, vix=%s, regime=%s, err_streak=%d).",
+            delay_s, state.cycle_count, len(state.backlog),
+            macro_hint.get("vix"), macro_hint.get("market_regime"),
+            state.consecutive_error_cycles,
+        )
+
+        # Sleep in 1-second slices so SIGINT/SIGTERM are caught promptly.
+        for _ in range(int(delay_s)):
+            if _shutdown:
+                break
+            time.sleep(1)
+
+    logger.info("Agent loop exited cleanly.")
+
+
 def main() -> None:
     """CLI entry point with two-tier refresh support.
 
@@ -1222,6 +1374,15 @@ def main() -> None:
         Loop: refresh market data every N seconds.  The account tier still
         fetches Robinhood at most once per day — an all-day run logs in once.
         Ctrl-C or SIGTERM exits cleanly after the current cycle completes.
+
+    --agent
+        Run the autonomous advisory agent loop.  Replaces ``--interval``'s
+        fixed timer with the adaptive cadence + backlog reminder policy in
+        ``engine/advisory_agent.py``.  Cadence is RTH/VIX/regime-aware;
+        high-conviction signals the operator hasn't logged a decision for
+        are re-pinged at 1h / 4h / 24h escalation tiers.  Persistent state
+        at ``OUTPUT_DIR/agent_state.json`` survives restarts.  Takes
+        precedence over ``--interval``.
 
     --refresh-account
         Force a fresh Robinhood login on this launch, bypassing the daily
@@ -1245,6 +1406,17 @@ def main() -> None:
         default=False,
         help="Force a fresh Robinhood fetch on this launch (bypasses daily cache).",
     )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the autonomous advisory agent loop: adaptive cadence based on "
+            "market hours / VIX / regime, backlog reminders for high-conviction "
+            "signals the operator has not yet logged a decision for, persistent "
+            "state across restarts.  Takes precedence over --interval."
+        ),
+    )
     args = parser.parse_args()
 
     # Load .env into os.environ before any runtime os.environ.get() call.
@@ -1262,7 +1434,7 @@ def main() -> None:
     # At most one per launch in --interval mode to avoid notification spam.
     _clean_notified = False
 
-    def _run_cycle() -> None:
+    def _run_cycle() -> RunResult:
         nonlocal _force_next, _clean_notified
         result = run_once(force_account=_force_next)
         _force_next = False  # one-shot; cache resumes from here
@@ -1365,8 +1537,11 @@ def main() -> None:
             _macro = None
 
         _write_html_report(result, macro_dto=_macro)
+        return result
 
-    if args.interval > 0:
+    if args.agent:
+        _run_agent_loop(run_cycle=_run_cycle)
+    elif args.interval > 0:
         _shutdown = False
 
         def _handle_signal(signum: int, frame: Any) -> None:
