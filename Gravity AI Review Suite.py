@@ -4344,6 +4344,8 @@ class GravityAIAuditor:
         self.step_68_help_content_audit()
         # Prompt 6 — final consolidated help-explainers audit (10 checks from plan §7)
         self.step_68_help_explainers_audit()
+        # Robinhood agent trader — option 2 (autonomous advisory loop, no orders)
+        self.step_69_advisory_agent_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -10480,6 +10482,277 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_68_help_explainers_audit"] = audit
+
+    def step_69_advisory_agent_audit(self) -> None:
+        """Step 69 — Autonomous Advisory Agent (engine/advisory_agent.py) audit.
+
+        Background
+        ----------
+        The Robinhood agent trader option 2: a self-pacing loop that wraps
+        ``main.run_once()`` with:
+          * adaptive cadence (RTH-aware + VIX/regime-adaptive + error back-off)
+          * actionable-backlog reminders that re-ping high-conviction signals
+            the operator has NOT yet logged a decision for, on 1h/4h/24h tiers
+          * persistent state at ``output/agent_state.json``
+
+        ADVISORY-ONLY invariant: the module contains NO order-submission code
+        and never imports any broker.  All side effects route through the
+        existing ``alerting.notify()`` ntfy channel and ``main.run_once()``.
+
+        Checks
+        ------
+        1.  ``engine.advisory_agent`` module is importable.
+        2.  ``CONFIG`` dict carries every required threshold (no magic numbers
+            in the logic functions).
+        3.  ``AgentState`` / ``BacklogEntry`` / ``BacklogReminder`` are
+            dataclasses with the expected fields.
+        4.  ``compute_next_run_delay`` returns the RTH-normal delay during
+            midday RTH with low VIX and clean error history.
+        5.  ``compute_next_run_delay`` tightens cadence inside RTH when
+            VIX ≥ ``vol_spike_vix_threshold``.
+        6.  ``compute_next_run_delay`` returns the off-hours delay on a
+            weekend.
+        7.  Error back-off short-circuits the RTH path.
+        8.  ``update_backlog`` adds a high-conviction BUY signal.
+        9.  ``update_backlog`` drops a backlog item once a matching "acted"
+            decision-log entry exists.
+        10. ``compute_backlog_reminders`` does not fire until tier 1 (1 h) has
+            elapsed, and ``apply_reminder_dispatch`` advances the counter.
+        11. ``load_agent_state`` / ``save_agent_state`` round-trip.
+        12. ``load_agent_state`` returns a fresh state on corrupt JSON
+            (CONSTRAINT #6 — never raises).
+        13. ``engine/advisory_agent.py`` source contains NO order-submission
+            keywords (``submit_order``, ``place_order``, etc.) — ADVISORY ONLY.
+        14. ``main.py`` registers the ``--agent`` flag and defines
+            ``_run_agent_loop``.
+        15. ``tests/test_advisory_agent.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_69_advisory_agent_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            from datetime import datetime, timedelta, timezone
+            from pathlib import Path
+            from zoneinfo import ZoneInfo
+            import importlib
+            import inspect
+
+            # ── 1: importable ─────────────────────────────────────────────
+            mod = importlib.import_module("engine.advisory_agent")
+            audit["checks"].append({"check": "engine.advisory_agent importable", "passed": True})
+
+            # ── 2: CONFIG has every required key ──────────────────────────
+            required_cfg = {
+                "rth_normal_delay_s", "rth_high_vol_delay_s",
+                "rth_open_close_delay_s", "rth_open_close_window_minutes",
+                "extended_hours_delay_s", "off_hours_delay_s",
+                "error_backoff_base_s", "error_backoff_max_s",
+                "vol_spike_vix_threshold", "high_vol_regimes", "min_delay_s",
+                "backlog_conviction_threshold", "backlog_tier_hours",
+                "backlog_tier_priorities", "backlog_max_reminders",
+                "backlog_expiry_hours",
+                "decision_log_match_window_hours",
+            }
+            cfg_ok = required_cfg.issubset(set(mod.CONFIG.keys()))
+            all_pass = all_pass and cfg_ok
+            audit["checks"].append({
+                "check": "CONFIG dict contains all required thresholds",
+                "passed": bool(cfg_ok),
+                "detail": f"missing={sorted(required_cfg - set(mod.CONFIG.keys()))}",
+            })
+
+            # ── 3: dataclasses with expected fields ──────────────────────
+            dc_ok = (
+                hasattr(mod.AgentState, "__dataclass_fields__")
+                and {"cycle_count", "backlog", "consecutive_error_cycles"}.issubset(
+                    mod.AgentState.__dataclass_fields__)
+                and hasattr(mod.BacklogEntry, "__dataclass_fields__")
+                and {"symbol", "action", "conviction", "first_seen_iso",
+                     "last_pinged_iso", "reminders_sent"}.issubset(
+                    mod.BacklogEntry.__dataclass_fields__)
+                and hasattr(mod.BacklogReminder, "__dataclass_fields__")
+            )
+            all_pass = all_pass and dc_ok
+            audit["checks"].append({
+                "check": "AgentState / BacklogEntry / BacklogReminder dataclass fields",
+                "passed": bool(dc_ok),
+            })
+
+            # ── helpers for cadence tests ───────────────────────────────
+            _ET = ZoneInfo("America/New_York")
+            def _et(y, m, d, h, mi=0):
+                return datetime(y, m, d, h, mi, tzinfo=_ET).astimezone(timezone.utc)
+
+            state = mod.AgentState()
+
+            # ── 4: RTH normal delay (midday Monday, low VIX) ─────────────
+            d_normal = mod.compute_next_run_delay(
+                _et(2025, 6, 30, 12, 0),
+                state=state, vix=15.0, market_regime="RISK ON",
+            )
+            c4 = (d_normal == mod.CONFIG["rth_normal_delay_s"])
+            all_pass = all_pass and c4
+            audit["checks"].append({
+                "check": "RTH-normal cadence applies midday with low VIX",
+                "passed": bool(c4), "detail": f"delay={d_normal}",
+            })
+
+            # ── 5: high-VIX tightens cadence in RTH ──────────────────────
+            d_high = mod.compute_next_run_delay(
+                _et(2025, 6, 30, 12, 0),
+                state=state, vix=35.0, market_regime="RISK ON",
+            )
+            c5 = (d_high == mod.CONFIG["rth_high_vol_delay_s"])
+            all_pass = all_pass and c5
+            audit["checks"].append({
+                "check": "High-VIX (>=vol_spike_vix_threshold) tightens RTH cadence",
+                "passed": bool(c5), "detail": f"delay={d_high}",
+            })
+
+            # ── 6: off-hours delay on a weekend ──────────────────────────
+            d_weekend = mod.compute_next_run_delay(
+                _et(2025, 6, 28, 12, 0),  # Saturday
+                state=state, vix=15.0, market_regime="RISK ON",
+            )
+            c6 = (d_weekend == mod.CONFIG["off_hours_delay_s"])
+            all_pass = all_pass and c6
+            audit["checks"].append({
+                "check": "Off-hours cadence applies on weekend",
+                "passed": bool(c6), "detail": f"delay={d_weekend}",
+            })
+
+            # ── 7: error back-off short-circuits ─────────────────────────
+            err_state = mod.AgentState(consecutive_error_cycles=2)
+            d_err = mod.compute_next_run_delay(
+                _et(2025, 6, 30, 12, 0),
+                state=err_state, vix=15.0, market_regime="RISK ON",
+            )
+            c7 = (d_err != mod.CONFIG["rth_normal_delay_s"] and d_err >= mod.CONFIG["min_delay_s"])
+            all_pass = all_pass and c7
+            audit["checks"].append({
+                "check": "Error back-off short-circuits the RTH path",
+                "passed": bool(c7), "detail": f"delay={d_err}",
+            })
+
+            # ── 8: high-conviction BUY enters backlog ────────────────────
+            from dataclasses import dataclass as _dc
+            @_dc
+            class _R:
+                symbol: str; action: str; conviction: float
+            now = datetime(2025, 6, 30, 14, 0, tzinfo=timezone.utc)
+            st2 = mod.AgentState()
+            mod.update_backlog(st2, [_R("AAPL", "BUY", 0.90)], [], now)
+            c8 = ("AAPL:BUY" in st2.backlog)
+            all_pass = all_pass and c8
+            audit["checks"].append({
+                "check": "update_backlog inserts high-conviction BUY",
+                "passed": bool(c8),
+            })
+
+            # ── 9: acted decision drops backlog entry ────────────────────
+            @_dc
+            class _DE:
+                symbol: str; action_taken: str; timestamp: str
+            entry = _DE(
+                symbol="AAPL", action_taken="acted",
+                timestamp=(now + timedelta(hours=1)).isoformat(),
+            )
+            mod.update_backlog(st2, [_R("AAPL", "BUY", 0.90)], [entry], now + timedelta(hours=2))
+            c9 = ("AAPL:BUY" not in st2.backlog)
+            all_pass = all_pass and c9
+            audit["checks"].append({
+                "check": "update_backlog clears entry after matching 'acted' decision",
+                "passed": bool(c9),
+            })
+
+            # ── 10: tier-1 reminder fires after 1 h ──────────────────────
+            st3 = mod.AgentState(backlog={
+                "AAPL:BUY": mod.BacklogEntry(
+                    symbol="AAPL", action="BUY", conviction=0.90,
+                    first_seen_iso=now.isoformat(),
+                    last_pinged_iso="", reminders_sent=0,
+                )
+            })
+            no_reminders = mod.compute_backlog_reminders(st3, now + timedelta(minutes=30))
+            yes_reminders = mod.compute_backlog_reminders(st3, now + timedelta(hours=1, minutes=1))
+            c10a = (no_reminders == [] and len(yes_reminders) == 1 and yes_reminders[0].tier == 1)
+            mod.apply_reminder_dispatch(st3, yes_reminders, now + timedelta(hours=1, minutes=1))
+            c10b = (st3.backlog["AAPL:BUY"].reminders_sent == 1)
+            c10 = c10a and c10b
+            all_pass = all_pass and c10
+            audit["checks"].append({
+                "check": "Tier-1 reminder fires after 1 h; counter advances on dispatch",
+                "passed": bool(c10),
+            })
+
+            # ── 11: state round-trip ─────────────────────────────────────
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                p = Path(tmpdir) / "agent_state.json"
+                mod.save_agent_state(st3, p)
+                loaded = mod.load_agent_state(p)
+                c11 = (loaded.backlog["AAPL:BUY"].symbol == "AAPL"
+                       and loaded.backlog["AAPL:BUY"].reminders_sent == 1)
+                all_pass = all_pass and c11
+                audit["checks"].append({
+                    "check": "AgentState save/load round-trip",
+                    "passed": bool(c11),
+                })
+
+                # ── 12: corrupt JSON degrades to fresh state ─────────────
+                p2 = Path(tmpdir) / "corrupt.json"
+                p2.write_text("not json {", encoding="utf-8")
+                fresh = mod.load_agent_state(p2)
+                c12 = (fresh.cycle_count == 0 and fresh.backlog == {})
+                all_pass = all_pass and c12
+                audit["checks"].append({
+                    "check": "load_agent_state degrades to fresh state on corrupt JSON",
+                    "passed": bool(c12),
+                })
+
+            # ── 13: ADVISORY-ONLY — no order-submission keywords in source
+            src = Path("engine/advisory_agent.py").read_text(encoding="utf-8")
+            forbidden = ["submit_order", "place_order", "place_equity_order",
+                         "place_option_order", "buy_order", "sell_order"]
+            present = [kw for kw in forbidden if kw in src]
+            c13 = (present == [])
+            all_pass = all_pass and c13
+            audit["checks"].append({
+                "check": "ADVISORY-ONLY — engine/advisory_agent.py contains no order-submission keywords",
+                "passed": bool(c13),
+                "detail": f"forbidden_kws_found={present}",
+            })
+
+            # ── 14: main.py wires --agent flag and _run_agent_loop ───────
+            main_src = Path("main.py").read_text(encoding="utf-8")
+            c14 = ("'--agent'" in main_src or '"--agent"' in main_src) and ("_run_agent_loop" in main_src)
+            all_pass = all_pass and c14
+            audit["checks"].append({
+                "check": "main.py declares --agent flag and _run_agent_loop helper",
+                "passed": bool(c14),
+            })
+
+            # ── 15: test file exists ─────────────────────────────────────
+            c15 = Path("tests/test_advisory_agent.py").exists()
+            all_pass = all_pass and c15
+            audit["checks"].append({
+                "check": "tests/test_advisory_agent.py exists",
+                "passed": bool(c15),
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_69_advisory_agent_audit"] = audit
 
 
 # =============================================================================
