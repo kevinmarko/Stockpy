@@ -86,16 +86,14 @@ untracking + "169" doc sweep awaiting operator decision.
 | **Effort** | ~1 h |
 | **Domain** | Shared (flag in PR) |
 
-**Chosen approach: (A) cosmetic.** Reorder the 76 fields into labelled sections
-(`# ── Kelly sizing ──`, `# ── Macro / regime ──`, `# ── Market data ──`, …) with
-section-comment banners. **Keep flat field names** so the ~200 `settings.KELLY_CAP`-style
-call sites are untouched. 80% of the readability win, zero refactor risk.
-
-1. Inventory: `grep -rhoE "settings\.[A-Z_]+" --include="*.py" . | sort -u` — the
-   regression checklist (every name must keep resolving).
-2. Reorder + comment-band. No field renames, no nesting.
-3. Verify: `pytest tests/test_settings.py -v` (clean-env defaults test is the canary) +
-   full suite.
+**Chosen approach: (A) cosmetic.** ✅ **Done.** The file was already loosely
+banner-grouped, so the realized work was: (1) a **24-section index** comment block at the
+top of `Settings` documenting declaration order + an explicit "do NOT nest — flat names
+are load-bearing" note; (2) **deduped an accidental duplicate** — `RH_USERNAME` /
+`RH_PASSWORD` / `RH_MFA_SECRET` were each defined **twice** (the second silently
+overriding the first), now a single definition with the merged richer descriptions.
+**Flat field names preserved** (zero call-site changes). `model_fields` = 73; clean-env
+defaults test + full suite (1571 passed) green.
 
 > Follow-up (deferred): approach (B) true nested Pydantic models with `@property` shims —
 > only if nested access is later desired.
@@ -223,7 +221,7 @@ Phase 6  aggregator ─────► PR (conditional — profile first)
 | 1.1 Untrack DB | ⏸ deferred | — | DB ships empty — "169 trades" doc drift; needs decision |
 | 1.2 TODO reword | ✅ done | — | forecasting_engine Stage-4 note |
 | 1.3 Stale CLAUDE notes | ✅ n/a | — | not in committed file |
-| 2 Settings (A) | ⬜ planned | — | |
+| 2 Settings (A) | ✅ done | — | section index + deduped accidental RH_* triple; 73 fields, flat names preserved |
 | 3a Advisory async | ⬜ planned | — | |
 | 3b Pandera tier | ⬜ planned | — | |
 | 3c Streamlit cache | ⬜ planned | — | ⚠️ Antigravity |
