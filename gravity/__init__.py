@@ -4346,6 +4346,7 @@ class GravityAIAuditor:
         # Robinhood agent trader — option 2 (autonomous advisory loop, no orders)
         self.step_69_advisory_agent_audit()
         self.step_70_trade_signals_audit()
+        self.step_71_robinhood_orders_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -10955,3 +10956,204 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_70_trade_signals_audit"] = audit
+
+    def step_71_robinhood_orders_audit(self) -> None:
+        """Step 71 — Robinhood realized-P&L engine (data/robinhood_orders.py) audit.
+
+        Background
+        ----------
+        Read-only realized-P&L engine: fetches FILLED equity orders and
+        reconstructs closed round-trip trades via FIFO lot-matching, feeding the
+        calibration tracker / fractional-Kelly population.  ADVISORY ONLY — no
+        order-submission, modification, or cancellation code; the fetch path is
+        strictly read (``get_all_stock_orders``).
+
+        Checks
+        ------
+        1.  ``data.robinhood_orders`` importable; public surface present.
+        2.  ``reconstruct_closed_trades`` is pure FIFO — splits a sell across
+            two buy lots into the correct closed trades.
+        3.  Realized P&L and return % are computed correctly for a round-trip.
+        4.  An excess/short sell drops the unmatched quantity (CONSTRAINT #4 —
+            never fabricated as a zero-cost entry).
+        5.  Output is sorted by ``exit_ts`` ascending.
+        6.  ``realized_pnl_summary([])`` is NaN-shaped (no fabricated zeros).
+        7.  Win rate + profit factor computed correctly; profit factor is NaN
+            with no losing trades.
+        8.  ``parse_orders`` keeps only ``state == "filled"`` and resolves
+            symbols via the injected resolver.
+        9.  ``fetch_filled_orders`` is dead-letter resilient — an injected
+            fetcher that raises yields ``[]`` (never raises).
+        10. ADVISORY-ONLY — no order-submission keywords in the source; the
+            test file exists.
+        """
+        audit: dict = {
+            "step": "step_71_robinhood_orders_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import importlib
+            import math
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            mod = importlib.import_module("data.robinhood_orders")
+            surface_ok = all(hasattr(mod, n) for n in (
+                "OrderFill", "ClosedTrade", "reconstruct_closed_trades",
+                "realized_pnl_summary", "parse_orders", "fetch_filled_orders",
+                "realized_performance",
+            ))
+            all_pass = all_pass and surface_ok
+            audit["checks"].append({
+                "check": "data.robinhood_orders importable with full public surface",
+                "passed": bool(surface_ok),
+            })
+
+            def _fill(sym, side, qty, price, day):
+                return mod.OrderFill(
+                    symbol=sym, side=side, quantity=qty, price=price,
+                    timestamp=datetime(2026, 1, day, 15, 0, tzinfo=timezone.utc),
+                    order_id=f"{sym}-{side}-{day}",
+                )
+
+            # ── 2: FIFO split across two lots ─────────────────────────────
+            trades = mod.reconstruct_closed_trades([
+                _fill("AAPL", "buy", 10, 100.0, 1),
+                _fill("AAPL", "buy", 10, 110.0, 2),
+                _fill("AAPL", "sell", 15, 120.0, 10),
+            ])
+            c2 = (len(trades) == 2
+                  and trades[0].quantity == 10 and trades[0].entry_price == 100.0
+                  and trades[1].quantity == 5 and trades[1].entry_price == 110.0)
+            all_pass = all_pass and c2
+            audit["checks"].append({
+                "check": "reconstruct_closed_trades splits a sell across two FIFO lots",
+                "passed": bool(c2),
+            })
+
+            # ── 3: realized P&L + return% correct ────────────────────────
+            c3 = (abs(sum(t.realized_pnl for t in trades) - 250.0) < 1e-6
+                  and abs(trades[0].return_pct - 20.0) < 1e-6)
+            all_pass = all_pass and c3
+            audit["checks"].append({
+                "check": "realized P&L and return% computed correctly",
+                "passed": bool(c3),
+            })
+
+            # ── 4: excess sell dropped (no fabrication) ──────────────────
+            ex = mod.reconstruct_closed_trades([
+                _fill("S", "buy", 5, 10.0, 1),
+                _fill("S", "sell", 8, 12.0, 2),
+            ])
+            c4 = (len(ex) == 1 and ex[0].quantity == 5)
+            all_pass = all_pass and c4
+            audit["checks"].append({
+                "check": "excess/short sell drops unmatched qty (CONSTRAINT #4)",
+                "passed": bool(c4),
+            })
+
+            # ── 5: sorted by exit_ts ─────────────────────────────────────
+            srt = mod.reconstruct_closed_trades([
+                _fill("AAA", "buy", 1, 10.0, 1), _fill("BBB", "buy", 1, 10.0, 1),
+                _fill("BBB", "sell", 1, 11.0, 3), _fill("AAA", "sell", 1, 11.0, 2),
+            ])
+            c5 = ([t.symbol for t in srt] == ["AAA", "BBB"])
+            all_pass = all_pass and c5
+            audit["checks"].append({
+                "check": "closed trades sorted by exit_ts ascending",
+                "passed": bool(c5),
+            })
+
+            # ── 6: empty summary NaN-shaped ──────────────────────────────
+            es = mod.realized_pnl_summary([])
+            c6 = (es["n_trades"] == 0
+                  and math.isnan(es["win_rate"]) and math.isnan(es["profit_factor"]))
+            all_pass = all_pass and c6
+            audit["checks"].append({
+                "check": "empty summary is NaN-shaped (no fabricated zeros)",
+                "passed": bool(c6),
+            })
+
+            # ── 7: win rate + profit factor ──────────────────────────────
+            mix = mod.reconstruct_closed_trades([
+                _fill("A", "buy", 1, 100.0, 1), _fill("A", "sell", 1, 120.0, 2),
+                _fill("B", "buy", 1, 100.0, 1), _fill("B", "sell", 1, 90.0, 2),
+                _fill("C", "buy", 1, 100.0, 1), _fill("C", "sell", 1, 110.0, 2),
+            ])
+            sm = mod.realized_pnl_summary(mix)
+            nl = mod.realized_pnl_summary(mod.reconstruct_closed_trades([
+                _fill("A", "buy", 1, 100.0, 1), _fill("A", "sell", 1, 110.0, 2),
+            ]))
+            c7 = (abs(sm["win_rate"] - 2 / 3) < 1e-9
+                  and abs(sm["profit_factor"] - 3.0) < 1e-9
+                  and math.isnan(nl["profit_factor"]))
+            all_pass = all_pass and c7
+            audit["checks"].append({
+                "check": "win rate + profit factor correct; NaN PF with no losses",
+                "passed": bool(c7),
+            })
+
+            # ── 8: parse_orders filled-only + resolver ───────────────────
+            raw = [
+                {"state": "filled", "side": "buy", "cumulative_quantity": "10",
+                 "average_price": "100", "last_transaction_at": "2026-01-01T15:00:00Z",
+                 "instrument": "https://x/inst/uuid1/", "id": "a"},
+                {"state": "cancelled", "side": "buy", "cumulative_quantity": "5",
+                 "average_price": "90", "last_transaction_at": "2026-01-01T15:00:00Z",
+                 "instrument": "https://x/inst/uuid1/", "id": "b"},
+            ]
+            parsed = mod.parse_orders(raw, lambda u: "AAPL" if "uuid1" in u else None)
+            c8 = (len(parsed) == 1 and parsed[0].symbol == "AAPL" and parsed[0].side == "buy")
+            all_pass = all_pass and c8
+            audit["checks"].append({
+                "check": "parse_orders keeps filled-only and resolves symbols",
+                "passed": bool(c8),
+            })
+
+            # ── 9: fetch dead-letter resilience ──────────────────────────
+            def _boom():
+                raise RuntimeError("network down")
+            # Point the cache at a guaranteed-missing path so no stale cache hides the failure.
+            import tempfile
+            with tempfile.TemporaryDirectory() as td:
+                old = mod._CACHE_PATH
+                try:
+                    mod._CACHE_PATH = Path(td) / "missing.json"
+                    got = mod.fetch_filled_orders(force=True, orders_fetcher=_boom,
+                                                  symbol_resolver=lambda u: "AAPL")
+                finally:
+                    mod._CACHE_PATH = old
+            c9 = (got == [])
+            all_pass = all_pass and c9
+            audit["checks"].append({
+                "check": "fetch_filled_orders returns [] on fetcher failure (CONSTRAINT #6)",
+                "passed": bool(c9),
+            })
+
+            # ── 10: ADVISORY-ONLY source + test file ─────────────────────
+            src = Path("data/robinhood_orders.py").read_text(encoding="utf-8").lower()
+            forbidden = ["submit_order", "place_order", "place_equity_order",
+                         "place_option_order", "buy_order", "sell_order",
+                         "order_buy", "order_sell", "cancel_order"]
+            present = [kw for kw in forbidden if kw in src]
+            test_exists = Path("tests/test_robinhood_orders.py").exists()
+            c10 = (present == [] and test_exists)
+            all_pass = all_pass and c10
+            audit["checks"].append({
+                "check": "ADVISORY-ONLY source (no order keywords); test file exists",
+                "passed": bool(c10),
+                "detail": f"forbidden={present} test={test_exists}",
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_71_robinhood_orders_audit"] = audit
