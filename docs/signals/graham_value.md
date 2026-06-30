@@ -96,7 +96,8 @@ string fields (currency symbols, `%`, `"N/A"`) before passing them to calculatio
 
 ## Empirical Notes
 
-- In the 169-trade seeded database, the Graham signal has a slightly positive win-rate
+- In the reconstructed closed-trade population (from Robinhood filled-order history via
+  `data/robinhood_orders.py`), the Graham signal has a slightly positive win-rate
   correlation (stocks below Graham Number that were bought tended to outperform), but
   the sample is not large enough to draw firm conclusions for individual tickers.
 - Weight of 15.0 reflects that pure Graham value is a useful sanity check but not a

@@ -73,7 +73,8 @@ intentional and validated by the strategy harness.
 - The chop filter eliminates the most common MACD failure mode: false crossovers in
   range-bound markets. Backtests show the gated MACD has ~40% fewer false positives than
   the raw indicator when the SPY Aroon Oscillator is below 50.
-- The −15/+10 asymmetry was calibrated on the 169 seeded trades: bearish crossovers in
+- The −15/+10 asymmetry was calibrated on the closed-trade population reconstructed from
+  Robinhood filled-order history (`data/robinhood_orders.py`): bearish crossovers in
   trending markets preceded losses more reliably than bullish crossovers preceded gains,
   consistent with the empirical asymmetry in equity risk premia.
 - For MACD parameters, the 12/26/9 default is used. Changing these is not recommended

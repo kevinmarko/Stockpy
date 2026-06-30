@@ -57,14 +57,16 @@ in `CLAUDE.md`), and earlier phases de-risk later ones.
   (b) defensively anchor `universe_engine.CACHE_PATH`/`DELISTED_PATH` to `_MODULE_DIR`
   (`os.path.abspath(__file__)`) instead of CWD, matching `data/robinhood_portfolio.py`.
   **Result: 1571 passed, 0 failed — now reproducible on a clean checkout.**
-- **1.1 Untrack `quant_platform.db`** — ⏸ **DEFERRED pending operator decision.**
-  Discovery: the committed DB has **0 rows** in both `trades` and `Transactions` — it
-  ships **empty**. This contradicts the "169 seeded trades" claim repeated in `CLAUDE.md`
-  (L124), `docs/HOW_TO_GUIDE.md` (L80/365/420/1317), and `docs/signals/*.md`. Options to
-  decide: (a) accept empty + untrack + sweep all "169" docs to "ships empty, rebuild via
-  `database_setup.py`"; (b) regenerate the 169 trades (needs the Robinhood order-history
-  source); (c) leave tracked, just document the discrepancy. **No data is at risk** — the
-  artifact is already empty.
+- **1.1 "169 seeded trades" doc drift** — ✅ **Resolved (option a — accept empty + doc sweep).**
+  The committed DB has **0 rows** in both `trades` and `Transactions` — it ships **empty**.
+  The phantom "169 seeded trades" claim was swept from `CLAUDE.md` (L125),
+  `docs/HOW_TO_GUIDE.md` (L80/365/420/1317), `docs/signals/macd_momentum.md`, and
+  `docs/signals/graham_value.md` to state the honest reality: the closed-trade population
+  is **reconstructed on demand** from Robinhood filled-order history via
+  `data/robinhood_orders.py` (Tier 7) and accumulates live; until ≥ 30 trades exist,
+  `_calculate_kelly_sizing()` takes the vol-target fallback path. The misleading
+  "Never assume the production DB is empty" guidance in `CLAUDE.md` was inverted. The DB
+  file is left tracked (no data at risk; untracking deferred as a separate low-value call).
 - **1.2 Reword the lone TODO** ✅ — `forecasting_engine.py` `TODO(Stage 4)` → "Future
   direction (Stage 4): …" so it reads as a tracked design decision, not a defect, and no
   longer trips TODO-grep tooling.
@@ -258,7 +260,7 @@ Phase 6  aggregator ─────► PR (conditional — profile first)
 |---|---|---|---|
 | 0 Baseline | ✅ done | — | 1571 passed, reproducible on clean checkout |
 | 1.0 delisted fixture fix | ✅ done | — | committed gitignored fixture + module-anchored paths |
-| 1.1 Untrack DB | ⏸ deferred | — | DB ships empty — "169 trades" doc drift; needs decision |
+| 1.1 "169 trades" doc drift | ✅ done | — | DB ships empty; swept phantom "169 seeded" claim from CLAUDE.md + 4 docs; inverted "never assume empty" note |
 | 1.2 TODO reword | ✅ done | — | forecasting_engine Stage-4 note |
 | 1.3 Stale CLAUDE notes | ✅ n/a | — | not in committed file |
 | 2 Settings (A) | ✅ done | — | section index + deduped accidental RH_* triple; 73 fields, flat names preserved |
