@@ -61,6 +61,7 @@ import argparse
 import logging
 import signal
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1123,8 +1124,23 @@ def run_once(force_account: bool = False) -> RunResult:
     context_extras = _build_context_extras(symbols, bars_dict, macro_dto)
 
     # ── Stage E: Per-symbol advisory evaluation ───────────────────────────────
+    # Each evaluate() call is independent (engine.advisory constructs its engines
+    # per call; the shared inputs — snapshot, market, macro_dto, context_extras —
+    # are read-only during the loop), so the loop parallelizes across a bounded
+    # thread pool.  The win is per-symbol network I/O (quote fetch) plus the
+    # native-compute sections (numpy/pandas/statsmodels/arch release the GIL).
+    # Results are reassembled in the ORIGINAL symbol order so the Sheet/HTML/
+    # snapshot output and logs are byte-identical regardless of completion order
+    # or worker count.  Dead-letter semantics are preserved exactly: a per-symbol
+    # exception becomes an entry in RunResult.errors and never aborts the run.
     logger.info("Evaluating %d symbols...", len(symbols))
-    for symbol in symbols:
+
+    def _eval_one(symbol: str):
+        """Return ('ok', Recommendation) or ('err', error_dict) for one symbol.
+
+        Never raises — mirrors the original per-symbol try/except so a single
+        bad ticker is dead-lettered, not propagated (CONSTRAINT #6).
+        """
         try:
             position = snapshot.positions.get(symbol)
             rec = advisory_evaluate(
@@ -1135,6 +1151,33 @@ def run_once(force_account: bool = False) -> RunResult:
                 macro_dto=macro_dto,
                 context_extras=context_extras,
             )
+            return ("ok", rec)
+        except Exception as exc:
+            return ("err", {
+                "symbol": symbol,
+                "stage": "advisory_evaluate",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+    workers = max(1, int(getattr(settings, "ADVISORY_MAX_CONCURRENCY", 8)))
+    if workers == 1 or len(symbols) <= 1:
+        # Sequential path — original, fully-deterministic behavior.
+        results_by_symbol = {sym: _eval_one(sym) for sym in symbols}
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(symbols))) as pool:
+            # executor.map preserves input order; we still key by symbol below
+            # so the assembly pass is order-explicit and robust.
+            mapped = pool.map(_eval_one, symbols)
+            results_by_symbol = {sym: res for sym, res in zip(symbols, mapped)}
+
+    # Ordered assembly: rebuild recommendations/errors and emit logs in the
+    # original symbol order so output is deterministic.
+    for symbol in symbols:
+        kind, payload = results_by_symbol[symbol]
+        if kind == "ok":
+            rec = payload
             recommendations.append(rec)
             logger.info(
                 "  %-6s  %-10s  conviction=%.2f  quality=%-7s  pos=%.1f%%",
@@ -1144,15 +1187,9 @@ def run_once(force_account: bool = False) -> RunResult:
                 rec.data_quality,
                 rec.suggested_position_pct * 100.0,
             )
-        except Exception as exc:
-            logger.warning("Advisory failed for %s: %s", symbol, exc)
-            errors.append({
-                "symbol": symbol,
-                "stage": "advisory_evaluate",
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+        else:
+            logger.warning("Advisory failed for %s: %s", symbol, payload["message"])
+            errors.append(payload)
 
     finished_at = datetime.now(timezone.utc)
     result = RunResult(

@@ -485,6 +485,70 @@ class TestRunOnce:
 
 
 # ---------------------------------------------------------------------------
+# Concurrency: sequential (workers=1) vs parallel (workers>1) equivalence
+# ---------------------------------------------------------------------------
+
+class TestAdvisoryConcurrency:
+    """Phase 3a — the parallelized advisory loop must produce byte-identical,
+    deterministically-ordered output regardless of ``ADVISORY_MAX_CONCURRENCY``.
+    """
+
+    _UNIVERSE = "AAPL,MSFT,GOOG,NVDA,TSLA,JNJ,AGNC,SPY"
+
+    def _run_with_workers(
+        self, workers: int, monkeypatch: pytest.MonkeyPatch, fail_symbol: str | None = None
+    ) -> RunResult:
+        monkeypatch.setenv("WATCHLIST", self._UNIVERSE)
+        monkeypatch.setattr(m.settings, "ADVISORY_MAX_CONCURRENCY", workers, raising=False)
+
+        def _eval_side(symbol: str, **kw: Any) -> Recommendation:
+            if fail_symbol is not None and symbol == fail_symbol:
+                raise RuntimeError(f"boom:{symbol}")
+            # Deterministic, symbol-dependent recommendation so order matters.
+            return _make_recommendation(symbol, "BUY" if symbol < "M" else "HOLD")
+
+        with patch(_PATCH_SNAPSHOT) as mock_snap, \
+             patch(_PATCH_PROVIDER), \
+             patch(_PATCH_EVALUATE) as mock_eval, \
+             patch(_PATCH_MACRO) as mock_macro, \
+             patch(_PATCH_BARS, return_value={}), \
+             patch(_PATCH_CTX, return_value={}):
+            mock_snap.return_value = _make_snapshot(positions={})
+            mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
+            mock_eval.side_effect = _eval_side
+            return run_once()
+
+    def test_parallel_matches_sequential_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seq = self._run_with_workers(1, monkeypatch)
+        par = self._run_with_workers(8, monkeypatch)
+        # Same recommendations, same ORDER (universe order, deduped+sorted by
+        # _build_universe), regardless of worker completion order.
+        assert [r.symbol for r in seq.recommendations] == [r.symbol for r in par.recommendations]
+        assert [r.action for r in seq.recommendations] == [r.action for r in par.recommendations]
+        assert len(par.recommendations) == 8
+        assert par.errors == []
+
+    def test_parallel_dead_letter_matches_sequential(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seq = self._run_with_workers(1, monkeypatch, fail_symbol="NVDA")
+        par = self._run_with_workers(8, monkeypatch, fail_symbol="NVDA")
+        # The failing symbol is dead-lettered identically in both paths.
+        assert [r.symbol for r in seq.recommendations] == [r.symbol for r in par.recommendations]
+        assert "NVDA" not in {r.symbol for r in par.recommendations}
+        assert len(par.errors) == 1 == len(seq.errors)
+        assert par.errors[0]["symbol"] == "NVDA"
+        assert par.errors[0]["stage"] == "advisory_evaluate"
+        assert par.errors[0]["error_type"] == "RuntimeError"
+
+    def test_zero_or_negative_workers_falls_back_to_sequential(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # max(1, ...) guard means 0 / negative never crashes the pool.
+        res = self._run_with_workers(0, monkeypatch)
+        assert len(res.recommendations) == 8
+        assert res.errors == []
+
+
+# ---------------------------------------------------------------------------
 # RunResult immutability
 # ---------------------------------------------------------------------------
 

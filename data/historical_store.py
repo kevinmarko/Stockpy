@@ -228,6 +228,12 @@ class HistoricalStore:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
         conn.execute("PRAGMA journal_mode=WAL")
+        # Make concurrent writers (e.g. the parallelized advisory loop in main.py)
+        # WAIT up to 5 s for the write lock instead of immediately raising
+        # SQLITE_BUSY. WAL already permits 1 writer + N readers; the busy timeout
+        # serializes the rare concurrent-write case gracefully rather than
+        # dead-lettering a symbol's fundamentals on lock contention.
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     def _ensure_tables(self) -> None:
