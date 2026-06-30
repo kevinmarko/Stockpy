@@ -4553,7 +4553,7 @@ class GravityAIAuditor:
         # ------------------------------------------------------------------
         try:
             import re
-            with open("gui/panels.py", encoding="utf-8") as fh:
+            with open("gui/panels/__init__.py", encoding="utf-8") as fh:
                 panels_src = fh.read()
             # Extract from render_observability start to the next def (or EOF)
             obs_match = re.search(
@@ -7721,7 +7721,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c2
 
             # Check 3: GUI Strategy Matrix toggle gate (source-grep)
-            panels_src = Path("gui/panels.py").read_text(encoding="utf-8")
+            panels_src = Path("gui/panels/__init__.py").read_text(encoding="utf-8")
             c3 = (
                 "ADVISORY_ONLY" in panels_src
                 and "Advisory mode — broker execution disabled" in panels_src
@@ -9672,7 +9672,7 @@ class GravityAIAuditor:
 
             # 9. gui/panels.py references recommendation_tracking_report
             try:
-                panels_src = (_repo / "gui" / "panels.py").read_text(encoding="utf-8")
+                panels_src = (_repo / "gui" / "panels" / "__init__.py").read_text(encoding="utf-8")
                 ok9 = "recommendation_tracking_report" in panels_src
             except Exception:
                 ok9 = False
@@ -10448,7 +10448,7 @@ class GravityAIAuditor:
             # ----------------------------------------------------------------
             # C9 — panels.py has ≥10 explain() calls, all 10 tab IDs covered
             # ----------------------------------------------------------------
-            panels_path = Path("gui/panels.py")
+            panels_path = Path("gui/panels/__init__.py")
             panels_src = panels_path.read_text(encoding="utf-8") if panels_path.exists() else ""
             total_calls = panels_src.count("help_widgets.explain(")
             tab_ids_in_panels = [
