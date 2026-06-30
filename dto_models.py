@@ -13,6 +13,37 @@ import logging
 logger = logging.getLogger("DTO_Validator")
 
 
+def normalize_yfinance_dividend_yield(info: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert yfinance's percent-style ``dividendYield`` to the fraction the
+    rest of the platform expects, mutating and returning ``info``.
+
+    yfinance (the pinned 1.5.1, verified against ``dividendRate / price``)
+    returns ``dividendYield`` as a **percent** — e.g. ``2.57`` for a 2.57%
+    yield. Every other ingestion path produces a **fraction**: ``FinnhubProvider``
+    divides by 100 explicitly, ``BaseDTO._to_float("2.57%")`` yields ``0.0257``,
+    and the mock engines use fractions (``0.02``). Without this normalization a
+    yfinance-sourced holding's yield is ~100× too large, which:
+
+      * makes the Gordon fair value (``annual_dividend = price * yield``) ~100×
+        too high, and
+      * trips the dividend HOLD-bias and ``dividend_yield > 0.03`` score gates
+        for essentially every dividend payer.
+
+    Only a finite, non-bool numeric value is divided. A string such as
+    ``"2.57%"`` is left untouched so the percent-aware ``_to_float`` path is the
+    sole converter and the value can never be double-divided.
+    """
+    dy = info.get("dividendYield")
+    if (
+        isinstance(dy, (int, float))
+        and not isinstance(dy, bool)
+        and math.isfinite(float(dy))
+        and dy
+    ):
+        info["dividendYield"] = float(dy) / 100.0
+    return info
+
+
 class BaseDTO:
     """Base class providing safe data parsing and conversion utilities for all DTOs."""
     

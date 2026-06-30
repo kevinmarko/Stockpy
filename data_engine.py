@@ -161,9 +161,12 @@ class DataEngine(IDataProvider):
         total = len(tickers)
         for idx, symbol in enumerate(tickers, 1):
             try:
+                from dto_models import normalize_yfinance_dividend_yield
                 t = yf.Ticker(symbol)
+                # yfinance returns dividendYield as a PERCENT; normalise to the
+                # fraction the platform expects (mirrors the Finnhub /100 path).
                 ticker_data = {
-                    'info': t.info or {},
+                    'info': normalize_yfinance_dividend_yield(dict(t.info or {})),
                     'dividends': t.dividends if hasattr(t, 'dividends') else pd.Series(dtype='float64'),
                     'financials': t.financials if hasattr(t, 'financials') else pd.DataFrame()
                 }

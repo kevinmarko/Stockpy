@@ -367,9 +367,12 @@ class YFinanceProvider(MarketDataProvider):
         """
         try:
             import yfinance as yf  # type: ignore
+            from dto_models import normalize_yfinance_dividend_yield
 
             info = yf.Ticker(symbol).info or {}
-            return dict(info)
+            # yfinance returns dividendYield as a PERCENT; normalise to the
+            # fraction the platform (and the Finnhub path) use. See the helper.
+            return normalize_yfinance_dividend_yield(dict(info))
         except Exception as exc:
             logger.warning(
                 "YFinanceProvider.get_fundamentals(%s) failed: %s — returning empty dict",
@@ -656,8 +659,10 @@ class FinnhubProvider:
             for fh_key, yf_key in self._METRIC_MAP.items():
                 val = metrics.get(fh_key)
                 if val is not None:
-                    # Finnhub returns dividendYield as percent (e.g. 0.52 = 0.52%)
-                    # yfinance returns it as a fraction (0.0052) — normalise
+                    # Finnhub returns dividendYield as percent (e.g. 0.52 = 0.52%);
+                    # normalise to the fraction the platform expects. (yfinance ALSO
+                    # returns percent now and is normalised at its own ingestion
+                    # path via dto_models.normalize_yfinance_dividend_yield.)
                     if yf_key == "dividendYield" and isinstance(val, (int, float)):
                         val = val / 100.0
                     info[yf_key] = val
