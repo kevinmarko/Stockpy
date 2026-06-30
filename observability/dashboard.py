@@ -93,7 +93,6 @@ st.set_page_config(
 # Data loaders (all cached with TTL)
 # ---------------------------------------------------------------------------
 
-@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
 def _load_state_snapshot() -> dict:
     """Load the orchestrator's last state snapshot from JSON.
 
@@ -101,13 +100,28 @@ def _load_state_snapshot() -> dict:
     after every successful pipeline run.  It contains the macro regime, VIX,
     HMM risk-on probability, and one entry per ticker signal.
 
-    Returns an empty dict if the file does not exist or is malformed —
-    callers handle missing keys gracefully with ``.get(..., "—")``.
+    The cache is keyed on the file's **mtime**, so a fresh run is reflected on
+    the next render rather than after up to ``DASHBOARD_REFRESH_SECONDS`` of
+    staleness. Returns an empty dict if the file does not exist or is malformed
+    — callers handle missing keys gracefully with ``.get(..., "—")``.
     """
     snap = settings.OUTPUT_DIR / "state_snapshot.json"
-    if snap.exists():
+    try:
+        mtime = snap.stat().st_mtime if snap.exists() else 0.0
+    except OSError:
+        mtime = 0.0
+    return _load_state_snapshot_cached(str(snap), mtime)
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_state_snapshot_cached(path: str, _mtime: float) -> dict:
+    """Read + parse the snapshot JSON. ``_mtime`` participates in the cache key
+    only — a changed mtime is a cache miss and forces a fresh read."""
+    from pathlib import Path as _Path
+    p = _Path(path)
+    if p.exists():
         try:
-            return json.loads(snap.read_text(encoding="utf-8"))
+            return json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             pass
     return {}
