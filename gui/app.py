@@ -174,6 +174,7 @@ tab_labels = [
     "📡 Live Inventory",
     "❓ Help",
     "📝 Prompts",
+    "🪄 AI Insights",
 ]
 tabs = st.tabs(tab_labels)
 
@@ -201,5 +202,7 @@ with tabs[10]:
     safe_panel(panels.render_help)
 with tabs[11]:
     safe_panel(panels.render_prompt_registry)
+with tabs[12]:
+    safe_panel(panels.render_ai_insights)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")
