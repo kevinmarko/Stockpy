@@ -363,10 +363,13 @@ def detect_price_triggers(
         stop_level = max(stop_level, 0.01)
 
         # ── Target level (forecast first, ATR fallback) ──────────────────
-        # The 30-day forecast IS the take-profit objective; if it is already
-        # at/below price the proximity test below fires immediately (price has
-        # reached the model's target).  ATR target is the no-forecast fallback.
-        if _finite(forecast) and forecast > 0:
+        # Only a BULLISH forecast (above current price) is a meaningful
+        # take-profit target for a long position.  A bearish forecast (below
+        # price) must NOT be used as a target — it would make the proximity
+        # test fire immediately since price >= bearish_target*(1-prox) is
+        # trivially true, alerting "near target" on every position the model
+        # expects to decline.  Fall through to the ATR-based target instead.
+        if _finite(forecast) and forecast > price:
             target_level: float = forecast
         elif _finite(atr) and atr > 0:
             target_level = avg_cost + target_mult * atr

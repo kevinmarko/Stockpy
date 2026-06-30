@@ -243,12 +243,28 @@ class TestPriceTriggers:
         assert math.isclose(alerts[0].detail["target_level"], 130.0)
         assert alerted["NVDA"] == "target"
 
-    def test_target_already_exceeded(self):
-        # Forecast below price → price has met/passed the model target → fire.
-        rec = self._rec(forecast=120.0)
+    def test_target_atr_fires_when_price_exceeds_atr_target(self):
+        # forecast=120 is BELOW price=125, so it is NOT used as a target (a
+        # bearish forecast is not a take-profit level).  But ATR=3 still gives
+        # an ATR-based target of cost + 3*3 = 109, which price 125 has already
+        # cleared → fires via the ATR fallback.
+        rec = self._rec(forecast=120.0)  # forecast < price; ATR=3 still present
         snap = _Snap({"NVDA": _Pos("NVDA", 10, 100.0, 125.0, 1250.0, 25.0)})
         alerts, _ = detect_price_triggers(snap, [rec], {})
         assert alerts and alerts[0].kind == "approaching_target"
+        assert math.isclose(alerts[0].detail["target_level"], 109.0)  # ATR path
+
+    def test_bearish_forecast_without_atr_does_not_fire_target(self):
+        # Regression test for the 2026-06-30 bug: a bearish forecast (below
+        # current price) with no ATR previously produced a spurious "approaching
+        # target" alert because the proximity test trivially passes when the
+        # "target" is lower than the current price.
+        # Fix: forecast is only used when forecast > price.
+        rec = _Rec("NVDA", "HOLD", 0.5, forecast=80.0, key_indicators={})  # bearish, no ATR
+        snap = _Snap({"NVDA": _Pos("NVDA", 10, 100.0, 100.0, 1000.0, 0.0)})
+        alerts, alerted = detect_price_triggers(snap, [rec], {})
+        assert alerts == [], "bearish forecast without ATR must not fire a target alert"
+        assert alerted == {}
 
     def test_target_atr_fallback_when_no_forecast(self):
         # No forecast, atr 3 → target = cost + 3*3 = 109. price 108 → within band.
