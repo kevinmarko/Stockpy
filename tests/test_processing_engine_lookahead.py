@@ -23,30 +23,18 @@ coverage pass) — not duplicated here.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from processing_engine import ProcessingEngine
-from tests.lookahead_check import verify_no_lookahead
-
-np.random.seed(7)
+from tests.lookahead_check import verify_no_lookahead, make_synthetic_ohlcv
 
 
 @pytest.fixture
 def synthetic_ohlcv_data() -> pd.DataFrame:
     """300 days -- long enough for SMA_200/Aroon(25)/Coppock warm-up to be
     fully past by the mid-series cutoff used in these tests."""
-    dates = pd.date_range(end="2026-06-24", periods=300)
-    close = 100.0 + np.cumsum(np.random.normal(0, 1.0, 300))
-    open_p = close + np.random.normal(0, 0.5, 300)
-    high = np.maximum(close, open_p) + np.random.uniform(0, 1.0, 300)
-    low = np.minimum(close, open_p) - np.random.uniform(0, 1.0, 300)
-    volume = np.random.randint(1000, 10000, 300).astype(float)
-    return pd.DataFrame(
-        {"Open": open_p, "High": high, "Low": low, "Close": close, "Volume": volume},
-        index=dates,
-    )
+    return make_synthetic_ohlcv(periods=300, seed=7)
 
 
 class TestCalculateTechnicalMetricsLookahead:

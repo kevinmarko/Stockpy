@@ -96,6 +96,7 @@ from unittest import mock
 import pytest
 
 import transactions_store
+from tests._db_isolation import make_memory_db_init
 
 
 # ============================================================================
@@ -119,21 +120,11 @@ def orchestrator_run(tmp_path_factory):
     fake_market_provider.get_intraday_bars.side_effect = Exception("no network in test sandbox")
     fake_market_provider.get_fundamentals.side_effect = Exception("no network in test sandbox")
 
-    original_ts_init = transactions_store.TransactionsStore.__init__
-
-    def _mem_init(self, db_url=None):  # noqa: ANN001
-        original_ts_init(self, db_url="sqlite:///:memory:")
-
     # run_pipeline()'s Technical Options step also hardcodes `IVHistoryStore()`
     # with no injection point -- same real-on-disk-DB pitfall as
     # TransactionsStore above (caught by a `git status` diff on
     # quant_platform.db during development of this file; redirect the same way).
     from volatility.iv_engine import IVHistoryStore
-
-    original_iv_init = IVHistoryStore.__init__
-
-    def _mem_iv_init(self, db_url=None):  # noqa: ANN001
-        original_iv_init(self, db_url="sqlite:///:memory:")
 
     _real_exists = os.path.exists
 
@@ -171,8 +162,13 @@ def orchestrator_run(tmp_path_factory):
         mock.patch(
             "main_orchestrator._execute_broker_orders", new_callable=mock.AsyncMock
         ) as _broker_mock,
-        mock.patch.object(transactions_store.TransactionsStore, "__init__", _mem_init),
-        mock.patch.object(IVHistoryStore, "__init__", _mem_iv_init),
+        mock.patch.object(
+            transactions_store.TransactionsStore, "__init__",
+            make_memory_db_init(transactions_store.TransactionsStore.__init__),
+        ),
+        mock.patch.object(
+            IVHistoryStore, "__init__", make_memory_db_init(IVHistoryStore.__init__)
+        ),
     ):
         _rh_cls.return_value.login.return_value = False
 

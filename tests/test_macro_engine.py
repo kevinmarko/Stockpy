@@ -294,43 +294,41 @@ class TestComputeHmmRiskOnProbabilityGaps:
         idx = pd.bdate_range(end=pd.Timestamp.now(), periods=n)
         return pd.DataFrame({"Close": prices}, index=idx)
 
-    def test_missing_vixcls_column_returns_none(self, engine):
+    def test_missing_vixcls_column_returns_none(self, engine, disable_historical_store):
         """settings.HISTORICAL_STORE_ENABLED defaults True, which would route
         macro history through the real on-disk HistoricalStore (bypassing
         whatever this test patches onto data_engine.fetch_macro_history) --
-        disable it so the direct-fetch path under test is actually exercised."""
+        disabled via the shared fixture so the direct-fetch path under test
+        is actually exercised."""
         spy_df = self._spy_df()
         broken_engine = MacroEngine(data_engine=MockDataEngine())
-        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False), \
-             mock.patch.object(
-                 broken_engine.data_engine, "fetch_macro_history",
-                 return_value=pd.DataFrame({"NOT_VIX": [1.0] * 200}),
-             ):
+        with mock.patch.object(
+            broken_engine.data_engine, "fetch_macro_history",
+            return_value=pd.DataFrame({"NOT_VIX": [1.0] * 200}),
+        ):
             result = broken_engine.compute_hmm_risk_on_probability(spy_df)
         assert result is None
 
-    def test_hmm_fit_exception_returns_none_not_raise(self, engine):
+    def test_hmm_fit_exception_returns_none_not_raise(self, engine, disable_historical_store):
         """A statistical second opinion failing must never crash the primary
         rules-based pipeline -- fit()/predict_proba() raising must degrade to
         None (CONSTRAINT #6).
 
-        HISTORICAL_STORE_ENABLED disabled: the macro-history fetch that
-        happens before fit() is ever called would otherwise route through
-        the real, on-disk HistoricalStore (confirmed polluting
-        quant_platform.db's macro_history table via direct execution) --
-        this test only cares about the fit()-raises path, so the fetch
-        itself uses the direct MockDataEngine.fetch_macro_history() path
-        like its sibling tests in this class already do."""
+        HISTORICAL_STORE_ENABLED disabled via the shared fixture: the
+        macro-history fetch that happens before fit() is ever called would
+        otherwise route through the real, on-disk HistoricalStore (confirmed
+        polluting quant_platform.db's macro_history table via direct
+        execution) -- this test only cares about the fit()-raises path, so
+        the fetch itself uses the direct MockDataEngine.fetch_macro_history()
+        path like its sibling tests in this class already do."""
         spy_df = self._spy_df()
-        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False), \
-             mock.patch.object(engine._hmm_detector, "fit", side_effect=RuntimeError("singular matrix")):
+        with mock.patch.object(engine._hmm_detector, "fit", side_effect=RuntimeError("singular matrix")):
             result = engine.compute_hmm_risk_on_probability(spy_df)
         assert result is None
 
-    def test_historical_store_disabled_uses_direct_fetch(self, engine):
+    def test_historical_store_disabled_uses_direct_fetch(self, engine, disable_historical_store):
         spy_df = self._spy_df()
-        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
-            result = engine.compute_hmm_risk_on_probability(spy_df)
+        result = engine.compute_hmm_risk_on_probability(spy_df)
         assert result is None or (0.0 <= result <= 1.0)
 
     def test_historical_store_failure_falls_back_to_direct_fetch(self, engine):
@@ -346,11 +344,10 @@ class TestComputeHmmRiskOnProbabilityGaps:
         assert result is not None
         assert 0.0 <= result <= 1.0
 
-    def test_fetch_macro_history_exception_returns_none(self, engine):
+    def test_fetch_macro_history_exception_returns_none(self, engine, disable_historical_store):
         spy_df = self._spy_df()
-        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False), \
-             mock.patch.object(
-                 engine.data_engine, "fetch_macro_history", side_effect=RuntimeError("FRED down")
-             ):
+        with mock.patch.object(
+            engine.data_engine, "fetch_macro_history", side_effect=RuntimeError("FRED down")
+        ):
             result = engine.compute_hmm_risk_on_probability(spy_df)
         assert result is None
