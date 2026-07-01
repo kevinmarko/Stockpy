@@ -1,5 +1,9 @@
 Project Context: Stock Dashboard Py (InvestYo Quant Platform)
 
+## Standing operator rules
+
+- **No automatic AI agent invocations.** Do not call subagents, multi-agent orchestration/workflows, or any scheduled/background self check-in loops unless the user explicitly asks for it in that turn. This includes autonomous PR-watching that triggers further investigation or fixes without an explicit per-instance ask.
+
 ## Key documentation files (Tier 6 — added 2026-06-26)
 | File | Purpose |
 |------|---------|
