@@ -25,6 +25,8 @@ Tabs
                                 with on-demand "Sync Now" (Task 1.4)
 11. Prompts                   — Prompt Registry: resolved version/source per ID,
                                 🔄 Sync, diff viewer, ↩ Rollback/pin (Stage 7)
+12. AI Insights                — Claude analyst note + Gemini chart-pattern vision +
+                                aggregate Claude-vs-Gemini disagreement view (Tier 9 Scope 3)
 
 Design
 ------
@@ -174,6 +176,7 @@ tab_labels = [
     "📡 Live Inventory",
     "❓ Help",
     "📝 Prompts",
+    "🪄 AI Insights",
 ]
 tabs = st.tabs(tab_labels)
 
@@ -201,5 +204,7 @@ with tabs[10]:
     safe_panel(panels.render_help)
 with tabs[11]:
     safe_panel(panels.render_prompt_registry)
+with tabs[12]:
+    safe_panel(panels.render_ai_insights)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")

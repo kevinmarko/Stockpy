@@ -4354,6 +4354,8 @@ class GravityAIAuditor:
         self.step_74_llm_commentary_audit()
         # Tier 9 Scope 2 — AI Gravity audit runner (Claude auditor + Gemini cross-checker)
         self.step_75_gravity_ai_runner_audit()
+        # Tier 9 Scope 3 — AI Insights tab (Claude analyst + Gemini Vision)
+        self.step_76_ai_insights_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -12071,3 +12073,188 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_75_gravity_ai_runner_audit"] = audit
+
+    def step_76_ai_insights_audit(self) -> None:
+        """Step 76 — Tier 9 Scope 3 AI Insights tab audit (2026-06-30).
+
+        9 checks pinning the contract for the multimodal Gemini Vision path
+        and the new AI Insights tab:
+
+        1.  Module surface — ``llm.chart_insight.generate_chart_pattern_read``
+            + ``render_price_chart_png`` importable; ``ChartPatternRead``
+            schema importable from ``llm.schemas``.
+        2.  ``GeminiProvider.call_structured_with_image`` method exists
+            (multimodal extension).
+        3.  Schema bounds — ``ChartPatternRead`` rejects out-of-domain
+            ``trend_direction``, caps ``support_levels`` at 3 entries.
+        4.  No top-level SDK reach in ``llm/chart_insight.py`` — anthropic /
+            google imports are lazy.
+        5.  No order-submission verbs in ``llm/chart_insight.py`` or
+            ``gui/ai_insights_panel.py`` (advisory-only invariant).
+        6.  Opt-in: ``generate_chart_pattern_read`` returns ``None`` when
+            ``LLM_COMMENTARY_ENABLED`` is False (default).
+        7.  No fabricated direction:
+            :func:`gui.ai_insights_panel.derive_disagreement_overview`
+            NEVER flags ``disagreement=True`` when one side is missing
+            (CONSTRAINT #4).
+        8.  Tab registration: ``gui/app.py`` references
+            ``panels.render_ai_insights`` AND a ``🪄 AI Insights`` label.
+        9.  Test files exist (``tests/test_chart_insight.py``,
+            ``tests/test_ai_insights_panel.py``,
+            ``tests/test_gemini_multimodal.py``).
+        """
+        from pathlib import Path as _Path
+
+        audit: dict = {
+            "step": "step_76_ai_insights_audit",
+            "description": "Tier 9 Scope 3 — AI Insights tab + Gemini Vision",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parents[1]
+
+        try:
+            # ── 1. module surface ───────────────────────────────────────────
+            from llm import chart_insight as _ci
+            from llm.schemas import ChartPatternRead as _CPR
+            c1 = (
+                callable(getattr(_ci, "generate_chart_pattern_read", None))
+                and callable(getattr(_ci, "render_price_chart_png", None))
+                and _CPR is not None
+            )
+            audit["checks"].append({
+                "check": "llm.chart_insight + ChartPatternRead public surface present",
+                "passed": bool(c1),
+            })
+            all_pass = all_pass and c1
+
+            # ── 2. multimodal Gemini method exists ─────────────────────────
+            from llm.providers import GeminiProvider as _GP
+            c2 = callable(getattr(_GP, "call_structured_with_image", None))
+            audit["checks"].append({
+                "check": "GeminiProvider.call_structured_with_image is callable",
+                "passed": bool(c2),
+            })
+            all_pass = all_pass and c2
+
+            # ── 3. schema bounds ────────────────────────────────────────────
+            from llm.schemas import ChartPatternRead
+            try:
+                ChartPatternRead(pattern_name="x", trend_direction="sideways", narrative="y")  # type: ignore[arg-type]
+                c3a = False
+            except Exception:
+                c3a = True
+            try:
+                ChartPatternRead(
+                    pattern_name="p", trend_direction="bullish", narrative="n",
+                    support_levels=["a", "b", "c", "d"],
+                )
+                c3b = False
+            except Exception:
+                c3b = True
+            c3 = c3a and c3b
+            audit["checks"].append({
+                "check": "ChartPatternRead rejects bad trend AND caps support_levels at 3",
+                "passed": bool(c3),
+                "detail": f"bad_trend_rejected={c3a} too_many_levels_rejected={c3b}",
+            })
+            all_pass = all_pass and c3
+
+            # ── 4. no top-level anthropic / google in llm/chart_insight.py ─
+            chart_src = (repo_root / "llm" / "chart_insight.py").read_text(encoding="utf-8")
+            top_level = "\n".join(
+                ln for ln in chart_src.splitlines()
+                if (not ln.startswith(" ") and not ln.startswith("\t"))
+            )
+            c4 = all(
+                tok not in top_level for tok in (
+                    "import anthropic", "from anthropic", "import google", "from google"
+                )
+            )
+            audit["checks"].append({
+                "check": "llm/chart_insight.py has no top-level SDK reach (lazy only)",
+                "passed": bool(c4),
+            })
+            all_pass = all_pass and c4
+
+            # ── 5. no order-submission verbs in either Scope 3 file ────────
+            panel_src = (repo_root / "gui" / "ai_insights_panel.py").read_text(encoding="utf-8")
+            forbidden = ("submit_order", "place_order", "buy_order", "sell_order",
+                         "place_equity_order", "place_option_order")
+            c5_chart = not any(p in chart_src for p in forbidden)
+            c5_panel = not any(p in panel_src for p in forbidden)
+            c5 = c5_chart and c5_panel
+            audit["checks"].append({
+                "check": "Scope 3 surface has no order-submission verbs (advisory-only)",
+                "passed": bool(c5),
+                "detail": f"chart_insight_ok={c5_chart} ai_insights_panel_ok={c5_panel}",
+            })
+            all_pass = all_pass and c5
+
+            # ── 6. opt-in: default disabled → None ─────────────────────────
+            from llm.chart_insight import generate_chart_pattern_read
+            import pandas as _pd
+            import numpy as _np
+            _np.random.seed(7)
+            _idx = _pd.date_range("2025-01-01", periods=60)
+            _df = _pd.DataFrame({"Close": _np.linspace(100, 110, 60)}, index=_idx)
+            _result = generate_chart_pattern_read("TEST", _df)
+            c6 = _result is None
+            audit["checks"].append({
+                "check": "generate_chart_pattern_read returns None when master switch off",
+                "passed": bool(c6),
+            })
+            all_pass = all_pass and c6
+
+            # ── 7. no fabricated direction in disagreement view ────────────
+            from gui.ai_insights_panel import derive_disagreement_overview
+            rows = derive_disagreement_overview(
+                [{"symbol": "AAPL", "action": "BUY"}],
+                claude_map={"AAPL": {"trend_direction": "bullish"}},
+                gemini_map={},  # missing
+            )
+            c7 = (
+                len(rows) == 1
+                and rows[0].disagreement is False
+                and rows[0].gemini_verdict is None
+            )
+            audit["checks"].append({
+                "check": "derive_disagreement_overview never flags disagreement against a missing side (CONSTRAINT #4)",
+                "passed": bool(c7),
+            })
+            all_pass = all_pass and c7
+
+            # ── 8. tab registration in gui/app.py ──────────────────────────
+            app_src = (repo_root / "gui" / "app.py").read_text(encoding="utf-8")
+            c8 = (
+                "panels.render_ai_insights" in app_src
+                and "🪄 AI Insights" in app_src
+            )
+            audit["checks"].append({
+                "check": "gui/app.py registers the AI Insights tab + wires render_ai_insights",
+                "passed": bool(c8),
+            })
+            all_pass = all_pass and c8
+
+            # ── 9. test files exist ────────────────────────────────────────
+            t1 = (repo_root / "tests" / "test_chart_insight.py").exists()
+            t2 = (repo_root / "tests" / "test_ai_insights_panel.py").exists()
+            t3 = (repo_root / "tests" / "test_gemini_multimodal.py").exists()
+            c9 = t1 and t2 and t3
+            audit["checks"].append({
+                "check": "All three Scope 3 test files exist",
+                "passed": bool(c9),
+                "detail": f"chart_insight={t1} ai_insights_panel={t2} gemini_multimodal={t3}",
+            })
+            all_pass = all_pass and c9
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_76_ai_insights_audit"] = audit

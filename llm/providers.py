@@ -223,3 +223,54 @@ class GeminiProvider(LLMProvider):
         except Exception as exc:
             logger.warning("GeminiProvider response parse failed: %s", exc)
             return None
+
+    def call_structured_with_image(
+        self,
+        system: str,
+        user: str,
+        image_bytes: bytes,
+        schema_model: Type[BaseModel],
+        *,
+        mime_type: str = "image/png",
+    ) -> Optional[BaseModel]:
+        """Multimodal variant — sends a PNG/JPEG alongside the user prompt.
+
+        Used by :mod:`llm.chart_insight` (Tier 9 Scope 3) to send a
+        matplotlib-rendered price chart to Gemini Vision and receive a
+        structured :class:`llm.schemas.ChartPatternRead` interpretation.
+
+        Soft-fail contract: same as :meth:`call_structured` — any provider
+        failure, parse error, or schema mismatch returns ``None``.  The
+        caller falls back to whatever deterministic chart description it
+        was going to render anyway.
+        """
+        if self._client is None or self._types is None:
+            return None
+        try:
+            image_part = self._types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            config = self._types.GenerateContentConfig(
+                system_instruction=system,
+                response_mime_type="application/json",
+                response_schema=schema_model,
+                max_output_tokens=self._max_output_tokens,
+            )
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=[user, image_part],
+                config=config,
+            )
+        except Exception as exc:
+            logger.warning("GeminiProvider multimodal call failed: %s", exc)
+            return None
+
+        try:
+            text = getattr(response, "text", None)
+            if not text:
+                return None
+            return schema_model.model_validate_json(text)
+        except ValidationError as exc:
+            logger.warning("GeminiProvider multimodal validation failed: %s", exc)
+            return None
+        except Exception as exc:
+            logger.warning("GeminiProvider multimodal response parse failed: %s", exc)
+            return None

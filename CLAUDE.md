@@ -1421,6 +1421,46 @@ Hand-curated mapping of audit-step number to the per-layer file(s) the model rea
 - The runner reads files from disk fresh on every call — no caching across runs. To re-audit after a code change, just re-run the CLI; the report file is atomically replaced.
 - The `gui/panels.py` Safety tab integration (rendering the runner JSON with red/green per-step badges) is **deferred to a follow-up Antigravity PR**, mirroring the Scope 1 deferral pattern.
 
+## Tier 9 Scope 3 — AI Insights tab (Gemini Vision, 2026-06)
+
+### Overview
+A new "🪄 AI Insights" Streamlit tab that combines, per symbol from the current `state_snapshot.json` universe:
+
+1. **Claude analyst note** — reuses `gui/llm_commentary_panel.py` so this tab and the Reports-tab drill-down share one code path AND one session-state cache.
+2. **Gemini chart pattern interpretation** — renders a 252-bar matplotlib chart, sends the PNG to Gemini Vision via `GeminiProvider.call_structured_with_image`, returns a schema-validated `ChartPatternRead` (pattern_name / trend_direction / qualitative support+resistance / narrative / confidence).
+3. **Aggregate Claude vs Gemini disagreement view** — walks the cached per-symbol outputs in `st.session_state` and emits one row per watchlist symbol (deterministic action + Claude verdict + Gemini verdict + disagreement boolean). Never flags disagreement against a missing side (CONSTRAINT #4).
+
+### New module surface
+- **`llm/schemas.py::ChartPatternRead`** — pydantic v2 schema with bounded fields (`pattern_name` ≤60, `trend_direction` Literal["bullish","bearish","neutral"], 1-3 `support_levels`/`resistance_levels` each ≤120 chars, `narrative` ≤800, `confidence` Literal["low","medium","high"]).
+- **`llm/providers.py::GeminiProvider.call_structured_with_image`** — multimodal extension. Builds `Part.from_bytes(data=image_bytes, mime_type='image/png')` + `GenerateContentConfig(response_schema=...)` and returns `Optional[BaseModel]`. Same soft-fail contract as `call_structured`.
+- **`llm/chart_insight.py`** — `render_price_chart_png(symbol, bars)` (matplotlib Agg, lazy import) + `generate_chart_pattern_read(symbol, bars, *, provider=None, chart_renderer=None)`. Day-bucketed JSON cache keyed by `(provider="gemini", schema="ChartPatternRead", symbol, score=close*1000+bar_count, action="CHART")`. Reuses `llm/cache.py` infrastructure.
+- **`gui/ai_insights_panel.py`** — Streamlit-free helpers: `insights_status` (three-state classifier on `LLM_COMMENTARY_ENABLED`+`GEMINI_API_KEY`), `format_chart_pattern_markdown`, `DisagreementRow` (frozen dataclass), `derive_disagreement_overview`, `disagreement_summary`. Headlessly testable.
+- **`gui/panels/__init__.py::render_ai_insights`** + `_render_gemini_chart_section`. Wired as tab 12 in `gui/app.py`.
+
+### Safety contract (audited by Gravity step_76 — 9 checks)
+1. Module surface exists (`generate_chart_pattern_read`, `render_price_chart_png`, `ChartPatternRead`).
+2. `GeminiProvider.call_structured_with_image` is callable.
+3. `ChartPatternRead` rejects bad `trend_direction` AND caps `support_levels`/`resistance_levels` at 3.
+4. No top-level `anthropic`/`google` imports in `llm/chart_insight.py` (lazy SDK reach only).
+5. Zero order-submission verbs in `llm/chart_insight.py` AND `gui/ai_insights_panel.py` (advisory-only).
+6. Opt-in: `generate_chart_pattern_read("X", df)` returns `None` when `LLM_COMMENTARY_ENABLED=False` (default).
+7. `derive_disagreement_overview` NEVER flags `disagreement=True` against a missing side (CONSTRAINT #4).
+8. `gui/app.py` registers the `🪄 AI Insights` tab AND wires `panels.render_ai_insights`.
+9. All three Scope 3 test files exist.
+
+### Cadence + cost
+On-demand only — every section is button-gated. The chart-render + Gemini-vision call fires only when the operator clicks **📈 Interpret chart with Gemini** for a specific symbol; results are cached in `st.session_state` (and the JSON disk cache) so re-renders inside the same UTC day are free. The aggregate disagreement view reads only what's already in session state; it never fans out provider calls.
+
+### Test surface
+- **`tests/test_chart_insight.py`** (19 tests): schema bounds, chart render happy/edge paths, bar fingerprint, end-to-end generate (cache hit, soft-fail on render/provider/exception, empty symbol, missing image method, default disabled).
+- **`tests/test_ai_insights_panel.py`** (~25 tests): status truth table, markdown rendering (full/partial/empty), disagreement view (agreement/disagreement/missing-side guard/heuristic direction), tab wiring (gui/app.py + helper imports).
+- **`tests/test_gemini_multimodal.py`** (9 tests): Part.from_bytes constructed, response parsed, schema mismatch / empty / network exception / missing SDK all return None.
+
+### Operator notes
+- The Reports-tab "🤖 Generate analyst commentary" button (Scope 1) and the AI Insights "🤖 Claude analyst note" section share the same `_render_llm_commentary_button` helper and the same session-state cache slot — clicking either populates both views.
+- Gemini Vision requires `GEMINI_API_KEY` AND `LLM_COMMENTARY_ENABLED=true`. The status banner at the top of the tab spells out which knob is missing.
+- The new tab adds matplotlib as a runtime dependency. It's lazy-imported inside `render_price_chart_png`, so an environment without matplotlib still loads the tab — the chart section just shows "Chart render failed".
+
 ## Prompt Registry (`prompt_registry/`, 2026-06)
 
 Versioned, cryptographically-signed, remotely-updatable store for every AI-facing instruction

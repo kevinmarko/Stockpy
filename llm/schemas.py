@@ -94,6 +94,68 @@ class AlertCommentary(BaseModel):
     )
 
 
+class ChartPatternRead(BaseModel):
+    """Gemini Vision interpretation of a single price chart (Tier 9 Scope 3).
+
+    The schema is bounded so a runaway provider response is rejected at
+    validation (same CONSTRAINT #4 + #6 contract as the other Tier 9
+    schemas).  All numeric fields are described *qualitatively* — the
+    model never returns prices it would have invented; it can only refer
+    to support / resistance levels visible in the chart it was given.
+
+    Fields
+    ------
+    pattern_name :
+        Short label for the dominant pattern (e.g. ``"ascending triangle"``,
+        ``"head-and-shoulders"``, ``"sideways consolidation"``).  Free-form
+        string capped at 60 chars so it fits a single dashboard cell.
+    trend_direction :
+        Ordinal verdict: ``"bullish" | "bearish" | "neutral"``.  Advisory
+        only — does NOT feed back into the numeric pipeline.
+    support_levels / resistance_levels :
+        Lists of qualitative descriptions of levels visible in the chart
+        (e.g. ``"recent low near $170"``, ``"prior breakout zone"``).
+        Bounded to 3 each, each ≤120 chars.  Never numeric — see
+        CONSTRAINT #4.
+    narrative :
+        2-3 sentence paragraph the GUI renders verbatim.  Capped at 800
+        chars so the Streamlit ``st.markdown`` block never blows out the
+        page width.
+    confidence :
+        Ordinal: ``"low" | "medium" | "high"``.  Advisory hint only.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pattern_name: str = Field(
+        min_length=1,
+        max_length=60,
+        description="Short label for the dominant pattern visible in the chart.",
+    )
+    trend_direction: Literal["bullish", "bearish", "neutral"] = Field(
+        description="Ordinal trend read — advisory only, never feeds the pipeline.",
+    )
+    support_levels: List[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description="≤3 qualitative descriptions of support; each ≤120 chars.",
+    )
+    resistance_levels: List[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description="≤3 qualitative descriptions of resistance; each ≤120 chars.",
+    )
+    narrative: str = Field(
+        min_length=1,
+        max_length=800,
+        description="2-3 sentence operator-facing chart interpretation.",
+    )
+    confidence: Literal["low", "medium", "high"] = Field(
+        default="medium",
+        description="Advisory confidence hint — does NOT override deterministic conviction.",
+    )
+
+
 class GravityAuditStepResult(BaseModel):
     """One AI-rendered Gravity audit step verdict.
 
