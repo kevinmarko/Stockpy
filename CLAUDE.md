@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Standing operator rules
+
+- **No automatic AI agent invocations.** Do not call subagents (Agent/Task tool), Workflow orchestration, or any scheduled/background self check-ins (e.g. `send_later` polling loops) unless the user explicitly asks for it in that turn. This includes autonomous PR-watching that triggers further investigation or fixes without an explicit per-instance ask. Standing subscriptions to CI/review events are fine only when the user has asked to "watch" or "monitor" a PR — even then, do not layer additional autonomous agent fan-out on top without asking.
+
 ## Multi-Agent Branch Workflow
 
 Two agents work on this repo: **Claude Code** and **Antigravity IDE**.
