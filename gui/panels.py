@@ -1,14 +1,25 @@
 """
-gui/panels/__init__.py
-======================
-Package root — re-exports all public ``render_*`` functions and helpers from
-sub-modules.  External callers continue to use ``from gui import panels`` /
-``from gui.panels import render_launcher`` unchanged.
+gui/panels.py
+=============
+Render functions for the InvestYo Command Center, one per tab.  Each public
+``render_*`` function is wrapped by :func:`safe_panel` in ``gui/app.py`` so a
+failure in any single panel surfaces as an inline error box rather than
+crashing the whole app (dead-letter UI pattern, CONSTRAINT #6).
 
-Sub-modules extracted so far
------------------------------
-- ``_shared.py``  — shared file-backed loaders, constants, and utility helpers
-  (extracted 2026-06-29).  Future extractions add more sub-modules here.
+The panels deliberately avoid live async broker calls.  They read the
+orchestrator's file-backed state (``output/state_snapshot.json`` etc.) and call
+the platform's existing synchronous engines directly:
+
+*   evaluation/research analytics  → ``evaluation_engine`` / ``research_engine``
+*   signal registry + weights      → ``signals.registry`` / ``settings.SIGNAL_WEIGHTS``
+*   kill switch                     → ``execution.kill_switch.GlobalKillSwitch``
+*   options greeks / IVR            → ``technical_options_engine``
+*   account state (RH)              → ``data.robinhood_portfolio`` (account only)
+*   prices / fundamentals           → ``data.market_data.get_provider`` (markets only)
+
+Source-of-truth separation (CONSTRAINT #4) is enforced visually: the
+Paper-Trading Monitor labels every column with its origin so Robinhood account
+state and market-data prices are never conflated.
 """
 
 from __future__ import annotations
@@ -30,30 +41,48 @@ from gui import env_io, orchestrator_runner, help_widgets
 from gui.symbol_search import filter_by_symbol
 from gui.orchestrator_runner import StageStatus
 
+logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 # ---------------------------------------------------------------------------
-# Shared loaders + utilities — now live in _shared.py; re-exported here for
-# backward compatibility so all existing ``from gui.panels import X`` imports
-# continue to resolve correctly without any changes at the call sites.
+# GICS 11 sector seed for the Brinson-Fachler attribution editor. Choosing a
+# fixed canonical list (rather than an empty grid) gives the operator a
+# starting point that matches the way most public benchmarks publish their
+# sector exposures, so the typical workflow is "tweak weights" rather than
+# "type 11 sector names from scratch".
 # ---------------------------------------------------------------------------
-from gui.panels._shared import (  # noqa: E402
-    GICS_SECTORS,
-    _BF_EDITOR_COLUMNS,
-    _REPO_ROOT,
-    _active_symbols,
-    _held_symbols,
-    _kill_switch,
-    _signal_symbols,
-    _watchlist_symbols,
-    load_block_log,
-    logger,
+GICS_SECTORS: Tuple[str, ...] = (
+    "Communication Services",
+    "Consumer Discretionary",
+    "Consumer Staples",
+    "Energy",
+    "Financials",
+    "Health Care",
+    "Industrials",
+    "Information Technology",
+    "Materials",
+    "Real Estate",
+    "Utilities",
 )
 
-# ===========================================================================
-# State-snapshot loaders — KEPT HERE (not in _shared.py) so tests can patch
-# ``gui.panels._load_state_snapshot_cached`` on the panels namespace without
-# chasing module-reference indirection through _shared.
-# ===========================================================================
+# Canonical column names used by the editor table AND
+# ``EvaluationEngine._calculate_brinson_fachler_compat`` (it accepts both
+# ``portfolio_weight``/``portfolio_return`` and ``weight``/``return`` shapes;
+# we hand it the explicit form so the column-rename layer is exercised
+# deterministically).
+_BF_EDITOR_COLUMNS: Tuple[str, ...] = (
+    "Sector",
+    "Portfolio Weight (%)",
+    "Portfolio Return (%)",
+    "Benchmark Weight (%)",
+    "Benchmark Return (%)",
+)
 
+
+# ===========================================================================
+# Shared file-backed loaders (cached) — mirror observability/dashboard.py
+# ===========================================================================
 
 def load_state_snapshot() -> dict:
     """Load the orchestrator's last ``state_snapshot.json`` (empty dict if absent).
@@ -82,6 +111,104 @@ def _load_state_snapshot_cached(path: str, _mtime: float) -> dict:
         except Exception:
             return {}
     return {}
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def load_block_log(n: int = 100) -> List[dict]:
+    """Load the most recent ``n`` risk-gate block entries (newest first)."""
+    log_path = settings.OUTPUT_DIR / "risk_gate_blocks.jsonl"
+    if not log_path.exists():
+        return []
+    try:
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        rows: List[dict] = []
+        for line in lines[-n:]:
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return list(reversed(rows))
+    except Exception:
+        return []
+
+
+def _kill_switch():
+    """Construct a GlobalKillSwitch pointed at the configured output dir."""
+    from execution.kill_switch import GlobalKillSwitch
+
+    return GlobalKillSwitch(sentinel_file=settings.OUTPUT_DIR / "KILL_SWITCH")
+
+
+def _signal_symbols(snap: dict) -> List[str]:
+    """Active symbols from the last snapshot, falling back to DEFAULT_TICKERS."""
+    syms = [s.get("symbol") for s in snap.get("signals", []) if s.get("symbol")]
+    if syms:
+        return syms
+    return list(settings.DEFAULT_TICKERS)
+
+
+def _watchlist_symbols() -> List[str]:
+    """Return tickers from ``WATCHLIST`` env var or repo-root ``watchlist.txt``.
+
+    Mirrors :func:`main._load_watchlist` so the GUI's symbol discovery is
+    consistent with the orchestrator's evaluation universe. Silently returns
+    ``[]`` when neither source exists — never raises (CONSTRAINT #6).
+    """
+    import os
+
+    env_val = os.environ.get("WATCHLIST", "").strip()
+    if env_val:
+        return [t.strip().upper() for t in env_val.split(",") if t.strip()]
+
+    wl = _REPO_ROOT / "watchlist.txt"
+    if wl.exists():
+        try:
+            return [
+                line.strip().upper()
+                for line in wl.read_text().splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("watchlist.txt read failed: %s", exc)
+    return []
+
+
+def _held_symbols() -> List[str]:
+    """Robinhood-held tickers from a cached snapshot (if any).
+
+    Reads ``cache/account_snapshot.json`` directly so the matrix tab doesn't
+    trigger a live broker login. Returns ``[]`` if the cache is absent or
+    unparseable.
+    """
+    cache = _REPO_ROOT / "cache" / "account_snapshot.json"
+    if not cache.exists():
+        return []
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+        positions = data.get("positions", {})
+        return sorted(positions.keys())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("account_snapshot.json read failed: %s", exc)
+        return []
+
+
+def _active_symbols(snap: dict) -> List[str]:
+    """Union of held positions, watchlist, and last pipeline signals.
+
+    Falls back to :data:`settings.DEFAULT_TICKERS` only when all three
+    sources are empty — matches the Portfolio & Watchlist Synchronization
+    contract documented in :mod:`main`.
+    """
+    universe: List[str] = []
+    seen: set = set()
+    for src in (_held_symbols(), _watchlist_symbols(), _signal_symbols(snap)):
+        for s in src:
+            if s not in seen:
+                seen.add(s)
+                universe.append(s)
+    if not universe:
+        return list(settings.DEFAULT_TICKERS)
+    return universe
 
 
 # ===========================================================================
@@ -3709,8 +3836,6 @@ def render_help() -> None:
         help_widgets.explain(tab_id, expanded=False)
 
 
-
-
 # ===========================================================================
 # Tab 11 — Prompt Registry
 # ===========================================================================
@@ -4090,11 +4215,6 @@ def render_prompt_registry() -> None:
                     )
                 except Exception as exc:
                     st.warning(f"Pin cleared in-memory but `.env` write failed: {exc}")
-
-
-def utcnow_str() -> str:
-    """UTC timestamp string for footer display."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def utcnow_str() -> str:

@@ -212,14 +212,6 @@ class Recommendation:
     forecast: Optional[float]
     key_indicators: Dict[str, float]
     data_quality: Literal["OK", "STALE", "PARTIAL"]
-    # Tier 9 — Claude-generated analyst narrative (on-demand only, opt-in via
-    # settings.LLM_COMMENTARY_ENABLED).  Carries an :class:`AnalystRationale`
-    # ``.model_dump()`` dict on success, ``None`` on any failure — the
-    # deterministic ``rationale`` field above is ALWAYS preserved regardless.
-    # Typed as ``Dict[str, Any]`` (not the schema model directly) so this file
-    # never needs to import ``llm.schemas`` — keeps the SDK reachability
-    # surface lazy.  Default ``None`` keeps positional construction stable.
-    llm_rationale: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1194,75 +1186,3 @@ def _safe_float(value: Any, default: float) -> float:
         return f
     except (TypeError, ValueError):
         return default
-
-
-# ---------------------------------------------------------------------------
-# Tier 9 — Claude analyst-rationale enrichment (on-demand only)
-# ---------------------------------------------------------------------------
-# This function is the ONLY callsite that may invoke an LLM from inside
-# engine/advisory.py.  It is deliberately a sibling of ``evaluate()`` rather
-# than a step inside it: the plan picked on-demand-only cadence, so every
-# per-cycle ``evaluate()`` call must stay byte-identical to pre-Tier-9
-# behaviour.  Operators reach this function via the CLI
-# (``python -m engine.llm_commentary SYMBOL``) or a future GUI button.
-#
-# Soft-fail contract (CONSTRAINT #6): on any failure — LLM disabled, missing
-# key, provider exception, schema mismatch — return the ORIGINAL recommendation
-# unchanged.  The deterministic ``rec.rationale`` template text is never
-# overwritten, only enriched alongside it via ``llm_rationale``.
-#
-# No-fabrication contract (CONSTRAINT #4): the LLM output flows ONLY into
-# ``rec.llm_rationale`` (an Optional[Dict[str, Any]]).  It never touches
-# ``score``, ``conviction``, ``suggested_position_pct``, ``forecast``,
-# ``key_indicators``, or any numeric pipeline scalar.
-
-def enrich_with_llm_rationale(
-    rec: Recommendation,
-    context: Optional[Dict[str, Any]] = None,
-) -> Recommendation:
-    """Return ``rec`` with ``llm_rationale`` populated, or unchanged on failure.
-
-    Parameters
-    ----------
-    rec :
-        A deterministic recommendation produced by :func:`evaluate`.
-    context :
-        Optional extra payload to forward to the LLM commentary layer
-        (macro snippet, regime DTO snapshot, etc.).  Reserved for future
-        expansion; safely defaults to an empty dict.
-
-    Returns
-    -------
-    Recommendation
-        Either ``rec`` (when LLM is disabled, no key is set, or the call
-        fails — preserves the deterministic template), or a new instance
-        with ``llm_rationale`` populated by :class:`llm.schemas.AnalystRationale`
-        ``.model_dump()``.
-
-    Notes
-    -----
-    The frozen dataclass is rebuilt via :func:`dataclasses.replace` so the
-    immutability invariant holds.  ``llm.commentary.generate_analyst_rationale``
-    is responsible for caching, schema validation, and soft-fail; this
-    function is a thin orchestration layer.
-    """
-    try:
-        if not getattr(settings, "LLM_COMMENTARY_ENABLED", False):
-            return rec
-        # Lazy import: keeps engine/advisory.py free of any LLM/SDK reach at
-        # module-load time.  Gravity step_74 source-greps for top-level imports.
-        from dataclasses import asdict, replace  # noqa: PLC0415
-        from llm.commentary import generate_analyst_rationale  # noqa: PLC0415
-
-        rec_skeleton = asdict(rec)
-        result = generate_analyst_rationale(rec_skeleton, context or {})
-        if result is None:
-            return rec
-        return replace(rec, llm_rationale=result.model_dump())
-    except Exception as exc:
-        logger.warning(
-            "enrich_with_llm_rationale soft-failed for %s: %s — returning template-only rec.",
-            getattr(rec, "symbol", "?"),
-            exc,
-        )
-        return rec

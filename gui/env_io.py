@@ -98,12 +98,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PROMPT_REGISTRY_ENABLED",   # bool master switch (baseline-only when False)
     "PROMPT_REGISTRY_BACKEND",   # "http" | "local" | "firestore"
     "PROMPT_REGISTRY_PINS",      # JSON dict {"prompt_id": "version"} — rollback lever
-    # Tier 9 — Claude + Gemini commentary toggles (non-secret).  Credentials
-    # (ANTHROPIC_API_KEY / GEMINI_API_KEY) live in SECRET_KEYS below per
-    # CONSTRAINT #3 — they are NEVER GUI-writable.
-    "LLM_COMMENTARY_ENABLED",            # bool master switch (default False)
-    "LLM_COMMENTARY_RATIONALE_PROVIDER", # "claude" | "none"
-    "LLM_COMMENTARY_ALERT_PROVIDER",     # "gemini" | "none"
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -133,10 +127,6 @@ SECRET_KEYS: tuple[str, ...] = (
     "PROMPT_REGISTRY_TOKEN",         # bearer read-token
     "PROMPT_REGISTRY_PUBLISH_TOKEN", # higher-privilege publish credential
     "PROMPT_REGISTRY_SIGNING_KEY",   # HMAC-SHA256 verification key
-    # Tier 9 — Claude + Gemini commentary credentials.  CONSTRAINT #3 — these
-    # are NEVER GUI-writable; hand-edit .env to set / rotate them.
-    "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
 )
 
 # Keys whose values are JSON-encoded structures (lists/dicts) in .env.

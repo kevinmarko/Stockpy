@@ -4548,7 +4548,7 @@ class GravityAIAuditor:
         # ------------------------------------------------------------------
         try:
             import re
-            with open("gui/panels/__init__.py", encoding="utf-8") as fh:
+            with open("gui/panels.py", encoding="utf-8") as fh:
                 panels_src = fh.read()
             # Extract from render_observability start to the next def (or EOF)
             obs_match = re.search(
@@ -7716,7 +7716,7 @@ class GravityAIAuditor:
             all_pass = all_pass and c2
 
             # Check 3: GUI Strategy Matrix toggle gate (source-grep)
-            panels_src = Path("gui/panels/__init__.py").read_text(encoding="utf-8")
+            panels_src = Path("gui/panels.py").read_text(encoding="utf-8")
             c3 = (
                 "ADVISORY_ONLY" in panels_src
                 and "Advisory mode — broker execution disabled" in panels_src
@@ -9665,13 +9665,13 @@ class GravityAIAuditor:
                 ok8 = False
             all_pass = _chk("HistoricalStore failure degrades gracefully (CONSTRAINT #6)", ok8) and all_pass
 
-            # 9. gui/panels/__init__.py references recommendation_tracking_report
+            # 9. gui/panels.py references recommendation_tracking_report
             try:
-                panels_src = (_repo / "gui" / "panels" / "__init__.py").read_text(encoding="utf-8")
+                panels_src = (_repo / "gui" / "panels.py").read_text(encoding="utf-8")
                 ok9 = "recommendation_tracking_report" in panels_src
             except Exception:
                 ok9 = False
-            all_pass = _chk("gui/panels/__init__.py references recommendation_tracking_report", ok9) and all_pass
+            all_pass = _chk("gui/panels.py references recommendation_tracking_report", ok9) and all_pass
 
             # 10. Test file exists
             ok10 = (_repo / "tests" / "test_recommendation_tracking.py").exists()
