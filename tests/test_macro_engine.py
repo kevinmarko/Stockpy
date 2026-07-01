@@ -312,9 +312,18 @@ class TestComputeHmmRiskOnProbabilityGaps:
     def test_hmm_fit_exception_returns_none_not_raise(self, engine):
         """A statistical second opinion failing must never crash the primary
         rules-based pipeline -- fit()/predict_proba() raising must degrade to
-        None (CONSTRAINT #6)."""
+        None (CONSTRAINT #6).
+
+        HISTORICAL_STORE_ENABLED disabled: the macro-history fetch that
+        happens before fit() is ever called would otherwise route through
+        the real, on-disk HistoricalStore (confirmed polluting
+        quant_platform.db's macro_history table via direct execution) --
+        this test only cares about the fit()-raises path, so the fetch
+        itself uses the direct MockDataEngine.fetch_macro_history() path
+        like its sibling tests in this class already do."""
         spy_df = self._spy_df()
-        with mock.patch.object(engine._hmm_detector, "fit", side_effect=RuntimeError("singular matrix")):
+        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False), \
+             mock.patch.object(engine._hmm_detector, "fit", side_effect=RuntimeError("singular matrix")):
             result = engine.compute_hmm_risk_on_probability(spy_df)
         assert result is None
 

@@ -702,18 +702,30 @@ def test_main_orchestrator_pipeline():
     """
     Verifies that the main orchestrator executes the full synchronous routing pipeline
     successfully and produces a validated output DataFrame.
+
+    HISTORICAL_STORE_ENABLED disabled: run_pipeline() internally calls
+    ProcessingEngine.calculate_fundamental_metrics(), which -- per the
+    Tier 2.3 Phase 3 wiring -- routes through the real, on-disk
+    HistoricalStore when settings.HISTORICAL_STORE_ENABLED (default True)
+    is left at its default. Without this, a live run of this test writes a
+    negative/empty fundamentals cache row for AAPL into the real committed
+    quant_platform.db every day the cached row goes stale (mirrors the
+    same trap already guarded against in test_processing_engine.py and
+    test_macro_engine.py).
     """
+    from unittest import mock
     from main_orchestrator import run_pipeline
     from data_engine import MockDataEngine
     import config
-    
+
     mock_de = MockDataEngine()
     tickers = ["AAPL"]
     macro_raw = mock_de.fetch_macro_raw()
     fund_raw = mock_de.fetch_fundamentals_raw(tickers)
     tech_raw = mock_de.fetch_technical_raw(tickers)
-    
-    final_df, _macro_dto, _shared_ctx = run_pipeline(tickers, macro_raw, fund_raw, tech_raw)
+
+    with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
+        final_df, _macro_dto, _shared_ctx = run_pipeline(tickers, macro_raw, fund_raw, tech_raw)
     assert not final_df.empty
 
     # Assert all strategy keys are present and populated
