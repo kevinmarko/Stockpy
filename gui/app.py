@@ -25,6 +25,8 @@ Tabs
                                 with on-demand "Sync Now" (Task 1.4)
 11. Prompts                   — Prompt Registry: resolved version/source per ID,
                                 🔄 Sync, diff viewer, ↩ Rollback/pin (Stage 7)
+12. AI Insights                — Claude analyst note + Gemini chart-pattern vision +
+                                aggregate Claude-vs-Gemini disagreement view (Tier 9 Scope 3)
 
 Design
 ------

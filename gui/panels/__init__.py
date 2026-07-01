@@ -353,6 +353,18 @@ def _render_llm_commentary_button(row: dict, symbol: str) -> None:
         with st.spinner(f"Asking Claude about {symbol}…"):
             payload = generate_for_symbol_row(row)
         st.session_state[session_slot] = payload
+        # Mirror into a symbol-keyed map (separate from the cache-key-keyed
+        # session_slot above) so cross-tab aggregate views — the AI Insights
+        # tab's Claude-vs-Gemini disagreement table — can look up the latest
+        # Claude payload for this symbol without knowing the cache-key hash.
+        # Mirrors the analogous gemini_by_symbol map in
+        # _render_gemini_chart_section.
+        claude_mirror = st.session_state.get("ai_insights_claude_by_symbol", {})
+        if payload is not None:
+            claude_mirror[symbol] = payload
+        else:
+            claude_mirror.pop(symbol, None)
+        st.session_state["ai_insights_claude_by_symbol"] = claude_mirror
 
     cached = st.session_state.get(session_slot)
     if cached is not None or session_slot in st.session_state:
@@ -4128,16 +4140,9 @@ def render_ai_insights() -> None:
     st.markdown("---")
     st.markdown("#### 🔍 Aggregate Claude vs Gemini disagreement")
     try:
-        claude_map = {
-            k: v for k, v in st.session_state.items()
-            if isinstance(k, str) and k.startswith("ai_insights_claude_payload_") and isinstance(v, dict)
-        }
-        gemini_map = {
-            k: v for k, v in st.session_state.items()
-            if isinstance(k, str) and k.startswith("ai_insights_gemini_payload_") and isinstance(v, dict)
-        }
-        # Project session-state keys back to symbol → payload by storing the
-        # payload under a sibling lookup map populated by section 2 above.
+        # Both maps are populated by symbol-keyed mirrors written at click
+        # time: the Claude mirror in _render_llm_commentary_button, the
+        # Gemini mirror in _render_gemini_chart_section.
         claude_by_symbol = st.session_state.get("ai_insights_claude_by_symbol", {})
         gemini_by_symbol = st.session_state.get("ai_insights_gemini_by_symbol", {})
 
