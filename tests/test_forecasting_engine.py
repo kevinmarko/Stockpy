@@ -64,6 +64,23 @@ def _no_prophet(monkeypatch):
     monkeypatch.setattr(forecasting_engine, "PROPHET_AVAILABLE", False)
 
 
+@pytest.fixture(autouse=True)
+def _no_tensorflow(monkeypatch):
+    """CNN-LSTM training is slow and orthogonal to what this file targets
+    (TestRunCnnLstmForecastDegradation below tests the unavailable-fallback
+    path explicitly and already disables this per-test; this file-wide
+    default closes the same gap for TestGenerateForecast's end-to-end tests,
+    which call generate_forecast() with >=70 rows of history_series --
+    generate_forecast() builds a history_df internally from that series and
+    would silently train a real Keras model, undermining the "fast and
+    deterministic regardless of what happens to be installed" guarantee
+    _no_prophet already states, whenever TensorFlow happens to be importable
+    in a given environment (it is not a pinned requirements.txt dependency,
+    so this is environment-dependent, not currently triggered in every
+    environment -- but the file's own intent is to never depend on that)."""
+    monkeypatch.setattr(forecasting_engine, "TENSORFLOW_AVAILABLE", False)
+
+
 # ============================================================================
 # run_monte_carlo
 # ============================================================================

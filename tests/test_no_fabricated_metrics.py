@@ -56,22 +56,37 @@ from signals.timeseries_momentum import TimeSeriesMomentumSignal
 def _patched_ee() -> EvaluationEngine:
     """EvaluationEngine backed by an in-memory DB so no real trades are read.
 
-    evaluate_portfolio() always constructs TransactionsStore() internally
-    with no override parameter -- skipping this redirect would silently read
-    the real on-disk quant_platform.db (the same pitfall hit in item #1's
-    HistoricalStore work), matching the established pattern in
-    tests/test_evaluate_portfolio_zero_positions.py.
+    CORRECTED (found during PR review, verified by direct execution):
+    EvaluationEngine.__init__ never constructs a TransactionsStore -- only
+    evaluate_portfolio() does, internally, with no override parameter. An
+    earlier version of this helper patched TransactionsStore.__init__ only
+    for the duration of EvaluationEngine() construction and restored it in a
+    finally block immediately afterward -- by the time a test called
+    ee.evaluate_portfolio(...), the patch was already gone, so every test
+    using that pattern silently read the real, git-committed on-disk
+    quant_platform.db instead of an in-memory one (a read, not a write, so
+    `git status` never caught it). Wrapping evaluate_portfolio() itself,
+    rather than the constructor, keeps the redirect active for exactly the
+    call that needs it, regardless of how many times evaluate_portfolio()
+    is invoked on the returned engine.
     """
-    original_init = transactions_store.TransactionsStore.__init__
+    ee = EvaluationEngine()
+    original_evaluate_portfolio = ee.evaluate_portfolio
 
-    def _mem_init(self, db_url=None):  # noqa: ANN001
-        original_init(self, db_url="sqlite:///:memory:")
+    def _wrapped_evaluate_portfolio(*args, **kwargs):
+        original_init = transactions_store.TransactionsStore.__init__
 
-    transactions_store.TransactionsStore.__init__ = _mem_init
-    try:
-        return EvaluationEngine()
-    finally:
-        transactions_store.TransactionsStore.__init__ = original_init
+        def _mem_init(self, db_url=None):  # noqa: ANN001
+            original_init(self, db_url="sqlite:///:memory:")
+
+        transactions_store.TransactionsStore.__init__ = _mem_init
+        try:
+            return original_evaluate_portfolio(*args, **kwargs)
+        finally:
+            transactions_store.TransactionsStore.__init__ = original_init
+
+    ee.evaluate_portfolio = _wrapped_evaluate_portfolio
+    return ee
 
 
 def _signal_context() -> SignalContext:
