@@ -44,17 +44,37 @@ def _make_benchmark_df() -> pd.DataFrame:
 
 
 def _patched_ee() -> EvaluationEngine:
-    """EvaluationEngine backed by an empty in-memory DB so no real trades are read."""
-    original_init = transactions_store.TransactionsStore.__init__
+    """EvaluationEngine backed by an empty in-memory DB so no real trades are read.
 
-    def _mem_init(self, db_url=None):  # noqa: ANN001
-        original_init(self, db_url="sqlite:///:memory:")
+    CORRECTED (found during a PR review, verified by direct execution):
+    EvaluationEngine.__init__ never constructs a TransactionsStore -- only
+    evaluate_portfolio() does, internally, with no override parameter. The
+    previous version of this helper patched TransactionsStore.__init__ only
+    for the duration of EvaluationEngine() construction and restored it in a
+    finally block immediately afterward -- by the time a test called
+    ee.evaluate_portfolio(...), the patch was already gone, so every test in
+    this file silently read the real, git-committed on-disk quant_platform.db
+    instead of an in-memory one (a read, not a write, so `git status` never
+    caught it). Wrapping evaluate_portfolio() itself, rather than the
+    constructor, keeps the redirect active for exactly the call that needs it.
+    """
+    ee = EvaluationEngine()
+    original_evaluate_portfolio = ee.evaluate_portfolio
 
-    transactions_store.TransactionsStore.__init__ = _mem_init
-    try:
-        return EvaluationEngine()
-    finally:
-        transactions_store.TransactionsStore.__init__ = original_init
+    def _wrapped_evaluate_portfolio(*args, **kwargs):
+        original_init = transactions_store.TransactionsStore.__init__
+
+        def _mem_init(self, db_url=None):  # noqa: ANN001
+            original_init(self, db_url="sqlite:///:memory:")
+
+        transactions_store.TransactionsStore.__init__ = _mem_init
+        try:
+            return original_evaluate_portfolio(*args, **kwargs)
+        finally:
+            transactions_store.TransactionsStore.__init__ = original_init
+
+    ee.evaluate_portfolio = _wrapped_evaluate_portfolio
+    return ee
 
 
 # ---------------------------------------------------------------------------
