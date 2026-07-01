@@ -85,6 +85,11 @@ ADVISORY_LOG_PATH = settings.OUTPUT_DIR / "gui_advisory.log"
 # Log written by ``launch_symbol_retry`` for per-symbol dead-letter retries.
 RETRY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_retry.log"
 
+# Log written by ``launch_scheduled_advisory`` — the AI Control Center's
+# operator-started recurring run (main.py --interval N / --agent).  Kept
+# distinct so the Control Center tails only its own scheduled run.
+SCHEDULED_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_scheduled.log"
+
 # Telemetry log written by ``alerting.setup_logging()`` and shared by both
 # entry points. Surfaced in the Launcher tab so the operator sees structured
 # diagnostics from across the platform (CONSTRAINT #2 — observable feedback).
@@ -285,6 +290,140 @@ def launch_advisory_main(refresh_account: bool = False) -> RunHandle:
         mode="advisory",
         _popen=popen,
     )
+
+
+def launch_scheduled_advisory(
+    mode: str = "interval",
+    interval_seconds: int = 300,
+    *,
+    refresh_account: bool = False,
+) -> RunHandle:
+    """Spawn ``main.py`` as an OPERATOR-STARTED recurring advisory run.
+
+    This backs the AI Control Center's "Start scheduled run" / "Start agent
+    loop" buttons.  It is the ONLY scheduling mechanism the platform exposes and
+    it is strictly operator-initiated and operator-stoppable — there is no cron,
+    no daemon, and nothing autonomous.  The operator presses Start; the child
+    keeps refreshing on the requested cadence until the operator presses Stop
+    (:func:`stop_run`) or the GUI process ends.
+
+    Parameters
+    ----------
+    mode:
+        ``"interval"`` → ``python main.py --interval N`` (fixed-cadence refresh
+        loop).  ``"agent"`` → ``python main.py --agent`` (the autonomous
+        *advisory* agent loop from Tier 6 — still advisory-only, no orders,
+        still operator-started/stoppable).  Any other value is treated as
+        ``"interval"``.
+    interval_seconds:
+        Cadence in seconds for ``--interval`` mode.  Ignored for ``--agent``
+        (the agent sets its own adaptive cadence).  Clamped to ``>= 30`` so the
+        operator cannot hot-loop the market-data API.
+    refresh_account:
+        Pass ``--refresh-account`` on the first launch to bypass the daily
+        Robinhood cache.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="scheduled"``, ``log_path=SCHEDULED_LOG_PATH``) for
+        polling status, tailing the log, and stopping via :func:`stop_run`.
+
+    Notes
+    -----
+    During a scheduled run, only the ALREADY-WIRED automatic AI path fires —
+    Gemini alert-commentary appended to watch/trade alerts when
+    ``LLM_COMMENTARY_ENABLED`` is set.  The per-symbol Claude / Gemini-vision /
+    Opal actions remain on-demand GUI buttons; they are NOT invoked by the
+    scheduled loop.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "main.py"]
+    if str(mode).lower() == "agent":
+        cmd.append("--agent")
+        cadence_desc = "agent-adaptive"
+    else:
+        safe_interval = max(30, int(interval_seconds or 0))
+        cmd.extend(["--interval", str(safe_interval)])
+        cadence_desc = f"{safe_interval}s"
+    if refresh_account:
+        cmd.append("--refresh-account")
+
+    log_file = open(SCHEDULED_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo scheduled advisory (main.py) launch @ "
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')} (mode={mode}, cadence={cadence_desc}, "
+        f"refresh_account={refresh_account})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched scheduled advisory pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,  # advisory-only — no orders submitted
+        refresh_account=refresh_account,
+        log_path=SCHEDULED_LOG_PATH,
+        mode="scheduled",
+        _popen=popen,
+    )
+
+
+def stop_run(handle: Optional[RunHandle], *, timeout: float = 5.0) -> bool:
+    """Terminate a launched subprocess (operator "Stop" button).
+
+    Sends SIGTERM (via ``Popen.terminate`` when the object survived, else an
+    OS-level ``os.kill``), waits up to ``timeout`` seconds, then escalates to
+    SIGKILL if still alive.  Returns ``True`` when the process is confirmed
+    stopped (or was never running), ``False`` if it could not be confirmed.
+    Never raises — a Stop button must not crash the GUI (CONSTRAINT #6).
+    """
+    if handle is None:
+        return True
+    try:
+        popen = getattr(handle, "_popen", None)
+        if popen is not None:
+            if popen.poll() is not None:
+                return True  # already exited
+            popen.terminate()
+            try:
+                popen.wait(timeout=timeout)
+            except Exception:
+                popen.kill()
+            return popen.poll() is not None
+        # Reconstructed across a Streamlit rerun without the Popen object:
+        # fall back to a PID-level signal.
+        pid = getattr(handle, "pid", None)
+        if not pid or not _pid_alive(int(pid)):
+            return True
+        import signal as _signal  # noqa: PLC0415
+
+        os.kill(int(pid), _signal.SIGTERM)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not _pid_alive(int(pid)):
+                return True
+            time.sleep(0.2)
+        try:
+            os.kill(int(pid), _signal.SIGKILL)
+        except Exception:
+            pass
+        return not _pid_alive(int(pid))
+    except Exception as exc:
+        logger.warning("stop_run failed for handle pid=%s: %s",
+                       getattr(handle, "pid", "?"), exc)
+        return False
 
 
 def _read_tail(path: Path, max_lines: int, idle_hint: str) -> str:

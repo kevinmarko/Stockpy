@@ -1461,6 +1461,56 @@ On-demand only — every section is button-gated. The chart-render + Gemini-visi
 - Gemini Vision requires `GEMINI_API_KEY` AND `LLM_COMMENTARY_ENABLED=true`. The status banner at the top of the tab spells out which knob is missing.
 - The new tab adds matplotlib as a runtime dependency. It's lazy-imported inside `render_price_chart_png`, so an environment without matplotlib still loads the tab — the chart section just shows "Chart render failed".
 
+## AI Control Center tab (`gui/ai_control_center.py`, 2026-07)
+
+### Overview
+A single **"🎛️ AI Control Center"** Streamlit tab (tab 14 in `gui/app.py`) — the one operator-facing surface for **every** AI option on the platform. It **consolidates** (does not duplicate) the AI actions previously scattered across the Reports, Safety, and AI Insights tabs, plus the master switches (`GRAVITY_AI_RUNNER_ENABLED`, `OPAL_RESEARCH_*`) that weren't GUI-writable before. **Operator-only — nothing autonomous.** Every action is a button click or an operator-started `--interval` / `--agent` run they can stop (honors the standing "no automatic AI invocation" rule).
+
+### Headless helper module: `gui/ai_control_center.py`
+Streamlit-free, unit-testable (mirrors `gui/ai_insights_panel.py`). Public surface:
+- **`AICapability`** — frozen dataclass describing one AI option (`key`, `label`, `enable_settings`, `provider_key_settings`, `module`, `trigger`, `toggle_key`, `help`).
+- **`CAPABILITIES`** — registry of all five options in display order: `claude_commentary`, `gemini_alerts`, `gemini_vision`, `gravity_ai_runner`, `opal_research`.
+- **`capability_status(settings, cap) -> {enabled, key_present, built, status}`** — four-state classifier. Verdict ordering (most-blocking first): `not_built` (backing module absent — e.g. Opal before its build) > `disabled` (master switch off, or provider selector == `"none"`) > `missing_key` (enabled but a provider key is unset) > `ready`.
+- **`control_center_overview(settings) -> list[dict]`** — one status row per capability.
+- **`status_badge(status) -> str`** — maps a status token to `🟢 ready` / `⚪ disabled` / `🟡 key missing` / `🚧 not built`.
+- **`validate_toggle_write(key)`** — pre-flight guard: raises `SecretWriteError` for a secret key (CONSTRAINT #3), `DisallowedKeyError` for a non-allowlisted key.
+- **`opal_built() -> bool`** — soft `import llm.research` probe; the Opal row auto-activates once its backend ships (`docs/OPAL_BUILD_SPEC.md`).
+
+### GUI panel: `gui/panels/__init__.py::render_ai_control_center`
+Wrapped in `safe_panel` (CONSTRAINT #6). Four sections:
+- **A — Capability grid + toggles.** One row per option: status badge + masked key-present badge + an enable/disable `st.toggle` written via `gui.env_io.write_setting` (takes effect **next launch**). Provider API keys stay secret-only — set by hand in `.env`.
+- **B — On-demand per-symbol actions.** Symbol picker (from `state_snapshot.json`) + buttons that **REUSE the exact existing helpers** — `_render_llm_commentary_button(row, sym)` (Claude note), `_render_gemini_chart_section(sym)` (Gemini chart read), and a gated Opal button (`llm.research.generate_research_brief` when `opal_built()`, else a "requires build" caption). No logic duplication.
+- **C — Gravity AI audit.** Reuses `_render_gravity_ai_runner_section()`.
+- **D — Operator-launched scheduled run.** Interval input + "▶️ Start scheduled run (`--interval`)" / "🤖 Start agent loop (`--agent`)" → `orchestrator_runner.launch_scheduled_advisory(mode, interval_seconds)`; live "⏹ Stop" → `orchestrator_runner.stop_run(handle)`. Handle persisted in `st.session_state["acc_scheduled_handle"]`. You start it, you stop it — nothing runs on its own.
+
+### Scheduling launcher: `gui/orchestrator_runner.py`
+- **`launch_scheduled_advisory(mode="interval", interval_seconds=300, *, refresh_account=False) -> RunHandle`** — spawns `python main.py --interval N` (clamped `>= 30 s`) or `--agent` via `subprocess.Popen`, logging to `output/gui_scheduled.log` (`SCHEDULED_LOG_PATH`). Returns `RunHandle(mode="scheduled")`. **The ONLY scheduling mechanism the platform exposes** — strictly operator-initiated/stoppable; no cron, no daemon, no `threading.Timer`.
+- **`stop_run(handle, *, timeout=5.0) -> bool`** — SIGTERM → SIGKILL escalation (`Popen.terminate`/`kill`, or `os.kill` for a handle reconstructed across a Streamlit rerun). Never raises (CONSTRAINT #6).
+
+### env_io allowlist (`gui/env_io.py`)
+- `ALLOWED_KEYS` gained `GRAVITY_AI_RUNNER_ENABLED`, `OPAL_RESEARCH_ENABLED`, `OPAL_RESEARCH_PROVIDER`, `OPAL_RESEARCH_MODEL` (non-secret toggles).
+- `SECRET_KEYS` gained `OPENAI_API_KEY` (forward-compatible Opal enabler; never GUI-writable — CONSTRAINT #3).
+
+### Opal relationship (phased)
+- **Phase 1 (shipped):** Control Center works fully for the four shipped options + scheduling + toggles. The Opal row renders gated `not_built` ("requires build — see `docs/OPAL_BUILD_SPEC.md`").
+- **Phase 2 (deferred, operator-scheduled):** build the Opal backend per `docs/OPAL_BUILD_SPEC.md`; its Control Center row auto-activates via `opal_built()` — no Control Center change needed.
+
+### Help content (`gui/help_content.py`)
+`TAB_HELP["ai_control_center"]` added (anchor `#advisory-only-mode`). `tests/test_help_content.py::test_exactly_10_tabs` bumped to 11 (ai_insights and prompts intentionally carry no TAB_HELP entry).
+
+### Test surface
+- **`tests/test_ai_control_center.py`** (~24 tests): CAPABILITIES completeness; `capability_status` truth table (ready/disabled/missing_key/provider-none/not_built); overview row shape; toggle-write guard (rejects secret + non-allowlisted, allows Control-Center toggles); Opal-gated-when-absent; `launch_scheduled_advisory` with `subprocess.Popen` monkeypatched (interval flag, agent flag, 30 s clamp) + `stop_run` terminate/None-safe; tab-wiring + no-autonomous-scheduler + no-order-verb source greps.
+- **`tests/test_gui_env_io_control_center_keys.py`** (8 tests): the four new toggles in `ALLOWED_KEYS`; `OPENAI_API_KEY` in `SECRET_KEYS` and not in `ALLOWED_KEYS`; `write_setting("OPENAI_API_KEY", …)` raises `SecretWriteError`.
+
+### Gravity step 78 (`step_78_ai_control_center_audit`)
+10 checks: module surface + CAPABILITIES covers 5 options; new toggles in `ALLOWED_KEYS`; `OPENAI_API_KEY` secret-only; `capability_status` truth table; `launch_scheduled_advisory` + `stop_run` callable; launcher spawns via subprocess with no autonomous scheduler; tab registered in `gui/app.py`; `validate_toggle_write` rejects secret + non-allowlisted keys; Opal gated `not_built` while `llm.research` absent; both test files exist.
+
+### Critical invariants (must never regress)
+- **Operator-only / no autonomous AI** — every action is a button or an operator-started `--interval`/`--agent` run they can stop. No background scheduler, no self-call. Enforced by step 78 check 6.
+- **CONSTRAINT #3** — `OPENAI_API_KEY` (and all provider keys) stay `SECRET_KEYS`-only; `validate_toggle_write` and `write_setting` refuse any secret key. Enforced by step 78 checks 3 + 8.
+- **No logic duplication** — Section B/C buttons call the exact existing helpers (`_render_llm_commentary_button`, `_render_gemini_chart_section`, `_render_gravity_ai_runner_section`, `orchestrator_runner`).
+- **CONSTRAINT #6** — every section wrapped; a not-built capability (Opal) degrades to a caption, never a crash.
+
 ## Prompt Registry (`prompt_registry/`, 2026-06)
 
 Versioned, cryptographically-signed, remotely-updatable store for every AI-facing instruction

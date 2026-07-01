@@ -250,7 +250,9 @@ class TestTabHelp:
     def test_exactly_10_tabs(self) -> None:
         from gui.help_content import TAB_HELP
 
-        assert len(TAB_HELP) == 10
+        # 10 original tabs + the AI Control Center tab (ai_insights and prompts
+        # intentionally carry no TAB_HELP entry — explain() no-ops for those).
+        assert len(TAB_HELP) == 11
 
     def test_values_are_tab_help(self) -> None:
         from gui.help_content import TAB_HELP, TabHelp

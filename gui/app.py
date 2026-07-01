@@ -27,6 +27,9 @@ Tabs
                                 🔄 Sync, diff viewer, ↩ Rollback/pin (Stage 7)
 12. AI Insights                — Claude analyst note + Gemini chart-pattern vision +
                                 aggregate Claude-vs-Gemini disagreement view (Tier 9 Scope 3)
+13. AI Control Center          — one operator surface for every AI option: master-switch
+                                toggles, on-demand per-symbol actions, Gravity AI audit,
+                                and Start/Stop of an --interval/--agent scheduled run
 
 Design
 ------
@@ -177,6 +180,7 @@ tab_labels = [
     "❓ Help",
     "📝 Prompts",
     "🪄 AI Insights",
+    "🎛️ AI Control Center",
 ]
 tabs = st.tabs(tab_labels)
 
@@ -206,5 +210,7 @@ with tabs[11]:
     safe_panel(panels.render_prompt_registry)
 with tabs[12]:
     safe_panel(panels.render_ai_insights)
+with tabs[13]:
+    safe_panel(panels.render_ai_control_center)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")
