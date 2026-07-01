@@ -10,8 +10,6 @@ Unit tests for:
    None (never fabricated) when SPY history or macro history is unavailable.
 """
 
-from unittest import mock
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -22,7 +20,7 @@ from macro_engine import MacroEngine
 
 
 @pytest.fixture(autouse=True)
-def _disable_historical_store():
+def _disable_historical_store(disable_historical_store):
     """settings.HISTORICAL_STORE_ENABLED defaults True, which would route
     MacroEngine.compute_hmm_risk_on_probability()'s macro-history reads
     through the real, on-disk HistoricalStore (see the Tier 2.3 Phase 3
@@ -30,13 +28,10 @@ def _disable_historical_store():
     directly. Confirmed by direct execution -- NOT just the "succeeds" test
     below, but also the "insufficient rows" graceful-degradation test --
     that this write happens before the eventual None short-circuit, so it
-    is disabled file-wide via this autouse fixture rather than per-test
-    (mirrors the pattern already established in test_processing_engine.py's
-    TestCalculateFundamentalMetrics for the same HISTORICAL_STORE_ENABLED
-    trap). The DTO-only tests in sections 1/2 above do no I/O and are
-    unaffected by this setting."""
-    with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
-        yield
+    is disabled file-wide via this autouse shim (wrapping the shared
+    tests/conftest.py fixture) rather than per-test. The DTO-only tests in
+    sections 1/2 above do no I/O and are unaffected by this setting."""
+    yield
 
 
 # =============================================================================

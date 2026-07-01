@@ -1,6 +1,32 @@
 import pandas as pd
 import numpy as np
-from typing import Callable, Any, Union
+from typing import Callable, Any, Union, Optional
+
+
+def make_synthetic_ohlcv(periods: int, seed: Optional[int] = None, end: str = "2026-06-24") -> pd.DataFrame:
+    """Deterministic synthetic OHLCV history via a random walk on Close.
+
+    Shared by the lookahead perturbation test files (previously duplicated
+    near-identically across tests/test_indicators_lookahead.py and
+    tests/test_processing_engine_lookahead.py, differing only in `periods`
+    and RNG seed). Uses a local `np.random.RandomState(seed)` rather than
+    the global `np.random.seed()` + bare `np.random.*` calls the original
+    fixtures used, so callers get the same reproducibility guarantee
+    (same seed -> same DataFrame) without depending on global RNG state
+    or call order relative to other tests.
+    """
+    rng = np.random.RandomState(seed)
+    dates = pd.date_range(end=end, periods=periods)
+    close = 100.0 + np.cumsum(rng.normal(0, 1.0, periods))
+    open_p = close + rng.normal(0, 0.5, periods)
+    high = np.maximum(close, open_p) + rng.uniform(0, 1.0, periods)
+    low = np.minimum(close, open_p) - rng.uniform(0, 1.0, periods)
+    volume = rng.randint(1000, 10000, periods).astype(float)
+    return pd.DataFrame(
+        {"Open": open_p, "High": high, "Low": low, "Close": close, "Volume": volume},
+        index=dates,
+    )
+
 
 def verify_no_lookahead(
     func: Callable[[Union[pd.Series, pd.DataFrame], int], Any],

@@ -47,6 +47,7 @@ from signals.base import SignalContext
 from signals.pairs_trading import generate_pairs_signals
 from signals.rsi2_mean_reversion import RSI2MeanReversionSignal
 from signals.timeseries_momentum import TimeSeriesMomentumSignal
+from tests._db_isolation import redirect_class_to_memory_db
 
 
 # ============================================================================
@@ -74,16 +75,8 @@ def _patched_ee() -> EvaluationEngine:
     original_evaluate_portfolio = ee.evaluate_portfolio
 
     def _wrapped_evaluate_portfolio(*args, **kwargs):
-        original_init = transactions_store.TransactionsStore.__init__
-
-        def _mem_init(self, db_url=None):  # noqa: ANN001
-            original_init(self, db_url="sqlite:///:memory:")
-
-        transactions_store.TransactionsStore.__init__ = _mem_init
-        try:
+        with redirect_class_to_memory_db(transactions_store.TransactionsStore):
             return original_evaluate_portfolio(*args, **kwargs)
-        finally:
-            transactions_store.TransactionsStore.__init__ = original_init
 
     ee.evaluate_portfolio = _wrapped_evaluate_portfolio
     return ee

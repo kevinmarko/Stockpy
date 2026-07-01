@@ -306,9 +306,11 @@ class TestCalculateFundamentalMetrics:
     that targets the HistoricalStore integration explicitly re-enables it."""
 
     @pytest.fixture(autouse=True)
-    def _disable_historical_store(self):
-        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
-            yield
+    def _disable_historical_store(self, disable_historical_store):
+        """Shim wrapping the shared tests/conftest.py fixture in an
+        autouse=True local fixture, so every test in this class gets it
+        without each one requesting it by name."""
+        yield
 
     def test_basic_happy_path(self, engine):
         dtos = {"AAPL": _fund_dto()}
@@ -377,8 +379,6 @@ class TestCalculateFundamentalMetrics:
         from producing a row."""
         good = _fund_dto("GOOD")
         bad = _fund_dto("BAD")
-        bad.sector = None  # triggers AttributeError-prone .strip() paths upstream is fine,
-        # but force a hard failure via raw_info corruption instead:
         bad.raw_info = "not-a-dict"  # .get() on a str -> AttributeError inside try/except
         result = engine.calculate_fundamental_metrics({"GOOD": good, "BAD": bad})
         assert "GOOD" in result
