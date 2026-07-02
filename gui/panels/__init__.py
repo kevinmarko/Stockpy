@@ -4291,7 +4291,16 @@ def render_ai_control_center() -> None:
         # Toggle (only for capabilities with a writable master switch that is built)
         tkey = rowinfo["toggle_key"]
         if tkey and rowinfo["built"]:
-            cur = bool(getattr(settings, tkey, False))
+            # Read the CURRENT value from .env (not the import-frozen `settings`
+            # singleton) so that after a write the next rerun sees the updated
+            # value and does not spuriously re-write on every unrelated rerun.
+            raw = env_io.get_value(tkey, "").strip().lower()
+            if raw in ("true", "1", "yes", "on"):
+                cur = True
+            elif raw in ("false", "0", "no", "off"):
+                cur = False
+            else:  # key absent from .env → fall back to the runtime default
+                cur = bool(getattr(settings, tkey, False))
             new = c4.toggle(
                 f"Enable ({tkey})",
                 value=cur,
@@ -4355,7 +4364,6 @@ def render_ai_control_center() -> None:
                     )
                 else:
                     from llm.research import generate_research_brief  # noqa: PLC0415
-                    from gui.ai_insights_panel import format_chart_pattern_markdown  # noqa: PLC0415, F401
 
                     slot = f"acc_opal_payload_{sym}"
                     if st.button("🔬 Generate research brief (Opal)", key=f"acc_opal_btn_{sym}",
