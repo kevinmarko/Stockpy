@@ -9,9 +9,11 @@ Streamlit — mirrors :mod:`gui.ai_insights_panel` / :mod:`gui.gravity_ai_panel`
 The Control Center is the single operator-facing surface for every AI option
 on the platform. This module supplies:
 
-* :data:`CAPABILITIES` — the registry of all AI options (Claude commentary,
-  Gemini alert commentary, Gemini chart vision, Gravity AI runner, Opal
-  research), each described by an :class:`AICapability`.
+* :data:`CAPABILITIES` — the registry of all AI options (analyst rationale
+  commentary, alert commentary — both flexibly routed to Claude OR Gemini
+  per LLM_COMMENTARY_RATIONALE_PROVIDER / LLM_COMMENTARY_ALERT_PROVIDER —
+  Gemini chart vision, Gravity AI runner, Opal research), each described by
+  an :class:`AICapability`.
 * :func:`capability_status` — a four-state classifier (``ready`` /
   ``disabled`` / ``missing_key`` / ``not_built``) per capability, derived
   from the live settings + whether the backing module is importable.
@@ -55,8 +57,12 @@ class AICapability:
         The capability is "enabled" iff the primary (first) switch is truthy
         AND, when a provider-selector is listed, it is not ``"none"``.
     provider_key_settings :
-        The ``settings`` attribute name(s) holding the required provider API
-        key(s). ALL must be present for the capability to be ``ready``.
+        The ``settings`` attribute name(s) that COULD hold the required
+        provider API key, depending on which provider is configured. Used as
+        a static fallback (ALL must be present) when
+        ``provider_selector_setting`` is ``None``; otherwise informational
+        only — the actual live requirement is resolved dynamically via
+        ``provider_selector_setting`` (see below).
     module :
         Import path whose presence means the backing code is built (used to
         gate Opal until its backend ships). ``None`` = always built.
@@ -69,6 +75,15 @@ class AICapability:
         ``ALLOWED_KEYS``). ``None`` = read-only status row.
     help :
         One-line operator help.
+    provider_selector_setting :
+        The ``settings`` attribute name holding an operator-chosen provider
+        name (``"claude"`` | ``"gemini"`` | ``"none"``), when this capability
+        supports flexible per-job routing (Tier 9 rationale/alert commentary
+        — either provider may serve either job). When set, the REQUIRED key
+        is resolved dynamically via :data:`_PROVIDER_KEY_MAP` from the LIVE
+        value of this setting, rather than from the static
+        ``provider_key_settings`` tuple. ``None`` = not flexible (Gravity
+        runner, chart vision, Opal — each has a fixed provider).
     """
 
     key: str
@@ -79,6 +94,7 @@ class AICapability:
     trigger: str
     toggle_key: Optional[str]
     help: str
+    provider_selector_setting: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -87,23 +103,29 @@ class AICapability:
 CAPABILITIES: Tuple[AICapability, ...] = (
     AICapability(
         key="claude_commentary",
-        label="Claude analyst commentary",
+        label="Analyst rationale commentary",
         enable_settings=("LLM_COMMENTARY_ENABLED", "LLM_COMMENTARY_RATIONALE_PROVIDER"),
-        provider_key_settings=("ANTHROPIC_API_KEY",),
+        provider_key_settings=("ANTHROPIC_API_KEY", "GEMINI_API_KEY"),
         module="llm.commentary",
         trigger="on_demand",
         toggle_key="LLM_COMMENTARY_ENABLED",
-        help="Per-symbol analyst 'why' note. On-demand button (Section B).",
+        help="Per-symbol analyst 'why' note. On-demand button (Section B). "
+             "Provider is operator-chosen (Claude or Gemini) via "
+             "LLM_COMMENTARY_RATIONALE_PROVIDER.",
+        provider_selector_setting="LLM_COMMENTARY_RATIONALE_PROVIDER",
     ),
     AICapability(
         key="gemini_alerts",
-        label="Gemini alert commentary",
+        label="Alert commentary",
         enable_settings=("LLM_COMMENTARY_ENABLED", "LLM_COMMENTARY_ALERT_PROVIDER"),
-        provider_key_settings=("GEMINI_API_KEY",),
+        provider_key_settings=("ANTHROPIC_API_KEY", "GEMINI_API_KEY"),
         module="llm.commentary",
         trigger="scheduled",
         toggle_key="LLM_COMMENTARY_ENABLED",
-        help="Concise ntfy alert bodies. Fires automatically during a scheduled run (Section D).",
+        help="Concise ntfy alert bodies. Fires automatically during a scheduled run "
+             "(Section D). Provider is operator-chosen (Claude or Gemini) via "
+             "LLM_COMMENTARY_ALERT_PROVIDER.",
+        provider_selector_setting="LLM_COMMENTARY_ALERT_PROVIDER",
     ),
     AICapability(
         key="gemini_vision",
@@ -168,8 +190,41 @@ def _is_enabled(settings_obj: Any, cap: AICapability) -> bool:
     return True
 
 
+# Maps an operator-chosen provider name (the live value of a
+# ``provider_selector_setting`` attribute) to the ``settings`` attribute
+# holding that provider's API key.  Used by :func:`_keys_present` /
+# :func:`_active_provider` to resolve flexible per-job routing (Tier 9
+# rationale/alert commentary — either provider may serve either job).
+_PROVIDER_KEY_MAP: Dict[str, str] = {
+    "claude": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+
+def _active_provider(settings_obj: Any, cap: AICapability) -> Optional[str]:
+    """Return the live provider choice for a flexible capability, or ``None``."""
+    if not cap.provider_selector_setting:
+        return None
+    choice = str(getattr(settings_obj, cap.provider_selector_setting, "") or "").strip().lower()
+    return choice or None
+
+
 def _keys_present(settings_obj: Any, cap: AICapability) -> bool:
-    """True iff every required provider key is present + non-empty."""
+    """True iff the required provider key is present + non-empty.
+
+    When ``provider_selector_setting`` is set, the requirement is resolved
+    dynamically from the LIVE provider choice (either "claude" or "gemini"
+    may serve the job) via :data:`_PROVIDER_KEY_MAP`. Otherwise falls back
+    to the static ``provider_key_settings`` tuple (ALL must be present).
+    """
+    choice = _active_provider(settings_obj, cap)
+    if choice is not None:
+        key_name = _PROVIDER_KEY_MAP.get(choice)
+        if key_name is None:
+            # Unknown/"none" provider choice — no key requirement resolvable.
+            return False
+        return bool(getattr(settings_obj, key_name, None) or "")
     for k in cap.provider_key_settings:
         if not (getattr(settings_obj, k, None) or ""):
             return False
@@ -206,6 +261,7 @@ def capability_status(settings_obj: Any, cap: AICapability) -> Dict[str, Any]:
         "key_present": bool(key_present),
         "built": bool(built),
         "status": status,
+        "active_provider": _active_provider(settings_obj, cap),
     }
 
 
@@ -214,12 +270,14 @@ def control_center_overview(settings_obj: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for cap in CAPABILITIES:
         st = capability_status(settings_obj, cap)
+        active = st["active_provider"]
+        required_key = _PROVIDER_KEY_MAP.get(active) if active else None
         rows.append({
             "key": cap.key,
             "label": cap.label,
             "trigger": cap.trigger,
             "toggle_key": cap.toggle_key,
-            "provider_keys": list(cap.provider_key_settings),
+            "provider_keys": [required_key] if required_key else list(cap.provider_key_settings),
             **st,
         })
     return rows

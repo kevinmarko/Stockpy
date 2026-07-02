@@ -4288,6 +4288,9 @@ def render_ai_control_center() -> None:
         keys_present = rowinfo["key_present"]
         key_names = ", ".join(rowinfo["provider_keys"])
         c3.markdown(("🔑 set" if keys_present else "🔓 missing") + f"  \n`{key_names}`")
+        active_provider = rowinfo.get("active_provider")
+        if active_provider:
+            c3.caption(f"via: **{active_provider}**")
         # Toggle (only for capabilities with a writable master switch that is built)
         tkey = rowinfo["toggle_key"]
         if tkey and rowinfo["built"]:

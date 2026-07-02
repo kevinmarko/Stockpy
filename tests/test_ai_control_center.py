@@ -130,6 +130,50 @@ class TestCapabilityStatus:
         )
         assert st["status"] == "disabled"
 
+    def test_flexible_routing_gemini_serving_rationale_is_ready(self) -> None:
+        # Flexible-routing regression: the "claude_commentary" row must
+        # resolve to GEMINI_API_KEY (not ANTHROPIC_API_KEY) when the
+        # operator routes rationale to Gemini.
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                ANTHROPIC_API_KEY="",
+                GEMINI_API_KEY="sk-gem-x",
+            ),
+            self._claude(),
+        )
+        assert st["status"] == "ready"
+        assert st["active_provider"] == "gemini"
+
+    def test_flexible_routing_claude_serving_alerts_is_ready(self) -> None:
+        gemini_alerts = next(c for c in CAPABILITIES if c.key == "gemini_alerts")
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_ALERT_PROVIDER="claude",
+                GEMINI_API_KEY="",
+                ANTHROPIC_API_KEY="sk-ant-x",
+            ),
+            gemini_alerts,
+        )
+        assert st["status"] == "ready"
+        assert st["active_provider"] == "claude"
+
+    def test_flexible_routing_wrong_key_present_is_missing_key(self) -> None:
+        # Rationale routed to gemini, but only the ANTHROPIC key is set —
+        # must be missing_key, not a false "ready".
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                ANTHROPIC_API_KEY="sk-ant-x",
+                GEMINI_API_KEY="",
+            ),
+            self._claude(),
+        )
+        assert st["status"] == "missing_key"
+
     def test_not_built_wins_over_everything(self) -> None:
         # Opal is enabled + key present, but llm.research is not shipped yet.
         st = capability_status(
@@ -148,11 +192,34 @@ class TestOverview:
         rows = control_center_overview(SimpleNamespace())
         assert len(rows) == len(CAPABILITIES)
         for r in rows:
-            assert {"key", "label", "trigger", "status", "provider_keys"} <= set(r)
+            assert {"key", "label", "trigger", "status", "provider_keys", "active_provider"} <= set(r)
 
     def test_status_badges_present(self) -> None:
         for token in ("ready", "disabled", "missing_key", "not_built"):
             assert status_badge(token)
+
+    def test_active_provider_narrows_required_key(self) -> None:
+        rows = control_center_overview(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                LLM_COMMENTARY_ALERT_PROVIDER="claude",
+                ANTHROPIC_API_KEY="sk-ant-x",
+                GEMINI_API_KEY="sk-gem-x",
+            )
+        )
+        rationale_row = next(r for r in rows if r["key"] == "claude_commentary")
+        alert_row = next(r for r in rows if r["key"] == "gemini_alerts")
+        assert rationale_row["active_provider"] == "gemini"
+        assert rationale_row["provider_keys"] == ["GEMINI_API_KEY"]
+        assert alert_row["active_provider"] == "claude"
+        assert alert_row["provider_keys"] == ["ANTHROPIC_API_KEY"]
+
+    def test_non_flexible_capability_has_no_active_provider(self) -> None:
+        rows = control_center_overview(SimpleNamespace())
+        vision_row = next(r for r in rows if r["key"] == "gemini_vision")
+        assert vision_row["active_provider"] is None
+        assert vision_row["provider_keys"] == ["GEMINI_API_KEY"]
 
 
 # ---------------------------------------------------------------------------

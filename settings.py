@@ -633,15 +633,19 @@ class Settings(BaseSettings):
     LLM_COMMENTARY_RATIONALE_PROVIDER: str = Field(
         default="claude",
         description=(
-            "Provider for analyst rationale generation.  'claude' (default) "
-            "or 'none' (disable rationale LLM regardless of master switch)."
+            "Provider for analyst rationale generation.  'claude' (default), "
+            "'gemini', or 'none' (disable rationale LLM regardless of master "
+            "switch).  Either provider works for either job — this and "
+            "LLM_COMMENTARY_ALERT_PROVIDER are independent, operator-chosen."
         ),
     )
     LLM_COMMENTARY_ALERT_PROVIDER: str = Field(
         default="gemini",
         description=(
-            "Provider for alert commentary generation.  'gemini' (default) "
-            "or 'none' (disable alert LLM regardless of master switch)."
+            "Provider for alert commentary generation.  'gemini' (default), "
+            "'claude', or 'none' (disable alert LLM regardless of master "
+            "switch).  Either provider works for either job — this and "
+            "LLM_COMMENTARY_RATIONALE_PROVIDER are independent, operator-chosen."
         ),
     )
     LLM_COMMENTARY_CACHE_PATH: str = Field(
@@ -661,15 +665,20 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: Optional[str] = Field(
         default=None,
         description=(
-            "Anthropic API key for Claude analyst commentary.  Unset → "
-            "rationale LLM disabled, template fallback kicks in."
+            "Anthropic API key for the Claude provider.  Required whenever "
+            "either LLM_COMMENTARY_RATIONALE_PROVIDER or "
+            "LLM_COMMENTARY_ALERT_PROVIDER is set to 'claude'.  Unset → that "
+            "job's LLM disabled, template fallback kicks in."
         ),
     )
     GEMINI_API_KEY: Optional[str] = Field(
         default=None,
         description=(
-            "Google AI Studio key for Gemini alert commentary.  Unset → "
-            "alert LLM disabled, template fallback kicks in."
+            "Google AI Studio key for the Gemini provider.  Required whenever "
+            "either LLM_COMMENTARY_RATIONALE_PROVIDER or "
+            "LLM_COMMENTARY_ALERT_PROVIDER is set to 'gemini' (also used for "
+            "chart-pattern vision).  Unset → that job's LLM disabled, "
+            "template fallback kicks in."
         ),
     )
 

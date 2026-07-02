@@ -12262,11 +12262,12 @@ class GravityAIAuditor:
         self.report["step_76_ai_insights_audit"] = audit
 
     def step_78_ai_control_center_audit(self) -> None:
-        """Step 78 — AI Control Center tab audit (2026-07-01).
+        """Step 78 — AI Control Center tab audit (2026-07-01, extended 2026-07-02).
 
-        10 checks pinning the single operator-facing surface for every AI
-        option (Claude commentary, Gemini alerts, Gemini chart vision, Gravity
-        AI runner, Opal research) — all operator-triggered, nothing autonomous:
+        11 checks pinning the single operator-facing surface for every AI
+        option (analyst rationale + alert commentary — both flexibly routed
+        to Claude OR Gemini, Gemini chart vision, Gravity AI runner, Opal
+        research) — all operator-triggered, nothing autonomous:
 
         1.  ``gui.ai_control_center`` importable; ``CAPABILITIES`` covers the
             five expected keys.
@@ -12290,6 +12291,12 @@ class GravityAIAuditor:
         9.  Opal row gated ``not_built`` while ``llm.research`` is absent.
         10. Test files exist (``tests/test_ai_control_center.py``,
             ``tests/test_gui_env_io_control_center_keys.py``).
+        11. Flexible per-job routing — the ``claude_commentary`` row resolves
+            ``ready`` off ``GEMINI_API_KEY`` when
+            ``LLM_COMMENTARY_RATIONALE_PROVIDER=gemini``, and the
+            ``gemini_alerts`` row resolves ``ready`` off ``ANTHROPIC_API_KEY``
+            when ``LLM_COMMENTARY_ALERT_PROVIDER=claude`` — either provider
+            serves either job.
         """
         from pathlib import Path as _Path
         from types import SimpleNamespace as _NS
@@ -12461,6 +12468,41 @@ class GravityAIAuditor:
                 "detail": f"ai_control_center={t1} env_io_keys={t2}",
             })
             all_pass = all_pass and c10
+
+            # ── 11. flexible per-job routing: either provider serves either
+            #        job — the "claude_commentary" row resolves to
+            #        GEMINI_API_KEY (not ANTHROPIC_API_KEY) when the operator
+            #        routes rationale to Gemini, and vice versa for alerts.
+            gemini_alerts_cap = next(c for c in CAPABILITIES if c.key == "gemini_alerts")
+            flex_rationale_to_gemini = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                    ANTHROPIC_API_KEY="",
+                    GEMINI_API_KEY="sk-gem-x"),
+                claude_cap,
+            )
+            flex_alerts_to_claude = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_ALERT_PROVIDER="claude",
+                    GEMINI_API_KEY="",
+                    ANTHROPIC_API_KEY="sk-ant-x"),
+                gemini_alerts_cap,
+            )
+            c11 = (
+                flex_rationale_to_gemini["status"] == "ready"
+                and flex_rationale_to_gemini["active_provider"] == "gemini"
+                and flex_alerts_to_claude["status"] == "ready"
+                and flex_alerts_to_claude["active_provider"] == "claude"
+            )
+            audit["checks"].append({
+                "check": "Flexible per-job routing: Gemini can serve rationale AND Claude can serve alerts",
+                "passed": bool(c11),
+                "detail": (
+                    f"rationale->gemini={flex_rationale_to_gemini['status']} "
+                    f"alerts->claude={flex_alerts_to_claude['status']}"
+                ),
+            })
+            all_pass = all_pass and c11
 
             audit["overall_pass"] = bool(all_pass)
             audit["status"] = "PASSED" if all_pass else "FAILED"
