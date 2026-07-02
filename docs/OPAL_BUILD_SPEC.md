@@ -26,12 +26,15 @@ as enriched input.
 
 A pure-LLM "researcher" with no live data would hallucinate catalysts and news. Opal MUST
 synthesize **real retrieved data**, not invent it. The platform already fetches real Finnhub
-`company_news` + `earnings_calendar` (`signals/news_catalyst.py`: `_fetch_company_news`,
-`_fetch_next_earnings`; `FinnhubProvider` in `data/market_data.py`) and carries a macro DTO.
-Opal's research module reuses these to assemble a grounded input packet, then asks GPT to
-**synthesize** it into the schema. The `data_confidence` field + a strict "qualitative only,
-never invent numbers" system prompt are the backstops. (Future option: OpenAI Responses API
-web-search tool for live grounding — out of scope here.)
+`company_news` + `earnings_calendar` in `signals/news_catalyst.py` (currently as the private
+helpers `_fetch_company_news` / `_fetch_next_earnings`; `FinnhubProvider` in
+`data/market_data.py`) and carries a macro DTO. STEP 3a below promotes those helpers to their
+public names (`fetch_company_news` / `fetch_next_earnings`) so `llm/research.py` can consume
+them without reaching into another module's private surface. Opal's research module reuses
+these to assemble a grounded input packet, then asks GPT to **synthesize** it into the schema.
+The `data_confidence` field + a strict "qualitative only, never invent numbers" system prompt
+are the backstops. (Future option: OpenAI Responses API web-search tool for live grounding —
+out of scope here.)
 
 Opal stays **ADVISORY-ONLY** and **opt-in / default-off** — consistent with the standing rule
 against automatic AI invocations (the feature is operator-triggered, not background/autonomous).
@@ -132,25 +135,44 @@ Deliver working code + passing tests + a green Gravity step_77 before considerin
 ## 4. STEP PROMPTS (build order)
 
 ```
-STEP 1 — OpenAIProvider. In llm/providers.py add OpenAIProvider(LLMProvider): lazy `import
-openai` in __init__; call_structured(system,user,schema_model) uses
-response_format={"type":"json_schema","json_schema":{"name":schema_model.__name__,"schema":
-schema_model.model_json_schema(),"strict":True}}; parse choices[0].message.content via
-model_validate_json; hard timeout from OPAL_RESEARCH_TIMEOUT_SECONDS; any exception/parse/schema
-miss → None. name="openai". Missing SDK → self._client=None → calls return None.
+STEP 1 — OpenAIProvider. In llm/providers.py add OpenAIProvider(LLMProvider): lazy
+`import openai` in __init__; construct client as
+`openai.OpenAI(api_key=..., timeout=timeout_seconds)` — timeout goes at CLIENT INIT
+(mirrors `anthropic.Anthropic(api_key=..., timeout=...)` in ClaudeProvider — do NOT reach for
+`signal.alarm`). call_structured(system,user,schema_model) uses the openai>=1.40 SDK helper
+`client.beta.chat.completions.parse(model=..., messages=[{"role":"system","content":system},
+{"role":"user","content":user}], response_format=schema_model)` and returns
+`completion.choices[0].message.parsed` (already a validated pydantic instance; may be `None` on
+a refusal — check `.message.refusal` / `.message.parsed`). Do NOT hand-roll
+`response_format={"type":"json_schema","strict":True,"schema":model_json_schema()}` — OpenAI's
+strict mode requires `additionalProperties:false` on every object AND every field in `required`
+(Optional fields must be `type:[T,"null"]`, not omitted); pydantic v2's raw `model_json_schema()`
+doesn't emit these, so a hand-rolled schema 400s at runtime. The `.parse()` helper does the
+schema post-processing for you. Any exception / refusal / None `.parsed` → return None.
+name="openai". Missing SDK → self._client=None → calls return None.
 
 STEP 2 — ResearchBrief schema. In llm/schemas.py add ResearchBrief (ConfigDict extra=forbid,
 frozen). Fields: thesis_context (≤600), catalysts (1-4, ≤160), risk_factors (1-4, ≤160),
 recent_developments (0-4, ≤200), data_confidence Literal[low|medium|high], sources_note (≤200).
 NO numeric fields.
 
+STEP 3a — Promote Finnhub helpers to public API. In signals/news_catalyst.py rename
+`_fetch_company_news` → `fetch_company_news` and `_fetch_next_earnings` → `fetch_next_earnings`
+(update the two internal callers in the same file — `NewsCatalystSignal.pre_compute`). Behavior
+unchanged; single-diff docstring/rename commit. This lets llm/research.py consume a public API
+instead of reaching into another module's private surface.
+
 STEP 3 — llm/research.py. _RESEARCH_SYSTEM_PROMPT (synthesize supplied grounding only; never
-invent numbers; advisory note). _gather_grounding(symbol, context) reuses
-signals.news_catalyst._fetch_company_news / _fetch_next_earnings (degrade to {} on any failure)
-+ macro snippet from context. generate_research_brief(symbol, context=None, *, provider=None,
+invent numbers; advisory note). _gather_grounding(symbol, context) reuses the newly-public
+signals.news_catalyst.fetch_company_news / fetch_next_earnings (degrade to {} on any failure) +
+macro snippet from context. generate_research_brief(symbol, context=None, *, provider=None,
 grounding_fn=None): opt-in gate → cache_get → build user prompt from grounding → provider.
 call_structured → cache_put → return; soft-fail → None. Reuse llm.cache + _registry_prompt
-("llm.research.system").
+("llm.research.system"). Cache key MUST use `llm.cache.make_cache_key(provider="openai",
+schema_name="ResearchBrief", symbol=symbol, score=0.0, action="RESEARCH", date_iso=None)` — the
+`score` / `action` slots aren't semantic for a research brief, so we fix them to `0.0` /
+`"RESEARCH"` (mirrors how llm/chart_insight.py pins non-scored artifacts) and let the UTC-date
+bucket be the natural refresh boundary.
 
 STEP 4 — Router. In llm/router.py add get_research_provider(): None unless OPAL_RESEARCH_ENABLED
 and OPAL_RESEARCH_PROVIDER=="openai" and OPENAI_API_KEY set → OpenAIProvider(...).
@@ -224,7 +246,11 @@ Mirrors `step_74/75/76`. Each check appends `{check, passed[, detail]}`; wire
 1. Module surface: `llm.research.generate_research_brief`, `ResearchBrief`, `OpenAIProvider` importable.
 2. `OpenAIProvider.call_structured` is callable.
 3. `ResearchBrief` rejects >4 catalysts AND a bad `data_confidence` value.
-4. `ResearchBrief` exposes NO numeric field (field-name scan — CONSTRAINT #4).
+4. `ResearchBrief` exposes NO numeric field — type-based check: iterate
+   `ResearchBrief.model_fields.items()` and assert every annotation resolves to `str`,
+   `list[str]`, or `Literal[...]`. Reject anything that resolves to `int`, `float`, `Decimal`,
+   or a container of those (CONSTRAINT #4 — stronger than a field-name scan, which would miss a
+   `catalysts: list[str]` field whose content happens to include "$5B buyback").
 5. No top-level `openai` import in `llm/research.py` OR `engine/advisory.py` (lazy only).
 6. No order-submission verbs in `llm/research.py` (advisory-only).
 7. Opt-in: `generate_research_brief("X")` returns `None` when `OPAL_RESEARCH_ENABLED=False`.
@@ -236,7 +262,13 @@ Mirrors `step_74/75/76`. Each check appends `{check, passed[, detail]}`; wire
 
 ## 7. Ready-to-apply documentation text
 
-### 7a. `CLAUDE.md` — new section (insert after the Scope-3 section, before Prompt Registry)
+### 7a. `CLAUDE.md` — new section
+
+**Insertion point:** immediately after the `## Tier 9 Scope 3 — AI Insights tab (Gemini Vision, 2026-06)`
+section, BEFORE the `## AI Control Center tab (gui/ai_control_center.py, 2026-07)` section.
+Rationale: keeps all Tier-9 LLM-provider scopes (1/2/3/4) contiguous so an operator scanning
+CLAUDE.md sees the three-provider layer in one continuous block, with the Control Center /
+Prompt Registry sections following separately.
 
 ```markdown
 ## Tier 9 Scope 4 — Opal Research Agent (`llm/research.py`, OpenAI/GPT)
@@ -290,11 +322,19 @@ exist. Runner audit prompt: `ai_verification_prompts.STEP_8_PROMPT`; `_STEP_FILE
 - Opt-in default-off — zero `openai` import + zero network when `OPAL_RESEARCH_ENABLED=False`.
 - No GUI-writable secret — `OPENAI_API_KEY` in `SECRET_KEYS` only.
 - No top-level LLM SDK reach in `engine/advisory.py` or `llm/research.py`.
+
+### AI Control Center auto-activation
+The AI Control Center tab (`gui/ai_control_center.py`, added in the tab-14 build) already
+carries an `opal_built()` helper that soft-imports `llm.research`. Once STEP 3 lands, the
+Control Center's Opal row auto-lights-up (status transitions from `not_built` → `disabled` /
+`missing_key` / `ready` per the standard 4-state classifier). **No Control Center change is
+needed** as part of this build — do not duplicate the wiring there.
 ```
 
 ### 7b. `GEMINI.md` — replace the "openai/anthropic" line
 
-Current (line ~35): *"Uses openai/anthropic for LLM agent integration."*
+Locate via `grep -n "openai/anthropic" GEMINI.md` (line number drifts as GEMINI.md grows —
+don't cite a fixed line). Current text: *"Uses openai/anthropic for LLM agent integration."*
 Replace with:
 
 ```markdown
@@ -318,7 +358,8 @@ Add an Opal bullet under the standing-rules/architecture section:
 
 1. `pytest` the 5 new Opal test files + adjacent (`test_advisory_llm_enrichment`,
    `test_llm_providers`, `test_ai_insights_panel`) → green, mocked SDKs only.
-2. Gravity `step_74/75/76/77` all PASS (run the auditor methods in isolation).
+2. Gravity `step_74/75/76/77/78` all PASS (run the auditor methods in isolation — step_78 is the
+   AI Control Center audit; verify Opal row transitions from `not_built` → its live status).
 3. Opt-in smoke: `OPAL_RESEARCH_ENABLED=false python -m engine.opal_research AAPL` → prints the
    "Opal research unavailable" sentinel, exit 0; no `openai` import occurs.
 4. Grounding smoke (keys present, off-CI): `_gather_grounding` returns real Finnhub headlines;
@@ -326,6 +367,13 @@ Add an Opal bullet under the standing-rules/architecture section:
 5. `grep -n "^import openai\|^from openai" engine/advisory.py llm/research.py` → empty (lazy only).
 6. `Recommendation` numeric fields byte-identical before/after enrichment when Opal is on.
 7. `CLAUDE.md` Scope-4 section + `GEMINI.md` three-provider update present and accurate.
+8. Structured-output smoke (keys present, off-CI): a real call to `OpenAIProvider.call_structured`
+   with a trivial `ResearchBrief` prompt returns a validated pydantic instance (NOT `None`) —
+   confirms the `.beta.chat.completions.parse()` path is wired correctly and the schema is
+   accepted by OpenAI's strict-mode post-processing.
+9. `Recommendation.research_brief` respects the additive contract — every existing
+   `engine.advisory.evaluate` caller in the repo (`main.py`, `main_orchestrator.py`, the CLI, the
+   GUI drill-down) still constructs `Recommendation` positionally without touching the new field.
 
 ## 9. Open decision for execution time (not blocking)
 
