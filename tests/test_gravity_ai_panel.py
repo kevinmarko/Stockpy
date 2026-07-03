@@ -5,7 +5,7 @@ Unit tests for ``gui.gravity_ai_panel`` — the Streamlit-free helpers behind
 the Safety-tab AI Gravity audit section.
 
 Runs fully headless: no Streamlit import, no real LLM provider, no network.
-The Safety-tab wiring inside ``gui/panels/__init__.py`` is verified by a
+The Safety-tab wiring inside ``gui/panels/gravity_audit.py`` is verified by a
 source-grep test (mirroring ``tests/test_llm_commentary_panel.py``).
 
 Coverage

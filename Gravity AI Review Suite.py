@@ -4085,7 +4085,7 @@ class GravityAIAuditor:
 
             # 4. No order functions defined in the gui/ package.
             import re as _re
-            gui_dir = _Path(__file__).resolve().parent / "gui"
+            gui_dir = _Path(__file__).resolve().parents[1] / "gui"
             order_pat = _re.compile(r"^\s*def\s+(submit_order|place_order|place_equity_order|"
                                     r"place_option_order|buy_order|sell_order|place_\w+)", _re.MULTILINE)
             offenders = []
@@ -4709,7 +4709,7 @@ class GravityAIAuditor:
 
             # ── (h) No order/execution function names in the module ─────
             import ast, pathlib
-            src = (pathlib.Path(__file__).resolve().parent
+            src = (pathlib.Path(__file__).resolve().parents[1]
                    / "data" / "portfolio_sync.py").read_text(encoding="utf-8")
             tree = ast.parse(src)
             forbidden = {
@@ -9421,7 +9421,7 @@ class GravityAIAuditor:
         try:
             import sys
             from pathlib import Path
-            _repo = Path(__file__).resolve().parent
+            _repo = Path(__file__).resolve().parents[1]
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
 
@@ -9559,7 +9559,7 @@ class GravityAIAuditor:
             from pathlib import Path
             from datetime import date, timedelta, datetime
 
-            _repo = Path(__file__).resolve().parent
+            _repo = Path(__file__).resolve().parents[1]
             import sys
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
@@ -9748,7 +9748,7 @@ class GravityAIAuditor:
             from pathlib import Path
             from unittest.mock import patch, MagicMock
 
-            _repo = Path(__file__).resolve().parent
+            _repo = Path(__file__).resolve().parents[1]
             import sys
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
@@ -9824,7 +9824,7 @@ class GravityAIAuditor:
                 import tempfile
                 with tempfile.TemporaryDirectory() as td:
                     with patch("scripts.refresh_validations._download_spy", return_value=spy), \
-                         patch("scripts.refresh_validations.TieredCostModel", return_value=MagicMock()):
+                         patch("execution.cost_model.TieredCostModel", return_value=MagicMock()):
                         results = _rv.run_validations(
                             strategies=["__no_such_strategy__"],
                             output_dir=Path(td),
@@ -10056,10 +10056,10 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: total ALL_CHECKS count is 16 (15 from Stage 2 + alpaca_key_rotation_recent from Stage 3)
-            c9 = len(preflight_check.ALL_CHECKS) == 16
+            # Check 9: total ALL_CHECKS count is 17 (16 from Stage 2 + alpaca_key_rotation_recent from Stage 3)
+            c9 = len(preflight_check.ALL_CHECKS) == 17
             audit["checks"].append({
-                "check": f"ALL_CHECKS has 16 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "check": f"ALL_CHECKS has 17 entries (got {len(preflight_check.ALL_CHECKS)})",
                 "passed": c9,
             })
             all_pass = all_pass and c9

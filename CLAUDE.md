@@ -1303,8 +1303,8 @@ Rollout is strictly `off → review → live`. A `field_validator` coerces any u
 ### Test surface
 - `tests/test_queue_builder.py` (19 tests): mode staging (off→no file, review→file+never-placeable), allow_place gating (live+cap allows, no-cap blocks, kill-switch blocks all, gate-failure fails closed), intent construction + drop rules + held-SELL qty + capped notional + deterministic client_order_id, payload schema + atomic write + emit-failure swallowed, `gate_intent` unit.
 
-### Domain note (follow-up)
-A GUI banner surfacing the Robinhood execution mode (red on `live`) belongs in `gui/app.py` / `gui/panels.py` (Antigravity-owned per the domain split) and is intentionally left as a follow-up for the GUI owner — it is informational, not a guard.
+### GUI banner (`gui/robinhood_mode.py`, 2026-07)
+Informational only — the actual guards live in `execution/queue_builder.py`. A persistent banner is rendered above the tab bar in `gui/app.py`, driven by the headless `gui.robinhood_mode.read_robinhood_execution_mode(settings)` helper (frozen `RobinhoodModeState` dataclass; pure function; never raises — CONSTRAINT #6). Variants: `off` → hidden (default; renders nothing); `review` → amber `st.warning` explaining every intent is `allow_place=False`; `live` → red `st.error` naming the per-order cap (if set) or flagging `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` as UNSET (if not). Rendered AFTER the ADVISORY_ONLY / Alpaca run-mode banner so both are visible when both apply. Wrapped in a try/except so a broken banner never crashes the app. Tests: `tests/test_robinhood_mode.py` (48 tests — mode/cap coercion, off/review/live variants, cap-set vs cap-unset copy, degradation contract, app-wiring source guards).
 
 ### New env vars / settings
 - `ROBINHOOD_EXECUTION_MODE` — `off` (default) | `review` | `live`.

@@ -4098,7 +4098,7 @@ class GravityAIAuditor:
 
             # 4. No order functions defined in the gui/ package.
             import re as _re
-            gui_dir = _Path(__file__).resolve().parent / "gui"
+            gui_dir = _Path(__file__).resolve().parents[1] / "gui"
             order_pat = _re.compile(r"^\s*def\s+(submit_order|place_order|place_equity_order|"
                                     r"place_option_order|buy_order|sell_order|place_\w+)", _re.MULTILINE)
             offenders = []
@@ -4728,7 +4728,7 @@ class GravityAIAuditor:
 
             # ── (h) No order/execution function names in the module ─────
             import ast, pathlib
-            src = (pathlib.Path(__file__).resolve().parent
+            src = (pathlib.Path(__file__).resolve().parents[1]
                    / "data" / "portfolio_sync.py").read_text(encoding="utf-8")
             tree = ast.parse(src)
             forbidden = {
@@ -9440,7 +9440,7 @@ class GravityAIAuditor:
         try:
             import sys
             from pathlib import Path
-            _repo = Path(__file__).resolve().parent
+            _repo = Path(__file__).resolve().parents[1]
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
 
@@ -9578,7 +9578,7 @@ class GravityAIAuditor:
             from pathlib import Path
             from datetime import date, timedelta, datetime
 
-            _repo = Path(__file__).resolve().parent
+            _repo = Path(__file__).resolve().parents[1]
             import sys
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
@@ -9767,7 +9767,7 @@ class GravityAIAuditor:
             from pathlib import Path
             from unittest.mock import patch, MagicMock
 
-            _repo = Path(__file__).resolve().parent
+            _repo = Path(__file__).resolve().parents[1]
             import sys
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
