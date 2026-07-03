@@ -130,16 +130,22 @@ class TestPanelWiring:
         assert callable(panels._render_opal_research_section)
 
     def test_opal_section_gated_on_own_switch(self):
-        path = _REPO_ROOT / "gui" / "panels" / "__init__.py"
+        # Lives in gui/panels/ai_insights.py post-refactor (Phase 4a extracted
+        # gui/panels/__init__.py into per-tab modules; __init__.py is now a
+        # thin re-export stub).
+        path = _REPO_ROOT / "gui" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
-        # The Opal helper must reference its OWN independent switch.
+        # The Opal helper must reference its OWN independent switch.  It may be
+        # the last function in the file, so fall back to end-of-file when no
+        # trailing "\ndef " is found.
         start = src.index("def _render_opal_research_section")
-        end = src.index("\ndef ", start + 1)
+        next_def = src.find("\ndef ", start + 1)
+        end = next_def if next_def != -1 else len(src)
         body = src[start:end]
         assert "OPAL_RESEARCH_ENABLED" in body
 
     def test_opal_section_called_before_claude_section_in_render_ai_insights(self):
-        path = _REPO_ROOT / "gui" / "panels" / "__init__.py"
+        path = _REPO_ROOT / "gui" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
         start = src.index("def render_ai_insights")
         end = src.index("\ndef ", start + 1)
@@ -153,7 +159,7 @@ class TestPanelWiring:
             assert opal_idx < claude_idx
 
     def test_research_module_imported_lazily_inside_section(self):
-        path = _REPO_ROOT / "gui" / "panels" / "__init__.py"
+        path = _REPO_ROOT / "gui" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
         top_level_lines = [
             ln for ln in src.splitlines() if not ln.startswith(" ") and not ln.startswith("\t")

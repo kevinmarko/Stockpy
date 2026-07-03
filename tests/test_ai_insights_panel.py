@@ -231,7 +231,10 @@ class TestPanelWiring:
         assert "tabs[12]" in src
 
     def test_panel_imports_helper_module(self):
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "__init__.py"
+        # Lives in gui/panels/ai_insights.py post-refactor (Phase 4a extracted
+        # gui/panels/__init__.py into per-tab modules; __init__.py is now a
+        # thin re-export stub).
+        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
         assert "from gui.ai_insights_panel import" in src
         for name in (
@@ -256,7 +259,9 @@ class TestOpalIndependentGating:
     """
 
     def _render_ai_insights_body(self) -> str:
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "__init__.py"
+        # Lives in gui/panels/ai_insights.py post-refactor (see
+        # test_panel_imports_helper_module for the rationale).
+        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "ai_insights.py"
         src = path.read_text(encoding="utf-8")
         start = src.index("def render_ai_insights")
         end = src.index("\ndef ", start + 1)

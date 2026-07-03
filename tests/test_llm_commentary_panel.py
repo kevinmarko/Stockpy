@@ -5,7 +5,7 @@ Unit tests for ``gui.llm_commentary_panel`` — the Streamlit-free helpers
 that back the on-demand Claude analyst commentary button on the Reports tab.
 
 All tests run headlessly — no Streamlit, no real LLM provider, no network.
-The button-render wiring inside ``gui/panels/__init__.py`` is verified by an
+The button-render wiring inside ``gui/panels/report_viewer.py`` is verified by an
 AST/source-grep check (mirroring the pattern used by other GUI section
 tests, e.g. ``tests/test_strategy_health.py``).
 
@@ -285,12 +285,12 @@ class TestPanelsWiring:
     def test_render_report_viewer_calls_button_helper(self):
         # Source-grep guards against an accidental drop of the wiring in
         # the drill-down expander.
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "__init__.py"
+        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "report_viewer.py"
         src = path.read_text(encoding="utf-8")
         assert "_render_llm_commentary_button(row, pick)" in src
 
     def test_helper_imports_from_panel_module(self):
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "__init__.py"
+        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "report_viewer.py"
         src = path.read_text(encoding="utf-8")
         assert "from gui.llm_commentary_panel import" in src
         for name in (
@@ -299,4 +299,4 @@ class TestPanelsWiring:
             "format_rationale_markdown",
             "generate_for_symbol_row",
         ):
-            assert name in src, f"helper {name} missing from gui/panels/__init__.py"
+            assert name in src, f"helper {name} missing from gui/panels/report_viewer.py"
