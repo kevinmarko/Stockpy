@@ -4356,6 +4356,8 @@ class GravityAIAuditor:
         self.step_75_gravity_ai_runner_audit()
         # Tier 9 Scope 3 — AI Insights tab (Claude analyst + Gemini Vision)
         self.step_76_ai_insights_audit()
+        # AI Control Center — one operator surface for every AI option
+        self.step_78_ai_control_center_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -12258,3 +12260,256 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_76_ai_insights_audit"] = audit
+
+    def step_78_ai_control_center_audit(self) -> None:
+        """Step 78 — AI Control Center tab audit (2026-07-01, extended 2026-07-02).
+
+        11 checks pinning the single operator-facing surface for every AI
+        option (analyst rationale + alert commentary — both flexibly routed
+        to Claude OR Gemini, Gemini chart vision, Gravity AI runner, Opal
+        research) — all operator-triggered, nothing autonomous:
+
+        1.  ``gui.ai_control_center`` importable; ``CAPABILITIES`` covers the
+            five expected keys.
+        2.  ``GRAVITY_AI_RUNNER_ENABLED`` + the three ``OPAL_RESEARCH_*``
+            toggles are in ``gui.env_io.ALLOWED_KEYS``.
+        3.  ``OPENAI_API_KEY`` is in ``SECRET_KEYS`` AND NOT in ``ALLOWED_KEYS``
+            (CONSTRAINT #3).
+        4.  ``capability_status`` truth table — ready / disabled / missing_key
+            / not_built all reachable.
+        5.  Scheduling launcher exists — ``orchestrator_runner``
+            ``launch_scheduled_advisory`` AND ``stop_run`` are callable.
+        6.  Operator-triggered only — ``launch_scheduled_advisory`` spawns via
+            ``subprocess`` and has NO autonomous scheduler (no ``threading.Timer``
+            / ``cron`` / ``schedule.every`` in the launcher source).
+        7.  Tab registration: ``gui/app.py`` references
+            ``panels.render_ai_control_center`` AND a ``🎛️ AI Control Center``
+            label.
+        8.  ``validate_toggle_write`` rejects a secret key (``OPENAI_API_KEY``
+            → ``SecretWriteError``) and a non-allowlisted key
+            (``DisallowedKeyError``).
+        9.  Opal row gated ``not_built`` while ``llm.research`` is absent.
+        10. Test files exist (``tests/test_ai_control_center.py``,
+            ``tests/test_gui_env_io_control_center_keys.py``).
+        11. Flexible per-job routing — the ``claude_commentary`` row resolves
+            ``ready`` off ``GEMINI_API_KEY`` when
+            ``LLM_COMMENTARY_RATIONALE_PROVIDER=gemini``, and the
+            ``gemini_alerts`` row resolves ``ready`` off ``ANTHROPIC_API_KEY``
+            when ``LLM_COMMENTARY_ALERT_PROVIDER=claude`` — either provider
+            serves either job.
+        """
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+
+        audit: dict = {
+            "step": "step_78_ai_control_center_audit",
+            "description": "AI Control Center — one operator surface for every AI option",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parents[1]
+
+        try:
+            # ── 1. module surface + CAPABILITIES completeness ──────────────
+            from gui.ai_control_center import (
+                CAPABILITIES,
+                capability_status,
+                control_center_overview,
+                validate_toggle_write,
+                opal_built,
+            )
+            cap_keys = {c.key for c in CAPABILITIES}
+            expected = {
+                "claude_commentary", "gemini_alerts", "gemini_vision",
+                "gravity_ai_runner", "opal_research",
+            }
+            c1 = expected.issubset(cap_keys) and callable(capability_status) \
+                and callable(control_center_overview)
+            audit["checks"].append({
+                "check": "gui.ai_control_center importable + CAPABILITIES covers 5 options",
+                "passed": bool(c1),
+                "detail": f"keys={sorted(cap_keys)}",
+            })
+            all_pass = all_pass and c1
+
+            # ── 2. new toggles in ALLOWED_KEYS ─────────────────────────────
+            from gui.env_io import ALLOWED_KEYS, SECRET_KEYS
+            need_allowed = (
+                "GRAVITY_AI_RUNNER_ENABLED", "OPAL_RESEARCH_ENABLED",
+                "OPAL_RESEARCH_PROVIDER", "OPAL_RESEARCH_MODEL",
+            )
+            c2 = all(k in ALLOWED_KEYS for k in need_allowed)
+            audit["checks"].append({
+                "check": "GRAVITY_AI_RUNNER_ENABLED + OPAL_RESEARCH_* in ALLOWED_KEYS",
+                "passed": bool(c2),
+            })
+            all_pass = all_pass and c2
+
+            # ── 3. OPENAI_API_KEY secret-only (CONSTRAINT #3) ──────────────
+            c3 = "OPENAI_API_KEY" in SECRET_KEYS and "OPENAI_API_KEY" not in ALLOWED_KEYS
+            audit["checks"].append({
+                "check": "OPENAI_API_KEY is SECRET_KEYS-only (never GUI-writable)",
+                "passed": bool(c3),
+            })
+            all_pass = all_pass and c3
+
+            # ── 4. capability_status truth table ───────────────────────────
+            claude_cap = next(c for c in CAPABILITIES if c.key == "claude_commentary")
+            opal_cap = next(c for c in CAPABILITIES if c.key == "opal_research")
+            ready = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                    ANTHROPIC_API_KEY="sk-x"),
+                claude_cap,
+            )["status"]
+            disabled = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=False,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                    ANTHROPIC_API_KEY="sk-x"),
+                claude_cap,
+            )["status"]
+            missing = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                    ANTHROPIC_API_KEY=""),
+                claude_cap,
+            )["status"]
+            notbuilt = capability_status(
+                _NS(OPAL_RESEARCH_ENABLED=True,
+                    OPAL_RESEARCH_PROVIDER="openai",
+                    OPENAI_API_KEY="sk-x"),
+                opal_cap,
+            )["status"]
+            c4 = (ready == "ready" and disabled == "disabled"
+                  and missing == "missing_key" and notbuilt == "not_built")
+            audit["checks"].append({
+                "check": "capability_status truth table (ready/disabled/missing_key/not_built)",
+                "passed": bool(c4),
+                "detail": f"ready={ready} disabled={disabled} missing={missing} notbuilt={notbuilt}",
+            })
+            all_pass = all_pass and c4
+
+            # ── 5. scheduling launcher exists ──────────────────────────────
+            from gui import orchestrator_runner as _orr
+            c5 = callable(getattr(_orr, "launch_scheduled_advisory", None)) \
+                and callable(getattr(_orr, "stop_run", None))
+            audit["checks"].append({
+                "check": "orchestrator_runner.launch_scheduled_advisory + stop_run callable",
+                "passed": bool(c5),
+            })
+            all_pass = all_pass and c5
+
+            # ── 6. operator-triggered only (no autonomous scheduler) ───────
+            orr_src = (repo_root / "gui" / "orchestrator_runner.py").read_text(encoding="utf-8")
+            c6 = (
+                "subprocess" in orr_src
+                and "threading.Timer" not in orr_src
+                and "schedule.every" not in orr_src
+                and "crontab" not in orr_src
+            )
+            audit["checks"].append({
+                "check": "scheduling launcher spawns via subprocess, no autonomous scheduler",
+                "passed": bool(c6),
+            })
+            all_pass = all_pass and c6
+
+            # ── 7. tab registration in gui/app.py ──────────────────────────
+            app_src = (repo_root / "gui" / "app.py").read_text(encoding="utf-8")
+            c7 = (
+                "panels.render_ai_control_center" in app_src
+                and "AI Control Center" in app_src
+            )
+            audit["checks"].append({
+                "check": "gui/app.py registers the AI Control Center tab + wires the panel",
+                "passed": bool(c7),
+            })
+            all_pass = all_pass and c7
+
+            # ── 8. toggle-write guard rejects secret + disallowed keys ─────
+            from gui.env_io import SecretWriteError, DisallowedKeyError
+            try:
+                validate_toggle_write("OPENAI_API_KEY")
+                c8a = False
+            except SecretWriteError:
+                c8a = True
+            except Exception:
+                c8a = False
+            try:
+                validate_toggle_write("SOME_RANDOM_KEY_NOT_ALLOWED")
+                c8b = False
+            except DisallowedKeyError:
+                c8b = True
+            except Exception:
+                c8b = False
+            c8 = c8a and c8b
+            audit["checks"].append({
+                "check": "validate_toggle_write rejects secret + non-allowlisted keys (CONSTRAINT #3)",
+                "passed": bool(c8),
+                "detail": f"secret_rejected={c8a} disallowed_rejected={c8b}",
+            })
+            all_pass = all_pass and c8
+
+            # ── 9. Opal gated not_built while llm.research absent ──────────
+            c9 = (opal_built() is False) and (notbuilt == "not_built")
+            audit["checks"].append({
+                "check": "Opal row gated not_built until llm.research ships",
+                "passed": bool(c9),
+            })
+            all_pass = all_pass and c9
+
+            # ── 10. test files exist ───────────────────────────────────────
+            t1 = (repo_root / "tests" / "test_ai_control_center.py").exists()
+            t2 = (repo_root / "tests" / "test_gui_env_io_control_center_keys.py").exists()
+            c10 = t1 and t2
+            audit["checks"].append({
+                "check": "Control Center test files exist",
+                "passed": bool(c10),
+                "detail": f"ai_control_center={t1} env_io_keys={t2}",
+            })
+            all_pass = all_pass and c10
+
+            # ── 11. flexible per-job routing: either provider serves either
+            #        job — the "claude_commentary" row resolves to
+            #        GEMINI_API_KEY (not ANTHROPIC_API_KEY) when the operator
+            #        routes rationale to Gemini, and vice versa for alerts.
+            gemini_alerts_cap = next(c for c in CAPABILITIES if c.key == "gemini_alerts")
+            flex_rationale_to_gemini = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                    ANTHROPIC_API_KEY="",
+                    GEMINI_API_KEY="sk-gem-x"),
+                claude_cap,
+            )
+            flex_alerts_to_claude = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_ALERT_PROVIDER="claude",
+                    GEMINI_API_KEY="",
+                    ANTHROPIC_API_KEY="sk-ant-x"),
+                gemini_alerts_cap,
+            )
+            c11 = (
+                flex_rationale_to_gemini["status"] == "ready"
+                and flex_rationale_to_gemini["active_provider"] == "gemini"
+                and flex_alerts_to_claude["status"] == "ready"
+                and flex_alerts_to_claude["active_provider"] == "claude"
+            )
+            audit["checks"].append({
+                "check": "Flexible per-job routing: Gemini can serve rationale AND Claude can serve alerts",
+                "passed": bool(c11),
+                "detail": (
+                    f"rationale->gemini={flex_rationale_to_gemini['status']} "
+                    f"alerts->claude={flex_alerts_to_claude['status']}"
+                ),
+            })
+            all_pass = all_pass and c11
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_78_ai_control_center_audit"] = audit

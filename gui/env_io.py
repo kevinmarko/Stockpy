@@ -104,6 +104,14 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "LLM_COMMENTARY_ENABLED",            # bool master switch (default False)
     "LLM_COMMENTARY_RATIONALE_PROVIDER", # "claude" | "none"
     "LLM_COMMENTARY_ALERT_PROVIDER",     # "gemini" | "none"
+    # AI Control Center toggles (non-secret).  These master switches were
+    # previously settable only by hand-editing .env; the Control Center tab
+    # surfaces them.  Provider credentials (ANTHROPIC/GEMINI/OPENAI keys) stay
+    # in SECRET_KEYS below — CONSTRAINT #3, never GUI-writable.
+    "GRAVITY_AI_RUNNER_ENABLED",         # bool — Gravity AI runner (Claude+Gemini)
+    "OPAL_RESEARCH_ENABLED",             # bool — Opal research agent (OpenAI)
+    "OPAL_RESEARCH_PROVIDER",            # "openai" | "none"
+    "OPAL_RESEARCH_MODEL",               # e.g. "gpt-4o"
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -137,6 +145,10 @@ SECRET_KEYS: tuple[str, ...] = (
     # are NEVER GUI-writable; hand-edit .env to set / rotate them.
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
+    # OpenAI credential for the Opal research agent (docs/OPAL_BUILD_SPEC.md).
+    # Declared secret-only now (Control Center references it); the Opal backend
+    # build wires it into settings.  CONSTRAINT #3 — never GUI-writable.
+    "OPENAI_API_KEY",
 )
 
 # Keys whose values are JSON-encoded structures (lists/dicts) in .env.

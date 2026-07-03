@@ -881,6 +881,22 @@ TAB_HELP: Dict[str, TabHelp] = {
         ("live inventory", "advisory mode"),
         "#4-choosing-your-ticker-universe",
     ),
+    "ai_control_center": _t(
+        "ai_control_center",
+        "🎛️ AI Control Center",
+        "One place to turn every AI option on or off, run each on demand, and "
+        "start/stop a recurring pipeline run — all operator-triggered, nothing "
+        "autonomous.  Section A toggles the master switches (Claude commentary, "
+        "Gemini alerts, Gemini chart vision, Gravity AI runner, Opal research) and "
+        "shows a ready / disabled / missing-key / not-built badge per capability.  "
+        "Section B runs per-symbol Claude / Gemini-vision / Opal actions on demand.  "
+        "Section C runs the Gravity AI audit.  Section D starts and stops an "
+        "`--interval` or `--agent` run you can stop at any time.  Provider API keys "
+        "stay secret-only in `.env` (never GUI-writable); toggles take effect on the "
+        "next launch.",
+        ("advisory mode", "kill switch"),
+        "#advisory-only-mode",
+    ),
 }
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,375 @@
+"""
+tests/test_ai_control_center.py
+===============================
+Headless tests for the AI Control Center surface (no Streamlit).
+
+Coverage
+--------
+* ``CAPABILITIES`` registry completeness.
+* ``capability_status`` four-state truth table (ready / disabled / missing_key
+  / not_built).
+* ``control_center_overview`` row shape.
+* ``validate_toggle_write`` rejects secret keys (CONSTRAINT #3) and honours the
+  ``ALLOWED_KEYS`` allowlist.
+* ``orchestrator_runner.launch_scheduled_advisory`` spawns a subprocess (mocked
+  — no real child) and returns a scheduled ``RunHandle``; ``stop_run`` never
+  raises.
+* Opal is gated ``not_built`` while ``llm.research`` is absent.
+* Tab-wiring source grep (gui/app.py).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from gui.ai_control_center import (
+    CAPABILITIES,
+    AICapability,
+    capability_status,
+    control_center_overview,
+    opal_built,
+    status_badge,
+    validate_toggle_write,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+# ---------------------------------------------------------------------------
+# CAPABILITIES registry
+# ---------------------------------------------------------------------------
+class TestCapabilitiesRegistry:
+    def test_covers_five_options(self) -> None:
+        keys = {c.key for c in CAPABILITIES}
+        assert {
+            "claude_commentary",
+            "gemini_alerts",
+            "gemini_vision",
+            "gravity_ai_runner",
+            "opal_research",
+        }.issubset(keys)
+
+    def test_all_entries_are_capabilities(self) -> None:
+        assert all(isinstance(c, AICapability) for c in CAPABILITIES)
+
+    def test_every_capability_has_help_and_trigger(self) -> None:
+        for c in CAPABILITIES:
+            assert c.help.strip()
+            assert c.trigger in {"on_demand", "scheduled"}
+
+    def test_toggle_keys_are_non_secret(self) -> None:
+        from gui.env_io import SECRET_KEYS
+
+        for c in CAPABILITIES:
+            if c.toggle_key is not None:
+                assert c.toggle_key not in SECRET_KEYS
+
+    def test_provider_keys_are_secret(self) -> None:
+        from gui.env_io import SECRET_KEYS
+
+        for c in CAPABILITIES:
+            for k in c.provider_key_settings:
+                assert k in SECRET_KEYS
+
+
+# ---------------------------------------------------------------------------
+# capability_status truth table
+# ---------------------------------------------------------------------------
+class TestCapabilityStatus:
+    def _claude(self) -> AICapability:
+        return next(c for c in CAPABILITIES if c.key == "claude_commentary")
+
+    def _opal(self) -> AICapability:
+        return next(c for c in CAPABILITIES if c.key == "opal_research")
+
+    def test_ready(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                ANTHROPIC_API_KEY="sk-x",
+            ),
+            self._claude(),
+        )
+        assert st["status"] == "ready"
+        assert st["enabled"] and st["key_present"] and st["built"]
+
+    def test_disabled(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=False,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                ANTHROPIC_API_KEY="sk-x",
+            ),
+            self._claude(),
+        )
+        assert st["status"] == "disabled"
+
+    def test_missing_key(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                ANTHROPIC_API_KEY="",
+            ),
+            self._claude(),
+        )
+        assert st["status"] == "missing_key"
+
+    def test_provider_none_counts_as_disabled(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="none",
+                ANTHROPIC_API_KEY="sk-x",
+            ),
+            self._claude(),
+        )
+        assert st["status"] == "disabled"
+
+    def test_flexible_routing_gemini_serving_rationale_is_ready(self) -> None:
+        # Flexible-routing regression: the "claude_commentary" row must
+        # resolve to GEMINI_API_KEY (not ANTHROPIC_API_KEY) when the
+        # operator routes rationale to Gemini.
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                ANTHROPIC_API_KEY="",
+                GEMINI_API_KEY="sk-gem-x",
+            ),
+            self._claude(),
+        )
+        assert st["status"] == "ready"
+        assert st["active_provider"] == "gemini"
+
+    def test_flexible_routing_claude_serving_alerts_is_ready(self) -> None:
+        gemini_alerts = next(c for c in CAPABILITIES if c.key == "gemini_alerts")
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_ALERT_PROVIDER="claude",
+                GEMINI_API_KEY="",
+                ANTHROPIC_API_KEY="sk-ant-x",
+            ),
+            gemini_alerts,
+        )
+        assert st["status"] == "ready"
+        assert st["active_provider"] == "claude"
+
+    def test_flexible_routing_wrong_key_present_is_missing_key(self) -> None:
+        # Rationale routed to gemini, but only the ANTHROPIC key is set —
+        # must be missing_key, not a false "ready".
+        st = capability_status(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                ANTHROPIC_API_KEY="sk-ant-x",
+                GEMINI_API_KEY="",
+            ),
+            self._claude(),
+        )
+        assert st["status"] == "missing_key"
+
+    def test_not_built_wins_over_everything(self) -> None:
+        # Opal is enabled + key present, but llm.research is not shipped yet.
+        st = capability_status(
+            SimpleNamespace(
+                OPAL_RESEARCH_ENABLED=True,
+                OPAL_RESEARCH_PROVIDER="openai",
+                OPENAI_API_KEY="sk-x",
+            ),
+            self._opal(),
+        )
+        assert st["status"] == "not_built"
+
+
+class TestOverview:
+    def test_one_row_per_capability(self) -> None:
+        rows = control_center_overview(SimpleNamespace())
+        assert len(rows) == len(CAPABILITIES)
+        for r in rows:
+            assert {"key", "label", "trigger", "status", "provider_keys", "active_provider"} <= set(r)
+
+    def test_status_badges_present(self) -> None:
+        for token in ("ready", "disabled", "missing_key", "not_built"):
+            assert status_badge(token)
+
+    def test_active_provider_narrows_required_key(self) -> None:
+        rows = control_center_overview(
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                LLM_COMMENTARY_ALERT_PROVIDER="claude",
+                ANTHROPIC_API_KEY="sk-ant-x",
+                GEMINI_API_KEY="sk-gem-x",
+            )
+        )
+        rationale_row = next(r for r in rows if r["key"] == "claude_commentary")
+        alert_row = next(r for r in rows if r["key"] == "gemini_alerts")
+        assert rationale_row["active_provider"] == "gemini"
+        assert rationale_row["provider_keys"] == ["GEMINI_API_KEY"]
+        assert alert_row["active_provider"] == "claude"
+        assert alert_row["provider_keys"] == ["ANTHROPIC_API_KEY"]
+
+    def test_non_flexible_capability_has_no_active_provider(self) -> None:
+        rows = control_center_overview(SimpleNamespace())
+        vision_row = next(r for r in rows if r["key"] == "gemini_vision")
+        assert vision_row["active_provider"] is None
+        assert vision_row["provider_keys"] == ["GEMINI_API_KEY"]
+
+
+# ---------------------------------------------------------------------------
+# validate_toggle_write (CONSTRAINT #3)
+# ---------------------------------------------------------------------------
+class TestToggleWriteGuard:
+    def test_rejects_secret_key(self) -> None:
+        from gui.env_io import SecretWriteError
+
+        with pytest.raises(SecretWriteError):
+            validate_toggle_write("OPENAI_API_KEY")
+
+    def test_rejects_non_allowlisted_key(self) -> None:
+        from gui.env_io import DisallowedKeyError
+
+        with pytest.raises(DisallowedKeyError):
+            validate_toggle_write("TOTALLY_MADE_UP_KEY")
+
+    def test_allows_control_center_toggles(self) -> None:
+        # Must not raise.
+        for key in (
+            "GRAVITY_AI_RUNNER_ENABLED",
+            "OPAL_RESEARCH_ENABLED",
+            "LLM_COMMENTARY_ENABLED",
+        ):
+            validate_toggle_write(key)
+
+
+# ---------------------------------------------------------------------------
+# Opal gating
+# ---------------------------------------------------------------------------
+class TestOpalGating:
+    def test_opal_not_built_yet(self) -> None:
+        # llm/research.py is intentionally not shipped in this phase.
+        assert opal_built() is False
+
+
+# ---------------------------------------------------------------------------
+# Scheduling launcher (subprocess mocked)
+# ---------------------------------------------------------------------------
+class _FakePopen:
+    def __init__(self, *args, **kwargs) -> None:
+        self.pid = 424242
+        self.args = args
+        self.kwargs = kwargs
+        self._alive = True
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def terminate(self) -> None:
+        self._alive = False
+
+    def wait(self, timeout=None):
+        self._alive = False
+        return 0
+
+    def kill(self) -> None:
+        self._alive = False
+
+
+class TestSchedulingLauncher:
+    def test_launch_interval_spawns_subprocess(self, monkeypatch, tmp_path) -> None:
+        from gui import orchestrator_runner as orr
+
+        captured = {}
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _FakePopen(cmd, **kwargs)
+
+        monkeypatch.setattr(orr.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
+        monkeypatch.setattr(orr.settings, "OUTPUT_DIR", tmp_path)
+
+        handle = orr.launch_scheduled_advisory(mode="interval", interval_seconds=120)
+        assert handle.mode == "scheduled"
+        assert handle.pid == 424242
+        assert "--interval" in captured["cmd"]
+        assert "120" in captured["cmd"]
+        assert handle.is_running() is True
+
+    def test_launch_agent_uses_agent_flag(self, monkeypatch, tmp_path) -> None:
+        from gui import orchestrator_runner as orr
+
+        captured = {}
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _FakePopen(cmd, **kwargs)
+
+        monkeypatch.setattr(orr.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
+        monkeypatch.setattr(orr.settings, "OUTPUT_DIR", tmp_path)
+
+        orr.launch_scheduled_advisory(mode="agent")
+        assert "--agent" in captured["cmd"]
+        assert "--interval" not in captured["cmd"]
+
+    def test_interval_clamped_to_minimum(self, monkeypatch, tmp_path) -> None:
+        from gui import orchestrator_runner as orr
+
+        captured = {}
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _FakePopen(cmd, **kwargs)
+
+        monkeypatch.setattr(orr.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
+        monkeypatch.setattr(orr.settings, "OUTPUT_DIR", tmp_path)
+
+        orr.launch_scheduled_advisory(mode="interval", interval_seconds=1)
+        # Clamped to >= 30 so the operator cannot hot-loop the market-data API.
+        assert "30" in captured["cmd"]
+
+    def test_stop_run_terminates(self, monkeypatch, tmp_path) -> None:
+        from gui import orchestrator_runner as orr
+
+        monkeypatch.setattr(orr.subprocess, "Popen", lambda cmd, **kw: _FakePopen(cmd, **kw))
+        monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
+        monkeypatch.setattr(orr.settings, "OUTPUT_DIR", tmp_path)
+
+        handle = orr.launch_scheduled_advisory(mode="interval", interval_seconds=60)
+        assert orr.stop_run(handle) is True
+        assert handle.is_running() is False
+
+    def test_stop_run_none_handle_is_safe(self) -> None:
+        from gui import orchestrator_runner as orr
+
+        assert orr.stop_run(None) is True
+
+
+# ---------------------------------------------------------------------------
+# Tab wiring + operator-only invariants (source grep)
+# ---------------------------------------------------------------------------
+class TestTabWiring:
+    def test_app_registers_control_center_tab(self) -> None:
+        app_src = (_REPO_ROOT / "gui" / "app.py").read_text(encoding="utf-8")
+        assert "panels.render_ai_control_center" in app_src
+        assert "AI Control Center" in app_src
+
+    def test_scheduling_has_no_autonomous_scheduler(self) -> None:
+        orr_src = (_REPO_ROOT / "gui" / "orchestrator_runner.py").read_text(encoding="utf-8")
+        assert "subprocess" in orr_src
+        assert "threading.Timer" not in orr_src
+        assert "schedule.every" not in orr_src
+        assert "crontab" not in orr_src
+
+    def test_control_center_has_no_order_verbs(self) -> None:
+        src = (_REPO_ROOT / "gui" / "ai_control_center.py").read_text(encoding="utf-8")
+        for verb in ("submit_order", "place_order", "buy_order", "sell_order"):
+            assert verb not in src
