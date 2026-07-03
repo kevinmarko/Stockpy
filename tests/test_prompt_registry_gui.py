@@ -395,8 +395,8 @@ class TestSecurityInvariants:
 
     def test_security_banner_in_source(self):
         # gui/panels.py was converted to a package (commit 162df57); the
-        # active source now lives in gui/panels/__init__.py.
-        panels_src = Path(_REPO_ROOT / "gui" / "panels" / "__init__.py").read_text()
+        # active source now lives in gui/panels/prompt_registry.py.
+        panels_src = Path(_REPO_ROOT / "gui" / "panels" / "prompt_registry.py").read_text()
         assert "safety gates are enforced in code" in panels_src.lower() or \
                "safety gates are" in panels_src
 
