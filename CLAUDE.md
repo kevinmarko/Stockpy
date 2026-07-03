@@ -1370,7 +1370,7 @@ Two jobs — analyst rationale and alert commentary — that ENRICH (never repla
 - Setting `LLM_COMMENTARY_ENABLED=true` in `.env` without setting `ANTHROPIC_API_KEY` AND `GEMINI_API_KEY` is harmless: the providers' constructors return early (no key → `_client=None`), the commentary functions return `None`, and the template fallback kicks in transparently.
 - The cache key is bucketed by UTC date AND `floor(score/5)`. To force a re-fetch on the same day, delete `output/llm_commentary_cache.json` (it's gitignored).
 - For ntfy push limits, `AlertCommentary.body` is hard-capped at 280 chars by the schema. A provider response longer than that fails validation → soft-fail → template message goes out unchanged.
-- The `gui/panels.py` Reports tab button is **deferred to a follow-up Antigravity PR** per the domain split. The CLI (`python -m engine.llm_commentary SYMBOL`) is the on-demand entry point in this PR.
+- The Reports tab "🤖 Generate analyst commentary" button (`_render_llm_commentary_button` in `gui/panels/report_viewer.py`) has since shipped, alongside the CLI (`python -m engine.llm_commentary SYMBOL`) as the scriptable entry point.
 - New optional dependency: `google-genai>=0.3.0` (added to `requirements.txt`). `anthropic>=0.25.0` was already present.
 
 ## Tier 9 Scope 2 — AI Gravity Audit Runner (`engine/gravity_ai_runner.py`, 2026-06)
@@ -1424,7 +1424,7 @@ Hand-curated mapping of audit-step number to the per-layer file(s) the model rea
 ### Operator notes
 - Setting `GRAVITY_AI_RUNNER_ENABLED=true` without `ANTHROPIC_API_KEY` AND `GEMINI_API_KEY` produces a useful — but degraded — report: each step has `claude_verdict=None` / `gemini_verdict=None` with `notes` explaining which side was unavailable. There is no failure path that aborts the run.
 - The runner reads files from disk fresh on every call — no caching across runs. To re-audit after a code change, just re-run the CLI; the report file is atomically replaced.
-- The `gui/panels.py` Safety tab integration (rendering the runner JSON with red/green per-step badges) is **deferred to a follow-up Antigravity PR**, mirroring the Scope 1 deferral pattern.
+- The Safety tab integration (rendering the runner JSON with per-step verdicts) has since shipped as `_render_gravity_ai_runner_section` in `gui/panels/gravity_audit.py`.
 
 ## Tier 9 Scope 3 — AI Insights tab (Gemini Vision, 2026-06)
 
@@ -1548,7 +1548,7 @@ Wrapped in `safe_panel` (CONSTRAINT #6). Four sections:
 
 ### Opal relationship (phased)
 - **Phase 1 (shipped):** Control Center works fully for the four shipped options + scheduling + toggles. The Opal row renders gated `not_built` ("requires build — see `docs/OPAL_BUILD_SPEC.md`").
-- **Phase 2 (deferred, operator-scheduled):** build the Opal backend per `docs/OPAL_BUILD_SPEC.md`; its Control Center row auto-activates via `opal_built()` — no Control Center change needed.
+- **Phase 2 (shipped, see Tier 9 Scope 4 below):** the Opal backend (`llm/research.py`) has since been built; its Control Center row auto-activated via `opal_built()` with no Control Center code changes needed, confirming the design.
 
 ### Help content (`gui/help_content.py`)
 `TAB_HELP["ai_control_center"]` added (anchor `#advisory-only-mode`). `tests/test_help_content.py::test_exactly_10_tabs` bumped to 11 (ai_insights and prompts intentionally carry no TAB_HELP entry).
