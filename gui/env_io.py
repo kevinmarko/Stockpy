@@ -145,9 +145,8 @@ SECRET_KEYS: tuple[str, ...] = (
     # are NEVER GUI-writable; hand-edit .env to set / rotate them.
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
-    # OpenAI credential for the Opal research agent (docs/OPAL_BUILD_SPEC.md).
-    # Declared secret-only now (Control Center references it); the Opal backend
-    # build wires it into settings.  CONSTRAINT #3 — never GUI-writable.
+    # OpenAI credential for Opal, the research agent (Tier 9 Scope 4,
+    # llm/research.py).  CONSTRAINT #3 — never GUI-writable; hand-edit .env.
     "OPENAI_API_KEY",
 )
 

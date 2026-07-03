@@ -186,7 +186,36 @@ STEP_7_PROMPT = StepPromptTemplate(
     ]
 )
 
-ALL_PROMPTS = [STEP_1_PROMPT, STEP_2_PROMPT, STEP_3_PROMPT, STEP_4_PROMPT, STEP_5_PROMPT, STEP_6_PROMPT, STEP_7_PROMPT]
+STEP_8_PROMPT = StepPromptTemplate(
+    step_number=8,
+    step_title="Opal Research Agent & Multi-Provider Grounding",
+    prompt_text="""
+    Analyze the provided source code for Step 8 (Tier 9 Scope 4 — Opal, the OpenAI/GPT
+    front-of-pipeline research agent). Verify:
+    1. PROVIDER ABSTRACTION: OpenAIProvider implements the LLMProvider ABC, lazy-imports openai, and
+       soft-fails to None on every error (network/parse/schema/missing-SDK).
+    2. GROUNDING (no hallucinated data): generate_research_brief synthesizes REAL retrieved Finnhub
+       news/earnings (via signals.news_catalyst helpers), never invents catalysts/numbers; the
+       ResearchBrief schema exposes NO numeric price/score fields (CONSTRAINT #4).
+    3. OPT-IN: brief generation is gated on OPAL_RESEARCH_ENABLED (default False) — off means no
+       openai import, no network.
+    4. THREADING: the brief flows into context["research_brief"] and into the Claude rationale
+       user-prompt; it never writes a numeric Recommendation field.
+    5. SECRETS: OPENAI_API_KEY is SECRET_KEYS-only (CONSTRAINT #3).
+    6. ADVISORY-ONLY: no order-submission verbs in llm/research.py.
+
+    Respond in JSON: {"status": "PASSED/FAILED", "score": 0-100, "findings": [], "missing_elements": []}
+    """,
+    criteria=[
+        ValidationCriterion("8.1", "Provider abstraction + soft-fail", ["LLMProvider", "import openai", "None"], True),
+        ValidationCriterion("8.2", "Real grounding, no numeric fields", ["fetch_company_news", "fetch_next_earnings", "ResearchBrief"], True),
+        ValidationCriterion("8.3", "Opt-in default-off", ["OPAL_RESEARCH_ENABLED"], True),
+        ValidationCriterion("8.4", "Threading into rationale prompt", ["research_brief", "context"], True),
+        ValidationCriterion("8.5", "Secrets + advisory-only", ["OPENAI_API_KEY", "SECRET_KEYS"], True),
+    ]
+)
+
+ALL_PROMPTS = [STEP_1_PROMPT, STEP_2_PROMPT, STEP_3_PROMPT, STEP_4_PROMPT, STEP_5_PROMPT, STEP_6_PROMPT, STEP_7_PROMPT, STEP_8_PROMPT]
 
 # --- AGENT VALIDATOR CLASS ---
 class GravityAIAuditor:

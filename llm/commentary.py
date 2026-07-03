@@ -76,8 +76,19 @@ def _registry_prompt(prompt_id: str, default: str) -> str:
     return body
 
 
-def _format_rationale_user_prompt(rec_skeleton: Dict[str, Any]) -> str:
-    """Render the user-turn prompt for analyst rationale generation."""
+def _format_rationale_user_prompt(
+    rec_skeleton: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Render the user-turn prompt for analyst rationale generation.
+
+    When ``context["research_brief"]`` is present (Tier 9 Scope 4 — Opal's
+    grounded research brief, generated BEFORE this call by
+    ``engine.advisory.enrich_with_llm_rationale``), appends a "Research
+    context" block so Claude's own synthesis can cite it. Purely additive —
+    the existing payload lines and instruction paragraph are unchanged when
+    no research brief is present, so pre-Opal behavior is byte-identical.
+    """
     payload_lines = ["Recommendation payload:"]
     for key in (
         "symbol",
@@ -92,11 +103,21 @@ def _format_rationale_user_prompt(rec_skeleton: Dict[str, Any]) -> str:
     ):
         if key in rec_skeleton:
             payload_lines.append(f"  {key}: {rec_skeleton[key]!r}")
+
+    research_brief = (context or {}).get("research_brief") if context else None
+    if isinstance(research_brief, dict) and research_brief:
+        payload_lines.append("\nResearch context (Opal, grounded on real retrieved data):")
+        for key in ("thesis_context", "catalysts", "risk_factors", "recent_developments",
+                    "data_confidence", "sources_note"):
+            if key in research_brief:
+                payload_lines.append(f"  {key}: {research_brief[key]!r}")
+
     payload_lines.append(
         "\nWrite the structured analyst note. Headline first, then a 2-3 sentence "
         "'why now' grounded in the payload, 1-3 key-risk bullets, and one "
         "invalidation sentence. Reference the payload's existing numbers — do "
-        "not invent any."
+        "not invent any. If research context is provided above, you may draw "
+        "on it for framing but must not invent facts beyond it."
     )
     return "\n".join(payload_lines)
 
@@ -132,8 +153,10 @@ def generate_analyst_rationale(
         ``dataclasses.asdict(rec)`` or a hand-built dict).  The model
         references these fields verbatim — it never invents new ones.
     context :
-        Optional extra payload (regime DTO snapshot, macro snippets); not
-        required.  Reserved for future expansion.
+        Optional extra payload (regime DTO snapshot, macro snippets).  When
+        ``context["research_brief"]`` is present (Tier 9 Scope 4 — Opal),
+        it is appended as a "Research context" block in the user prompt.
+        Not required — absent or empty behaves exactly as before Opal.
 
     Returns
     -------
@@ -180,7 +203,7 @@ def generate_analyst_rationale(
             return None
 
         system = _registry_prompt("llm.rationale.system", _RATIONALE_SYSTEM_PROMPT)
-        user = _format_rationale_user_prompt(rec_skeleton)
+        user = _format_rationale_user_prompt(rec_skeleton, context)
         result = provider.call_structured(system=system, user=user, schema_model=AnalystRationale)
         if result is None:
             return None

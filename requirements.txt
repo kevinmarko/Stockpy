@@ -114,7 +114,7 @@ google-cloud-language>=2.14.0
 pandas-datareader>=0.10.0
 SQLAlchemy>=2.0.0
 psycopg2-binary>=2.9.9
-openai>=1.12.0
+openai>=1.40.0  # Tier 9 Scope 4 — Opal research agent; >=1.40 for Structured Outputs .parse() helper
 anthropic>=0.25.0
 google-genai>=0.3.0  # Tier 9 — Gemini provider for ntfy alert commentary (lazy-imported)
 pydantic-settings==2.14.2

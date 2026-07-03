@@ -34,8 +34,8 @@ from signals.news_catalyst import (
     _earnings_proximity_multiplier,
     _lexicon_sentiment,
     _score_headline,
-    _fetch_company_news,
-    _fetch_next_earnings,
+    fetch_company_news,
+    fetch_next_earnings,
 )
 
 
@@ -275,7 +275,7 @@ class TestPreCompute:
         mock_client.company_news.side_effect = RuntimeError("rate limit")
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
         with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
-            with patch("signals.news_catalyst._build_finnhub_client", return_value=mock_client):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     sig.pre_compute(universe, ctx)
         # All symbols should have 0.0 scores (error path)
@@ -293,7 +293,7 @@ class TestPreCompute:
         ]
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
         with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
-            with patch("signals.news_catalyst._build_finnhub_client", return_value=mock_client):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):  # skip courtesy delay
                         sig.pre_compute(universe, ctx)
@@ -310,7 +310,7 @@ class TestPreCompute:
         mock_client.company_news.return_value = []
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
         with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
-            with patch("signals.news_catalyst._build_finnhub_client", return_value=mock_client):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
                         sig.pre_compute(universe, ctx)
@@ -332,7 +332,7 @@ class TestPreCompute:
             "earningsCalendar": [{"date": soon}]
         }
         with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
-            with patch("signals.news_catalyst._build_finnhub_client", return_value=mock_client):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
                         sig.pre_compute(universe, ctx)
@@ -346,7 +346,7 @@ class TestPreCompute:
         universe = pd.DataFrame({"Symbol": []})
         mock_client = MagicMock()
         with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
-            with patch("signals.news_catalyst._build_finnhub_client", return_value=mock_client):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 sig.pre_compute(universe, ctx)
         assert sig._news_scores == {}
 
@@ -380,13 +380,13 @@ class TestFetchHelpers:
     def test_fetch_company_news_error_returns_empty(self):
         mock_client = MagicMock()
         mock_client.company_news.side_effect = RuntimeError("timeout")
-        result = _fetch_company_news(mock_client, "AAPL", 7)
+        result = fetch_company_news(mock_client, "AAPL", 7)
         assert result == []
 
     def test_fetch_next_earnings_error_returns_none(self):
         mock_client = MagicMock()
         mock_client.earnings_calendar.side_effect = ValueError("bad request")
-        result = _fetch_next_earnings(mock_client, "AAPL")
+        result = fetch_next_earnings(mock_client, "AAPL")
         assert result is None
 
     def test_fetch_company_news_returns_list(self):
@@ -394,7 +394,7 @@ class TestFetchHelpers:
         mock_client.company_news.return_value = [
             {"headline": "test news", "datetime": 1234567890}
         ]
-        result = _fetch_company_news(mock_client, "AAPL", 7)
+        result = fetch_company_news(mock_client, "AAPL", 7)
         assert isinstance(result, list)
         assert len(result) == 1
 
@@ -404,14 +404,14 @@ class TestFetchHelpers:
         mock_client.earnings_calendar.return_value = {
             "earningsCalendar": [{"date": future}]
         }
-        result = _fetch_next_earnings(mock_client, "AAPL")
+        result = fetch_next_earnings(mock_client, "AAPL")
         assert result is not None
         assert result > datetime.now(timezone.utc)
 
     def test_fetch_next_earnings_empty_calendar_returns_none(self):
         mock_client = MagicMock()
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        result = _fetch_next_earnings(mock_client, "AAPL")
+        result = fetch_next_earnings(mock_client, "AAPL")
         assert result is None
 
 

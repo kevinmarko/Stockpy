@@ -2,7 +2,7 @@
 llm/schemas.py — Pydantic v2 schemas for LLM structured output.
 ================================================================
 
-Two schemas, one per provider role:
+One schema per provider role:
 
 * :class:`AnalystRationale` — Claude (analyst narrative).  Carries the four
   fields that a human reading a sell-side note would expect: a one-sentence
@@ -17,6 +17,13 @@ Two schemas, one per provider role:
   the deterministic ``WatchAlert.priority`` / ``TradeAlert.priority`` is
   the single source of truth for ntfy priority and is never overridden by
   an LLM response (enforced at the call site).
+
+* :class:`ChartPatternRead` — Gemini Vision (chart-pattern interpretation,
+  Tier 9 Scope 3).
+
+* :class:`ResearchBrief` — OpenAI/Opal (front-of-pipeline grounded research
+  brief, Tier 9 Scope 4).  Qualitative-only by construction — no numeric
+  field exists to fabricate a price target or score into.
 
 Length bounds are validated via ``Field(max_length=...)`` so a runaway
 provider response is rejected at the schema-validation step before it
@@ -153,6 +160,78 @@ class ChartPatternRead(BaseModel):
     confidence: Literal["low", "medium", "high"] = Field(
         default="medium",
         description="Advisory confidence hint — does NOT override deterministic conviction.",
+    )
+
+
+class ResearchBrief(BaseModel):
+    """OpenAI/Opal grounded research brief for a single symbol (Tier 9 Scope 4).
+
+    A FRONT-OF-PIPELINE artifact: synthesized from REAL retrieved Finnhub
+    news + earnings + a macro snippet (never invented — CONSTRAINT #4), then
+    threaded INTO the Claude analyst-rationale prompt as enriched context.
+
+    Qualitative-only by construction: every field resolves to ``str``,
+    ``list[str]``, or a ``Literal`` — there is no numeric field to fabricate
+    a price target or score into. This is enforced structurally (not just by
+    convention) so Gravity step_77 can type-check `model_fields` rather than
+    scan field names.
+
+    Fields
+    ------
+    thesis_context :
+        2-4 sentence synthesis of the symbol's current setup, grounded in
+        the supplied news/earnings/macro packet. ≤600 chars.
+    catalysts :
+        1-4 short bullets naming specific upcoming or recent catalysts
+        drawn from the grounding packet (e.g. "Q3 earnings call scheduled
+        Nov 4"). Each ≤160 chars. Never a number the model invented.
+    risk_factors :
+        1-4 short bullets naming risks visible in the grounding packet.
+        Each ≤160 chars.
+    recent_developments :
+        0-4 short bullets summarizing recent real news headlines supplied
+        in the grounding packet. Each ≤200 chars. Empty when no news was
+        retrieved — never fabricated to fill the list.
+    data_confidence :
+        Ordinal: ``"low" | "medium" | "high"`` — reflects how much real
+        grounding data was available (e.g. "low" when Finnhub returned no
+        news and no earnings date). Advisory only.
+    sources_note :
+        One-sentence attribution of what was actually retrieved (e.g.
+        "Based on 3 Finnhub headlines from the past 7 days; no earnings
+        date available."). ≤200 chars.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    thesis_context: str = Field(
+        min_length=1,
+        max_length=600,
+        description="2-4 sentence synthesis grounded in the supplied news/earnings/macro packet.",
+    )
+    catalysts: List[str] = Field(
+        min_length=1,
+        max_length=4,
+        description="1-4 short bullets naming specific catalysts from the grounding packet; each ≤160 chars.",
+    )
+    risk_factors: List[str] = Field(
+        min_length=1,
+        max_length=4,
+        description="1-4 short bullets naming risks visible in the grounding packet; each ≤160 chars.",
+    )
+    recent_developments: List[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description="0-4 short bullets summarizing real retrieved headlines; each ≤200 chars.",
+    )
+    data_confidence: Literal["low", "medium", "high"] = Field(
+        default="medium",
+        description="How much real grounding data was available. Advisory only.",
+    )
+    sources_note: str = Field(
+        min_length=1,
+        max_length=200,
+        description="One-sentence attribution of what was actually retrieved.",
     )
 
 

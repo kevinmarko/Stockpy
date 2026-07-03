@@ -220,6 +220,15 @@ class Recommendation:
     # never needs to import ``llm.schemas`` — keeps the SDK reachability
     # surface lazy.  Default ``None`` keeps positional construction stable.
     llm_rationale: Optional[Dict[str, Any]] = None
+    # Tier 9 Scope 4 — Opal (OpenAI) grounded research brief (on-demand only,
+    # opt-in via settings.OPAL_RESEARCH_ENABLED, independent of
+    # LLM_COMMENTARY_ENABLED).  Carries a :class:`llm.schemas.ResearchBrief`
+    # ``.model_dump()`` dict on success, ``None`` on any failure or when Opal
+    # is disabled.  Same lazy-typing rationale as ``llm_rationale`` above —
+    # this file never imports ``llm.schemas`` at module level.  Additive:
+    # existing positional ``Recommendation(...)`` constructions elsewhere in
+    # the repo are unaffected by this new trailing field.
+    research_brief: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1215,12 +1224,19 @@ def _safe_float(value: Any, default: float) -> float:
 # ``rec.llm_rationale`` (an Optional[Dict[str, Any]]).  It never touches
 # ``score``, ``conviction``, ``suggested_position_pct``, ``forecast``,
 # ``key_indicators``, or any numeric pipeline scalar.
+#
+# Tier 9 Scope 4 (Opal): the SAME contract extends to ``rec.research_brief``
+# — Opal's grounded research brief is independently opt-in
+# (``settings.OPAL_RESEARCH_ENABLED``) and, when generated, is threaded into
+# ``context["research_brief"]`` BEFORE the Claude rationale call runs, so
+# Claude's own synthesis can cite it.  Opal's failure never blocks Claude's
+# call and vice versa — each is independently soft-fail (CONSTRAINT #6).
 
 def enrich_with_llm_rationale(
     rec: Recommendation,
     context: Optional[Dict[str, Any]] = None,
 ) -> Recommendation:
-    """Return ``rec`` with ``llm_rationale`` populated, or unchanged on failure.
+    """Return ``rec`` with ``llm_rationale`` / ``research_brief`` populated.
 
     Parameters
     ----------
@@ -1228,41 +1244,77 @@ def enrich_with_llm_rationale(
         A deterministic recommendation produced by :func:`evaluate`.
     context :
         Optional extra payload to forward to the LLM commentary layer
-        (macro snippet, regime DTO snapshot, etc.).  Reserved for future
-        expansion; safely defaults to an empty dict.
+        (macro snippet, regime DTO snapshot, etc.).  Never mutated in
+        place — a local copy is used so Opal's injected
+        ``"research_brief"`` key never leaks back into the caller's dict.
 
     Returns
     -------
     Recommendation
-        Either ``rec`` (when LLM is disabled, no key is set, or the call
-        fails — preserves the deterministic template), or a new instance
-        with ``llm_rationale`` populated by :class:`llm.schemas.AnalystRationale`
-        ``.model_dump()``.
+        ``rec`` unchanged when both Opal and Claude are disabled / fail, or
+        a new instance with ``llm_rationale`` and/or ``research_brief``
+        populated from whichever succeeded — either field independently.
 
     Notes
     -----
     The frozen dataclass is rebuilt via :func:`dataclasses.replace` so the
-    immutability invariant holds.  ``llm.commentary.generate_analyst_rationale``
-    is responsible for caching, schema validation, and soft-fail; this
-    function is a thin orchestration layer.
+    immutability invariant holds.  ``llm.research.generate_research_brief``
+    and ``llm.commentary.generate_analyst_rationale`` are each responsible
+    for their own caching, schema validation, and soft-fail; this function
+    is a thin orchestration layer that sequences Opal BEFORE Claude (so its
+    output can enrich Claude's prompt) without letting either's failure
+    affect the other.
     """
-    try:
-        if not getattr(settings, "LLM_COMMENTARY_ENABLED", False):
-            return rec
-        # Lazy import: keeps engine/advisory.py free of any LLM/SDK reach at
-        # module-load time.  Gravity step_74 source-greps for top-level imports.
-        from dataclasses import asdict, replace  # noqa: PLC0415
-        from llm.commentary import generate_analyst_rationale  # noqa: PLC0415
+    working_context: Dict[str, Any] = dict(context or {})
+    research_brief_dict: Optional[Dict[str, Any]] = None
 
-        rec_skeleton = asdict(rec)
-        result = generate_analyst_rationale(rec_skeleton, context or {})
-        if result is None:
-            return rec
-        return replace(rec, llm_rationale=result.model_dump())
+    # Tier 9 Scope 4 — Opal runs FIRST (front-of-pipeline research). Its
+    # success or failure is entirely independent of the Claude call below.
+    try:
+        if getattr(settings, "OPAL_RESEARCH_ENABLED", False):
+            # Lazy import: keeps engine/advisory.py free of any LLM/SDK reach
+            # at module-load time. Gravity step_74/77 source-grep for
+            # top-level imports.
+            from llm.research import generate_research_brief  # noqa: PLC0415
+
+            brief = generate_research_brief(rec.symbol, working_context)
+            if brief is not None:
+                research_brief_dict = brief.model_dump()
+                working_context["research_brief"] = research_brief_dict
+    except Exception as exc:
+        logger.warning(
+            "enrich_with_llm_rationale: Opal research brief soft-failed for %s: %s",
+            getattr(rec, "symbol", "?"),
+            exc,
+        )
+
+    llm_rationale_dict: Optional[Dict[str, Any]] = None
+    try:
+        if getattr(settings, "LLM_COMMENTARY_ENABLED", False):
+            # Lazy import: see note above.
+            from dataclasses import asdict  # noqa: PLC0415
+            from llm.commentary import generate_analyst_rationale  # noqa: PLC0415
+
+            rec_skeleton = asdict(rec)
+            result = generate_analyst_rationale(rec_skeleton, working_context)
+            if result is not None:
+                llm_rationale_dict = result.model_dump()
     except Exception as exc:
         logger.warning(
             "enrich_with_llm_rationale soft-failed for %s: %s — returning template-only rec.",
             getattr(rec, "symbol", "?"),
             exc,
         )
+
+    if llm_rationale_dict is None and research_brief_dict is None:
         return rec
+
+    from dataclasses import replace  # noqa: PLC0415
+
+    return replace(
+        rec,
+        llm_rationale=llm_rationale_dict if llm_rationale_dict is not None else rec.llm_rationale,
+        research_brief=(
+            research_brief_dict if research_brief_dict is not None else rec.research_brief
+        ),
+    )

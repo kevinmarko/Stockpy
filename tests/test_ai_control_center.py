@@ -175,7 +175,41 @@ class TestCapabilityStatus:
         assert st["status"] == "missing_key"
 
     def test_not_built_wins_over_everything(self) -> None:
-        # Opal is enabled + key present, but llm.research is not shipped yet.
+        # Synthetic capability pointing at a module that will never exist —
+        # tests the RANKING invariant (not_built beats enabled+key-present)
+        # independent of whether any real shipped capability is unbuilt.
+        # (Opal itself shipped in Tier 9 Scope 4 — see
+        # test_opal_research_now_built below — so this can no longer use
+        # the real opal_research capability to exercise this path.)
+        fake_cap = AICapability(
+            key="fake_unbuilt",
+            label="Fake unbuilt capability",
+            enable_settings=("FAKE_ENABLED",),
+            provider_key_settings=("FAKE_API_KEY",),
+            module="llm.does_not_exist_module_xyz",
+            trigger="on_demand",
+            toggle_key="FAKE_ENABLED",
+            help="Test-only capability for the not_built ranking check.",
+        )
+        st = capability_status(
+            SimpleNamespace(FAKE_ENABLED=True, FAKE_API_KEY="sk-x"),
+            fake_cap,
+        )
+        assert st["status"] == "not_built"
+
+    def test_opal_research_now_built(self) -> None:
+        # Tier 9 Scope 4 shipped llm/research.py — Opal's capability row
+        # must now resolve built=True and, with the default settings
+        # (OPAL_RESEARCH_ENABLED=False), land on "disabled" — never
+        # "not_built".
+        st = capability_status(
+            SimpleNamespace(OPAL_RESEARCH_ENABLED=False, OPAL_RESEARCH_PROVIDER="openai"),
+            self._opal(),
+        )
+        assert st["built"] is True
+        assert st["status"] == "disabled"
+
+    def test_opal_research_ready_when_enabled_and_keyed(self) -> None:
         st = capability_status(
             SimpleNamespace(
                 OPAL_RESEARCH_ENABLED=True,
@@ -184,7 +218,7 @@ class TestCapabilityStatus:
             ),
             self._opal(),
         )
-        assert st["status"] == "not_built"
+        assert st["status"] == "ready"
 
 
 class TestOverview:
@@ -252,9 +286,13 @@ class TestToggleWriteGuard:
 # Opal gating
 # ---------------------------------------------------------------------------
 class TestOpalGating:
-    def test_opal_not_built_yet(self) -> None:
-        # llm/research.py is intentionally not shipped in this phase.
-        assert opal_built() is False
+    def test_opal_now_built(self) -> None:
+        # Tier 9 Scope 4 shipped llm/research.py — opal_built() now
+        # correctly reports the backend as importable. Readiness is then
+        # gated purely on OPAL_RESEARCH_ENABLED + OPENAI_API_KEY (see
+        # TestCapabilityStatus.test_opal_research_now_built /
+        # test_opal_research_ready_when_enabled_and_keyed).
+        assert opal_built() is True
 
 
 # ---------------------------------------------------------------------------
