@@ -3,17 +3,39 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pandas as pd
 
-# Create mocks for TensorFlow before importing any engine that imports tf
-mock_tf = MagicMock()
+import types
+
+# Create mock modules for TensorFlow before importing any engine that imports tf
+mock_tf = types.ModuleType('tensorflow')
+mock_keras = types.ModuleType('tensorflow.keras')
+mock_models = types.ModuleType('tensorflow.keras.models')
+mock_layers = types.ModuleType('tensorflow.keras.layers')
+mock_callbacks = types.ModuleType('tensorflow.keras.callbacks')
+
+# Wire them together just in case
+mock_tf.keras = mock_keras
+mock_keras.models = mock_models
+mock_keras.layers = mock_layers
+mock_keras.callbacks = mock_callbacks
+
+# Create the specific mock class for Sequential
 mock_sequential = MagicMock()
 # By default, predict should return a 2D array of shape (1, 4) with dummy scaled values
 mock_sequential.return_value.predict.return_value = np.ones((1, 4)) * 0.5
+mock_models.Sequential = mock_sequential
+
+# Add other required imports
+mock_layers.Conv1D = MagicMock()
+mock_layers.LSTM = MagicMock()
+mock_layers.Dense = MagicMock()
+mock_layers.MaxPooling1D = MagicMock()
+mock_callbacks.EarlyStopping = MagicMock()
 
 sys.modules['tensorflow'] = mock_tf
-sys.modules['tensorflow.keras.models'] = MagicMock()
-sys.modules['tensorflow.keras.models'].Sequential = mock_sequential
-sys.modules['tensorflow.keras.layers'] = MagicMock()
-sys.modules['tensorflow.keras.callbacks'] = MagicMock()
+sys.modules['tensorflow.keras'] = mock_keras
+sys.modules['tensorflow.keras.models'] = mock_models
+sys.modules['tensorflow.keras.layers'] = mock_layers
+sys.modules['tensorflow.keras.callbacks'] = mock_callbacks
 
 import forecasting_engine
 # Force TENSORFLOW_AVAILABLE to be True for testing

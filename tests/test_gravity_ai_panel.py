@@ -5,7 +5,7 @@ Unit tests for ``gui.gravity_ai_panel`` — the Streamlit-free helpers behind
 the Safety-tab AI Gravity audit section.
 
 Runs fully headless: no Streamlit import, no real LLM provider, no network.
-The Safety-tab wiring inside ``gui/panels/__init__.py`` is verified by a
+The Safety-tab wiring inside ``gui/panels/gravity_audit.py`` is verified by a
 source-grep test (mirroring ``tests/test_llm_commentary_panel.py``).
 
 Coverage
@@ -336,12 +336,12 @@ class TestPanelWiring:
         assert callable(panels._render_gravity_ai_runner_section)
 
     def test_render_gravity_audit_calls_runner_section(self):
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "__init__.py"
+        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "gravity_audit.py"
         src = path.read_text(encoding="utf-8")
         assert "_render_gravity_ai_runner_section()" in src
 
     def test_section_imports_from_helper_module(self):
-        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "__init__.py"
+        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "gravity_audit.py"
         src = path.read_text(encoding="utf-8")
         assert "from gui.gravity_ai_panel import" in src
         for name in (
@@ -351,4 +351,4 @@ class TestPanelWiring:
             "step_rows",
             "summarise_run",
         ):
-            assert name in src, f"helper {name} missing from gui/panels/__init__.py"
+            assert name in src, f"helper {name} missing from gui/panels/gravity_audit.py"
