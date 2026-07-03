@@ -101,7 +101,18 @@ _STEP_FILE_MAP: Dict[int, Tuple[str, ...]] = {
         "execution/order_manager.py",
         "main_orchestrator.py",
     ),
-    8: ("llm/research.py", "llm/providers.py", "engine/advisory.py"),
+    8: (
+        "llm/research.py",
+        "llm/providers.py",
+        # STEP_8_PROMPT criterion 8.2 asks the auditor to verify the
+        # ResearchBrief schema exposes no numeric field — its class body lives
+        # in llm/schemas.py, so it MUST be in the audited source.
+        "llm/schemas.py",
+        "engine/advisory.py",
+        # Criterion 8.5 asks the auditor to verify OPENAI_API_KEY is
+        # SECRET_KEYS-only — the SECRET_KEYS tuple lives in gui/env_io.py.
+        "gui/env_io.py",
+    ),
 }
 
 # Cap each individual file's slice at this many bytes so a single huge file

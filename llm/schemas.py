@@ -25,16 +25,29 @@ One schema per provider role:
   brief, Tier 9 Scope 4).  Qualitative-only by construction — no numeric
   field exists to fabricate a price target or score into.
 
-Length bounds are validated via ``Field(max_length=...)`` so a runaway
-provider response is rejected at the schema-validation step before it
-reaches a notification or the cache.
+Length bounds are validated at the schema-validation step so a runaway
+provider response is rejected before it reaches a notification or the
+cache.  For plain ``str`` fields this is ``Field(max_length=...)`` (a
+character cap); for ``List[str]`` fields the ``Field(min_length/max_length)``
+caps the NUMBER OF ITEMS, and each item's character length is capped by an
+inner ``Annotated[str, StringConstraints(max_length=...)]`` element type
+(a bare ``max_length`` on a ``List[str]`` would only bound the list length,
+never the per-string length).
 """
 
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import Annotated, List, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+
+# Per-item length-bounded string aliases for the ``List[str]`` schema fields.
+# A bare ``Field(max_length=N)`` on a ``List[str]`` bounds the list length,
+# NOT the length of each string element — the inner ``StringConstraints`` is
+# what actually caps each bullet's character count.
+_Catalyst = Annotated[str, StringConstraints(max_length=160)]
+_RiskFactor = Annotated[str, StringConstraints(max_length=160)]
+_Development = Annotated[str, StringConstraints(max_length=200)]
 
 
 class AnalystRationale(BaseModel):
@@ -182,12 +195,15 @@ class ResearchBrief(BaseModel):
         2-4 sentence synthesis of the symbol's current setup, grounded in
         the supplied news/earnings/macro packet. ≤600 chars.
     catalysts :
-        1-4 short bullets naming specific upcoming or recent catalysts
+        0-4 short bullets naming specific upcoming or recent catalysts
         drawn from the grounding packet (e.g. "Q3 earnings call scheduled
-        Nov 4"). Each ≤160 chars. Never a number the model invented.
+        Nov 4"). Each ≤160 chars. May be empty when the grounding packet
+        yields none — never fabricated to fill the list. Never a number the
+        model invented.
     risk_factors :
-        1-4 short bullets naming risks visible in the grounding packet.
-        Each ≤160 chars.
+        0-4 short bullets naming risks visible in the grounding packet.
+        Each ≤160 chars. May be empty when none are visible in the packet
+        — never fabricated.
     recent_developments :
         0-4 short bullets summarizing recent real news headlines supplied
         in the grounding packet. Each ≤200 chars. Empty when no news was
@@ -209,17 +225,17 @@ class ResearchBrief(BaseModel):
         max_length=600,
         description="2-4 sentence synthesis grounded in the supplied news/earnings/macro packet.",
     )
-    catalysts: List[str] = Field(
-        min_length=1,
+    catalysts: List[_Catalyst] = Field(
+        default_factory=list,
         max_length=4,
-        description="1-4 short bullets naming specific catalysts from the grounding packet; each ≤160 chars.",
+        description="0-4 short bullets naming specific catalysts from the grounding packet; each ≤160 chars. May be empty.",
     )
-    risk_factors: List[str] = Field(
-        min_length=1,
+    risk_factors: List[_RiskFactor] = Field(
+        default_factory=list,
         max_length=4,
-        description="1-4 short bullets naming risks visible in the grounding packet; each ≤160 chars.",
+        description="0-4 short bullets naming risks visible in the grounding packet; each ≤160 chars. May be empty.",
     )
-    recent_developments: List[str] = Field(
+    recent_developments: List[_Development] = Field(
         default_factory=list,
         max_length=4,
         description="0-4 short bullets summarizing real retrieved headlines; each ≤200 chars.",

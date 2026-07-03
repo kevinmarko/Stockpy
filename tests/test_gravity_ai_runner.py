@@ -91,6 +91,19 @@ class TestStepFileMap:
         for step, files in _STEP_FILE_MAP.items():
             assert isinstance(files, tuple) and len(files) >= 1, f"step {step} has empty map"
 
+    def test_step_8_includes_schemas_and_env_io(self):
+        # Fix 5: step 8's file map was extended so the Gravity STEP_8 auditor
+        # can read the ResearchBrief class body (llm/schemas.py, criterion 8.2)
+        # and the SECRET_KEYS tuple (gui/env_io.py, criterion 8.5) in addition
+        # to the original three files.
+        step8 = _STEP_FILE_MAP[8]
+        assert "llm/schemas.py" in step8
+        assert "gui/env_io.py" in step8
+        # The original three files must remain present.
+        assert "llm/research.py" in step8
+        assert "llm/providers.py" in step8
+        assert "engine/advisory.py" in step8
+
     def test_compose_target_code_for_each_step(self):
         # Every mapped file should be readable without raising; returns a string.
         from engine.gravity_ai_runner import _compose_target_code

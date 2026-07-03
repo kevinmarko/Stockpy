@@ -1235,6 +1235,8 @@ def _safe_float(value: Any, default: float) -> float:
 def enrich_with_llm_rationale(
     rec: Recommendation,
     context: Optional[Dict[str, Any]] = None,
+    *,
+    run_opal: bool = False,
 ) -> Recommendation:
     """Return ``rec`` with ``llm_rationale`` / ``research_brief`` populated.
 
@@ -1247,13 +1249,25 @@ def enrich_with_llm_rationale(
         (macro snippet, regime DTO snapshot, etc.).  Never mutated in
         place — a local copy is used so Opal's injected
         ``"research_brief"`` key never leaks back into the caller's dict.
+        A caller MAY pre-populate ``context["research_brief"]`` with an
+        already-generated Opal brief (e.g. one cached from the GUI's
+        dedicated Opal button); it is then threaded into Claude's prompt
+        AND surfaced on the returned rec WITHOUT any new OpenAI call.
+    run_opal :
+        When ``True`` AND ``settings.OPAL_RESEARCH_ENABLED`` is on, generate
+        a FRESH Opal research brief (an OpenAI call) before the Claude call.
+        Defaults to ``False`` (Tier 9 Scope 4 decoupling): a plain Claude
+        rationale request — the Reports/AI-Insights "Claude analyst note"
+        button, the ``engine.llm_commentary`` CLI — must NOT incur a
+        surprise OpenAI cost. Those surfaces instead reuse a
+        caller-supplied ``context["research_brief"]`` (free) when present.
 
     Returns
     -------
     Recommendation
-        ``rec`` unchanged when both Opal and Claude are disabled / fail, or
-        a new instance with ``llm_rationale`` and/or ``research_brief``
-        populated from whichever succeeded — either field independently.
+        ``rec`` unchanged when nothing was produced, or a new instance with
+        ``llm_rationale`` and/or ``research_brief`` populated from whichever
+        succeeded — either field independently.
 
     Notes
     -----
@@ -1263,30 +1277,43 @@ def enrich_with_llm_rationale(
     for their own caching, schema validation, and soft-fail; this function
     is a thin orchestration layer that sequences Opal BEFORE Claude (so its
     output can enrich Claude's prompt) without letting either's failure
-    affect the other.
+    affect the other.  Every mutation of ``rec`` (including the final
+    :func:`dataclasses.replace` calls) is wrapped so the function NEVER
+    raises — direct callers such as the ``engine.llm_commentary`` CLI rely
+    on this "exit 0 on soft-fail" guarantee (CONSTRAINT #6).
     """
+    from dataclasses import replace  # noqa: PLC0415 — stdlib, no SDK-lazy concern
+
     working_context: Dict[str, Any] = dict(context or {})
     research_brief_dict: Optional[Dict[str, Any]] = None
 
-    # Tier 9 Scope 4 — Opal runs FIRST (front-of-pipeline research). Its
-    # success or failure is entirely independent of the Claude call below.
-    try:
-        if getattr(settings, "OPAL_RESEARCH_ENABLED", False):
-            # Lazy import: keeps engine/advisory.py free of any LLM/SDK reach
-            # at module-load time. Gravity step_74/77 source-grep for
-            # top-level imports.
-            from llm.research import generate_research_brief  # noqa: PLC0415
+    # A caller may hand us an already-generated brief (GUI reuse path) — surface
+    # it on the returned rec too, without a new OpenAI call.
+    _supplied = working_context.get("research_brief")
+    if isinstance(_supplied, dict) and _supplied:
+        research_brief_dict = _supplied
 
-            brief = generate_research_brief(rec.symbol, working_context)
-            if brief is not None:
-                research_brief_dict = brief.model_dump()
-                working_context["research_brief"] = research_brief_dict
-    except Exception as exc:
-        logger.warning(
-            "enrich_with_llm_rationale: Opal research brief soft-failed for %s: %s",
-            getattr(rec, "symbol", "?"),
-            exc,
-        )
+    # Tier 9 Scope 4 — Opal runs FIRST (front-of-pipeline research), but ONLY
+    # on an explicit opt-in (run_opal=True); its success/failure is entirely
+    # independent of the Claude call below.
+    if run_opal:
+        try:
+            if getattr(settings, "OPAL_RESEARCH_ENABLED", False):
+                # Lazy import: keeps engine/advisory.py free of any LLM/SDK
+                # reach at module-load time. Gravity step_74/77 source-grep
+                # for top-level imports.
+                from llm.research import generate_research_brief  # noqa: PLC0415
+
+                brief = generate_research_brief(rec.symbol, working_context)
+                if brief is not None:
+                    research_brief_dict = brief.model_dump()
+                    working_context["research_brief"] = research_brief_dict
+        except Exception as exc:
+            logger.warning(
+                "enrich_with_llm_rationale: Opal research brief soft-failed for %s: %s",
+                getattr(rec, "symbol", "?"),
+                exc,
+            )
 
     llm_rationale_dict: Optional[Dict[str, Any]] = None
     try:
@@ -1306,15 +1333,25 @@ def enrich_with_llm_rationale(
             exc,
         )
 
-    if llm_rationale_dict is None and research_brief_dict is None:
-        return rec
-
-    from dataclasses import replace  # noqa: PLC0415
-
-    return replace(
-        rec,
-        llm_rationale=llm_rationale_dict if llm_rationale_dict is not None else rec.llm_rationale,
-        research_brief=(
-            research_brief_dict if research_brief_dict is not None else rec.research_brief
-        ),
-    )
+    # Apply each field independently, each guarded so a replace() failure
+    # (e.g. a future Recommendation refactor) never propagates — the "never
+    # raises" contract holds for the whole function body (Fix 7 / CONSTRAINT #6).
+    if research_brief_dict is not None and research_brief_dict is not rec.research_brief:
+        try:
+            rec = replace(rec, research_brief=research_brief_dict)
+        except Exception as exc:
+            logger.warning(
+                "enrich_with_llm_rationale: research_brief replace() failed for %s: %s",
+                getattr(rec, "symbol", "?"),
+                exc,
+            )
+    if llm_rationale_dict is not None:
+        try:
+            rec = replace(rec, llm_rationale=llm_rationale_dict)
+        except Exception as exc:
+            logger.warning(
+                "enrich_with_llm_rationale: llm_rationale replace() failed for %s: %s",
+                getattr(rec, "symbol", "?"),
+                exc,
+            )
+    return rec

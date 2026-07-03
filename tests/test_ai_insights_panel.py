@@ -241,3 +241,49 @@ class TestPanelWiring:
             "insights_status",
         ):
             assert name in src, f"helper {name} missing"
+
+
+# ---------------------------------------------------------------------------
+# TestOpalIndependentGating — Fix 1: Opal section renders even when the
+# Claude/Gemini insights_status gate is "disabled".
+# ---------------------------------------------------------------------------
+
+
+class TestOpalIndependentGating:
+    """The AI Insights tab must NOT early-return the whole function on
+    ``insights_status == "disabled"`` before Section 0 (Opal) renders — Opal
+    has its own independent ``OPAL_RESEARCH_ENABLED`` switch.
+    """
+
+    def _render_ai_insights_body(self) -> str:
+        path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "__init__.py"
+        src = path.read_text(encoding="utf-8")
+        start = src.index("def render_ai_insights")
+        end = src.index("\ndef ", start + 1)
+        return src[start:end]
+
+    def test_opal_section_call_precedes_disabled_gate(self):
+        body = self._render_ai_insights_body()
+        opal_idx = body.index("_render_opal_research_section(")
+        gate_idx = body.index('status == "disabled"')
+        assert opal_idx < gate_idx, (
+            "Opal section must render BEFORE the Claude/Gemini disabled gate so "
+            "it stays visible when only OPAL_RESEARCH_ENABLED is on (Fix 1)."
+        )
+
+    def test_no_early_return_precedes_opal_section(self):
+        body = self._render_ai_insights_body()
+        opal_idx = body.index("_render_opal_research_section(")
+        head = body[:opal_idx]
+        # The only permitted early returns before the Opal section are the
+        # data-availability guards (no snapshot / no symbols) — the
+        # insights_status "disabled" return must NOT be among them.
+        assert 'status == "disabled"' not in head, (
+            "The insights_status disabled early-return must not short-circuit "
+            "before the Opal section (Fix 1)."
+        )
+
+    def test_disabled_gate_message_scopes_to_claude_gemini(self):
+        body = self._render_ai_insights_body()
+        # The disabled message should make clear Opal is unaffected.
+        assert "OPAL_RESEARCH_ENABLED" in body

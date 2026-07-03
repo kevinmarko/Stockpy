@@ -184,6 +184,7 @@ def generate_for_symbol_row(
     row: Mapping[str, Any],
     *,
     enricher: Optional[Any] = None,
+    research_brief: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run the on-demand enrichment for a single signal row.
 
@@ -195,6 +196,14 @@ def generate_for_symbol_row(
     enricher :
         Optional override (test seam).  Defaults to
         :func:`engine.advisory.enrich_with_llm_rationale`.
+    research_brief :
+        Optional already-generated Opal research brief
+        (``ResearchBrief.model_dump()``) to thread into Claude's prompt for
+        free — no new OpenAI call.  Tier 9 Scope 4 reuse path: the GUI's
+        dedicated "Opal research brief" button caches its payload in session
+        state; the "Claude analyst note" button forwards that cached payload
+        here so Claude's synthesis benefits WITHOUT the Claude button ever
+        triggering a fresh Opal call (``run_opal`` stays ``False``).
 
     Returns
     -------
@@ -207,6 +216,12 @@ def generate_for_symbol_row(
         skeleton = signal_row_to_rec_skeleton(row)
         if not skeleton["symbol"]:
             return None
+
+        # Thread a caller-supplied Opal brief into the enrichment context so
+        # Claude can cite it — never triggers a new Opal call (run_opal=False).
+        _context: Optional[Dict[str, Any]] = None
+        if isinstance(research_brief, Mapping) and research_brief:
+            _context = {"research_brief": dict(research_brief)}
 
         if enricher is None:
             # Lazy import keeps this module Streamlit-free AND keeps the
@@ -224,7 +239,7 @@ def generate_for_symbol_row(
                 key_indicators={k: float(v or 0.0) for k, v in skeleton["key_indicators"].items()},
                 data_quality=skeleton["data_quality"] if skeleton["data_quality"] in ("OK", "STALE", "PARTIAL") else "OK",
             )
-            enriched = enrich_with_llm_rationale(rec)
+            enriched = enrich_with_llm_rationale(rec, _context)
         else:
             # Test seam — enricher receives the skeleton dict directly.
             enriched = enricher(skeleton)

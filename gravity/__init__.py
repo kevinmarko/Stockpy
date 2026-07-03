@@ -12361,7 +12361,14 @@ class GravityAIAuditor:
             import typing as _typing
             from decimal import Decimal as _Decimal
 
+            def _unwrap_annotated(ann: object) -> object:
+                # Annotated[X, ...] (per-item StringConstraints) → X.
+                if hasattr(ann, "__metadata__"):
+                    return _typing.get_args(ann)[0]
+                return ann
+
             def _is_qualitative_annotation(ann: object) -> bool:
+                ann = _unwrap_annotated(ann)
                 if ann is str:
                     return True
                 origin = _typing.get_origin(ann)
@@ -12369,7 +12376,7 @@ class GravityAIAuditor:
                     return True
                 if origin in (list, List):
                     args = _typing.get_args(ann)
-                    return len(args) == 1 and args[0] is str
+                    return len(args) == 1 and _unwrap_annotated(args[0]) is str
                 return False
 
             numeric_fields = [

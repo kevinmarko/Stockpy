@@ -88,11 +88,94 @@ class TestResearchBriefSchema:
                 sources_note="s",
             )
 
-    def test_zero_catalysts_rejected(self):
+    def test_zero_catalysts_allowed(self):
+        # Fix 6 — empty catalysts/risk_factors are now allowed so the model can
+        # honestly return nothing when the grounding packet is sparse (matches
+        # recent_developments; CONSTRAINT #4 — never forced to fabricate).
+        r = ResearchBrief(
+            thesis_context="x", catalysts=[], risk_factors=[], sources_note="s"
+        )
+        assert r.catalysts == []
+        assert r.risk_factors == []
+
+    def test_catalyst_item_too_long_rejected(self):
+        # Fix 4 — per-item string length is now enforced (≤160), not just list count.
         with pytest.raises(ValidationError):
             ResearchBrief(
-                thesis_context="x", catalysts=[], risk_factors=["r"], sources_note="s"
+                thesis_context="x",
+                catalysts=["y" * 161],
+                risk_factors=["r"],
+                sources_note="s",
             )
+
+    def test_recent_development_item_too_long_rejected(self):
+        with pytest.raises(ValidationError):
+            ResearchBrief(
+                thesis_context="x",
+                catalysts=["a"],
+                risk_factors=["r"],
+                recent_developments=["z" * 201],
+                sources_note="s",
+            )
+
+    def test_risk_factor_item_too_long_rejected(self):
+        # Fix 4 parallel — per-item risk_factor length is enforced (≤160).
+        with pytest.raises(ValidationError):
+            ResearchBrief(
+                thesis_context="x",
+                catalysts=["a"],
+                risk_factors=["r" * 161],
+                sources_note="s",
+            )
+
+    def test_catalyst_item_exactly_160_accepted(self):
+        # Boundary — exactly at the ≤160 cap is valid.
+        r = ResearchBrief(
+            thesis_context="x",
+            catalysts=["c" * 160],
+            risk_factors=["r"],
+            sources_note="s",
+        )
+        assert len(r.catalysts[0]) == 160
+
+    def test_recent_development_item_exactly_200_accepted(self):
+        # Boundary — exactly at the ≤200 cap is valid.
+        r = ResearchBrief(
+            thesis_context="x",
+            catalysts=["a"],
+            risk_factors=["r"],
+            recent_developments=["d" * 200],
+            sources_note="s",
+        )
+        assert len(r.recent_developments[0]) == 200
+
+    def test_four_catalysts_accepted(self):
+        # Boundary — the list-count cap (max_length=4) survives Fix 4/6;
+        # exactly 4 items is still valid (5 is rejected elsewhere).
+        r = ResearchBrief(
+            thesis_context="x",
+            catalysts=["a", "b", "c", "d"],
+            risk_factors=["r"],
+            sources_note="s",
+        )
+        assert len(r.catalysts) == 4
+
+    def test_all_empty_lists_brief_validates_and_roundtrips(self):
+        # Fix 6 — a fully sparse brief (no catalysts, risks, or developments)
+        # is honest and valid, and round-trips through model_dump/re-validate.
+        r = ResearchBrief(
+            thesis_context="Sparse grounding.",
+            catalysts=[],
+            risk_factors=[],
+            recent_developments=[],
+            data_confidence="low",
+            sources_note="No news or earnings retrieved.",
+        )
+        assert r.catalysts == []
+        assert r.risk_factors == []
+        assert r.recent_developments == []
+        r2 = ResearchBrief(**r.model_dump())
+        assert r2 == r
 
     def test_too_many_risk_factors_rejected(self):
         with pytest.raises(ValidationError):
@@ -154,18 +237,27 @@ class TestResearchBriefSchema:
             )
 
     def test_no_numeric_field_present(self):
-        # CONSTRAINT #4 — every field must be qualitative (str / list[str] / Literal).
+        # CONSTRAINT #4 — every field must be qualitative (str / list[str] /
+        # Literal).  Fix 4 wraps the list item types in
+        # ``Annotated[str, StringConstraints(...)]`` for per-item length caps,
+        # so the check must unwrap Annotated to reach the base ``str``.
         import typing
 
+        def _base(ann):
+            # Unwrap Annotated[X, ...] → X.
+            if hasattr(ann, "__metadata__"):
+                return typing.get_args(ann)[0]
+            return ann
+
         for name, field in ResearchBrief.model_fields.items():
-            ann = field.annotation
+            ann = _base(field.annotation)
             origin = typing.get_origin(ann)
-            is_qualitative = (
-                ann is str
-                or origin is typing.Literal
-                or (origin is list and typing.get_args(ann) == (str,))
-            )
-            assert is_qualitative, f"field {name!r} is not qualitative: {ann!r}"
+            if origin is list:
+                item = _base(typing.get_args(ann)[0]) if typing.get_args(ann) else None
+                is_qualitative = item is str
+            else:
+                is_qualitative = ann is str or origin is typing.Literal
+            assert is_qualitative, f"field {name!r} is not qualitative: {field.annotation!r}"
 
 
 # ---------------------------------------------------------------------------

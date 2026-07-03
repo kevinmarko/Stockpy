@@ -345,13 +345,20 @@ def _render_llm_commentary_button(row: dict, symbol: str) -> None:
     )
     session_slot = f"llm_cmt_payload_{cache_key}"
 
+    # Tier 9 Scope 4 reuse path: if the operator already generated an Opal
+    # research brief for this symbol (the dedicated "Opal research brief"
+    # button on the AI Insights tab caches its payload here), thread it into
+    # Claude's prompt for FREE — clicking the Claude button never triggers a
+    # fresh Opal/OpenAI call (enrich_with_llm_rationale runs with run_opal=False).
+    cached_opal_brief = st.session_state.get(f"ai_insights_opal_payload_{symbol}")
+
     if st.button(
         "🤖 Generate analyst commentary",
         key=f"llm_cmt_btn_{cache_key}",
         width="stretch",
     ):
         with st.spinner(f"Asking Claude about {symbol}…"):
-            payload = generate_for_symbol_row(row)
+            payload = generate_for_symbol_row(row, research_brief=cached_opal_brief)
         st.session_state[session_slot] = payload
         # Mirror into a symbol-keyed map (separate from the cache-key-keyed
         # session_slot above) so cross-tab aggregate views — the AI Insights
@@ -4085,22 +4092,14 @@ def render_ai_insights() -> None:
         st.error(f"AI Insights helpers unavailable: {exc}")
         return
 
+    # NOTE: ``insights_status`` gates ONLY the Claude/Gemini sections (it keys
+    # off ``LLM_COMMENTARY_ENABLED``).  Opal (Section 0) has its OWN independent
+    # master switch (``OPAL_RESEARCH_ENABLED``) and MUST render regardless — so
+    # the disabled/missing-key handling below is deferred until AFTER the symbol
+    # picker + Section 0, instead of early-returning the whole tab (Fix 1).
     status = insights_status(settings)
-    if status == "disabled":
-        st.info(
-            "AI Insights is off.  Set `LLM_COMMENTARY_ENABLED=true` and at "
-            "least `GEMINI_API_KEY=…` (plus `ANTHROPIC_API_KEY=…` for the "
-            "analyst notes) in `.env`, then relaunch the GUI."
-        )
-        return
-    if status == "missing_key":
-        st.warning(
-            "`LLM_COMMENTARY_ENABLED=true` but `GEMINI_API_KEY` is unset.  "
-            "The chart-pattern section will be a no-op; the analyst-note "
-            "section still works if `ANTHROPIC_API_KEY` is set."
-        )
 
-    # ── Symbol picker (shared across the three sections) ────────────────
+    # ── Symbol picker (shared across all sections, incl. independent Opal) ──
     snap = load_state_snapshot()
     sig_list = snap.get("signals", []) if isinstance(snap, dict) else []
     if not sig_list:
@@ -4125,14 +4124,32 @@ def render_ai_insights() -> None:
     )
 
     # ── Section 0 — Opal research brief (front-of-pipeline, OpenAI) ─────
+    # Rendered FIRST and gated only on its own OPAL_RESEARCH_ENABLED switch —
+    # independent of the Claude/Gemini status below (Fix 1).
     st.markdown("#### 🔬 Opal research brief")
     try:
         _render_opal_research_section(selected_symbol)
     except Exception as exc:
         st.error(f"Opal research section failed: {exc}")
 
-    # ── Section 1 — Claude analyst note (reuses Reports-tab helper) ────
+    # ── Claude/Gemini gate — applies to Sections 1–3 ONLY ───────────────
     st.markdown("---")
+    if status == "disabled":
+        st.info(
+            "Claude/Gemini insights are off.  Set `LLM_COMMENTARY_ENABLED=true` "
+            "and at least `GEMINI_API_KEY=…` (plus `ANTHROPIC_API_KEY=…` for the "
+            "analyst notes) in `.env`, then relaunch the GUI.  (The Opal section "
+            "above has its own `OPAL_RESEARCH_ENABLED` switch and is unaffected.)"
+        )
+        return
+    if status == "missing_key":
+        st.warning(
+            "`LLM_COMMENTARY_ENABLED=true` but `GEMINI_API_KEY` is unset.  "
+            "The chart-pattern section will be a no-op; the analyst-note "
+            "section still works if `ANTHROPIC_API_KEY` is set."
+        )
+
+    # ── Section 1 — Claude analyst note (reuses Reports-tab helper) ────
     st.markdown("#### 🤖 Claude analyst note")
     try:
         _render_llm_commentary_button(row, selected_symbol)

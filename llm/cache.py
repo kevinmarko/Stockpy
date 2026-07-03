@@ -55,20 +55,36 @@ def make_cache_key(
     score: float,
     action: str,
     date_iso: Optional[str] = None,
+    variant: str = "",
 ) -> str:
-    """Build the canonical cache key — pure function, used by tests."""
+    """Build the canonical cache key — pure function, used by tests.
+
+    ``variant`` is an optional extra discriminator appended to the key ONLY
+    when non-empty, so callers that don't pass it get a byte-identical key to
+    the pre-variant format (backward compatible — existing cache entries and
+    tests are unaffected).  Callers use it to segregate otherwise-identical
+    requests whose PROMPT differs on a dimension the base key doesn't capture
+    — notably a Claude rationale generated WITH an Opal research brief in
+    context vs. one generated without (Tier 9 Scope 4): the brief changes the
+    user prompt but none of provider/schema/symbol/date/score/action, so
+    without a variant the brief-augmented call would silently hit a
+    brief-less cached entry (or vice-versa).
+    """
     try:
         bucket = int(math.floor(float(score) / 5.0))
     except Exception:
         bucket = 0
-    parts = "|".join([
+    fields = [
         provider,
         schema_name,
         (symbol or "").upper(),
         date_iso or _utc_today_iso(),
         str(bucket),
         (action or "").upper(),
-    ])
+    ]
+    if variant:
+        fields.append(str(variant))
+    parts = "|".join(fields)
     return hashlib.sha256(parts.encode("utf-8")).hexdigest()
 
 

@@ -165,7 +165,7 @@ class TestOpalThreadsIntoContext:
         })
 
         r = _rec()
-        out = enrich_with_llm_rationale(r)
+        out = enrich_with_llm_rationale(r, run_opal=True)
 
         assert out.research_brief is not None
         assert out.research_brief["thesis_context"] == brief.thesis_context
@@ -194,7 +194,7 @@ class TestOpalThreadsIntoContext:
         monkeypatch.setattr(commentary_mod, "get_rationale_provider", lambda: fake_rationale_prov)
 
         r = _rec()
-        out = enrich_with_llm_rationale(r)
+        out = enrich_with_llm_rationale(r, run_opal=True)
 
         assert out.research_brief is not None
         assert out.llm_rationale is not None
@@ -224,10 +224,90 @@ class TestOpalThreadsIntoContext:
         monkeypatch.setattr(commentary_mod, "get_rationale_provider", lambda: fake_rationale_prov)
 
         r = _rec()
-        out = enrich_with_llm_rationale(r)
+        out = enrich_with_llm_rationale(r, run_opal=True)
 
         assert out.research_brief is None
         assert out.llm_rationale is not None
+
+
+# ---------------------------------------------------------------------------
+# TestOpalDecoupling — Fix 3: run_opal gating + free reuse of a cached brief
+# ---------------------------------------------------------------------------
+
+
+class TestOpalDecoupling:
+    def test_default_run_opal_false_does_not_call_openai(self, monkeypatch):
+        # Even with OPAL_RESEARCH_ENABLED=True, a plain enrich (run_opal defaults
+        # to False) must NOT fire a fresh Opal/OpenAI call — no surprise cost.
+        from engine import advisory as advisory_mod
+        import llm.research as research_mod
+
+        monkeypatch.setattr(advisory_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(advisory_mod.settings, "LLM_COMMENTARY_ENABLED", False, raising=False)
+
+        calls = []
+
+        def _tracking(*a, **kw):
+            calls.append(a)
+            return _good_brief()
+
+        monkeypatch.setattr(research_mod, "generate_research_brief", _tracking)
+
+        r = _rec()
+        out = enrich_with_llm_rationale(r)  # run_opal defaults to False
+
+        assert calls == []
+        assert out.research_brief is None
+
+    def test_supplied_brief_reused_without_new_call_and_surfaced(self, monkeypatch):
+        # The GUI reuse path: caller pre-populates context["research_brief"] with
+        # an already-generated brief; enrich threads it into Claude's prompt AND
+        # surfaces it on the rec, with NO new Opal call (run_opal=False).
+        from engine import advisory as advisory_mod
+        from llm import commentary as commentary_mod
+        import llm.research as research_mod
+
+        monkeypatch.setattr(advisory_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(advisory_mod.settings, "LLM_COMMENTARY_ENABLED", True, raising=False)
+        monkeypatch.setattr(commentary_mod.settings, "LLM_COMMENTARY_ENABLED", True, raising=False)
+
+        calls = []
+        monkeypatch.setattr(
+            research_mod, "generate_research_brief",
+            lambda *a, **kw: calls.append(a) or _good_brief(),
+        )
+
+        rationale_payload = AnalystRationale(
+            headline="h", why_now="w", key_risks=["r"], invalidation="i"
+        )
+        fake_rationale_prov = _FakeRationaleProvider(value=rationale_payload)
+        monkeypatch.setattr(commentary_mod, "get_rationale_provider", lambda: fake_rationale_prov)
+
+        supplied = _good_brief(thesis_context="Reused marker XYZ789.").model_dump()
+        r = _rec()
+        out = enrich_with_llm_rationale(
+            r, {"research_brief": supplied}, run_opal=False
+        )
+
+        # No fresh Opal call happened.
+        assert calls == []
+        # The supplied brief is surfaced on the rec.
+        assert out.research_brief == supplied
+        # ...and threaded into Claude's prompt.
+        assert len(fake_rationale_prov.captured_user_prompts) == 1
+        assert "Reused marker XYZ789." in fake_rationale_prov.captured_user_prompts[0]
+
+    def test_caller_context_not_mutated(self, monkeypatch):
+        # working_context is a copy — the caller's dict never gains keys.
+        from engine import advisory as advisory_mod
+
+        monkeypatch.setattr(advisory_mod.settings, "OPAL_RESEARCH_ENABLED", False, raising=False)
+        monkeypatch.setattr(advisory_mod.settings, "LLM_COMMENTARY_ENABLED", False, raising=False)
+
+        ctx = {"macro_snippet": "RISK ON"}
+        r = _rec()
+        enrich_with_llm_rationale(r, ctx, run_opal=True)
+        assert ctx == {"macro_snippet": "RISK ON"}
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +330,7 @@ class TestNoFabricatedMetrics:
         })
 
         r = _rec()
-        out = enrich_with_llm_rationale(r)
+        out = enrich_with_llm_rationale(r, run_opal=True)
 
         assert out.symbol == r.symbol
         assert out.action == r.action
