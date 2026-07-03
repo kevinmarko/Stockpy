@@ -166,6 +166,25 @@ else:
     else:
         st.info(_mode_state.run_mode_label, icon="⚪")
 
+# --- Tier 8: Robinhood execution-mode banner ---
+# Independent of ADVISORY_ONLY / DRY_RUN / ALPACA_PAPER — Robinhood's
+# execution queue has its own staged posture (off | review | live).  In
+# any non-``off`` posture there is a real proposed-order queue on disk
+# that a Claude Code agent can act on, so we surface a persistent banner
+# above the tab bar.  Rendered AFTER the ADVISORY MODE / Alpaca run-mode
+# banner so the operator sees both when both apply.  Informational
+# only — the actual guards live in ``execution/queue_builder.py``.
+try:
+    from gui.robinhood_mode import read_robinhood_execution_mode
+    _rh_mode_state = read_robinhood_execution_mode(settings)
+    if _rh_mode_state.variant == "error":
+        st.error(_rh_mode_state.label, icon="🔴")
+    elif _rh_mode_state.variant == "warning":
+        st.warning(_rh_mode_state.label, icon="🟡")
+    # variant == "hidden" (mode="off") → render nothing
+except Exception as _rh_exc:  # noqa: BLE001 — informational banner never blocks the app
+    logger.debug("Robinhood execution-mode banner soft-failed: %s", _rh_exc)
+
 tab_labels = [
     "🚀 Launcher",
     "📈 Reports",
