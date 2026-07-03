@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 try:
-    from tests.lookahead_check import verify_no_lookahead
+    from tests.lookahead_check import verify_no_lookahead, make_synthetic_ohlcv
 except ImportError:
-    from lookahead_check import verify_no_lookahead
+    from lookahead_check import verify_no_lookahead, make_synthetic_ohlcv
 from research_engine import AdvancedResearchEngine
 
 # Seed random number generator for reproducibility
@@ -14,22 +14,7 @@ np.random.seed(42)
 @pytest.fixture
 def synthetic_ohlcv_data():
     """Generates synthetic stock price history (100 days)."""
-    dates = pd.date_range(end="2026-06-24", periods=100)
-    # Generate random walk for Close
-    close = 100.0 + np.cumsum(np.random.normal(0, 1.0, 100))
-    open_p = close + np.random.normal(0, 0.5, 100)
-    high = np.maximum(close, open_p) + np.random.uniform(0, 1.0, 100)
-    low = np.minimum(close, open_p) - np.random.uniform(0, 1.0, 100)
-    volume = np.random.randint(1000, 10000, 100).astype(float)
-    
-    df = pd.DataFrame({
-        "Open": open_p,
-        "High": high,
-        "Low": low,
-        "Close": close,
-        "Volume": volume
-    }, index=dates)
-    return df
+    return make_synthetic_ohlcv(periods=100, seed=42)
 
 @pytest.fixture
 def synthetic_spy_data():

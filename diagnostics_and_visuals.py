@@ -252,6 +252,49 @@ HTML_REPORT_TEMPLATE = """
         .pos { color: var(--success); }
         .neg { color: var(--danger); }
 
+        /* ======== Δ SINCE LAST RUN BAND ======== */
+        .delta-band {
+            background: var(--card-bg);
+            border: 1px solid var(--accent);
+            border-left: 4px solid var(--accent);
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin-bottom: 22px;
+            box-shadow: 0 0 0 1px var(--accent-glow);
+        }
+        .delta-band .delta-header {
+            display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .delta-band h3 {
+            font-size: 14px; color: var(--accent); margin: 0;
+            text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
+        }
+        .delta-band .delta-ts { color: var(--text-muted); font-size: 12px; }
+        .delta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px 22px;
+        }
+        .delta-cell .delta-label {
+            color: var(--text-muted); font-size: 11px;
+            text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;
+        }
+        .delta-cell ul { list-style: none; padding-left: 0; margin: 0; font-size: 13px; }
+        .delta-cell li { padding: 2px 0; }
+        .delta-cell .sym { font-weight: 700; color: var(--text-main); }
+        .delta-band .regime-banner {
+            background: var(--warning-glow);
+            border: 1px solid var(--warning);
+            color: var(--warning); border-radius: 6px;
+            padding: 8px 12px; margin-bottom: 12px;
+            font-size: 13px; font-weight: 600;
+        }
+        .delta-band .empty-note {
+            color: var(--text-muted); font-size: 13px;
+            padding: 4px 0; text-align: left;
+        }
+
         /* ======== MACRO / REGIME CARDS ======== */
         .exec-grid {
             display: grid;
@@ -378,6 +421,37 @@ HTML_REPORT_TEMPLATE = """
             color: #a5d6ff; border: 1px solid var(--border); font-size: 13px; line-height: 1.5;
         }
         .empty-note { padding: 28px 20px; color: var(--text-muted); font-size: 14px; text-align: center; }
+
+        /* ======== MOBILE RESPONSIVE — single-column collapse below 600 px ======== */
+        /* Operators checking from their phones see a readable single-column layout  */
+        /* with touch-friendly tap targets on expandable rows (min-height 44 px).    */
+        @media (max-width: 600px) {
+            body { padding: 14px 10px; }
+            h1 { font-size: 18px; }
+            header { flex-direction: column; align-items: flex-start; gap: 8px; }
+            .timestamp { font-size: 12px; }
+            /* Single-column stack for summary tiles */
+            .summary-band { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .summary-tile { padding: 12px 14px; }
+            .summary-tile .value { font-size: 18px; }
+            /* Single-column stack for macro / regime cards */
+            .exec-grid { grid-template-columns: 1fr; gap: 12px; }
+            .exec-card { padding: 16px; }
+            /* Δ-band: single column */
+            .delta-grid { grid-template-columns: 1fr; gap: 10px; }
+            /* Allow the table to scroll horizontally rather than overflow the viewport */
+            .signal-table-wrap, table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            /* Larger tap targets on data rows and headers */
+            tr.data-row td { padding: 14px 8px; min-height: 44px; font-size: 13px; }
+            th { padding: 12px 8px; min-height: 44px; font-size: 11px; }
+            /* Detail grid: two columns on mobile */
+            .detail-grid { grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+            .rationale { font-size: 13px; padding: 10px 12px; }
+            /* Badges: slightly larger text for readability */
+            .badge { font-size: 12px; padding: 5px 10px; }
+            /* Search input full-width */
+            #search-input { width: 100%; box-sizing: border-box; }
+        }
     </style>
 </head>
 <body>
@@ -437,6 +511,93 @@ HTML_REPORT_TEMPLATE = """
                 </div>
                 <div class="sub">{{ account_summary.n_total }} symbols analysed</div>
             </div>
+        </div>
+        {% endif %}
+
+        {% if snapshot_diff %}
+        <!-- ======== Δ SINCE LAST RUN ======== -->
+        <div class="delta-band">
+            <div class="delta-header">
+                <h3>Δ Since Last Run</h3>
+                {% if snapshot_diff.prev_ts and snapshot_diff.curr_ts %}
+                    <span class="delta-ts">{{ snapshot_diff.prev_ts }} → {{ snapshot_diff.curr_ts }}</span>
+                {% elif snapshot_diff.curr_ts %}
+                    <span class="delta-ts">First snapshot — {{ snapshot_diff.curr_ts }}</span>
+                {% endif %}
+            </div>
+            {% if snapshot_diff.regime_change %}
+            <div class="regime-banner">
+                ⚠ Regime change:
+                <strong>{{ snapshot_diff.regime_change[0] }}</strong>
+                →
+                <strong>{{ snapshot_diff.regime_change[1] }}</strong>
+            </div>
+            {% endif %}
+            {% if snapshot_diff.is_empty %}
+                <div class="empty-note">No material changes since last run.</div>
+            {% else %}
+            <div class="delta-grid">
+                {% if snapshot_diff.new_buys %}
+                <div class="delta-cell">
+                    <div class="delta-label">🟢 New BUYs</div>
+                    <ul>
+                        {% for sym in snapshot_diff.new_buys %}
+                            <li><span class="sym pos">{{ sym }}</span></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                {% if snapshot_diff.action_flips %}
+                <div class="delta-cell">
+                    <div class="delta-label">🔁 Action flips</div>
+                    <ul>
+                        {% for flip in snapshot_diff.action_flips %}
+                            <li><span class="sym">{{ flip.symbol }}</span>:
+                                <span style="color:var(--text-muted)">{{ flip.before }}</span>
+                                →
+                                <span class="sig-{{ flip.after|replace(' ', '_') }}">{{ flip.after }}</span>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                {% if snapshot_diff.conviction_deltas %}
+                <div class="delta-cell">
+                    <div class="delta-label">📈 Conviction moved (|Δ| ≥ {{ "%.2f"|format(snapshot_diff.conviction_deltas[0].delta|abs if snapshot_diff.conviction_deltas else 0.2) }})</div>
+                    <ul>
+                        {% for d in snapshot_diff.conviction_deltas %}
+                            <li><span class="sym">{{ d.symbol }}</span>:
+                                {{ "%.2f"|format(d.before) }} → {{ "%.2f"|format(d.after) }}
+                                <span class="{{ 'pos' if d.delta >= 0 else 'neg' }}">
+                                    ({{ '+' if d.delta >= 0 else '' }}{{ "%.2f"|format(d.delta) }})
+                                </span>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                {% if snapshot_diff.added_holdings %}
+                <div class="delta-cell">
+                    <div class="delta-label">➕ Holdings added</div>
+                    <ul>
+                        {% for sym in snapshot_diff.added_holdings %}
+                            <li><span class="sym pos">{{ sym }}</span></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                {% if snapshot_diff.dropped_holdings %}
+                <div class="delta-cell">
+                    <div class="delta-label">➖ Holdings dropped</div>
+                    <ul>
+                        {% for sym in snapshot_diff.dropped_holdings %}
+                            <li><span class="sym neg">{{ sym }}</span></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
         {% endif %}
 
@@ -690,6 +851,7 @@ def generate_html_report(
     real_yield: float = 2.5,
     audit_log: Dict[str, Any] = None,
     account_summary: Optional[Dict[str, Any]] = None,
+    snapshot_diff: Optional[Dict[str, Any]] = None,
 ):
     """
     Render the daily advisory HTML report.
@@ -722,6 +884,13 @@ def generate_html_report(
         ``total_dividends``, ``num_positions``, ``n_buy``, ``n_hold``,
         ``n_sell``, ``n_total``, ``fetched_at`` (str), ``age_hours`` (float),
         ``is_stale`` (bool).  Never contains secrets.
+    snapshot_diff:
+        Optional ``SnapshotDiff.to_dict()`` payload from
+        :mod:`scripts.snapshot_diff`.  When present the report renders a
+        "Δ Since Last Run" band at the top (new BUYs, action flips,
+        conviction moves, holdings added/dropped, regime change).  When
+        ``None`` (no prior snapshot or rotation failure) the band is
+        hidden entirely.
     """
     telemetry.info("Generating Daily Jinja2 HTML Report (holdings + rationale layout)...")
 
@@ -856,6 +1025,7 @@ def generate_html_report(
         audit_log=audit_log,
         avg_portfolio_heat=avg_heat,
         account_summary=account_summary,
+        snapshot_diff=snapshot_diff,
         n_buy=n_buy,
         n_hold=n_hold,
         n_sell=n_sell,

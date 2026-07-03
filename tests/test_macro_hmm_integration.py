@@ -12,10 +12,26 @@ Unit tests for:
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from data_engine import MockDataEngine
 from dto_models import MacroEconomicDTO
 from macro_engine import MacroEngine
+
+
+@pytest.fixture(autouse=True)
+def _disable_historical_store(disable_historical_store):
+    """settings.HISTORICAL_STORE_ENABLED defaults True, which would route
+    MacroEngine.compute_hmm_risk_on_probability()'s macro-history reads
+    through the real, on-disk HistoricalStore (see the Tier 2.3 Phase 3
+    wiring note in macro_engine.py) instead of DataEngine.fetch_macro_history()
+    directly. Confirmed by direct execution -- NOT just the "succeeds" test
+    below, but also the "insufficient rows" graceful-degradation test --
+    that this write happens before the eventual None short-circuit, so it
+    is disabled file-wide via this autouse shim (wrapping the shared
+    tests/conftest.py fixture) rather than per-test. The DTO-only tests in
+    sections 1/2 above do no I/O and are unaffected by this setting."""
+    yield
 
 
 # =============================================================================

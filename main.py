@@ -61,6 +61,7 @@ import argparse
 import logging
 import signal
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -112,6 +113,7 @@ from signals.base import SignalContext
 # inside main() — do NOT call logging.basicConfig() at module level here).
 # ---------------------------------------------------------------------------
 from alerting import notify, setup_logging, summarize_run
+from execution.kill_switch import GlobalKillSwitch
 
 logger = logging.getLogger("InvestYo.main")
 
@@ -324,10 +326,21 @@ def _fetch_bars_for_universe(
     Returns a dict symbol → DataFrame.  Failures are dead-lettered per symbol
     so one bad ticker never aborts the pre-compute pass.
     """
+    _store = None
+    if settings.HISTORICAL_STORE_ENABLED:
+        try:
+            from data.historical_store import HistoricalStore
+            _store = HistoricalStore()
+        except Exception as exc:
+            logger.warning("HistoricalStore unavailable; using direct provider. %s", exc)
+
     bars: Dict[str, pd.DataFrame] = {}
     for sym in symbols:
         try:
-            df = market.get_intraday_bars(sym, lookback_days=450)
+            if _store is not None:
+                df = _store.get_bars(sym, lookback_days=450, provider=market)
+            else:
+                df = market.get_intraday_bars(sym, lookback_days=450)
             if df is not None and not df.empty:
                 bars[sym] = df
         except Exception as exc:
@@ -740,6 +753,97 @@ def _apply_conditional_formatting(
 # HTML report (Stage G)
 # ---------------------------------------------------------------------------
 
+def _write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO]) -> None:
+    """Persist OUTPUT_DIR/state_snapshot.json + rotate into history/.
+
+    Mirrors ``main_orchestrator._write_state_snapshot`` so the
+    ``scripts.snapshot_diff`` reader sees a consistent schema across both
+    entry points. Errors are swallowed (CONSTRAINT #6) — the daily report
+    must always render.
+    """
+    try:
+        import json
+        from datetime import datetime, timezone
+
+        snap = result.snapshot
+        positions = getattr(snap, "positions", {}) or {}
+        holdings = sorted(
+            sym.upper() for sym, p in positions.items()
+            if float(getattr(p, "quantity", 0.0) or 0.0) > 0
+        )
+
+        signals: List[Dict[str, Any]] = []
+        for rec in result.recommendations:
+            pos = positions.get(rec.symbol)
+            ki = rec.key_indicators or {}
+            shares = float(getattr(pos, "quantity", 0.0) or 0.0) if pos else 0.0
+            signals.append({
+                "symbol": rec.symbol,
+                # advisory entry point: action == advisory_action (single source).
+                "action": rec.action,
+                "advisory_action": rec.action,
+                "advisory_conviction": float(rec.conviction or 0.0),
+                "advisory_position_pct": float(rec.suggested_position_pct or 0.0),
+                "advisory_rationale": rec.rationale or "",
+                "kelly_target": float(rec.suggested_position_pct or 0.0),
+                "score": float(ki.get("score", 0.0) or 0.0),
+                "price": float(getattr(pos, "current_price", 0.0) or 0.0) if pos else 0.0,
+                "shares": shares,
+            })
+
+        regime = "UNKNOWN"
+        vix = 0.0
+        if macro_dto is not None:
+            regime = getattr(macro_dto, "market_regime", "UNKNOWN") or "UNKNOWN"
+            vix = float(getattr(macro_dto, "vix_value", 0.0) or 0.0)
+
+        snapshot = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tickers": [r.symbol for r in result.recommendations],
+            "holdings": holdings,
+            "market_regime": str(regime),
+            "vix": vix,
+            "kill_switch_active": (settings.OUTPUT_DIR / "KILL_SWITCH").exists(),
+            "macro_regime_gate_enabled": settings.MACRO_REGIME_GATE_ENABLED,
+            "signals": signals,
+        }
+        snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
+        snap_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        try:
+            from scripts.snapshot_diff import rotate_snapshot
+            rotate_snapshot(
+                snapshot,
+                settings.OUTPUT_DIR,
+                max_age_days=settings.SNAPSHOT_HISTORY_DAYS,
+            )
+        except Exception as rot_exc:
+            logger.debug("Snapshot rotation skipped: %s", rot_exc)
+    except Exception as exc:
+        logger.warning("State snapshot write failed (non-critical): %s", exc)
+
+
+def _load_snapshot_diff_for_report() -> Optional[Dict[str, Any]]:
+    """Return the latest Δ Since Last Run diff dict (or ``None`` if unavailable).
+
+    Always called AFTER ``_write_state_snapshot`` so the just-written
+    snapshot is the "curr" side of the comparison; the prior rotated
+    snapshot is "prev". Returns ``None`` on any failure or first ever run
+    so the report template hides the band entirely.
+    """
+    try:
+        from scripts.snapshot_diff import compute_diff_from_history
+        diff = compute_diff_from_history(
+            settings.OUTPUT_DIR,
+            conviction_delta_threshold=settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD,
+        )
+        if diff.prev_ts is None and diff.curr_ts is None:
+            return None
+        return diff.to_dict()
+    except Exception as exc:
+        logger.debug("Δ-band diff unavailable: %s", exc)
+        return None
+
+
 def _write_html_report(result: RunResult, macro_dto: Optional[MacroEconomicDTO] = None) -> None:
     """Generate the daily HTML report from RunResult (non-fatal on error)."""
     try:
@@ -827,8 +931,16 @@ def _write_html_report(result: RunResult, macro_dto: Optional[MacroEconomicDTO] 
             account_summary = None
 
         out_path = str(settings.OUTPUT_DIR / "daily_report.html")
+        # Δ Since Last Run band: write+rotate the snapshot for THIS run first,
+        # then load the diff against the previously-rotated snapshot. The
+        # template hides the band entirely when snapshot_diff is None.
+        _write_state_snapshot(result, macro_dto)
+        snapshot_diff = _load_snapshot_diff_for_report()
         generate_html_report(
-            portfolio_dicts, regime, out_path, account_summary=account_summary, **kw
+            portfolio_dicts, regime, out_path,
+            account_summary=account_summary,
+            snapshot_diff=snapshot_diff,
+            **kw,
         )
         logger.info("HTML report written to %s.", out_path)
 
@@ -953,7 +1065,7 @@ def run_once(force_account: bool = False) -> RunResult:
         # without spelunking through the source.
         logger.warning(
             "Empty symbol universe — nothing to evaluate. "
-            "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET in "
+            "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET (optional) in "
             ".env so Robinhood positions populate the universe, (2) set the "
             "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), (3) "
             "create %s with one ticker per line, or (4) add tickers to "
@@ -971,6 +1083,38 @@ def run_once(force_account: bool = False) -> RunResult:
             duration_seconds=(finished_at - started_at).total_seconds(),
         )
 
+    # ── Kill-switch advisory pause gate ──────────────────────────────────────
+    # Checked after Stage B so the universe is known (for telemetry), but
+    # BEFORE Stage C (macro) and the expensive per-symbol pipeline.
+    # When the sentinel is active we return an empty RunResult rather than
+    # crashing or producing stale recommendations.  The observability dashboard
+    # continues reading the last state_snapshot.json written by a normal run.
+    _ks = GlobalKillSwitch()
+    if _ks.is_active():
+        _ks_reason = _ks.reason() or "(no reason recorded)"
+        logger.info(
+            "Advisory paused by kill-switch sentinel — skipping evaluation cycle. "
+            "Reason: %s  |  Universe would have been: %s  |  "
+            "Deactivate with: python -m execution.kill_switch --deactivate",
+            _ks_reason,
+            ", ".join(symbols[:10]) + ("..." if len(symbols) > 10 else ""),
+        )
+        finished_at = datetime.now(timezone.utc)
+        return RunResult(
+            snapshot=snapshot,
+            recommendations=[],
+            errors=[{
+                "symbol": "_advisory",
+                "stage": "kill_switch_gate",
+                "error_type": "AdvisoryPaused",
+                "message": f"Kill-switch sentinel active: {_ks_reason}",
+                "timestamp": finished_at.isoformat(),
+            }],
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=(finished_at - started_at).total_seconds(),
+        )
+
     # ── Stage C: Macro context ────────────────────────────────────────────────
     macro_dto = _build_macro_dto()
 
@@ -980,8 +1124,23 @@ def run_once(force_account: bool = False) -> RunResult:
     context_extras = _build_context_extras(symbols, bars_dict, macro_dto)
 
     # ── Stage E: Per-symbol advisory evaluation ───────────────────────────────
+    # Each evaluate() call is independent (engine.advisory constructs its engines
+    # per call; the shared inputs — snapshot, market, macro_dto, context_extras —
+    # are read-only during the loop), so the loop parallelizes across a bounded
+    # thread pool.  The win is per-symbol network I/O (quote fetch) plus the
+    # native-compute sections (numpy/pandas/statsmodels/arch release the GIL).
+    # Results are reassembled in the ORIGINAL symbol order so the Sheet/HTML/
+    # snapshot output and logs are byte-identical regardless of completion order
+    # or worker count.  Dead-letter semantics are preserved exactly: a per-symbol
+    # exception becomes an entry in RunResult.errors and never aborts the run.
     logger.info("Evaluating %d symbols...", len(symbols))
-    for symbol in symbols:
+
+    def _eval_one(symbol: str):
+        """Return ('ok', Recommendation) or ('err', error_dict) for one symbol.
+
+        Never raises — mirrors the original per-symbol try/except so a single
+        bad ticker is dead-lettered, not propagated (CONSTRAINT #6).
+        """
         try:
             position = snapshot.positions.get(symbol)
             rec = advisory_evaluate(
@@ -992,6 +1151,33 @@ def run_once(force_account: bool = False) -> RunResult:
                 macro_dto=macro_dto,
                 context_extras=context_extras,
             )
+            return ("ok", rec)
+        except Exception as exc:
+            return ("err", {
+                "symbol": symbol,
+                "stage": "advisory_evaluate",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+    workers = max(1, int(getattr(settings, "ADVISORY_MAX_CONCURRENCY", 8)))
+    if workers == 1 or len(symbols) <= 1:
+        # Sequential path — original, fully-deterministic behavior.
+        results_by_symbol = {sym: _eval_one(sym) for sym in symbols}
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(symbols))) as pool:
+            # executor.map preserves input order; we still key by symbol below
+            # so the assembly pass is order-explicit and robust.
+            mapped = pool.map(_eval_one, symbols)
+            results_by_symbol = {sym: res for sym, res in zip(symbols, mapped)}
+
+    # Ordered assembly: rebuild recommendations/errors and emit logs in the
+    # original symbol order so output is deterministic.
+    for symbol in symbols:
+        kind, payload = results_by_symbol[symbol]
+        if kind == "ok":
+            rec = payload
             recommendations.append(rec)
             logger.info(
                 "  %-6s  %-10s  conviction=%.2f  quality=%-7s  pos=%.1f%%",
@@ -1001,15 +1187,9 @@ def run_once(force_account: bool = False) -> RunResult:
                 rec.data_quality,
                 rec.suggested_position_pct * 100.0,
             )
-        except Exception as exc:
-            logger.warning("Advisory failed for %s: %s", symbol, exc)
-            errors.append({
-                "symbol": symbol,
-                "stage": "advisory_evaluate",
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+        else:
+            logger.warning("Advisory failed for %s: %s", symbol, payload["message"])
+            errors.append(payload)
 
     finished_at = datetime.now(timezone.utc)
     result = RunResult(
@@ -1028,6 +1208,188 @@ def run_once(force_account: bool = False) -> RunResult:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _read_macro_snapshot_hint() -> Dict[str, Any]:
+    """Return ``{"vix": float|None, "market_regime": str|None}`` from the last
+    ``output/state_snapshot.json`` write — or empty values when missing.
+
+    Used by ``_run_agent_loop`` to inform the adaptive cadence policy without
+    re-running ``_build_macro_dto`` (which would re-hit FRED).  Returns a
+    neutral hint dict (both keys ``None``) on any error so the policy falls
+    back to its default time-of-day cadence.
+    """
+    try:
+        import json
+        snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
+        if not snap_path.exists():
+            return {"vix": None, "market_regime": None}
+        payload = json.loads(snap_path.read_text(encoding="utf-8"))
+        vix_raw = payload.get("vix")
+        regime_raw = payload.get("market_regime")
+        return {
+            "vix": float(vix_raw) if vix_raw not in (None, 0, 0.0) else None,
+            "market_regime": str(regime_raw) if regime_raw else None,
+        }
+    except Exception as exc:
+        logger.debug("Could not read macro hint from state_snapshot.json: %s", exc)
+        return {"vix": None, "market_regime": None}
+
+
+def _run_agent_loop(run_cycle) -> None:
+    """Autonomous advisory loop driver.
+
+    Replaces ``--interval N``'s fixed timer with the policy in
+    ``engine.advisory_agent``:
+      * adaptive cadence (RTH-aware, VIX/regime-adaptive, error back-off)
+      * actionable-backlog reminders for high-conviction signals the operator
+        has not yet logged a decision for
+      * persistent state at ``OUTPUT_DIR/agent_state.json`` so the backlog
+        survives restarts
+
+    The ``run_cycle`` callable is the same closure used by ``--interval`` mode;
+    it must return the ``RunResult`` of one full cycle.  All ntfy push behavior
+    inside ``run_cycle`` is preserved (errors → high-priority push, clean run →
+    one default push per launch, watch_engine alerts per cycle).
+
+    SIGINT / SIGTERM are caught and the loop exits cleanly after the current
+    cycle plus any post-cycle reminder dispatch — never mid-sleep.
+    """
+    # Lazy import keeps test imports of main.py cheap.
+    from engine.advisory_agent import (  # noqa: PLC0415
+        apply_reminder_dispatch,
+        compute_backlog_reminders,
+        compute_next_run_delay,
+        dispatch_backlog_reminders,
+        load_agent_state,
+        process_run_result,
+        save_agent_state,
+        update_backlog,
+    )
+
+    state_path = settings.OUTPUT_DIR / "agent_state.json"
+    state = load_agent_state(state_path)
+    logger.info(
+        "Agent mode starting — state path=%s loaded backlog=%d cycle_count=%d",
+        state_path, len(state.backlog), state.cycle_count,
+    )
+
+    _shutdown = False
+
+    def _handle_signal(signum: int, frame: Any) -> None:
+        nonlocal _shutdown
+        logger.info("Shutdown signal received; finishing current cycle then exiting.")
+        _shutdown = True
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    dashboard_url = os.environ.get("NTFY_DASHBOARD_URL")
+
+    while not _shutdown:
+        # ── (1) Run one full advisory cycle (sheet + html + watch_engine) ────
+        cycle_started_at = datetime.now(timezone.utc)
+        try:
+            result = run_cycle()
+        except Exception as exc:
+            logger.exception("Agent cycle failed unexpectedly: %s", exc)
+            result = None
+
+        # ── (2) Update agent state with cycle outcome ────────────────────────
+        if result is not None:
+            try:
+                process_run_result(state, result, datetime.now(timezone.utc))
+            except Exception as exc:
+                logger.warning("process_run_result failed (%s); skipping", exc)
+
+            # ── (3) Refresh backlog from latest recommendations + decision log
+            decision_entries: List[Any] = []
+            try:
+                from gui.decision_log import read_decisions  # noqa: PLC0415
+                decision_entries = read_decisions()
+            except Exception as exc:
+                logger.debug("decision_log read failed (%s); backlog clear step skipped", exc)
+            try:
+                update_backlog(
+                    state, result.recommendations, decision_entries,
+                    datetime.now(timezone.utc),
+                )
+            except Exception as exc:
+                logger.warning("update_backlog failed (%s); skipping", exc)
+
+            # ── (4) Compute and dispatch backlog reminders ───────────────────
+            try:
+                reminders = compute_backlog_reminders(state, datetime.now(timezone.utc))
+                if reminders:
+                    dispatch_backlog_reminders(reminders, dashboard_url=dashboard_url)
+                    apply_reminder_dispatch(state, reminders, datetime.now(timezone.utc))
+                    logger.info(
+                        "Agent dispatched %d backlog reminder(s).", len(reminders),
+                    )
+            except Exception as exc:
+                logger.warning("Backlog reminder dispatch failed (%s); skipping", exc)
+
+            # ── (4b) Trade-signal abilities (conviction momentum + price triggers)
+            try:
+                from engine.trade_signals import (  # noqa: PLC0415
+                    detect_conviction_momentum,
+                    detect_price_triggers,
+                    dispatch_trade_alerts,
+                    update_conviction_history,
+                )
+                recs = result.recommendations
+                # Ability A — conviction momentum (cross-cycle trajectory).
+                state.conviction_history = update_conviction_history(
+                    state.conviction_history, recs,
+                )
+                mom_alerts, state.momentum_alerted = detect_conviction_momentum(
+                    state.conviction_history, recs, state.momentum_alerted,
+                )
+                # Ability B — stop / take-profit proximity for held positions.
+                price_alerts, state.price_trigger_alerted = detect_price_triggers(
+                    result.snapshot, recs, state.price_trigger_alerted,
+                )
+                trade_alerts = mom_alerts + price_alerts
+                if trade_alerts:
+                    dispatch_trade_alerts(trade_alerts, dashboard_url=dashboard_url)
+                    logger.info(
+                        "Agent dispatched %d trade alert(s) — momentum=%d price=%d.",
+                        len(trade_alerts), len(mom_alerts), len(price_alerts),
+                    )
+            except Exception as exc:
+                logger.warning("Trade-signal abilities failed (%s); skipping", exc)
+
+        # ── (5) Persist state regardless of cycle outcome ─────────────────────
+        try:
+            save_agent_state(state, state_path)
+        except Exception as exc:
+            logger.warning("save_agent_state failed (%s); skipping", exc)
+
+        if _shutdown:
+            break
+
+        # ── (6) Compute adaptive sleep duration ──────────────────────────────
+        macro_hint = _read_macro_snapshot_hint()
+        delay_s = compute_next_run_delay(
+            datetime.now(timezone.utc),
+            state=state,
+            vix=macro_hint.get("vix"),
+            market_regime=macro_hint.get("market_regime"),
+        )
+        logger.info(
+            "Agent sleeping %ds (cycle #%d, backlog=%d, vix=%s, regime=%s, err_streak=%d).",
+            delay_s, state.cycle_count, len(state.backlog),
+            macro_hint.get("vix"), macro_hint.get("market_regime"),
+            state.consecutive_error_cycles,
+        )
+
+        # Sleep in 1-second slices so SIGINT/SIGTERM are caught promptly.
+        for _ in range(int(delay_s)):
+            if _shutdown:
+                break
+            time.sleep(1)
+
+    logger.info("Agent loop exited cleanly.")
+
+
 def main() -> None:
     """CLI entry point with two-tier refresh support.
 
@@ -1042,6 +1404,15 @@ def main() -> None:
         Loop: refresh market data every N seconds.  The account tier still
         fetches Robinhood at most once per day — an all-day run logs in once.
         Ctrl-C or SIGTERM exits cleanly after the current cycle completes.
+
+    --agent
+        Run the autonomous advisory agent loop.  Replaces ``--interval``'s
+        fixed timer with the adaptive cadence + backlog reminder policy in
+        ``engine/advisory_agent.py``.  Cadence is RTH/VIX/regime-aware;
+        high-conviction signals the operator hasn't logged a decision for
+        are re-pinged at 1h / 4h / 24h escalation tiers.  Persistent state
+        at ``OUTPUT_DIR/agent_state.json`` survives restarts.  Takes
+        precedence over ``--interval``.
 
     --refresh-account
         Force a fresh Robinhood login on this launch, bypassing the daily
@@ -1065,6 +1436,17 @@ def main() -> None:
         default=False,
         help="Force a fresh Robinhood fetch on this launch (bypasses daily cache).",
     )
+    parser.add_argument(
+        "--agent",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the autonomous advisory agent loop: adaptive cadence based on "
+            "market hours / VIX / regime, backlog reminders for high-conviction "
+            "signals the operator has not yet logged a decision for, persistent "
+            "state across restarts.  Takes precedence over --interval."
+        ),
+    )
     args = parser.parse_args()
 
     # Load .env into os.environ before any runtime os.environ.get() call.
@@ -1082,7 +1464,7 @@ def main() -> None:
     # At most one per launch in --interval mode to avoid notification spam.
     _clean_notified = False
 
-    def _run_cycle() -> None:
+    def _run_cycle() -> RunResult:
         nonlocal _force_next, _clean_notified
         result = run_once(force_account=_force_next)
         _force_next = False  # one-shot; cache resumes from here
@@ -1122,6 +1504,69 @@ def main() -> None:
             _clean_notified = True
         # ─────────────────────────────────────────────────────────────────────
 
+        # ── Symbol watch alerts (Tier 1.4) — non-fatal ───────────────────────────
+        # Evaluated immediately after run_once() so alerts reflect the freshest
+        # signal output.  State is loaded from the PREVIOUS run, compared
+        # against the CURRENT recommendations, and saved AFTER dispatch.
+        # This is the shift-adjusted, no-lookahead contract: no market data
+        # is re-fetched inside watch_engine; it only compares already-computed
+        # advisory outputs.
+        try:
+            from watch_engine import (
+                dispatch_watch_alerts,
+                evaluate_watch_rules,
+                load_watch_rules,
+                load_watch_state,
+                save_watch_state,
+            )
+
+            _watch_rules = load_watch_rules(settings.WATCH_RULES_FILE)
+            _watch_state_path = settings.OUTPUT_DIR / "watch_state.json"
+            _prev_watch_state = load_watch_state(_watch_state_path)
+            _watch_alerts, _new_watch_state = evaluate_watch_rules(
+                _watch_rules,
+                result.recommendations,
+                _prev_watch_state,
+            )
+            dispatch_watch_alerts(
+                _watch_alerts,
+                dashboard_url=os.environ.get("NTFY_DASHBOARD_URL"),
+            )
+            # Always save — keeps edge-trigger state current even on quiet runs.
+            save_watch_state(_new_watch_state, _watch_state_path)
+            if _watch_alerts:
+                logger.info(
+                    "Symbol watch: %d alert(s) dispatched across %d rule(s).",
+                    len(_watch_alerts),
+                    len(_watch_rules),
+                )
+        except Exception as _watch_exc:
+            logger.warning(
+                "Symbol watch alert evaluation failed (non-critical): %s",
+                _watch_exc,
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── Robinhood execution queue (Tier 8) — non-fatal, advisory-only ─────
+        # Emits a GATED, DRY-RUN proposed-order queue to
+        # output/execution_queue.json for the Claude Code "robinhood-execution"
+        # agent to consume.  This NEVER contacts a broker or places an order —
+        # the headless pipeline cannot call the Robinhood MCP.  When
+        # ROBINHOOD_EXECUTION_MODE=off (the default) nothing is written and this
+        # block is a no-op.  The kill-switch advisory-pause gate above already
+        # short-circuits run_once(), so a paused cycle emits nothing.
+        try:
+            from execution.queue_builder import emit_execution_queue  # noqa: PLC0415
+
+            _queue_path = emit_execution_queue(result)
+            if _queue_path is not None:
+                logger.info("Robinhood execution queue emitted → %s", _queue_path)
+        except Exception as _queue_exc:
+            logger.warning(
+                "Execution queue emit failed (non-critical): %s", _queue_exc,
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
         market = get_provider()
         _write_to_sheet(result, market=market)
 
@@ -1142,8 +1587,11 @@ def main() -> None:
             _macro = None
 
         _write_html_report(result, macro_dto=_macro)
+        return result
 
-    if args.interval > 0:
+    if args.agent:
+        _run_agent_loop(run_cycle=_run_cycle)
+    elif args.interval > 0:
         _shutdown = False
 
         def _handle_signal(signum: int, frame: Any) -> None:

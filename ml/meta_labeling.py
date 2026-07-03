@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 import pickle
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -278,7 +278,7 @@ class MetaLabeler(Model):
     def save(self, path: Optional[Path] = None) -> Path:
         """Persist to ml/models/meta_<signal_id>_<YYYYMMDD>.pkl."""
         if path is None:
-            stamp = datetime.utcnow().strftime("%Y%m%d")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
             path = _MODELS_DIR / f"meta_{self.signal_id}_{stamp}.pkl"
         with open(path, "wb") as f:
             pickle.dump(self, f)

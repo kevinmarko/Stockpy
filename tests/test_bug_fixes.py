@@ -21,7 +21,9 @@ BUG-6 — Fallback forecast used naive linear formula (main_orchestrator.py)
   Forecast_10/60/90 used price*(1+mu*N) instead of Monte Carlo in the except path.
 """
 
+import ast
 import math
+import pathlib
 import numpy as np
 import pandas as pd
 import pytest
@@ -32,6 +34,55 @@ from dto_models import MacroEconomicDTO
 from processing_engine import ProcessingEngine
 from evaluation_engine import EvaluationEngine
 from forecasting_engine import ForecastingEngine
+
+
+# ============================================================================
+# AST guard helpers for BUG-6 (see TestFallbackForecastMonteCarlo below)
+# ============================================================================
+# Detects the SEMANTIC shape `X * (1.0 + mu * N)` regardless of exact
+# formatting/spacing/operand order -- a plain source-string match (the
+# original guard) only catches the one literal spelling it was written
+# against; a `1.0 + mu*10` or `(1 + 10 * mu)` reformatting of the same bug
+# would silently slip past a string check while still being the identical
+# forbidden formula.
+
+def _is_constant_one(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value in (1, 1.0)
+
+
+def _is_mu_times_number(node: ast.expr) -> bool:
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult)):
+        return False
+    names = [n for n in (node.left, node.right) if isinstance(n, ast.Name) and n.id == "mu"]
+    consts = [n for n in (node.left, node.right) if isinstance(n, ast.Constant)]
+    return len(names) == 1 and len(consts) == 1
+
+
+def _is_one_plus_mu_times_n(node: ast.expr) -> bool:
+    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)):
+        return False
+    for a, b in ((node.left, node.right), (node.right, node.left)):
+        if _is_constant_one(a) and _is_mu_times_number(b):
+            return True
+    return False
+
+
+def _find_naive_linear_formula_nodes(tree: ast.AST) -> list:
+    """Every BinOp node anywhere in the tree matching `X * (1.0 + mu * N)`
+    in any operand order (`mu*N` or `N*mu`, either side of the outer Mult)."""
+    matches = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult)):
+            continue
+        for operand in (node.left, node.right):
+            if _is_one_plus_mu_times_n(operand):
+                matches.append(node)
+    return matches
+
+
+def _find_naive_linear_formula_nodes_in_file(path: str) -> list:
+    src = pathlib.Path(path).read_text()
+    return _find_naive_linear_formula_nodes(ast.parse(src))
 
 
 # ============================================================================
@@ -338,20 +389,51 @@ class TestFallbackForecastMonteCarlo:
         assert mean_10 != mean_60
 
     def test_linear_formula_absent_from_orchestrator_source(self):
-        """AST/source guard: the exact naive linear strings from the old bug
-        must not appear in main_orchestrator.py."""
-        import pathlib
-        src = pathlib.Path("main_orchestrator.py").read_text()
-        for pattern in ["(1.0 + mu * 10)", "(1.0 + mu * 60)", "(1.0 + mu * 90)"]:
-            assert pattern not in src, (
-                f"BUG-6 regression: found old linear formula '{pattern}' in "
-                "main_orchestrator.py; fallback forecast must use run_monte_carlo()"
-            )
+        """AST guard (not a source-string match): walks main_orchestrator.py's
+        parse tree for the SEMANTIC shape `X * (1.0 + mu * N)` (in any operand
+        order/grouping the old bug could have used -- `mu*N`, `N*mu`, the Add
+        on either side of the Mult, etc.), rather than three exact literal
+        strings. A plain `"(1.0 + mu * 10)" not in src` check only catches
+        that one specific spacing/parenthesization -- an equivalent
+        `1.0 + mu*10` or `(1 + 10 * mu)` reintroducing the same bug would
+        silently pass the old check. Verified against both directions: every
+        differently-formatted variant of the buggy formula is still detected,
+        and the current (fixed) source produces zero matches."""
+        result = _find_naive_linear_formula_nodes_in_file("main_orchestrator.py")
+        assert result == [], (
+            f"BUG-6 regression: found {len(result)} naive-linear-formula "
+            f"expression(s) (X * (1.0 + mu * N) in any equivalent form) at "
+            f"line(s) {[n.lineno for n in result]} in main_orchestrator.py; "
+            "fallback forecast must use run_monte_carlo() for every horizon, "
+            "not a deterministic linear extrapolation."
+        )
 
     def test_run_monte_carlo_present_in_orchestrator(self):
         """run_monte_carlo() must appear in main_orchestrator.py source."""
-        import pathlib
         src = pathlib.Path("main_orchestrator.py").read_text()
         assert "run_monte_carlo" in src, (
             "BUG-6 regression: run_monte_carlo() not found in main_orchestrator.py"
         )
+
+    @pytest.mark.parametrize("snippet", [
+        "x = price * (1.0 + mu * 10)",       # the original bug's exact spelling
+        "x = price*(1+mu*60)",               # no whitespace, int literal 1
+        "x = (1 + 90 * mu) * price",         # Add before Mult, N*mu order
+        "x = price * (1.0 + 10.0 * mu)",     # N*mu instead of mu*N
+    ])
+    def test_ast_guard_detects_every_reformatting_of_the_bug(self, snippet):
+        """Meta-test proving the AST guard used above is genuinely stronger
+        than the source-string match it replaced: every differently
+        formatted/ordered restatement of the SAME forbidden formula must
+        still be caught, not just the one literal spelling the original bug
+        happened to use."""
+        tree = ast.parse(snippet)
+        assert _find_naive_linear_formula_nodes(tree), (
+            f"AST guard failed to detect a reformatted variant of BUG-6's "
+            f"naive linear formula: {snippet!r}"
+        )
+
+    def test_ast_guard_does_not_false_positive_on_legitimate_monte_carlo_call(self):
+        clean_snippet = "mc_10, _, _ = fe.run_monte_carlo(price, mu, sigma, 10)"
+        tree = ast.parse(clean_snippet)
+        assert _find_naive_linear_formula_nodes(tree) == []

@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+from __future__ import annotations
+import io
+import json
+import logging
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
+import pandas as pd
+import streamlit as st
+from settings import settings
+from gui import env_io, orchestrator_runner, help_widgets
+from gui.symbol_search import filter_by_symbol
+from gui.orchestrator_runner import StageStatus
+from gui.panels._shared import (  # noqa: E402
+    GICS_SECTORS,
+    _BF_EDITOR_COLUMNS,
+    _REPO_ROOT,
+    _active_symbols,
+    _held_symbols,
+    _kill_switch,
+    _signal_symbols,
+    _watchlist_symbols,
+    load_block_log,
+    logger,
+)
+
+
+def _current_scalar(key: str, fallback: Any) -> Any:
+    """Best-effort current value of ``key`` (from .env, else live settings)."""
+    try:
+        raw = env_io.get_value(key, "")
+    except Exception:
+        raw = ""
+    if raw != "":
+        return raw
+    return getattr(settings, key, fallback)
+
+
+
+def render_settings_manager() -> None:
+    """Edit NON-secret tunables and persist them to ``.env`` (secrets masked)."""
+    help_widgets.explain("settings")
+    st.subheader("⚙️ Dynamic Settings Manager")
+    st.caption(
+        "Edit non-secret runtime tunables. Changes are written to `.env` and take "
+        "effect on the **next** launch. Secrets are masked and read-only here "
+        "(edit them directly in `.env`)."
+    )
+
+    updates: Dict[str, Any] = {}
+    with st.form("settings_form"):
+        for key, kind in _SETTINGS_LAYOUT:
+            cur = _current_scalar(key, getattr(settings, key, ""))
+            if kind == "number":
+                try:
+                    val = st.number_input(key, value=float(cur), step=0.01, format="%.4f")
+                except Exception:
+                    val = st.number_input(key, value=0.0, step=0.01, format="%.4f")
+                updates[key] = val
+            elif kind == "int":
+                try:
+                    val = st.number_input(key, value=int(float(cur)), step=1)
+                except Exception:
+                    val = st.number_input(key, value=0, step=1)
+                updates[key] = int(val)
+            elif kind == "bool":
+                truthy = str(cur).strip().lower() in {"1", "true", "yes", "on"}
+                updates[key] = st.checkbox(key, value=truthy)
+            elif kind == "tickers":
+                default_list = (
+                    cur if isinstance(cur, list) else list(settings.DEFAULT_TICKERS)
+                )
+                text = st.text_input(
+                    key, value=", ".join(default_list),
+                    help="Comma-separated tickers; stored as a JSON array.",
+                )
+                updates[key] = [t.strip().upper() for t in text.split(",") if t.strip()]
+            else:  # text
+                updates[key] = st.text_input(key, value="" if cur is None else str(cur))
+
+        submitted = st.form_submit_button("💾 Save to .env", type="primary")
+
+    if submitted:
+        try:
+            written = env_io.write_many(updates)
+            st.success(f"Saved {len(written)} setting(s) to .env. Re-launch to apply.")
+        except env_io.SecretWriteError as exc:
+            st.error(f"Refused to write a secret: {exc}")
+        except Exception as exc:
+            st.error(f"Failed to write settings: {exc}")
+
+    # Masked view of secrets so the operator can confirm what's configured.
+    with st.expander("🔒 Secrets (masked, read-only)"):
+        secret_rows = []
+        for key in env_io.SECRET_KEYS:
+            try:
+                raw = dict(env_io._raw_env()).get(key)  # noqa: SLF001 - internal read for display
+            except Exception:
+                raw = None
+            secret_rows.append({"Key": key, "Status": env_io.mask_secret(raw)})
+        st.dataframe(pd.DataFrame(secret_rows), width="stretch")
+
+
+# ===========================================================================
+# Tab 4 — Strategy Matrix & Risk Gating
+# ===========================================================================
+
+

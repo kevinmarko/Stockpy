@@ -30,6 +30,19 @@ Design principles
   reason "(skipped via --skip)" so the result set always has one entry per
   check regardless.
 
+* **Advisory-mode auto-skip.**  When ``settings.ADVISORY_ONLY=True`` the checks
+  listed in ``_ADVISORY_AUTO_SKIP`` are automatically marked PASS (with a clear
+  "skipped: ADVISORY_ONLY" reason) because they are either broker-dependent or
+  have no meaningful signal when no orders are submitted.  This prevents false-
+  positive failures on a correctly-running advisory deployment:
+    - Broker-dependent checks (4): alpaca_configured, alpaca_paper_mode,
+      dry_run_disabled, paper_trading_duration.
+    - Advisory false-positives (3): heartbeat_fresh (main.py does not write
+      the heartbeat file — only main_orchestrator.py does), validation_reports
+      (strategy validation reports are a go-live gate, not advisory health),
+      no_unexpected_risk_blocks (risk-gate blocks only occur on order submission,
+      which never happens in advisory mode).
+
 * **No side effects.**  Checks are read-only.  They inspect files, environment
   variables, and database state but never write, modify, or delete anything.
 
@@ -39,27 +52,64 @@ Usage
     python scripts/preflight_check.py --json              # machine-readable JSON array
     python scripts/preflight_check.py --skip heartbeat_fresh paper_trading_duration
 
-Checks
+Checks (15 total)
 ------
  1. fred_key_configured         — FRED_API_KEY is set and is not the known-
                                   compromised value (detected via settings.fred_key_is_leaked).
- 2. alpaca_configured           — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
- 3. macro_regime_gate_enabled   — MACRO_REGIME_GATE_ENABLED=True when live trading.
+ 2. key_rotation_recent         — FRED_API_KEY was rotated within the last 90
+                                  days (FRED_KEY_ROTATED_DATE in .env).
+                                  Warning-only; never blocking.
+ 3. alpaca_key_rotation_recent  — ALPACA_API_KEY was rotated within the last 90
+                                  days (ALPACA_KEY_ROTATED_DATE in .env).
+                                  Warning-only; never blocking.
+                                  SKIPPED when ADVISORY_ONLY=True (Alpaca keys
+                                  have no blast-radius risk while the broker
+                                  surface is quarantined).
+ 4. advisory_only_active        — settings.ADVISORY_ONLY=True (Tier 5.1
+                                  quarantine).  When True, the broker-readiness
+                                  checks (alpaca_configured / alpaca_paper_mode
+                                  / dry_run_disabled / paper_trading_duration /
+                                  alpaca_key_rotation_recent) and advisory
+                                  false-positive checks (heartbeat_fresh /
+                                  validation_reports / no_unexpected_risk_blocks)
+                                  are auto-skipped.  Warning-only when False
+                                  (live broker stack is in scope).
+ 5. alpaca_configured           — ALPACA_API_KEY + ALPACA_SECRET_KEY are present.
+                                  SKIPPED when ADVISORY_ONLY=True.
+ 6. macro_regime_gate_enabled   — MACRO_REGIME_GATE_ENABLED=True when live trading.
                                   Warning-only in paper mode; blocking when
                                   ALPACA_PAPER=False + gate disabled.
- 4. alpaca_paper_mode           — ALPACA_PAPER=True.  Warning-only when False.
- 5. dry_run_disabled            — DRY_RUN=False (orders reach the broker).
- 6. env_not_committed           — .env file is git-untracked (``git ls-files``).
- 7. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
- 8. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
- 9. db_exists                   — quant_platform.db exists and is non-empty.
-10. paper_trading_duration      — Paper-trading started ≥ 90 days ago
+ 7. alpaca_paper_mode           — ALPACA_PAPER=True.  Warning-only when False.
+                                  SKIPPED when ADVISORY_ONLY=True.
+ 8. dry_run_disabled            — DRY_RUN=False (orders reach the broker).
+                                  SKIPPED when ADVISORY_ONLY=True.
+ 9. env_not_committed           — .env file is git-untracked (``git ls-files``).
+10. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
+11. state_snapshot_fresh        — output/state_snapshot.json exists and its
+                                  embedded timestamp is < 2 hours old.  Both
+                                  main.py (advisory) and main_orchestrator.py
+                                  write this file, making it the cross-mode
+                                  liveness indicator.  NOT auto-skipped in
+                                  advisory mode (it IS the advisory liveness
+                                  check).
+12. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
+                                  SKIPPED when ADVISORY_ONLY=True — the heartbeat
+                                  is written only by main_orchestrator.py; advisory
+                                  runs via main.py do not require a persistent
+                                  orchestrator process.
+12. db_exists                   — quant_platform.db exists and is non-empty.
+13. paper_trading_duration      — Paper-trading started ≥ 90 days ago
                                   (requires PAPER_TRADING_START_DATE in .env).
-11. validation_reports          — Every *_validation_summary.json in reports/ is
+                                  SKIPPED when ADVISORY_ONLY=True (no broker
+                                  → no paper-trading clock).
+14. validation_reports          — Every *_validation_summary.json in reports/ is
                                   deployable=True and dated within 30 days.
-12. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
-                                  last 24 hours (indicates missing/expired reports
-                                  were discovered at order time rather than here).
+                                  SKIPPED when ADVISORY_ONLY=True — validation
+                                  reports gate live order submission; advisory mode
+                                  produces signals only (no orders submitted).
+16. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
+                                  last 24 hours.  SKIPPED when ADVISORY_ONLY=True
+                                  (no order submissions → no risk-gate blocks).
 """
 
 from __future__ import annotations
@@ -138,6 +188,184 @@ def check_fred_key_configured() -> CheckResult:
             "FRED_API_KEY matches the known-compromised leaked value — rotate immediately",
         )
     return CheckResult(name, True, "FRED_API_KEY is configured and not the leaked value")
+
+
+def check_key_rotation_recent(max_age_days: int = 90) -> CheckResult:
+    """Warn if FRED_API_KEY has not been rotated within the recommended window.
+
+    Advisory-only operators rely on FRED for macroeconomic regime data even when
+    no orders are submitted.  Rotating credentials every 90 days limits the blast
+    radius if a key leaks from logs or a shared ``.env`` file.
+
+    This check is **warning-only** (never blocking) because a stale rotation date
+    does not prevent the platform from running; it is a hygiene reminder.
+
+    If ``FRED_KEY_ROTATED_DATE`` is unset the check still passes with a warning so
+    the operator is prompted to start tracking the rotation date — it does NOT fail
+    because the field is optional and not set in existing deployments.
+
+    ``ALPACA_KEY_ROTATED_DATE`` is intentionally NOT checked here: Alpaca paper keys
+    have no blast-radius risk in advisory mode, and paper → live migration (which
+    would make them sensitive) is handled by the ``advisory_only_active`` gate.
+    """
+    name = "key_rotation_recent"
+    rotated_str = getattr(settings, "FRED_KEY_ROTATED_DATE", None)
+    if not rotated_str:
+        return CheckResult(
+            name, True,
+            "⚠️  FRED_KEY_ROTATED_DATE not set in .env — consider adding it after "
+            "your next key rotation so the 90-day reminder can track age. "
+            "Set at https://fred.stlouisfed.org/docs/api/api_key.html",
+            warning=True,
+        )
+    try:
+        rotated = date.fromisoformat(rotated_str)
+    except ValueError:
+        return CheckResult(
+            name, True,
+            f"⚠️  FRED_KEY_ROTATED_DATE has invalid format {rotated_str!r} "
+            "(expected YYYY-MM-DD). Cannot check rotation age.",
+            warning=True,
+        )
+    age_days = (date.today() - rotated).days
+    if age_days > max_age_days:
+        return CheckResult(
+            name, True,
+            f"⚠️  FRED_API_KEY was last rotated {age_days} days ago "
+            f"(limit {max_age_days} days). Consider rotating at "
+            "https://fred.stlouisfed.org/docs/api/api_key.html and updating "
+            "FRED_KEY_ROTATED_DATE in .env.",
+            warning=True,
+        )
+    return CheckResult(
+        name, True,
+        f"FRED_API_KEY rotated {age_days} days ago (within {max_age_days}-day window)",
+    )
+
+
+def check_alpaca_key_rotation_recent(max_age_days: int = 90) -> CheckResult:
+    """Warn if ALPACA_API_KEY has not been rotated within the recommended window.
+
+    Mirrors ``check_key_rotation_recent`` but for the Alpaca key pair.  This
+    check is **warning-only** (never blocking) because a stale rotation date is
+    a hygiene reminder, not a hard gate.
+
+    Automatically **skipped** when ``ADVISORY_ONLY=True`` because Alpaca paper
+    keys have no blast-radius risk while the broker surface is quarantined —
+    paper → live migration (which would make them sensitive) is handled by the
+    ``advisory_only_active`` gate.  The check only becomes meaningful after
+    ADVISORY_ONLY is disabled for a live-trading deployment.
+
+    If ``ALPACA_KEY_ROTATED_DATE`` is unset the check passes with a warning so
+    the operator is prompted to start tracking the rotation date once they begin
+    using a live broker key.
+    """
+    name = "alpaca_key_rotation_recent"
+    rotated_str = getattr(settings, "ALPACA_KEY_ROTATED_DATE", None)
+    if not rotated_str:
+        return CheckResult(
+            name, True,
+            "⚠️  ALPACA_KEY_ROTATED_DATE not set in .env — consider adding it "
+            "after your next Alpaca key rotation so the 90-day reminder can "
+            "track age. Generate keys at https://alpaca.markets/",
+            warning=True,
+        )
+    try:
+        rotated = date.fromisoformat(rotated_str)
+    except ValueError:
+        return CheckResult(
+            name, True,
+            f"⚠️  ALPACA_KEY_ROTATED_DATE has invalid format {rotated_str!r} "
+            "(expected YYYY-MM-DD). Cannot check rotation age.",
+            warning=True,
+        )
+    age_days = (date.today() - rotated).days
+    if age_days > max_age_days:
+        return CheckResult(
+            name, True,
+            f"⚠️  ALPACA_API_KEY was last rotated {age_days} days ago "
+            f"(limit {max_age_days} days). Consider rotating at "
+            "https://alpaca.markets/ and updating ALPACA_KEY_ROTATED_DATE in .env.",
+            warning=True,
+        )
+    return CheckResult(
+        name, True,
+        f"ALPACA_API_KEY rotated {age_days} days ago (within {max_age_days}-day window)",
+    )
+
+
+def check_advisory_only_active() -> CheckResult:
+    """Verify that ADVISORY_ONLY mode is active (Tier 5.1 quarantine).
+
+    When ``settings.ADVISORY_ONLY`` is True (the project default), the broker
+    surface is quarantined: ``main_orchestrator._execute_broker_orders`` is a
+    no-op, the GUI mode toggle is disabled, and broker credentials need not be
+    configured.  This check passes loudly so the operator sees the quarantine
+    in the readiness table.
+
+    When ``ADVISORY_ONLY`` is False the broker stack is live; we emit a
+    *warning-level* PASS so the operator confirms they intentionally lifted
+    the quarantine.  Other broker-readiness checks (``alpaca_configured``,
+    ``alpaca_paper_mode``, ``dry_run_disabled``, ``paper_trading_duration``)
+    then run; under ADVISORY_ONLY=True they are skipped by ``run_checks``.
+    """
+    name = "advisory_only_active"
+    if getattr(settings, "ADVISORY_ONLY", True):
+        return CheckResult(
+            name, True,
+            "ADVISORY_ONLY=True — broker execution surface is quarantined. "
+            "Pipeline produces signals + reports only.",
+        )
+    return CheckResult(
+        name, True,
+        "⚠️  ADVISORY_ONLY=False — broker execution surface is LIVE. "
+        "Confirm this is intentional and that downstream broker checks pass.",
+        warning=True,
+    )
+
+
+def check_robinhood_execution_mode() -> CheckResult:
+    """Surface the Robinhood execution-bridge mode (Tier 8).
+
+    Independent of ADVISORY_ONLY (which gates the Alpaca surface).  Three modes:
+      * ``off``    — (default) the bridge emits nothing; PASS, no warning.
+      * ``review`` — paper/dry-run; the queue is emitted but only
+        ``review_equity_order`` simulations run downstream; PASS, no warning.
+      * ``live``   — real placement is possible via the Claude Code agent; PASS
+        with a WARNING so the operator confirms it is intentional, and a FAIL
+        only when ``live`` is set without a per-order notional cap configured
+        (``ROBINHOOD_MAX_NOTIONAL_PER_ORDER<=0``) — going live with no dollar
+        ceiling is unsafe.
+
+    Never auto-skipped under ADVISORY_ONLY — the Robinhood path is orthogonal to
+    the Alpaca quarantine.
+    """
+    name = "robinhood_execution_mode"
+    mode = str(getattr(settings, "ROBINHOOD_EXECUTION_MODE", "off") or "off").lower()
+    cap = float(getattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0) or 0.0)
+    if mode in ("off", "review"):
+        return CheckResult(
+            name, True,
+            f"ROBINHOOD_EXECUTION_MODE={mode} — "
+            + ("bridge inert (no queue emitted)." if mode == "off"
+               else "paper/dry-run; review_equity_order only, no placement."),
+        )
+    if mode == "live":
+        if cap <= 0:
+            return CheckResult(
+                name, False,
+                "ROBINHOOD_EXECUTION_MODE=live but ROBINHOOD_MAX_NOTIONAL_PER_ORDER "
+                "is unset (<=0). Configure a per-order dollar ceiling before going live.",
+            )
+        return CheckResult(
+            name, True,
+            f"⚠️  ROBINHOOD_EXECUTION_MODE=live — real Robinhood placement is "
+            f"possible (cap ${cap:,.0f}/order, agentic account, per-trade human "
+            f"confirm). Confirm this is intentional.",
+            warning=True,
+        )
+    # Unknown values are coerced to 'off' by the settings validator, but guard anyway.
+    return CheckResult(name, True, f"ROBINHOOD_EXECUTION_MODE={mode!r} treated as off.")
 
 
 def check_alpaca_configured() -> CheckResult:
@@ -291,6 +519,54 @@ def check_kill_switch_inactive() -> CheckResult:
             f"(reason: {ks.reason() or '(none)'})",
         )
     return CheckResult(name, True, "Kill switch is inactive")
+
+
+def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
+    """Verify that the pipeline state snapshot was written recently.
+
+    Both ``main.py`` (advisory) and ``main_orchestrator.py`` (full pipeline)
+    write ``OUTPUT_DIR/state_snapshot.json`` at the end of every run.  The file
+    carries an ISO 8601 UTC ``timestamp`` field that this check reads to compute
+    the snapshot age.  File mtime is used as a fallback when the ``timestamp``
+    field is absent (e.g., written by an older version of the platform).
+
+    This is the cross-mode liveness indicator: it is meaningful in advisory mode
+    (where ``main.py`` does NOT write ``heartbeat.txt``) AND in full-pipeline
+    mode (where ``main_orchestrator.py`` writes both).  It is therefore NOT in
+    ``_ADVISORY_AUTO_SKIP`` — it is the one check that replaces ``heartbeat_fresh``
+    as the liveness gate when running in advisory mode.
+    """
+    name = "state_snapshot_fresh"
+    snapshot_path = settings.OUTPUT_DIR / "state_snapshot.json"
+    if not snapshot_path.exists():
+        return CheckResult(
+            name, False,
+            "output/state_snapshot.json not found — has the pipeline been run recently? "
+            "Run: python3 main.py  (advisory)  or  python3 main_orchestrator.py",
+        )
+    try:
+        data = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        ts_str = data.get("timestamp", "")
+        if ts_str:
+            ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - ts
+        else:
+            mtime = snapshot_path.stat().st_mtime
+            age = datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, tz=timezone.utc)
+        if age > timedelta(hours=max_age_hours):
+            return CheckResult(
+                name, False,
+                f"State snapshot is {age.total_seconds()/3600:.1f}h old (limit {max_age_hours}h) — "
+                "pipeline may be down; run python3 main.py to refresh",
+            )
+        return CheckResult(
+            name, True,
+            f"State snapshot is {age.total_seconds()/60:.0f} min old",
+        )
+    except Exception as exc:
+        return CheckResult(name, False, f"Could not read state snapshot: {exc}")
 
 
 def check_heartbeat_fresh(max_age_hours: float = 2.0) -> CheckResult:
@@ -514,18 +790,80 @@ def check_no_unexpected_risk_blocks(hours: float = 24.0) -> CheckResult:
 # matching relies on (strip ``check_`` prefix → name).
 ALL_CHECKS = [
     check_fred_key_configured,
+    check_key_rotation_recent,
+    check_alpaca_key_rotation_recent,
+    check_advisory_only_active,
+    check_robinhood_execution_mode,
     check_alpaca_configured,
     check_macro_regime_gate_enabled,
     check_alpaca_paper_mode,
     check_dry_run_disabled,
     check_env_not_committed,
     check_kill_switch_inactive,
+    check_state_snapshot_fresh,
     check_heartbeat_fresh,
     check_db_exists,
     check_paper_trading_duration,
     check_validation_reports,
     check_no_unexpected_risk_blocks,
 ]
+
+
+# Checks that are auto-skipped when ADVISORY_ONLY=True.
+# Two categories:
+#   (a) Broker-dependent (5): no broker stack means these have no meaning.
+#       Includes alpaca_key_rotation_recent — Alpaca keys have no blast-radius
+#       risk while the broker surface is quarantined.
+#   (b) Advisory false-positives (3): checks that require the full async
+#       orchestrator pipeline or broker execution to produce a meaningful signal;
+#       in advisory mode they would always fail even on a healthy platform.
+#
+#       - heartbeat_fresh: written by main_orchestrator.py only; main.py does not
+#         write heartbeat.txt, so this always fails in advisory mode.
+#       - validation_reports: strategy validation reports are a pre-live deployment
+#         gate, not an advisory health signal.
+#       - no_unexpected_risk_blocks: risk-gate blocks occur only on order
+#         submission; advisory mode never submits orders.
+#
+# Note: state_snapshot_fresh is deliberately NOT in this list — it is the
+# advisory-mode liveness check (both entry points write state_snapshot.json).
+_ADVISORY_AUTO_SKIP: dict[str, str] = {
+    "alpaca_configured": (
+        "ADVISORY_ONLY=True — broker credentials not required; "
+        "execution surface is quarantined"
+    ),
+    "alpaca_paper_mode": (
+        "ADVISORY_ONLY=True — paper/live mode flag is irrelevant "
+        "when no orders are submitted"
+    ),
+    "dry_run_disabled": (
+        "ADVISORY_ONLY=True — DRY_RUN flag is superseded by "
+        "execution surface quarantine"
+    ),
+    "paper_trading_duration": (
+        "ADVISORY_ONLY=True — paper-trading clock does not apply "
+        "when no orders are submitted"
+    ),
+    "alpaca_key_rotation_recent": (
+        "ADVISORY_ONLY=True — Alpaca keys have no blast-radius risk while "
+        "the broker surface is quarantined; rotation reminder only meaningful "
+        "for live-trading deployments"
+    ),
+    "heartbeat_fresh": (
+        "ADVISORY_ONLY=True — heartbeat is written only by "
+        "main_orchestrator.py; advisory runs via main.py do not "
+        "require a persistent orchestrator process"
+    ),
+    "validation_reports": (
+        "ADVISORY_ONLY=True — validation reports gate live order "
+        "submission; advisory mode produces signals only "
+        "(no orders submitted to brokers)"
+    ),
+    "no_unexpected_risk_blocks": (
+        "ADVISORY_ONLY=True — risk-gate blocks occur only on order "
+        "submission; advisory mode never submits orders"
+    ),
+}
 
 
 def run_checks(skip: list[str] | None = None) -> list[CheckResult]:
@@ -544,13 +882,25 @@ def run_checks(skip: list[str] | None = None) -> list[CheckResult]:
     check function (e.g. an unexpected attribute error in a new version of
     ``settings``) produces a FAIL result rather than aborting the remaining
     checks.  The exception message is included in the reason string.
+
+    Tier 5.1 — When ``settings.ADVISORY_ONLY`` is True the broker-dependent
+    checks in ``_ADVISORY_AUTO_SKIP`` are auto-skipped (PASS with a clear
+    reason) so the gate does not require Alpaca credentials, ALPACA_PAPER, or
+    PAPER_TRADING_START_DATE while the broker surface is quarantined.
     """
-    skip = skip or []
+    skip = list(skip or [])
+    advisory_only = bool(getattr(settings, "ADVISORY_ONLY", True))
     results: list[CheckResult] = []
     for fn in ALL_CHECKS:
         check_name = fn.__name__.replace("check_", "")
         if check_name in skip:
             results.append(CheckResult(check_name, True, "(skipped via --skip)"))
+            continue
+        if advisory_only and check_name in _ADVISORY_AUTO_SKIP:
+            results.append(CheckResult(
+                check_name, True,
+                "(skipped: ADVISORY_ONLY=True — broker check not applicable)",
+            ))
             continue
         try:
             results.append(fn())

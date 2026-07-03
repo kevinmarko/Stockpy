@@ -47,7 +47,40 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Secrets / credentials (resolved from the environment) ---
+    # =========================================================================
+    # FIELD SECTIONS (in declaration order below)
+    # -------------------------------------------------------------------------
+    #   1.  Secrets / credentials .............. FRED, Alpaca
+    #   2.  Market-data layer .................. provider, Finnhub, cache TTLs
+    #   3.  Robinhood — legacy SMS login ....... ROBINHOOD_USERNAME/PASSWORD
+    #   4.  Robinhood — portfolio TOTP ......... RH_USERNAME/PASSWORD/MFA_SECRET
+    #   5.  Order management / broker .......... DRY_RUN, ADVISORY_ONLY, webhook
+    #   6.  Pre-trade risk gate ................ correlation, loss limit, HMM
+    #   7.  Kill switch ........................ FLATTEN_ON_KILL
+    #   8.  Observability / alerts ............. Discord/Slack/email/SMTP, dash
+    #   9.  Key rotation / preflight dates ..... paper-start, FRED/Alpaca rotated
+    #   10. Financial constants ................ risk-free, premium, heat
+    #   11. Position sizing .................... Kelly, vol-target, leverage caps
+    #   12. Runtime / IO ....................... OUTPUT_DIR, tickers, log, concurrency
+    #   13. Signal weights ..................... flat + regime overrides + disabled
+    #   14. Multifactor ........................ microcap threshold
+    #   15. Meta-labeling ...................... min-confidence hard gate
+    #   16. Historical persistence ............. store flag, backfill, refresh
+    #   17. Forecast skill weighting ........... window, min-obs
+    #   18. Macro regime gate .................. MACRO_REGIME_GATE_ENABLED
+    #   19. Snapshot diff / Δ-band ............. history days, conviction delta
+    #   20. Symbol watch alerts ................ WATCH_RULES_FILE
+    #   21. Rationale verbosity ................ standard | verbose
+    #   22. News catalyst ...................... lookback, FinBERT, earnings gate
+    #   23. Correlation clusters ............... lookback, threshold
+    #   24. Dual-momentum overlay .............. safe/risky assets
+    #
+    # NOTE: field names are intentionally FLAT (e.g. settings.KELLY_CAP). The
+    # sections are documentation only — do NOT nest fields into sub-models, as
+    # ~200 call sites and the .env contract depend on the flat names.
+    # =========================================================================
+
+    # --- 1. Secrets / credentials (resolved from the environment) ---
     # FRED is required for *live* macro data. It is left empty by default so the
     # platform can still import and fall back to MockDataEngine; the live path
     # calls ``ensure_fred_configured()`` to fail clearly when it is missing.
@@ -83,18 +116,101 @@ class Settings(BaseSettings):
         default=30,
         description="In-process quote cache TTL in seconds (never persisted to disk).",
     )
+    # TTL (seconds) for the in-process fundamentals cache in FinnhubProvider
+    # and CompositeProvider.  Fundamentals are quarterly/slow-moving, so a
+    # multi-hour TTL is safe and prevents the free Finnhub tier (60 calls/min)
+    # from being exhausted by repeated orchestrator passes.  Both positive AND
+    # empty responses are cached so 429-rate-limited symbols don't re-trigger
+    # network calls within the window.
+    FUNDAMENTALS_CACHE_TTL_SECONDS: int = Field(
+        default=21_600,
+        description="In-process fundamentals cache TTL in seconds (default 6 h).",
+    )
+    # Sliding-window call budget for FinnhubProvider (per 60 s).  Free tier is
+    # 60 calls/minute; we default to 50 to leave headroom for the two auxiliary
+    # endpoints (quote, company_profile2) that ``get_fundamentals`` invokes.
+    FINNHUB_RATE_LIMIT_PER_MIN: int = Field(
+        default=50,
+        description="Finnhub sliding-window call budget per 60 s (free tier ceiling: 60).",
+    )
     # --- Robinhood Integration (legacy data/robinhood_client.py — SMS login) ---
     ROBINHOOD_USERNAME: Optional[str] = Field(default=None, description="Robinhood username (email).")
     ROBINHOOD_PASSWORD: Optional[str] = Field(default=None, description="Robinhood password.")
     # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py — TOTP login) ---
-    # Read-only; used for account state only. No order functions anywhere in that module.
-    RH_USERNAME: Optional[str] = Field(default=None, description="Robinhood account email for TOTP-authenticated read-only portfolio snapshot.")
-    RH_PASSWORD: Optional[str] = Field(default=None, description="Robinhood account password for TOTP-authenticated read-only portfolio snapshot.")
-    RH_MFA_SECRET: Optional[str] = Field(default=None, description="Base32 TOTP secret from the Robinhood MFA setup page. Never logged or cached.")
+    # Read-only; used for account state only. No order functions anywhere in that
+    # module. data/robinhood_portfolio.py reads these directly from os.environ so
+    # they are never stored in a Settings object (avoiding accidental logging);
+    # they are declared here for .env documentation + pydantic-settings consistency.
+    RH_USERNAME: Optional[str] = Field(
+        default=None,
+        description="Robinhood account email for TOTP-authenticated read-only portfolio snapshot.",
+    )
+    RH_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="Robinhood account password for TOTP-authenticated read-only portfolio snapshot.",
+    )
+    RH_MFA_SECRET: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base32 TOTP secret from the Robinhood MFA setup page. Used to generate "
+            "the 6-digit code via pyotp.TOTP(RH_MFA_SECRET).now() — never logged or cached."
+        ),
+    )
     # --- Order management (execution/order_manager.py) ---
     # When True the orchestrator logs intended orders but never submits them.
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.
     DRY_RUN: bool = Field(default=False, description="Log orders but do not submit to broker.")
+
+    # --- Advisory-only mode (Tier 5.1, 2026-06) ---
+    # When True (the project default), the entire broker-execution surface is
+    # quarantined: main_orchestrator._execute_broker_orders() returns
+    # immediately with an INFO log, the GUI Strategy Matrix mode toggle is
+    # disabled, and preflight_check.py drops the broker-readiness checks
+    # (alpaca_configured / alpaca_paper_mode / dry_run_disabled) in favour of
+    # a single advisory_only_active check.  This is a HARDER guarantee than
+    # DRY_RUN: DRY_RUN is enforced inside OrderManager (which can be bypassed
+    # by a future caller); ADVISORY_ONLY is enforced at the orchestrator-level
+    # ``_execute_broker_orders`` gate AND surfaced in every GUI tab as a
+    # persistent banner, so the operator cannot click into Live by mistake.
+    #
+    # Set to False ONLY if you have explicitly re-enabled the broker stack
+    # and intend to submit orders.  Both flags must agree (ADVISORY_ONLY=false
+    # AND DRY_RUN=false AND ALPACA_PAPER=false) to reach a live submission.
+    ADVISORY_ONLY: bool = Field(
+        default=True,
+        description=(
+            "When True, ALL broker order submission is suppressed. The pipeline "
+            "still runs end-to-end (signals, sizing, HTML report, JSON payload) "
+            "but main_orchestrator._execute_broker_orders() returns immediately "
+            "and the GUI Strategy Matrix execution-mode toggle is disabled. "
+            "Set False ONLY when broker execution is intentionally re-enabled."
+        ),
+    )
+    # --- Robinhood execution bridge (Tier 8, 2026-06) ---
+    # Independent of ADVISORY_ONLY (which gates the Alpaca surface).  The
+    # Robinhood Trading MCP is consumed by a Claude Code agent, NOT the headless
+    # pipeline, so this flag only governs whether `execution/queue_builder.py`
+    # emits a gated, dry-run `output/execution_queue.json` for that agent.
+    #   off    — (default) emit nothing; zero behaviour change.
+    #   review — paper/dry-run: emit the queue; the agent only ever calls the
+    #            MCP `review_equity_order` (simulate), never `place_equity_order`.
+    #   live   — the queue marks `allow_place=true` only when the risk gate passes
+    #            AND the kill switch is clear; the agent STILL requires per-trade
+    #            human confirmation before calling `place_equity_order`.
+    # Rollout is strictly off -> review -> live; you never start at live.  An
+    # unrecognised value coerces to `off` (fail-safe) via the validator below.
+    ROBINHOOD_EXECUTION_MODE: str = Field(
+        default="off",
+        description="Robinhood execution-queue mode: off | review | live (default off).",
+    )
+    # Hard per-order notional ceiling (USD) applied when building the queue.
+    # 0.0 means "unset" — the execution agent treats 0.0 as 'must configure a
+    # cap before any live placement'.
+    ROBINHOOD_MAX_NOTIONAL_PER_ORDER: float = Field(
+        default=0.0,
+        description="Max USD notional per Robinhood order when building the queue (0 = unset).",
+    )
+
     # Slack / Discord incoming-webhook URL for reconciliation drift alerts.
     ALERT_WEBHOOK_URL: Optional[str] = Field(
         default=None,
@@ -163,26 +279,28 @@ class Settings(BaseSettings):
         description="ISO date (YYYY-MM-DD) when paper trading began. Required by preflight check.",
     )
 
-    # --- Robinhood portfolio snapshot (data/robinhood_portfolio.py) ---
-    # These three variables feed the TOTP-based read-only portfolio fetch.
-    # data/robinhood_portfolio.py reads them directly from os.environ so that
-    # they are never stored in a Settings object (avoiding accidental logging).
-    # They are declared here for .env documentation and pydantic-settings
-    # auto-loading consistency only.
-    RH_USERNAME: Optional[str] = Field(
-        default=None,
-        description="Robinhood account email for read-only portfolio snapshot.",
-    )
-    RH_PASSWORD: Optional[str] = Field(
-        default=None,
-        description="Robinhood account password for read-only portfolio snapshot.",
-    )
-    RH_MFA_SECRET: Optional[str] = Field(
+    # ISO date string (YYYY-MM-DD) recording when FRED_API_KEY was last rotated.
+    # Used by scripts/preflight_check.py::check_key_rotation_recent to surface a
+    # warning when the key has not been rotated within the recommended 90-day window.
+    # Set this whenever you generate a new key at:
+    #   https://fred.stlouisfed.org/docs/api/api_key.html
+    # Advisory-only operators still benefit from rotating the FRED key to limit
+    # blast radius if the key leaks from logs or shared .env files.
+    FRED_KEY_ROTATED_DATE: Optional[str] = Field(
         default=None,
         description=(
-            "Base32 TOTP secret from the Robinhood MFA setup page. "
-            "Used by data/robinhood_portfolio.py to generate the 6-digit code "
-            "via pyotp.TOTP(RH_MFA_SECRET).now() — never logged or cached."
+            "ISO date (YYYY-MM-DD) when FRED_API_KEY was last rotated. "
+            "Set after generating a new key to keep the rotation reminder current. "
+            "Unset = key-age check skipped (warning-level PASS, not blocking)."
+        ),
+    )
+    ALPACA_KEY_ROTATED_DATE: Optional[str] = Field(
+        default=None,
+        description=(
+            "ISO date (YYYY-MM-DD) when ALPACA_API_KEY was last rotated. "
+            "Auto-skipped by preflight when ADVISORY_ONLY=True (paper keys have "
+            "no blast-radius risk when the broker surface is quarantined). "
+            "Unset = key-age check skipped (warning-level PASS, not blocking)."
         ),
     )
 
@@ -209,6 +327,21 @@ class Settings(BaseSettings):
     OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
     LOG_LEVEL: str = "INFO"
+    # Number of worker threads for the per-symbol advisory loop in main.run_once().
+    # Each engine.advisory.evaluate() call is independent (per-call engine
+    # construction, read-only shared inputs), so the loop parallelizes safely.
+    # The win is mostly network I/O (per-symbol quote fetch) plus native-compute
+    # sections (numpy/pandas/statsmodels/arch release the GIL). Concurrent
+    # HistoricalStore fundamentals writes are serialized by its busy_timeout.
+    # Set to 1 to force the original sequential, fully-deterministic path.
+    ADVISORY_MAX_CONCURRENCY: int = Field(
+        default=8,
+        description=(
+            "Worker-thread count for the per-symbol advisory loop in "
+            "main.run_once(). 1 = sequential (original behavior). Results are "
+            "always reassembled in deterministic symbol order regardless of value."
+        ),
+    )
     SIGNAL_WEIGHTS: dict[str, float] = Field(
         default_factory=lambda: {
             "macro_regime": 45.0,
@@ -235,8 +368,101 @@ class Settings(BaseSettings):
             # LightGBM cross-sectional ranker (one ensemble member — modest weight
             # until the model accumulates enough history to earn a larger share).
             "lgbm_ranker": 0.10,
+            # News / earnings catalyst (Tier 2.4) — modest weight until the
+            # module accumulates a track record (FinBERT or lexicon fallback).
+            "news_catalyst": 10.0,
         },
         description="Weights for individual quantitative signal modules."
+    )
+
+    # --- Regime-Conditional Signal Weights (Tier 2.1) ---
+    # Optional per-regime weight overrides.  When non-empty, SignalAggregator
+    # merges these on top of the flat SIGNAL_WEIGHTS for the current macro
+    # regime, so e.g. mean-reversion can be boosted in RISK ON and suppressed
+    # in RECESSION without touching the default dict.
+    #
+    # Format (JSON in .env):
+    #   REGIME_SIGNAL_WEIGHTS={
+    #     "RISK ON":      {"rsi2_mean_reversion": 20.0, "timeseries_momentum": 25.0},
+    #     "RECESSION":    {"rsi2_mean_reversion": 0.0, "macro_regime": 60.0},
+    #     "CREDIT EVENT": {"rsi2_mean_reversion": 0.0, "macro_regime": 60.0},
+    #     "_default":     {}
+    #   }
+    #
+    # Only keys listed in a regime dict are overridden; all other modules
+    # keep their SIGNAL_WEIGHTS values.  An empty dict (the project default)
+    # preserves the flat-dict behavior exactly — fully backward-compatible.
+    # "_default" is used as a catch-all when the current regime has no entry.
+    REGIME_SIGNAL_WEIGHTS: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-regime signal weight overrides merged onto SIGNAL_WEIGHTS. "
+            "Keys are macro regime names ('RISK ON', 'RECESSION', etc.) or "
+            "'_default' for catch-all. Empty dict (default) = flat weights for "
+            "all regimes (backward-compatible)."
+        ),
+    )
+
+    # --- Historical Persistence (data/historical_store.py, Tier 2.3) ---
+    # Gates all DB read/write routing through HistoricalStore.  Setting False
+    # reproduces today's behavior exactly — every call goes directly to the
+    # live provider without touching the DB.
+    HISTORICAL_STORE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master flag for HistoricalStore DB routing. When True, OHLCV bars "
+            "and account snapshots are read from / written to quant_platform.db. "
+            "First call for a symbol = full BARS_BACKFILL_DAYS backfill; "
+            "subsequent calls = delta only. Set False to reproduce pre-Tier-2.3 "
+            "behavior (all fetches go directly to the live provider)."
+        ),
+    )
+    BARS_BACKFILL_DAYS: int = Field(
+        default=504,
+        description=(
+            "Number of calendar days to backfill on first-ever fetch for a symbol "
+            "(≈ 2 years of trading days). Subsequent fetches are incremental."
+        ),
+    )
+    FUNDAMENTALS_REFRESH_DAYS: int = Field(
+        default=1,
+        description=(
+            "Maximum age (calendar days) of a cached fundamentals row before "
+            "HistoricalStore.get_fundamentals() refetches from the provider. "
+            "1 = daily refresh. Fundamentals rarely change intraday, so 1 day "
+            "is the recommended minimum. Set 0 to always refetch."
+        ),
+    )
+    MACRO_REFRESH_HOURS: int = Field(
+        default=12,
+        description=(
+            "Minimum age (hours) of the most-recent macro_history row before "
+            "HistoricalStore.get_macro() triggers a FRED top-up. FRED publishes "
+            "VIXCLS daily and T10Y2Y daily; 12 h ensures we top up at most twice "
+            "per day while not running stale for longer than half a trading session."
+        ),
+    )
+
+    # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
+    # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
+    # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.
+    # Persisted to forecast_errors table in quant_platform.db.
+    FORECAST_SKILL_WINDOW_DAYS: int = Field(
+        default=60,
+        description=(
+            "Rolling window (calendar days) over which per-model RMSE is computed "
+            "for inverse-skill forecast blending. Increase for stability; decrease "
+            "for faster adaptation. Cold-start equal weighting applies when fewer "
+            "than FORECAST_SKILL_MIN_OBS completed observations exist."
+        ),
+    )
+    FORECAST_SKILL_MIN_OBS: int = Field(
+        default=30,
+        description=(
+            "Minimum number of completed (actualized) forecast rows required per "
+            "model before skill-based weighting activates. Below this threshold, "
+            "all models receive equal weight (cold-start fallback)."
+        ),
     )
 
     # --- Macro Regime Gate (execution/risk_gate.py + gui/ Observability tab) ---
@@ -302,6 +528,269 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Snapshot rotation & Δ-band diff (scripts/snapshot_diff.py) ---
+    # Each orchestrator/advisory run writes output/state_snapshot.json AND
+    # a rotated copy under output/history/state_snapshot_<UTC>.json. The
+    # daily HTML report reads the two most-recent rotated snapshots and
+    # renders a "Δ Since Last Run" band at the top of the report so the
+    # operator sees, at a glance, which signals flipped, which holdings
+    # were added/dropped, and which conviction scores moved materially.
+    # Rotation pruning, the conviction-delta threshold for "material", and
+    # the on-disk history directory name are operator-tunable.
+    SNAPSHOT_HISTORY_DAYS: int = Field(
+        default=30,
+        description=(
+            "Rotated state-snapshot files older than this many days are "
+            "pruned from OUTPUT_DIR/history on every run. 0 disables pruning."
+        ),
+    )
+    SNAPSHOT_CONVICTION_DELTA_THRESHOLD: float = Field(
+        default=0.2,
+        description=(
+            "Per-symbol conviction (advisory_conviction) deltas with absolute "
+            "value at or above this threshold are surfaced in the Δ Since Last "
+            "Run band. Smaller moves are suppressed as noise."
+        ),
+    )
+
+    # --- Symbol watch alerts (watch_engine.py, Tier 1.4) ---
+    # Path to the YAML file that defines symbol-watch alert rules.  Evaluated
+    # at the end of every run_once() cycle; missing file = no rules (no-op).
+    # Rule types: action_change, conviction_above, conviction_below.
+    # See watch_rules.yaml at the project root for the full schema.
+    WATCH_RULES_FILE: str = Field(
+        default="watch_rules.yaml",
+        description=(
+            "Path to watch_rules.yaml.  Defines per-symbol ntfy push-alert "
+            "rules (action_change, conviction_above, conviction_below).  "
+            "Missing file = no rules active (silent no-op)."
+        ),
+    )
+
+    # --- Rationale verbosity (engine/advisory.py, Task 1.5) ---
+    # Controls how much narrative detail the per-symbol advisory rationale
+    # produces.  Standard mode (the default) is a single terse paragraph
+    # citing the top 2-3 drivers — suitable for dashboards and notifications.
+    # Verbose mode appends four labelled sections:
+    #   [A] Regime context — HMM probability + FRED macro snapshot
+    #   [B] Historical calibration — strategy win-rate and Kelly edge estimate
+    #   [C] Signal invalidation thresholds — the conditions that void the
+    #       current recommendation (RSI flip points, macro gates, sector veto)
+    #   [D] Indicator theory notes — first-line __doc__ of each active
+    #       signal module (pulled dynamically from signals.registry)
+    # Valid values: "standard" (default) | "verbose"
+    RATIONALE_VERBOSITY: str = Field(
+        default="standard",
+        description=(
+            "Advisory rationale depth. 'standard' = top 2-3 driver paragraph "
+            "(default). 'verbose' = adds regime context [A], historical "
+            "calibration [B], invalidation thresholds [C], and indicator "
+            "theory notes [D]. Set RATIONALE_VERBOSITY=verbose in .env."
+        ),
+    )
+
+    # --- News Catalyst Signal (Tier 2.4, signals/news_catalyst.py) ---
+    # Controls how far back to pull Finnhub company_news headlines and
+    # whether to use the FinBERT neural sentiment scorer (requires
+    # `pip install transformers` and either PyTorch or TensorFlow).
+    # When FINBERT_ENABLED=false or transformers is unavailable, a curated
+    # 80-word financial keyword lexicon is used instead — no accuracy loss
+    # on very short headlines, ~10-15% worse on multi-sentence summaries.
+    NEWS_LOOKBACK_DAYS: int = Field(
+        default=7,
+        description=(
+            "Calendar days of Finnhub company_news headlines to score per "
+            "symbol per pre_compute cycle. Longer windows add latency; the "
+            "free Finnhub tier provides ~3 months of history."
+        ),
+    )
+    FINBERT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True and `transformers` is installed, uses ProsusAI/FinBERT "
+            "for headline sentiment.  When False (or transformers unavailable), "
+            "falls back to the built-in keyword lexicon.  Set False to avoid "
+            "the ~200 MB model download on first use."
+        ),
+    )
+
+    # --- Tier 9: Claude + Gemini commentary integration (llm/) ---
+    # Master switch.  When False (the default) the platform behaves byte-
+    # identically to pre-Tier-9: ZERO SDK imports, ZERO network calls, the
+    # deterministic template rationale and alert text remain the single SoT.
+    # CONSTRAINT: API keys live in SECRET_KEYS (gui/env_io.SECRET_KEYS); the
+    # toggles below live in ALLOWED_KEYS so the Strategy Matrix tab can flip
+    # them without ever touching a credential.  CONSTRAINT #3.
+    LLM_COMMENTARY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Tier 9 master switch.  When True AND the relevant provider key "
+            "is set, on-demand LLM commentary is generated by the CLI and "
+            "alert dispatchers.  evaluate() never calls an LLM in-cycle; "
+            "cadence is on-demand only (CLI + GUI button)."
+        ),
+    )
+    LLM_COMMENTARY_RATIONALE_PROVIDER: str = Field(
+        default="claude",
+        description=(
+            "Provider for analyst rationale generation.  'claude' (default), "
+            "'gemini', or 'none' (disable rationale LLM regardless of master "
+            "switch).  Either provider works for either job — this and "
+            "LLM_COMMENTARY_ALERT_PROVIDER are independent, operator-chosen."
+        ),
+    )
+    LLM_COMMENTARY_ALERT_PROVIDER: str = Field(
+        default="gemini",
+        description=(
+            "Provider for alert commentary generation.  'gemini' (default), "
+            "'claude', or 'none' (disable alert LLM regardless of master "
+            "switch).  Either provider works for either job — this and "
+            "LLM_COMMENTARY_RATIONALE_PROVIDER are independent, operator-chosen."
+        ),
+    )
+    LLM_COMMENTARY_CACHE_PATH: str = Field(
+        default="output/llm_commentary_cache.json",
+        description=(
+            "JSON cache for LLM commentary results.  Day-bucketed; safe to "
+            "delete manually.  Lives under output/ which is gitignored."
+        ),
+    )
+    LLM_COMMENTARY_TIMEOUT_SECONDS: int = Field(
+        default=8,
+        description=(
+            "Hard wall-clock timeout per provider call.  Exceeding it counts "
+            "as a soft failure (returns None; caller falls back to template)."
+        ),
+    )
+    ANTHROPIC_API_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Anthropic API key for the Claude provider.  Required whenever "
+            "either LLM_COMMENTARY_RATIONALE_PROVIDER or "
+            "LLM_COMMENTARY_ALERT_PROVIDER is set to 'claude'.  Unset → that "
+            "job's LLM disabled, template fallback kicks in."
+        ),
+    )
+    GEMINI_API_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Google AI Studio key for the Gemini provider.  Required whenever "
+            "either LLM_COMMENTARY_RATIONALE_PROVIDER or "
+            "LLM_COMMENTARY_ALERT_PROVIDER is set to 'gemini' (also used for "
+            "chart-pattern vision).  Unset → that job's LLM disabled, "
+            "template fallback kicks in."
+        ),
+    )
+
+    # --- Tier 9 / Scope 4: Opal research agent (llm/research.py, OpenAI/GPT) ---
+    # A separate, independent opt-in master switch from LLM_COMMENTARY_ENABLED —
+    # Opal's front-of-pipeline research brief can run without per-symbol
+    # commentary enabled, and vice versa. Default False: zero `openai` SDK
+    # reach and zero network calls when off (CONSTRAINT #6 opt-in contract).
+    OPAL_RESEARCH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for Opal, the OpenAI/GPT front-of-pipeline research "
+            "agent (Tier 9 Scope 4).  Off by default — zero `openai` import and "
+            "zero network calls when False.  When True AND OPENAI_API_KEY is "
+            "set, generate_research_brief() produces a grounded, qualitative "
+            "ResearchBrief threaded into the Claude rationale prompt."
+        ),
+    )
+    OPAL_RESEARCH_PROVIDER: str = Field(
+        default="openai",
+        description=(
+            "Provider for Opal research-brief generation.  'openai' (default, "
+            "the only supported provider today) or 'none' (disable regardless "
+            "of the master switch)."
+        ),
+    )
+    OPAL_RESEARCH_MODEL: str = Field(
+        default="gpt-4o",
+        description="OpenAI model used for Opal's structured-output research brief calls.",
+    )
+    OPAL_RESEARCH_TIMEOUT_SECONDS: int = Field(
+        default=15,
+        description=(
+            "Hard wall-clock timeout per OpenAIProvider call.  Exceeding it "
+            "counts as a soft failure (returns None; caller skips Opal for "
+            "this cycle)."
+        ),
+    )
+    OPENAI_API_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "OpenAI API key for the Opal research agent.  Unset → Opal "
+            "disabled, no research brief generated (byte-identical to today)."
+        ),
+    )
+
+    # --- Tier 9 / Scope 2: Gravity AI audit runner (engine/gravity_ai_runner.py) ---
+    # A separate opt-in master switch from LLM_COMMENTARY_ENABLED so an
+    # operator can run on-demand AI audits (uses both Claude + Gemini) without
+    # having to also enable per-symbol rationale commentary.  Default False:
+    # the existing Python-only Gravity steps in gravity/__init__.py continue
+    # to run unchanged.  When True AND both API keys are set, the CLI
+    # `python -m engine.gravity_ai_runner [STEP]` calls Claude as the primary
+    # auditor and Gemini as the cross-checker; both responses are validated
+    # against `llm.schemas.GravityAuditStepResult` and disagreement on
+    # status is surfaced explicitly (the runner never picks a winner).
+    GRAVITY_AI_RUNNER_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the AI Gravity audit runner (Claude auditor + "
+            "Gemini cross-checker).  Off by default — the existing Python-only "
+            "Gravity audit pipeline is unchanged when False.  When True, on-"
+            "demand CLI runs both models against the 7 audit prompts in "
+            "ai_verification_prompts.py and writes output/gravity_ai_audit.json."
+        ),
+    )
+    GRAVITY_AI_RUNNER_OUTPUT_PATH: str = Field(
+        default="output/gravity_ai_audit.json",
+        description=(
+            "Where the runner writes the per-step Claude + Gemini verdicts.  "
+            "Lives under output/ which is gitignored."
+        ),
+    )
+    NEWS_EARNINGS_SUPPRESS_HOURS: float = Field(
+        default=48.0,
+        description=(
+            "Hours before next earnings date within which the news catalyst "
+            "score is forced to 0.0.  Pre-earnings headlines are unreliable "
+            "catalysts — the outcome isn't observable yet."
+        ),
+    )
+    NEWS_EARNINGS_DAMPEN_DAYS: float = Field(
+        default=7.0,
+        description=(
+            "Days before next earnings within which the news catalyst score "
+            "is multiplied by 0.5 (50% dampening).  Beyond this window the "
+            "full score is used."
+        ),
+    )
+
+    # --- Correlation Cluster Awareness (Tier 2.5, research_engine.py) ---
+    # Controls the on-demand hierarchical clustering computed in the GUI
+    # Reports tab.  These settings are read by the GUI; the orchestrator
+    # does NOT run cluster analysis automatically (on-demand only).
+    CORRELATION_CLUSTER_LOOKBACK_DAYS: int = Field(
+        default=60,
+        description=(
+            "Calendar days of daily returns used to build the pairwise "
+            "correlation matrix for hierarchical clustering. 60 days ≈ 3 "
+            "months, enough to capture a medium-term co-movement regime."
+        ),
+    )
+    CORRELATION_CLUSTER_THRESHOLD: float = Field(
+        default=0.4,
+        description=(
+            "Dendrogram cut-distance for cluster assignment.  Uses the "
+            "Lopez de Prado distance d=sqrt(0.5*(1-rho)).  At 0.4, stocks "
+            "with |correlation| > 0.68 merge into the same cluster.  "
+            "Lower = tighter (fewer, smaller clusters); higher = looser."
+        ),
+    )
+
     # --- Dual Momentum allocator overlay ---
     USE_DUAL_MOMENTUM_OVERLAY: bool = Field(
         default=False,
@@ -320,6 +809,105 @@ class Settings(BaseSettings):
         description="Risky ETFs compared in the Dual Momentum cross-sectional filter.",
     )
 
+    # ── Prompt Registry (prompt_registry/ package) ───────────────────────────
+    # Versioned, cryptographically-signed, remotely-updatable store for every
+    # AI-facing instruction.  Default: disabled (baseline-only, zero network).
+    # See docs/PROMPT_REGISTRY_PLAN.md §8 for the full security model.
+    #
+    # CONSTRAINT #3 — the four credential fields are Optional[str] secrets:
+    # they are masked by gui/env_io.read_settings() and raise SecretWriteError
+    # on any GUI write attempt.  Only ENABLED / BACKEND / PINS are in
+    # ALLOWED_KEYS (GUI-writable tunables).
+
+    PROMPT_REGISTRY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch.  False (default) → baseline-only, zero network calls. "
+            "Set True to enable remote manifest fetch and cache."
+        ),
+    )
+    PROMPT_REGISTRY_BACKEND: str = Field(
+        default="http",
+        description=(
+            "Storage backend: 'http' (default, protected HTTPS endpoint), "
+            "'local' (LocalJSONStore from a file path), or 'firestore' (lazy import)."
+        ),
+    )
+    PROMPT_REGISTRY_URL: Optional[str] = Field(
+        default=None,
+        description=(
+            "HTTPS URL of the protected registry manifest endpoint "
+            "(e.g. a private GitHub raw URL or S3 presigned object).  "
+            "SECRET — never GUI-writable, never logged."
+        ),
+    )
+    PROMPT_REGISTRY_TOKEN: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bearer token sent as Authorization header to PROMPT_REGISTRY_URL.  "
+            "Read-only credential; the publish token is separate.  "
+            "SECRET — never GUI-writable, never logged."
+        ),
+    )
+    PROMPT_REGISTRY_PUBLISH_TOKEN: Optional[str] = Field(
+        default=None,
+        description=(
+            "Higher-privilege credential required by 'python -m prompt_registry publish'. "
+            "The platform runtime never needs this.  "
+            "SECRET — never GUI-writable, never logged."
+        ),
+    )
+    PROMPT_REGISTRY_SIGNING_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Shared HMAC-SHA256 key used by signing.verify() to authenticate every "
+            "fetched prompt version.  A failed verification falls through to the "
+            "disk cache → committed baseline (fail-closed).  "
+            "SECRET — never GUI-writable, never logged."
+        ),
+    )
+    PROMPT_REGISTRY_PINS: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "JSON object mapping prompt IDs to pinned version strings "
+            '(e.g. {"master_preprompt": "1.2.0"}).  '
+            "Overrides the remote \'latest\' pointer for each pinned ID.  "
+            "GUI-writable from the Prompts tab (ALLOWED_KEYS); persisted to .env "
+            "via gui/env_io.write_setting."
+        ),
+    )
+    PROMPT_REGISTRY_REFRESH_SECONDS: int = Field(
+        default=0,
+        description=(
+            "0 (default) = fetch only at launch / on explicit sync() call "
+            "(CONSTRAINT #5 — no always-on daemon).  "
+            "Positive value: long-running processes may re-sync on this interval."
+        ),
+    )
+    PROMPT_CACHE_DIR: str = Field(
+        default="output/prompt_cache",
+        description=(
+            "Directory for the signed-version disk cache.  "
+            "Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS "
+            "signed .json files are kept per ID for offline rollback."
+        ),
+    )
+    PROMPT_CACHE_KEEP_VERSIONS: int = Field(
+        default=5,
+        description=(
+            "Number of signed versions to retain on disk per prompt ID.  "
+            "Older versions are pruned by CacheManager.write() so rollback works "
+            "offline up to this depth."
+        ),
+    )
+    PROMPT_MAX_CHARS: int = Field(
+        default=50_000,
+        description=(
+            "Hard upper bound on prompt body size enforced by guardrails.validate_prompt(). "
+            "Bodies exceeding this are rejected as a denial-of-service mitigation."
+        ),
+    )
+
     @field_validator("OUTPUT_DIR")
     @classmethod
     def _ensure_output_dir(cls, value: Path) -> Path:
@@ -327,6 +915,17 @@ class Settings(BaseSettings):
         path = Path(value)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @field_validator("ROBINHOOD_EXECUTION_MODE")
+    @classmethod
+    def _coerce_robinhood_mode(cls, value: str) -> str:
+        """Fail-safe: any value outside {off, review, live} collapses to ``off``.
+
+        A typo, stale env value, or injection can never accidentally arm
+        execution — the worst case is the inert default.
+        """
+        v = str(value or "").strip().lower()
+        return v if v in {"off", "review", "live"} else "off"
 
     @property
     def fred_key_is_leaked(self) -> bool:

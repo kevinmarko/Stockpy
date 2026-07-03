@@ -324,8 +324,39 @@ class ProcessingEngine:
             Required to compute the low-volatility factor input
             (low_vol_score); absent/missing tickers get NaN, never a
             fabricated default.
+
+        Notes (Tier 2.3 Phase 3)
+        -------------------------
+        When ``settings.HISTORICAL_STORE_ENABLED`` is True, this method routes
+        each ticker's raw fundamentals dict through
+        ``HistoricalStore.get_fundamentals(ticker)``, which caches the result
+        in ``fundamentals_history`` (daily refresh) and provides it from the DB
+        on subsequent calls without hitting the live provider.
+
+        The HistoricalStore lookup uses the SAME raw dict keys that
+        ``FundamentalDataDTO.from_raw_dict`` already consumes, so no downstream
+        key-mapping changes are required.  The ``provider`` argument is seeded
+        from the DTO's original provider so the fallback path is identical to
+        pre-Phase-3 behavior.
         """
         realized_vol_60d_map = realized_vol_60d_map or {}
+
+        # ── Phase 3: HistoricalStore fundamentals routing ────────────────────
+        # When enabled, persist each ticker's raw fundamentals dict and serve
+        # subsequent requests from the DB cache (daily TTL).  The typed dict
+        # returned by get_fundamentals uses the same yfinance-style keys as the
+        # existing FundamentalDataDTO pipeline, so nothing below changes.
+        _hist_store = None
+        if settings.HISTORICAL_STORE_ENABLED:
+            try:
+                from data.historical_store import HistoricalStore
+                _hist_store = HistoricalStore()
+            except Exception as _exc:
+                logging.warning(
+                    "ProcessingEngine: could not initialise HistoricalStore — "
+                    "falling back to direct DTO path. Error: %s", _exc,
+                )
+
         results = {}
         for ticker, dto in fund_dtos.items():
             if not dto:
@@ -333,6 +364,48 @@ class ProcessingEngine:
             try:
                 # EXPLANATION: Safe extraction of raw yfinance info fields stored on the DTO.
                 info = getattr(dto, 'raw_info', {}) or {}
+
+                # ── Phase 3: merge typed fundamentals from DB cache ───────────
+                # If HistoricalStore is active, write today's raw info dict to the
+                # DB (or read from cache if fresh) and overlay any non-None typed
+                # values onto the existing DTO attributes.  The DTO remains the
+                # authoritative object; we only supplement missing or stale fields.
+                if _hist_store is not None and info:
+                    try:
+                        # Pass the provider extracted from data.market_data so the
+                        # inner fallback in get_fundamentals can reach the network.
+                        from data.market_data import get_provider as _get_provider
+                        _provider = _get_provider()
+                        _typed = _hist_store.get_fundamentals(
+                            ticker,
+                            max_age_days=settings.FUNDAMENTALS_REFRESH_DAYS,
+                            provider=_provider,
+                        )
+                        # Overlay typed values onto the raw info dict so that
+                        # downstream processing_engine code (which reads from `info`
+                        # and `dto.*`) still works unchanged.
+                        if _typed:
+                            _key_remap = {
+                                "pe_ratio":         "trailingPE",
+                                "pb_ratio":         "priceToBook",
+                                "roe":              "returnOnEquity",
+                                "dividend_yield":   "dividendYield",
+                                "market_cap":       "marketCap",
+                                "eps":              "trailingEps",
+                                "operating_margin": "operatingMargins",
+                                # debt_to_equity: stored as decimal; info uses percent
+                            }
+                            for typed_col, raw_key in _key_remap.items():
+                                typed_val = _typed.get(typed_col)
+                                if typed_val is not None and not (
+                                    isinstance(typed_val, float) and math.isnan(typed_val)
+                                ):
+                                    info.setdefault(raw_key, typed_val)
+                    except Exception as _exc:
+                        logging.debug(
+                            "ProcessingEngine[%s]: HistoricalStore fundamentals "
+                            "overlay failed: %s (continuing with DTO).", ticker, _exc,
+                        )
                 price = float(
                     info.get('regularMarketPrice')
                     or info.get('previousClose')

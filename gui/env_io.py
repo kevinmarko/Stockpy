@@ -83,12 +83,35 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "DASHBOARD_REFRESH_SECONDS",
     "LOG_LEVEL",
     "DRY_RUN",
+    # Execution mode toggle — paper sandbox vs. live endpoint. Writeable from
+    # the Strategy Matrix tab's global Simulation/Paper/Live selector. Never a
+    # secret: the broker keys themselves are SECRET_KEYS.
+    "ALPACA_PAPER",
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
     # Universe / signals (JSON-encoded)
     "DEFAULT_TICKERS",
     "SIGNAL_WEIGHTS",
     "DISABLED_SIGNAL_MODULES",
+    # Prompt Registry tunables (non-secret; credentials live in SECRET_KEYS below).
+    # See docs/PROMPT_REGISTRY_PLAN.md §8 and settings.PROMPT_REGISTRY_*.
+    "PROMPT_REGISTRY_ENABLED",   # bool master switch (baseline-only when False)
+    "PROMPT_REGISTRY_BACKEND",   # "http" | "local" | "firestore"
+    "PROMPT_REGISTRY_PINS",      # JSON dict {"prompt_id": "version"} — rollback lever
+    # Tier 9 — Claude + Gemini commentary toggles (non-secret).  Credentials
+    # (ANTHROPIC_API_KEY / GEMINI_API_KEY) live in SECRET_KEYS below per
+    # CONSTRAINT #3 — they are NEVER GUI-writable.
+    "LLM_COMMENTARY_ENABLED",            # bool master switch (default False)
+    "LLM_COMMENTARY_RATIONALE_PROVIDER", # "claude" | "none"
+    "LLM_COMMENTARY_ALERT_PROVIDER",     # "gemini" | "none"
+    # AI Control Center toggles (non-secret).  These master switches were
+    # previously settable only by hand-editing .env; the Control Center tab
+    # surfaces them.  Provider credentials (ANTHROPIC/GEMINI/OPENAI keys) stay
+    # in SECRET_KEYS below — CONSTRAINT #3, never GUI-writable.
+    "GRAVITY_AI_RUNNER_ENABLED",         # bool — Gravity AI runner (Claude+Gemini)
+    "OPAL_RESEARCH_ENABLED",             # bool — Opal research agent (OpenAI)
+    "OPAL_RESEARCH_PROVIDER",            # "openai" | "none"
+    "OPAL_RESEARCH_MODEL",               # e.g. "gpt-4o"
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -112,11 +135,29 @@ SECRET_KEYS: tuple[str, ...] = (
     "ALERT_SMTP_HOST",
     "ALERT_SMTP_USER",
     "ALERT_SMTP_PASSWORD",
+    # Prompt Registry credentials — 4 separate roles (read / publish / sign / url).
+    # Never GUI-writable; edit .env by hand only (CONSTRAINT #3).
+    "PROMPT_REGISTRY_URL",           # protected HTTPS manifest endpoint
+    "PROMPT_REGISTRY_TOKEN",         # bearer read-token
+    "PROMPT_REGISTRY_PUBLISH_TOKEN", # higher-privilege publish credential
+    "PROMPT_REGISTRY_SIGNING_KEY",   # HMAC-SHA256 verification key
+    # Tier 9 — Claude + Gemini commentary credentials.  CONSTRAINT #3 — these
+    # are NEVER GUI-writable; hand-edit .env to set / rotate them.
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    # OpenAI credential for Opal, the research agent (Tier 9 Scope 4,
+    # llm/research.py).  CONSTRAINT #3 — never GUI-writable; hand-edit .env.
+    "OPENAI_API_KEY",
 )
 
 # Keys whose values are JSON-encoded structures (lists/dicts) in .env.
 _JSON_KEYS: frozenset[str] = frozenset(
-    {"DEFAULT_TICKERS", "SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES"}
+    {
+        "DEFAULT_TICKERS",
+        "SIGNAL_WEIGHTS",
+        "DISABLED_SIGNAL_MODULES",
+        "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}
+    }
 )
 
 _MASK_SET = "•••• set"

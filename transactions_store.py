@@ -1,9 +1,12 @@
+import logging
 import os
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Union
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+logger = logging.getLogger(__name__)
 
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(DB_DIR, "quant_platform.db")
@@ -17,19 +20,32 @@ class Trade(Base):
     trade_id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String(10), nullable=False)
     side = Column(String(10), nullable=False)  # 'long' or 'short'
-    entry_ts = Column(DateTime, nullable=False, default=datetime.utcnow)
+    entry_ts = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     entry_price = Column(Float, nullable=False)
     exit_ts = Column(DateTime, nullable=True)
     exit_price = Column(Float, nullable=True)
     shares = Column(Float, nullable=False)
     strategy = Column(String(50), nullable=True)
     notes = Column(String(255), nullable=True)
+    conviction = Column(Float, nullable=True)  # advisory signal conviction [0,1] at entry
 
 class TransactionsStore:
     def __init__(self, db_url: str = DATABASE_URL):
         self.engine = create_engine(db_url, echo=False)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
+        self._ensure_conviction_column()
+
+    def _ensure_conviction_column(self) -> None:
+        """Add conviction column to existing DBs that predate this feature."""
+        try:
+            insp = inspect(self.engine)
+            existing = {c["name"] for c in insp.get_columns("trades")}
+            if "conviction" not in existing:
+                with self.engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE trades ADD COLUMN conviction REAL"))
+        except Exception as exc:
+            logger.debug("_ensure_conviction_column: %s", exc)
 
     def record_trade(
         self,
@@ -39,13 +55,14 @@ class TransactionsStore:
         entry_price: float,
         shares: float,
         strategy: Optional[str] = None,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        conviction: Optional[float] = None,
     ) -> int:
         """Records a new open trade. Returns the trade_id."""
         session = self.Session()
         try:
             # Ensure naive datetime for SQL consistency
-            naive_entry_ts = entry_ts.replace(tzinfo=None) if entry_ts else datetime.utcnow()
+            naive_entry_ts = entry_ts.replace(tzinfo=None) if entry_ts else datetime.now(timezone.utc).replace(tzinfo=None)
             trade = Trade(
                 symbol=symbol.upper().strip(),
                 side=side.lower().strip(),
@@ -53,7 +70,8 @@ class TransactionsStore:
                 entry_price=float(entry_price),
                 shares=float(shares),
                 strategy=strategy,
-                notes=notes
+                notes=notes,
+                conviction=float(conviction) if conviction is not None else None,
             )
             session.add(trade)
             session.commit()
@@ -73,7 +91,7 @@ class TransactionsStore:
             if not trade:
                 raise ValueError(f"Trade ID {trade_id} not found.")
             # Ensure naive datetime for SQL consistency
-            naive_exit_ts = exit_ts.replace(tzinfo=None) if exit_ts else datetime.utcnow()
+            naive_exit_ts = exit_ts.replace(tzinfo=None) if exit_ts else datetime.now(timezone.utc).replace(tzinfo=None)
             trade.exit_ts = naive_exit_ts
             trade.exit_price = float(exit_price)
             session.commit()

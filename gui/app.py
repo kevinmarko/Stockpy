@@ -23,6 +23,13 @@ Tabs
 9.  Observability             — compact macro/regime/P&L summary
 10. Live Inventory            — synchronized portfolio + watchlist coverage map
                                 with on-demand "Sync Now" (Task 1.4)
+11. Prompts                   — Prompt Registry: resolved version/source per ID,
+                                🔄 Sync, diff viewer, ↩ Rollback/pin (Stage 7)
+12. AI Insights                — Claude analyst note + Gemini chart-pattern vision +
+                                aggregate Claude-vs-Gemini disagreement view (Tier 9 Scope 3)
+13. AI Control Center          — one operator surface for every AI option: master-switch
+                                toggles, on-demand per-symbol actions, Gravity AI audit,
+                                and Start/Stop of an --interval/--agent scheduled run
 
 Design
 ------
@@ -59,7 +66,7 @@ except Exception:  # pragma: no cover - dotenv always present per requirements.t
 import streamlit as st
 
 from settings import settings
-from gui import panels
+from gui import panels, run_mode
 
 logging.basicConfig(level=getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO))
 logger = logging.getLogger("gui.app")
@@ -108,10 +115,56 @@ if st.sidebar.button("🔄 Clear cached reads"):
     st.cache_data.clear()
     st.rerun()
 
+# Sidebar quick-help widget (3 most-common questions)
+try:
+    with st.sidebar.expander("❓ Quick help"):
+        st.markdown(
+            "**What do action signals mean?**  \n"
+            "STRONG BUY / BUY / HOLD / RISK REDUCE / SELL — directional "
+            "recommendations derived from a weighted blend of signal modules. "
+            "All are *informational only* — no orders are submitted.\n\n"
+            "**What is Kelly Target?**  \n"
+            "Fractional-Kelly position size as a % of capital, calibrated from "
+            "your actual closed-trade history and volatility. 0 % means "
+            "insufficient data or a sell signal.\n\n"
+            "**Why is everything in advisory mode?**  \n"
+            "`ADVISORY_ONLY=true` in `.env` quarantines all broker execution "
+            "(the default). Set it to `false` only when you are ready to connect "
+            "a live or paper broker."
+        )
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
-# Main title + tabs
+# Main title + persistent run-mode header
 # ---------------------------------------------------------------------------
 st.title("InvestYo Command Center")
+
+# --- Tier 5.1: persistent advisory-only banner ---
+# When settings.ADVISORY_ONLY is True (the project default) we render a single,
+# unambiguous banner above the tab bar so the operator cannot miss the
+# quarantine.  In that mode we deliberately suppress the simulation/paper/live
+# mode badge because the DRY_RUN / ALPACA_PAPER toggle is no-op'd downstream;
+# showing a Live badge while the broker is quarantined would be misleading.
+if getattr(settings, "ADVISORY_ONLY", True):
+    st.info(
+        "📋 **ADVISORY MODE** — no orders will be submitted to any broker. "
+        "The pipeline produces signals, sizing, and reports only. "
+        "Set `ADVISORY_ONLY=false` in `.env` to re-enable broker execution.",
+        icon="📋",
+    )
+else:
+    # Persistent banner derived from DRY_RUN + ALPACA_PAPER + session run handle.
+    # Shown above the tab bar so the operator always knows what mode they're in.
+    _mode_state = run_mode.read_active_run_mode(session_state=st.session_state)
+    _mode_colors = {"Simulation": "blue", "Paper": "orange", "Live": "red"}
+    _banner_color = _mode_colors.get(_mode_state.mode, "gray")
+    if _mode_state.mode == "Live":
+        st.error(_mode_state.run_mode_label, icon="🔴")
+    elif _mode_state.mode == "Paper":
+        st.warning(_mode_state.run_mode_label, icon="🟡")
+    else:
+        st.info(_mode_state.run_mode_label, icon="⚪")
 
 tab_labels = [
     "🚀 Launcher",
@@ -124,6 +177,10 @@ tab_labels = [
     "🛰️ Market Data",
     "📊 Observability",
     "📡 Live Inventory",
+    "❓ Help",
+    "📝 Prompts",
+    "🪄 AI Insights",
+    "🎛️ AI Control Center",
 ]
 tabs = st.tabs(tab_labels)
 
@@ -147,5 +204,13 @@ with tabs[8]:
     safe_panel(panels.render_observability)
 with tabs[9]:
     safe_panel(panels.render_live_inventory)
+with tabs[10]:
+    safe_panel(panels.render_help)
+with tabs[11]:
+    safe_panel(panels.render_prompt_registry)
+with tabs[12]:
+    safe_panel(panels.render_ai_insights)
+with tabs[13]:
+    safe_panel(panels.render_ai_control_center)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")

@@ -77,7 +77,7 @@ Everything else has a working default. See [Section 3](#3-configuring-your-envir
 python3 database_setup.py
 ```
 
-This creates `quant_platform.db` (SQLite) with the correct schema for storing daily signals and execution logs. The file already exists in the repo with 169 seeded trades — you only need to re-run this if you want to reset it or if the schema has changed.
+This creates `quant_platform.db` (SQLite) with the correct schema for storing daily signals and execution logs. The file already exists in the repo but **ships with an empty `trades` table** — you only need to re-run this if you want to reset it or if the schema has changed. The closed-trade population that powers Kelly sizing and the calibration tracker is reconstructed on demand from your Robinhood filled-order history by `data/robinhood_orders.py` (Tier 7) and accumulates live as advisory runs record trades.
 
 ### Step 4 — Verify your setup
 
@@ -85,7 +85,7 @@ This creates `quant_platform.db` (SQLite) with the correct schema for storing da
 python scripts/preflight_check.py
 ```
 
-This runs 11 automated readiness checks. On a fresh setup you will see some failures (especially `heartbeat_fresh` and `paper_trading_duration`) — that is normal. See [Section 13](#13-preflight-check--are-you-ready-to-go-live) for what each check means.
+This runs 15 automated readiness checks. On a fresh setup you will see some failures (especially `heartbeat_fresh` and `paper_trading_duration`) — that is normal. See [Section 13](#13-preflight-check--are-you-ready-to-go-live) for what each check means.
 
 ---
 
@@ -203,8 +203,8 @@ streamlit run gui/app.py
 
 It opens in your browser with nine tabs:
 
-1. **🚀 Launcher** — a Launch button that runs `main_orchestrator.py` as a background subprocess, with live stage indicators (Data Acquisition → Processing → Forecasting → Execution), a heartbeat freshness gauge, and a tail of the run log. Optional **Dry run** and **Refresh Robinhood account** toggles.
-2. **📈 Reports** — portfolio heat, edge/MFE/MAE on the latest signals, and one-click download of the generated HTML report / signals CSV.
+1. **🚀 Launcher** — **two** launch buttons: **▶️ Launch Pipeline** runs `main_orchestrator.py` (async, broker, full HTML report); **🔄 Refresh Data (Advisory)** runs `main.py` (synchronous advisory loop, broker-free — the canonical `.env`-loading entry point). Live stage indicators (Data Acquisition → Processing → Forecasting → Execution) for the orchestrator path, a heartbeat freshness gauge, and **two log expanders** — the active run log (`output/gui_run.log` or `output/gui_advisory.log`) plus the platform-wide structured telemetry stream from `alerting.setup_logging()` (`logs/investyo.log`). A **pre-launch env-readiness check** flags missing required variables (e.g. `FRED_API_KEY`) *before* you click, so a degraded run is diagnosed up front rather than after the fact. Optional **Dry run**, **Refresh Robinhood account**, and **Auto-refresh while running** (5 s ticker) toggles.
+2. **📈 Reports** — portfolio heat, edge/MFE/MAE on the latest signals, one-click download of the generated HTML report / signals CSV, and a full **Brinson-Fachler Attribution Analysis** section. Edit the GICS-11 sector matrix directly (`st.data_editor`) or **bulk-paste TSV/CSV** from a spreadsheet, then click *Compute attribution* to see allocation / selection / interaction effects (top-line metrics + per-sector breakdown + bar chart, with CSV downloads for the editor input and the breakdown).
 3. **⚙️ Settings** — edit **non-secret** tunables (`RISK_FREE_RATE`, `KELLY_FRACTION`, `DEFAULT_TICKERS`, thresholds, …) and save them to `.env`. **Secrets (API keys, passwords, TOTP) are shown masked and are read-only here** — edit those directly in `.env`. Changes take effect on the **next** launch.
 4. **🧩 Strategy Matrix** — enable/disable individual signal modules (writes `DISABLED_SIGNAL_MODULES`), adjust their weights (writes `SIGNAL_WEIGHTS`), and manually activate/deactivate the **Macro Kill Switch**.
 5. **📒 Paper Monitor** — your Robinhood account snapshot (account state only) side-by-side with the pipeline's market-data projection, reconciled by ticker.
@@ -296,6 +296,19 @@ Open either in any browser. The advisory report (`daily_report.html`)
   BUY/HOLD/SELL tally. Sourced from your Robinhood account snapshot
   (`cache/account_snapshot.json`); shows an "ACCOUNT DATA STALE" pill when the
   snapshot is older than 24 h. Hidden when no account data is available.
+- **Δ Since Last Run band**: at the very top of the report, immediately under
+  the portfolio summary band, the report now shows what changed compared to
+  the previous run — **new BUYs**, **action flips** (e.g. `JNJ: BUY → HOLD`),
+  **conviction moves** with `|Δ| ≥ 0.20` (tunable via
+  `SNAPSHOT_CONVICTION_DELTA_THRESHOLD` in `.env`), **holdings added/dropped**,
+  and **regime changes** (e.g. `RISK ON → RECESSION`). On the very first run
+  every BUY is treated as "new" and every held symbol as "added"; on subsequent
+  runs only material changes appear. The band is hidden entirely when no prior
+  snapshot exists or rotation failed (it never blocks the report). Powered by
+  rotated state snapshots in `output/history/state_snapshot_<UTC>.json`
+  (pruned after `SNAPSHOT_HISTORY_DAYS=30` days). Inspect any run manually:
+  `python -m scripts.snapshot_diff` (markdown) or
+  `python -m scripts.snapshot_diff --format json output/history/old.json output/history/new.json`.
 - **Macro regime + portfolio-heat cards** and a BUY/HOLD/SELL doughnut.
 - **Holdings, Action Signals & Rationale table**: per symbol — shares, average
   cost, current price, market value, signed unrealized P&L ($ and %), suggested
@@ -305,6 +318,8 @@ Open either in any browser. The advisory report (`daily_report.html`)
 - **Search box + sortable columns**: type to filter by symbol/action/rationale;
   click a column header to sort. (No page reload, no external JS libraries.)
 - **Gravity AI Audit Log tab**: raw JSON findings from the verification suite.
+- **Reports tab — Decision Journal**: log whether you acted on, passed, or modified each advisory signal (see [Manual Execution Journal](#manual-execution-journal-reports-tab) below).
+- **Reports tab — Conviction Calibration**: reliability diagram showing whether the conviction scores match actual win rates (see [Conviction Calibration](#conviction-calibration-reports-tab) below).
 
 Non-held watchlist symbols render "—" in the holdings columns (positions are
 never fabricated). The report contains no credentials.
@@ -315,7 +330,39 @@ never fabricated). The report contains no credentials.
 
 ### State snapshot (for the dashboard)
 
-`output/state_snapshot.json` — machine-readable summary consumed by the Streamlit observability dashboard. Updated every pipeline run.
+`output/state_snapshot.json` — machine-readable summary consumed by the Streamlit observability dashboard. Updated every pipeline run. A timestamped copy is ALSO written to `output/history/state_snapshot_<UTC>.json` and pruned after `SNAPSHOT_HISTORY_DAYS` (default 30); the daily HTML report's "Δ Since Last Run" band reads the two most recent rotated copies via `scripts/snapshot_diff.py`.
+
+### Manual Execution Journal (Reports tab)
+
+The **Decision Journal** section in the Reports tab lets you log what you did with each advisory signal — useful for post-hoc analysis and for teaching the calibration tracker which signals you actually endorsed.
+
+**How it works:**
+
+1. Open the Reports tab and scroll to "Signal Decision Journal".
+2. Select the symbol from the dropdown (pre-populated with the last pipeline signals).
+3. The context strip shows the system recommendation, conviction score, and current price.
+4. Add optional notes, then click one of:
+   - **✅ Acted** — you executed (or are executing) the suggested action.
+   - **⏭ Passed** — you saw the signal but chose not to act.
+   - **🔁 Modified** — you acted differently from the system (enter notes explaining the change).
+5. The entry is appended to `output/decision_log.jsonl` (JSON-Lines, one entry per line).
+
+For **"Acted"** entries only, the journal automatically looks up the nearest matching trade in `quant_platform.db` within ±24 h and records the `trade_id`. This allows the conviction calibration chart to filter to "decisions the operator actually endorsed."
+
+**Log file location:** `output/decision_log.jsonl` — append-only, never read by the signal pipeline. The Past Decisions expander shows the last 20 entries with a CSV download button.
+
+### Conviction Calibration (Reports tab)
+
+The **Conviction Calibration** section in the Reports tab renders a reliability diagram — comparing the system's stated conviction score against the actual empirical win rate per conviction bin.
+
+- X-axis: conviction bin (0–1, split into 10 equal bins by default).
+- Y-axis: actual win rate for closed trades in that bin.
+- Diagonal line: "perfect calibration" (conviction 0.8 → 80% actual win rate).
+
+Bars above the diagonal → conviction underestimates actual skill in that range.
+Bars below the diagonal → conviction is overconfident in that range.
+
+**Important:** win rates are only shown for bins with ≥ 5 trades (configurable). Closed trades reconstructed from your Robinhood order history (via `data/robinhood_orders.py`) have no conviction scores, so the chart starts empty and fills in as `record_trade(conviction=...)` calls accumulate from live advisory runs.
 
 ### Database
 
@@ -370,7 +417,7 @@ Where:
 - `KELLY_FRACTION` = 0.5 (half-Kelly — halves the bet for safety)
 - Result is capped at `KELLY_CAP` = 0.20 (max 20% from this formula)
 
-The database ships with 169 real closed trades seeded from a Robinhood account, so you start on the real Kelly path immediately.
+The database ships with an empty `trades` table, so sizing starts on the vol-target fallback path. Once at least 30 closed trades accumulate — reconstructed from your Robinhood filled-order history via `data/robinhood_orders.py`, or recorded live by advisory runs — `_calculate_kelly_sizing()` switches to the real fractional-Kelly path automatically.
 
 **If you have fewer than 30 trades for a strategy:**
 Falls back to volatility targeting:
@@ -475,6 +522,12 @@ The harness also runs walk-forward analysis (rolling train/test splits) and repo
 
 ## 11. Paper Trading Workflow
 
+> **Advisory mode is the project default (`ADVISORY_ONLY=true`).** In this mode no orders
+> are submitted to any broker — the pipeline is purely informational. This section
+> documents the paper-trading workflow that applies once you have explicitly set
+> `ADVISORY_ONLY=false`. See [Advisory-Only Mode](#advisory-only-mode) for the
+> procedure and implications.
+
 Paper trading = running with real market data and real logic, but simulated money (no real orders). This is mandatory before going live.
 
 ### Start paper trading
@@ -568,21 +621,36 @@ If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt
 python scripts/preflight_check.py
 ```
 
-Runs 11 checks. **All must pass (exit code 0) before going live.** Here's what each check does and how to fix failures:
+Runs 15 checks total. Behaviour depends on `ADVISORY_ONLY`:
 
-| Check | Passes when | How to fix a failure |
-|-------|------------|---------------------|
-| `fred_key_configured` | `FRED_API_KEY` is set and is not the old leaked key | Add key to `.env` |
-| `alpaca_configured` | Both `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` are set | Add keys to `.env` |
-| `alpaca_paper_mode` | `ALPACA_PAPER=true` — **warning only, not blocking** | Change to `false` only when ready to go live |
-| `dry_run_disabled` | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
-| `env_not_committed` | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
-| `kill_switch_inactive` | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
-| `heartbeat_fresh` | `output/heartbeat.txt` is < 2 hours old | Run `python3 main_orchestrator.py` to generate it |
-| `db_exists` | `quant_platform.db` exists and is non-empty | Run `python3 database_setup.py` |
-| `paper_trading_duration` | ≥ 90 days since `PAPER_TRADING_START_DATE` | Wait — this is intentional; set your start date when you begin |
-| `validation_reports` | At least one report exists, all are deployable, and all are < 30 days old | Run `python -m validation.harness --strategy main_pipeline --start 2015-01-01 --end 2024-12-31` |
-| `no_unexpected_risk_blocks` | No `minimum_validation` blocks in `risk_gate_blocks.jsonl` in the last 24h | Generate a validation report — the minimum_validation risk gate is blocking orders because no deployable reports exist |
+* **`ADVISORY_ONLY=true` (default)**: seven checks are automatically skipped (shown
+  as PASS with a per-check advisory-mode note): four broker-stack checks
+  (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`,
+  `paper_trading_duration`), one key-rotation check (`alpaca_key_rotation_recent` —
+  Alpaca keys have no blast-radius risk while the broker surface is quarantined), and
+  two runtime-state checks that are false-positives for advisory runs
+  (`heartbeat_fresh`, `validation_reports`). `advisory_only_active` always passes
+  loudly. Exit 0 when the remaining checks pass.
+* **`ADVISORY_ONLY=false`**: all 15 checks run. Exit 0 only when ALL pass (required
+  before going live).
+
+| Check | Advisory skip? | Passes when | How to fix a failure |
+|-------|:--------------:|------------|---------------------|
+| `fred_key_configured` | No | `FRED_API_KEY` is set | Add key to `.env` |
+| `key_rotation_recent` | No | `FRED_KEY_ROTATED_DATE` set and within 90 days — warning only, never blocking | Set `FRED_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` when you rotate |
+| `alpaca_key_rotation_recent` | **Yes** | `ALPACA_KEY_ROTATED_DATE` set and within 90 days — warning only, never blocking | Set `ALPACA_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` when you rotate |
+| `advisory_only_active` | No | Always — PASS-loud when `true`, PASS-with-warning when `false` | Set `ADVISORY_ONLY=true` to return to advisory mode |
+| `alpaca_configured` | **Yes** | Both Alpaca keys are set | Add keys to `.env` |
+| `macro_regime_gate_enabled` | No | `MACRO_REGIME_GATE_ENABLED=true` (blocks in live mode when off) | Set `MACRO_REGIME_GATE_ENABLED=true` in `.env` |
+| `alpaca_paper_mode` | **Yes** | `ALPACA_PAPER=true` — warning only | Change to `false` only when ready to go live |
+| `dry_run_disabled` | **Yes** | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
+| `env_not_committed` | No | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
+| `kill_switch_inactive` | No | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
+| `heartbeat_fresh` | **Yes** | `output/heartbeat.txt` is < 2 hours old (written by `main_orchestrator.py` only) | Run `python3 main_orchestrator.py` to generate it |
+| `db_exists` | No | `quant_platform.db` exists and is non-empty | Run `python3 database_setup.py` |
+| `paper_trading_duration` | **Yes** | ≥ 90 days since `PAPER_TRADING_START_DATE` | Wait — this is intentional; set your start date when you begin |
+| `validation_reports` | **Yes** | At least one report exists, deployable, and < 30 days old | Run `python -m validation.harness --strategy main_pipeline --start 2015-01-01 --end 2024-12-31` |
+| `no_unexpected_risk_blocks` | No | No `minimum_validation` blocks in last 24 h | Generate a validation report — the minimum_validation risk gate is blocking because no deployable reports exist |
 
 ### JSON output (for automation)
 
@@ -704,9 +772,17 @@ For Gmail: use an App Password (not your main password). Google account → Secu
 
 ---
 
-## 15. The Kill Switch
+## 15. The Kill Switch / Pause Gate
 
-The kill switch immediately halts all new order submissions. Use it in an emergency.
+In **advisory mode** (`ADVISORY_ONLY=true`) the kill switch sentinel (`output/KILL_SWITCH`)
+repurposes as a **pause-recommendations gate**: when the file exists, `main.run_once()`
+logs `"Advisory paused by kill-switch sentinel — skipping evaluation cycle"` and returns
+an empty RunResult for that cycle.  `main_orchestrator._main_body()` returns immediately
+before `run_pipeline()` so the last written `state_snapshot.json` and HTML report are
+preserved.  No broker interaction exists to halt — this is purely a signal-generation pause.
+
+In **live-execution mode** (`ADVISORY_ONLY=false`) the sentinel also causes `OrderManager`
+to raise `KillSwitchActiveError` before any order reaches the broker.
 
 ### Check status
 
@@ -714,15 +790,19 @@ The kill switch immediately halts all new order submissions. Use it in an emerge
 python -m execution.kill_switch --status
 ```
 
-### Activate (block all orders now)
+### Activate (pause advisory / block live orders)
 
 ```bash
-python -m execution.kill_switch --activate "manual emergency halt"
+python -m execution.kill_switch --activate --reason "investigating anomaly"
 ```
 
-Once active, `OrderManager` raises `KillSwitchActiveError` before even looking at any order. The pipeline continues running and producing signals — only order submission is blocked.
+In advisory mode: next pipeline run skips evaluation and logs the pause reason.
+In live mode: `OrderManager` raises `KillSwitchActiveError` before any order. The pipeline
+continues to run and produce signals — only order submission is blocked.
 
-### Deactivate (resume orders)
+The Launcher tab → Safety Controls also exposes a toggle button.
+
+### Deactivate (resume)
 
 ```bash
 python -m execution.kill_switch --deactivate
@@ -730,7 +810,9 @@ python -m execution.kill_switch --deactivate
 
 ### How it works
 
-The kill switch is a file: `output/KILL_SWITCH`. Its presence = active. The platform checks for file existence on every order attempt — no database, no network call, no race condition. To activate from code:
+The kill switch is a file: `output/KILL_SWITCH`. Its presence = active. The platform
+checks for file existence on every evaluation or order attempt — no database, no network
+call, no race condition. To activate from code:
 
 ```python
 from execution.kill_switch import GlobalKillSwitch
@@ -738,11 +820,34 @@ ks = GlobalKillSwitch()
 ks.activate("VIX spiked above 45")
 ```
 
-### Automatic kill switch
+### Automatic kill switch (live mode only)
 
-The platform auto-fires the kill switch in the macro kill switch check within the rules-based regime. You don't need to trigger this manually — it fires when:
+In live-execution mode, the platform auto-fires the kill switch when the macro regime
+becomes extreme. You don't need to trigger this manually — it fires when:
+
 - `vix > 30` AND `sahm_rule >= 0.5` (base condition), OR
-- The regime is RECESSION AND HMM agrees risk-off > 70% AND `vix > 25` OR `sahm >= 0.3` (faster trigger with HMM agreement)
+- The regime is RECESSION AND HMM agrees risk-off > 70% AND `vix > 25` OR `sahm >= 0.3`
+  (faster trigger with HMM agreement)
+
+In advisory mode, this auto-fire has no practical effect (no orders to block) but the
+sentinel is still written so the GUI pause indicator activates and the operator is alerted.
+
+### Macro-triggered advisory gating (independent of the kill switch)
+
+Even when the kill switch is **not** active, the advisory engine applies conservative
+overrides when macro conditions deteriorate.  These are applied per-symbol inside
+`engine/advisory.evaluate()` before the holding-aware overlay:
+
+| Condition | Effect on advisory signal |
+|---|---|
+| `market_regime = RECESSION` or `CREDIT EVENT` | Hard gate: all BUY / STRONG BUY → HOLD |
+| `VIX > 30` OR `Sahm Rule ≥ 0.5` | Soft gate: composite score penalised by 25 pts |
+| Finance / Financial Services / Real Estate sector AND yield curve inverted (`< 0`) OR HY OAS > 6% | Sector veto: BUY → HOLD for structurally exposed sectors |
+
+When a gate fires, the advisory rationale explains the override (e.g. "Macro regime is
+RECESSION: systemic risk gate halts fresh equity allocations").  Existing holders may
+still receive a SELL from the loss-cut rule even when a macro gate is active — the gate
+only suppresses *new* BUY allocations.
 
 ---
 
@@ -867,7 +972,7 @@ pytest -x
 | `tests/test_risk_gate.py` | All 10 pre-trade risk gate checks |
 | `tests/test_kill_switch.py` | Kill switch lifecycle |
 | `tests/test_alerts.py` | Alert channel dispatch (Discord, Slack, email, file) |
-| `tests/test_preflight.py` | All 11 preflight checks |
+| `tests/test_preflight.py` | All 14 preflight checks |
 | `tests/test_hmm_synthetic.py` | HMM regime detector accuracy |
 | `tests/test_kelly.py` | Kelly sizing formula and fallback |
 | `tests/test_multifactor.py` | Fama-French multifactor signal |
@@ -967,4 +1072,584 @@ This creates `reports/main_pipeline_validation_summary.json`. The preflight chec
 
 ---
 
-*Last updated: 2026-06-25. Reflects: Sheet2 column-A universe fallback in `main.py`, the `.env`→`os.environ` `load_dotenv()` fix, and the `arch ≥ 8.0` GJR-GARCH `fit()` API fix.*
+*Last updated: 2026-06-26. Reflects: Tier 5.3 kill-switch pause gate wired into `main.run_once()` and `main_orchestrator._main_body()`, macro-triggered advisory gating (RECESSION hard gate, VIX/Sahm soft gate, sector veto) added to §15. Prior: Tier 5.1 `ADVISORY_ONLY=true` default (broker quarantine), advisory-mode preflight auto-skip (§13), Strategy Matrix mode toggle suppressed under advisory mode, new Advisory-Only Mode section, Sheet2 column-A universe fallback, `load_dotenv()` placement fix.*
+
+## Safety tab (formerly Gravity Audit) — what to check when an order is blocked
+
+The Safety tab now leads with two new sections before the Gravity audit launcher:
+
+1. **🚧 Circuit Breaker Dashboard** — every active trip derived from
+   `output/KILL_SWITCH` and the last 24 hours of `output/risk_gate_blocks.jsonl`.
+   CRITICAL severity halts everything (kill switch, daily loss limit, portfolio
+   heat, macro kill switch, minimum_validation gate); WARNING covers per-symbol
+   blocks (max position size, max correlation, market hours, etc.). Click
+   **🔬 Inspect raw trip payloads** to see the original JSON-line block — that's
+   the source of truth.
+
+2. **🕸️ Dependency Map** — pick the data source(s) that are degraded right
+   now (Alpaca, Finnhub, FRED, Robinhood, etc.) and the panel lists every
+   strategy/tab/report that loses coverage. Useful both as documentation
+   (read-only) and as triage during an outage. The map lives in
+   `gui/dependency_map.py`; extend it there as new consumers come online.
+
+When the orchestrator vetoes orders unexpectedly:
+1. Open the Safety tab.
+2. Look at the Circuit Breaker Dashboard for the most recent CRITICAL trip.
+3. If it's the kill switch, check Strategy Matrix → Manual Kill Switch panel to
+   deactivate (the sentinel file is `output/KILL_SWITCH`).
+4. If it's a risk-gate block, read the `threshold` / `observed` columns and the
+   raw payload — those tell you *which check* fired and *by how much*.
+
+## Advisory-Only Mode
+
+`settings.ADVISORY_ONLY=true` is the project default. It quarantines the entire broker-
+execution surface so the pipeline can run safely without ever touching a live or paper
+account.
+
+### What changes when ADVISORY_ONLY=true
+
+| Layer | Behaviour |
+|-------|-----------|
+| `main_orchestrator._execute_broker_orders` | Returns immediately with an INFO log — no broker imports reached |
+| `gui/app.py` header | Shows `📋 ADVISORY MODE` banner instead of Simulation / Paper / Live badge |
+| Strategy Matrix mode toggle | Suppressed — replaced by a read-only caption showing underlying flags |
+| `scripts/preflight_check.py` | Four broker checks auto-skip; `advisory_only_active` = PASS-loud |
+| Kill switch sentinel | Repurposes as a pause-recommendations gate (see §15) |
+
+### Re-enabling broker execution
+
+```bash
+# 1. Set in .env
+ADVISORY_ONLY=false
+DRY_RUN=false
+ALPACA_PAPER=true    # start with paper; change to false only for live
+
+# 2. Verify preflight (all 13 checks must pass)
+python scripts/preflight_check.py
+
+# 3. Launch pipeline (paper mode)
+python3 main_orchestrator.py
+```
+
+All three flags must be consistent: `ADVISORY_ONLY=false AND DRY_RUN=false AND
+ALPACA_PAPER=false` is required to reach a live submission. The GUI mode toggle
+reappears automatically once `ADVISORY_ONLY=false`.
+
+---
+
+## Strategy Matrix tab — Global Execution Mode toggle
+
+> **Suppressed while `ADVISORY_ONLY=true`.** The toggle reappears automatically
+> when `ADVISORY_ONLY=false`. See [Advisory-Only Mode](#advisory-only-mode) above.
+
+The Strategy Matrix (Control) tab leads with a **🎚️ Global Execution Mode**
+selector backed by `gui/strategy_registry.py`. Three modes:
+
+| Mode | DRY_RUN | ALPACA_PAPER | What happens |
+|---|---|---|---|
+| 🧪 Simulation | true | true | OrderManager intercepts every intent before any broker contact. Safe default. |
+| 📝 Paper | false | true | Orders route to the Alpaca paper sandbox. No real money. |
+| 🔴 Live | false | false | Orders hit the live broker. Requires a **CONFIRM LIVE PRODUCTION** click. |
+
+**Setting takes effect on the next orchestrator/advisory launch.** We never
+mutate a running `settings.Settings`. The writer goes through the allowlist-
+bounded `gui/env_io.write_setting` so the GUI cannot flip a half-state (only
+ALPACA_PAPER without DRY_RUN, for example) — both flags are written together.
+
+Below the mode selector is the **📜 Strategy Version Registry**: a table of
+each registered signal module with its sha256 prefix (first 12 hex chars) and
+file mtime. If you redeployed a strategy file but the version hash and mtime
+haven't moved, the file did not actually change on disk — useful when
+"obviously I deployed this" disagrees with the dashboard.
+
+## Reports tab — Live vs Backtested provenance + drill-down
+
+The Reports tab now opens with a colour-coded banner:
+
+* **🔵 Live data** (blue `st.info`) — sourced from `output/state_snapshot.json`
+  written by the most recent orchestrator/advisory run AND the active execution
+  mode is Paper or Live.
+* **⚪ Backtested / simulated** (grey Markdown blockquote) — either no snapshot
+  exists yet, or `DRY_RUN=true` is active so every number is simulated.
+
+Each MFE/MAE/Edge Ratio entry now has a **🔬 Drill down by symbol** expander:
+pick a ticker → see the full signal row + recent closed trades for that symbol
+from `transactions_store.TransactionsStore`. Use this to answer "why is this
+score what it is" without exporting the CSV.
+
+## Advisory-Only Mode (Tier 5.1, default-on)
+
+The project ships with **`settings.ADVISORY_ONLY=true`** as the default. In this mode the platform runs the full quant pipeline — fetches data, computes indicators, runs forecasts, sizes positions, writes the HTML report and JSON payload — but **never submits orders to any broker**.
+
+**What you will see:**
+- GUI: a persistent blue `📋 ADVISORY MODE` banner above the tab bar; the Strategy Matrix `Global Execution Mode` toggle shows `📋 Advisory mode — broker execution disabled` instead of the Simulation/Paper/Live radio.
+- Orchestrator: an INFO log line `"ADVISORY_ONLY=True — broker execution surface is quarantined; skipping all order submission, reconciliation, and broker imports."`
+- Preflight: a new `advisory_only_active` row at position #2; the four broker-dependent rows (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`, `paper_trading_duration`) show as PASS with reason `"(skipped: ADVISORY_ONLY=True — broker check not applicable)"`.
+
+**To re-enable broker execution:** set `ADVISORY_ONLY=false` in `.env`, then restart the orchestrator. See §1 of `docs/RUNBOOK.md` for the paper→live switch checklist.
+
+## Symbol Watch Alerts (Tier 1.4)
+
+The platform can send proactive ntfy push notifications whenever a symbol's advisory action flips or conviction crosses a threshold — without you needing to poll the dashboard.
+
+### Prerequisites
+
+1. **ntfy app** — install on your phone from the App Store or Google Play (search "ntfy").
+2. **NTFY_TOPIC** must already be set in `.env` (see §14 of this guide for the one-time setup). Watch alerts piggyback on the same topic; no second subscription is needed.
+
+### How it works
+
+At the end of every `run_once()` cycle, `watch_engine.py`:
+1. Loads rules from `watch_rules.yaml` (project root).
+2. Loads the previous run's state from `output/watch_state.json`.
+3. Compares the current advisory output against the previous state.
+4. Fires alerts for any matched rules.
+5. Saves updated state atomically for the next run.
+
+### Rule schema (`watch_rules.yaml`)
+
+```yaml
+rules:
+  - symbol: "*"          # "*" = all symbols in the current universe
+    alert_on: conviction_above
+    threshold: 0.85      # [0.0 – 1.0]  required for conviction_above / conviction_below
+    priority: high       # high | default | low  (maps to ntfy X-Priority header)
+    label: "High conviction"   # optional free-text label in the notification
+
+  - symbol: "AAPL"
+    alert_on: action_change
+    priority: default
+```
+
+**`alert_on` values:**
+| Value | Fires when… |
+|---|---|
+| `action_change` | Action flips (e.g. HOLD→BUY, BUY→SELL). **Never fires on the very first run** (no prior state to compare). |
+| `conviction_above` | Conviction rises to ≥ threshold for the first time. Stays silent while the condition persists. Resets when conviction drops back below threshold. |
+| `conviction_below` | Mirror of `conviction_above` — fires on the first run where conviction falls below threshold. |
+
+### Environment variables
+
+| Variable | Default | Notes |
+|---|---|---|
+| `WATCH_RULES_FILE` | `watch_rules.yaml` | Path to the YAML rule file. Relative paths are resolved from the working directory where `main.py` is launched. |
+| `NTFY_DASHBOARD_URL` | *(empty)* | Optional URL appended to every alert body (e.g. `http://localhost:8501`). Tap the notification to open the GUI directly. |
+
+### Adding or editing rules
+
+1. Open `watch_rules.yaml` in any text editor.
+2. Add, remove, or modify `rules` entries.
+3. The changes take effect on the **next** `run_once()` cycle — no restart needed.
+
+### Resetting alert state
+
+Conviction-above/below alerts use edge-triggering to avoid notification spam. If you want an alert to fire again immediately (e.g. after adjusting the threshold), delete `output/watch_state.json`. The next run treats all symbols as first-run and re-evaluates from scratch.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| No alerts ever fire | `NTFY_TOPIC` is unset or empty | Set `NTFY_TOPIC=your-topic` in `.env` |
+| Rule in YAML but no alert | `alert_on` value not recognised, or threshold out of `[0, 1]` | Check `logs/investyo.log` for a WARNING "Skipping rule…" line |
+| `conviction_above` never re-fires | Edge suppression is working as intended | Delete `output/watch_state.json` to reset |
+| Stale symbol keeps alerting | Symbol was removed from universe but `watch_state.json` still has its entry | Automatic: state is pruned to the current universe each run; wait one cycle |
+
+---
+
+## Verbose Advisory Rationale (Tier 1.5)
+
+By default the per-symbol rationale is a single terse paragraph suitable for dashboards and phone notifications. Set `RATIONALE_VERBOSITY=verbose` in `.env` to unlock a four-section institutional-grade narrative.
+
+### Prerequisites
+- `.env` must exist (copy from `.env.example`).
+- No additional dependencies.
+
+### How it works
+Every time `run_once()` evaluates a symbol it calls `engine.advisory.evaluate()`. When `RATIONALE_VERBOSITY=verbose`:
+
+1. `evaluate()` pre-computes win-rate data from `TransactionsStore` (same database used by Kelly sizing).
+2. It also pulls first-line `__doc__` strings from all signal modules that are active in the current macro regime.
+3. Both data blobs are passed to `_build_rationale()` which appends four labelled sections after the standard paragraph.
+
+### The four verbose sections
+
+| Label | What it shows |
+|---|---|
+| **[A] Regime context** | HMM probability level and FRED macro snapshot (VIX, Sahm Rule, yield-curve spread) so you immediately understand whether macro filters are active or bypassed. |
+| **[B] Calibration** | Strategy win-rate and Kelly edge estimate from closed trades, so conviction is grounded in a real track record rather than a single signal. Falls back gracefully when fewer than 30 trades exist. |
+| **[C] Invalidation** | Explicit "flip points" that would void the current recommendation: RSI reversal levels, score breakdowns, VIX/Sahm macro gate tripwires, sector-veto conditions, and SMA-200 trend break. |
+| **[D] Theory notes** | First-line docstring of each regime-active signal module, so an analyst can understand the theoretical basis without reading source code. |
+
+### Enabling verbose mode
+
+```bash
+# In .env
+RATIONALE_VERBOSITY=verbose
+```
+
+Then restart the platform (`.env` is loaded at entry-point startup):
+
+```bash
+python3 main.py         # advisory orchestrator (fastest refresh)
+# or
+python3 main_orchestrator.py  # full async pipeline
+```
+
+The `rationale` field in the HTML report and Google Sheet will now show the extended narrative.
+
+### Switching back to standard mode
+
+```bash
+# In .env
+RATIONALE_VERBOSITY=standard   # or just remove the line; 'standard' is the default
+```
+
+### Example verbose rationale
+
+```
+AAPL: Accumulate a new position. The multi-signal composite score is 72/100
+(moderately bullish; regime: RISK ON); the 30-day blended forecast implies
+5.0% upside (target $105.00 vs current $100.00); Aroon oscillator (72) indicates
+a strong uptrend. (Raw strategy signal: BUY.)
+
+[A] Regime context: RISK ON — HMM strongly confirms risk-on (p=0.82).
+VIX=18.4, Sahm Rule=0.10, 10y-2y spread=+0.32.
+[B] Calibration: This multi-signal setup has shown a 64% win rate over 84 closed
+trades (payoff ratio 1.8:1; Kelly edge 0.45 — positive — edge exists).
+[C] Invalidation: score drop below 35 converts signal to RISK REDUCE; RSI rising
+above 35 (currently 22) voids the oversold entry; VIX > 30 or Sahm Rule ≥ 0.5
+applies a −25pt macro penalty; close below SMA-200 ($95.00) invalidates the
+uptrend filter.
+[D] Indicator notes: Aroon Trend: Aroon Oscillator chop-filtering for trend
+detection; Macd Momentum: MACD Bullish/Bearish crossover scoring; Timeseries
+Momentum: Moskowitz/Ooi/Pedersen time-series momentum.
+```
+
+### Compliance and audit use
+
+The `[A]–[D]` markers are stable labels — compliance reviewers can cite "section [C] invalidation thresholds" without parsing the full text. The verbose rationale is entirely data-driven; no new thresholds are hard-coded (all flip points reference the `CONFIG` dict in `engine/advisory.py`).
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| No verbose sections even after setting `RATIONALE_VERBOSITY=verbose` | `.env` was not reloaded | Restart `main.py` / `main_orchestrator.py` — settings are loaded once at startup. |
+| `[B]` shows "Insufficient closed-trade history" | Fewer than 30 closed trades in `quant_platform.db` | Expected on fresh installations. Run for several weeks to accumulate trade history. |
+| `[D]` section absent | All signal modules filtered out by `is_active_in_regime()` (e.g. RECESSION regime) | Expected in extreme macro regimes where most signals are suppressed. Check the `[A]` section for the regime name. |
+
+---
+
+## Autonomous Advisory Agent
+
+The autonomous agent (Tier 6) replaces `--interval N`'s fixed timer with a
+self-pacing loop. It still only produces advisory output — it never places an
+order — but it decides *when* to re-run and re-pings you about high-conviction
+signals you have not acted on.
+
+```bash
+python3 main.py --agent          # takes precedence over --interval
+```
+
+### What it does each cycle
+
+1. Runs one full advisory cycle (same as `--interval`): signals, sizing, HTML
+   report, Sheets, and the per-cycle Symbol Watch alerts.
+2. **Adaptive cadence** — picks the next sleep based on US market hours, VIX,
+   macro regime, and recent errors: fast around the open/close and during
+   volatility spikes, slow overnight/weekends, and it backs off after errors.
+3. **Actionable backlog** — a high-conviction BUY/SELL you have not logged a
+   decision for is re-pinged on escalating tiers (≈1 h / 4 h / 24 h) via ntfy,
+   then stops once you act (a matching "acted" entry in the Decision Journal),
+   the signal expires, or the reminder cap is reached.
+4. **Persistent state** — the backlog and conviction history survive restarts
+   in `output/agent_state.json`.
+
+### Stopping it
+
+Press Ctrl-C (or send SIGTERM). The loop finishes the current cycle, dispatches
+any pending reminders, saves state, and exits cleanly.
+
+### Configuration
+
+`NTFY_TOPIC` enables push reminders (unset = silent). `NTFY_DASHBOARD_URL`
+appends a one-click dashboard link to each push. All cadence/backlog thresholds
+live in `engine.advisory_agent.CONFIG`.
+
+---
+
+## Trade-Signal Alerts
+
+Two advisory trading abilities (Tier 6.1) layer on the autonomous agent. Both
+are derived purely from data the agent already has each cycle (recommendations
++ your Robinhood snapshot) and both are pushed as ntfy alerts — no order code.
+
+### Conviction momentum
+
+The agent uniquely tracks each symbol's conviction *trajectory* across cycles:
+
+- **Building** — conviction is climbing steadily but has not yet reached the
+  backlog siren, so you get an *early* heads-up before the move matures.
+- **Fading** — conviction is deteriorating on a name no longer rated BUY, an
+  *early* exit warning.
+
+Each trend pings once (debounced); it re-alerts only if the trend breaks and
+re-forms, or flips direction.
+
+### Stop / target proximity
+
+For your held positions, the agent derives a volatility-scaled (ATR) stop below
+your cost basis and a take-profit target from the 30-day forecast, then alerts
+when the live price approaches (or breaches) either level — turning the agent
+into a position-management assistant. Dust positions and rows with bad price
+data are skipped (no fabricated levels).
+
+All thresholds live in `engine.trade_signals.CONFIG`.
+
+---
+
+## Robinhood Execution Bridge
+
+The Robinhood Execution Bridge (Tier 8) is the **opt-in, paper-first** path that
+lets the platform act on its advisory output through the Robinhood Trading MCP.
+It is **off by default** and independent of `ADVISORY_ONLY` (which governs the
+separate Alpaca surface).
+
+Because the MCP is consumed by a **Claude Code agent** — not the headless
+Python pipeline — the platform only writes a gated, dry-run proposed-order queue
+(`output/execution_queue.json`); a Claude Code agent (`/rh-execute`) is the only
+actor that ever calls the MCP. *Python writes intents; the agent writes
+outcomes* to `output/execution_receipts.jsonl`.
+
+### One-time setup (local, interactive)
+
+```bash
+claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mcp/trading
+# then in Claude Code:  /mcp  → robinhood-trading → authenticate (OAuth)
+```
+
+Open and fund a dedicated Robinhood **Agentic account** with a small, capped
+amount — agent orders only ever touch that account; your main account stays
+read-only. Smoke-test the read tools (`get_accounts`, `get_portfolio`) before
+enabling any placement.
+
+### Execution modes
+
+Set `ROBINHOOD_EXECUTION_MODE` in `.env`. Roll out strictly `off → review → live`.
+
+| Mode | What happens |
+|------|--------------|
+| `off` (default) | Nothing is written. Zero behavior change. |
+| `review` | The queue is emitted; `/rh-execute` only *simulates* via `review_equity_order` and stops. This is the paper/dry-run stage. |
+| `live` | An intent may be placed **only** when the risk gate passed, the kill switch is clear, and a per-order notional cap is set — and `/rh-execute` still asks you to confirm each order individually. |
+
+`ROBINHOOD_MAX_NOTIONAL_PER_ORDER` is a hard per-order dollar ceiling; `live`
+requires it `> 0` or `preflight_check.py` fails.
+
+### Running it
+
+```bash
+python3 main.py                  # writes output/execution_queue.json when mode != off
+# then in Claude Code:
+/rh-execute                      # previews every order; in live mode, places with confirmation
+```
+
+### Stopping placement immediately
+
+The kill switch blocks all placement (checked when the queue is built and again
+before each order):
+
+```bash
+python -m execution.kill_switch --activate --reason "halt robinhood execution"
+```
+
+Or set `ROBINHOOD_EXECUTION_MODE=off` so the next run emits nothing. Full
+operating procedure: see `docs/RUNBOOK.md` → "Robinhood Execution Bridge".
+
+---
+
+## In-App Help & Glossary
+
+The **❓ Help tab** in the Command Center (`streamlit run gui/app.py`) gives instant access
+to every concept in this guide without leaving the browser window.
+
+### What you'll find
+
+| Widget | Where | What it does |
+|---|---|---|
+| `❓ What is this & how do I use it?` expander | Top of every tab | Plain-English summary of the tab's purpose and controls |
+| Metric tooltips | VIX, HMM Risk-On, Sahm Rule, Macro Regime KPI chips | Hover-over definition — never a bare number |
+| Glossary | Help tab → search box | 60+ terms (Kelly Target, PBO, DSR, Sahm Rule, IVR, HMM, …) with plain-English definitions and "Read more →" links back to this guide |
+| Section help expanders | Reports, Options, Live Inventory | Inline context for Brinson-Fachler, VRP gate, Coverage Status |
+
+### First-run onboarding tour
+
+On the **very first launch** of the Command Center the Help tab shows a 4-step
+"Start here" checklist (and the Launcher tab's how-to expander opens automatically):
+
+1. Set `FRED_API_KEY` in `.env` (free API key from FRED at `https://fred.stlouisfed.org/docs/api/api_key.html`).
+2. Click **🔄 Refresh Data (Advisory)** in the Launcher tab.
+3. Open the HTML report (`output/daily_report_*.html`).
+4. Review the Conviction Calibration chart (Reports tab) once closed trades accumulate.
+
+Click **✅ Got it — don't show again** to dismiss permanently. The tour writes a marker
+file (`output/.gui_onboarded`). Delete that file to reset the tour.
+
+### Help-key convention
+
+Metric tooltips are looked up via keys of the form `"<tab>.<metric_name>"` in
+`gui/help_content.METRIC_HELP`. A missing key returns `""` and renders no tooltip
+— it **never raises** (CONSTRAINT #6). All operator-facing definitions live in
+`gui/help_content.py`; never hard-code explainer prose directly in `gui/panels.py`.
+
+### Anchor-contract invariant
+
+Every glossary entry's `guide_anchor` field **must** resolve to a real heading slug in
+this file. The contract is enforced by:
+
+- `tests/test_help_content.py::TestAnchorValidity` (runs in CI on every push).
+- Gravity step 68 check 3.
+
+If you rename any heading in this file, search for the old slug in `gui/help_content.py`
+and update it to match the new slug; otherwise the anchor test will fail.
+
+## §16 Remote Prompt Updates (Prompt Registry)
+
+> **Security boundary (must never be overridden):** Fetched prompts are advisory text only.
+> They can change what an AI is *told* — they cannot change what the platform is *permitted to do*.
+> Order submission, advisory quarantine, risk gates, and the kill switch are enforced in Python code,
+> not in any prompt. This invariant is verified on every Gravity audit run (step 69, check 7).
+
+### What the registry is
+
+`prompt_registry/` is a versioned, cryptographically-signed store for every AI-facing instruction
+(master pre-prompt, Gravity step bodies, etc.).  Publishing a new version and moving the "latest"
+pointer is the *only* over-the-internet update mechanism — it never touches Python modules, settings,
+or the broker execution surface.
+
+| File / path | Role |
+|---|---|
+| `prompt_registry/baseline/` | Git-committed fallback bodies (always available, no network) |
+| `output/prompt_cache/` | Signed on-disk cache of fetched versions (rollback depth = 5 by default) |
+| `prompt_registry/__main__.py` | CLI: `list`, `get`, `sync`, `pin`, `rollback`, `diff`, `verify`, `publish` |
+| `gui/app.py` tab "📝 Prompts" | GUI: resolved version / source per ID, Sync, diff viewer, Rollback |
+
+### Resolution order (CONSTRAINT #4 — never empty)
+
+```
+Pin (PROMPT_REGISTRY_PINS) → Remote latest (verified) → Disk cache (verified) → Baseline → sentinel
+```
+
+The sentinel body is a one-line placeholder; `get()` never returns `""`.
+
+### Day-to-day operator workflow
+
+#### Fetching the latest master pre-prompt to paste
+
+```bash
+python -m prompt_registry get master_preprompt
+```
+
+The body is printed to stdout.  Pipe to `pbcopy` on macOS to copy directly to the clipboard:
+
+```bash
+python -m prompt_registry get master_preprompt | pbcopy
+```
+
+#### Checking what version is resolved for every ID
+
+```bash
+python -m prompt_registry list
+```
+
+Output columns: `prompt_id`, `resolved_version`, `source` (pin / remote / cache / baseline).
+
+#### Syncing all IDs from the remote manifest
+
+```bash
+python -m prompt_registry sync
+```
+
+Fetches the manifest, verifies HMAC-SHA256 signatures, writes to `output/prompt_cache/`.
+Requires `PROMPT_REGISTRY_URL` and `PROMPT_REGISTRY_SIGNING_KEY` set in `.env`.
+**CONSTRAINT #5 — never called on a timer.**  Sync is explicit (CLI or the GUI "🔄 Sync" button).
+
+#### Pinning a specific version
+
+```bash
+python -m prompt_registry pin master_preprompt 1.1.0
+```
+
+Writes `PROMPT_REGISTRY_PINS={"master_preprompt": "1.1.0"}` to `.env` (via `gui/env_io`).
+Effective on the **next** launch — never hot-swaps a running process.
+
+#### Rolling back to the previous cached version
+
+```bash
+python -m prompt_registry rollback master_preprompt
+```
+
+Sets the pin to the second-newest entry in `output/prompt_cache/master_preprompt/`.
+Fails gracefully (non-zero exit, clear message) when fewer than two versions are cached.
+
+#### Verifying cache integrity
+
+```bash
+python -m prompt_registry verify
+```
+
+Re-checks HMAC-SHA256 signatures and guardrail constraints for every cached version.
+Non-zero exit if any file fails — useful in CI or after a manual cache edit.
+
+#### Diffing two versions
+
+```bash
+python -m prompt_registry diff master_preprompt 1.0.0 1.1.0
+```
+
+Prints a unified diff to stdout.  The GUI "Prompts" tab renders the same diff inline.
+
+### Publishing a new version (author machine only)
+
+Publishing requires `PROMPT_REGISTRY_PUBLISH_TOKEN` and `PROMPT_REGISTRY_SIGNING_KEY` in `.env`.
+The runtime platform **never** needs `PUBLISH_TOKEN` — only the author's machine does.
+
+```bash
+# 1. Write the new prompt body to a file
+echo "Updated master pre-prompt body …" > /tmp/master_preprompt_v1.1.0.txt
+
+# 2. Publish to the registry backend (signs with SIGNING_KEY, uploads with PUBLISH_TOKEN)
+python -m prompt_registry publish master_preprompt 1.1.0 /tmp/master_preprompt_v1.1.0.txt
+```
+
+After publish, any platform with `PROMPT_REGISTRY_ENABLED=true` will pick up the new version on
+the next explicit `sync`.  Platforms with the registry disabled continue using their baseline copies
+unchanged.
+
+### Environment variables
+
+| Variable | Secret? | Default | Purpose |
+|---|---|---|---|
+| `PROMPT_REGISTRY_ENABLED` | No | `false` | Master switch; baseline-only when `false` |
+| `PROMPT_REGISTRY_BACKEND` | No | `http` | Storage backend (`http` / `local` / `firestore`) |
+| `PROMPT_REGISTRY_URL` | **Yes** | — | Protected HTTPS URL of the signed manifest |
+| `PROMPT_REGISTRY_TOKEN` | **Yes** | — | Bearer read-token for `PROMPT_REGISTRY_URL` |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | **Yes** | — | Higher-privilege publish credential (author only) |
+| `PROMPT_REGISTRY_SIGNING_KEY` | **Yes** | — | HMAC-SHA256 key for body verification |
+| `PROMPT_REGISTRY_PINS` | No | `{}` | Version pins JSON dict |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | No | `0` | Refresh cadence (0 = on-demand only) |
+| `PROMPT_CACHE_DIR` | No | `output/prompt_cache` | On-disk cache path |
+| `PROMPT_CACHE_KEEP_VERSIONS` | No | `5` | Rollback depth per prompt ID |
+| `PROMPT_MAX_CHARS` | No | `50000` | Max body size enforced by guardrails |
+
+The four secret keys are masked in the GUI Settings tab and raise `SecretWriteError` if a write
+is attempted through the `gui/env_io` path (CONSTRAINT #3).  Edit them by hand in `.env` only.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `get()` always returns baseline | `PROMPT_REGISTRY_ENABLED=false` or no `PROMPT_REGISTRY_URL` | Set both in `.env`, run `sync` |
+| Signature verification failed | `PROMPT_REGISTRY_SIGNING_KEY` mismatch | Confirm the key matches the one used at publish time |
+| `publish` exits non-zero immediately | `PROMPT_REGISTRY_PUBLISH_TOKEN` absent | Set the token in `.env` on the author machine only |
+| `rollback` says "fewer than 2 versions" | Only one version in cache | Run `sync` to fetch the remote manifest, then retry |
+| GUI "Prompts" tab shows all sources as "baseline" | Registry disabled or never synced | Enable registry and click "🔄 Sync" in the Prompts tab |

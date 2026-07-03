@@ -8,6 +8,7 @@
 
 import logging
 import warnings
+from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
@@ -41,7 +42,33 @@ except ImportError:
 
 
 class ForecastingEngine:
-    def __init__(self):
+    """Quantitative forecasting engine wrapping ARIMA, Monte Carlo,
+    Holt-Winters, and CNN-LSTM models.
+
+    Tier 2.2 addition: an optional ``ForecastTracker`` instance wires in
+    skill-based ensemble blending.  When provided, the engine:
+    1. Updates actuals for past forecasts (``tracker.update_actuals``).
+    2. Fetches normalized inverse-RMSE weights (``tracker.get_skill_weights``).
+    3. Blends model outputs using those weights; falls back to the original
+       sector-preference static blending when skill data is absent (cold start).
+    4. Records the new forecast prices for future validation
+       (``tracker.record_forecasts``).
+
+    The tracker is optional: ``ForecastingEngine()`` (no args) reproduces the
+    pre-Tier-2.2 behavior exactly — no DB writes, static blending unchanged.
+    """
+
+    def __init__(self, tracker=None):
+        """
+        Parameters
+        ----------
+        tracker : ForecastTracker or None
+            Optional skill tracker.  When ``None`` (default), skill-weighted
+            blending is disabled and the original static logic is used.
+        """
+        from forecasting.forecast_tracker import ForecastTracker  # local import avoids circularity
+        self._tracker: Optional[ForecastTracker] = tracker if isinstance(tracker, ForecastTracker) else None
+
         # Configuration: Target Days by Sector
         self.sector_configs = {
             "Technology": {"days": 30, "model": "MC"},
@@ -51,7 +78,7 @@ class ForecastingEngine:
             "Energy": {"days": 60, "model": "MC"},
             "Financial Services": {"days": 60, "model": "ARIMA"},
             "Industrials": {"days": 60, "model": "ARIMA"},
-            "Real Estate": {"days": 90, "model": "HW"},  
+            "Real Estate": {"days": 90, "model": "HW"},
             "Utilities": {"days": 90, "model": "ARIMA"},
             "Consumer Defensive": {"days": 90, "model": "ARIMA"},
             "Basic Materials": {"days": 60, "model": "ARIMA"}
@@ -374,8 +401,9 @@ class ForecastingEngine:
         is specified. When TensorFlow is absent the engine degrades gracefully
         to zeros (never fabricated values).
 
-        TODO(Stage 4): Move to a single cross-ticker model. Per-ticker retraining
-        is acceptable for ~4 tickers but will not scale.
+        Future direction (Stage 4): move to a single cross-ticker model.
+        Per-ticker retraining is acceptable for ~4 tickers but will not scale to
+        a large universe — tracked as a deliberate design decision, not a defect.
         """
         if days_forward is not None:
             horizons = (int(days_forward),)
@@ -463,9 +491,84 @@ class ForecastingEngine:
             return zero_result
 
     # =========================================================================
+    # SKILL-WEIGHTED BLENDING HELPER (Tier 2.2)
+    # =========================================================================
+
+    @staticmethod
+    def _blend_with_skill(
+        model_forecasts: Dict[str, float],
+        skill_weights: Dict[str, float],
+        preferred_model: str,
+        current_price: float,
+    ) -> float:
+        """Blend model forecast prices using normalized inverse-RMSE skill weights.
+
+        When ``skill_weights`` is non-empty and covers at least one model that
+        produced output, the function computes a weighted average restricted to
+        models in both ``model_forecasts`` and ``skill_weights``.
+
+        Falls back to the original static sector-preference blending when:
+        * ``skill_weights`` is empty (cold start / tracker not wired).
+        * No model in ``skill_weights`` produced a valid forecast price.
+
+        Parameters
+        ----------
+        model_forecasts : dict[str, float]
+            Model name → forecast price (positive prices only; zeros excluded).
+        skill_weights : dict[str, float]
+            Normalized inverse-RMSE weights from ``ForecastTracker.get_skill_weights()``.
+            Empty dict → cold-start equal weighting → static fallback.
+        preferred_model : str
+            Sector-preferred model key (``"MC"``, ``"ARIMA"``, or ``"HW"``).
+        current_price : float
+            Current price — returned as last-resort fallback when all models
+            fail to produce output, to avoid returning 0.0 (CONSTRAINT #4).
+
+        Returns
+        -------
+        float
+            Blended forecast price.
+        """
+        if not model_forecasts:
+            return current_price  # no models produced output; never return 0.0
+
+        # Skill-weighted blend: restrict to models in both dicts
+        if skill_weights:
+            active: Dict[str, float] = {
+                name: weight
+                for name, weight in skill_weights.items()
+                if name in model_forecasts
+            }
+            if active:
+                total = sum(active.values())
+                if total > 0:
+                    return sum(model_forecasts[name] * (w / total) for name, w in active.items())
+                # Degenerate: all weights zero → fall through to static logic
+
+        # Static sector-preference fallback (original logic)
+        hw_price = model_forecasts.get("holt_winters", 0.0)
+        arima_price = model_forecasts.get("arima", 0.0)
+        mc_price = model_forecasts.get("monte_carlo", 0.0)
+        lstm_price = model_forecasts.get("cnn_lstm", 0.0)
+
+        if preferred_model == "HW" and hw_price > 0:
+            return hw_price
+        if preferred_model == "ARIMA" and arima_price > 0:
+            return arima_price
+
+        # General static blend (mirrors original hardcoded weights)
+        if lstm_price > 0.0:
+            if arima_price > 0:
+                return lstm_price * 0.4 + arima_price * 0.2 + mc_price * 0.4
+            return lstm_price * 0.5 + mc_price * 0.5
+        if arima_price > 0 and mc_price > 0:
+            return arima_price * 0.4 + mc_price * 0.6
+        return arima_price if arima_price > 0 else (mc_price if mc_price > 0 else current_price)
+
+    # =========================================================================
     # ORCHESTRATOR
     # =========================================================================
-    
+
     def generate_forecast(self, row: pd.Series, current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
         """
         Generates forecasts and maps them to SCHEMA KEYS:
@@ -530,11 +633,24 @@ class ForecastingEngine:
             # 2. Multi-Horizon Forecasts
             horizons = [10, 30, 60, 90]
 
+            # Symbol and timestamp for skill tracker integration (Tier 2.2)
+            symbol = str(row.get('Symbol', row.get('Ticker', 'UNKNOWN'))).upper()
+            now_utc = datetime.now(timezone.utc)
+
             # Train the CNN-LSTM ONCE (direct multi-step) and reuse its per-horizon
             # outputs below, instead of retraining a fresh model per horizon.
             lstm_multi: Dict[int, float] = {h: 0.0 for h in horizons}
             if TENSORFLOW_AVAILABLE and history_df is not None and len(history_df) >= 70:
                 lstm_multi = self.run_cnn_lstm_forecast(history_df, horizons=tuple(horizons))
+
+            # Step 2a: update actuals for all horizons BEFORE generating new forecasts.
+            # This ensures the skill weights computed below reflect the latest error data.
+            if self._tracker is not None:
+                for h in horizons:
+                    try:
+                        self._tracker.update_actuals(symbol, h, current_price, now_utc)
+                    except Exception as _exc:
+                        logger.debug("ForecastTracker.update_actuals skipped for %s h=%d: %s", symbol, h, _exc)
 
             for h in horizons:
                 a_res = 0.0
@@ -548,24 +664,41 @@ class ForecastingEngine:
 
                 m_res, _, _ = self.run_monte_carlo(current_price, mu, sigma, days_forward=h)
 
-                # Blend forecasts based on sector configurations
-                blended = 0.0
-                if preferred_model == "HW" and h_res > 0:
-                    blended = h_res
-                elif preferred_model == "ARIMA" and a_res > 0:
-                    blended = a_res
-                else:
-                    # General blending
-                    if lstm_res > 0.0:
-                        # Incorporate deep learning forecast with statistical models
-                        blended = (lstm_res * 0.4) + (a_res * 0.2) + (m_res * 0.4) if a_res > 0 else (lstm_res * 0.5) + (m_res * 0.5)
-                    elif a_res > 0 and m_res > 0:
-                        blended = (a_res * 0.4) + (m_res * 0.6)
-                    elif a_res > 0:
-                        blended = a_res
-                    else:
-                        blended = m_res
-                
+                # Collect per-model prices for skill tracking and skill-weighted blend.
+                # Only include models that produced a positive price (CONSTRAINT #4).
+                model_forecasts: Dict[str, float] = {}
+                if a_res > 0:
+                    model_forecasts["arima"] = a_res
+                if m_res > 0:
+                    model_forecasts["monte_carlo"] = m_res
+                if h_res > 0:
+                    model_forecasts["holt_winters"] = h_res
+                if lstm_res > 0:
+                    model_forecasts["cnn_lstm"] = lstm_res
+
+                # Step 2b: retrieve skill weights for this horizon (empty dict = cold start).
+                skill_weights: Dict[str, float] = {}
+                if self._tracker is not None:
+                    try:
+                        from settings import settings as _settings
+                        skill_weights = self._tracker.get_skill_weights(
+                            symbol, h,
+                            window_days=_settings.FORECAST_SKILL_WINDOW_DAYS,
+                            min_obs=_settings.FORECAST_SKILL_MIN_OBS,
+                        )
+                    except Exception as _exc:
+                        logger.debug("ForecastTracker.get_skill_weights skipped for %s h=%d: %s", symbol, h, _exc)
+
+                # Blend using skill weights (falls back to static blend when skill_weights={})
+                blended = self._blend_with_skill(model_forecasts, skill_weights, preferred_model, current_price)
+
+                # Step 2c: persist new forecasts for future validation.
+                if self._tracker is not None and model_forecasts:
+                    try:
+                        self._tracker.record_forecasts(symbol, h, model_forecasts, now_utc)
+                    except Exception as _exc:
+                        logger.debug("ForecastTracker.record_forecasts skipped for %s h=%d: %s", symbol, h, _exc)
+
                 results[f'Forecast_{h}'] = blended
 
             # Extract Facebook Prophet 30-day baseline forecasts if active

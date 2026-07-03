@@ -34,6 +34,7 @@ is a stage shows "pending" slightly longer; it never blocks or crashes the GUI.
 
 from __future__ import annotations
 
+import enum
 import logging
 import os
 import subprocess
@@ -41,14 +42,64 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from settings import settings
+
+
+class StageStatus(str, enum.Enum):
+    """Pipeline-stage status values.
+
+    Inherits from ``str`` so legacy callers that compare with plain string
+    literals (e.g. ``if status == "active"``) continue to work without
+    modification.
+
+    Values
+    ------
+    SUCCESS : Finished cleanly — a later stage's markers appeared or run exited 0.
+    ACTIVE  : This is the furthest stage whose log markers have been seen.
+    ERROR   : Run exited non-zero and this stage was the last active one.
+    PENDING : Launched but this stage's markers not yet seen.
+    SKIPPED : Execution was intentionally skipped (e.g. ``DRY_RUN=true``).
+    """
+
+    SUCCESS = "success"
+    ACTIVE = "active"
+    ERROR = "error"
+    PENDING = "pending"
+    SKIPPED = "skipped"
 
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Orchestrator (async) launch log — written by ``main_orchestrator.py``.
 RUN_LOG_PATH = settings.OUTPUT_DIR / "gui_run.log"
+
+# Advisory (synchronous main.py) launch log — written when the operator picks
+# the "Refresh Data (Advisory main.py)" button on the Launcher tab. Kept in a
+# distinct file so the orchestrator's stage-marker scan in ``compute_stage_status``
+# is not confused by main.py's lighter-weight progress lines.
+ADVISORY_LOG_PATH = settings.OUTPUT_DIR / "gui_advisory.log"
+
+# Log written by ``launch_symbol_retry`` for per-symbol dead-letter retries.
+RETRY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_retry.log"
+
+# Log written by ``launch_scheduled_advisory`` — the AI Control Center's
+# operator-started recurring run (main.py --interval N / --agent).  Kept
+# distinct so the Control Center tails only its own scheduled run.
+SCHEDULED_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_scheduled.log"
+
+# Telemetry log written by ``alerting.setup_logging()`` and shared by both
+# entry points. Surfaced in the Launcher tab so the operator sees structured
+# diagnostics from across the platform (CONSTRAINT #2 — observable feedback).
+TELEMETRY_LOG_PATH = _REPO_ROOT / "logs" / "investyo.log"
+
+# Env vars the pipeline NEEDS to produce non-trivial output. Missing values are
+# surfaced as a pre-launch warning in the UI rather than discovered after a
+# silent degraded run. Only the *minimum* set required for a useful refresh —
+# optional integrations (Robinhood, alerts, broker) are NOT listed here.
+REQUIRED_ENV_VARS: tuple[str, ...] = ("FRED_API_KEY",)
 
 # Ordered pipeline stages surfaced as indicators in the UI. Each tuple is
 # (display_label, list of case-insensitive substrings that, once seen in the
@@ -65,10 +116,18 @@ STAGES: List[tuple[str, List[str]]] = [
 
 @dataclass
 class RunHandle:
-    """Mutable handle for a launched orchestrator subprocess.
+    """Mutable handle for a launched pipeline subprocess.
 
     Stored in Streamlit ``session_state`` so the run survives reruns and the UI
     can poll status without re-launching.
+
+    The ``mode`` field distinguishes the two supported entry points:
+
+    *   ``"orchestrator"`` — async ``main_orchestrator.py`` (full pipeline,
+        broker execution, schema validation, HTML report).
+    *   ``"advisory"``     — synchronous ``main.py`` (advisory-only, no broker,
+        primary entry point for environment loading + global constraint
+        validation per the project's ``.env`` convention).
     """
 
     pid: int
@@ -76,6 +135,7 @@ class RunHandle:
     dry_run: bool
     refresh_account: bool
     log_path: Path = RUN_LOG_PATH
+    mode: str = "orchestrator"
     _popen: Optional[subprocess.Popen] = field(default=None, repr=False)
 
     def is_running(self) -> bool:
@@ -165,19 +225,273 @@ def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) ->
         started_at=time.time(),
         dry_run=dry_run,
         refresh_account=refresh_account,
+        log_path=RUN_LOG_PATH,
+        mode="orchestrator",
         _popen=popen,
     )
 
 
-def read_log_tail(max_lines: int = 200) -> str:
-    """Return the last ``max_lines`` lines of the current run log (or a hint)."""
-    if not RUN_LOG_PATH.exists():
-        return "(no run log yet — launch the orchestrator to populate it)"
+def launch_advisory_main(refresh_account: bool = False) -> RunHandle:
+    """Spawn ``main.py`` (the advisory, synchronous entry point) as a subprocess.
+
+    This is the path the project's ``.env`` convention says is canonical for
+    environment loading and global-constraint validation (the entry-point-level
+    ``load_dotenv()`` call lives in ``main.py``).  Surfacing it from the
+    Launcher tab gives the operator a fast, one-shot refresh that:
+
+    * loads ``.env`` into ``os.environ`` (modules using ``os.environ.get``
+      directly — notably ``data.robinhood_portfolio`` — depend on this);
+    * runs the structured-logging + push-notification ``alerting.setup_logging``
+      flow, so the ``logs/investyo.log`` telemetry tail in the UI populates;
+    * writes ``output/state_snapshot.json`` so all observability panels
+      refresh their data without restarting the async orchestrator.
+
+    Parameters
+    ----------
+    refresh_account:
+        Pass ``--refresh-account`` to bypass the daily Robinhood cache for
+        this launch.
+
+    Returns
+    -------
+    RunHandle
+        Handle for polling status and tailing :data:`ADVISORY_LOG_PATH`.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "main.py"]
+    if refresh_account:
+        cmd.append("--refresh-account")
+
+    log_file = open(ADVISORY_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo advisory (main.py) launch @ {time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(refresh_account={refresh_account})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched advisory main.py pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,  # main.py is advisory-only — no orders submitted
+        refresh_account=refresh_account,
+        log_path=ADVISORY_LOG_PATH,
+        mode="advisory",
+        _popen=popen,
+    )
+
+
+def launch_scheduled_advisory(
+    mode: str = "interval",
+    interval_seconds: int = 300,
+    *,
+    refresh_account: bool = False,
+) -> RunHandle:
+    """Spawn ``main.py`` as an OPERATOR-STARTED recurring advisory run.
+
+    This backs the AI Control Center's "Start scheduled run" / "Start agent
+    loop" buttons.  It is the ONLY scheduling mechanism the platform exposes and
+    it is strictly operator-initiated and operator-stoppable — there is no cron,
+    no daemon, and nothing autonomous.  The operator presses Start; the child
+    keeps refreshing on the requested cadence until the operator presses Stop
+    (:func:`stop_run`) or the GUI process ends.
+
+    Parameters
+    ----------
+    mode:
+        ``"interval"`` → ``python main.py --interval N`` (fixed-cadence refresh
+        loop).  ``"agent"`` → ``python main.py --agent`` (the autonomous
+        *advisory* agent loop from Tier 6 — still advisory-only, no orders,
+        still operator-started/stoppable).  Any other value is treated as
+        ``"interval"``.
+    interval_seconds:
+        Cadence in seconds for ``--interval`` mode.  Ignored for ``--agent``
+        (the agent sets its own adaptive cadence).  Clamped to ``>= 30`` so the
+        operator cannot hot-loop the market-data API.
+    refresh_account:
+        Pass ``--refresh-account`` on the first launch to bypass the daily
+        Robinhood cache.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="scheduled"``, ``log_path=SCHEDULED_LOG_PATH``) for
+        polling status, tailing the log, and stopping via :func:`stop_run`.
+
+    Notes
+    -----
+    During a scheduled run, only the ALREADY-WIRED automatic AI path fires —
+    Gemini alert-commentary appended to watch/trade alerts when
+    ``LLM_COMMENTARY_ENABLED`` is set.  The per-symbol Claude / Gemini-vision /
+    Opal actions remain on-demand GUI buttons; they are NOT invoked by the
+    scheduled loop.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "main.py"]
+    if str(mode).lower() == "agent":
+        cmd.append("--agent")
+        cadence_desc = "agent-adaptive"
+    else:
+        safe_interval = max(30, int(interval_seconds or 0))
+        cmd.extend(["--interval", str(safe_interval)])
+        cadence_desc = f"{safe_interval}s"
+    if refresh_account:
+        cmd.append("--refresh-account")
+
+    log_file = open(SCHEDULED_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo scheduled advisory (main.py) launch @ "
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')} (mode={mode}, cadence={cadence_desc}, "
+        f"refresh_account={refresh_account})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched scheduled advisory pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,  # advisory-only — no orders submitted
+        refresh_account=refresh_account,
+        log_path=SCHEDULED_LOG_PATH,
+        mode="scheduled",
+        _popen=popen,
+    )
+
+
+def stop_run(handle: Optional[RunHandle], *, timeout: float = 5.0) -> bool:
+    """Terminate a launched subprocess (operator "Stop" button).
+
+    Sends SIGTERM (via ``Popen.terminate`` when the object survived, else an
+    OS-level ``os.kill``), waits up to ``timeout`` seconds, then escalates to
+    SIGKILL if still alive.  Returns ``True`` when the process is confirmed
+    stopped (or was never running), ``False`` if it could not be confirmed.
+    Never raises — a Stop button must not crash the GUI (CONSTRAINT #6).
+    """
+    if handle is None:
+        return True
     try:
-        lines = RUN_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        popen = getattr(handle, "_popen", None)
+        if popen is not None:
+            if popen.poll() is not None:
+                return True  # already exited
+            popen.terminate()
+            try:
+                popen.wait(timeout=timeout)
+            except Exception:
+                popen.kill()
+            return popen.poll() is not None
+        # Reconstructed across a Streamlit rerun without the Popen object:
+        # fall back to a PID-level signal.
+        pid = getattr(handle, "pid", None)
+        if not pid or not _pid_alive(int(pid)):
+            return True
+        import signal as _signal  # noqa: PLC0415
+
+        os.kill(int(pid), _signal.SIGTERM)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not _pid_alive(int(pid)):
+                return True
+            time.sleep(0.2)
+        try:
+            os.kill(int(pid), _signal.SIGKILL)
+        except Exception:
+            pass
+        return not _pid_alive(int(pid))
+    except Exception as exc:
+        logger.warning("stop_run failed for handle pid=%s: %s",
+                       getattr(handle, "pid", "?"), exc)
+        return False
+
+
+def _read_tail(path: Path, max_lines: int, idle_hint: str) -> str:
+    """Return the last ``max_lines`` lines of ``path`` (or ``idle_hint``)."""
+    if not path.exists():
+        return idle_hint
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         return "\n".join(lines[-max_lines:])
     except Exception as exc:  # pragma: no cover - IO edge
-        return f"(failed to read run log: {exc})"
+        return f"(failed to read {path.name}: {exc})"
+
+
+def read_log_tail(max_lines: int = 200, handle: Optional[RunHandle] = None) -> str:
+    """Return the last ``max_lines`` lines of the active run log.
+
+    If ``handle`` is supplied, its ``log_path`` is preferred so the tail follows
+    whichever entry point (orchestrator vs. advisory) the operator launched
+    most recently. With no handle, the orchestrator's log is the default to
+    preserve backwards-compatible behaviour for older callers.
+    """
+    target = handle.log_path if handle is not None else RUN_LOG_PATH
+    return _read_tail(
+        target,
+        max_lines,
+        idle_hint="(no run log yet — launch a pipeline to populate it)",
+    )
+
+
+def read_telemetry_tail(max_lines: int = 120) -> str:
+    """Return the last ``max_lines`` lines of ``logs/investyo.log``.
+
+    ``alerting.setup_logging()`` rotates that file at 10 MB × 5 backups and is
+    invoked by both ``main.py`` and (indirectly) the orchestrator path; tailing
+    it gives the UI a single, entry-point-agnostic stream of structured
+    diagnostics that survives across runs.
+    """
+    return _read_tail(
+        TELEMETRY_LOG_PATH,
+        max_lines,
+        idle_hint="(no telemetry yet — alerting.setup_logging() runs on first launch)",
+    )
+
+
+def validate_required_env(
+    required: Optional[Iterable[str]] = None,
+) -> Dict[str, bool]:
+    """Return a mapping ``{env_var: present}`` for each required variable.
+
+    A variable is considered *present* when it appears in ``os.environ`` with a
+    non-empty stripped value. This is a pre-launch readiness check surfaced in
+    the Launcher tab so a missing key (most commonly ``FRED_API_KEY``) is
+    diagnosed *before* the subprocess silently degrades to neutral defaults
+    rather than after — eliminating the failure mode the user reported as
+    "Refresh Data does not produce observable results".
+
+    Parameters
+    ----------
+    required:
+        Iterable of env-var names to check. Defaults to
+        :data:`REQUIRED_ENV_VARS`.
+    """
+    names = tuple(required) if required is not None else REQUIRED_ENV_VARS
+    out: Dict[str, bool] = {}
+    for n in names:
+        val = os.environ.get(n, "")
+        out[n] = bool(val and val.strip())
+    return out
 
 
 def heartbeat_age_seconds() -> Optional[float]:
@@ -195,22 +509,102 @@ def heartbeat_age_seconds() -> Optional[float]:
         return None
 
 
-def compute_stage_status(handle: Optional[RunHandle]) -> Dict[str, str]:
+def launch_symbol_retry(
+    symbol: str,
+    refresh_account: bool = False,
+) -> "RunHandle":
+    """Spawn ``main.py`` targeting a single symbol for a dead-letter retry.
+
+    The symbol is injected via the ``WATCHLIST`` environment variable so
+    the advisory run contains only that ticker.  Held positions are always
+    included by ``main.run_once()``'s ``_build_universe`` — the operator
+    can confirm the single-symbol result on the Paper Monitor tab.
+
+    The retry is a best-effort diagnosis run, not a production execution:
+    ``main.py`` is advisory-only and submits no orders.
+
+    Parameters
+    ----------
+    symbol:
+        Ticker to retry (case-insensitive; forced to upper-case for the env).
+    refresh_account:
+        Pass ``--refresh-account`` to bypass the daily Robinhood cache.
+
+    Returns
+    -------
+    RunHandle
+        Handle with ``mode="retry"`` and ``log_path=RETRY_LOG_PATH``.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "main.py"]
+    if refresh_account:
+        cmd.append("--refresh-account")
+
+    # Inject the single target symbol via WATCHLIST so no code in main.py
+    # needs to change — it already reads WATCHLIST from os.environ.
+    env = os.environ.copy()
+    env["WATCHLIST"] = symbol.upper()
+
+    log_file = open(RETRY_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115
+    log_file.write(
+        f"# InvestYo dead-letter retry: {symbol.upper()} "
+        f"@ {time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(refresh_account={refresh_account})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=env,
+        bufsize=1,
+        text=True,
+    )
+    logger.info(
+        "Launched dead-letter retry pid=%s symbol=%s", popen.pid, symbol.upper()
+    )
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=refresh_account,
+        log_path=RETRY_LOG_PATH,
+        mode="retry",
+        _popen=popen,
+    )
+
+
+def compute_stage_status(
+    handle: Optional[RunHandle],
+) -> Dict[str, StageStatus]:
     """Derive per-stage status from the run log + heartbeat + snapshot mtime.
 
-    Returns a mapping ``{stage_label: "done"|"active"|"pending"|"idle"}``.
+    Returns a mapping ``{stage_label: StageStatus}``.
 
-    *   ``idle``    — no run handle / no log (nothing launched this session).
-    *   ``pending`` — launched but this stage's markers not yet seen.
-    *   ``active``  — this is the latest stage whose markers have appeared.
-    *   ``done``    — a later stage's markers have appeared, or the run finished
-                      and a snapshot was written.
+    *   ``PENDING`` — launched but this stage's markers not yet seen.
+    *   ``ACTIVE``  — this is the latest stage whose markers have appeared.
+    *   ``SUCCESS`` — a later stage's markers appeared or run finished cleanly.
+    *   ``ERROR``   — run exited non-zero and this was the last active stage.
+    *   ``SKIPPED`` — Execution stage when the run handle was ``dry_run=True``
+                      (orchestrator logs intent but never calls the broker).
+
+    Note
+    ----
+    The legacy string values (``"pending"``, ``"active"``, etc.) are still
+    valid because :class:`StageStatus` subclasses ``str``.  Callers that
+    previously compared against bare string literals continue to work.
     """
     labels = [label for label, _ in STAGES]
-    if handle is None or not RUN_LOG_PATH.exists():
-        return {label: "idle" for label in labels}
+    if handle is None:
+        return {label: StageStatus.PENDING for label in labels}
+    if not handle.log_path.exists():
+        return {label: StageStatus.PENDING for label in labels}
 
-    log_text = read_log_tail(max_lines=2000).lower()
+    log_text = read_log_tail(max_lines=2000, handle=handle).lower()
     reached: List[bool] = []
     for _label, markers in STAGES:
         reached.append(any(m in log_text for m in markers))
@@ -218,18 +612,29 @@ def compute_stage_status(handle: Optional[RunHandle]) -> Dict[str, str]:
     # Index of the furthest stage reached (-1 if none).
     last_reached = max((i for i, r in enumerate(reached) if r), default=-1)
 
-    finished = (handle is not None) and (not handle.is_running())
+    finished = not handle.is_running()
+    rc = handle.returncode()
+    run_errored = finished and rc is not None and rc != 0
     snapshot = settings.OUTPUT_DIR / "state_snapshot.json"
     snapshot_fresh = snapshot.exists() and (snapshot.stat().st_mtime >= handle.started_at)
 
-    status: Dict[str, str] = {}
+    status: Dict[str, StageStatus] = {}
     for i, label in enumerate(labels):
-        if finished and snapshot_fresh:
-            status[label] = "done"
+        # "Execution" stage is SKIPPED when dry_run=True on an orchestrator run.
+        if label == "Execution" and handle.dry_run and handle.mode == "orchestrator":
+            status[label] = StageStatus.SKIPPED
+            continue
+
+        if finished and snapshot_fresh and not run_errored:
+            status[label] = StageStatus.SUCCESS
+        elif run_errored and i == last_reached:
+            status[label] = StageStatus.ERROR
+        elif run_errored and i < last_reached:
+            status[label] = StageStatus.SUCCESS
         elif i < last_reached:
-            status[label] = "done"
+            status[label] = StageStatus.SUCCESS
         elif i == last_reached:
-            status[label] = "active"
+            status[label] = StageStatus.ACTIVE
         else:
-            status[label] = "pending"
+            status[label] = StageStatus.PENDING
     return status

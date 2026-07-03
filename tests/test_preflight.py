@@ -68,6 +68,13 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     m.DRY_RUN = overrides.get("DRY_RUN", False)
     m.OUTPUT_DIR = overrides.get("OUTPUT_DIR", tmp_path)
     m.PAPER_TRADING_START_DATE = overrides.get("PAPER_TRADING_START_DATE", None)
+    # ADVISORY_ONLY defaults to True (project default) so tests that call
+    # run_checks() without an override don't trigger the broker checks.
+    m.ADVISORY_ONLY = overrides.get("ADVISORY_ONLY", True)
+    m.MACRO_REGIME_GATE_ENABLED = overrides.get("MACRO_REGIME_GATE_ENABLED", True)
+    # Key-rotation dates — default None (unset = warning-level PASS, not blocking).
+    m.FRED_KEY_ROTATED_DATE = overrides.get("FRED_KEY_ROTATED_DATE", None)
+    m.ALPACA_KEY_ROTATED_DATE = overrides.get("ALPACA_KEY_ROTATED_DATE", None)
     return m
 
 
@@ -461,6 +468,203 @@ class TestValidationReports:
 
 
 # ---------------------------------------------------------------------------
+# Key-rotation checks (Stage 3 — 2026-06-26 cleanup)
+# ---------------------------------------------------------------------------
+
+class TestKeyRotationChecks:
+    """Tests for check_key_rotation_recent and check_alpaca_key_rotation_recent.
+
+    Both are warning-only (never blocking). Both pass with a warning when the
+    date is unset or invalid. Both fail (well, warn) when the date is stale.
+    The Alpaca check is also auto-skipped under ADVISORY_ONLY=True.
+    """
+
+    def test_fred_rotation_unset_warns(self, tmp_path):
+        """Unset FRED_KEY_ROTATED_DATE → warning-level PASS."""
+        from scripts.preflight_check import check_key_rotation_recent
+        s = _settings(tmp_path, FRED_KEY_ROTATED_DATE=None)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_key_rotation_recent()
+        assert r.passed
+        assert r.warning
+        assert r.name == "key_rotation_recent"
+        assert r.reason  # non-empty message
+
+    def test_fred_rotation_fresh_passes(self, tmp_path):
+        """FRED key rotated 30 days ago → clean PASS (no warning)."""
+        from scripts.preflight_check import check_key_rotation_recent
+        fresh = (date.today() - timedelta(days=30)).isoformat()
+        s = _settings(tmp_path, FRED_KEY_ROTATED_DATE=fresh)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_key_rotation_recent()
+        assert r.passed
+        assert not r.warning
+        assert "30" in r.reason
+
+    def test_fred_rotation_stale_warns(self, tmp_path):
+        """FRED key rotated 100 days ago → warning-level PASS (never blocking)."""
+        from scripts.preflight_check import check_key_rotation_recent
+        stale = (date.today() - timedelta(days=100)).isoformat()
+        s = _settings(tmp_path, FRED_KEY_ROTATED_DATE=stale)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_key_rotation_recent(max_age_days=90)
+        assert r.passed  # warning-only — NEVER False
+        assert r.warning
+        assert "100" in r.reason
+
+    def test_alpaca_rotation_unset_warns(self, tmp_path):
+        """Unset ALPACA_KEY_ROTATED_DATE → warning-level PASS."""
+        from scripts.preflight_check import check_alpaca_key_rotation_recent
+        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE=None)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_alpaca_key_rotation_recent()
+        assert r.passed
+        assert r.warning
+        assert r.name == "alpaca_key_rotation_recent"
+        assert r.reason
+
+    def test_alpaca_rotation_stale_warns(self, tmp_path):
+        """Stale Alpaca key → warning-level PASS (never blocking)."""
+        from scripts.preflight_check import check_alpaca_key_rotation_recent
+        stale = (date.today() - timedelta(days=120)).isoformat()
+        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE=stale)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_alpaca_key_rotation_recent(max_age_days=90)
+        assert r.passed  # warning-only — NEVER False
+        assert r.warning
+        assert "120" in r.reason
+
+    def test_alpaca_rotation_fresh_passes(self, tmp_path):
+        """Alpaca key rotated 30 days ago → clean PASS (no warning)."""
+        from scripts.preflight_check import check_alpaca_key_rotation_recent
+        fresh = (date.today() - timedelta(days=30)).isoformat()
+        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE=fresh)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_alpaca_key_rotation_recent(max_age_days=90)
+        assert r.passed
+        assert not r.warning
+        assert "30" in r.reason
+
+    def test_alpaca_rotation_invalid_iso_warns(self, tmp_path):
+        """Invalid ALPACA_KEY_ROTATED_DATE format → warning-level PASS (never blocking)."""
+        from scripts.preflight_check import check_alpaca_key_rotation_recent
+        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE="not-a-date")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_alpaca_key_rotation_recent()
+        assert r.passed  # warning-only — NEVER False
+        assert r.warning
+        assert "invalid" in r.reason.lower() or "format" in r.reason.lower()
+
+    def test_alpaca_rotation_auto_skipped_advisory_mode(self, tmp_path):
+        """alpaca_key_rotation_recent is auto-skipped under ADVISORY_ONLY=True."""
+        from scripts.preflight_check import run_checks
+        s = _settings(tmp_path, ADVISORY_ONLY=True)
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+                results = run_checks()
+        result = next(r for r in results if r.name == "alpaca_key_rotation_recent")
+        assert result.passed
+        assert "skipped" in result.reason.lower()
+        assert "ADVISORY_ONLY" in result.reason
+
+
+# ---------------------------------------------------------------------------
+# advisory-mode auto-skip (Stage 2 — 2026-06-26 cleanup)
+# ---------------------------------------------------------------------------
+
+class TestAdvisoryModeAutoSkip:
+    """ADVISORY_ONLY=True auto-skips heartbeat_fresh and validation_reports.
+
+    These two checks would be false-positive failures in advisory mode:
+    - ``heartbeat_fresh``: the heartbeat is written only by main_orchestrator.py;
+      advisory runs via main.py do not require a persistent orchestrator process.
+    - ``validation_reports``: validation reports gate live order submission;
+      advisory mode produces signals only (no orders submitted to brokers).
+
+    Both checks must revert to their real pass/fail logic when ADVISORY_ONLY=False.
+    """
+
+    def test_heartbeat_skipped_when_advisory_true(self, tmp_path):
+        """heartbeat_fresh is auto-skipped (PASS) when ADVISORY_ONLY=True.
+
+        tmp_path has no heartbeat.txt so the check would FAIL if it ran — the
+        skip intercepts it before the file-access logic executes.
+        """
+        from scripts.preflight_check import run_checks
+        s = _settings(tmp_path, ADVISORY_ONLY=True)
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+                results = run_checks()
+        hb = next(r for r in results if r.name == "heartbeat_fresh")
+        assert hb.passed, f"Expected PASS (skipped), got FAIL: {hb.reason}"
+        assert "skipped" in hb.reason.lower()
+        assert "ADVISORY_ONLY" in hb.reason
+
+    def test_validation_reports_skipped_when_advisory_true(self, tmp_path):
+        """validation_reports is auto-skipped (PASS) when ADVISORY_ONLY=True.
+
+        tmp_path has no reports/ dir so the check would FAIL if it ran.
+        """
+        from scripts.preflight_check import run_checks
+        s = _settings(tmp_path, ADVISORY_ONLY=True)
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+                results = run_checks()
+        vr = next(r for r in results if r.name == "validation_reports")
+        assert vr.passed, f"Expected PASS (skipped), got FAIL: {vr.reason}"
+        assert "skipped" in vr.reason.lower()
+        assert "ADVISORY_ONLY" in vr.reason
+
+    def test_heartbeat_runs_real_logic_when_advisory_false(self, tmp_path):
+        """heartbeat_fresh runs and FAILs when ADVISORY_ONLY=False and file is missing."""
+        from scripts.preflight_check import run_checks
+        s = _settings(tmp_path, ADVISORY_ONLY=False)
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+                results = run_checks()
+        hb = next(r for r in results if r.name == "heartbeat_fresh")
+        assert not hb.passed, "Expected FAIL — no heartbeat.txt in tmp_path"
+        assert "not found" in hb.reason
+
+    def test_validation_reports_runs_real_logic_when_advisory_false(self, tmp_path):
+        """validation_reports runs and FAILs when ADVISORY_ONLY=False and no reports exist."""
+        from scripts.preflight_check import run_checks
+        s = _settings(tmp_path, ADVISORY_ONLY=False)
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+                results = run_checks()
+        vr = next(r for r in results if r.name == "validation_reports")
+        assert not vr.passed, "Expected FAIL — no reports/ dir in tmp_path"
+
+    def test_skip_reasons_are_distinct_per_check(self, tmp_path):
+        """Each auto-skipped check has a unique reason string (not a generic message)."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        reasons = list(_ADVISORY_AUTO_SKIP.values())
+        assert len(reasons) == len(set(reasons)), "Every auto-skip check must have a unique reason"
+        # All eight auto-skip entries must be present
+        for name in (
+            "alpaca_configured", "alpaca_paper_mode", "dry_run_disabled",
+            "paper_trading_duration", "alpaca_key_rotation_recent",
+            "heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks",
+        ):
+            assert name in _ADVISORY_AUTO_SKIP, f"{name} missing from _ADVISORY_AUTO_SKIP"
+
+    def test_original_broker_checks_still_skipped(self, tmp_path):
+        """All seven auto-skip checks are PASS under ADVISORY_ONLY=True."""
+        from scripts.preflight_check import run_checks, _ADVISORY_AUTO_SKIP
+        s = _settings(tmp_path, ADVISORY_ONLY=True)
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+                results = run_checks()
+        result_by_name = {r.name: r for r in results}
+        for check_name in _ADVISORY_AUTO_SKIP:
+            r = result_by_name.get(check_name)
+            assert r is not None, f"{check_name} missing from run_checks output"
+            assert r.passed, f"{check_name} should be skipped (PASS) under advisory mode"
+            assert "skipped" in r.reason.lower(), f"{check_name} skip reason unclear: {r.reason}"
+
+
+# ---------------------------------------------------------------------------
 # run_checks + --skip
 # ---------------------------------------------------------------------------
 
@@ -547,3 +751,145 @@ class TestMainExitCode:
         data = json.loads(out)
         assert isinstance(data, list)
         assert all("name" in d and "passed" in d and "reason" in d for d in data)
+
+
+# ---------------------------------------------------------------------------
+# state_snapshot_fresh
+# ---------------------------------------------------------------------------
+
+class TestStateSnapshotFresh:
+    """check_state_snapshot_fresh — cross-mode liveness indicator.
+
+    Both main.py (advisory) and main_orchestrator.py write state_snapshot.json
+    so this check is meaningful in both deployment modes.  It is NOT in
+    _ADVISORY_AUTO_SKIP, unlike heartbeat_fresh.
+    """
+
+    def test_passes_when_snapshot_is_recent(self, tmp_path):
+        """A snapshot with a current UTC timestamp passes within the age limit."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        snapshot = tmp_path / "state_snapshot.json"
+        snapshot.write_text(
+            json.dumps({"timestamp": datetime.now(timezone.utc).isoformat()}),
+            encoding="utf-8",
+        )
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert r.passed
+        assert r.name == "state_snapshot_fresh"
+
+    def test_fails_when_snapshot_is_stale(self, tmp_path):
+        """A snapshot older than max_age_hours fails with age info in the reason."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        snapshot = tmp_path / "state_snapshot.json"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        snapshot.write_text(
+            json.dumps({"timestamp": stale_ts}),
+            encoding="utf-8",
+        )
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert not r.passed
+        assert "old" in r.reason.lower()
+
+    def test_fails_when_snapshot_is_missing(self, tmp_path):
+        """No state_snapshot.json file → FAIL with 'not found' in reason."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh()
+        assert not r.passed
+        assert "not found" in r.reason
+
+    def test_falls_back_to_mtime_when_no_timestamp_field(self, tmp_path):
+        """When 'timestamp' is absent, file mtime is used as fallback."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        import os, time
+        snapshot = tmp_path / "state_snapshot.json"
+        snapshot.write_text(json.dumps({"signals": []}), encoding="utf-8")
+        # mtime is seconds-ago fresh, so this should pass
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert r.passed
+
+    def test_not_in_advisory_auto_skip(self):
+        """state_snapshot_fresh must NOT be auto-skipped in advisory mode —
+        it is the advisory liveness check."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "state_snapshot_fresh" not in _ADVISORY_AUTO_SKIP
+
+
+# ---------------------------------------------------------------------------
+# _ADVISORY_AUTO_SKIP expanded set
+# ---------------------------------------------------------------------------
+
+class TestAdvisoryAutoSkip:
+    """Verify that all 8 expected checks are in _ADVISORY_AUTO_SKIP.
+
+    Four broker-dependent checks were always there (alpaca_configured,
+    alpaca_paper_mode, dry_run_disabled, paper_trading_duration).  Stage 2
+    added three advisory false-positive checks to eliminate spurious failures
+    on a correctly-running advisory deployment.  Stage 3 added a fifth
+    broker-dependent check (alpaca_key_rotation_recent), bringing the total
+    to 8 (5 broker + 3 false-positives).
+    """
+
+    def test_original_broker_checks_present(self):
+        """The original four broker-dependent checks are still auto-skipped."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        broker_checks = {
+            "alpaca_configured",
+            "alpaca_paper_mode",
+            "dry_run_disabled",
+            "paper_trading_duration",
+        }
+        assert broker_checks.issubset(set(_ADVISORY_AUTO_SKIP))
+
+    def test_heartbeat_fresh_in_auto_skip(self):
+        """heartbeat_fresh is auto-skipped because main.py (advisory) does not write it."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "heartbeat_fresh" in _ADVISORY_AUTO_SKIP
+
+    def test_validation_reports_in_auto_skip(self):
+        """validation_reports gates live deployment, not advisory operation."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "validation_reports" in _ADVISORY_AUTO_SKIP
+
+    def test_no_unexpected_risk_blocks_in_auto_skip(self):
+        """no_unexpected_risk_blocks is irrelevant in advisory mode (no orders)."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "no_unexpected_risk_blocks" in _ADVISORY_AUTO_SKIP
+
+    def test_auto_skip_has_eight_entries(self):
+        """Exactly 8 checks are in _ADVISORY_AUTO_SKIP (5 broker + 3 false-positives)."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert len(_ADVISORY_AUTO_SKIP) == 8
+
+    def test_state_snapshot_not_auto_skipped(self):
+        """state_snapshot_fresh must remain active in advisory mode (it IS the liveness check)."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "state_snapshot_fresh" not in _ADVISORY_AUTO_SKIP
+
+    def test_advisory_auto_skip_applied_by_run_checks(self, tmp_path):
+        """run_checks marks all _ADVISORY_AUTO_SKIP checks as PASS when ADVISORY_ONLY=True."""
+        from scripts.preflight_check import run_checks, _ADVISORY_AUTO_SKIP
+        s = _settings(tmp_path)
+        s.ADVISORY_ONLY = True
+        with patch("scripts.preflight_check.settings", s):
+            results = run_checks(skip=[
+                "fred_key_configured",
+                "key_rotation_recent",
+                "advisory_only_active",
+                "macro_regime_gate_enabled",
+                "env_not_committed",
+                "kill_switch_inactive",
+                "state_snapshot_fresh",
+                "db_exists",
+            ])
+        by_name = {r.name: r for r in results}
+        for name in _ADVISORY_AUTO_SKIP:
+            assert by_name[name].passed, f"Expected {name} to be auto-skipped (PASS)"
+            assert "ADVISORY_ONLY" in by_name[name].reason

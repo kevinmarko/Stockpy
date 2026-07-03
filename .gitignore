@@ -21,7 +21,14 @@ venv/
 
 # Debug output files / DB
 *.csv
+# Curated, version-controlled data fixtures (exceptions to the blanket *.csv rule).
+# delisted_tickers.csv is a hand-maintained survivorship-bias fixture that
+# universe_engine.get_delisted_tickers() and tests/test_universe.py depend on —
+# without this exception a fresh clone / CI checkout cannot pass that test.
+!data/delisted_tickers.csv
 *.db
+*.db-shm
+*.db-wal
 *.html
 *.json
 !Gravity_Verification_Report.json

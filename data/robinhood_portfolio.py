@@ -187,40 +187,49 @@ class AccountSnapshot:
 # ---------------------------------------------------------------------------
 
 def _login() -> None:
-    """Authenticate to Robinhood using TOTP MFA.
+    """Authenticate to Robinhood using TOTP or SMS MFA.
 
-    Reads RH_USERNAME, RH_PASSWORD, and RH_MFA_SECRET from os.environ
+    Reads RH_USERNAME, RH_PASSWORD, and optional RH_MFA_SECRET from os.environ
     (populated from .env by python-dotenv / pydantic-settings at startup).
-    Raises RuntimeError if any credential is missing or if login fails.
+    Raises RuntimeError if any required credential is missing or if login fails.
 
     ``store_session=True`` persists the session pickle in ~/.tokens so that
     subsequent logins on the same device reuse the stored OAuth token,
     minimising MFA prompts and avoiding spurious "new device" notifications.
-    ``by_sms=False`` prevents the library from requesting an SMS code when a
-    TOTP code is already being supplied.
+    Passing ``mfa_code=`` selects the TOTP path; ``robin-stocks`` >= 3.4
+    removed the legacy ``by_sms=`` kwarg and infers the path from whether
+    ``mfa_code`` is supplied. If RH_MFA_SECRET is not set, falls back to 
+    interactive MFA prompting in the terminal.
     """
     username = _require_env("RH_USERNAME")
     password = _require_env("RH_PASSWORD")
-    mfa_secret = _require_env("RH_MFA_SECRET")
+    mfa_secret = os.environ.get("RH_MFA_SECRET", "").strip()
 
-    # Generate the current 6-digit TOTP code from the base32 secret.
-    # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
-    mfa_code = pyotp.TOTP(mfa_secret).now()
-
-    result = r.login(
-        username,
-        password,
-        store_session=True,  # persist ~/.tokens pickle for same-device reuse
-        mfa_code=mfa_code,
-        by_sms=False,        # suppress SMS prompt — TOTP code is already provided
-    )
+    if mfa_secret:
+        # Generate the current 6-digit TOTP code from the base32 secret.
+        # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
+        mfa_code = pyotp.TOTP(mfa_secret).now()
+        
+        result = r.login(
+            username,
+            password,
+            store_session=True,  # persist ~/.tokens pickle for same-device reuse
+            mfa_code=mfa_code,
+        )
+    else:
+        logger.info("RH_MFA_SECRET is missing or empty. Falling back to interactive MFA login.")
+        result = r.login(
+            username,
+            password,
+            store_session=True,  # persist ~/.tokens pickle for same-device reuse
+        )
 
     if not isinstance(result, dict) or "access_token" not in result:
         raise RuntimeError(
-            "Robinhood TOTP login failed — no access_token in login response. "
-            "Check RH_USERNAME, RH_PASSWORD, and RH_MFA_SECRET."
+            "Robinhood login failed — no access_token in login response. "
+            "Check RH_USERNAME and RH_PASSWORD."
         )
-    logger.info("Robinhood TOTP login succeeded.")
+    logger.info("Robinhood login succeeded.")
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +443,22 @@ def fetch_account_snapshot(
         Live-fetch failure + cache present → returns stale cache, logs warning.
         Live-fetch failure + no cache     → raises the original exception.
     """
-    # ---- Fast path: valid non-stale cache ----
+    # ---- Tier 1: DB-first read (fastest — no JSON I/O, no network) ----
+    if not force:
+        try:
+            from data.historical_store import HistoricalStore
+            _store = HistoricalStore()
+            _db_snap = _store.latest_account_snapshot()
+            if _db_snap is not None and not _db_snap.is_stale(max_age_hours):
+                logger.info(
+                    "Using DB-cached account snapshot (age %.1fh)",
+                    _db_snap.age_hours(),
+                )
+                return _db_snap
+        except Exception as _exc:
+            logger.debug("DB snapshot read failed, falling through: %s", _exc)
+
+    # ---- Tier 2: JSON cache ----
     if not force:
         cached = _read_cache()
         if cached is not None and not cached.is_stale(max_age_hours):
@@ -445,10 +469,16 @@ def fetch_account_snapshot(
             )
             return cached
 
-    # ---- Live fetch ----
+    # ---- Tier 3: live fetch ----
     try:
         snapshot = _fetch_live_snapshot()
         _write_cache(snapshot)
+        try:
+            from data.historical_store import HistoricalStore
+            _store = HistoricalStore()
+            _store.save_account_snapshot(snapshot)
+        except Exception as _exc:
+            logger.warning("DB snapshot write failed (non-fatal): %s", _exc)
         return snapshot
     except Exception as exc:
         logger.error("Live Robinhood fetch failed: %s", exc)

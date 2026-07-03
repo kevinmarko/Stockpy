@@ -58,6 +58,7 @@ from allocators.dual_momentum import DualMomentumAllocator
 from signals import global_registry
 from signals.base import SignalContext
 from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
+from execution.kill_switch import GlobalKillSwitch
 from diagnostics_and_visuals import (
     telemetry, 
     generate_plotly_volatility_bands, 
@@ -407,6 +408,25 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
             if shared_context.multifactor_scores else float('nan')
         )
 
+    # Write news sentiment and earnings dates (Tier 2.4 — NewsCatalystSignal.pre_compute).
+    # These fields are populated only when FINNHUB_API_KEY is configured.
+    # NaN / "" are safe defaults that degrade gracefully in all downstream consumers.
+    dashboard_df['News_Sentiment'] = float('nan')
+    dashboard_df['Earnings_Date'] = ""
+    if shared_context.news_sentiment_scores:
+        dashboard_df['News_Sentiment'] = dashboard_df['Symbol'].map(
+            lambda x: shared_context.news_sentiment_scores.get(str(x).upper(), float('nan'))
+        )
+    if shared_context.earnings_dates:
+        dashboard_df['Earnings_Date'] = dashboard_df['Symbol'].map(
+            lambda x: shared_context.earnings_dates.get(str(x).upper(), "")
+        )
+    # Correlation_Cluster column is computed on-demand in the GUI Reports tab
+    # (fetch_returns_for_clustering + compute_correlation_clusters) rather than
+    # in the main pipeline, because it requires simultaneous historical returns
+    # for all symbols.  Default NaN here so the column exists in the schema.
+    dashboard_df['Correlation_Cluster'] = float('nan')
+
     # 6. Strategy & Sizing Evaluations
     telemetry.info("Routing data through Strategy and Evaluation Engines...")
     se = StrategyEngine()
@@ -426,119 +446,171 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     dashboard_df['Robinhood Avg Cost'] = 0.0
     dashboard_df['Robinhood Dividends'] = 0.0
 
+    # dead_letter_entries accumulates per-symbol failures (Constraint #6).
+    # Written atomically to output/dead_letter.json after the loop so the GUI
+    # can display failed symbols and offer targeted retry without a full restart.
     eval_results = {}
+    dead_letter_entries: list[dict] = []
+
     for idx, row in dashboard_df.iterrows():
         ticker = row['Symbol']
         price = row['Price']
         if not price or price == 0:
             continue
 
-        # MarketBar DTO
-        history_df = tech_raw.get(ticker)
-        if history_df is not None and not history_df.empty:
-            latest_row = history_df.iloc[-1]
-            bar_dto = MarketBarDTO(
-                date=datetime.now(),
-                ticker=ticker,
-                open_price=latest_row.get('Open', price),
-                high_price=latest_row.get('High', price),
-                low_price=latest_row.get('Low', price),
-                close_price=latest_row.get('Close', price),
-                volume=int(latest_row.get('Volume', 0))
+        # Track which processing stage we are in so dead-letter entries carry
+        # actionable context (e.g. "strategy" vs "dto_construction").
+        _stage = "dto_construction"
+        try:
+            # MarketBar DTO
+            history_df = tech_raw.get(ticker)
+            if history_df is not None and not history_df.empty:
+                latest_row = history_df.iloc[-1]
+                bar_dto = MarketBarDTO(
+                    date=datetime.now(),
+                    ticker=ticker,
+                    open_price=latest_row.get('Open', price),
+                    high_price=latest_row.get('High', price),
+                    low_price=latest_row.get('Low', price),
+                    close_price=latest_row.get('Close', price),
+                    volume=int(latest_row.get('Volume', 0))
+                )
+            else:
+                bar_dto = MarketBarDTO(datetime.now(), ticker, price, price, price, price, 0)
+
+            # Fundamentals DTO
+            fund_dto = fund_dtos.get(ticker)
+            if fund_dto is None:
+                fund_dto = FundamentalDataDTO(
+                    ticker=ticker, pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
+                    book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
+                    payout_ratio=0.0, sector="Unknown", company_name="Unknown"
+                )
+
+            # Robinhood Position DTO
+            rh_position = robinhood_positions.get(ticker) if robinhood_positions else None
+
+            # Generate action signal
+            _stage = "strategy"
+            atr_val = float(row.get('ATR', 0.0))
+            aroon_val = float(row.get('Aroon Up', 50.0))
+            macd_line_val = float(row.get('MACD_Line', 0.0))
+            macd_signal_val = float(row.get('MACD_Signal', 0.0))
+            aroon_osc_val = float(row.get('Aroon Oscillator', 0.0))
+            rsi_val = float(row.get('RSI', 50.0))
+            sortino_val = float(row.get('Sortino Ratio', row.get('Sortino_Ratio', 0.0)))
+            drawdown_val = float(row.get('Max Drawdown', row.get('Max_Drawdown', 0.0)))
+            rs_val = float(row.get('Relative_Strength', row.get('RS vs SPY', row.get('Relative Strength', 0.0))))
+            garch_val = float(row.get('GARCH_Vol', 0.0))
+            edge_val = float(row.get('Edge Ratio', row.get('Edge_Ratio', 0.0)))
+            rsi_2_val = float(row.get('RSI_2', 50.0)) if pd.notna(row.get('RSI_2', 50.0)) else 50.0
+            sma_5_val = float(row.get('SMA_5')) if pd.notna(row.get('SMA_5')) else None
+
+            chan_long = 0.0
+            chan_short = 0.0
+            if ticker in tech_opt_indicators:
+                chan_long = tech_opt_indicators[ticker].get('Chandelier_Long', 0.0)
+                chan_short = tech_opt_indicators[ticker].get('Chandelier_Short', 0.0)
+
+            strategy_output = se.evaluate_security(
+                bar=bar_dto,
+                fundamentals=fund_dto,
+                macro=macro_dto,
+                forecast_price=row.get('Forecast_30', 0.0),
+                trend_strength=aroon_val,
+                atr=atr_val,
+                macd_line=macd_line_val,
+                macd_signal=macd_signal_val,
+                aroon_osc=aroon_osc_val,
+                rsi=rsi_val,
+                sortino_ratio=sortino_val,
+                max_drawdown=drawdown_val,
+                relative_strength=rs_val,
+                garch_vol=garch_val,
+                edge_ratio=edge_val,
+                chandelier_long=chan_long,
+                chandelier_short=chan_short,
+                roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
+                sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
+                rsi_2=rsi_2_val,
+                sma_5=sma_5_val,
+                robinhood_position=rh_position
+            )
+
+            # Calculate Edge Ratio (Post-trade evaluation)
+            _stage = "edge_ratio"
+            edge_ratio_val = 0.0
+            if history_df is not None and len(history_df) >= 20:
+                # Evaluate a mock hold period for the last 15 trading days
+                entry_d = history_df.index[-15]
+                exit_d = history_df.index[-1]
+                trade_entry_p = float(history_df["Close"].iloc[-15])
+
+                edge_data = ee.calculate_edge_ratio(history_df, trade_entry_p, entry_d, exit_d)
+                edge_ratio_val = float(edge_data['Edge Ratio'])
+                # Add Edge Ratio to explainer notes for completeness
+                strategy_output["Strategy Explainer Notes"] += (
+                    f"\nPOST-TRADE EDGE RATIO: {edge_data['Edge Ratio']:.2f} "
+                    f"(MFE: {edge_data['MFE']*100:.1f}%, MAE: {edge_data['MAE']*100:.1f}%)"
+                )
+
+            _stage = "results"
+            eval_results[ticker] = {
+                'Edge Ratio': edge_ratio_val,
+                'Action Signal': strategy_output['Action Signal'],
+                'Advice': strategy_output['Advice'],
+                'Actionable Advice Signal': strategy_output['Actionable Advice Signal'],
+                'is_dividend_sustainable': int(fund_dto.is_dividend_sustainable),
+                'eps_trailing': fund_dto.eps_trailing,
+                'book_value': fund_dto.book_value,
+                'graham_number': fund_dto.graham_number,
+                'Kelly Target': float(strategy_output['Kelly Target']),
+                'Option Strategy': tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '') if ticker in tech_opt_indicators else strategy_output['Option Strategy'],
+                'buyRange': strategy_output['buyRange'],
+                'sellRange': strategy_output['sellRange'],
+                'Strategy Explainer Notes': strategy_output['Strategy Explainer Notes'],
+                'Robinhood Shares': float(strategy_output.get('Robinhood Shares', 0.0)),
+                'Robinhood Avg Cost': float(strategy_output.get('Robinhood Avg Cost', 0.0)),
+                'Robinhood Dividends': float(strategy_output.get('Robinhood Dividends', 0.0)),
+                'Robinhood Advice': str(strategy_output.get('Robinhood Advice', 'N/A'))
+            }
+
+        except Exception as _ticker_exc:
+            # Dead-letter this symbol: record stage + error, continue to next ticker.
+            dead_letter_entries.append({
+                "symbol": ticker,
+                "stage": _stage,
+                "error": str(_ticker_exc),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            telemetry.error(
+                "Dead-lettered %s at stage=%s: %s", ticker, _stage, _ticker_exc,
+                exc_info=True,
+            )
+
+    # Persist dead-letter report (always written — empty entries = clean run).
+    # Written inline to avoid importing gui.* from the pipeline layer.
+    _dl_path = settings.OUTPUT_DIR / "dead_letter.json"
+    try:
+        import json as _json
+        _dl_payload = {
+            "run_id": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "entries": dead_letter_entries,
+        }
+        _dl_tmp = _dl_path.with_suffix(".tmp")
+        _dl_path.parent.mkdir(parents=True, exist_ok=True)
+        _dl_tmp.write_text(_json.dumps(_dl_payload, indent=2), encoding="utf-8")
+        _dl_tmp.replace(_dl_path)
+        if dead_letter_entries:
+            telemetry.warning(
+                "Dead-letter report: %d symbol(s) failed — see %s",
+                len(dead_letter_entries), _dl_path,
             )
         else:
-            bar_dto = MarketBarDTO(datetime.now(), ticker, price, price, price, price, 0)
-
-        # Fundamentals DTO
-        fund_dto = fund_dtos.get(ticker)
-        if fund_dto is None:
-            fund_dto = FundamentalDataDTO(
-                ticker=ticker, pe_ratio=None, pb_ratio=None, dividend_yield=0.0,
-                book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0,
-                payout_ratio=0.0, sector="Unknown", company_name="Unknown"
-            )
-
-        # Robinhood Position DTO
-        rh_position = robinhood_positions.get(ticker) if robinhood_positions else None
-
-        # Generate action signal
-        atr_val = float(row.get('ATR', 0.0))
-        aroon_val = float(row.get('Aroon Up', 50.0))
-        macd_line_val = float(row.get('MACD_Line', 0.0))
-        macd_signal_val = float(row.get('MACD_Signal', 0.0))
-        aroon_osc_val = float(row.get('Aroon Oscillator', 0.0))
-        rsi_val = float(row.get('RSI', 50.0))
-        sortino_val = float(row.get('Sortino Ratio', row.get('Sortino_Ratio', 0.0)))
-        drawdown_val = float(row.get('Max Drawdown', row.get('Max_Drawdown', 0.0)))
-        rs_val = float(row.get('Relative_Strength', row.get('RS vs SPY', row.get('Relative Strength', 0.0))))
-        garch_val = float(row.get('GARCH_Vol', 0.0))
-        edge_val = float(row.get('Edge Ratio', row.get('Edge_Ratio', 0.0)))
-        rsi_2_val = float(row.get('RSI_2', 50.0)) if pd.notna(row.get('RSI_2', 50.0)) else 50.0
-        sma_5_val = float(row.get('SMA_5')) if pd.notna(row.get('SMA_5')) else None
-
-        chan_long = 0.0
-        chan_short = 0.0
-        if ticker in tech_opt_indicators:
-            chan_long = tech_opt_indicators[ticker].get('Chandelier_Long', 0.0)
-            chan_short = tech_opt_indicators[ticker].get('Chandelier_Short', 0.0)
-
-        strategy_output = se.evaluate_security(
-            bar=bar_dto,
-            fundamentals=fund_dto,
-            macro=macro_dto,
-            forecast_price=row.get('Forecast_30', 0.0),
-            trend_strength=aroon_val,
-            atr=atr_val,
-            macd_line=macd_line_val,
-            macd_signal=macd_signal_val,
-            aroon_osc=aroon_osc_val,
-            rsi=rsi_val,
-            sortino_ratio=sortino_val,
-            max_drawdown=drawdown_val,
-            relative_strength=rs_val,
-            garch_vol=garch_val,
-            edge_ratio=edge_val,
-            chandelier_long=chan_long,
-            chandelier_short=chan_short,
-            roc_12m=float(row.get('ROC_12M') if pd.notna(row.get('ROC_12M')) else 0.0),
-            sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
-            rsi_2=rsi_2_val,
-            sma_5=sma_5_val,
-            robinhood_position=rh_position
-        )
-
-        # Calculate Edge Ratio (Post-trade evaluation)
-        edge_ratio_val = 0.0
-        if history_df is not None and len(history_df) >= 20:
-            # Evaluate a mock hold period for the last 15 trading days
-            entry_d = history_df.index[-15]
-            exit_d = history_df.index[-1]
-            trade_entry_p = float(history_df["Close"].iloc[-15])
-            
-            edge_data = ee.calculate_edge_ratio(history_df, trade_entry_p, entry_d, exit_d)
-            edge_ratio_val = float(edge_data['Edge Ratio'])
-            # Add Edge Ratio to explainer notes for completeness
-            strategy_output["Strategy Explainer Notes"] += f"\nPOST-TRADE EDGE RATIO: {edge_data['Edge Ratio']:.2f} (MFE: {edge_data['MFE']*100:.1f}%, MAE: {edge_data['MAE']*100:.1f}%)"
-
-        eval_results[ticker] = {
-            'Edge Ratio': edge_ratio_val,
-            'Action Signal': strategy_output['Action Signal'],
-            'Advice': strategy_output['Advice'],
-            'Actionable Advice Signal': strategy_output['Actionable Advice Signal'],
-            'is_dividend_sustainable': int(fund_dto.is_dividend_sustainable),
-            'eps_trailing': fund_dto.eps_trailing,
-            'book_value': fund_dto.book_value,
-            'graham_number': fund_dto.graham_number,
-            'Kelly Target': float(strategy_output['Kelly Target']),
-            'Option Strategy': tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '') if ticker in tech_opt_indicators else strategy_output['Option Strategy'],
-            'buyRange': strategy_output['buyRange'],
-            'sellRange': strategy_output['sellRange'],
-            'Strategy Explainer Notes': strategy_output['Strategy Explainer Notes'],
-            'Robinhood Shares': float(strategy_output.get('Robinhood Shares', 0.0)),
-            'Robinhood Avg Cost': float(strategy_output.get('Robinhood Avg Cost', 0.0)),
-            'Robinhood Dividends': float(strategy_output.get('Robinhood Dividends', 0.0)),
-            'Robinhood Advice': str(strategy_output.get('Robinhood Advice', 'N/A'))
-        }
+            telemetry.info("All symbols processed cleanly — dead_letter.json cleared.")
+    except Exception as _dl_exc:
+        telemetry.warning("Failed to write dead-letter report: %s", _dl_exc)
 
     # Vectorized mapping to avoid iterrows mutation (Constraint #3)
     for col in [
@@ -558,11 +630,17 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     if 'Avg Cost' in dashboard_df.columns:
         dashboard_df['Entry_Price'] = dashboard_df['Avg Cost']
 
-    # Map 'Shares' to 'position_size' for Portfolio Heat
+    # Map 'Shares' to 'position_size' for Portfolio Heat.
+    # Watchlist-only tickers have 0 shares, so Shares * Price = 0 for every row.
+    # Replace zero-valued position sizes with the $10k notional default so downstream
+    # calculations (portfolio heat, Brinson-Fachler sector weights) never divide by zero.
     if 'Shares' in dashboard_df.columns and 'Price' in dashboard_df.columns:
         dashboard_df['position_size'] = dashboard_df['Shares'] * dashboard_df['Price']
+        zero_mask = dashboard_df['position_size'] <= 0.0
+        if zero_mask.any():
+            dashboard_df.loc[zero_mask, 'position_size'] = 10000.0
     elif 'position_size' not in dashboard_df.columns:
-        dashboard_df['position_size'] = 10000.0 # Default $10k assumption
+        dashboard_df['position_size'] = 10000.0  # Default $10k assumption
 
     # Map VaR 95 to stop loss percentage
     if 'VaR 95' in dashboard_df.columns:
@@ -683,7 +761,17 @@ async def _execute_broker_orders(
     * Kill-switch active → ``KillSwitchActiveError`` is raised inside
       ``submit_order_with_idempotency``; caught here and logged as CRITICAL.
     * ``dry_run=True`` logs intent but never reaches the broker network.
+    * ``settings.ADVISORY_ONLY=True`` (the project default in Tier 5.1) makes
+      this function a no-op: the broker stack is not even imported and an
+      INFO log is emitted so the operator sees the quarantine in the run log.
     """
+    if getattr(settings, "ADVISORY_ONLY", True):
+        telemetry.info(
+            "ADVISORY_ONLY=True — broker execution surface is quarantined; "
+            "skipping all order submission, reconciliation, and broker imports. "
+            "Set settings.ADVISORY_ONLY=false in .env to re-enable."
+        )
+        return
     try:
         from execution.alpaca_broker import AlpacaBroker
         from execution.broker_base import OrderIntent, OrderSide, OrderType
@@ -789,21 +877,29 @@ async def _execute_broker_orders(
 def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: list) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
-    The Streamlit observability dashboard reads this file to display the
-    last-known macro state without requiring a live FRED/broker connection.
-    Errors are swallowed so a snapshot failure never crashes the pipeline.
+    Also writes a timestamped rotated copy under OUTPUT_DIR/history/ via
+    :func:`scripts.snapshot_diff.rotate_snapshot` so the daily HTML report
+    can render a "Δ Since Last Run" band. Errors in the live-snapshot
+    write OR the rotation are swallowed so a snapshot failure never
+    crashes the pipeline.
     """
     import json
     try:
         signals = []
+        held_symbols = set()
         if not final_df.empty:
             for _, row in final_df.iterrows():
+                shares = float(row.get("Shares", 0.0) or row.get("Robinhood Shares", 0.0) or 0.0)
+                sym = str(row.get("Symbol", "")).upper().strip()
+                if sym and shares > 0:
+                    held_symbols.add(sym)
                 signals.append({
                     "symbol": str(row.get("Symbol", "")),
                     "action": str(row.get("Action Signal", "")),
                     "kelly_target": float(row.get("Kelly Target", 0.0) or 0.0),
                     "score": float(row.get("Score", 0.0) or 0.0),
                     "price": float(row.get("Price", 0.0) or 0.0),
+                    "shares": shares,
                     "macro_status": str(row.get("Macro Status", "")),
                     "hmm_risk_on": float(row.get("HMM_Risk_On_Probability", 0.0) or 0.0),
                     # Buy- and sell-side execution corridors surfaced so the
@@ -820,6 +916,9 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tickers": tickers,
+            # Sorted list of symbols where the account holds qty > 0; consumed
+            # by scripts.snapshot_diff to compute added_holdings / dropped_holdings.
+            "holdings": sorted(held_symbols),
             "market_regime": str(macro_raw.get("market_regime", "UNKNOWN")),
             "vix": float(macro_raw.get("VIXCLS", 0.0) or 0.0),
             "yield_curve": float(macro_raw.get("T10Y2Y", 0.0) or 0.0),
@@ -835,11 +934,68 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
         }
         snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
         snap_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        # Rotate into history/ (write-then-rename + prune > SNAPSHOT_HISTORY_DAYS).
+        # Failure is non-fatal — the live snapshot is already on disk.
+        try:
+            from scripts.snapshot_diff import rotate_snapshot
+            rotate_snapshot(
+                snapshot,
+                settings.OUTPUT_DIR,
+                max_age_days=settings.SNAPSHOT_HISTORY_DAYS,
+            )
+        except Exception as rot_exc:
+            telemetry.debug("Snapshot rotation skipped: %s", rot_exc)
     except Exception as exc:
         telemetry.warning("Failed to write state snapshot: %s", exc)
 
 
-async def _main_body(effective_dry_run: bool) -> None:
+def _validate_dashboard(final_df, *, strict: bool) -> bool:
+    """Validate the compiled dashboard against ``config.DashboardSchema``.
+
+    Two-tier validation (Phase 3b of docs/IMPROVEMENT_PLAN.md):
+
+    * **Production (strict=False, default):** validate with ``lazy=True`` so
+      *every* schema violation across the wide 50+ column frame is reported in
+      one pass (rather than aborting at the first bad column). Failures are
+      logged and the pipeline CONTINUES — the HTML report / JSON payload still
+      carry value and must not be held hostage to a single coerced column.
+    * **CI / --strict (strict=True):** a validation failure is FATAL
+      (``sys.exit(1)``) so schema drift can never silently ship.
+
+    Returns ``True`` when the frame validates (or is empty), ``False`` on any
+    violation in non-strict mode. Never raises in non-strict mode (CONSTRAINT #6).
+    """
+    import pandera as pa  # already loaded transitively via `import config`
+
+    if final_df.empty:
+        return True
+    try:
+        config.DashboardSchema.validate(final_df, lazy=True)
+        telemetry.info("✅ Final compiled DataFrame successfully validated against DashboardSchema.")
+        return True
+    except pa.errors.SchemaErrors as schema_errs:
+        # lazy=True aggregates ALL failures into .failure_cases (a DataFrame).
+        try:
+            n_cases = len(schema_errs.failure_cases)
+        except Exception:
+            n_cases = -1
+        telemetry.error(
+            "❌ DashboardSchema validation found %s failure case(s):\n%s",
+            n_cases, schema_errs,
+        )
+        if strict:
+            telemetry.critical("Strict mode (--strict): aborting on schema validation failure.")
+            sys.exit(1)
+        return False
+    except Exception as schema_err:
+        telemetry.error(f"❌ Final compiled DataFrame failed DashboardSchema validation: {schema_err}")
+        if strict:
+            telemetry.critical("Strict mode (--strict): aborting on schema validation failure.")
+            sys.exit(1)
+        return False
+
+
+async def _main_body(effective_dry_run: bool, strict: bool = False) -> None:
     """Core pipeline logic — separated from main() so the heartbeat try/finally is clean."""
     # Surface a CRITICAL alert if the previously leaked FRED key is still in use.
     settings.warn_if_fred_key_leaked(telemetry)
@@ -880,6 +1036,20 @@ async def _main_body(effective_dry_run: bool) -> None:
         fund_raw = de.fetch_fundamentals_raw(tickers)
         tech_raw = de.fetch_technical_raw(tickers)
 
+    # 1b. Kill-switch advisory pause gate
+    # Checked after data fetch but before the expensive pipeline so the
+    # observability dashboard continues displaying the last written snapshot.
+    _ks = GlobalKillSwitch()
+    if _ks.is_active():
+        _ks_reason = _ks.reason() or "(no reason recorded)"
+        telemetry.info(
+            "Advisory paused by kill-switch sentinel — skipping pipeline. "
+            "Reason: %s  |  Deactivate with: "
+            "python -m execution.kill_switch --deactivate",
+            _ks_reason,
+        )
+        return
+
     # 2. Run Pipeline
     try:
         final_df, macro_dto, shared_context = run_pipeline(
@@ -887,16 +1057,13 @@ async def _main_body(effective_dry_run: bool) -> None:
             data_engine=de, robinhood_positions=rh_positions,
         )
     except Exception as pipe_err:
-        telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}")
+        # exc_info=True logs the full traceback so future crashes are diagnosable
+        # from the log alone rather than requiring a debugger attach.
+        telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}", exc_info=True)
         sys.exit(1)
 
-    # 3. Schema Validation
-    if not final_df.empty:
-        try:
-            config.DashboardSchema.validate(final_df)
-            telemetry.info("✅ Final compiled DataFrame successfully validated against DashboardSchema.")
-        except Exception as schema_err:
-            telemetry.error(f"❌ Final compiled DataFrame failed DashboardSchema validation: {schema_err}")
+    # 3. Schema Validation (two-tier: lazy/non-fatal in prod, fatal under --strict)
+    _validate_dashboard(final_df, strict=strict)
 
     # 3b. Advisory Evaluation — holding-aware BUY/SELL/HOLD overlay
     # Uses the full pipeline's macro_dto (with HMM probability), xsec ranks,
@@ -990,6 +1157,13 @@ async def _main_body(effective_dry_run: bool) -> None:
             except Exception as plot_err:
                 telemetry.warning(f"Failed to generate interactive Plotly chart: {plot_err}")
 
+        # State snapshot rotation precedes BOTH the HTML report and the JSON
+        # payload so the Δ Since Last Run band always reflects "this run vs.
+        # previous run", never "previous run vs. one-before-that". Wrapped
+        # try/except inside _write_state_snapshot so a failure here cannot
+        # abort report generation.
+        _write_state_snapshot(macro_raw, final_df, tickers)
+
         # Jinja2 HTML Report Generation
         try:
             portfolio_dicts = final_df.to_dict(orient="records")
@@ -1001,6 +1175,20 @@ async def _main_body(effective_dry_run: bool) -> None:
             sahm_rule_val = float(macro_raw.get('SAHMREALTIME', 0.3))
             real_yield_val = float(macro_raw.get('DGS10', 4.0)) - float(macro_raw.get('CPIAUCSL_YoY', 2.0))
             regime_val = final_df["Macro Status"].iloc[0] if "Macro Status" in final_df.columns else "NEUTRAL"
+            # Δ Since Last Run band: read the two most-recent rotated snapshots
+            # (the just-rotated current run + the previous one). Degrades to
+            # None on first ever run or any error so the template hides the band.
+            snapshot_diff_payload: Optional[Dict[str, Any]] = None
+            try:
+                from scripts.snapshot_diff import compute_diff_from_history
+                _diff = compute_diff_from_history(
+                    settings.OUTPUT_DIR,
+                    conviction_delta_threshold=settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD,
+                )
+                if _diff.prev_ts is not None or _diff.curr_ts is not None:
+                    snapshot_diff_payload = _diff.to_dict()
+            except Exception as diff_exc:
+                telemetry.debug("Δ-band diff unavailable: %s", diff_exc)
             generate_html_report(
                 portfolio_dicts,
                 regime_val,
@@ -1008,7 +1196,8 @@ async def _main_body(effective_dry_run: bool) -> None:
                 yield_curve=yield_curve_val,
                 credit_spread=credit_spread_val,
                 sahm_rule=sahm_rule_val,
-                real_yield=real_yield_val
+                real_yield=real_yield_val,
+                snapshot_diff=snapshot_diff_payload,
             )
         except Exception as html_err:
             telemetry.warning(f"Failed to generate daily HTML report: {html_err}")
@@ -1031,10 +1220,20 @@ async def _main_body(effective_dry_run: bool) -> None:
         print("================================================\n")
 
     # 6. Broker Execution — submit delta orders and reconcile state
-    # Only runs when Alpaca credentials are configured; silently skipped otherwise.
-    # Uses macro_dto returned by run_pipeline() (carries hmm_risk_on_probability
-    # for the HMM regime gate in PreTradeRiskGate.run_all()).
-    if not final_df.empty and settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
+    # Tier 5.1: when ADVISORY_ONLY is True (the default) the broker surface is
+    # quarantined entirely — we do not even check Alpaca credentials, so an
+    # operator who happens to have keys in .env from an earlier paper-trading
+    # phase does NOT trigger any broker import.  Only when ADVISORY_ONLY is
+    # explicitly False AND Alpaca credentials are configured do we reach
+    # ``_execute_broker_orders``.  Uses macro_dto returned by run_pipeline()
+    # (carries hmm_risk_on_probability for the HMM regime gate).
+    if getattr(settings, "ADVISORY_ONLY", True):
+        telemetry.info(
+            "📋 ADVISORY_ONLY=True — pipeline produced %d signals; broker "
+            "execution is disabled for this run.",
+            0 if final_df is None else len(final_df),
+        )
+    elif not final_df.empty and settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
         await _execute_broker_orders(final_df, effective_dry_run, macro_dto=macro_dto)
     elif not final_df.empty:
         telemetry.info(
@@ -1042,14 +1241,18 @@ async def _main_body(effective_dry_run: bool) -> None:
             "Set them in .env to enable live/paper order submission."
         )
 
-    # Write a machine-readable state snapshot for the observability dashboard.
-    _write_state_snapshot(macro_raw, final_df, tickers)
+    # State snapshot for the observability dashboard is written above (line
+    # ~1076) so the Δ-band diff sees this run BEFORE the report renders.
     telemetry.info("✅ Master Orchestration finished successfully.")
 
 
-async def main(dry_run: bool = False):  # --dry-run flag propagated from CLI
+async def main(dry_run: bool = False, strict: bool = False):  # CLI flags propagated
     """Master async entry point.  Starts a heartbeat background task and
-    always cancels it (even on crash) via try/finally."""
+    always cancels it (even on crash) via try/finally.
+
+    ``strict`` (``--strict``) makes DashboardSchema validation FATAL so CI can
+    gate on schema drift; the default (False) logs all violations and continues.
+    """
     # Load .env into os.environ.  See module-top comment on python-dotenv:
     # the loader is deliberately invoked here (not at import) so the test
     # suite's Settings()-default assertions aren't polluted by .env values
@@ -1064,7 +1267,7 @@ async def main(dry_run: bool = False):  # --dry-run flag propagated from CLI
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
     try:
-        await _main_body(effective_dry_run)
+        await _main_body(effective_dry_run, strict=strict)
     finally:
         _hb_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -1081,5 +1284,11 @@ if __name__ == "__main__":
         default=False,
         help="Log intended orders but do not submit to broker.",
     )
+    _parser.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help="Treat DashboardSchema validation failures as fatal (exit 1). For CI / schema-drift gating.",
+    )
     _args = _parser.parse_args()
-    asyncio.run(main(dry_run=_args.dry_run))
+    asyncio.run(main(dry_run=_args.dry_run, strict=_args.strict))

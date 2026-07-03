@@ -48,6 +48,7 @@ from forecasting_engine import ForecastingEngine
 from technical_options_engine import TechnicalOptionsEngine
 from strategy_engine import StrategyEngine
 from transactions_store import TransactionsStore
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,45 @@ CONFIG: Dict[str, Any] = {
     # Minimum bars required before running full technical indicators / strategy
     # engine; below this we still return a recommendation but with PARTIAL quality.
     "min_history_bars": 30,
+
+    # ── Macro-triggered advisory gating ──────────────────────────────────────
+    # WHY: Systemic macro stress is a separate risk dimension from individual
+    # security signals.  When macro conditions deteriorate past these thresholds
+    # the advisory layer applies conservative overrides BEFORE the holding-aware
+    # overlay runs — holding overlays can still escalate to SELL, but no new BUY
+    # signals are issued into a regime-flagged environment.
+    #
+    # Hard gate (RECESSION or CREDIT EVENT macro regime):
+    #   Any raw STRONG BUY / BUY → downgraded to HOLD so the platform never
+    #   recommends fresh equity allocations into a systemic crisis.
+    #
+    # Soft gate (VIX > macro_vix_gate_threshold OR Sahm ≥ macro_sahm_gate_threshold):
+    #   Apply a -macro_score_penalty pt penalty to the composite score before
+    #   mapping it to a base action.  A score that was marginally bullish may
+    #   become neutral or mildly bearish under stress.
+    #
+    # Sector veto (Finance / Real Estate under inverted curve or blown spreads):
+    #   These sectors face direct structural headwinds from an inverted yield
+    #   curve (net-interest-margin compression) or extreme HY OAS (credit market
+    #   seizure).  Any BUY signal for a vetoed sector is suppressed to HOLD.
+    "macro_vix_gate_threshold": 30.0,        # VIX above this → soft gate fires
+    "macro_sahm_gate_threshold": 0.5,        # Sahm Rule at/above this → soft gate fires
+    "macro_score_penalty": 25,               # pts subtracted from score under soft gate
+    # Sectors with structural exposure to yield-curve / credit-spread stress:
+    "macro_veto_sectors": [
+        "Financials", "Financial Services", "Real Estate",
+    ],
+    # Yield curve (10y-2y spread) below this → veto macro_veto_sectors from fresh buys.
+    "macro_veto_yield_curve_threshold": 0.0,
+    # HY OAS above this → veto macro_veto_sectors from fresh buys.
+    "macro_veto_oas_threshold": 6.0,
+
+    # ── Verbose-rationale invalidation levels (Task 1.5) ─────────────────────
+    # RSI levels used in section [C] to name mean-reversion void conditions.
+    # Kept in CONFIG so the invalidation narrative stays consistent with the
+    # signal-module parameters that produced the entry signal.
+    "rsi_mean_reversion_exit_level": 35,     # RSI(14) above this → oversold bounce gone
+    "rsi_2_mean_reversion_exit_level": 35,   # RSI(2) above this → ultra-short bounce gone
 }
 
 
@@ -172,6 +212,23 @@ class Recommendation:
     forecast: Optional[float]
     key_indicators: Dict[str, float]
     data_quality: Literal["OK", "STALE", "PARTIAL"]
+    # Tier 9 — Claude-generated analyst narrative (on-demand only, opt-in via
+    # settings.LLM_COMMENTARY_ENABLED).  Carries an :class:`AnalystRationale`
+    # ``.model_dump()`` dict on success, ``None`` on any failure — the
+    # deterministic ``rationale`` field above is ALWAYS preserved regardless.
+    # Typed as ``Dict[str, Any]`` (not the schema model directly) so this file
+    # never needs to import ``llm.schemas`` — keeps the SDK reachability
+    # surface lazy.  Default ``None`` keeps positional construction stable.
+    llm_rationale: Optional[Dict[str, Any]] = None
+    # Tier 9 Scope 4 — Opal (OpenAI) grounded research brief (on-demand only,
+    # opt-in via settings.OPAL_RESEARCH_ENABLED, independent of
+    # LLM_COMMENTARY_ENABLED).  Carries a :class:`llm.schemas.ResearchBrief`
+    # ``.model_dump()`` dict on success, ``None`` on any failure or when Opal
+    # is disabled.  Same lazy-typing rationale as ``llm_rationale`` above —
+    # this file never imports ``llm.schemas`` at module level.  Additive:
+    # existing positional ``Recommendation(...)`` constructions elsewhere in
+    # the repo are unaffected by this new trailing field.
+    research_brief: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +487,95 @@ def evaluate(
         partial_flags.append("strategy_engine_failed")
 
     # ──────────────────────────────────────────────────────────────────────────
+    # Step 8b — Macro-triggered advisory gating
+    # Systemic macro risk gates applied BEFORE the holding-aware overlay so
+    # risk-off conditions consistently reduce position signals for all holders.
+    # The gates never escalate a signal — they only suppress or penalise.
+    # Existing holders may still receive a SELL from the overlay (Case A) even
+    # when a macro gate is in place; this function only blocks fresh BUYs.
+    # ──────────────────────────────────────────────────────────────────────────
+    macro_gate_reason: str = ""
+    adjusted_score: int = score  # may be reduced by soft gate below
+
+    if macro_dto.market_regime in ("RECESSION", "CREDIT EVENT"):
+        # Hard gate: any fresh BUY recommendation is a systemic-risk signal
+        # that the advisory layer refuses to issue during a crisis regime.
+        if raw_signal in ("STRONG BUY", "BUY"):
+            raw_signal = "HOLD"
+            adjusted_score = min(adjusted_score, CONFIG["buy_score_threshold"] - 1)
+        macro_gate_reason = (
+            f"Macro regime is {macro_dto.market_regime}: systemic risk gate "
+            f"halts fresh equity allocations."
+        )
+        logger.info(
+            "advisory[%s]: macro hard gate — regime=%s → signal capped at HOLD",
+            symbol, macro_dto.market_regime,
+        )
+    elif (
+        macro_dto.vix > CONFIG["macro_vix_gate_threshold"]
+        or macro_dto.sahm_rule_indicator >= CONFIG["macro_sahm_gate_threshold"]
+    ):
+        # Soft gate: elevated systemic stress → penalty on composite score.
+        adjusted_score = max(0, adjusted_score - CONFIG["macro_score_penalty"])
+        _vix_part = f"VIX={macro_dto.vix:.1f}" if macro_dto.vix else ""
+        _sahm_part = (
+            f"Sahm={macro_dto.sahm_rule_indicator:.2f}"
+            if macro_dto.sahm_rule_indicator else ""
+        )
+        _stress_desc = ", ".join(x for x in [_vix_part, _sahm_part] if x)
+        macro_gate_reason = (
+            f"Systemic stress indicators elevated ({_stress_desc}) — "
+            f"-{CONFIG['macro_score_penalty']}pt score penalty applied."
+        )
+        logger.info(
+            "advisory[%s]: macro soft gate — %s, score %d → %d",
+            symbol, _stress_desc, score, adjusted_score,
+        )
+
+    # Sector-specific veto: Finance / Real Estate when yield curve is inverted
+    # or HY credit spreads are at systemic-crisis levels.  These sectors face
+    # direct structural headwinds that override individual security signals.
+    # MacroEconomicDTO stores init param yield_curve_10y_2y as self.yield_curve
+    # and high_yield_oas as self.credit_spread.
+    _veto_sectors_lower = {s.lower() for s in CONFIG["macro_veto_sectors"]}
+    _sector_lower = (fund_dto.sector or "").lower()
+    _yield_inverted = (
+        macro_dto.yield_curve < CONFIG["macro_veto_yield_curve_threshold"]
+    )
+    _spreads_extreme = (
+        macro_dto.credit_spread > CONFIG["macro_veto_oas_threshold"]
+    )
+    if (
+        _sector_lower in _veto_sectors_lower
+        and (_yield_inverted or _spreads_extreme)
+        and raw_signal in ("STRONG BUY", "BUY")
+    ):
+        raw_signal = "HOLD"
+        adjusted_score = min(adjusted_score, CONFIG["buy_score_threshold"] - 1)
+        _veto_conditions: list[str] = []
+        if _yield_inverted:
+            _veto_conditions.append(
+                f"yield curve inverted ({macro_dto.yield_curve:.2f})"
+            )
+        if _spreads_extreme:
+            _veto_conditions.append(
+                f"HY OAS={macro_dto.credit_spread:.1f}%"
+            )
+        _veto_reason = (
+            f"{fund_dto.sector} sector vetoed: "
+            f"{' and '.join(_veto_conditions)} "
+            f"create structural headwinds for this sector."
+        )
+        macro_gate_reason = (
+            f"{macro_gate_reason} {_veto_reason}".strip()
+            if macro_gate_reason else _veto_reason
+        )
+        logger.info(
+            "advisory[%s]: sector veto — %s under %s",
+            symbol, fund_dto.sector, " + ".join(_veto_conditions),
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
     # Step 9 — Holding-aware overlay
     # ──────────────────────────────────────────────────────────────────────────
     is_holding = position is not None and position.quantity > 0
@@ -505,9 +651,10 @@ def evaluate(
         # should retain the position rather than triggering a sale or adding more
         # capital on a sub-threshold signal.
         elif _high_yield_holder and final_action in ("BUY", "HOLD"):
-            # If the signal is genuinely strong (score ≥ buy_score_threshold),
+            # If the signal is genuinely strong (adjusted_score ≥ buy_score_threshold),
             # the BUY stands — only suppress on weak/neutral readings.
-            if score < CONFIG["buy_score_threshold"]:
+            # adjusted_score already incorporates any macro score penalty.
+            if adjusted_score < CONFIG["buy_score_threshold"]:
                 final_action = "HOLD"
                 final_conviction = max(final_conviction, CONFIG["conviction_hold"])
                 holding_override_reason = (
@@ -541,12 +688,55 @@ def evaluate(
         )
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Step 11 — Plain-English rationale (top 2-3 drivers)
+    # Step 10b — Task 1.5: verbose-rationale pre-computation
+    # Runs only when RATIONALE_VERBOSITY=verbose; a single attribute read on
+    # the standard path makes the overhead immeasurable.
+    # All data gathered here is passed into _build_rationale() so that function
+    # remains a pure string-builder with no I/O of its own.
+    # ──────────────────────────────────────────────────────────────────────────
+    _verbose_win_rate: Optional[tuple] = None   # (p, b, n_trades)
+    _verbose_module_docs: Dict[str, str] = {}
+
+    if settings.RATIONALE_VERBOSITY == "verbose":
+        # Win-rate calibration — reuses the transactions_store already bound
+        # by _compute_kelly_sizing; pre-computing here so _build_rationale is I/O-free.
+        try:
+            _ts_v = transactions_store if transactions_store is not None else TransactionsStore()
+            _cdf = _ts_v.closed_trades_df()
+            _vp, _vb, _vn = estimate_win_rate_and_payoff(_cdf, lookback_trades=100)
+            if not (math.isnan(_vp) or math.isnan(_vb)):
+                _verbose_win_rate = (_vp, _vb, _vn)
+        except Exception:
+            pass  # CONSTRAINT #6 — calibration failure must never abort the rationale
+
+        # Active signal-module docstrings (lazy import to avoid circular imports)
+        try:
+            from signals.registry import global_registry as _gr
+            for _mn, _mod in _gr.get_all().items():
+                if not _mod.is_active_in_regime(macro_dto):
+                    continue
+                _cdoc = type(_mod).__doc__ or ""
+                for _dl in _cdoc.splitlines():
+                    _dl = _dl.strip()
+                    # Skip empty lines, the boilerplate heading, and separator lines
+                    if (
+                        _dl
+                        and "InvestYo Quant Platform" not in _dl
+                        and not set(_dl).issubset(set("=-"))
+                    ):
+                        _verbose_module_docs[_mn] = _dl
+                        break
+        except Exception:
+            pass  # CONSTRAINT #6 — docstring collection must never crash the pipeline
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 11 — Plain-English rationale (top 2-3 drivers in standard mode;
+    # four annotated verbose sections appended when RATIONALE_VERBOSITY=verbose)
     # ──────────────────────────────────────────────────────────────────────────
     rationale = _build_rationale(
         symbol=symbol,
         action=final_action,
-        score=score,
+        score=adjusted_score,
         raw_signal=raw_signal,
         macro_regime=macro_dto.market_regime,
         forecast_price=forecast_price,
@@ -559,6 +749,18 @@ def evaluate(
         rsi=tech.get("RSI"),
         aroon_osc=tech.get("Aroon Oscillator"),
         garch_vol=garch_vol,
+        macro_gate_reason=macro_gate_reason,
+        # ── Task 1.5 verbose-rationale additions ────────────────────────────
+        hmm_risk_on_probability=macro_dto.hmm_risk_on_probability,
+        vix_value=macro_dto.vix,
+        sahm_rule_indicator=macro_dto.sahm_rule_indicator,
+        yield_curve=macro_dto.yield_curve,
+        win_rate_data=_verbose_win_rate,
+        active_module_docs=_verbose_module_docs,
+        strategy_explainer_notes=strategy_out.get("Strategy Explainer Notes", ""),
+        rsi_2=tech.get("RSI_2"),
+        sma_200=tech.get("SMA_200"),
+        sector=fund_dto.sector or "",
     )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -732,14 +934,59 @@ def _build_rationale(
     rsi: Optional[float],
     aroon_osc: Optional[float],
     garch_vol: Optional[float],
+    macro_gate_reason: str = "",
+    # ── Task 1.5 — verbose-mode additions (all optional, safe defaults) ────────
+    hmm_risk_on_probability: Optional[float] = None,
+    vix_value: float = 18.0,
+    sahm_rule_indicator: float = 0.0,
+    yield_curve: float = 0.50,
+    win_rate_data: Optional[tuple] = None,      # (p, b, n_trades) or None
+    active_module_docs: Optional[Dict[str, str]] = None,
+    strategy_explainer_notes: str = "",         # from StrategyEngine (informational)
+    rsi_2: Optional[float] = None,
+    sma_200: Optional[float] = None,
+    sector: str = "",
 ) -> str:
-    """Build a one-paragraph plain-English rationale citing the top 2-3 drivers.
+    """Build a plain-English rationale for the advisory recommendation.
 
-    The rationale intentionally reads like analyst prose rather than a
-    dump of indicator values — it picks the most decision-relevant factors
-    and describes their direction and implication.
+    Standard mode (``RATIONALE_VERBOSITY=standard``, the default):
+        One paragraph citing the top 2-3 drivers — composite score,
+        30-day forecast direction, and the most decisive holding-aware
+        condition (if the symbol is held).
+
+    Verbose mode (``RATIONALE_VERBOSITY=verbose``):
+        The standard paragraph PLUS four annotated sections:
+
+        ``[A] Regime context`` — HMM probability and FRED macro snapshot
+        so an analyst can immediately understand whether the defensive filters
+        are active or bypassed and why.
+
+        ``[B] Historical calibration`` — strategy win-rate and Kelly edge
+        estimate derived from closed trades in ``TransactionsStore``, so
+        position-sizing conviction is grounded in a track record rather than
+        a single-cycle signal.
+
+        ``[C] Signal invalidation thresholds`` — explicit "flip points" that
+        would void the current recommendation: RSI reversal levels, score
+        breakdowns, macro gate triggers, and sector-veto conditions.
+
+        ``[D] Indicator theory notes`` — first-line ``__doc__`` of each
+        active signal module pulled dynamically via ``signals.registry``,
+        providing the theoretical basis of each contributing model.
+
+    When a macro gate overrode the signal, ``macro_gate_reason`` is
+    prepended so the operator understands why a bullish individual signal
+    resulted in a HOLD before reading anything else.
     """
+    # ─────────────────────────────────────────────────────────────────────────
+    # STANDARD PARAGRAPH — identical to pre-1.5 behaviour
+    # ─────────────────────────────────────────────────────────────────────────
     drivers: list[str] = []
+
+    # Driver 0 — macro gate (prepended when active so it is the first thing
+    # the operator reads, not buried after the technical score).
+    if macro_gate_reason:
+        drivers.append(macro_gate_reason)
 
     # Driver 1 — composite signal score
     score_descriptor = "neutral"
@@ -784,13 +1031,17 @@ def _build_rationale(
             )
     else:
         if aroon_osc is not None:
-            trend_desc = "strong uptrend" if aroon_osc > 50 else "downtrend" if aroon_osc < -50 else "choppy/neutral trend"
+            trend_desc = (
+                "strong uptrend" if aroon_osc > 50
+                else "downtrend" if aroon_osc < -50
+                else "choppy/neutral trend"
+            )
             drivers.append(f"Aroon oscillator ({aroon_osc:.0f}) indicates a {trend_desc}")
         elif garch_vol is not None:
             vol_desc = "elevated" if garch_vol > 0.30 else "moderate" if garch_vol > 0.15 else "low"
             drivers.append(f"GARCH vol of {garch_vol * 100:.1f}% is {vol_desc}")
 
-    # Assemble
+    # Assemble the standard one-paragraph rationale
     drivers_text = "; ".join(drivers[:3])  # cap at 3 for readability
     action_phrase = {
         "BUY":  "accumulate a new position",
@@ -798,11 +1049,131 @@ def _build_rationale(
         "HOLD": "maintain existing exposure without adding capital",
     }.get(action, action)
 
-    return (
+    standard_para = (
         f"{symbol}: {action_phrase.capitalize()}. "
         f"{drivers_text.rstrip('.')}. "
         f"(Raw strategy signal: {raw_signal}.)"
     )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # VERBOSE SECTIONS (appended only when RATIONALE_VERBOSITY=verbose)
+    # Each section is labelled [A]–[D] so compliance reviewers can cite them.
+    # ─────────────────────────────────────────────────────────────────────────
+    if settings.RATIONALE_VERBOSITY != "verbose":
+        return standard_para
+
+    verbose_parts: list[str] = []
+
+    # ── [A] Regime Context ────────────────────────────────────────────────────
+    # Explains whether the HMM and rules-based regime agree and surfaces the
+    # key macro variables that drive or suppress the risk filters.
+    if hmm_risk_on_probability is not None:
+        if hmm_risk_on_probability >= 0.70:
+            hmm_desc = f"HMM strongly confirms risk-on (p={hmm_risk_on_probability:.2f})"
+        elif hmm_risk_on_probability >= 0.30:
+            hmm_desc = f"HMM is uncertain (p={hmm_risk_on_probability:.2f})"
+        else:
+            hmm_desc = (
+                f"HMM signals elevated risk-off pressure (p={hmm_risk_on_probability:.2f})"
+                f" — RISK ON classification may be fleeting"
+            )
+    else:
+        hmm_desc = "HMM regime estimate unavailable (insufficient FRED history or first run)"
+
+    verbose_parts.append(
+        f"[A] Regime context: {macro_regime} — {hmm_desc}. "
+        f"VIX={vix_value:.1f}, Sahm Rule={sahm_rule_indicator:.2f}, "
+        f"10y-2y spread={yield_curve:+.2f}."
+    )
+
+    # ── [B] Historical Calibration ────────────────────────────────────────────
+    # Grounds position sizing in the strategy's actual closed-trade track record
+    # so the operator can distinguish a high-conviction edge from a cold start.
+    if win_rate_data is not None:
+        _p, _b, _n = win_rate_data
+        _edge = _p * _b - (1.0 - _p)
+        _edge_desc = "positive — edge exists" if _edge > 0 else "negative — edge absent"
+        verbose_parts.append(
+            f"[B] Calibration: This multi-signal setup has shown a {_p * 100:.0f}% win rate "
+            f"over {_n} closed trades (payoff ratio {_b:.1f}:1; "
+            f"Kelly edge {_edge:.2f} — {_edge_desc})."
+        )
+    else:
+        verbose_parts.append(
+            "[B] Calibration: Insufficient closed-trade history (< 30 trades); "
+            "position sizing defaults to volatility targeting."
+        )
+
+    # ── [C] Signal Invalidation Thresholds ───────────────────────────────────
+    # Defines the explicit 'flip points' that would void or reverse the current
+    # recommendation — essential for compliance review and stop-loss logic.
+    _void: list[str] = []
+
+    # Score-based action flip
+    if action in ("BUY", "HOLD"):
+        _void.append(
+            f"score drop below {CONFIG['sell_score_threshold']} converts signal to RISK REDUCE"
+        )
+    else:
+        _void.append(
+            f"score recovery above {CONFIG['buy_score_threshold']} warrants re-evaluation"
+        )
+
+    # RSI mean-reversion void for oversold BUY entries
+    if rsi is not None and rsi < 30 and action == "BUY":
+        _rsi_exit = CONFIG["rsi_mean_reversion_exit_level"]
+        _void.append(
+            f"RSI rising above {_rsi_exit} (currently {rsi:.0f}) voids the oversold entry"
+        )
+
+    # RSI-2 void for ultra-short mean-reversion entries
+    if rsi_2 is not None and rsi_2 < 10 and action == "BUY":
+        _rsi2_exit = CONFIG["rsi_2_mean_reversion_exit_level"]
+        _void.append(
+            f"RSI(2) recovery above {_rsi2_exit} (currently {rsi_2:.0f}) voids the "
+            f"ultra-oversold mean-reversion entry"
+        )
+
+    # Macro soft-gate flip points (always shown — operator must know the tripwires)
+    _void.append(
+        f"VIX > {CONFIG['macro_vix_gate_threshold']:.0f} or "
+        f"Sahm Rule ≥ {CONFIG['macro_sahm_gate_threshold']:.1f} applies a "
+        f"−{CONFIG['macro_score_penalty']}pt macro penalty"
+    )
+
+    # Sector-veto flip point (only surfaced for the affected sectors)
+    _sector_lower = sector.lower()
+    _veto_lower = {s.lower() for s in CONFIG.get("macro_veto_sectors", [])}
+    if _sector_lower in _veto_lower:
+        _void.append(
+            f"yield curve inversion < 0 with HY OAS > "
+            f"{CONFIG['macro_veto_oas_threshold']:.0f}% blocks fresh BUYs "
+            f"in {sector or 'this'} sector"
+        )
+
+    # SMA-200 trend-filter break
+    if sma_200 is not None and sma_200 > 0:
+        _void.append(f"close below SMA-200 (${sma_200:.2f}) invalidates the uptrend filter")
+
+    verbose_parts.append(
+        "[C] Invalidation: " + "; ".join(_void) + "."
+    )
+
+    # ── [D] Active Indicator Theory Notes ────────────────────────────────────
+    # Dynamically pulls the first-line __doc__ of each regime-active signal
+    # module from signals.registry so the rationale is self-documenting.
+    # Capped at 4 entries to remain readable; pre-filtered in evaluate().
+    _mods = active_module_docs or {}
+    _theory_items: list[str] = []
+    for _mname, _mdoc in list(_mods.items())[:4]:
+        _display = _mname.replace("_", " ").title()
+        _theory_items.append(f"{_display}: {_mdoc}")
+    if _theory_items:
+        verbose_parts.append(
+            "[D] Indicator notes: " + "; ".join(_theory_items) + "."
+        )
+
+    return f"{standard_para}\n\n" + "\n".join(verbose_parts)
 
 
 def _derive_strategy_name(
@@ -832,3 +1203,155 @@ def _safe_float(value: Any, default: float) -> float:
         return f
     except (TypeError, ValueError):
         return default
+
+
+# ---------------------------------------------------------------------------
+# Tier 9 — Claude analyst-rationale enrichment (on-demand only)
+# ---------------------------------------------------------------------------
+# This function is the ONLY callsite that may invoke an LLM from inside
+# engine/advisory.py.  It is deliberately a sibling of ``evaluate()`` rather
+# than a step inside it: the plan picked on-demand-only cadence, so every
+# per-cycle ``evaluate()`` call must stay byte-identical to pre-Tier-9
+# behaviour.  Operators reach this function via the CLI
+# (``python -m engine.llm_commentary SYMBOL``) or a future GUI button.
+#
+# Soft-fail contract (CONSTRAINT #6): on any failure — LLM disabled, missing
+# key, provider exception, schema mismatch — return the ORIGINAL recommendation
+# unchanged.  The deterministic ``rec.rationale`` template text is never
+# overwritten, only enriched alongside it via ``llm_rationale``.
+#
+# No-fabrication contract (CONSTRAINT #4): the LLM output flows ONLY into
+# ``rec.llm_rationale`` (an Optional[Dict[str, Any]]).  It never touches
+# ``score``, ``conviction``, ``suggested_position_pct``, ``forecast``,
+# ``key_indicators``, or any numeric pipeline scalar.
+#
+# Tier 9 Scope 4 (Opal): the SAME contract extends to ``rec.research_brief``
+# — Opal's grounded research brief is independently opt-in
+# (``settings.OPAL_RESEARCH_ENABLED``) and, when generated, is threaded into
+# ``context["research_brief"]`` BEFORE the Claude rationale call runs, so
+# Claude's own synthesis can cite it.  Opal's failure never blocks Claude's
+# call and vice versa — each is independently soft-fail (CONSTRAINT #6).
+
+def enrich_with_llm_rationale(
+    rec: Recommendation,
+    context: Optional[Dict[str, Any]] = None,
+    *,
+    run_opal: bool = False,
+) -> Recommendation:
+    """Return ``rec`` with ``llm_rationale`` / ``research_brief`` populated.
+
+    Parameters
+    ----------
+    rec :
+        A deterministic recommendation produced by :func:`evaluate`.
+    context :
+        Optional extra payload to forward to the LLM commentary layer
+        (macro snippet, regime DTO snapshot, etc.).  Never mutated in
+        place — a local copy is used so Opal's injected
+        ``"research_brief"`` key never leaks back into the caller's dict.
+        A caller MAY pre-populate ``context["research_brief"]`` with an
+        already-generated Opal brief (e.g. one cached from the GUI's
+        dedicated Opal button); it is then threaded into Claude's prompt
+        AND surfaced on the returned rec WITHOUT any new OpenAI call.
+    run_opal :
+        When ``True`` AND ``settings.OPAL_RESEARCH_ENABLED`` is on, generate
+        a FRESH Opal research brief (an OpenAI call) before the Claude call.
+        Defaults to ``False`` (Tier 9 Scope 4 decoupling): a plain Claude
+        rationale request — the Reports/AI-Insights "Claude analyst note"
+        button, the ``engine.llm_commentary`` CLI — must NOT incur a
+        surprise OpenAI cost. Those surfaces instead reuse a
+        caller-supplied ``context["research_brief"]`` (free) when present.
+
+    Returns
+    -------
+    Recommendation
+        ``rec`` unchanged when nothing was produced, or a new instance with
+        ``llm_rationale`` and/or ``research_brief`` populated from whichever
+        succeeded — either field independently.
+
+    Notes
+    -----
+    The frozen dataclass is rebuilt via :func:`dataclasses.replace` so the
+    immutability invariant holds.  ``llm.research.generate_research_brief``
+    and ``llm.commentary.generate_analyst_rationale`` are each responsible
+    for their own caching, schema validation, and soft-fail; this function
+    is a thin orchestration layer that sequences Opal BEFORE Claude (so its
+    output can enrich Claude's prompt) without letting either's failure
+    affect the other.  Every mutation of ``rec`` (including the final
+    :func:`dataclasses.replace` calls) is wrapped so the function NEVER
+    raises — direct callers such as the ``engine.llm_commentary`` CLI rely
+    on this "exit 0 on soft-fail" guarantee (CONSTRAINT #6).
+    """
+    from dataclasses import replace  # noqa: PLC0415 — stdlib, no SDK-lazy concern
+
+    working_context: Dict[str, Any] = dict(context or {})
+    research_brief_dict: Optional[Dict[str, Any]] = None
+
+    # A caller may hand us an already-generated brief (GUI reuse path) — surface
+    # it on the returned rec too, without a new OpenAI call.
+    _supplied = working_context.get("research_brief")
+    if isinstance(_supplied, dict) and _supplied:
+        research_brief_dict = _supplied
+
+    # Tier 9 Scope 4 — Opal runs FIRST (front-of-pipeline research), but ONLY
+    # on an explicit opt-in (run_opal=True); its success/failure is entirely
+    # independent of the Claude call below.
+    if run_opal:
+        try:
+            if getattr(settings, "OPAL_RESEARCH_ENABLED", False):
+                # Lazy import: keeps engine/advisory.py free of any LLM/SDK
+                # reach at module-load time. Gravity step_74/77 source-grep
+                # for top-level imports.
+                from llm.research import generate_research_brief  # noqa: PLC0415
+
+                brief = generate_research_brief(rec.symbol, working_context)
+                if brief is not None:
+                    research_brief_dict = brief.model_dump()
+                    working_context["research_brief"] = research_brief_dict
+        except Exception as exc:
+            logger.warning(
+                "enrich_with_llm_rationale: Opal research brief soft-failed for %s: %s",
+                getattr(rec, "symbol", "?"),
+                exc,
+            )
+
+    llm_rationale_dict: Optional[Dict[str, Any]] = None
+    try:
+        if getattr(settings, "LLM_COMMENTARY_ENABLED", False):
+            # Lazy import: see note above.
+            from dataclasses import asdict  # noqa: PLC0415
+            from llm.commentary import generate_analyst_rationale  # noqa: PLC0415
+
+            rec_skeleton = asdict(rec)
+            result = generate_analyst_rationale(rec_skeleton, working_context)
+            if result is not None:
+                llm_rationale_dict = result.model_dump()
+    except Exception as exc:
+        logger.warning(
+            "enrich_with_llm_rationale soft-failed for %s: %s — returning template-only rec.",
+            getattr(rec, "symbol", "?"),
+            exc,
+        )
+
+    # Apply each field independently, each guarded so a replace() failure
+    # (e.g. a future Recommendation refactor) never propagates — the "never
+    # raises" contract holds for the whole function body (Fix 7 / CONSTRAINT #6).
+    if research_brief_dict is not None and research_brief_dict is not rec.research_brief:
+        try:
+            rec = replace(rec, research_brief=research_brief_dict)
+        except Exception as exc:
+            logger.warning(
+                "enrich_with_llm_rationale: research_brief replace() failed for %s: %s",
+                getattr(rec, "symbol", "?"),
+                exc,
+            )
+    if llm_rationale_dict is not None:
+        try:
+            rec = replace(rec, llm_rationale=llm_rationale_dict)
+        except Exception as exc:
+            logger.warning(
+                "enrich_with_llm_rationale: llm_rationale replace() failed for %s: %s",
+                getattr(rec, "symbol", "?"),
+                exc,
+            )
+    return rec

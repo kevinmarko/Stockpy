@@ -1,19 +1,30 @@
-# InvestYo Go-Live Runbook
+# InvestYo Advisory Platform — Runbook
 
-Operational reference for the first 5 trading days live and ongoing incident response.
+Operational reference for day-to-day use, incident response, and maintenance.
+
+> **Advisory mode is the project default (`ADVISORY_ONLY=true`).**
+> In this mode the pipeline runs end-to-end — data fetch, indicators, forecasts,
+> position sizing, HTML report — but **never submits orders to any broker**.
+> Sections that describe broker-execution behaviour are marked **⚠ N/A in advisory mode**
+> and are retained so future operators who lift the quarantine have a complete reference.
+> See `docs/HOW_TO_GUIDE.md → "Advisory-Only Mode"` for the procedure to re-enable
+> broker execution.
 
 ---
 
 ## 0. Everyday Startup (macOS double-click)
 
-The fastest way to start the platform is to **double-click `launch.command`** in Finder or the Dock. The script:
+The fastest way to start the platform is to **double-click `launch.command`** in Finder
+or the Dock. The script:
 
 1. Verifies `.venv` exists and Python is exactly 3.12.x before starting.
 2. Prints a clear error (and pauses for you to read it) if either check fails.
-3. Runs `python main.py --interval 60` by default — refreshes every 60 s until you close the window.
+3. Runs `python main.py --interval 60` by default — refreshes every 60 s until you close
+   the window.
 4. Pauses with "Press any key to close" after exit so final output is always visible.
 
-**To change the interval**: open `launch.command` in any text editor, set `REFRESH_INTERVAL_SECONDS=N` at the top (0 = single run).
+**To change the interval**: open `launch.command` in any text editor, set
+`REFRESH_INTERVAL_SECONDS=N` at the top (`0` = single run).
 
 **If `.venv` is missing** (e.g., fresh clone):
 
@@ -25,222 +36,428 @@ python3.12 -m venv .venv
 
 Then double-click `launch.command` again.
 
-**If the wrong Python version is detected**: the launcher tells you which version was found and how to recreate `.venv` with Python 3.12.
+**If the wrong Python version is detected**: the launcher tells you which version was found
+and how to recreate `.venv` with Python 3.12.
 
-**Prefer a visual control panel?** Double-click **`launch_gui.command`** (or run `streamlit run gui/app.py`) to open the **Command Center** — a 9-tab GUI that launches the orchestrator, shows live pipeline-stage status, edits non-secret `.env` tunables (secrets stay masked/read-only), toggles signal modules and the kill switch, and surfaces the Gravity audit. It is read-only / file-backed: it launches `main_orchestrator.py` as a subprocess and reads the files it writes, so it never touches the broker directly. The kill switch toggled from the Strategy Matrix tab writes the same `output/KILL_SWITCH` sentinel as `python -m execution.kill_switch --activate`, so the two are interchangeable. Disabling a module in that tab writes `DISABLED_SIGNAL_MODULES` to `.env` and takes effect on the **next** orchestrator launch.
+**Prefer a visual control panel?** Double-click **`launch_gui.command`** (or run
+`streamlit run gui/app.py`) to open the **Command Center** — a 10-tab GUI that launches
+the pipeline, shows live stage status, edits non-secret `.env` tunables (secrets stay
+masked/read-only), toggles signal modules and the pause gate (kill switch), and surfaces
+the Gravity audit. The GUI is read-only / file-backed: it launches `main_orchestrator.py`
+(or `main.py` for the advisory refresh path) as a subprocess and reads the files it writes,
+so it never touches a broker directly.
+
+The **Launcher tab** exposes two distinct entry points:
+
+* **▶️ Launch Pipeline** — `main_orchestrator.py` (full pipeline, HTML report, JSON
+  payload; broker skipped while `ADVISORY_ONLY=true`).
+* **🔄 Refresh Data (Advisory)** — `main.py` (broker-free; fastest path to refresh
+  `output/state_snapshot.json`, signals, and the HTML report).
+
+A pre-launch readiness check warns about missing required env vars (e.g. `FRED_API_KEY`)
+*before* the subprocess starts. The tab tails BOTH the active run log AND the platform-wide
+structured telemetry stream (`logs/investyo.log`) so one window covers diagnostics across
+both entry points.
+
+The **daily HTML report** leads with a **"Δ Since Last Run" band**: new BUYs, action
+flips, conviction moves (`|Δ| ≥ SNAPSHOT_CONVICTION_DELTA_THRESHOLD`, default 0.20),
+holdings added/dropped, and regime changes. Powered by rotated state snapshots in
+`output/history/` (pruned after `SNAPSHOT_HISTORY_DAYS=30` days). The band is hidden
+on first ever run.
+
+**Not sure what a term means?** The **❓ Help tab** has a searchable glossary of 60+ terms
+(Kelly Target, PBO, DSR, Sahm Rule, IVR, HMM, …) and plain-English tab descriptions —
+no page switch needed.  Every tab also carries a collapsible
+`❓ What is this & how do I use it?` expander at the top.
+
+The **Reports tab** includes:
+
+* **Decision Journal** — log "acted / passed / modified" per signal; entries go to
+  `output/decision_log.jsonl` and for "acted" entries are linked to the nearest
+  `quant_platform.db` trade record within ±24 h.
+* **Conviction Calibration** — reliability diagram showing whether stated conviction
+  scores match empirical win rates per bin. Starts empty until conviction-annotated
+  trades accumulate; bins with < 5 trades show NaN.
+* **Brinson-Fachler Attribution Analysis** — edit a GICS-11 sector matrix or bulk-paste
+  TSV/CSV from a spreadsheet to compute allocation / selection / interaction effects.
 
 ---
 
-## 1. Switching from Paper to Live
+## 1. ⚠ N/A in Advisory Mode — Paper → Live Switch
 
-### Pre-switch (T-1 day)
+> **This section is suppressed while `ADVISORY_ONLY=true`.**
+> The pre-launch readiness check (`scripts/preflight_check.py`) automatically skips all
+> broker-readiness checks (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`,
+> `paper_trading_duration`) and instead passes a single `advisory_only_active` check.
+> The GUI Strategy Matrix mode toggle (Simulation / Paper / Live) is also suppressed.
+
+**To re-enable broker execution (future use):**
+
+1. Set `ADVISORY_ONLY=false` in `.env`.
+2. Re-run `python scripts/preflight_check.py` — it now enforces all broker-readiness
+   checks, including `alpaca_configured` and `paper_trading_duration` (≥ 90 days).
+3. Follow the original paper→live procedure documented below once all checks pass.
+
+### Pre-switch (T-1 day) — ⚠ BROKER EXECUTION REQUIRED
 
 1. Complete every item in `docs/GO_LIVE_CHECKLIST.md`.
-2. Run `python scripts/preflight_check.py` — must exit **0**.
+2. Run `python scripts/preflight_check.py` — must exit **0** (all checks including broker
+   ones must pass; `advisory_only_active` will warn that `ADVISORY_ONLY=False`).
 3. Notify all stakeholders that live trading begins the next session.
 4. Ensure the kill switch is **INACTIVE**: `python -m execution.kill_switch --status`
 
-### Day-of switch (pre-market, ≥ 30 min before open)
+### Day-of switch (pre-market, ≥ 30 min before open) — ⚠ BROKER EXECUTION REQUIRED
 
-1. Rotate `.env` value: **`ALPACA_PAPER=false`**
-2. Verify the new value is loaded:
-   ```python
-   from settings import settings
-   assert settings.ALPACA_PAPER is False
-   ```
+1. Rotate `.env` values: **`ALPACA_PAPER=false`** and **`ADVISORY_ONLY=false`**.
+2. Verify via the Strategy Matrix → Global Execution Mode selector (or `from settings
+   import settings; assert settings.ALPACA_PAPER is False`).
 3. Start the orchestrator in **dry-run** once to confirm it reads the live endpoint:
    ```
    python3 main_orchestrator.py --dry-run
    ```
-   Look for: `"AlpacaBroker initialized — paper=False"` in the logs (not `paper=True`).
+   Look for `"AlpacaBroker initialized — paper=False"` in the logs (not `paper=True`).
 4. Remove `--dry-run` for the first live run:
    ```
    python3 main_orchestrator.py
    ```
-5. Confirm in Alpaca dashboard that the account shows the same open positions as `transactions_store`.
+5. Confirm in Alpaca dashboard that the account shows the same positions as
+   `transactions_store`.
+
+**Switching back to Paper / Simulation** works identically — pick the other mode on the
+Strategy Matrix tab, or set `ALPACA_PAPER=true`. Setting `ADVISORY_ONLY=true` returns the
+platform to the default quarantine state regardless of `ALPACA_PAPER`.
 
 ---
 
 ## 1.1 Phone Push Alerts (ntfy.sh)
 
-`main.py` sends push notifications to your phone via ntfy.sh (`alerting.py`). Configure once; no account required.
+`main.py` sends push notifications via ntfy.sh (`alerting.py`). Configure once; no
+account required.
 
 **Setup**:
+
 1. Install the **ntfy** app (iOS / Android).
 2. In `.env`: set `NTFY_TOPIC` to a long random string (e.g. `investyo-abc123xyz`).
 3. In the ntfy app: subscribe to that exact topic name.
 
 **What you will receive**:
+
 | Notification | Priority | When |
 |---|---|---|
-| ⚠ Errors Detected | HIGH (audible, bypasses DND on some devices) | Any symbol-level pipeline failure |
+| ⚠ Errors Detected | HIGH (audible) | Any symbol-level pipeline failure |
 | ✓ Refresh Complete | Default | Once per launch |
 
-The error alert lists the failing symbol and pipeline stage so you can triage without opening the log. In `--interval` mode, the "refresh complete" alert fires only on the first clean cycle to avoid spam.
+The error alert lists the failing symbol and pipeline stage so you can triage without
+opening the log. In `--interval` mode, the "refresh complete" alert fires only on the
+first clean cycle to avoid spam.
 
 **If you get an error alert**:
-1. Check `logs/investyo.log` for the ERROR line — it will name the symbol, stage, and exception.
-2. If the problem is a single bad ticker (data gap, API timeout), it is automatically dead-lettered — the run continues and other symbols are unaffected. No action required unless it persists.
-3. If ALL symbols are failing, check network connectivity, FRED API key, and market data provider keys.
+
+1. Check `logs/investyo.log` for the ERROR line — it will name the symbol, stage, and
+   exception.
+2. If the problem is a single bad ticker (data gap, API timeout), it is automatically
+   dead-lettered — the run continues and other symbols are unaffected. No action required
+   unless it persists.
+3. If ALL symbols are failing, check network connectivity, FRED API key, and market data
+   provider keys.
 
 ---
 
-## 2. Pre-Market Checklist (First 5 Live Days)
+## 2. Pre-Market Checklist (Daily Advisory Run)
 
 Run this EVERY trading morning before 09:00 ET:
 
 | Check | Command / Action |
 |-------|-----------------|
-| **Start pipeline** | Double-click `launch.command` (auto-interval mode, 60 s refresh) |
-| Kill switch inactive | `python -m execution.kill_switch --status` |
-| Heartbeat recent | `ls -la output/heartbeat.txt` (< 2 h old) |
-| Preflight pass | `python scripts/preflight_check.py` (exit 0) |
-| Dashboard open | `streamlit run observability/dashboard.py` |
-| Holdings & P&L sane | Dashboard → **Account Holdings & P&L** panel — equity, buying power, per-position unrealized P&L (green/red). If empty, run `python3 main.py --refresh-account`. Use the sidebar **🔄 Refresh now** button after refreshing the snapshot. |
-| No reconciliation drift | Dashboard → Open Positions panel |
-| Risk gate log clean | Dashboard → Risk Gate Block Log (no unexpected blocks) |
-| VIX check | Dashboard → VIX panel (> 25 → consider extra caution) |
-| Macro regime | Dashboard → Macro Regime (RISK ON = proceed) |
-| Daily report reviewed | Open `output/daily_report.html` — summary band (equity/P&L/dividends), then per-symbol action + click-to-expand rationale |
+| **Start pipeline** | Double-click `launch.command` or use `🔄 Refresh Data (Advisory)` in Launcher tab |
+| Advisory mode active | Launcher tab banner shows `📋 ADVISORY MODE` (blue) |
+| Heartbeat recent | `ls -la output/heartbeat.txt` (< 2 h old); or Observability tab → heartbeat sparkline |
+| Preflight pass | `python scripts/preflight_check.py` (exit 0; `advisory_only_active` = PASS) |
+| Account snapshot fresh | `python3 main.py --refresh-account` if snapshot age > 20 h |
+| Holdings & P&L sane | Dashboard → **Account Holdings & P&L** — equity, buying power, per-position unrealized P&L. If empty, force refresh above. |
+| No dead-letter failures | Launcher tab → Dead-Letter Queue (all symbols completed) |
+| Δ Since Last Run reviewed | Open `output/daily_report.html` — check top band for unexpected action flips or conviction drops |
+| Regime & VIX checked | Observability tab → recession telemetry (Sahm Rule / HY OAS / VIX / regime) |
+| Conviction calibration glanced | Reports tab → Conviction Calibration (win-rate bars near the diagonal) |
 
 ---
 
 ## 3. Incident Response
 
-### 3.1 Reconciliation Drift
+### 3.1 Stale Account Snapshot
 
-**Symptom**: `CRITICAL` log: `"RECONCILIATION DRIFT"`. Alert webhook fires.
+**Symptom**: Holdings & P&L panel shows `Snapshot age: Xh` > 20 h, or
+`data/robinhood_portfolio.fetch_account_snapshot()` warns
+`"Using stale cache (Xh old)"`. The "Δ Since Last Run" band may show incorrect
+`added_holdings` / `dropped_holdings` because position changes haven't been picked up.
 
 **Immediate action**:
-1. Activate kill switch to halt new orders:
-   ```
-   python -m execution.kill_switch --activate --reason "reconciliation drift"
-   ```
-2. Log into Alpaca dashboard and compare positions manually.
-3. Update `transactions_store` if the broker is the source of truth (rare edge case:
-   a fill that arrived while the orchestrator was down).
-4. Fix the discrepancy, then deactivate the kill switch:
-   ```
-   python -m execution.kill_switch --deactivate
-   ```
+
+```bash
+# Force a live Robinhood refresh (bypasses the 20-h daily cache)
+python3 main.py --refresh-account
+```
+
+Or from the GUI: Launcher tab → **🔄 Refresh Data (Advisory)** with the
+`refresh_account` checkbox ticked.
+
+**Verify**:
+
+```bash
+python3 -c "
+from data.robinhood_portfolio import fetch_account_snapshot
+snap = fetch_account_snapshot(force=True)
+print(f'Fetched at: {snap.fetched_at}  Positions: {len(snap.positions)}')
+"
+```
 
 **Root causes to check**:
-- Order submitted but fill arrived during a process restart.
-- Alpaca position expired (options) without a corresponding close in the store.
-- Network partition caused a partial fill that wasn't recorded.
+
+| Cause | Fix |
+|-------|-----|
+| Robinhood MFA challenge triggered | Run `python3 main.py --refresh-account`; enter MFA code at the terminal prompt |
+| `RH_MFA_SECRET` wrong or rotated | Re-scan the TOTP QR code in the Robinhood app; update `RH_MFA_SECRET` in `.env` |
+| `RH_USERNAME` / `RH_PASSWORD` invalid | Verify credentials; Robinhood sometimes forces a password reset after a security event |
+| Network partition during overnight run | Retry manually; stale cache is returned (not an error) on live-fetch failure — the platform degrades gracefully |
+| Cache file corrupt | Delete `cache/account_snapshot.json` and re-run; a missing cache triggers a live fetch |
+
+**When to escalate**: if live fetch fails AND no cache exists, the platform logs an error
+and evaluates only watchlist symbols (held positions are temporarily missing from the
+universe). Verify the next run picks up holdings again; if not, check Robinhood API
+availability.
 
 ---
 
-### 3.2 Kill Switch Fails to Block
+### 3.2 Missing Recommendation for Held Symbol
 
-**Symptom**: `KILL_SWITCH` file exists but orders are still submitted.
+**Symptom**: The HTML report or observability dashboard shows one of your Robinhood
+holdings without an Action Signal (blank, `—`, or `PARTIAL` data quality), while other
+symbols completed normally. The Launcher tab Dead-Letter Queue may show the symbol with a
+stage and exception.
 
 **Immediate action**:
-1. Stop the orchestrator process immediately (`Ctrl+C` or `kill <PID>`).
-2. Flatten all positions manually via Alpaca dashboard.
-3. **Do not restart** until root cause is found.
 
-**Debug**:
-- Confirm the sentinel file path: `ls -la output/KILL_SWITCH`
-- Confirm `settings.OUTPUT_DIR` matches where the orchestrator writes: `python -c "from settings import settings; print(settings.OUTPUT_DIR)"`
-- Confirm `OrderManager` is using `GlobalKillSwitch()` (not a patched/injected instance).
+1. Open the Launcher tab → Dead-Letter Queue. Note the `stage` and `error` for the
+   affected symbol.
+2. Click the **🔄 Retry** button next to the symbol — this spawns `main.py` with
+   `WATCHLIST=<SYMBOL>` so only that ticker is re-evaluated.
+3. If retry also fails, check the error:
+
+| Stage | Common cause | Fix |
+|-------|-------------|-----|
+| `dto_construction` | Price history unavailable (ticker delisted, bad symbol, market closed) | Confirm the symbol is valid and the market is open; check `data.market_data.get_provider()` |
+| `strategy` | GARCH / options engine exception | See §3.7 (GJR-GARCH warning); verify `technical_options_engine.build_premium_directive` |
+| `forecasting` | CNN-LSTM or ARIMA diverged | Run `python3 -m pytest tests/test_forecasting_lookahead.py -v`; check model inputs for NaN |
+| `results` | Schema validation failure | Run `python scripts/preflight_check.py`; check `config.COLUMN_SCHEMA` for missing key |
+
+4. If the failure is persistent (> 2 consecutive runs), reduce position exposure manually
+   and add a note to `output/decision_log.jsonl` via the Decision Journal ("modified —
+   pipeline unable to evaluate").
+
+**Held-symbol safety rule**: A held symbol that fails market-data probe is classified
+`EQUITY_ONLY` (not `UNCOVERED`) by `data.portfolio_sync.build_sync_report()`. Its
+cost-basis-anchored equity is preserved in the Holdings view (`qty × avg_cost`) — no
+fabricated current price. The equity view stays accurate even while the signal pipeline
+cannot evaluate the symbol.
+
+**When to escalate**: if the same held symbol fails for > 5 consecutive trading days AND
+represents > 5% of portfolio equity, re-evaluate the position manually using external
+sources. The platform is advisory; the operator retains all execution decisions.
 
 ---
 
-### 3.3 Broker Connection Lost
+### 3.3 Calibration Score Dropping Below Threshold
 
-**Symptom**: `AlpacaBroker` raises `RuntimeError` or connection timeout; 
-`_execute_broker_orders` logs `ERROR`.
+**Symptom**: Reports tab → Conviction Calibration shows the reliability diagram's bars
+systematically below the diagonal (the system claims high conviction but actual win rates
+are lower). The Calibration Error (MAE) KPI climbs above `0.10` (10 pp average
+discrepancy between stated conviction and empirical win rate).
 
-**Immediate action**:
-1. Check Alpaca status page: https://status.alpaca.markets
-2. If planned maintenance: activate kill switch until connectivity restored.
-3. If unexpected: check for API key rotation requirement.
+**What this means**: The advisory signals have become over-confident. The strategy's
+stated conviction scores no longer reflect empirical accuracy. Left unchecked, the
+calibration tracker (Tier 1.2) will flag this; the Decision Journal will show more
+"passed" entries than "acted" if the operator has been manually discounting signals.
 
-**Recovery**:
-- Reconnect is automatic on the next orchestrator run (Alpaca SDK reconnects).
-- Run reconciliation manually after reconnect to confirm state is consistent.
+**Diagnostic steps**:
+
+```bash
+# 1. Check how many conviction-annotated closed trades underpin the bins
+python3 -c "
+from transactions_store import TransactionsStore
+from evaluation_engine import calibration_curve
+store = TransactionsStore()
+df = calibration_curve(store, n_bins=10, min_trades_per_bin=5)
+print(df[['bin_center', 'win_rate', 'count', 'perfect_calibration']].to_string())
+"
+```
+
+```bash
+# 2. Check which signal modules are active and their weights
+python3 -c "
+from signals.registry import global_registry
+from settings import settings
+for name, mod in global_registry.get_all().items():
+    w = settings.SIGNAL_WEIGHTS.get(name, 0)
+    print(f'{name}: weight={w}')
+"
+```
+
+**Response by severity**:
+
+| MAE | Response |
+|-----|----------|
+| 0.05–0.10 | Monitor. Check if a specific conviction bucket (e.g. 0.7–0.8) is systematically wrong; reduce weight on the corresponding signal module via Settings tab. |
+| 0.10–0.15 | Re-run the strategy validation harness: `python -m validation.harness --strategy <name> --start 2015-01-01 --end 2024-12-31`. If PBO > 0.50 or DSR < 0.95, the strategy is no longer deployable. Reduce its `SIGNAL_WEIGHTS` entry to `0` until the next retrain cycle. |
+| > 0.15 | Disable the strategy module via the GUI Strategy Matrix tab (`DISABLED_SIGNAL_MODULES`). Document the degradation in `output/decision_log.jsonl` (entry type: "modified"). Alert to re-evaluate the regime and signal architecture. |
+
+**Minimum data requirement**: bins with fewer than 5 trades show `NaN` win rate (never
+fabricated). A calibration MAE reading is only reliable once at least 30 conviction-
+annotated closed trades exist. Before that threshold, the calibration diagram is
+informational only — do not act on single-bin anomalies.
+
+**Re-calibration procedure** (after signal weights are adjusted):
+
+1. Run the pipeline for 5–10 trading sessions to accumulate new conviction-annotated
+   trades (ensure `conviction` is being passed to `record_trade()` — check
+   `transactions_store.TransactionsStore.record_trade`).
+2. Re-check the calibration diagram. If MAE recovers below 0.10, remove the restriction.
+3. If MAE does not improve, run the full validation harness and consider strategy
+   retirement.
 
 ---
 
 ### 3.4 Validation Report Missing for Active Strategy
 
-**Symptom**: Dashboard shows "No validation reports" OR `preflight_check.py` fails `check_validation_reports`.
+**Symptom**: Dashboard shows "No validation reports" OR `preflight_check.py` fails
+`check_validation_reports`.
 
 **Immediate action**:
-1. Do NOT deploy the strategy live until a fresh report is generated.
+
+1. Do NOT weight the strategy heavily until a fresh report is generated.
 2. Run the harness:
-   ```
+   ```bash
    python -m validation.harness --strategy <name> --start 2015-01-01 --end 2024-12-31
    ```
-3. If the strategy fails validation, deactivate it (remove from `settings.DEFAULT_TICKERS` or reduce weight to 0 in `settings.SIGNAL_WEIGHTS`).
+3. If the strategy fails validation (PBO ≥ 0.50 OR DSR < 0.95 OR Sharpe < 0.50 OR
+   MaxDD ≥ 30%), set its weight to 0 in `settings.SIGNAL_WEIGHTS` via the Strategy
+   Matrix tab.
 
 ---
 
 ### 3.5 Portfolio Heat Exceeding Limit
 
-**Symptom**: Risk gate blocks new BUY orders with `"portfolio_heat"` reason; 
-Dashboard shows heat > 6%.
+**Symptom**: In a live-execution context, the risk gate would block new BUY orders with
+`"portfolio_heat"` reason. In advisory mode the gate is informational — no orders are
+submitted — but the observability dashboard still surfaces the heat metric.
 
-**Normal response**: This is the risk gate working correctly. Do not override it.
-- Review open positions to understand the source of adverse P&L.
-- Consider tightening stop losses.
-- The gate unblocks automatically once heat drops below `settings.MAX_PORTFOLIO_HEAT`.
+**Normal response**: Review open positions to understand the source of adverse P&L.
+The gate (when re-enabled) unblocks automatically once heat drops below
+`settings.MAX_PORTFOLIO_HEAT`. No action required unless you are tracking this as an
+overlay decision.
 
 ---
 
-### 3.5b "RH_USERNAME is missing" but .env has it set
+### 3.5b "RH_USERNAME is missing" but `.env` has it set
 
-**Symptom**: Log shows `ERROR - Live Robinhood fetch failed: Required environment variable 'RH_USERNAME' (or 'ROBINHOOD_USERNAME') is missing or empty` — yet your `.env` clearly contains `RH_USERNAME=...`.
+**Symptom**: Log shows `ERROR - Live Robinhood fetch failed: Required environment
+variable 'RH_USERNAME' (or 'ROBINHOOD_USERNAME') is missing or empty` — yet your `.env`
+clearly contains `RH_USERNAME=...`.
 
-**Root cause**: An entry-point module (`main.py` or `main_orchestrator.py`) is not calling `load_dotenv()`. `pydantic-settings` reads `.env` into the `Settings()` object but never copies values into `os.environ`. Any module that reads credentials via `os.environ.get(...)` directly — `data/robinhood_portfolio.py` does this — sees empty strings.
+**Root cause**: `pydantic-settings` reads `.env` into `Settings()` but does NOT propagate
+values to `os.environ`. `data/robinhood_portfolio.py` reads credentials via
+`os.environ.get()` directly, so it sees empty strings unless `load_dotenv()` has been
+called.
 
 **Verify**:
+
 ```bash
 .venv/bin/python3 -m pytest tests/test_env_loading.py -v
 ```
+
 Both tests must PASS. If either fails, the regression has returned.
 
-**Fix**: The canonical pattern is to **import** `load_dotenv` at module top but **call** it inside the entry-point function — NOT at module top. Module-top invocation pollutes the pytest session (importing `main` would load every `.env` value into `os.environ` and break `tests/test_settings.py::test_settings_defaults`). Confirm:
+**Fix**: The canonical pattern is to **import** `load_dotenv` at module top but **call**
+it inside the entry-point function — `main.py` calls `_load_dotenv(override=False)` as
+the first line of `main()`; `main_orchestrator.py` calls it inside `async def main()`.
+`run_once()` deliberately does NOT call it — callers (`make verify`, `verify.command`)
+must call `load_dotenv()` themselves before invoking `run_once()`, and both already do.
 
-- `main.py` — imports `from dotenv import load_dotenv as _load_dotenv` at module top and calls `_load_dotenv(override=False)` **inside `main()`** (the first line, before `setup_logging()`). `run_once()` deliberately does NOT call it — direct callers (`make verify`, `verify.command`, ad-hoc REPL) are responsible for calling `load_dotenv()` themselves before invoking `run_once()`, and both already do so in their respective wrappers.
-- `main_orchestrator.py` — same import at module top; calls `_load_dotenv(override=False)` **inside `async def main()`**.
+**Companion symptoms**:
 
-`override=False` so an explicit shell `export` always wins over `.env`.
-
-**Companion symptoms to check at the same time**:
-- `RH_MFA_SECRET` empty in `.env` → the new portfolio module requires TOTP MFA. Enable Authenticator-app MFA in the Robinhood app (Settings → Security → Two-Factor Authentication → Authenticator App), copy the Base32 secret, paste into `RH_MFA_SECRET=`.
-- `WATCHLIST` unset AND no `watchlist.txt` AND no Sheet2 tickers → even after Robinhood works, an empty held-positions set produces an empty universe. Fix with any of: (1) set `WATCHLIST=SPY,QQQ,AAPL,MSFT,JNJ` in `.env`, (2) create `watchlist.txt` (one ticker per line, `#` = comment), or (3) add tickers to **column A of the "Sheet2" tab** in the "Stock Dashboard Py" Google Sheet (the last-resort fallback — requires `credentials.json`).
-- First line of `.env` is a free-text comment without `#` prefix → produces `python-dotenv could not parse statement starting at line 1` warning. Harmless but ugly; prefix the line with `#`. (Fixed in this repo's `.env` on 2026-06-25.)
+- `RH_MFA_SECRET` empty → requires TOTP MFA. Enable Authenticator-app MFA in Robinhood
+  (Settings → Security → Two-Factor Authentication → Authenticator App), copy the Base32
+  secret, paste into `RH_MFA_SECRET=`.
+- `WATCHLIST` unset AND no `watchlist.txt` AND no held positions → empty universe. Fix
+  with: `WATCHLIST=SPY,QQQ,AAPL` in `.env`, or `watchlist.txt` (one ticker per line), or
+  tickers in **Sheet2 column A** of the Google Sheet (last-resort fallback).
+- First line of `.env` is a comment without `#` prefix → `python-dotenv could not parse
+  statement starting at line 1`. Prefix the line with `#`.
 
 ---
 
 ### 3.6 HMM Says High Risk-Off
 
-**Symptom**: Risk gate blocks BUY orders with `"hmm_regime"` reason;
-HMM risk-on probability < `1 - HMM_RISK_OFF_BLOCK_THRESHOLD` (default 0.80).
+**Symptom**: HMM risk-on probability < `1 - HMM_RISK_OFF_BLOCK_THRESHOLD` (default 0.80);
+in a live-execution context this would block BUY orders with `"hmm_regime"` reason. In
+advisory mode this is surfaced as a macro-regime indicator only.
 
-**Normal response**: This is also the risk gate working correctly.
-- SELL signals are never blocked by the HMM gate.
-- The gate clears automatically as the HMM model updates in subsequent pipeline runs.
-- Do not override unless you have high conviction the HMM is wrong AND you have
-  documented reasoning.
+**Normal response**: Monitor. The gate clears automatically as the HMM model updates.
+SELL signals are never blocked by the HMM gate. Do not override unless you have high
+conviction the HMM is wrong AND documented reasoning.
 
 ---
 
 ### 3.7 "GJR-GARCH failed to converge" Warning
 
-**Symptom**: Log shows `WARNING - GJR-GARCH failed to converge: ... Falling back to 20-day historical standard deviation.`
+**Symptom**: Log shows `WARNING - GJR-GARCH failed to converge: ... Falling back to
+20-day historical standard deviation.`
 
-**This is NOT a data-quantity problem.** A genuine convergence failure (too few returns, degenerate variance) is rare and self-heals as history accumulates. If the message text contains a Python error such as `got an unexpected keyword argument 'method'`, it is an **API mismatch**, not a model failure: the `arch` library dropped/changed a `fit()` keyword between versions, so every ticker silently falls through to the cruder 20-day historical-vol fallback regardless of how much data exists.
+**Not a data-quantity problem** in most cases. If the message contains a Python
+`TypeError` / `unexpected keyword argument`, it is an **API mismatch**:
 
-**Verify which case you have**: read the full warning. A real convergence failure names a numerical reason; an API break names a Python `TypeError` / `unexpected keyword argument`.
+**Fix (API break)**: `technical_options_engine.estimate_gjr_garch_volatility()` must call
+`model.fit(update_freq=0, disp='off')` with NO `method=` kwarg. `arch ≥ 8.0` removed
+it. Confirm:
 
-**Fix (API break)**: `technical_options_engine.py` → `estimate_gjr_garch_volatility()` calls `model.fit(update_freq=0, disp='off')`. `arch ≥ 8.0` removed the top-level `method=` kwarg — do NOT pass `method=...` (it errors) and do NOT pass `options={"method": ...}` (scipy ignores it with an `OptimizeWarning`). The library's default optimizer (SLSQP) converges correctly for GJR-GARCH(1,1). Confirm with:
 ```bash
 .venv/bin/python3 -m pytest tests/test_quantitative_models.py -k garch -v
 ```
+
 Both GARCH tests must PASS with no `arch` warning.
+
+---
+
+### 3.8 ⚠ N/A in Advisory Mode — Reconciliation Drift
+
+> Reconciliation drift (`CRITICAL: RECONCILIATION DRIFT`) only occurs when
+> `OrderManager` is submitting orders to a broker. While `ADVISORY_ONLY=true`, no orders
+> are submitted and `reconcile_state()` is not called. If you have lifted the quarantine
+> and see this symptom:
+>
+> 1. Activate the kill switch: `python -m execution.kill_switch --activate --reason
+>    "reconciliation drift"`
+> 2. Log into Alpaca dashboard and compare positions manually.
+> 3. Fix the discrepancy, then deactivate: `python -m execution.kill_switch --deactivate`
+
+---
+
+### 3.9 ⚠ N/A in Advisory Mode — Kill Switch Fails to Block
+
+> Only relevant when `ADVISORY_ONLY=false` and `OrderManager` is submitting orders.
+> While quarantined, the kill switch sentinel (`output/KILL_SWITCH`) repurposes as the
+> **pause-recommendations gate** — see §6.
+
+---
+
+### 3.10 ⚠ N/A in Advisory Mode — Broker Connection Lost
+
+> `AlpacaBroker` / `_execute_broker_orders` are not reached while `ADVISORY_ONLY=true`.
+> If you have lifted the quarantine and see Alpaca connection errors:
+>
+> 1. Check https://status.alpaca.markets for planned maintenance.
+> 2. If unexpected: check for API key rotation requirement.
+> 3. Reconnect is automatic on the next orchestrator run. Run reconciliation manually
+>    after reconnect.
 
 ---
 
@@ -248,9 +465,9 @@ Both GARCH tests must PASS with no `arch` warning.
 
 | Role | Contact | Notes |
 |------|---------|-------|
-| Alpaca broker support | support@alpaca.markets | For fill disputes, account issues |
-| Alpaca status | https://status.alpaca.markets | Outages / maintenance windows |
 | FRED API issues | https://fred.stlouisfed.org/docs/api/ | Key rotation, rate limits |
+| Alpaca broker support _(when active)_ | support@alpaca.markets | For fill disputes, account issues |
+| Alpaca status _(when active)_ | https://status.alpaca.markets | Outages / maintenance windows |
 
 ---
 
@@ -258,35 +475,300 @@ Both GARCH tests must PASS with no `arch` warning.
 
 | Frequency | Task |
 |-----------|------|
-| Daily | Review dashboard, check reconciliation |
-| Weekly | Review risk gate block log; investigate any `minimum_validation` blocks |
-| Monthly | Rotate API keys; re-run validation harness for all strategies |
-| Quarterly | Full review of `MAX_POSITION_WEIGHT`, `KELLY_FRACTION`, `KELLY_CAP`; update capital sizing |
-| Annually | Full stress-test re-run for options-selling strategies |
+| Daily | Review HTML report Δ band; check Observability tab heartbeat and recession telemetry |
+| Weekly | Glance at Conviction Calibration MAE; review any Dead-Letter Queue entries |
+| Monthly | Re-run validation harness for all active strategies; rotate API keys (FRED, Robinhood) |
+| Quarterly | Full review of `MAX_POSITION_WEIGHT`, `KELLY_FRACTION`, `KELLY_CAP`; check calibration curve for systematic bias |
+| Annually | Full stress-test re-run for options-selling strategies; re-review `ADVISORY_ONLY` status if broker execution is intended |
 
 ---
 
-## 6. Emergency Shutdown Procedure
+## 6. Advisory Pause and Restart Procedure
 
-If something catastrophic happens (market crash, broker API breach, runaway orders):
+In advisory mode there is no broker to halt, so an "emergency shutdown" means
+**pausing the recommendation engine** so the pipeline produces no new signals while
+you investigate an anomaly.
+
+The pause gate is implemented in `main.run_once()` (after universe build, before macro
+compute) and in `main_orchestrator._main_body()` (after data fetch, before `run_pipeline()`).
+When the sentinel is active, `RunResult.recommendations` is empty and the error list
+records `stage="kill_switch_gate"`.  The last written `state_snapshot.json` and HTML
+report are untouched so the observability dashboard continues displaying the last known state.
+
+### How to pause recommendations
 
 ```bash
-# 1. Immediately halt all new orders
-python -m execution.kill_switch --activate --reason "EMERGENCY SHUTDOWN"
+# 1. Activate the pause gate (the same file the kill switch uses)
+python -m execution.kill_switch --activate --reason "advisory pause — investigating anomaly"
 
-# 2. Stop the orchestrator
-pkill -f main_orchestrator.py  # or kill the process by PID
-
-# 3. Manually flatten all positions via Alpaca web dashboard
-# https://app.alpaca.markets/paper/dashboard/overview
-
-# 4. Back up the database
-cp quant_platform.db quant_platform_emergency_$(date +%Y%m%d_%H%M%S).db
-
-# 5. Document the incident in docs/incident_log.md
+# 2. Confirm the pipeline sees the pause on next run
+python3 main.py
+# Expected: INFO — Advisory paused by kill-switch sentinel — skipping evaluation cycle.
+#           Reason: advisory pause — investigating anomaly  |  Universe would have been: ...
 ```
 
-Do NOT restart the orchestrator until:
-- Root cause is identified.
-- All positions are either closed or reconciled.
-- `preflight_check.py` exits 0.
+The GUI also exposes the kill switch toggle in the Launcher tab → Safety Controls. While
+the sentinel is active, the GUI safety indicator shows `🔴 PAUSED`.
+
+> **Note — macro-triggered advisory gating (automatic, always active):** Separately from
+> the manual kill switch, `engine/advisory.evaluate()` applies conservative overrides when
+> macro conditions deteriorate.  Three tiers: (1) RECESSION / CREDIT EVENT regime → all
+> BUY signals suppressed to HOLD; (2) VIX > 30 OR Sahm ≥ 0.5 → -25 pt score penalty;
+> (3) Finance / Financial Services / Real Estate sector AND yield curve inverted OR HY OAS
+> > 6% → sector veto (BUY → HOLD).  These fire automatically per-symbol; the operator
+> does not need to activate the kill switch for them to take effect.  Each override is
+> documented in the advisory rationale so the HTML report explains the gate to the operator.
+
+### How to resume
+
+```bash
+# After investigating and resolving the root cause:
+python -m execution.kill_switch --deactivate
+
+# Confirm preflight passes
+python scripts/preflight_check.py  # should exit 0
+
+# Restart the pipeline
+python3 main.py
+```
+
+### When to pause
+
+| Situation | Action |
+|-----------|--------|
+| Calibration MAE > 0.15 (§3.3) | Pause + disable affected signal module before resuming |
+| Missing recommendation for held symbol > 5 consecutive days (§3.2) | Pause + investigate data source; check Dead-Letter Queue |
+| Account snapshot stale > 48 h (§3.1) | Force refresh first (`--refresh-account`); pause only if live fetch also fails |
+| Macro regime shows RECESSION AND HMM agrees | Pause new signal evaluation; monitor daily |
+| Suspicious pipeline output (all signals identical, all BUY, all NaN) | Pause immediately; run `python scripts/preflight_check.py` and check `logs/investyo.log` |
+
+### Back up the database before any destructive investigation
+
+```bash
+cp quant_platform.db quant_platform_backup_$(date +%Y%m%d_%H%M%S).db
+```
+
+### Incident log
+
+Document every pause in `output/decision_log.jsonl` via the Reports tab → Decision
+Journal (entry type: "modified", notes: describe the anomaly and resolution). This keeps
+a timestamped operator log that the calibration tracker can correlate with signal
+accuracy changes.
+
+---
+
+## Incident response: data source degraded mid-session
+
+When a data source (Alpaca market data, Finnhub, FRED, Robinhood) is reporting errors:
+
+1. Open Safety tab → Dependency Map (`gui/dependency_map.py`).
+2. Multi-select the degraded sources.
+3. Read the impacted-consumers table — this is the authoritative list of
+   strategies/tabs/reports that lose coverage right now.
+4. If a CRITICAL consumer (e.g. `processing_engine`, `forecasting_engine`) appears in
+   the list → pause recommendations via the kill-switch toggle in the Safety tab.
+5. After remediation, refresh the Safety tab; the dashboard derives its state from files
+   (`output/KILL_SWITCH`, `output/risk_gate_blocks.jsonl`), so there is no in-process
+   cache to invalidate.
+
+---
+
+## Advisory-Only Mode (Tier 5.1, default-on)
+
+`settings.ADVISORY_ONLY=true` is the project default.  Three enforcement layers keep the
+broker surface quarantined:
+
+1. **Orchestrator** — `main_orchestrator._execute_broker_orders` returns immediately with
+   an INFO log before any broker import is reached.
+2. **GUI** — `gui/app.py` renders a persistent `📋 ADVISORY MODE` banner; the Strategy
+   Matrix mode toggle (Simulation / Paper / Live) is suppressed.
+3. **Preflight** — four broker-dependent checks auto-skip; `advisory_only_active` check
+   is PASS-loud (and PASS-with-warning when `ADVISORY_ONLY=false`).
+
+**Re-enabling broker execution** requires ALL THREE flags to be `false` simultaneously:
+`ADVISORY_ONLY=false AND DRY_RUN=false AND ALPACA_PAPER=false`. Follow the procedure in
+§1 above and ensure `preflight_check.py` exits 0 with all broker checks passing before
+any live run.
+
+---
+
+## Robinhood Execution Bridge (Tier 8) — paper-first rollout
+
+The Robinhood Trading MCP lets a **Claude Code agent** (not the headless pipeline) place
+equity trades into a dedicated, separately-funded **Agentic account**. The platform only
+emits a gated, dry-run queue (`output/execution_queue.json`); the agent is the only actor
+that calls the MCP. This is **independent of `ADVISORY_ONLY`** — it never arms the Alpaca
+surface.
+
+### One-time setup (operator, local — cannot be done headless)
+
+```bash
+# 1. Add the MCP (in your own terminal / Claude Code, not a remote session)
+claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mcp/trading
+# 2. Authenticate: in Claude Code run  /mcp  → robinhood-trading → authorize (OAuth)
+# 3. In the Robinhood app: open + fund a dedicated AGENTIC account with a small, capped
+#    amount. This is the blast radius — keep your main account out of execution.
+# 4. Smoke-test READ-ONLY first (ask Claude Code to call get_accounts / get_portfolio).
+#    Do NOT place anything yet.
+```
+
+### Staged rollout — strictly `off → review → live`
+
+```bash
+# Stage A — PAPER / DRY-RUN (review): emit the queue; the agent only simulates.
+#   .env:
+ROBINHOOD_EXECUTION_MODE=review
+python3 main.py                 # writes output/execution_queue.json (allow_place=false on all)
+# In Claude Code:  /rh-execute  → previews each order via review_equity_order, then STOPS.
+
+# Stage B — LIVE (only after reviewing paper output and you are satisfied):
+#   .env:
+ROBINHOOD_EXECUTION_MODE=live
+ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500     # REQUIRED > 0 for live; preflight fails otherwise
+python scripts/preflight_check.py        # check_robinhood_execution_mode warns (live) / fails (no cap)
+python3 main.py                          # queue now carries allow_place=true where gated-OK
+# In Claude Code:  /rh-execute  → previews, then for each allow_place=true intent asks for an
+#   explicit per-order confirmation before calling place_equity_order.
+```
+
+### Safety controls (all enforced)
+
+- **`off` is the default** — nothing is written, zero behavior change.
+- **`review` never places** — the agent calls only `review_equity_order`.
+- **`allow_place`** is `true` only when `mode=live AND risk-gate passed AND kill switch clear
+  AND a notional cap is set` — structurally false otherwise.
+- **Kill switch** pauses everything: `python -m execution.kill_switch --activate --reason "..."`
+  blocks queue placement (checked at emit time and again before each order). The advisory
+  pause gate (§6) also short-circuits `run_once()`, so a paused cycle emits no queue.
+- **Per-trade human confirmation** is mandatory in `live`; the agent never batch-confirms and
+  never operates against the non-Agentic account.
+- **Notional ceilings**: `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` (platform) + the Agentic account's
+  funded balance (Robinhood).
+
+### Pausing / disabling
+
+```bash
+# Immediate stop (blocks placement; queue still previews):
+python -m execution.kill_switch --activate --reason "halt robinhood execution"
+# Full disable (next run emits nothing):
+#   set ROBINHOOD_EXECUTION_MODE=off in .env
+```
+
+Outcomes the agent placed/previewed/skipped are appended to `output/execution_receipts.jsonl`
+(agent-authored); the platform owns `output/execution_queue.json` (Python-authored intents).
+Both are gitignored.
+
+## §7 Prompt Registry — Publish & Rollback Playbooks
+
+> **Security boundary:** Prompt-registry operations touch advisory text only.
+> They cannot alter order submission logic, advisory quarantine, risk gates, or the kill switch.
+> All safety enforcement stays in Python code — this invariant is audited in Gravity step 69 check 7.
+
+### 7.1 Normal publish flow (author machine)
+
+Use when a revised AI instruction is ready to roll out to all running instances.
+
+```bash
+# 1. Draft the new prompt body and confirm it passes guardrails locally
+python -m prompt_registry verify       # must exit 0 on current cache
+
+# 2. Publish (requires PROMPT_REGISTRY_PUBLISH_TOKEN + PROMPT_REGISTRY_SIGNING_KEY in .env)
+python -m prompt_registry publish <prompt_id> <new_version> /path/to/body.txt
+
+# 3. Confirm remote manifest now lists the new version
+python -m prompt_registry list         # should show source=remote, version=<new_version>
+
+# 4. On every platform, sync explicitly (never automatic — CONSTRAINT #5)
+python -m prompt_registry sync
+```
+
+Expected log output on success:
+```
+INFO  prompt_registry.registry — sync: fetched manifest registry_version=<new_version>
+INFO  prompt_registry.registry — _safe_adopt: cached <prompt_id> v<new_version>
+```
+
+### 7.2 Emergency rollback — bad prompt body deployed
+
+**Symptoms:** advisory rationale contains incorrect thresholds; AI-facing step body produces
+wrong output; `verify` exits non-zero on the remote-fetched version.
+
+**Rollback steps:**
+
+```bash
+# Step 1: Identify the bad version
+python -m prompt_registry list         # shows resolved_version per ID
+
+# Step 2: Roll back to the previous cached version (in-memory pin)
+python -m prompt_registry rollback <prompt_id>
+
+# Step 3: Confirm pin is set
+python -m prompt_registry list         # source should now show "pin"
+
+# Step 4: Persist the pin to .env so it survives restarts
+#   The rollback command does this automatically via gui/env_io.
+#   Verify:
+grep PROMPT_REGISTRY_PINS .env
+
+# Step 5: If the bad version is also in the remote manifest, publish a fixed version
+#   and update the "latest" pointer before running sync again.
+python -m prompt_registry publish <prompt_id> <fixed_version> /path/to/fixed_body.txt
+python -m prompt_registry sync
+python -m prompt_registry rollback <prompt_id>   # pin to fixed version
+
+# Step 6: Document in docs/incident_log.md
+```
+
+**Resolution:** pin cleared automatically once a verified fixed version is set as latest and
+synced.  Remove the pin entry from `PROMPT_REGISTRY_PINS` in `.env` to resume automatic
+"latest" resolution.
+
+### 7.3 Cache corruption / verify failure
+
+**Symptoms:** `python -m prompt_registry verify` exits non-zero; HMAC signature mismatch in
+logs.
+
+```bash
+# Step 1: Identify which ID/version failed
+python -m prompt_registry verify       # prints per-check pass/fail
+
+# Step 2: Delete the corrupt cache entry (safe — baseline is always the fallback)
+rm output/prompt_cache/<prompt_id>/<version>.json
+
+# Step 3: Re-sync from remote
+python -m prompt_registry sync
+
+# Step 4: Re-verify
+python -m prompt_registry verify       # must exit 0
+```
+
+If remote also fails verification, the signing key may be mismatched.
+Confirm `PROMPT_REGISTRY_SIGNING_KEY` matches the key used at publish time and retry.
+
+### 7.4 Registry completely disabled (baseline-only mode)
+
+When `PROMPT_REGISTRY_ENABLED=false` (the default), the platform uses the `prompt_registry/baseline/`
+files committed in the repo.  No network calls, no key required.
+
+To re-enable:
+```bash
+# In .env
+PROMPT_REGISTRY_ENABLED=true
+PROMPT_REGISTRY_URL=<manifest-url>
+PROMPT_REGISTRY_TOKEN=<read-token>
+PROMPT_REGISTRY_SIGNING_KEY=<hmac-key>
+
+# Then sync explicitly
+python -m prompt_registry sync
+```
+
+### 7.5 Key indicators a prompt-registry incident is NOT a safety incident
+
+| Observation | What it means | Action |
+|---|---|---|
+| Advisory rationale text changed unexpectedly | Prompt body was updated; narrative changed | Rollback prompt body (§7.2) |
+| Order submission behavior changed | Code change, NOT registry | Investigate `execution/`, `engine/advisory.py`, git log |
+| Kill switch logic changed | Code change, NOT registry | Investigate `execution/kill_switch.py`, git log |
+| Risk gate thresholds changed | Code change or settings change, NOT registry | Check `.env` and `execution/risk_gate.py` |
+
+The registry can never change code behavior — only text shown to an AI assistant.
