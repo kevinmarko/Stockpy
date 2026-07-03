@@ -1,8 +1,8 @@
 """
-llm/providers.py — Provider abstraction over Claude (Anthropic) + Gemini (Google).
-==================================================================================
+llm/providers.py — Provider abstraction over Claude, Gemini, and OpenAI.
+=========================================================================
 
-Both providers implement :class:`LLMProvider`:
+Three providers implement :class:`LLMProvider`:
 
 * :class:`ClaudeProvider` — Anthropic Messages API with structured-output
   forcing via ``tool_use`` (single emitter tool whose ``input_schema`` is the
@@ -11,18 +11,25 @@ Both providers implement :class:`LLMProvider`:
 * :class:`GeminiProvider` — Google ``google.genai`` client with
   ``response_mime_type='application/json'`` + ``response_schema=...`` for
   structured-output forcing.
+* :class:`OpenAIProvider` — OpenAI ``openai`` SDK (>=1.40) using the
+  ``client.beta.chat.completions.parse(response_format=schema_model)``
+  Structured Outputs helper, which returns an already-validated pydantic
+  instance (or ``None`` on a refusal). Backs Opal (Tier 9 Scope 4), the
+  front-of-pipeline research agent in :mod:`llm.research`.
 
-Both providers:
+All three providers:
 
 * Lazy-import their SDK inside ``__init__`` so the package costs nothing
-  to load when ``LLM_COMMENTARY_ENABLED`` is False.
-* Apply a hard wall-clock timeout (``LLM_COMMENTARY_TIMEOUT_SECONDS``).
+  to load when the relevant master switch is off.
+* Apply a hard wall-clock timeout (``LLM_COMMENTARY_TIMEOUT_SECONDS`` /
+  ``OPAL_RESEARCH_TIMEOUT_SECONDS``).
 * Wrap the entire call + parse in try/except — any exception → ``None``
   (CONSTRAINT #6).  Callers depend on this contract to fall back to the
   deterministic template.
 * Validate the response through ``schema_model.model_validate`` /
-  ``model_validate_json`` so a malformed response is rejected at the
-  schema boundary, NOT downstream.
+  ``model_validate_json`` (or receive an already-validated instance, as
+  with OpenAI's ``.parse()`` helper) so a malformed response is rejected at
+  the schema boundary, NOT downstream.
 """
 
 from __future__ import annotations
@@ -273,4 +280,82 @@ class GeminiProvider(LLMProvider):
             return None
         except Exception as exc:
             logger.warning("GeminiProvider multimodal response parse failed: %s", exc)
+            return None
+
+
+class OpenAIProvider(LLMProvider):
+    """OpenAI GPT via the official ``openai`` SDK (>=1.40, Structured Outputs).
+
+    Uses ``client.beta.chat.completions.parse(response_format=schema_model)``
+    — the SDK-side helper that performs OpenAI's strict-mode JSON-schema
+    post-processing (``additionalProperties: false`` on every object,
+    Optional fields folded into ``required`` with nullable typing) so the
+    caller never hand-rolls a raw ``response_format={"type": "json_schema",
+    ...}`` payload, which would 400 against a bare pydantic
+    ``model_json_schema()`` output.
+
+    Backs Opal (Tier 9 Scope 4) — the front-of-pipeline research agent in
+    :mod:`llm.research`.
+    """
+
+    name = "openai"
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = "gpt-4o",
+        timeout_seconds: float = 15.0,
+    ) -> None:
+        # Lazy import: see ClaudeProvider note. The timeout is applied at
+        # CLIENT INIT (mirrors anthropic.Anthropic(..., timeout=...)) — never
+        # signal.alarm, which breaks under threads/Streamlit.
+        try:
+            import openai  # noqa: PLC0415
+        except ImportError:  # pragma: no cover - import guard
+            self._client = None
+            self._model = model
+            self._timeout_seconds = timeout_seconds
+            return
+
+        self._openai = openai
+        try:
+            self._client = openai.OpenAI(api_key=api_key, timeout=timeout_seconds)
+        except Exception:
+            self._client = None
+        self._model = model
+        self._timeout_seconds = timeout_seconds
+
+    def call_structured(
+        self,
+        system: str,
+        user: str,
+        schema_model: Type[BaseModel],
+    ) -> Optional[BaseModel]:
+        if self._client is None:
+            return None
+        try:
+            completion = self._client.beta.chat.completions.parse(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format=schema_model,
+            )
+        except Exception as exc:
+            logger.warning("OpenAIProvider call failed: %s", exc)
+            return None
+
+        try:
+            message = completion.choices[0].message
+            if getattr(message, "refusal", None):
+                logger.warning("OpenAIProvider refused: %s", message.refusal)
+                return None
+            parsed = getattr(message, "parsed", None)
+            if parsed is None:
+                return None
+            return parsed
+        except Exception as exc:
+            logger.warning("OpenAIProvider response parse failed: %s", exc)
             return None

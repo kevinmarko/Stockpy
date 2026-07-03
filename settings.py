@@ -682,6 +682,49 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Tier 9 / Scope 4: Opal research agent (llm/research.py, OpenAI/GPT) ---
+    # A separate, independent opt-in master switch from LLM_COMMENTARY_ENABLED —
+    # Opal's front-of-pipeline research brief can run without per-symbol
+    # commentary enabled, and vice versa. Default False: zero `openai` SDK
+    # reach and zero network calls when off (CONSTRAINT #6 opt-in contract).
+    OPAL_RESEARCH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for Opal, the OpenAI/GPT front-of-pipeline research "
+            "agent (Tier 9 Scope 4).  Off by default — zero `openai` import and "
+            "zero network calls when False.  When True AND OPENAI_API_KEY is "
+            "set, generate_research_brief() produces a grounded, qualitative "
+            "ResearchBrief threaded into the Claude rationale prompt."
+        ),
+    )
+    OPAL_RESEARCH_PROVIDER: str = Field(
+        default="openai",
+        description=(
+            "Provider for Opal research-brief generation.  'openai' (default, "
+            "the only supported provider today) or 'none' (disable regardless "
+            "of the master switch)."
+        ),
+    )
+    OPAL_RESEARCH_MODEL: str = Field(
+        default="gpt-4o",
+        description="OpenAI model used for Opal's structured-output research brief calls.",
+    )
+    OPAL_RESEARCH_TIMEOUT_SECONDS: int = Field(
+        default=15,
+        description=(
+            "Hard wall-clock timeout per OpenAIProvider call.  Exceeding it "
+            "counts as a soft failure (returns None; caller skips Opal for "
+            "this cycle)."
+        ),
+    )
+    OPENAI_API_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "OpenAI API key for the Opal research agent.  Unset → Opal "
+            "disabled, no research brief generated (byte-identical to today)."
+        ),
+    )
+
     # --- Tier 9 / Scope 2: Gravity AI audit runner (engine/gravity_ai_runner.py) ---
     # A separate opt-in master switch from LLM_COMMENTARY_ENABLED so an
     # operator can run on-demand AI audits (uses both Claude + Gemini) without

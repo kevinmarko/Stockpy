@@ -27,6 +27,8 @@ venv/
 # without this exception a fresh clone / CI checkout cannot pass that test.
 !data/delisted_tickers.csv
 *.db
+*.db-shm
+*.db-wal
 *.html
 *.json
 !Gravity_Verification_Report.json

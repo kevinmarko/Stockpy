@@ -17,6 +17,9 @@ What lives here
 * :func:`format_chart_pattern_markdown` — render a ``ChartPatternRead``
   dump as Markdown for the panel.  Returns an "unavailable" sentinel on
   ``None`` (CONSTRAINT #6 — caller never sees a blank box).
+* :func:`format_research_brief_markdown` — same contract for Opal's
+  ``ResearchBrief`` (Tier 9 Scope 4), rendered at the TOP of the tab
+  (front-of-pipeline).
 * :func:`derive_disagreement_overview` — aggregate disagreement table:
   takes the current ``state_snapshot.json`` ``signals`` list + a cached
   Claude-vs-Gemini directional map and emits one row per symbol with
@@ -96,6 +99,52 @@ def format_chart_pattern_markdown(payload: Optional[Mapping[str, Any]]) -> str:
         parts.append("**Resistance:**\n" + "\n".join(f"- {r}" for r in resistances))
 
     return "\n\n".join(parts) if parts else format_chart_pattern_markdown(None)
+
+
+def format_research_brief_markdown(payload: Optional[Mapping[str, Any]]) -> str:
+    """Render a :class:`llm.schemas.ResearchBrief` model_dump as Markdown.
+
+    Tier 9 Scope 4 (Opal) — mirrors :func:`format_chart_pattern_markdown`'s
+    contract exactly: returns the "unavailable" sentinel when ``payload`` is
+    ``None``/empty so the caller never special-cases that path, and renders
+    each section only when its field is present/non-empty — partial-safe,
+    never a fabricated placeholder (CONSTRAINT #4).
+    """
+    if not payload:
+        return (
+            "_Opal research brief unavailable._  The provider returned no "
+            "payload (soft-fail), Opal is disabled, or no API key is "
+            "configured.  The deterministic recommendation above is the "
+            "source of truth."
+        )
+
+    thesis = str(payload.get("thesis_context", "") or "").strip()
+    confidence = str(payload.get("data_confidence", "") or "").strip()
+    sources_note = str(payload.get("sources_note", "") or "").strip()
+    catalysts: List[str] = [
+        str(c).strip() for c in (payload.get("catalysts") or []) if str(c).strip()
+    ]
+    risks: List[str] = [
+        str(r).strip() for r in (payload.get("risk_factors") or []) if str(r).strip()
+    ]
+    developments: List[str] = [
+        str(d).strip() for d in (payload.get("recent_developments") or []) if str(d).strip()
+    ]
+
+    parts: List[str] = []
+    if thesis:
+        suffix = f" ({confidence} confidence)" if confidence else ""
+        parts.append(f"**Thesis:** {thesis}{suffix}")
+    if catalysts:
+        parts.append("**Catalysts:**\n" + "\n".join(f"- {c}" for c in catalysts))
+    if risks:
+        parts.append("**Risk factors:**\n" + "\n".join(f"- {r}" for r in risks))
+    if developments:
+        parts.append("**Recent developments:**\n" + "\n".join(f"- {d}" for d in developments))
+    if sources_note:
+        parts.append(f"_{sources_note}_")
+
+    return "\n\n".join(parts) if parts else format_research_brief_markdown(None)
 
 
 # ---------------------------------------------------------------------------

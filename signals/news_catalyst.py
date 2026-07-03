@@ -188,8 +188,13 @@ def _earnings_proximity_multiplier(
 # Finnhub client helpers
 # ---------------------------------------------------------------------------
 
-def _build_finnhub_client() -> Optional[Any]:
-    """Return a finnhub.Client or None if not configured / not installed."""
+def build_finnhub_client() -> Optional[Any]:
+    """Return a finnhub.Client or None if not configured / not installed.
+
+    Public API (promoted alongside :func:`fetch_company_news` /
+    :func:`fetch_next_earnings` in Tier 9 Scope 4) so ``llm/research.py``
+    can obtain a Finnhub client without reaching into a private surface.
+    """
     api_key = os.environ.get("FINNHUB_API_KEY", "")
     if not api_key:
         return None
@@ -204,10 +209,15 @@ def _build_finnhub_client() -> Optional[Any]:
         return None
 
 
-def _fetch_company_news(
+def fetch_company_news(
     client: Any, symbol: str, lookback_days: int
 ) -> List[Dict[str, Any]]:
-    """Fetch recent company news; returns [] on any error."""
+    """Fetch recent company news; returns [] on any error.
+
+    Public API (promoted from ``_fetch_company_news`` in Tier 9 Scope 4) so
+    ``llm/research.py`` can reuse this exact grounding call for Opal's
+    research briefs without reaching into a private module surface.
+    """
     try:
         now_utc = datetime.now(timezone.utc)
         start = (now_utc - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
@@ -221,8 +231,12 @@ def _fetch_company_news(
         return []
 
 
-def _fetch_next_earnings(client: Any, symbol: str) -> Optional[datetime]:
-    """Return the soonest upcoming earnings datetime (UTC-aware) or None."""
+def fetch_next_earnings(client: Any, symbol: str) -> Optional[datetime]:
+    """Return the soonest upcoming earnings datetime (UTC-aware) or None.
+
+    Public API (promoted from ``_fetch_next_earnings`` in Tier 9 Scope 4) —
+    see :func:`fetch_company_news`.
+    """
     try:
         now_utc = datetime.now(timezone.utc)
         start = now_utc.strftime("%Y-%m-%d")
@@ -291,7 +305,7 @@ class NewsCatalystSignal(SignalModule):
         self._news_scores = {}
         self._earnings_dt = {}
 
-        client = _build_finnhub_client()
+        client = build_finnhub_client()
         if client is None:
             logger.info(
                 "NewsCatalystSignal: FINNHUB_API_KEY not set — all news "
@@ -321,10 +335,10 @@ class NewsCatalystSignal(SignalModule):
 
         for symbol in symbols:
             try:
-                next_earnings = _fetch_next_earnings(client, symbol)
+                next_earnings = fetch_next_earnings(client, symbol)
                 self._earnings_dt[symbol] = next_earnings
 
-                news_items = _fetch_company_news(client, symbol, lookback)
+                news_items = fetch_company_news(client, symbol, lookback)
                 scores = [
                     _score_headline(item.get("headline", ""), pipeline)
                     for item in news_items

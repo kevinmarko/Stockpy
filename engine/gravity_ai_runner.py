@@ -44,8 +44,8 @@ CLI
 ---
 ``python -m engine.gravity_ai_runner [STEP]``
 
-* No argument: runs all 7 steps.
-* Integer 1-7: runs that single step.
+* No argument: runs all 8 steps.
+* Integer 1-8: runs that single step.
 * ``--json``: emits JSON only (suitable for piping); otherwise renders a
   human summary then the JSON path.
 
@@ -100,6 +100,18 @@ _STEP_FILE_MAP: Dict[int, Tuple[str, ...]] = {
         "execution/kill_switch.py",
         "execution/order_manager.py",
         "main_orchestrator.py",
+    ),
+    8: (
+        "llm/research.py",
+        "llm/providers.py",
+        # STEP_8_PROMPT criterion 8.2 asks the auditor to verify the
+        # ResearchBrief schema exposes no numeric field — its class body lives
+        # in llm/schemas.py, so it MUST be in the audited source.
+        "llm/schemas.py",
+        "engine/advisory.py",
+        # Criterion 8.5 asks the auditor to verify OPENAI_API_KEY is
+        # SECRET_KEYS-only — the SECRET_KEYS tuple lives in gui/env_io.py.
+        "gui/env_io.py",
     ),
 }
 
@@ -316,7 +328,7 @@ def run_step(
     Parameters
     ----------
     step_number :
-        Integer 1-7 (the prompts shipped in ``ai_verification_prompts.py``).
+        Integer 1-8 (the prompts shipped in ``ai_verification_prompts.py``).
     claude / gemini :
         Optional pre-constructed providers (injected by tests).  When
         ``None`` the runner constructs them via the lazy factories,
@@ -531,7 +543,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Run the AI Gravity audit (Claude auditor + Gemini cross-checker).",
     )
     parser.add_argument("step", type=int, nargs="?", default=None,
-                        help="Integer 1-7. Omit to run every step.")
+                        help="Integer 1-8. Omit to run every step.")
     parser.add_argument("--json", action="store_true",
                         help="Emit JSON only (suitable for piping).")
     parser.add_argument("--output", type=str, default=None,

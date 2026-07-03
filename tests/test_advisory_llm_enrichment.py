@@ -189,6 +189,54 @@ class TestEnrichSoftFail:
 
 
 # ---------------------------------------------------------------------------
+# TestEnrichReplaceFailure — Fix 7: a dataclasses.replace() failure must NOT
+# propagate; the function returns the original rec (never raises).
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichReplaceFailure:
+    def test_replace_failure_does_not_raise_returns_original_rec(self, monkeypatch):
+        from engine import advisory as advisory_mod
+        from llm import commentary as commentary_mod
+        from llm.schemas import AnalystRationale
+
+        monkeypatch.setattr(advisory_mod.settings, "LLM_COMMENTARY_ENABLED", True, raising=False)
+        monkeypatch.setattr(commentary_mod.settings, "LLM_COMMENTARY_ENABLED", True, raising=False)
+
+        payload = AnalystRationale(
+            headline="Strong setup",
+            why_now="Trend confirmed.",
+            key_risks=["Macro tail risk."],
+            invalidation="Close below 200-day SMA.",
+        )
+
+        class _Prov:
+            name = "claude"
+
+            def call_structured(self, *a, **kw):
+                return payload
+
+        monkeypatch.setattr(commentary_mod, "get_rationale_provider", lambda: _Prov())
+
+        # enrich_with_llm_rationale lazy-imports `from dataclasses import replace`
+        # INSIDE the function body, so the name it binds resolves to
+        # dataclasses.replace — patch that attribute directly.
+        def _boom(*a, **kw):
+            raise RuntimeError("synthetic replace() failure")
+
+        monkeypatch.setattr(dataclasses, "replace", _boom)
+
+        r = _rec()
+        # Must NOT raise even though a valid rationale was produced and the
+        # subsequent replace() blows up.
+        out = enrich_with_llm_rationale(r)
+        assert isinstance(out, Recommendation)
+        # replace() failed, so the original rec is returned untouched.
+        assert out is r
+        assert out.llm_rationale is None
+
+
+# ---------------------------------------------------------------------------
 # TestNoTopLevelLLMImport
 # ---------------------------------------------------------------------------
 

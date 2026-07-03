@@ -127,6 +127,45 @@ class TestCacheKey:
         )
         assert k_t != k_y
 
+    def test_empty_variant_is_backward_compatible(self):
+        # Fix 2 — an empty variant must produce a byte-identical key to the
+        # pre-variant format (existing cache entries + callers unaffected).
+        k_none = make_cache_key(
+            provider="claude", schema_name="X", symbol="AAPL", score=50.0, action="BUY",
+            date_iso="2026-07-03",
+        )
+        k_empty = make_cache_key(
+            provider="claude", schema_name="X", symbol="AAPL", score=50.0, action="BUY",
+            date_iso="2026-07-03", variant="",
+        )
+        assert k_none == k_empty
+
+    def test_variant_segregates_key(self):
+        # A non-empty variant (e.g. an Opal research-brief fingerprint) yields a
+        # DISTINCT key so a brief-augmented rationale never collides with a
+        # brief-less one.
+        k_base = make_cache_key(
+            provider="claude", schema_name="X", symbol="AAPL", score=50.0, action="BUY",
+            date_iso="2026-07-03",
+        )
+        k_var = make_cache_key(
+            provider="claude", schema_name="X", symbol="AAPL", score=50.0, action="BUY",
+            date_iso="2026-07-03", variant="rbdeadbeef",
+        )
+        assert k_var != k_base
+
+    def test_different_variants_distinct(self):
+        # A CHANGED brief (different fingerprint) invalidates → distinct key.
+        k1 = make_cache_key(
+            provider="claude", schema_name="X", symbol="AAPL", score=50.0, action="BUY",
+            date_iso="2026-07-03", variant="rb11111111",
+        )
+        k2 = make_cache_key(
+            provider="claude", schema_name="X", symbol="AAPL", score=50.0, action="BUY",
+            date_iso="2026-07-03", variant="rb22222222",
+        )
+        assert k1 != k2
+
 
 # ---------------------------------------------------------------------------
 # TestCacheStore

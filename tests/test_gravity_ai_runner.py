@@ -9,7 +9,7 @@ Coverage
 --------
 TestSchemaSurface             — `GravityAuditStepResult` accepts canonical payloads
                                 AND rejects out-of-bounds ones.
-TestStepFileMap               — all 7 steps in the file map; every mapped file
+TestStepFileMap               — all 8 steps in the file map; every mapped file
                                 is read without crashing; nonexistent steps
                                 produce a sentinel placeholder, never raise.
 TestRunStepDisabled           — master switch off → no provider instantiated;
@@ -19,9 +19,9 @@ TestRunStepAgreement          — both providers return PASSED → disagreement=
 TestRunStepDisagreement       — Claude=PASSED, Gemini=FAILED → disagreement=True.
 TestRunStepProviderRaises     — provider raises → that side is None; the OTHER
                                 side's verdict survives (no cross-contamination).
-TestRunStepUnknownStep        — step number outside 1-7 → notes record it,
+TestRunStepUnknownStep        — step number outside 1-8 → notes record it,
                                 runner never raises.
-TestRunAll                    — sweeps all 7 steps; aggregate summary counts
+TestRunAll                    — sweeps all 8 steps; aggregate summary counts
                                 add up to total_steps.
 TestWriteReport               — round-trips through JSON atomically; missing
                                 target dir is created; write failure soft-fails.
@@ -85,10 +85,24 @@ class TestSchemaSurface:
 
 
 class TestStepFileMap:
-    def test_seven_steps_mapped(self):
-        assert sorted(_STEP_FILE_MAP.keys()) == [1, 2, 3, 4, 5, 6, 7]
+    def test_eight_steps_mapped(self):
+        # Step 8 (Tier 9 Scope 4 — Opal) was added alongside llm/research.py.
+        assert sorted(_STEP_FILE_MAP.keys()) == [1, 2, 3, 4, 5, 6, 7, 8]
         for step, files in _STEP_FILE_MAP.items():
             assert isinstance(files, tuple) and len(files) >= 1, f"step {step} has empty map"
+
+    def test_step_8_includes_schemas_and_env_io(self):
+        # Fix 5: step 8's file map was extended so the Gravity STEP_8 auditor
+        # can read the ResearchBrief class body (llm/schemas.py, criterion 8.2)
+        # and the SECRET_KEYS tuple (gui/env_io.py, criterion 8.5) in addition
+        # to the original three files.
+        step8 = _STEP_FILE_MAP[8]
+        assert "llm/schemas.py" in step8
+        assert "gui/env_io.py" in step8
+        # The original three files must remain present.
+        assert "llm/research.py" in step8
+        assert "llm/providers.py" in step8
+        assert "engine/advisory.py" in step8
 
     def test_compose_target_code_for_each_step(self):
         # Every mapped file should be readable without raising; returns a string.
@@ -262,15 +276,16 @@ class TestRunAll:
         # Inject the fakes directly so we don't depend on factory state.
         report = run_all(claude=claude, gemini=gemini)
         assert isinstance(report, RunReport)
-        assert len(report.steps) == 7
-        # Each step called both providers once (7 + 7 = 14 calls).
-        assert claude.call_count == 7
-        assert gemini.call_count == 7
+        assert len(report.steps) == 8
+        # Each step called both providers once (8 + 8 = 16 calls). Step 8
+        # (Tier 9 Scope 4 — Opal) was added alongside llm/research.py.
+        assert claude.call_count == 8
+        assert gemini.call_count == 8
         # Summary counts add up to total_steps.
         s = report.summary
-        assert s["total_steps"] == 7
-        assert s["claude"]["passed"] + s["claude"]["failed"] + s["claude"]["skipped"] == 7
-        assert s["gemini"]["passed"] + s["gemini"]["failed"] + s["gemini"]["skipped"] == 7
+        assert s["total_steps"] == 8
+        assert s["claude"]["passed"] + s["claude"]["failed"] + s["claude"]["skipped"] == 8
+        assert s["gemini"]["passed"] + s["gemini"]["failed"] + s["gemini"]["skipped"] == 8
 
     def test_run_all_disabled_by_default(self):
         # With no providers injected AND master switch False (default),
@@ -282,8 +297,8 @@ class TestRunAll:
         for st in report.steps:
             assert st.claude_verdict is None
             assert st.gemini_verdict is None
-        assert report.summary["claude"]["skipped"] == 7
-        assert report.summary["gemini"]["skipped"] == 7
+        assert report.summary["claude"]["skipped"] == 8
+        assert report.summary["gemini"]["skipped"] == 8
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +350,7 @@ class TestWriteReport:
         loaded = json.loads(target.read_text(encoding="utf-8"))
         assert "steps" in loaded
         assert "summary" in loaded
-        assert loaded["summary"]["total_steps"] == 7
+        assert loaded["summary"]["total_steps"] == 8
 
     def test_write_failure_soft_fails(self, tmp_path, monkeypatch):
         report = run_all()

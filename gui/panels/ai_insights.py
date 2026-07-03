@@ -27,6 +27,7 @@ from gui.panels._shared import (  # noqa: E402
     load_block_log,
     logger,
 )
+from gui.panels.report_viewer import _render_llm_commentary_button
 
 
 def _render_gemini_chart_section(symbol: str) -> None:
@@ -92,11 +93,15 @@ def _render_gemini_chart_section(symbol: str) -> None:
 
 
 def render_ai_insights() -> None:
-    """Render the AI Insights tab — Claude analyst + Gemini chart vision + aggregate view.
+    """Render the AI Insights tab — Opal research + Claude analyst + Gemini chart vision.
 
-    Three sections, all gated by the same ``LLM_COMMENTARY_ENABLED``
-    master switch:
+    Four sections, front-of-pipeline first:
 
+    0.  **Opal research brief (OpenAI)** — gated by its OWN independent
+        master switch (``OPAL_RESEARCH_ENABLED``); on-demand button calls
+        :func:`llm.research.generate_research_brief`.  Rendered FIRST since
+        Opal is a front-of-pipeline agent whose output threads into the
+        Claude analyst call below when both are enabled.
     1.  **Per-symbol Claude analyst note** — reuses
         :mod:`gui.llm_commentary_panel` so this tab and the Reports-tab
         drill-down button share one code path AND one session-state cache.
@@ -125,22 +130,14 @@ def render_ai_insights() -> None:
         st.error(f"AI Insights helpers unavailable: {exc}")
         return
 
+    # NOTE: ``insights_status`` gates ONLY the Claude/Gemini sections (it keys
+    # off ``LLM_COMMENTARY_ENABLED``).  Opal (Section 0) has its OWN independent
+    # master switch (``OPAL_RESEARCH_ENABLED``) and MUST render regardless — so
+    # the disabled/missing-key handling below is deferred until AFTER the symbol
+    # picker + Section 0, instead of early-returning the whole tab (Fix 1).
     status = insights_status(settings)
-    if status == "disabled":
-        st.info(
-            "AI Insights is off.  Set `LLM_COMMENTARY_ENABLED=true` and at "
-            "least `GEMINI_API_KEY=…` (plus `ANTHROPIC_API_KEY=…` for the "
-            "analyst notes) in `.env`, then relaunch the GUI."
-        )
-        return
-    if status == "missing_key":
-        st.warning(
-            "`LLM_COMMENTARY_ENABLED=true` but `GEMINI_API_KEY` is unset.  "
-            "The chart-pattern section will be a no-op; the analyst-note "
-            "section still works if `ANTHROPIC_API_KEY` is set."
-        )
 
-    # ── Symbol picker (shared across the three sections) ────────────────
+    # ── Symbol picker (shared across all sections, incl. independent Opal) ──
     snap = load_state_snapshot()
     sig_list = snap.get("signals", []) if isinstance(snap, dict) else []
     if not sig_list:
@@ -164,8 +161,33 @@ def render_ai_insights() -> None:
         else {}
     )
 
-    # ── Section 1 — Claude analyst note (reuses Reports-tab helper) ────
+    # ── Section 0 — Opal research brief (front-of-pipeline, OpenAI) ─────
+    # Rendered FIRST and gated only on its own OPAL_RESEARCH_ENABLED switch —
+    # independent of the Claude/Gemini status below (Fix 1).
+    st.markdown("#### 🔬 Opal research brief")
+    try:
+        _render_opal_research_section(selected_symbol)
+    except Exception as exc:
+        st.error(f"Opal research section failed: {exc}")
+
+    # ── Claude/Gemini gate — applies to Sections 1–3 ONLY ───────────────
     st.markdown("---")
+    if status == "disabled":
+        st.info(
+            "Claude/Gemini insights are off.  Set `LLM_COMMENTARY_ENABLED=true` "
+            "and at least `GEMINI_API_KEY=…` (plus `ANTHROPIC_API_KEY=…` for the "
+            "analyst notes) in `.env`, then relaunch the GUI.  (The Opal section "
+            "above has its own `OPAL_RESEARCH_ENABLED` switch and is unaffected.)"
+        )
+        return
+    if status == "missing_key":
+        st.warning(
+            "`LLM_COMMENTARY_ENABLED=true` but `GEMINI_API_KEY` is unset.  "
+            "The chart-pattern section will be a no-op; the analyst-note "
+            "section still works if `ANTHROPIC_API_KEY` is set."
+        )
+
+    # ── Section 1 — Claude analyst note (reuses Reports-tab helper) ────
     st.markdown("#### 🤖 Claude analyst note")
     try:
         _render_llm_commentary_button(row, selected_symbol)
@@ -219,5 +241,46 @@ def render_ai_insights() -> None:
     except Exception as exc:
         st.error(f"Aggregate view failed: {exc}")
 
+
+def _render_opal_research_section(symbol: str) -> None:
+    """Inner helper — Tier 9 Scope 4 Opal on-demand research brief.
+
+    Gated on its OWN independent master switch (``OPAL_RESEARCH_ENABLED``)
+    so it can be enabled/disabled without touching the Claude/Gemini
+    ``LLM_COMMENTARY_ENABLED`` switch that gates the rest of this tab.
+    """
+    if not symbol:
+        return
+    if not getattr(settings, "OPAL_RESEARCH_ENABLED", False):
+        st.caption(
+            "Opal is off. Set `OPAL_RESEARCH_ENABLED=true` and `OPENAI_API_KEY=…` "
+            "in `.env`, then relaunch the GUI. (Independent of `LLM_COMMENTARY_ENABLED` "
+            "above — Opal has its own master switch.)"
+        )
+        return
+    try:
+        from llm.research import generate_research_brief
+    except Exception as exc:
+        st.caption(f"(llm.research helpers unavailable: {exc})")
+        return
+
+    session_slot = f"ai_insights_opal_payload_{symbol}"
+    if st.button(
+        "🔬 Generate research brief (Opal)",
+        key=f"ai_insights_opal_btn_{symbol}",
+        width="stretch",
+    ):
+        with st.spinner(f"Opal researching {symbol}…"):
+            result = generate_research_brief(symbol, context={})
+        st.session_state[session_slot] = result.model_dump() if result is not None else None
+
+    cached = st.session_state.get(session_slot)
+    if cached is not None or session_slot in st.session_state:
+        try:
+            from gui.ai_insights_panel import format_research_brief_markdown
+        except Exception:
+            st.json(cached)
+            return
+        st.markdown(format_research_brief_markdown(cached))
 
 

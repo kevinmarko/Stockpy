@@ -291,13 +291,20 @@ def _render_llm_commentary_button(row: dict, symbol: str) -> None:
     )
     session_slot = f"llm_cmt_payload_{cache_key}"
 
+    # Tier 9 Scope 4 reuse path: if the operator already generated an Opal
+    # research brief for this symbol (the dedicated "Opal research brief"
+    # button on the AI Insights tab caches its payload here), thread it into
+    # Claude's prompt for FREE — clicking the Claude button never triggers a
+    # fresh Opal/OpenAI call (enrich_with_llm_rationale runs with run_opal=False).
+    cached_opal_brief = st.session_state.get(f"ai_insights_opal_payload_{symbol}")
+
     if st.button(
         "🤖 Generate analyst commentary",
         key=f"llm_cmt_btn_{cache_key}",
         width="stretch",
     ):
         with st.spinner(f"Asking Claude about {symbol}…"):
-            payload = generate_for_symbol_row(row)
+            payload = generate_for_symbol_row(row, research_brief=cached_opal_brief)
         st.session_state[session_slot] = payload
         # Mirror into a symbol-keyed map (separate from the cache-key-keyed
         # session_slot above) so cross-tab aggregate views — the AI Insights

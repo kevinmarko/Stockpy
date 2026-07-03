@@ -4356,6 +4356,8 @@ class GravityAIAuditor:
         self.step_75_gravity_ai_runner_audit()
         # Tier 9 Scope 3 — AI Insights tab (Claude analyst + Gemini Vision)
         self.step_76_ai_insights_audit()
+        # Tier 9 Scope 4 — Opal research agent (OpenAI/GPT grounded research brief)
+        self.step_77_opal_research_audit()
         # AI Control Center — one operator surface for every AI option
         self.step_78_ai_control_center_audit()
         # Extend existing steps with new coverage
@@ -11975,7 +11977,7 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c4
 
-            # ── Check 5: _STEP_FILE_MAP covers all 7 steps ──────────────────
+            # ── Check 5: _STEP_FILE_MAP covers every prompt step (dynamic) ──
             from ai_verification_prompts import ALL_PROMPTS
             expected = sorted(int(p.step_number) for p in ALL_PROMPTS)
             actual = sorted(_runner._STEP_FILE_MAP.keys())
@@ -12261,8 +12263,237 @@ class GravityAIAuditor:
 
         self.report["step_76_ai_insights_audit"] = audit
 
+    def step_77_opal_research_audit(self) -> None:
+        """Step 77 — Opal Research Agent audit (Tier 9 Scope 4, 2026-07-03).
+
+        10 checks pinning the OpenAI/GPT front-of-pipeline research agent:
+
+        1.  Module surface: ``llm.research.generate_research_brief``,
+            ``ResearchBrief``, ``OpenAIProvider`` importable.
+        2.  ``OpenAIProvider.call_structured`` is callable.
+        3.  ``ResearchBrief`` rejects >4 catalysts AND a bad
+            ``data_confidence`` value.
+        4.  ``ResearchBrief`` exposes NO numeric field — TYPE-BASED check
+            (stronger than a field-name scan): every ``model_fields``
+            annotation resolves to ``str``, ``list[str]``, or
+            ``Literal[...]``; nothing resolves to ``int``/``float``/
+            ``Decimal`` or a container of those (CONSTRAINT #4). The
+            checker function is self-tested against a dummy model with a
+            numeric field to prove it actually rejects what it claims to.
+        5.  No top-level ``openai`` import in ``llm/research.py`` OR
+            ``engine/advisory.py`` (lazy only).
+        6.  No order-submission verbs in ``llm/research.py``
+            (advisory-only).
+        7.  Opt-in: ``generate_research_brief("X")`` returns ``None`` when
+            ``OPAL_RESEARCH_ENABLED=False``.
+        8.  Threading: ``_format_rationale_user_prompt`` references
+            ``research_brief`` (source grep).
+        9.  ``OPENAI_API_KEY`` is in ``gui.env_io.SECRET_KEYS`` and NOT in
+            ``ALLOWED_KEYS``.
+        10. All five Opal test files exist.
+        """
+        from pathlib import Path as _Path
+
+        audit: dict = {
+            "step": "step_77_opal_research_audit",
+            "description": "Tier 9 Scope 4 — Opal research agent (OpenAI/GPT)",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parents[1]
+
+        try:
+            # ── 1. module surface ───────────────────────────────────────────
+            from llm.research import generate_research_brief
+            from llm.schemas import ResearchBrief
+            from llm.providers import OpenAIProvider
+            c1 = (
+                callable(generate_research_brief)
+                and ResearchBrief is not None
+                and OpenAIProvider is not None
+            )
+            audit["checks"].append({
+                "check": "llm.research.generate_research_brief + ResearchBrief + OpenAIProvider importable",
+                "passed": bool(c1),
+            })
+            all_pass = all_pass and c1
+
+            # ── 2. OpenAIProvider.call_structured callable ──────────────────
+            c2 = callable(getattr(OpenAIProvider, "call_structured", None))
+            audit["checks"].append({
+                "check": "OpenAIProvider.call_structured is callable",
+                "passed": bool(c2),
+            })
+            all_pass = all_pass and c2
+
+            # ── 3. ResearchBrief rejects bad catalysts/data_confidence ──────
+            try:
+                ResearchBrief(
+                    thesis_context="x",
+                    catalysts=["a", "b", "c", "d", "e"],  # 5 > max_length=4
+                    risk_factors=["r"],
+                    sources_note="s",
+                )
+                c3a = False
+            except Exception:
+                c3a = True
+            try:
+                ResearchBrief(
+                    thesis_context="x",
+                    catalysts=["a"],
+                    risk_factors=["r"],
+                    data_confidence="extreme",  # type: ignore[arg-type]
+                    sources_note="s",
+                )
+                c3b = False
+            except Exception:
+                c3b = True
+            c3 = c3a and c3b
+            audit["checks"].append({
+                "check": "ResearchBrief rejects >4 catalysts AND a bad data_confidence value",
+                "passed": bool(c3),
+                "detail": f"too_many_catalysts_rejected={c3a} bad_confidence_rejected={c3b}",
+            })
+            all_pass = all_pass and c3
+
+            # ── 4. NO numeric field — type-based check ──────────────────────
+            import typing as _typing
+            from decimal import Decimal as _Decimal
+
+            def _unwrap_annotated(ann: object) -> object:
+                # Annotated[X, ...] (per-item StringConstraints) → X.
+                if hasattr(ann, "__metadata__"):
+                    return _typing.get_args(ann)[0]
+                return ann
+
+            def _is_qualitative_annotation(ann: object) -> bool:
+                ann = _unwrap_annotated(ann)
+                if ann is str:
+                    return True
+                origin = _typing.get_origin(ann)
+                if origin is _typing.Literal:
+                    return True
+                if origin in (list, List):
+                    args = _typing.get_args(ann)
+                    return len(args) == 1 and _unwrap_annotated(args[0]) is str
+                return False
+
+            numeric_fields = [
+                name for name, field in ResearchBrief.model_fields.items()
+                if not _is_qualitative_annotation(field.annotation)
+            ]
+            c4a = len(numeric_fields) == 0
+
+            # Self-test: the checker must actually REJECT a numeric field,
+            # not just happen to pass on ResearchBrief's current shape.
+            from pydantic import BaseModel as _BaseModel
+
+            class _DummyNumericModel(_BaseModel):
+                price_target: float = 0.0
+
+            c4b = not _is_qualitative_annotation(
+                _DummyNumericModel.model_fields["price_target"].annotation
+            )
+            c4 = c4a and c4b
+            audit["checks"].append({
+                "check": "ResearchBrief exposes NO numeric field (type-based check, CONSTRAINT #4)",
+                "passed": bool(c4),
+                "detail": f"numeric_fields_found={numeric_fields} checker_rejects_float={c4b}",
+            })
+            all_pass = all_pass and c4
+
+            # ── 5. no top-level openai import (lazy only) ───────────────────
+            research_src = (repo_root / "llm" / "research.py").read_text(encoding="utf-8")
+            advisory_src = (repo_root / "engine" / "advisory.py").read_text(encoding="utf-8")
+
+            def _no_top_level_openai(src: str) -> bool:
+                top_level = "\n".join(
+                    ln for ln in src.splitlines()
+                    if (not ln.startswith(" ") and not ln.startswith("\t"))
+                )
+                return all(
+                    tok not in top_level for tok in ("import openai", "from openai")
+                )
+
+            c5 = _no_top_level_openai(research_src) and _no_top_level_openai(advisory_src)
+            audit["checks"].append({
+                "check": "No top-level `openai` import in llm/research.py OR engine/advisory.py (lazy only)",
+                "passed": bool(c5),
+            })
+            all_pass = all_pass and c5
+
+            # ── 6. no order-submission verbs in llm/research.py ─────────────
+            forbidden = ("submit_order", "place_order", "buy_order", "sell_order",
+                         "place_equity_order", "place_option_order")
+            c6 = not any(p in research_src for p in forbidden)
+            audit["checks"].append({
+                "check": "No order-submission verbs in llm/research.py (advisory-only)",
+                "passed": bool(c6),
+            })
+            all_pass = all_pass and c6
+
+            # ── 7. opt-in default-off ────────────────────────────────────────
+            from settings import settings as _settings
+            _prior_enabled = getattr(_settings, "OPAL_RESEARCH_ENABLED", False)
+            try:
+                _settings.OPAL_RESEARCH_ENABLED = False
+                c7 = generate_research_brief("X") is None
+            finally:
+                _settings.OPAL_RESEARCH_ENABLED = _prior_enabled
+            audit["checks"].append({
+                "check": "generate_research_brief returns None when OPAL_RESEARCH_ENABLED=False",
+                "passed": bool(c7),
+            })
+            all_pass = all_pass and c7
+
+            # ── 8. threading — source grep ───────────────────────────────────
+            commentary_src = (repo_root / "llm" / "commentary.py").read_text(encoding="utf-8")
+            c8 = "research_brief" in commentary_src
+            audit["checks"].append({
+                "check": "llm/commentary.py's _format_rationale_user_prompt references research_brief",
+                "passed": bool(c8),
+            })
+            all_pass = all_pass and c8
+
+            # ── 9. OPENAI_API_KEY secret-only ────────────────────────────────
+            from gui.env_io import SECRET_KEYS as _SK, ALLOWED_KEYS as _AK
+            c9 = "OPENAI_API_KEY" in _SK and "OPENAI_API_KEY" not in _AK
+            audit["checks"].append({
+                "check": "OPENAI_API_KEY is gui.env_io.SECRET_KEYS-only (CONSTRAINT #3)",
+                "passed": bool(c9),
+            })
+            all_pass = all_pass and c9
+
+            # ── 10. all five Opal test files exist ──────────────────────────
+            t1 = (repo_root / "tests" / "test_openai_provider.py").exists()
+            t2 = (repo_root / "tests" / "test_research_brief.py").exists()
+            t3 = (repo_root / "tests" / "test_opal_pipeline_integration.py").exists()
+            t4 = (repo_root / "tests" / "test_gui_env_io_openai_key.py").exists()
+            t5 = (repo_root / "tests" / "test_opal_research_panel.py").exists()
+            c10 = t1 and t2 and t3 and t4 and t5
+            audit["checks"].append({
+                "check": "All five Opal test files exist",
+                "passed": bool(c10),
+                "detail": (
+                    f"openai_provider={t1} research_brief={t2} pipeline_integration={t3} "
+                    f"env_io_key={t4} research_panel={t5}"
+                ),
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_77_opal_research_audit"] = audit
+
     def step_78_ai_control_center_audit(self) -> None:
-        """Step 78 — AI Control Center tab audit (2026-07-01, extended 2026-07-02).
+        """Step 78 — AI Control Center tab audit (2026-07-01, extended 2026-07-02, 2026-07-03).
 
         11 checks pinning the single operator-facing surface for every AI
         option (analyst rationale + alert commentary — both flexibly routed
@@ -12276,7 +12507,9 @@ class GravityAIAuditor:
         3.  ``OPENAI_API_KEY`` is in ``SECRET_KEYS`` AND NOT in ``ALLOWED_KEYS``
             (CONSTRAINT #3).
         4.  ``capability_status`` truth table — ready / disabled / missing_key
-            / not_built all reachable.
+            / not_built all reachable (not_built exercised via a synthetic
+            capability pointing at a nonexistent module, since Opal itself
+            shipped in Tier 9 Scope 4 and can no longer produce that state).
         5.  Scheduling launcher exists — ``orchestrator_runner``
             ``launch_scheduled_advisory`` AND ``stop_run`` are callable.
         6.  Operator-triggered only — ``launch_scheduled_advisory`` spawns via
@@ -12288,7 +12521,11 @@ class GravityAIAuditor:
         8.  ``validate_toggle_write`` rejects a secret key (``OPENAI_API_KEY``
             → ``SecretWriteError``) and a non-allowlisted key
             (``DisallowedKeyError``).
-        9.  Opal row gated ``not_built`` while ``llm.research`` is absent.
+        9.  Opal auto-activated: ``opal_built()`` is ``True`` (Tier 9 Scope 4
+            shipped ``llm/research.py``) AND the real ``opal_research``
+            capability resolves ``disabled`` by default — never
+            ``not_built`` — confirming the Control Center needed NO change
+            for this transition.
         10. Test files exist (``tests/test_ai_control_center.py``,
             ``tests/test_gui_env_io_control_center_keys.py``).
         11. Flexible per-job routing — the ``claude_commentary`` row resolves
@@ -12313,6 +12550,7 @@ class GravityAIAuditor:
         try:
             # ── 1. module surface + CAPABILITIES completeness ──────────────
             from gui.ai_control_center import (
+                AICapability,
                 CAPABILITIES,
                 capability_status,
                 control_center_overview,
@@ -12356,7 +12594,6 @@ class GravityAIAuditor:
 
             # ── 4. capability_status truth table ───────────────────────────
             claude_cap = next(c for c in CAPABILITIES if c.key == "claude_commentary")
-            opal_cap = next(c for c in CAPABILITIES if c.key == "opal_research")
             ready = capability_status(
                 _NS(LLM_COMMENTARY_ENABLED=True,
                     LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
@@ -12375,11 +12612,24 @@ class GravityAIAuditor:
                     ANTHROPIC_API_KEY=""),
                 claude_cap,
             )["status"]
+            # Synthetic capability pointing at a module that will never
+            # exist — tests the not_built RANKING invariant independent of
+            # whether any real shipped capability is unbuilt (Opal itself
+            # shipped in Tier 9 Scope 4 — see check 9 below — so it can no
+            # longer be used to exercise this path).
+            _fake_unbuilt_cap = AICapability(
+                key="fake_unbuilt",
+                label="Fake unbuilt capability",
+                enable_settings=("FAKE_ENABLED",),
+                provider_key_settings=("FAKE_API_KEY",),
+                module="llm.does_not_exist_module_xyz",
+                trigger="on_demand",
+                toggle_key="FAKE_ENABLED",
+                help="Gravity-only capability for the not_built ranking check.",
+            )
             notbuilt = capability_status(
-                _NS(OPAL_RESEARCH_ENABLED=True,
-                    OPAL_RESEARCH_PROVIDER="openai",
-                    OPENAI_API_KEY="sk-x"),
-                opal_cap,
+                _NS(FAKE_ENABLED=True, FAKE_API_KEY="sk-x"),
+                _fake_unbuilt_cap,
             )["status"]
             c4 = (ready == "ready" and disabled == "disabled"
                   and missing == "missing_key" and notbuilt == "not_built")
@@ -12450,11 +12700,23 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # ── 9. Opal gated not_built while llm.research absent ──────────
-            c9 = (opal_built() is False) and (notbuilt == "not_built")
+            # ── 9. Opal auto-activated now that llm.research shipped ───────
+            # Tier 9 Scope 4 landed: opal_built() must now report True (the
+            # module genuinely exists), and the real opal_research
+            # capability must resolve "disabled" by default (never
+            # "not_built") — confirming the auto-activation promised when
+            # the AI Control Center was built: no Control Center change was
+            # needed for this transition.
+            opal_cap_now = next(c for c in CAPABILITIES if c.key == "opal_research")
+            opal_default_status = capability_status(
+                _NS(OPAL_RESEARCH_ENABLED=False, OPAL_RESEARCH_PROVIDER="openai"),
+                opal_cap_now,
+            )["status"]
+            c9 = (opal_built() is True) and (opal_default_status == "disabled")
             audit["checks"].append({
-                "check": "Opal row gated not_built until llm.research ships",
+                "check": "Opal auto-activated (built=True) now that llm/research.py has shipped",
                 "passed": bool(c9),
+                "detail": f"opal_built={opal_built()} default_status={opal_default_status}",
             })
             all_pass = all_pass and c9
 
