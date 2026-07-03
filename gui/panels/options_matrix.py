@@ -27,6 +27,7 @@ from gui.panels._shared import (  # noqa: E402
     load_block_log,
     logger,
 )
+from gui.panels import load_state_snapshot
 
 
 def render_options_matrix() -> None:

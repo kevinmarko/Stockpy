@@ -29,6 +29,32 @@ from gui.panels._shared import (  # noqa: E402
 )
 
 
+# Render hints: (key, widget_kind). Unlisted allowlist keys default to text.
+_SETTINGS_LAYOUT: List[tuple[str, str]] = [
+    ("RISK_FREE_RATE", "number"),
+    ("MARKET_RISK_PREMIUM", "number"),
+    ("REQUIRED_RETURN_RATE", "number"),
+    ("MAX_PORTFOLIO_HEAT", "number"),
+    ("KELLY_FRACTION", "number"),
+    ("KELLY_CAP", "number"),
+    ("VOL_TARGET", "number"),
+    ("MAX_LEVERAGE", "number"),
+    ("MAX_POSITION_WEIGHT", "number"),
+    ("MAX_CORRELATION", "number"),
+    ("DAILY_LOSS_LIMIT_PCT", "number"),
+    ("HMM_RISK_OFF_BLOCK_THRESHOLD", "number"),
+    ("META_LABEL_MIN_CONFIDENCE", "number"),
+    ("DASHBOARD_REFRESH_SECONDS", "int"),
+    ("MAX_ORDER_RATE_PER_MIN", "int"),
+    ("MARKET_DATA_QUOTE_TTL_SECONDS", "int"),
+    ("DRY_RUN", "bool"),
+    ("RISK_GATE_ENFORCE_MARKET_HOURS", "bool"),
+    ("MARKET_DATA_PROVIDER", "text"),
+    ("LOG_LEVEL", "text"),
+    ("DEFAULT_TICKERS", "tickers"),
+]
+
+
 def _current_scalar(key: str, fallback: Any) -> Any:
     """Best-effort current value of ``key`` (from .env, else live settings)."""
     try:
