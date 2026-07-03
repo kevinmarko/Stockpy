@@ -39,7 +39,7 @@ class AIReviewReport:
     timestamp: str
 
 # --- SYSTEM PROMPT DEFINITION ---
-SYSTEM_PROMPT = """
+_BASELINE_SYSTEM_PROMPT = """
 You are 'Gravity', an Expert Quantitative Python Auditor and Algorithmic Trading Architect. Your mandate is to perform rigorous static analysis and logical verification of financial codebases based on institutional-grade quantitative finance standards.
 
 MASTER RULES FOR YOUR REVIEW:
@@ -53,7 +53,7 @@ Output your evaluation strictly in valid JSON format matching the requested sche
 
 # --- STEP 1 TO 6 AI PROMPT TEMPLATES ---
 
-STEP_1_PROMPT = StepPromptTemplate(
+_BASELINE_STEP_1_PROMPT = StepPromptTemplate(
     step_number=1,
     step_title="Establish the Vectorized Python Backend and Relational Database",
     prompt_text="""
@@ -71,7 +71,7 @@ STEP_1_PROMPT = StepPromptTemplate(
     ]
 )
 
-STEP_2_PROMPT = StepPromptTemplate(
+_BASELINE_STEP_2_PROMPT = StepPromptTemplate(
     step_number=2,
     step_title="Implement Advanced Technical Indicators & Strategy Engine",
     prompt_text="""
@@ -89,7 +89,7 @@ STEP_2_PROMPT = StepPromptTemplate(
     ]
 )
 
-STEP_3_PROMPT = StepPromptTemplate(
+_BASELINE_STEP_3_PROMPT = StepPromptTemplate(
     step_number=3,
     step_title="Volatility Modeling & Automated Options Strategy Matrix",
     prompt_text="""
@@ -109,7 +109,7 @@ STEP_3_PROMPT = StepPromptTemplate(
     ]
 )
 
-STEP_4_PROMPT = StepPromptTemplate(
+_BASELINE_STEP_4_PROMPT = StepPromptTemplate(
     step_number=4,
     step_title="Machine Learning & Time-Series Forecasting",
     prompt_text="""
@@ -127,7 +127,7 @@ STEP_4_PROMPT = StepPromptTemplate(
     ]
 )
 
-STEP_5_PROMPT = StepPromptTemplate(
+_BASELINE_STEP_5_PROMPT = StepPromptTemplate(
     step_number=5,
     step_title="Macro-Regime Detection & Fundamental Verification",
     prompt_text="""
@@ -144,7 +144,7 @@ STEP_5_PROMPT = StepPromptTemplate(
     ]
 )
 
-STEP_6_PROMPT = StepPromptTemplate(
+_BASELINE_STEP_6_PROMPT = StepPromptTemplate(
     step_number=6,
     step_title="Post-Trade Analytics & Position Sizing",
     prompt_text="""
@@ -163,7 +163,7 @@ STEP_6_PROMPT = StepPromptTemplate(
     ]
 )
 
-STEP_7_PROMPT = StepPromptTemplate(
+_BASELINE_STEP_7_PROMPT = StepPromptTemplate(
     step_number=7,
     step_title="Pre-Trade Risk Gate & Kill Switch",
     prompt_text="""
@@ -186,7 +186,7 @@ STEP_7_PROMPT = StepPromptTemplate(
     ]
 )
 
-STEP_8_PROMPT = StepPromptTemplate(
+_BASELINE_STEP_8_PROMPT = StepPromptTemplate(
     step_number=8,
     step_title="Opal Research Agent & Multi-Provider Grounding",
     prompt_text="""
@@ -214,6 +214,51 @@ STEP_8_PROMPT = StepPromptTemplate(
         ValidationCriterion("8.5", "Secrets + advisory-only", ["OPENAI_API_KEY", "SECRET_KEYS"], True),
     ]
 )
+
+
+
+# --- PROMPT REGISTRY INTEGRATION ---
+from prompt_registry import get_registry
+
+_reg = get_registry()
+
+# Ensure baselines are perfectly stripped to match the markdown registry exactly
+_BASELINE_SYSTEM_PROMPT = _BASELINE_SYSTEM_PROMPT.strip()
+_BASELINE_STEP_1_PROMPT.prompt_text = _BASELINE_STEP_1_PROMPT.prompt_text.strip()
+_BASELINE_STEP_2_PROMPT.prompt_text = _BASELINE_STEP_2_PROMPT.prompt_text.strip()
+_BASELINE_STEP_3_PROMPT.prompt_text = _BASELINE_STEP_3_PROMPT.prompt_text.strip()
+_BASELINE_STEP_4_PROMPT.prompt_text = _BASELINE_STEP_4_PROMPT.prompt_text.strip()
+_BASELINE_STEP_5_PROMPT.prompt_text = _BASELINE_STEP_5_PROMPT.prompt_text.strip()
+_BASELINE_STEP_6_PROMPT.prompt_text = _BASELINE_STEP_6_PROMPT.prompt_text.strip()
+_BASELINE_STEP_7_PROMPT.prompt_text = _BASELINE_STEP_7_PROMPT.prompt_text.strip()
+_BASELINE_STEP_8_PROMPT.prompt_text = _BASELINE_STEP_8_PROMPT.prompt_text.strip()
+
+SYSTEM_PROMPT = _reg.get("gravity.system", default=_BASELINE_SYSTEM_PROMPT)
+
+STEP_1_PROMPT = _BASELINE_STEP_1_PROMPT
+STEP_1_PROMPT.prompt_text = _reg.get("gravity.step_01", default=_BASELINE_STEP_1_PROMPT.prompt_text)
+
+STEP_2_PROMPT = _BASELINE_STEP_2_PROMPT
+STEP_2_PROMPT.prompt_text = _reg.get("gravity.step_02", default=_BASELINE_STEP_2_PROMPT.prompt_text)
+
+STEP_3_PROMPT = _BASELINE_STEP_3_PROMPT
+STEP_3_PROMPT.prompt_text = _reg.get("gravity.step_03", default=_BASELINE_STEP_3_PROMPT.prompt_text)
+
+STEP_4_PROMPT = _BASELINE_STEP_4_PROMPT
+STEP_4_PROMPT.prompt_text = _reg.get("gravity.step_04", default=_BASELINE_STEP_4_PROMPT.prompt_text)
+
+STEP_5_PROMPT = _BASELINE_STEP_5_PROMPT
+STEP_5_PROMPT.prompt_text = _reg.get("gravity.step_05", default=_BASELINE_STEP_5_PROMPT.prompt_text)
+
+STEP_6_PROMPT = _BASELINE_STEP_6_PROMPT
+STEP_6_PROMPT.prompt_text = _reg.get("gravity.step_06", default=_BASELINE_STEP_6_PROMPT.prompt_text)
+
+STEP_7_PROMPT = _BASELINE_STEP_7_PROMPT
+STEP_7_PROMPT.prompt_text = _reg.get("gravity.step_07", default=_BASELINE_STEP_7_PROMPT.prompt_text)
+
+STEP_8_PROMPT = _BASELINE_STEP_8_PROMPT
+STEP_8_PROMPT.prompt_text = _reg.get("gravity.step_08", default=_BASELINE_STEP_8_PROMPT.prompt_text)
+
 
 ALL_PROMPTS = [STEP_1_PROMPT, STEP_2_PROMPT, STEP_3_PROMPT, STEP_4_PROMPT, STEP_5_PROMPT, STEP_6_PROMPT, STEP_7_PROMPT, STEP_8_PROMPT]
 

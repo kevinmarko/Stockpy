@@ -9796,7 +9796,7 @@ class GravityAIAuditor:
                 import tempfile
                 with tempfile.TemporaryDirectory() as td:
                     with patch("scripts.refresh_validations._download_spy", return_value=spy), \
-                         patch("scripts.refresh_validations.TieredCostModel", return_value=MagicMock()):
+                         patch("execution.cost_model.TieredCostModel", return_value=MagicMock()):
                         results = _rv.run_validations(
                             strategies=["__no_such_strategy__"],
                             output_dir=Path(td),
@@ -10028,10 +10028,10 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: total ALL_CHECKS count is 16 (15 from Stage 2 + alpaca_key_rotation_recent from Stage 3)
-            c9 = len(preflight_check.ALL_CHECKS) == 16
+            # Check 9: total ALL_CHECKS count is 17 (16 from Stage 2 + alpaca_key_rotation_recent from Stage 3)
+            c9 = len(preflight_check.ALL_CHECKS) == 17
             audit["checks"].append({
-                "check": f"ALL_CHECKS has 16 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "check": f"ALL_CHECKS has 17 entries (got {len(preflight_check.ALL_CHECKS)})",
                 "passed": c9,
             })
             all_pass = all_pass and c9

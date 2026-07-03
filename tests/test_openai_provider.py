@@ -193,8 +193,8 @@ class TestSoftFailMatrix:
         out = p.call_structured(system="sys", user="usr", schema_model=_DemoSchema)
         assert out is None
 
-    def test_missing_sdk_returns_none(self):
-        sys.modules.pop("openai", None)
+    def test_missing_sdk_returns_none(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "openai", None)
         sys.modules.pop("llm.providers", None)
         from llm.providers import OpenAIProvider
 
