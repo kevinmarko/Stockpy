@@ -81,11 +81,15 @@ def test_execute_broker_orders_does_not_log_quarantine_when_flag_disabled(monkey
 # ---------------------------------------------------------------------------
 
 def test_strategy_mode_toggle_source_references_advisory_only():
-    """AST-level guard: ``gui/panels/strategy_matrix.py``'s ``_render_strategy_mode_toggle``
-    must read ``ADVISORY_ONLY`` and skip the radio/confirm controls when it
-    is True.  Lightweight grep is enough — we just need to detect a regression
-    that removes the gate entirely."""
-    # gui/panels.py was converted to a package; the content now lives in __init__.py
+    """AST-level guard: ``_render_strategy_mode_toggle`` must read
+    ``ADVISORY_ONLY`` and skip the radio/confirm controls when it is True.
+    Lightweight grep is enough — we just need to detect a regression that
+    removes the gate entirely."""
+    # gui/panels.py was converted to a package (Phase 4a extracted
+    # gui/panels/__init__.py into per-tab modules; __init__.py is now a
+    # thin re-export stub). ``_render_strategy_mode_toggle`` now lives in
+    # gui/panels/strategy_matrix.py — see tests/test_ai_insights_panel.py
+    # for the same fix pattern applied to the AI Insights tab.
     src = Path("gui/panels/strategy_matrix.py").read_text(encoding="utf-8")
     # The function must contain BOTH the setting reference and the explicit
     # caller-visible "Advisory mode — broker execution disabled" banner string.

@@ -336,11 +336,17 @@ class TestPanelWiring:
         assert callable(panels._render_gravity_ai_runner_section)
 
     def test_render_gravity_audit_calls_runner_section(self):
+        # Lives in gui/panels/gravity_audit.py post-refactor (Phase 4a extracted
+        # gui/panels/__init__.py into per-tab modules; __init__.py is now a
+        # thin re-export stub — see tests/test_ai_insights_panel.py for the
+        # same fix pattern applied to the AI Insights tab).
         path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "gravity_audit.py"
         src = path.read_text(encoding="utf-8")
         assert "_render_gravity_ai_runner_section()" in src
 
     def test_section_imports_from_helper_module(self):
+        # Lives in gui/panels/gravity_audit.py post-refactor (see
+        # test_render_gravity_audit_calls_runner_section for the rationale).
         path = Path(__file__).resolve().parents[1] / "gui" / "panels" / "gravity_audit.py"
         src = path.read_text(encoding="utf-8")
         assert "from gui.gravity_ai_panel import" in src
