@@ -4567,7 +4567,9 @@ class GravityAIAuditor:
         # ------------------------------------------------------------------
         try:
             import re
-            with open("gui/panels/__init__.py", encoding="utf-8") as fh:
+            # render_observability now lives in gui/panels/observability.py
+            # (post gui/panels refactor, 2026-06-29 — see gui/panels/__init__.py).
+            with open("gui/panels/observability.py", encoding="utf-8") as fh:
                 panels_src = fh.read()
             # Extract from render_observability start to the next def (or EOF)
             obs_match = re.search(
@@ -6547,10 +6549,14 @@ class GravityAIAuditor:
             import inspect
             from pathlib import Path
 
-            # Check 1: panels imports GlobalKillSwitch
+            # Check 1: panels imports GlobalKillSwitch (via the ``_kill_switch``
+            # helper, which now lives in gui/panels/_shared.py post the
+            # gui/panels package refactor, 2026-06-29 — gui/panels/__init__.py
+            # itself is now just a re-export stub, so inspect the actual
+            # function object rather than the package module source).
             import gui.panels as _panels_mod
-            src = inspect.getsource(_panels_mod)
-            c1 = "GlobalKillSwitch" in src
+            kill_switch_src = inspect.getsource(_panels_mod._kill_switch)
+            c1 = "GlobalKillSwitch" in kill_switch_src
             audit["checks"].append({
                 "check": "gui.panels references GlobalKillSwitch",
                 "passed": c1,
@@ -6565,8 +6571,12 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c2
 
-            # Check 3: the helper touches DRY_RUN AND kill-switch together (AST-grep)
-            tree = ast.parse(src)
+            # Check 3: the helper touches DRY_RUN AND kill-switch together
+            # (AST-grep). ``_render_launcher_safety_controls`` now lives in
+            # gui/panels/launcher.py — inspect the function object directly
+            # so this survives future re-extractions too.
+            safety_src = inspect.getsource(_panels_mod._render_launcher_safety_controls)
+            tree = ast.parse(safety_src)
             class _SafeModeVisitor(ast.NodeVisitor):
                 def __init__(self):
                     self.found_dry_run = False
@@ -6678,12 +6688,15 @@ class GravityAIAuditor:
                 })
                 all_pass = all_pass and c3
 
-            # Check 4: _render_preflight_panel exists and is called from render_launcher
+            # Check 4: _render_preflight_panel exists and is called from render_launcher.
+            # Both now live in gui/panels/launcher.py (post gui/panels package
+            # refactor, 2026-06-29) — inspect the function object directly
+            # rather than the (now-stub) package __init__ source.
             import gui.panels as _panels_mod
             c4a = hasattr(_panels_mod, "_render_preflight_panel")
-            src = inspect.getsource(_panels_mod)
+            launcher_src = inspect.getsource(_panels_mod.render_launcher)
             # Check it's referenced in render_launcher
-            tree = ast.parse(src)
+            tree = ast.parse(launcher_src)
             class _LauncherVisitor(ast.NodeVisitor):
                 def __init__(self):
                     self.preflight_called = False
@@ -7734,14 +7747,17 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c2
 
-            # Check 3: GUI Strategy Matrix toggle gate (source-grep)
-            panels_src = Path("gui/panels/__init__.py").read_text(encoding="utf-8")
+            # Check 3: GUI Strategy Matrix toggle gate (source-grep).
+            # ``_render_strategy_mode_toggle`` now lives in
+            # gui/panels/strategy_matrix.py (post gui/panels package refactor,
+            # 2026-06-29) — gui/panels/__init__.py only re-exports it.
+            panels_src = Path("gui/panels/strategy_matrix.py").read_text(encoding="utf-8")
             c3 = (
                 "ADVISORY_ONLY" in panels_src
                 and "Advisory mode — broker execution disabled" in panels_src
             )
             audit["checks"].append({
-                "check": "gui/panels.py _render_strategy_mode_toggle has ADVISORY_ONLY guard + banner",
+                "check": "gui/panels/strategy_matrix.py _render_strategy_mode_toggle has ADVISORY_ONLY guard + banner",
                 "passed": c3,
             })
             all_pass = all_pass and c3
@@ -7925,10 +7941,10 @@ class GravityAIAuditor:
             import ast
             import inspect
             import gui.panels as _panels_mod
-            src = inspect.getsource(_panels_mod)
-            tree = ast.parse(src)
 
-            # Check: _render_launcher_safety_controls exists
+            # Check: _render_launcher_safety_controls exists (works via the
+            # gui/panels/__init__.py re-export regardless of which submodule
+            # actually defines it).
             has_helper = hasattr(_panels_mod, "_render_launcher_safety_controls")
             checks.append({
                 "check": "Launcher-tab _render_launcher_safety_controls exists in gui.panels",
@@ -7936,7 +7952,15 @@ class GravityAIAuditor:
             })
             ext_pass = ext_pass and has_helper
 
-            # Check: render_launcher calls _render_launcher_safety_controls
+            # Check: render_launcher calls _render_launcher_safety_controls.
+            # ``render_launcher`` now lives in gui/panels/launcher.py (post
+            # gui/panels package refactor, 2026-06-29); inspect the function
+            # object directly rather than the (now-stub) package __init__
+            # source so this keeps working regardless of which submodule
+            # actually owns it.
+            launcher_src = inspect.getsource(_panels_mod.render_launcher)
+            tree = ast.parse(launcher_src)
+
             class _LauncherKSVisitor(ast.NodeVisitor):
                 def __init__(self):
                     self.found = False
@@ -9684,13 +9708,17 @@ class GravityAIAuditor:
                 ok8 = False
             all_pass = _chk("HistoricalStore failure degrades gracefully (CONSTRAINT #6)", ok8) and all_pass
 
-            # 9. gui/panels.py references recommendation_tracking_report
+            # 9. gui/panels references recommendation_tracking_report.
+            # ``_render_recommendation_tracking_section`` now lives in
+            # gui/panels/report_viewer.py (post gui/panels package refactor,
+            # 2026-06-29) — gui/panels/__init__.py itself is just a re-export
+            # stub and no longer contains this reference.
             try:
-                panels_src = (_repo / "gui" / "panels" / "__init__.py").read_text(encoding="utf-8")
+                panels_src = (_repo / "gui" / "panels" / "report_viewer.py").read_text(encoding="utf-8")
                 ok9 = "recommendation_tracking_report" in panels_src
             except Exception:
                 ok9 = False
-            all_pass = _chk("gui/panels.py references recommendation_tracking_report", ok9) and all_pass
+            all_pass = _chk("gui/panels references recommendation_tracking_report", ok9) and all_pass
 
             # 10. Test file exists
             ok10 = (_repo / "tests" / "test_recommendation_tracking.py").exists()
@@ -10460,10 +10488,21 @@ class GravityAIAuditor:
             all_pass = all_pass and c8
 
             # ----------------------------------------------------------------
-            # C9 — panels.py has ≥10 explain() calls, all 10 tab IDs covered
+            # C9 — panels has ≥10 explain() calls, all 10 tab IDs covered.
+            # Post the gui/panels package refactor (2026-06-29) each tab's
+            # ``render_*`` function — and its ``help_widgets.explain(...)``
+            # call — lives in its own per-tab module under gui/panels/, not
+            # in the (now ~110-line re-export stub) __init__.py. Concatenate
+            # every module in the package so this check's original intent
+            # (does the *panels package* wire up help text everywhere it
+            # should) still holds.
             # ----------------------------------------------------------------
-            panels_path = Path("gui/panels/__init__.py")
-            panels_src = panels_path.read_text(encoding="utf-8") if panels_path.exists() else ""
+            panels_dir = Path("gui/panels")
+            panels_src = "\n".join(
+                p.read_text(encoding="utf-8")
+                for p in sorted(panels_dir.glob("*.py"))
+                if p.exists()
+            ) if panels_dir.exists() else ""
             total_calls = panels_src.count("help_widgets.explain(")
             tab_ids_in_panels = [
                 t for t in expected_tabs
