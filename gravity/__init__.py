@@ -2418,7 +2418,7 @@ class GravityAIAuditor:
                 audit["checks"]["model_abc_uninstantiable"] = {"status": "PASSED"}
 
             # ── (c) ml/registry.yaml ─────────────────────────────────────────
-            registry_path = Path(__file__).parent / "ml" / "registry.yaml"
+            registry_path = Path(__file__).parent.parent / "ml" / "registry.yaml"
             if not registry_path.exists():
                 audit["checks"]["registry_yaml_parseable"] = {"status": "FAILED", "note": "file not found"}
             else:
@@ -2905,10 +2905,16 @@ class GravityAIAuditor:
             fh2._client.company_basic_financials.side_effect = mock_exc
             with patch("data.market_data.time.sleep", lambda s: None):
                 first = fh2.get_fundamentals("BAC")
+                # The first call legitimately makes 1 initial + 1 one-shot 429
+                # retry = 2 client calls (documented backoff-and-retry). The
+                # invariant under test is that the SECOND get_fundamentals is
+                # served from the negative cache and adds NO further client call.
+                calls_after_first = fh2._client.company_basic_financials.call_count
                 second = fh2.get_fundamentals("BAC")
             call_count_after_two = fh2._client.company_basic_financials.call_count
             rate_limit_handled = (
-                first == {} and second == {} and call_count_after_two == 1
+                first == {} and second == {}
+                and call_count_after_two == calls_after_first
             )
             audit["checks"]["finnhub_429_swallowed_and_cached"] = {
                 "status": "PASSED" if rate_limit_handled else "FAILED",
@@ -3848,7 +3854,7 @@ class GravityAIAuditor:
                     _chk("execution_is_excluded", False, "TestNoOrderFunctions missing")
 
             # 7. Makefile with 'verify' target
-            repo_root = Path(__file__).parent
+            repo_root = Path(__file__).parent.parent
             makefile = repo_root / "Makefile"
             if makefile.exists():
                 content = makefile.read_text(encoding="utf-8")
@@ -3943,7 +3949,7 @@ class GravityAIAuditor:
             return (imports_ok, called_ok)
 
         try:
-            repo_root = Path(__file__).parent
+            repo_root = Path(__file__).parent.parent
 
             for entry in ("main.py", "main_orchestrator.py"):
                 path = repo_root / entry
@@ -4240,7 +4246,7 @@ class GravityAIAuditor:
                      "" if compat_ok else "pipeline schema must render without the summary band")
 
             # 6. Regression test exists.
-            repo_root = _Path(__file__).parent
+            repo_root = _Path(__file__).parent.parent
             reg = repo_root / "tests" / "test_html_report.py"
             _chk("regression_test_exists", reg.exists(),
                  "tests/test_html_report.py is the canonical regression coverage")
@@ -7608,11 +7614,13 @@ class GravityAIAuditor:
                     total_dividends=0.0,
                     fetched_at=datetime.datetime.now(datetime.timezone.utc),
                 )
+                # market_regime is a computed @property (derived from yield
+                # curve + OAS + Sahm), NOT a constructor arg — inversion (-0.5)
+                # plus Sahm 0.7 already yields RECESSION.
                 _macro = MacroEconomicDTO(
                     yield_curve_10y_2y=-0.5, high_yield_oas=5.0,
                     inflation_rate=3.0, nominal_10y=4.5,
                     vix_value=38.0, sahm_rule_indicator=0.7,
-                    market_regime="RECESSION",
                 )
 
                 with (
