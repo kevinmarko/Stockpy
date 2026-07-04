@@ -12,11 +12,18 @@ Coverage
     RegistryFetchError, 401 → RegistryFetchError
 
 **LocalJSONStore**
-    round-trip (write + fetch), file not found, bad JSON, empty prompts dict
+    round-trip (write + fetch), file not found, bad JSON, empty prompts dict,
+    publish() creates a missing file, publish() round-trips via fetch,
+    publish() adds a version without losing prior versions, publish() leaves
+    other prompt ids untouched, republishing an existing version overwrites
+    + warns, atomic write leaves no .tmp file behind, publish() creates
+    missing parent directories
 
 **FirestoreStore**
     absent firebase-admin degrades to RegistryFetchError (not ImportError),
-    publish on any store raises ReadOnlyStoreError
+    publish on FirestoreStore/HTTPStore (read-only backends) raises
+    ReadOnlyStoreError — LocalJSONStore is the one backend that overrides
+    publish() to actually write
 
 **CacheManager**
     write + read round-trip, read miss → None, atomic write (.tmp cleaned up),
@@ -346,11 +353,88 @@ class TestLocalJSONStore:
         manifest = store.fetch_manifest()
         assert len(manifest.prompts) == 0
 
-    def test_publish_raises_read_only(self, tmp_path):
-        """publish() raises ReadOnlyStoreError."""
+    def test_publish_creates_file_when_missing(self, tmp_path):
+        """publish() against a non-existent file creates it with the new entry."""
+        reg = tmp_path / "registry.json"
+        store = LocalJSONStore(reg)
+        store.publish(
+            "gravity.system", "1.0.0", "body text", "sha-abc", "sig-xyz",
+            author="kevin", notes="first publish", created_at="2026-07-04T00:00:00Z",
+        )
+        assert reg.exists()
+        manifest = store.fetch_manifest()
+        record = manifest.get_prompt("gravity.system", "1.0.0")
+        assert record is not None
+        assert record.body == "body text"
+        assert record.sha256 == "sha-abc"
+        assert record.signature == "sig-xyz"
+        assert record.author == "kevin"
+        assert manifest.prompts["gravity.system"].latest == "1.0.0"
+
+    def test_publish_round_trip_via_fetch(self, tmp_path):
+        """A published version is immediately readable via fetch_manifest()."""
         store = LocalJSONStore(tmp_path / "registry.json")
-        with pytest.raises(ReadOnlyStoreError):
-            store.publish("gravity.system", "1.0.0", "body", "sha", "sig")
+        store.publish("master_preprompt", "2.0.0", "new body", "sha1", "sig1")
+        fresh_store = LocalJSONStore(tmp_path / "registry.json")
+        manifest = fresh_store.fetch_manifest()
+        assert manifest.get_prompt("master_preprompt", "2.0.0").body == "new body"
+
+    def test_publish_adds_new_version_without_losing_old(self, tmp_path):
+        """Publishing v1.1.0 keeps v1.0.0 in the versions map, bumps latest."""
+        reg = tmp_path / "registry.json"
+        reg.write_text(
+            json.dumps(_minimal_manifest_dict("master_preprompt", "1.0.0", body="old body")),
+            encoding="utf-8",
+        )
+        store = LocalJSONStore(reg)
+        store.publish("master_preprompt", "1.1.0", "new body", "sha2", "sig2")
+
+        manifest = store.fetch_manifest()
+        pv = manifest.prompts["master_preprompt"]
+        assert pv.latest == "1.1.0"
+        assert pv.versions["1.0.0"].body == "old body"
+        assert pv.versions["1.1.0"].body == "new body"
+
+    def test_publish_does_not_disturb_other_prompt_ids(self, tmp_path):
+        """Publishing one prompt id leaves other ids in the manifest untouched."""
+        reg = tmp_path / "registry.json"
+        reg.write_text(
+            json.dumps(_minimal_manifest_dict("gravity.step_01", "1.0.0", body="step1 body")),
+            encoding="utf-8",
+        )
+        store = LocalJSONStore(reg)
+        store.publish("gravity.step_02", "1.0.0", "step2 body", "sha3", "sig3")
+
+        manifest = store.fetch_manifest()
+        assert manifest.get_prompt("gravity.step_01").body == "step1 body"
+        assert manifest.get_prompt("gravity.step_02").body == "step2 body"
+
+    def test_publish_overwriting_existing_version_does_not_raise(self, tmp_path, caplog):
+        """Republishing an already-published version overwrites it and logs a warning."""
+        reg = tmp_path / "registry.json"
+        store = LocalJSONStore(reg)
+        store.publish("master_preprompt", "1.0.0", "body v1", "shaA", "sigA")
+
+        with caplog.at_level("WARNING"):
+            store.publish("master_preprompt", "1.0.0", "body v1 fixed", "shaB", "sigB")
+
+        manifest = store.fetch_manifest()
+        assert manifest.get_prompt("master_preprompt", "1.0.0").body == "body v1 fixed"
+        assert any("overwriting" in r.message for r in caplog.records)
+
+    def test_publish_leaves_no_tmp_file_behind(self, tmp_path):
+        """The atomic write's .tmp sibling is cleaned up (renamed away) on success."""
+        reg = tmp_path / "registry.json"
+        store = LocalJSONStore(reg)
+        store.publish("gravity.system", "1.0.0", "body", "sha", "sig")
+        assert not (tmp_path / "registry.json.tmp").exists()
+
+    def test_publish_creates_parent_dirs(self, tmp_path):
+        """publish() creates missing parent directories for the target path."""
+        reg = tmp_path / "nested" / "dir" / "registry.json"
+        store = LocalJSONStore(reg)
+        store.publish("gravity.system", "1.0.0", "body", "sha", "sig")
+        assert reg.exists()
 
     def test_multiple_prompts(self, tmp_path):
         """A manifest with multiple prompt ids loads all entries."""

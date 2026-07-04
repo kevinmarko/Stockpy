@@ -10,7 +10,12 @@ Architecture
 ``settings.PROMPT_REGISTRY_BACKEND``:
 
 * **``LocalJSONStore``** — reads a ``registry.json`` file on disk.  Zero
-  network.  Good for offline dev and single-machine setups.
+  network.  Good for offline dev and single-machine setups.  ``publish()``
+  is supported: it read-modify-writes the same file atomically (write to a
+  ``.tmp`` sibling, then ``os.replace``), so ``python -m prompt_registry
+  publish`` works end-to-end against this backend without any additional
+  credentials (the CLI's ``PROMPT_REGISTRY_PUBLISH_TOKEN`` gate still
+  applies before this method is ever called).
 * **``HTTPStore``** — fetches over HTTPS using ``urllib.request`` (stdlib, zero
   new dependencies).  Sends ``Authorization: Bearer <token>`` and
   ``If-None-Match`` / ETag for cheap conditional GETs.
@@ -39,6 +44,7 @@ Zero new dependencies
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import urllib.error
@@ -47,7 +53,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Union
 
-from prompt_registry.models import RegistryManifest
+from prompt_registry.models import PromptRecord, PromptVersion, RegistryManifest
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +175,84 @@ class LocalJSONStore(PromptStore):
         except Exception as exc:
             raise RegistryFetchError(
                 f"Failed to load local registry from {self._path}: {exc}"
+            ) from exc
+
+    def publish(
+        self,
+        prompt_id: str,
+        version: str,
+        body: str,
+        sha256: str,
+        signature: str,
+        *,
+        author: str = "",
+        notes: str = "",
+        created_at: str = "",
+    ) -> None:
+        """Write a new signed prompt version into the local ``registry.json``.
+
+        Read-modify-write: loads the existing manifest (starting fresh if the
+        file doesn't exist yet), adds the ``(prompt_id, version)`` entry
+        (overwriting an already-published version if republished, logged as a
+        warning since that changes provenance after the fact), sets ``latest``
+        to *version*, and atomically rewrites the file — a crash mid-write
+        can never corrupt the previously-published manifest.
+
+        Callers are expected to have already computed *sha256*/*signature*
+        (e.g. via ``prompt_registry.signing.sign``); this method persists
+        exactly what it's given without re-deriving or re-validating them.
+        """
+        try:
+            manifest = self.fetch_manifest()
+        except RegistryFetchError:
+            manifest = RegistryManifest(registry_version="", signing_alg="HMAC-SHA256", prompts={})
+
+        existing_pv = manifest.prompts.get(prompt_id)
+        existing_versions = dict(existing_pv.versions) if existing_pv is not None else {}
+
+        if version in existing_versions:
+            logger.warning(
+                "LocalJSONStore.publish: overwriting already-published version %r@%r",
+                prompt_id, version,
+            )
+
+        existing_versions[version] = PromptRecord(
+            body=body,
+            sha256=sha256,
+            signature=signature,
+            created_at=created_at,
+            author=author,
+            notes=notes,
+        )
+
+        new_prompts = dict(manifest.prompts)
+        new_prompts[prompt_id] = PromptVersion(latest=version, versions=existing_versions)
+
+        new_manifest = RegistryManifest(
+            registry_version=datetime.datetime.now(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            signing_alg=manifest.signing_alg or "HMAC-SHA256",
+            prompts=new_prompts,
+        )
+
+        data = json.dumps(new_manifest.to_dict(), indent=2)
+        tmp_path = self._path.with_name(self._path.name + ".tmp")
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path.write_text(data, encoding="utf-8")
+            tmp_path.replace(self._path)
+            logger.info(
+                "LocalJSONStore.publish: wrote %r@%r to %s",
+                prompt_id, version, self._path,
+            )
+        except Exception as exc:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"LocalJSONStore.publish: failed to write {self._path}: {exc}"
             ) from exc
 
 
