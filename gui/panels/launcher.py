@@ -205,6 +205,10 @@ def render_launcher() -> None:
     st.divider()
     _render_dead_letter_queue()
 
+    # ── Robinhood Execution Bridge status ───────────────────────────────────
+    st.divider()
+    _render_robinhood_execution_status()
+
     # ── Auto-refresh ticker (opt-in; cheap because Streamlit reruns are fast) ──
     if running and auto_refresh:
         time.sleep(5)
@@ -419,6 +423,123 @@ def _render_dead_letter_queue() -> None:
                     orchestrator_runner.read_log_tail(max_lines=60, handle=retry_handle),
                     language="text",
                 )
+
+
+def _render_robinhood_execution_status() -> None:
+    """Show the Tier 8 Robinhood execution bridge — mode, queue, receipts.
+
+    Read-only mirror of ``output/execution_queue.json`` (Python-authored
+    intents) and ``output/execution_receipts.jsonl`` (agent-authored outcomes
+    from the ``/rh-execute`` command). This panel never contacts the
+    Robinhood MCP itself — only a Claude Code agent running the
+    ``robinhood-execution`` skill does that. See
+    ``.claude/skills/robinhood-execution/SKILL.md``.
+    """
+    from gui.robinhood_execution_panel import (
+        EXECUTION_QUEUE_PATH,
+        is_queue_stale,
+        mfa_secret_configured,
+        queue_age_seconds,
+        read_execution_queue,
+        read_execution_receipts,
+    )
+    from gui.robinhood_mode import read_robinhood_execution_mode
+    from gui.help_content import SECTION_HELP
+    from gui import help_widgets
+
+    st.markdown("### 🤖 Robinhood Execution Bridge")
+    help_widgets.glossary_chip("robinhood execution bridge")
+    help_widgets.help_expander(
+        "ℹ️ About this section", SECTION_HELP.get("robinhood_execution_bridge")
+    )
+
+    mode_state = read_robinhood_execution_mode(settings)
+    if mode_state.mode == "off":
+        st.info("Mode: **off** — the bridge is disabled; run `main.py` after setting "
+                 "`ROBINHOOD_EXECUTION_MODE=review` in `.env` to start emitting a queue.")
+    elif mode_state.mode == "review":
+        st.warning("Mode: **review** (paper/dry-run) — every intent previews only; "
+                   "nothing can be placed.")
+    else:
+        cap_note = (
+            f"cap ${mode_state.notional_cap:,.2f}/order" if mode_state.notional_cap_set
+            else "⚠ no notional cap set — nothing is placeable until one is configured"
+        )
+        st.error(f"Mode: **live** — {cap_note}. Placement still requires per-order "
+                 "human confirmation in the agent session.")
+
+    if not mfa_secret_configured():
+        st.caption(
+            "ℹ️ `RH_MFA_SECRET` is not set — the next Robinhood account refresh "
+            "(`main.py --refresh-account`, or a stale-cache refresh) will fall back "
+            "to an interactive MFA prompt in the terminal. Set `RH_MFA_SECRET` in "
+            "`.env` (Base32 TOTP secret) to avoid this."
+        )
+
+    snapshot = read_execution_queue()
+    if snapshot is None:
+        st.caption(
+            f"`{EXECUTION_QUEUE_PATH.name}` not found yet — run `python3 main.py` "
+            "(with `ROBINHOOD_EXECUTION_MODE` set to `review` or `live`) to generate one."
+        )
+        return
+
+    stale = is_queue_stale(snapshot)
+    age_s = queue_age_seconds(snapshot)
+    age_label = f"{age_s / 60:.0f} min ago" if age_s == age_s else "unknown age"
+
+    kpi_cols = st.columns(5)
+    with kpi_cols[0]:
+        help_widgets.metric_with_help("Intents Queued", snapshot.n_intents, "Intents Queued")
+    with kpi_cols[1]:
+        help_widgets.metric_with_help("Placeable", snapshot.n_placeable, "Placeable")
+    with kpi_cols[2]:
+        help_widgets.metric_with_help("Queue Age", age_label, "Queue Age")
+    with kpi_cols[3]:
+        help_widgets.metric_with_help(
+            "Kill Switch",
+            "🔴 active" if snapshot.kill_switch_active else "🟢 clear",
+            "Kill Switch",
+        )
+    with kpi_cols[4]:
+        help_widgets.metric_with_help("Execution Mode", snapshot.mode, "Execution Mode")
+
+    if stale:
+        st.warning(
+            "⚠️ Queue is **stale** (> 30 minutes old) — the `/rh-execute` skill will "
+            "refuse to place from it. Re-run `python3 main.py` for a fresh queue."
+        )
+
+    if snapshot.intents:
+        queue_df = pd.DataFrame(
+            [
+                {
+                    "Symbol": intent.symbol,
+                    "Action": intent.action,
+                    "Qty": intent.qty,
+                    "Target $": intent.target_notional,
+                    "Conviction": intent.conviction,
+                    "Gate OK": "✅" if intent.gate_allowed else "🚫",
+                    "Placeable": "✅" if intent.allow_place else "—",
+                    "Gate reasons": "; ".join(intent.gate_reasons) if intent.gate_reasons else "",
+                }
+                for intent in snapshot.intents
+            ]
+        )
+        st.dataframe(queue_df, width="stretch", hide_index=True)
+    else:
+        st.caption("Queue is empty — no eligible BUY/SELL signals this cycle.")
+
+    receipts = read_execution_receipts(max_lines=20)
+    with st.expander(f"📜 Recent execution receipts ({len(receipts)})", expanded=False):
+        if receipts:
+            st.dataframe(pd.DataFrame(receipts), width="stretch", hide_index=True)
+        else:
+            st.caption(
+                "No receipts yet — outcomes are appended to "
+                "`output/execution_receipts.jsonl` by the `/rh-execute` agent session, "
+                "not by the pipeline."
+            )
 
 
 # ===========================================================================

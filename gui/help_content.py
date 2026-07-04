@@ -51,6 +51,7 @@ from validation.thresholds import (
     PBO_MAX,
     STRESS_MAX_DRAWDOWN,
 )
+from gui.robinhood_execution_panel import STALE_QUEUE_SECONDS as _RH_QUEUE_STALE_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,7 @@ _SAHM_THRESH = _ADVISORY_CONFIG["macro_sahm_gate_threshold"]
 _KELLY_CAP_PCT = int(settings.KELLY_CAP * 100)
 _KELLY_FRACTION = settings.KELLY_FRACTION
 _CONV_DELTA = settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD
+_RH_QUEUE_STALE_MIN = int(_RH_QUEUE_STALE_SECONDS // 60)
 
 GLOSSARY: Dict[str, GlossaryEntry] = {
     # ── Action signals ────────────────────────────────────────────────────────
@@ -972,6 +974,13 @@ SECTION_HELP: Dict[str, str] = {
         "Suppressed while ADVISORY_ONLY=true.  "
         "Live mode requires a deliberate 'CONFIRM LIVE PRODUCTION' button click."
     ),
+    "robinhood_execution_bridge": (
+        "Off by default. In 'review' mode the pipeline writes a gated, dry-run "
+        f"order queue that only previews. A queue older than {_RH_QUEUE_STALE_MIN} "
+        "minutes is treated as stale and the `/rh-execute` agent refuses to place "
+        "from it — re-run the pipeline for a fresh one. Placement, when enabled, "
+        "always requires per-order human confirmation in the agent session."
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -1083,6 +1092,29 @@ METRIC_HELP: Dict[str, str] = {
     "Sell Range": (
         "Sell Zone string showing upside target + trailing stop.  "
         "Same as Sell Zone — different column name in some report views."
+    ),
+    "Intents Queued": (
+        "Number of proposed orders in `output/execution_queue.json` this cycle.  "
+        "Each has already been run through the risk gate in dry-run."
+    ),
+    "Placeable": (
+        "Of the queued intents, how many are actually eligible to place: mode is "
+        "'live', the risk gate passed, the kill switch is clear, and a per-order "
+        "notional cap is set.  Zero is normal and expected in 'review' mode."
+    ),
+    "Queue Age": (
+        f"Minutes since the queue was generated.  Past {_RH_QUEUE_STALE_MIN} "
+        "minutes it is stale and `/rh-execute` will refuse to place from it."
+    ),
+    "Execution Mode": (
+        "The active `ROBINHOOD_EXECUTION_MODE`: off (nothing written), review "
+        "(paper/dry-run preview only), or live (placement possible, still "
+        "gated and human-confirmed per order)."
+    ),
+    "Kill Switch": (
+        "Whether `output/KILL_SWITCH` is active for THIS queue.  When active, "
+        "placement is blocked for every intent regardless of mode — checked "
+        "again by the agent immediately before each order."
     ),
 }
 
