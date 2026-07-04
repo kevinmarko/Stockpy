@@ -28,6 +28,7 @@ from gui.panels._shared import (  # noqa: E402
     logger,
 )
 from gui.panels import load_state_snapshot
+from gui.panels.launcher import _render_report_provenance_banner
 
 
 def default_brinson_fachler_frame() -> pd.DataFrame:

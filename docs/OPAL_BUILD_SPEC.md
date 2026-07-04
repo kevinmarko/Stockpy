@@ -1,8 +1,10 @@
 # Opal Build Spec — Tier 9 Scope 4: Research / Deep-Context Agent (OpenAI/GPT)
 
-**Status:** Build spec (prompts + doc text). No code has been built yet — this document is the
-executable work order for implementing Opal, plus the ready-to-apply `CLAUDE.md` / `GEMINI.md`
-section text and the Gravity-suite update spec.
+**Status: SHIPPED (2026-07-03, PR #86, commit `d5bb1a2`).** This document is retained as the
+historical work order / design record. All files, tests, Gravity step 77, and doc updates listed
+below have been implemented and merged to `main`; see the "Tier 9 Scope 4" section of `CLAUDE.md`
+for the live, maintained description of the shipped feature. This spec is no longer an open task —
+treat any "not yet built" language below as describing the pre-implementation state only.
 
 ---
 
