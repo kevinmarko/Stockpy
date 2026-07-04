@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-import pandera as pa
+import pandera.pandas as pa
 from pandera.typing import Series, DateTime
 
 # Core project imports

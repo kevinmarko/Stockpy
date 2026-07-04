@@ -28,6 +28,9 @@ from gui.panels._shared import (  # noqa: E402
     logger,
 )
 from gui.panels import load_state_snapshot
+from gui.panels.ai_insights import _render_gemini_chart_section
+from gui.panels.gravity_audit import _render_gravity_ai_runner_section
+from gui.panels.report_viewer import _render_llm_commentary_button
 
 
 def render_ai_control_center() -> None:
