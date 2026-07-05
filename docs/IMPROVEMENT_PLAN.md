@@ -13,9 +13,8 @@ in `CLAUDE.md`), and earlier phases de-risk later ones.
 
 1. **Never refactor structure and change behavior in the same PR.** If a later phase
    regresses, `git bisect` lands on a single-concern commit.
-2. **Domain ownership** (`CLAUDE.md`): `gui/` and Gravity tooling are **Antigravity's**
-   domain; `signals/`, `strategy_engine`, `main.py`, `settings.py` are Claude Code /
-   shared. Phases that cross into Antigravity territory are flagged ⚠️.
+2. **Single-agent ownership** (`CLAUDE.md`): Claude Code owns the entire repo, including
+   `gui/` and Gravity tooling — no domain split to coordinate with another agent.
 3. **Baseline-anchored** — Phase 0 captures a green test + Gravity + latency baseline that
    every later phase diffs against.
 
@@ -159,19 +158,18 @@ Three independent sub-PRs, any order.
   passes strict, invalid-frame non-strict returns False (never raises), invalid-frame
   strict exits 1, and the flag is wired through `main`/`_main_body`/CLI. Full suite 1579.
 
-### 3c — Streamlit cache freshness ⚠️ Antigravity
+### 3c — Streamlit cache freshness
 
 | | |
 |---|---|
-| **Branch** | `agent/antigravity/streamlit-cache-mtime` |
+| **Branch** | `agent/claude-code/streamlit-cache-mtime` (historically landed as `agent/antigravity/streamlit-cache-mtime` before the repo moved to single-agent ownership) |
 | **Risk** | Low | **Effort** 1 h |
 
 **Done.** Both `state_snapshot.json` loaders (`gui/panels.load_state_snapshot` and
 `observability/dashboard._load_state_snapshot`) now key their `@st.cache_data` on the
 file's `mtime` via a `_load_state_snapshot_cached(path, _mtime)` inner fn — a changed file
 is a cache miss (fresh read on the next render) instead of up to 30 min stale. TTL kept as
-an upper bound. 3 tests (`tests/test_snapshot_cache_freshness.py`); 1577 passed. ⚠️ touches
-Antigravity-domain files (`gui/`, `observability/`) — flagged in PR.
+an upper bound. 3 tests (`tests/test_snapshot_cache_freshness.py`); 1577 passed.
 
 Original sketch: Key the `state_snapshot.json` cache on file `mtime` so it invalidates exactly on change
 instead of a fixed 300s TTL (currently shows up to 4-cycle-stale data on a 60s refresh).
@@ -182,7 +180,7 @@ instead of a fixed 300s TTL (currently shows up to 4-cycle-stale data on a 60s r
 
 Pure file moves, no logic changes — large diffs, so merge when target files are quiet.
 
-### 4a — Split `gui/panels.py` (3,824 lines) ⚠️ Antigravity
+### 4a — Split `gui/panels.py` (3,824 lines)
 
 `gui/panels/` package, one file per tab, `__init__.py` re-exports every `render_*` so
 `gui/app.py` is untouched. Verify: `pytest -k "panels or gui"` + 11-tab streamlit smoke.
@@ -195,7 +193,7 @@ Pure file moves, no logic changes — large diffs, so merge when target files ar
 thin shim preserving the CLI entry point. Verify: output JSON byte-identical to Phase 0
 baseline (modulo timestamps).
 
-### 4c — Remove lazy `gui` imports ⚠️ Antigravity
+### 4c — Remove lazy `gui` imports
 
 After 4a, promote the 23 lazy `from gui import …` calls to module-top where the cycle has
 dissolved; comment where a genuine cycle remains.
@@ -244,10 +242,10 @@ Phase 1  hygiene ──────► PR
 Phase 2  settings ─────► PR
 Phase 3a advisory async ─► PR ┐
 Phase 3b pandera tier ───► PR ├─ independent, any order
-Phase 3c streamlit cache ─► PR ┘  ⚠️ Antigravity
-Phase 4a panels split ───► PR ┐  ⚠️ Antigravity
+Phase 3c streamlit cache ─► PR ┘
+Phase 4a panels split ───► PR ┐
 Phase 4b gravity split ──► PR ├─ do when GUI quiet; 4c after 4a
-Phase 4c lazy imports ───► PR ┘  ⚠️ Antigravity
+Phase 4c lazy imports ───► PR ┘
 Phase 5  deps (batch 1) ─► PR ; pandas3 spike separate
 Phase 6  aggregator ─────► PR (conditional — profile first)
 ```
@@ -266,7 +264,7 @@ Phase 6  aggregator ─────► PR (conditional — profile first)
 | 2 Settings (A) | ✅ done | — | section index + deduped accidental RH_* triple; 73 fields, flat names preserved |
 | 3a Advisory parallel | ✅ done | — | ThreadPoolExecutor (sync run_once preserved); +SQLite busy_timeout; 3 equivalence tests; 1574 passed |
 | 3b Pandera tier | ✅ done | — | _validate_dashboard helper, lazy=True prod / --strict fatal; 5 tests; 1579 passed |
-| 3c Streamlit cache | ✅ done | — | mtime-keyed snapshot loaders; 3 tests; ⚠️ Antigravity files |
+| 3c Streamlit cache | ✅ done | — | mtime-keyed snapshot loaders; 3 tests |
 | 4a Panels split | ✅ done | #structural-phases | `gui/panels.py` → `gui/panels/` package + `_shared.py`; 1634 passed |
 | 4b Gravity split | ✅ done | #structural-phases | `GravityAIAuditor` → `gravity/__init__.py`; launcher is 23-line shim; `gravity/` in `_EXCLUDED_PATH_PARTS` for AST scan; 1634 passed |
 | 4c Lazy imports | ✅ n/a | — | 54 lazy imports in `gui/panels/__init__.py` are intentional Streamlit cold-start optimizations — no circular deps; no changes needed |
