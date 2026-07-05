@@ -837,6 +837,17 @@ def _write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDT
                 "score": float(ki.get("score", 0.0) or 0.0),
                 "price": float(getattr(pos, "current_price", 0.0) or 0.0) if pos else 0.0,
                 "shares": shares,
+                # GUI Strategy Matrix decomposition (additive; consumed by
+                # gui/panels/strategy_matrix.py). Scalars sourced from
+                # engine.advisory.Recommendation.key_indicators;
+                # score_components is the one non-scalar field, carried
+                # separately on the Recommendation dataclass (None when the
+                # strategy engine failed this cycle — never fabricated).
+                "meta_label_composite": float(ki.get("meta_label_composite", 1.0) or 1.0),
+                "regime_multiplier": float(ki.get("regime_multiplier", 1.0) or 1.0),
+                "kelly_target_pre_regime": ki.get("kelly_target_pre_regime", float("nan")),
+                "kelly_target_post_regime": ki.get("kelly_target_post_regime", float("nan")),
+                "score_components": rec.score_components or {},
             })
 
         regime = "UNKNOWN"

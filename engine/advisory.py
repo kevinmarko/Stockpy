@@ -252,6 +252,13 @@ class Recommendation:
     # because real OHLCV history was missing.  Trailing default keeps existing
     # positional ``Recommendation(...)`` constructions unaffected.
     synthetic_inputs: bool = False
+    # GUI Strategy Matrix score-component decomposition (additive, trailing
+    # field — same pattern as llm_rationale/research_brief above so existing
+    # positional Recommendation(...) constructions are unaffected). Carries
+    # StrategyEngine.evaluate_security()'s "Score_Components" dict
+    # (module_name -> weighted contribution) for the symbol this cycle, or
+    # ``None`` when the strategy engine failed (never fabricated — CONSTRAINT #4).
+    score_components: Optional[Dict[str, float]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -838,6 +845,16 @@ def evaluate(
         "unrealized_pl_pct": unrealized_pl_pct,
         "dividend_yield": dividend_yield,
         "kelly_raw": kelly_fraction_raw,
+        # GUI Strategy Matrix decomposition scalars (additive) — sourced from
+        # StrategyEngine.evaluate_security()'s Score_Components/meta-label/
+        # regime-multiplier fields (see strategy_engine.py). Scalars only;
+        # the per-module Score_Components dict itself is NOT numeric so it
+        # cannot live in this flat float dict — it is threaded separately via
+        # _write_state_snapshot's "score_components" per-signal key below.
+        "meta_label_composite": _safe_float(strategy_out.get("Meta_Label_Composite"), 1.0),
+        "regime_multiplier": _safe_float(strategy_out.get("Regime_Multiplier"), 1.0),
+        "kelly_target_pre_regime": _safe_float(strategy_out.get("Kelly_Target_Pre_Regime"), nan),
+        "kelly_target_post_regime": _safe_float(strategy_out.get("Kelly_Target_Post_Regime"), nan),
     }
 
     # A2 — bar-derived technicals are meaningless on a synthetic flat bar; report
@@ -868,6 +885,13 @@ def evaluate(
 
     strategy_name = _derive_strategy_name(raw_signal, score, macro_dto.market_regime, partial_flags)
 
+    _score_components_raw = strategy_out.get("Score_Components")
+    score_components_out: Optional[Dict[str, float]] = (
+        {k: round(float(v), 6) for k, v in _score_components_raw.items()}
+        if isinstance(_score_components_raw, dict) and _score_components_raw
+        else None
+    )
+
     return Recommendation(
         symbol=symbol,
         action=final_action,
@@ -879,6 +903,7 @@ def evaluate(
         key_indicators={k: round(v, 6) if not math.isnan(v) else v for k, v in key_indicators.items()},
         data_quality=data_quality,
         synthetic_inputs=synthetic_inputs,
+        score_components=score_components_out,
     )
 
 

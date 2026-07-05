@@ -284,6 +284,37 @@ class StrategyEngine:
         final_score_raw, score_log, warnings, details, outputs, meta_label_composite = aggregator.aggregate(row, context)
         final_score = int(round(final_score_raw))
 
+        # ---------------------------------------------------------------------
+        # Score-component decomposition (GUI Strategy Matrix "why did this
+        # score" breakdown). Mirrors exactly the same active/disabled/regime
+        # gating SignalAggregator.aggregate() applies internally, so the sum
+        # of these contributions plus the 50.0 neutral base reproduces
+        # final_score_raw. Recomputed here (not returned by aggregate()) so
+        # this stays additive to the aggregator's public contract.
+        # NaN/None-score modules are skipped (never fabricated contributions).
+        # ---------------------------------------------------------------------
+        from signals.aggregator import resolve_regime_weights as _resolve_regime_weights
+        _market_regime = getattr(macro, "market_regime", "")
+        _effective_weights = _resolve_regime_weights(
+            _market_regime, settings.REGIME_SIGNAL_WEIGHTS, settings.SIGNAL_WEIGHTS,
+        )
+        score_components: Dict[str, float] = {}
+        for _name, _output in outputs.items():
+            if _name in settings.DISABLED_SIGNAL_MODULES:
+                continue
+            try:
+                _module = global_registry.get(_name)
+                if not _module.is_active_in_regime(macro):
+                    continue
+            except Exception:
+                continue
+            if _output is None or _output.score is None or (
+                isinstance(_output.score, float) and math.isnan(_output.score)
+            ):
+                continue
+            _weight = _effective_weights.get(_name, 0.0)
+            score_components[_name] = float(_output.score) * float(_weight)
+
         # Determine trend direction for options and sizing
         if aroon_osc is not None and not pd.isna(aroon_osc):
             is_uptrend = aroon_osc >= 50
@@ -350,6 +381,10 @@ class StrategyEngine:
         # ---------------------------------------------------------------------
         option_strategy, option_details = self._select_options_overlay(bar, fundamentals, signal, is_strong_uptrend, atr)
         kelly_fraction, sizing_path_tag = self._calculate_kelly_sizing(garch_vol, strategy_id=strategy_id)
+        # Snapshot the pre-regime-multiplier Kelly weight (already clamped to
+        # MAX_POSITION_WEIGHT by _calculate_kelly_sizing) so the GUI can show
+        # "before macro discount" vs. "after macro discount" side by side.
+        kelly_fraction_pre_regime = kelly_fraction
 
         # HMM regime second opinion (signals/regime_multiplier.py) scales the
         # final Kelly Target down when the HMM's risk_on_probability is low --
@@ -390,6 +425,15 @@ class StrategyEngine:
             "Actionable Advice Signal": actionable_advice_signal,
             "Score": final_score,
             "Kelly Target": kelly_fraction,
+            # ── GUI Strategy Matrix decomposition fields (additive; consumed
+            # by gui/panels/strategy_matrix.py's score-breakdown, regime-impact,
+            # and symbol-comparison sections) ──────────────────────────────────
+            "Score_Components": score_components,
+            "Meta_Label_Composite": float(meta_label_composite),
+            "Regime_Multiplier": float(regime_multiplier),
+            "Kelly_Target_Pre_Regime": float(kelly_fraction_pre_regime),
+            "Kelly_Target_Post_Regime": float(kelly_fraction),
+            "GARCH_Vol": float(garch_vol) if garch_vol is not None else float("nan"),
             "Option Strategy": option_strategy,
             "buyRange": tactical_range,
             # NEW: first-class sell-side range surfaced alongside buyRange.

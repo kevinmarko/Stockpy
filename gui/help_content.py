@@ -753,6 +753,46 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "agent reads it; it never auto-executes.",
         "#robinhood-execution-bridge",
     ),
+
+    # ── Strategy Matrix score decomposition / comparison (namespaced) ────────
+    "strategy_matrix.score_components": _g(
+        "Score Component Decomposition",
+        "Breaks a symbol's final aggregated score into each active signal "
+        "module's weighted contribution (module score x its configured weight). "
+        "Only modules that ran this cycle -- not disabled via the Strategy "
+        "Matrix, not suppressed by a regime gate -- are shown.  The base neutral "
+        "score is 50; the final score is 50 plus the sum of every shown "
+        "contribution.",
+        "#17-adjusting-signal-weights",
+    ),
+    "strategy_matrix.meta_label_composite": _g(
+        "Meta-Label Confidence Distribution",
+        "A histogram of `meta_label_composite` (the geometric mean of active "
+        "signal modules' meta-label probabilities) across every symbol in the "
+        "latest snapshot.  Until real MetaLabelers are trained and registered "
+        "(the current default), every symbol shows exactly 1.0 by design -- a "
+        "single spike, not an error.  It affects position sizing only, never "
+        "the BUY/HOLD/SELL action.",
+        "#6-understanding-the-output",
+    ),
+    "strategy_matrix.regime_multiplier": _g(
+        "Regime-Multiplier Sizing Impact",
+        "Compares the Kelly Target StrategyEngine computed before the HMM "
+        "regime multiplier was applied against the final value after that "
+        "multiplier (and the meta-label composite) were multiplied in and "
+        "re-clamped to the single-name ceiling.  Shows exactly how much current "
+        "macro conditions are discounting -- or occasionally boosting -- a "
+        "symbol's suggested position size right now.",
+        "#8-understanding-position-sizing-kelly-target",
+    ),
+    "comparison.symbol_comparison": _g(
+        "Symbol Comparison",
+        "A side-by-side view of 2-3 operator-chosen symbols: final score, "
+        "Kelly Target, conviction, GARCH volatility, and the per-module score "
+        "breakdown for each -- so a difference in ranking between two symbols "
+        "has a direct, inspectable answer instead of just two numbers.",
+        "#17-adjusting-signal-weights",
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -1148,6 +1188,39 @@ METRIC_HELP: Dict[str, str] = {
         "Whether `output/KILL_SWITCH` is active for THIS queue.  When active, "
         "placement is blocked for every intent regardless of mode — checked "
         "again by the agent immediately before each order."
+    ),
+
+    # ── Strategy Matrix score decomposition / comparison (namespaced) ────────
+    "strategy_matrix.score_components": (
+        "Weighted contribution (module score x weight) of each active signal "
+        "module to this symbol's final aggregated score.  Disabled or "
+        "regime-gated modules are omitted, never fabricated as zero-contribution rows."
+    ),
+    "strategy_matrix.meta_label_composite": (
+        "Geometric mean of active modules' meta-label P(signal correct).  "
+        "Exactly 1.0 for every symbol until a MetaLabeler is trained and "
+        "registered — the expected pre-Stage-4-deployment state, not an error."
+    ),
+    "strategy_matrix.regime_multiplier": (
+        "Kelly Target before vs. after the HMM regime multiplier and "
+        "meta-label composite were applied and the result re-clamped to the "
+        "single-name position ceiling."
+    ),
+    "strategy_matrix.kelly_target_pre_regime": (
+        "The fractional-Kelly / vol-target sizing weight StrategyEngine "
+        "computed BEFORE the HMM regime multiplier or meta-label composite "
+        "were applied — already clamped to `settings.MAX_POSITION_WEIGHT`."
+    ),
+    "strategy_matrix.kelly_target_post_regime": (
+        "The final Kelly Target after multiplying by the HMM regime "
+        "multiplier and meta-label composite and re-clamping to "
+        "`settings.MAX_POSITION_WEIGHT` — identical to the `Kelly Target` "
+        "column shown elsewhere in the platform."
+    ),
+    "comparison.symbol_comparison": (
+        "Side-by-side final score, Kelly Target, conviction, GARCH vol, and "
+        "meta-label/regime-multiplier readouts for 2-3 selected symbols, plus "
+        "each symbol's score-component breakdown for direct comparison."
     ),
 }
 
