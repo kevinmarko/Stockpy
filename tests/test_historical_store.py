@@ -271,9 +271,20 @@ class TestGetBars:
         db = str(tmp_path / "test.db")
         store = HistoricalStore(db_path=db)
 
-        # Seed with rows ending today.
-        df_today = _make_ohlcv(10)  # ends today
+        # Seed with rows ending exactly on today's *calendar* date. Note:
+        # _make_ohlcv() uses pd.bdate_range, which rolls back to the prior
+        # business day when today is a weekend/holiday — that would seed a
+        # max_date short of "today" and defeat the up-to-date check this
+        # test exists to exercise. Build the frame directly so the last row
+        # always lands on today regardless of what day of the week it is.
+        today = pd.Timestamp.now().normalize()
+        df_today = _make_ohlcv(9)
+        df_today = pd.concat([
+            df_today,
+            _make_ohlcv(1, end=today).set_axis([today]),
+        ])
         store._upsert_bars("AAPL", df_today, source="yfinance")
+        assert store.latest_bar_date("AAPL").normalize() == today
 
         provider = _make_provider(_make_ohlcv(10))
         store.get_bars("AAPL", lookback_days=30, provider=provider)
