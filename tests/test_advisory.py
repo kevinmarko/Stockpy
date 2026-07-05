@@ -1114,3 +1114,89 @@ class TestForecastSymmetry:
         assert rec.action == "HOLD", (
             f"Flat forecast on an appreciated holding should HOLD (Case C); got {rec.action}"
         )
+
+
+class TestTacticalRangesAndExitSizing:
+    """buy_range/sell_range threading from StrategyEngine.evaluate_security(),
+    and suggested_exit_pct sizing for SELL actions."""
+
+    def _run(self, position, forecast_30: float, raw_signal: str, score: int,
+              strategy_extra: dict | None = None):
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        strategy_out = {"Action Signal": raw_signal, "Score": score, "Kelly Target": 0.02}
+        strategy_out.update(strategy_extra or {})
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": forecast_30}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockSE.return_value.evaluate_security.return_value = strategy_out
+            return evaluate(
+                "TEST", position=position, market=market,
+                snapshot=_make_account_snapshot(), transactions_store=ts,
+            )
+
+    def test_buy_range_and_sell_range_threaded_from_strategy_engine(self):
+        rec = self._run(
+            position=None, forecast_30=100.0, raw_signal="BUY", score=70,
+            strategy_extra={
+                "buyRange": "Buy Zone: $95.00 - $99.00",
+                "sellRange": "Sell Zone: $105.00 - $110.00 | Stop @ $92.00",
+            },
+        )
+        assert rec.buy_range == "Buy Zone: $95.00 - $99.00"
+        assert rec.sell_range == "Sell Zone: $105.00 - $110.00 | Stop @ $92.00"
+
+    def test_missing_ranges_default_to_empty_string(self):
+        rec = self._run(position=None, forecast_30=100.0, raw_signal="HOLD", score=50)
+        assert rec.buy_range == ""
+        assert rec.sell_range == ""
+
+    def test_case_a_escalation_suggests_full_exit(self):
+        """Held below cost + bearish forecast (Case A) -> full-exit sizing."""
+        from engine.advisory import CONFIG
+        position = _StubPortfolioPosition(
+            symbol="TEST", quantity=50.0, average_cost=120.0, current_price=100.0,
+            market_value=5_000.0, unrealized_pl=-1_000.0, unrealized_pl_pct=-16.7,
+            dividends_received=10.0, name="Test Corp",
+        )
+        # -6% forecast, well past the -3% bearish threshold.
+        rec = self._run(position=position, forecast_30=94.0, raw_signal="HOLD", score=40)
+        assert rec.action == "SELL"
+        assert rec.suggested_exit_pct == CONFIG["exit_fraction_strong_sell"]
+
+    def test_base_signal_sell_suggests_partial_trim(self):
+        """A held position with a base RISK REDUCE signal (no Case A trigger:
+        small gain, flat forecast) -> partial-trim sizing, not a full exit."""
+        from engine.advisory import CONFIG
+        position = _StubPortfolioPosition(
+            symbol="TEST", quantity=50.0, average_cost=98.0, current_price=100.0,
+            market_value=5_000.0, unrealized_pl=100.0, unrealized_pl_pct=2.0,
+            dividends_received=0.0, name="Test Corp",
+        )
+        rec = self._run(position=position, forecast_30=100.5, raw_signal="RISK REDUCE", score=20)
+        assert rec.action == "SELL"
+        assert rec.suggested_exit_pct == CONFIG["exit_fraction_normal_sell"]
+        assert rec.suggested_exit_pct < CONFIG["exit_fraction_strong_sell"]
+
+    def test_non_held_sell_has_zero_exit_pct(self):
+        rec = self._run(position=None, forecast_30=100.0, raw_signal="RISK REDUCE", score=20)
+        assert rec.action == "SELL"
+        assert rec.suggested_exit_pct == 0.0
+
+    def test_buy_and_hold_have_zero_exit_pct(self):
+        rec_buy = self._run(position=None, forecast_30=100.0, raw_signal="BUY", score=70)
+        assert rec_buy.action == "BUY"
+        assert rec_buy.suggested_exit_pct == 0.0
+
+        rec_hold = self._run(position=None, forecast_30=100.0, raw_signal="HOLD", score=50)
+        assert rec_hold.action == "HOLD"
+        assert rec_hold.suggested_exit_pct == 0.0
