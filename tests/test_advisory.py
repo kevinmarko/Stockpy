@@ -255,7 +255,10 @@ class TestConfigCompleteness:
         "conviction_hold",
         "conviction_sell",
         "conviction_strong_sell",
+        "conviction_partial_multiplier",
+        "conviction_stale_multiplier",
         "bearish_forecast_pct_threshold",
+        "bullish_forecast_pct_threshold",
         "min_history_bars",
     ]
 
@@ -657,6 +660,44 @@ class TestDataQuality:
         # This test confirms the function runs without raising.
         assert rec.data_quality in ("OK", "STALE", "PARTIAL")
 
+    def test_partial_quality_decays_conviction(self):
+        """A1: a PARTIAL-quality recommendation carries strictly lower conviction
+        than the same signal on clean (OK) data — the decay multiplier is applied."""
+        import unittest.mock as mock
+        from engine.advisory import evaluate, CONFIG
+        from transactions_store import TransactionsStore
+
+        def _run(bars_raise: bool):
+            ts = TransactionsStore(db_url="sqlite:///:memory:")
+            market = _make_market_provider(
+                price=100.0, is_stale=False,
+                bars=None if bars_raise else _make_bars(252, 100.0),
+                bars_raise=bars_raise,
+            )
+            with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+                 mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+                 mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+                 mock.patch("engine.advisory.StrategyEngine") as MockSE:
+                MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+                MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 100.5}
+                MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+                MockSE.return_value.evaluate_security.return_value = {
+                    "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+                }
+                return evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts)
+
+        clean = _run(bars_raise=False)
+        partial = _run(bars_raise=True)
+
+        assert clean.data_quality == "OK"
+        assert partial.data_quality == "PARTIAL"
+        assert partial.conviction < clean.conviction, (
+            f"PARTIAL conviction {partial.conviction} should be < OK conviction {clean.conviction}"
+        )
+        assert partial.conviction == round(
+            clean.conviction * CONFIG["conviction_partial_multiplier"], 4
+        )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sizing tests
@@ -870,4 +911,122 @@ class TestDividendHoldBiasRule:
         # Score >= buy_score_threshold (55): dividend bias does not suppress a genuine BUY
         assert rec.action == "BUY", (
             f"Strong signal should prevail over dividend HOLD bias; got {rec.action}"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A2 — synthetic-input honesty
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSyntheticInputs:
+    """When OHLCV bars are unavailable, technical indicators are computed on a
+    flat synthetic bar and must NOT be presented as real signal."""
+
+    def test_missing_bars_flags_synthetic_and_hides_technicals(self):
+        import math
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        # bars_raise → no OHLCV history → synthetic bar substituted
+        market = _make_market_provider(price=100.0, bars_raise=True)
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+            # Even though the (mocked) engines return canned technicals, the
+            # advisory layer must treat them as untrustworthy because the bar was
+            # synthetic — so it hides them regardless of the engine output.
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 101.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockSE.return_value.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.0,
+            }
+            rec = evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts)
+
+        assert rec.synthetic_inputs is True
+        assert rec.data_quality == "PARTIAL"
+        # Rationale must not cite chart indicators fabricated from a flat bar.
+        assert "RSI(" not in rec.rationale
+        assert "Aroon oscillator" not in rec.rationale
+        # key_indicators technicals are NaN, not a fabricated number.
+        for tk in ("rsi", "rsi_2", "atr", "aroon_osc", "macd_line"):
+            assert math.isnan(rec.key_indicators[tk]), f"{tk} should be NaN on synthetic bars"
+
+    def test_real_bars_do_not_flag_synthetic(self):
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 101.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockSE.return_value.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.0,
+            }
+            rec = evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts)
+
+        assert rec.synthetic_inputs is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A3 — symmetric forecast handling
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestForecastSymmetry:
+    """A confirmed bullish forecast should keep a BUY on an already-appreciated
+    holding (rather than the Case-C gain-capture HOLD override) and raise its
+    conviction; a flat forecast preserves the legacy Case-C HOLD."""
+
+    def _run_held_gain(self, forecast_30: float):
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        # avg_cost 80, price 100 → +25% (significant gain); no dividend bias.
+        position = _StubPortfolioPosition(
+            symbol="TEST", quantity=100.0, average_cost=80.0, current_price=100.0,
+            market_value=10_000.0, unrealized_pl=2_000.0, unrealized_pl_pct=25.0,
+            dividends_received=0.0, name="Winner Corp",
+        )
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": forecast_30}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            MockSE.return_value.evaluate_security.return_value = {
+                "Action Signal": "BUY", "Score": 60, "Kelly Target": 0.03,
+            }
+            return evaluate(
+                "TEST", position=position, market=market,
+                snapshot=_make_account_snapshot(), transactions_store=ts,
+            )
+
+    def test_bullish_forecast_keeps_buy_and_raises_conviction(self):
+        from engine.advisory import CONFIG
+        rec = self._run_held_gain(forecast_30=110.0)   # +10% → bullish (> +3%)
+        assert rec.action == "BUY", (
+            f"Bullish forecast should keep BUY on an appreciated holding; got {rec.action}"
+        )
+        assert rec.conviction >= CONFIG["conviction_strong_buy"], (
+            f"Bullish-confirmed BUY should reach strong-buy conviction; got {rec.conviction}"
+        )
+
+    def test_flat_forecast_preserves_case_c_hold(self):
+        rec = self._run_held_gain(forecast_30=100.5)   # +0.5% → flat
+        assert rec.action == "HOLD", (
+            f"Flat forecast on an appreciated holding should HOLD (Case C); got {rec.action}"
         )
