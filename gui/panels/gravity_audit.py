@@ -421,8 +421,7 @@ def render_gravity_audit() -> None:
         for key, val in report.items():
             if not isinstance(val, dict):
                 continue
-            status = str(val.get("status", "—"))
-            ok = status.upper().startswith("PASS")
+            ok, status = _derive_step_status(key, val)
             rows.append({"Step": key, "Status": ("✅ " if ok else "❌ ") + status})
         if rows:
             st.dataframe(pd.DataFrame(rows), width="stretch")
@@ -434,6 +433,36 @@ def render_gravity_audit() -> None:
         with st.expander("🔬 Full audit JSON"):
             st.json(report)
 
+
+
+def _derive_step_status(key: str, val: Dict[str, Any]) -> Tuple[bool, str]:
+    """Best-effort PASS/FAIL derivation across every Gravity step-report shape.
+
+    Most steps populate a top-level ``"status"`` string (``"PASSED"`` /
+    ``"FAILED"`` / ``"ERROR"``). A handful of steps only set
+    ``"overall_pass"`` (bool) instead. The original Steps 1-7 predate both
+    conventions and report domain-specific conclusion fields — falling
+    through to the ``"—"`` sentinel for any of these misreported a passing
+    step as a failure in the audit table.
+    """
+    if "status" in val:
+        status = str(val["status"])
+        return status.upper().startswith("PASS"), status
+    if "overall_pass" in val:
+        ok = bool(val["overall_pass"])
+        return ok, "PASSED" if ok else "FAILED"
+    if key == "step_3_5_discrepancy_analysis":
+        conclusion = str(val.get("conclusion", "UNKNOWN"))
+        return conclusion == "Perfect Alignment", conclusion
+    if key == "step_7_simulation_impact":
+        sub_statuses = [
+            str(val.get("vector_bt_status", "")),
+            str(val.get("backtrader_status", "")),
+        ]
+        ok = not any("error" in s.lower() for s in sub_statuses if s)
+        label = " / ".join(s for s in sub_statuses if s) or "UNKNOWN"
+        return ok, label
+    return False, "—"
 
 
 def _parse_trailing_json(text: str) -> Optional[dict]:
