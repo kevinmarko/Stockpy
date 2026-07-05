@@ -6,32 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **No automatic AI agent invocations.** Do not call subagents (Agent/Task tool), Workflow orchestration, or any scheduled/background self check-ins (e.g. `send_later` polling loops) unless the user explicitly asks for it in that turn. This includes autonomous PR-watching that triggers further investigation or fixes without an explicit per-instance ask. Standing subscriptions to CI/review events are fine only when the user has asked to "watch" or "monitor" a PR — even then, do not layer additional autonomous agent fan-out on top without asking.
 
-## Multi-Agent Branch Workflow
+## Branch Workflow
 
-Two agents work on this repo: **Claude Code** and **Antigravity IDE**.
+Claude Code is the sole agent working on this repo (Antigravity IDE is retired — the prior
+multi-agent domain split and per-agent branch prefixes no longer apply; the whole codebase
+is Claude Code's to edit).
 
-### Branch naming
-```
-agent/claude-code/<short-description>    # Claude Code's branches
-agent/antigravity/<short-description>    # Antigravity's branches
-```
-- Never commit directly to `main` — always open a PR from a feature branch.
-- Branch names are lowercase-kebab: `agent/claude-code/fix-hmm-lookahead`.
-
-### Domain split (avoid editing the other agent's files in the same PR)
-| Domain | Owner |
-|---|---|
-| `signals/`, `strategy_engine.py`, `sizing/`, `ml/`, `regime/`, `macro_engine.py`, `validation/`, `execution/`, `tests/` | Claude Code |
-| `gui/`, `observability/`, `reporting_engine.py`, `diagnostics_and_visuals.py`, `scripts/` | Antigravity |
-| `config.py`, `dto_models.py`, `data/`, `data_engine.py`, `main.py`, `main_orchestrator.py`, `requirements.txt` | **Shared** — flag in PR |
-
-### Claude Code start-of-session checklist
+### Start-of-session checklist
 1. `git fetch origin && git rebase origin/main` — sync from main before starting.
-2. `git checkout -b agent/claude-code/<description>` — never work on an existing branch another agent pushed.
-3. Open a PR when the feature is complete; do not squash or amend published commits.
-
-### Merge sequencing for shared files
-When both agents edit a shared file in the same sprint, merge the smaller/less-risky PR first, then rebase the other on the updated `main` before merging. Document the sequence in the PR "Conflicts" section.
+2. `git checkout -b <short-description>` (lowercase-kebab, e.g. `fix-hmm-lookahead`).
+3. Never commit directly to `main` — always open a PR from a feature branch.
+4. Open a PR when the feature is complete; do not squash or amend published commits.
 
 ## Project
 
