@@ -793,6 +793,16 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "has a direct, inspectable answer instead of just two numbers.",
         "#17-adjusting-signal-weights",
     ),
+    # ── Sidebar: regime filter + CSV export ────────────────────────────────────
+    "sidebar.regime_filter": _g(
+        "Regime Filter",
+        "A sidebar control that lets you narrow the platform's view to symbols "
+        "last tagged with one specific macro regime (RISK ON / NEUTRAL / "
+        "RECESSION / CREDIT EVENT) instead of all of them.  The choice is stored "
+        "for the current browser session only — it does not change `.env` or "
+        "affect the pipeline's own regime-gating logic.",
+        "#9-the-macro-regime-system",
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -1054,6 +1064,16 @@ SECTION_HELP: Dict[str, str] = {
         "from it — re-run the pipeline for a fresh one. Placement, when enabled, "
         "always requires per-order human confirmation in the agent session."
     ),
+    "sidebar.regime_filter": (
+        "Filters the 'symbols matching' count below to the selected macro "
+        "regime. 'All regimes' shows every symbol from the last run regardless "
+        "of the regime tag recorded at that time."
+    ),
+    "export.download_signals_csv": (
+        "Exports the per-symbol rows from the last `state_snapshot.json` run — "
+        "action, score, Kelly target, buy/sell ranges, macro status — as a flat "
+        "CSV for offline post-trade analysis. Respects the regime filter above."
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -1289,6 +1309,11 @@ METRIC_HELP: Dict[str, str] = {
         "Side-by-side final score, Kelly Target, conviction, GARCH vol, and "
         "meta-label/regime-multiplier readouts for 2-3 selected symbols, plus "
         "each symbol's score-component breakdown for direct comparison."
+    ),
+    "sidebar.regime_match_count": (
+        "Count of symbols from the last pipeline run whose recorded macro "
+        "status matches the sidebar regime filter. Based on "
+        "`output/state_snapshot.json` — refresh the pipeline to update it."
     ),
 }
 
