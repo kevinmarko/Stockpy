@@ -30,6 +30,12 @@ from validation.thresholds import (
     DSR_MIN,
     NET_SHARPE_MIN,
     MAX_DRAWDOWN_MAX,
+    FAMILY_WISE_ALPHA,
+)
+from validation.multiple_testing import (
+    benjamini_hochberg,
+    deflated_sharpe_family,
+    format_multiple_testing_summary,
 )
 
 # Configure module logger
@@ -66,6 +72,7 @@ class ValidationReport:
         n_trials: int,
         is_options_selling: bool = False,
         stress_test_results: Optional[Dict[str, "StressResult"]] = None,
+        family_multiple_testing: Optional[Dict[str, Any]] = None,
     ):
         self.name = name
         self.start_date = start_date
@@ -91,6 +98,12 @@ class ValidationReport:
         # skewed payoff is not protected by the full-sample MaxDD gate below.
         self.is_options_selling = is_options_selling
         self.stress_test_results = stress_test_results
+        # Family-wise multiple-testing correction (validation/multiple_testing.py),
+        # computed opportunistically ACROSS every strategy's persisted
+        # *_validation_summary.json on disk — see
+        # compute_family_multiple_testing_report(). None until that function has
+        # been called at least once for this report (e.g. by run()'s final step).
+        self.family_multiple_testing = family_multiple_testing
 
     @property
     def stress_gate_passed(self) -> bool:
@@ -139,7 +152,151 @@ class ValidationReport:
             "start_date": self.start_date,
             "end_date": self.end_date,
             "report_date": datetime.now(timezone.utc).date().isoformat(),
+            # n_trials is persisted so validation.multiple_testing's family-wise
+            # DSR correction can be computed opportunistically across every
+            # strategy's *_validation_summary.json on disk, without needing to
+            # re-run any backtest (see compute_family_multiple_testing_report).
+            "n_trials": int(self.n_trials),
+            "family_multiple_testing": self.family_multiple_testing,
         }
+
+
+def compute_family_multiple_testing_report(
+    reports_dir: str = "reports",
+    *,
+    alpha: float = FAMILY_WISE_ALPHA,
+    p_from_dsr: bool = True,
+) -> Dict[str, Any]:
+    """Opportunistically compute the family-wise multiple-testing correction
+    across EVERY strategy validation summary currently on disk, without
+    requiring the caller to know in advance which strategies belong to a
+    "family" — every ``*_validation_summary.json`` in *reports_dir*
+    (written by ``StrategyValidationHarness._write_json_summary`` via
+    ``ValidationReport.to_summary_dict()``) is treated as one member of the
+    signal family (see ``signals/registry.py`` for the ~17 registered
+    modules this typically corresponds to).
+
+    Two independent corrections are surfaced:
+      1. Benjamini-Hochberg FDR control over p-values derived from each
+         strategy's DSR (``p = 1 - dsr``, since DSR is itself already a
+         one-sided probability that the true Sharpe is > 0 — see
+         ``p_from_dsr``).
+      2. Family-wise Deflated Sharpe Ratio, substituting the TOTAL trial
+         count summed across every strategy for each one's own trial count.
+
+    Dead-letter resilient (CONSTRAINT #6): a missing/malformed
+    ``reports_dir``, an unreadable JSON file, or a strategy summary lacking
+    the fields needed for one of the two corrections is logged and skipped
+    (or contributes NaN for that one strategy) rather than aborting the
+    whole aggregate report.
+
+    Parameters
+    ----------
+    reports_dir:
+        Directory to scan for ``*_validation_summary.json`` files.
+    alpha:
+        Target false discovery rate for Benjamini-Hochberg (default
+        ``validation.thresholds.FAMILY_WISE_ALPHA``).
+    p_from_dsr:
+        When True (default), derives each strategy's p-value as
+        ``1 - dsr`` — a strategy's DSR already IS the (one minus) p-value of
+        the null "true Sharpe <= 0" hypothesis under Bailey & Lopez de
+        Prado's framework, so this reuses it rather than inventing a new
+        statistic. When a strategy's DSR is missing/NaN, its p-value is
+        NaN and it will never be BH-rejected (see
+        ``multiple_testing.benjamini_hochberg``'s NaN handling).
+
+    Returns
+    -------
+    Dict[str, Any]
+        ``{"strategy_ids": [...], "bh_rejected": [...], "family_dsr":
+        [FamilyDSRResult, ...], "n_strategies": int, "summary_text": str}``.
+        ``{"strategy_ids": [], "bh_rejected": [], "family_dsr": [],
+        "n_strategies": 0, "summary_text": "..."}`` if no summaries are
+        found or the directory can't be read (never raises).
+    """
+    import json
+    from pathlib import Path
+
+    empty_result: Dict[str, Any] = {
+        "strategy_ids": [],
+        "bh_rejected": [],
+        "family_dsr": [],
+        "n_strategies": 0,
+        "summary_text": format_multiple_testing_summary([], [], []),
+    }
+
+    try:
+        dir_path = Path(reports_dir)
+        if not dir_path.is_dir():
+            logger.info(
+                "compute_family_multiple_testing_report: reports_dir %r does not "
+                "exist; nothing to aggregate.", reports_dir,
+            )
+            return empty_result
+
+        summary_files = sorted(dir_path.glob("*_validation_summary.json"))
+    except Exception as exc:
+        logger.warning(
+            "compute_family_multiple_testing_report: failed to scan %r: %s",
+            reports_dir, exc,
+        )
+        return empty_result
+
+    strategy_ids: List[str] = []
+    sharpes: List[float] = []
+    n_trials_list: List[int] = []
+    dsr_list: List[float] = []
+
+    for f in summary_files:
+        try:
+            payload = json.loads(f.read_text(encoding="utf-8"))
+            strategy_ids.append(str(payload.get("strategy_id", f.stem)))
+            sharpes.append(float(payload.get("sharpe")) if payload.get("sharpe") is not None else float("nan"))
+            n_trials_list.append(int(payload.get("n_trials", 1)))
+            dsr_list.append(float(payload.get("dsr", float("nan"))))
+        except Exception as exc:  # noqa: BLE001 - one bad file must not abort the sweep
+            logger.warning(
+                "compute_family_multiple_testing_report: skipping unreadable "
+                "summary %s: %s", f, exc,
+            )
+            continue
+
+    if not strategy_ids:
+        return empty_result
+
+    try:
+        pvalues = [
+            (1.0 - dsr) if not np.isnan(dsr) else float("nan")
+            for dsr in dsr_list
+        ] if p_from_dsr else [float("nan")] * len(strategy_ids)
+        bh_rejected = benjamini_hochberg(pvalues, alpha=alpha)
+    except Exception as exc:
+        logger.warning(
+            "compute_family_multiple_testing_report: benjamini_hochberg failed: %s", exc,
+        )
+        bh_rejected = [False] * len(strategy_ids)
+
+    try:
+        family_dsr = deflated_sharpe_family(
+            sharpes, n_trials_list, strategy_ids=strategy_ids,
+        )
+    except Exception as exc:
+        logger.warning(
+            "compute_family_multiple_testing_report: deflated_sharpe_family failed: %s", exc,
+        )
+        family_dsr = []
+
+    summary_text = format_multiple_testing_summary(bh_rejected, strategy_ids, family_dsr)
+
+    return {
+        "strategy_ids": strategy_ids,
+        "bh_rejected": bh_rejected,
+        "family_dsr": family_dsr,
+        "n_strategies": len(strategy_ids),
+        "summary_text": summary_text,
+    }
+
 
 class StrategyValidationHarness:
     """
@@ -338,11 +495,33 @@ class StrategyValidationHarness:
         if self.is_options_selling:
             print(format_stress_summary(report.stress_test_results))
 
-        # 6. Render HTML report
-        self._render_html_report(report)
-
-        # 7. Write machine-readable JSON summary for preflight_check and dashboard.
+        # 6. Write machine-readable JSON summary for preflight_check and dashboard
+        # FIRST — the family-wise multiple-testing sweep below scans reports/
+        # for every *_validation_summary.json on disk, so this strategy's own
+        # summary must already be present for it to participate.
         self._write_json_summary(report)
+
+        # 6b. Opportunistic family-wise multiple-testing correction (Benjamini-
+        # Hochberg + family-corrected DSR) across every strategy validation
+        # summary currently on disk — see validation/multiple_testing.py and
+        # compute_family_multiple_testing_report()'s docstring for rationale.
+        # Dead-letter resilient: any failure here must never abort an
+        # otherwise-successful validation run.
+        try:
+            report.family_multiple_testing = compute_family_multiple_testing_report()
+            # Re-write the JSON summary now that family_multiple_testing is
+            # populated, so downstream consumers (preflight, dashboard) see it
+            # without needing a second harness run.
+            self._write_json_summary(report)
+        except Exception as exc:
+            logger.warning(
+                "StrategyValidationHarness.run(%s): family multiple-testing "
+                "correction failed (non-fatal): %s", strategy_name, exc,
+            )
+
+        # 7. Render HTML report (after family_multiple_testing is populated so
+        # the template can surface it if desired).
+        self._render_html_report(report)
 
         return report
 

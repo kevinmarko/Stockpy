@@ -18,6 +18,10 @@ Threshold semantics
 ``STRESS_MAX_DRAWDOWN`` — Options-selling tail-scenario max-drawdown limit (50 %).
                           Applied by ``passes_stress_gate()`` in
                           ``validation/stress_scenarios.py``.
+``FAMILY_WISE_ALPHA``  — Target false discovery rate for the Benjamini-Hochberg
+                          correction applied ACROSS the full family of signal
+                          modules (not just one strategy's own trials). Applied
+                          by ``validation/multiple_testing.py::benjamini_hochberg``.
 """
 
 from __future__ import annotations
@@ -43,3 +47,13 @@ MAX_DRAWDOWN_MAX: float = 0.30
 STRESS_MAX_DRAWDOWN: float = 0.50
 """Max Drawdown limit for each dated shock window (Lehman/Volmageddon/COVID/Yen).
 Strategies exceeding this in *any* window are not deployable."""
+
+# ---------------------------------------------------------------------------
+# Multiple-testing correction across the signal-module family
+# (validation/multiple_testing.py)
+# ---------------------------------------------------------------------------
+FAMILY_WISE_ALPHA: float = 0.05
+"""Target false discovery rate for the Benjamini-Hochberg correction applied
+across the full family of signal modules (see signals/registry.py) and their
+trials — distinct from any single strategy's own within-strategy DSR/PBO
+gates above, which do not account for testing ~17 modules independently."""
