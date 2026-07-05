@@ -92,7 +92,8 @@ class CoverageStatus(str, Enum):
     encoder — ``json.dumps`` will emit the literal string value.
     """
 
-    FULL = "full"               # quote + bars + fundamentals
+    FULL = "full"               # quote + bars + fundamentals, quote fresh
+    STALE = "stale"             # quote + bars + fundamentals, but quote is STALE
     QUOTES_ONLY = "quotes_only"  # quote + bars but no fundamentals
     EQUITY_ONLY = "equity_only"  # held in Robinhood but no quote/bar
     UNCOVERED = "uncovered"     # neither quote nor fundamentals
@@ -164,6 +165,11 @@ class SyncReport:
     @property
     def n_full(self) -> int:
         return sum(1 for s in self.symbols.values() if s.coverage is CoverageStatus.FULL)
+
+    @property
+    def n_stale(self) -> int:
+        """Count of symbols with otherwise-full coverage but a stale quote."""
+        return sum(1 for s in self.symbols.values() if s.coverage is CoverageStatus.STALE)
 
     @property
     def n_equity_only(self) -> int:
@@ -273,7 +279,13 @@ def _probe_symbol_coverage(
 
     # --- classify ---
     if quote_ok and bars_ok and fund_ok:
-        coverage = CoverageStatus.FULL
+        # Coverage is nominally FULL, but a stale quote (delayed feed, or
+        # older than the provider's own staleness threshold) is downgraded
+        # to STALE so pricing-dependent consumers can tell "everything
+        # works, and it's fresh" apart from "everything works, but don't
+        # trust this price for time-sensitive decisions". Bars/fundamentals
+        # coverage is unaffected -- only the quote leg drives this flag.
+        coverage = CoverageStatus.STALE if is_stale else CoverageStatus.FULL
     elif quote_ok and bars_ok and not fund_ok:
         coverage = CoverageStatus.QUOTES_ONLY
     elif not quote_ok and not fund_ok:

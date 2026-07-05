@@ -177,3 +177,97 @@ def test_compute_hmm_risk_on_probability_succeeds_with_sufficient_aligned_data()
     result = me.compute_hmm_risk_on_probability(spy_df)
     assert result is not None
     assert 0.0 <= result <= 1.0
+
+
+# =============================================================================
+# 4. Task A4 -- per-process MacroEngine/HMMRegimeDetector reuse
+# =============================================================================
+# main.py's --interval / agent-loop mode calls run_once() -> _build_macro_dto()
+# repeatedly WITHIN THE SAME PROCESS. The HMMRegimeDetector.fit() retrain gate
+# (retrain_freq_days) is only meaningful if the SAME detector instance
+# persists across those cycles -- a fresh MacroEngine (and therefore a fresh,
+# never-fitted HMMRegimeDetector) every cycle makes the gate a no-op. These
+# tests simulate two consecutive cycles by calling
+# compute_hmm_risk_on_probability() TWICE on the SAME MacroEngine instance
+# (mirroring main.py's module-level _get_macro_engine() singleton) and assert
+# the underlying HMM does NOT refit on the second call.
+
+def test_same_macro_engine_instance_does_not_refit_on_second_cycle():
+    """Two consecutive compute_hmm_risk_on_probability() calls on the SAME
+    MacroEngine (simulating two --interval cycles within one process) must
+    NOT trigger a second real HMM fit -- last_fit_date must be unchanged and
+    the model parameters must be identical."""
+    mde = MockDataEngine()
+    me = MacroEngine(data_engine=mde)
+    macro_hist = mde.fetch_macro_history()
+
+    rng = np.random.RandomState(7)
+    n = len(macro_hist)
+    prices = 400 * np.exp(np.cumsum(rng.normal(0.0003, 0.012, n)))
+    spy_df = pd.DataFrame({"Close": prices}, index=macro_hist.index)
+
+    # Cycle 1
+    result_1 = me.compute_hmm_risk_on_probability(spy_df)
+    assert result_1 is not None
+    fit_date_after_cycle_1 = me._hmm_detector.last_fit_date
+    means_after_cycle_1 = me._hmm_detector.feature_means_.copy()
+    assert fit_date_after_cycle_1 is not None
+
+    # Cycle 2 -- SAME MacroEngine instance, SAME (or a slightly refreshed)
+    # SPY frame, well within the default 7-day retrain_freq_days window.
+    result_2 = me.compute_hmm_risk_on_probability(spy_df)
+    assert result_2 is not None
+    fit_date_after_cycle_2 = me._hmm_detector.last_fit_date
+    means_after_cycle_2 = me._hmm_detector.feature_means_
+
+    assert fit_date_after_cycle_2 == fit_date_after_cycle_1, (
+        "HMMRegimeDetector refit on the second cycle despite being called on "
+        "the SAME MacroEngine instance within the retrain_freq_days window -- "
+        "the retrain gate is only meaningful if the detector persists across "
+        "cycles (see main.py's _get_macro_engine() singleton)."
+    )
+    np.testing.assert_array_equal(means_after_cycle_1, means_after_cycle_2)
+    # Second call's probability must be byte-identical (same model, same data).
+    assert result_1 == result_2
+
+
+def test_fresh_macro_engine_per_cycle_would_refit_every_time():
+    """Contrast case: constructing a NEW MacroEngine per cycle (the bug this
+    task fixes) gives each cycle a never-fitted HMMRegimeDetector, so both
+    "cycles" perform a real fit (last_fit_date is set fresh both times,
+    rather than being carried over). This documents why reuse (not
+    reconstruction) is required to make the retrain gate meaningful."""
+    mde = MockDataEngine()
+    macro_hist = mde.fetch_macro_history()
+    rng = np.random.RandomState(7)
+    n = len(macro_hist)
+    prices = 400 * np.exp(np.cumsum(rng.normal(0.0003, 0.012, n)))
+    spy_df = pd.DataFrame({"Close": prices}, index=macro_hist.index)
+
+    me_cycle_1 = MacroEngine(data_engine=mde)
+    me_cycle_1.compute_hmm_risk_on_probability(spy_df)
+    assert me_cycle_1._hmm_detector.last_fit_date is not None
+
+    me_cycle_2 = MacroEngine(data_engine=mde)  # fresh instance == the bug
+    assert me_cycle_2._hmm_detector.last_fit_date is None, (
+        "a fresh MacroEngine's HMMRegimeDetector must start unfit -- this is "
+        "exactly why per-cycle reconstruction defeats the retrain gate."
+    )
+    me_cycle_2.compute_hmm_risk_on_probability(spy_df)
+    assert me_cycle_2._hmm_detector.last_fit_date is not None
+
+
+def test_hmm_n_states_and_retrain_freq_days_read_from_settings(monkeypatch):
+    """MacroEngine must construct its HMMRegimeDetector from
+    settings.HMM_N_STATES / settings.HMM_RETRAIN_FREQ_DAYS rather than
+    hardcoded literals, so an operator can tune them via .env."""
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "HMM_N_STATES", 4)
+    monkeypatch.setattr(_settings, "HMM_RETRAIN_FREQ_DAYS", 14)
+
+    mde = MockDataEngine()
+    me = MacroEngine(data_engine=mde)
+
+    assert me._hmm_detector.n_states == 4
+    assert me._hmm_detector.retrain_freq_days == 14
