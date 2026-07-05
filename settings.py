@@ -700,14 +700,20 @@ class Settings(BaseSettings):
     OPAL_RESEARCH_PROVIDER: str = Field(
         default="openai",
         description=(
-            "Provider for Opal research-brief generation.  'openai' (default, "
-            "the only supported provider today) or 'none' (disable regardless "
-            "of the master switch)."
+            "Provider for Opal research-brief generation.  'openai' (default), "
+            "'gemini', or 'none' (disable regardless of the master switch).  "
+            "Requires the matching API key (OPENAI_API_KEY or GEMINI_API_KEY)."
         ),
     )
     OPAL_RESEARCH_MODEL: str = Field(
         default="gpt-4o",
-        description="OpenAI model used for Opal's structured-output research brief calls.",
+        description=(
+            "Model name for Opal's structured-output research brief calls, "
+            "interpreted per the active OPAL_RESEARCH_PROVIDER (an OpenAI model "
+            "name when 'openai', a Gemini model name when 'gemini').  Left at "
+            "the OpenAI-flavored default, a 'gemini' provider choice falls back "
+            "to GeminiProvider's own model default instead of using this value."
+        ),
     )
     OPAL_RESEARCH_TIMEOUT_SECONDS: int = Field(
         default=15,

@@ -8,7 +8,7 @@ rationale, alert commentary) — the operator chooses independently via
 ``LLM_COMMENTARY_RATIONALE_PROVIDER`` / ``LLM_COMMENTARY_ALERT_PROVIDER``.
 There is still no cross-check: each job calls exactly one provider.
 
-All SDK calls are monkeypatched (fake ``anthropic`` + ``google.genai``
+All SDK calls are monkeypatched (fake ``anthropic`` + ``openai`` + ``google.genai``
 modules installed into ``sys.modules``). No real API requests are made.
 
 Coverage
@@ -26,6 +26,11 @@ TestNoneAndUnknownProvider     — "none" and an unrecognised provider string
                                  both return None (soft-fail, CONSTRAINT #6).
 TestMissingKeySoftFails        — provider selected but its key is unset →
                                  None, never raises.
+TestOpalResearchProviderFlexible — get_research_provider() dispatches to
+                                 OpenAIProvider OR GeminiProvider based on
+                                 OPAL_RESEARCH_PROVIDER; a Gemini choice
+                                 ignores the OpenAI-flavored OPAL_RESEARCH_MODEL
+                                 default but respects an explicit override.
 """
 
 from __future__ import annotations
@@ -47,6 +52,17 @@ def _install_fake_anthropic() -> None:
     fake.Anthropic = _FakeAnthropic  # type: ignore[attr-defined]
     fake.APIError = Exception  # type: ignore[attr-defined]
     sys.modules["anthropic"] = fake
+
+
+def _install_fake_openai() -> None:
+    fake = types.ModuleType("openai")
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.beta = MagicMock()
+
+    fake.OpenAI = _FakeOpenAI  # type: ignore[attr-defined]
+    sys.modules["openai"] = fake
 
 
 def _install_fake_google_genai() -> None:
@@ -87,10 +103,11 @@ def _fresh_fake_sdks():
     before calling the router's public functions is sufficient; no need to
     pop llm.router or llm.providers from sys.modules.
     """
-    injected = ("anthropic", "google", "google.genai", "google.genai.types")
+    injected = ("anthropic", "openai", "google", "google.genai", "google.genai.types")
     prior = {k: sys.modules.get(k) for k in injected}
 
     _install_fake_anthropic()
+    _install_fake_openai()
     _install_fake_google_genai()
     try:
         yield
@@ -238,3 +255,89 @@ class TestMissingKeySoftFails:
         monkeypatch.setattr(router_mod, "ClaudeProvider", _boom)
         # Must not raise — soft-fail contract (CONSTRAINT #6).
         assert router_mod.get_rationale_provider() is None
+
+
+# ---------------------------------------------------------------------------
+# TestOpalResearchProviderFlexible — get_research_provider() now dispatches
+# to OpenAIProvider OR GeminiProvider based on OPAL_RESEARCH_PROVIDER.
+# ---------------------------------------------------------------------------
+
+
+class TestOpalResearchProviderFlexible:
+    def test_master_switch_off_returns_none(self, router_mod, monkeypatch):
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", False, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "gemini", raising=False)
+        monkeypatch.setattr(router_mod.settings, "GEMINI_API_KEY", "sk-gem-x", raising=False)
+        assert router_mod.get_research_provider() is None
+
+    def test_openai_selected_returns_openai_provider(self, router_mod, monkeypatch):
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "openai", raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPENAI_API_KEY", "sk-oai-x", raising=False)
+        prov = router_mod.get_research_provider()
+        assert prov is not None
+        assert prov.name == "openai"
+
+    def test_gemini_selected_returns_gemini_provider(self, router_mod, monkeypatch):
+        # The scenario this task is about: switching Opal from OpenAI to Gemini.
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "gemini", raising=False)
+        monkeypatch.setattr(router_mod.settings, "GEMINI_API_KEY", "sk-gem-x", raising=False)
+        prov = router_mod.get_research_provider()
+        assert prov is not None
+        assert prov.name == "gemini"
+
+    def test_gemini_selected_ignores_openai_flavored_model_default(self, router_mod, monkeypatch):
+        # OPAL_RESEARCH_MODEL still at its OpenAI default ("gpt-4o") must not
+        # be forwarded to GeminiProvider — it should fall back to
+        # GeminiProvider's own (Gemini) model default instead.
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "gemini", raising=False)
+        monkeypatch.setattr(router_mod.settings, "GEMINI_API_KEY", "sk-gem-x", raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_MODEL", "gpt-4o", raising=False)
+        prov = router_mod.get_research_provider()
+        assert prov is not None
+        assert prov._model != "gpt-4o"
+        assert prov._model == "gemini-2.5-flash"
+
+    def test_gemini_selected_respects_explicit_gemini_model_override(self, router_mod, monkeypatch):
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "gemini", raising=False)
+        monkeypatch.setattr(router_mod.settings, "GEMINI_API_KEY", "sk-gem-x", raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_MODEL", "gemini-1.5-pro", raising=False)
+        prov = router_mod.get_research_provider()
+        assert prov is not None
+        assert prov._model == "gemini-1.5-pro"
+
+    def test_gemini_selected_no_key_returns_none(self, router_mod, monkeypatch):
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "gemini", raising=False)
+        monkeypatch.setattr(router_mod.settings, "GEMINI_API_KEY", "", raising=False)
+        assert router_mod.get_research_provider() is None
+
+    def test_openai_selected_no_key_returns_none(self, router_mod, monkeypatch):
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "openai", raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPENAI_API_KEY", None, raising=False)
+        assert router_mod.get_research_provider() is None
+
+    def test_none_provider_returns_none(self, router_mod, monkeypatch):
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "none", raising=False)
+        assert router_mod.get_research_provider() is None
+
+    def test_unknown_provider_string_returns_none(self, router_mod, monkeypatch):
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "grok", raising=False)
+        assert router_mod.get_research_provider() is None
+
+    def test_gemini_construction_exception_returns_none_never_raises(self, router_mod, monkeypatch):
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_ENABLED", True, raising=False)
+        monkeypatch.setattr(router_mod.settings, "OPAL_RESEARCH_PROVIDER", "gemini", raising=False)
+        monkeypatch.setattr(router_mod.settings, "GEMINI_API_KEY", "sk-gem-x", raising=False)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("SDK construction blew up")
+
+        monkeypatch.setattr(router_mod, "GeminiProvider", _boom)
+        assert router_mod.get_research_provider() is None
