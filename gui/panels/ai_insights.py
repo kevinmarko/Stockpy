@@ -191,7 +191,7 @@ def render_ai_insights() -> None:
     # ── Section 1 — Claude analyst note (reuses Reports-tab helper) ────
     st.markdown("#### 🤖 Claude analyst note")
     try:
-        _render_llm_commentary_button(row, selected_symbol)
+        _render_llm_commentary_button(row, selected_symbol, key_prefix="ai_insights")
     except Exception as exc:
         st.error(f"Analyst-note section failed: {exc}")
 

@@ -144,7 +144,7 @@ def render_ai_control_center() -> None:
             )
             st.markdown("**🤖 Claude analyst note**")
             try:
-                _render_llm_commentary_button(row, sym)
+                _render_llm_commentary_button(row, sym, key_prefix="ai_control")
             except Exception as exc:
                 st.error(f"Claude commentary failed: {exc}")
             st.markdown("**📈 Gemini chart read**")
