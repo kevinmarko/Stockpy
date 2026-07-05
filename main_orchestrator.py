@@ -211,44 +211,55 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     for ticker in tickers:
         df_hist = tech_raw.get(ticker)
         if df_hist is not None and not df_hist.empty:
-            indicators = toe.calculate_indicators(df_hist)
-            vol = toe.estimate_gjr_garch_volatility(df_hist)
-            realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
-            
-            # Fetch options chain / compute true 30d ATM IV
-            as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
-            price_val = float(df_hist['Close'].iloc[-1])
-            
-            current_iv = float('nan')
-            if data_engine is not None:
-                current_iv = get_30d_atm_iv(data_engine, ticker, as_of_date, spot_price=price_val)
-                if not np.isnan(current_iv):
-                    iv_store.record_iv(ticker, as_of_date, current_iv)
-            
-            true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
-            vrp = get_vrp(ticker, current_iv, vol)
-            
-            # Call strategy matrix with true_ivr, vrp, and macro_dto
-            opt_strategy = toe.generate_option_strategy_matrix(
-                true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
-                aroon_osc=indicators["Aroon_Oscillator"],
-                coppock_val=indicators["Coppock_Curve"],
-                stock_price=price_val,
-                current_iv=current_iv if not np.isnan(current_iv) else vol,
-                vrp=vrp,
-                macro_dto=macro_dto
-            )
-            tech_opt_indicators[ticker] = {
-                "Aroon_Oscillator": indicators["Aroon_Oscillator"],
-                "Coppock_Curve": indicators["Coppock_Curve"],
-                "Chandelier_Long": indicators["Chandelier_Long"],
-                "Chandelier_Short": indicators["Chandelier_Short"],
-                "GARCH_Vol": vol,
-                "Realized_Vol_Rank": realized_vol_rank,
-                "True_IVR": true_ivr,
-                "VRP": vrp,
-                "Option_Strategy_Matrix": opt_strategy
-            }
+            # Dead-letter resilience (CONSTRAINT #6): a single ticker's options
+            # analysis (GARCH vol, IV fetch, Black-Scholes strategy matrix) must
+            # never abort the whole pipeline run. One bad/degenerate input here
+            # (e.g. a zero-volatility read) previously crashed the entire
+            # main_orchestrator.py process uncaught.
+            try:
+                indicators = toe.calculate_indicators(df_hist)
+                vol = toe.estimate_gjr_garch_volatility(df_hist)
+                realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
+
+                # Fetch options chain / compute true 30d ATM IV
+                as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
+                price_val = float(df_hist['Close'].iloc[-1])
+
+                current_iv = float('nan')
+                if data_engine is not None:
+                    current_iv = get_30d_atm_iv(data_engine, ticker, as_of_date, spot_price=price_val)
+                    if not np.isnan(current_iv):
+                        iv_store.record_iv(ticker, as_of_date, current_iv)
+
+                true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
+                vrp = get_vrp(ticker, current_iv, vol)
+
+                # Call strategy matrix with true_ivr, vrp, and macro_dto
+                opt_strategy = toe.generate_option_strategy_matrix(
+                    true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
+                    aroon_osc=indicators["Aroon_Oscillator"],
+                    coppock_val=indicators["Coppock_Curve"],
+                    stock_price=price_val,
+                    current_iv=current_iv if not np.isnan(current_iv) else vol,
+                    vrp=vrp,
+                    macro_dto=macro_dto
+                )
+                tech_opt_indicators[ticker] = {
+                    "Aroon_Oscillator": indicators["Aroon_Oscillator"],
+                    "Coppock_Curve": indicators["Coppock_Curve"],
+                    "Chandelier_Long": indicators["Chandelier_Long"],
+                    "Chandelier_Short": indicators["Chandelier_Short"],
+                    "GARCH_Vol": vol,
+                    "Realized_Vol_Rank": realized_vol_rank,
+                    "True_IVR": true_ivr,
+                    "VRP": vrp,
+                    "Option_Strategy_Matrix": opt_strategy
+                }
+            except Exception as opt_exc:
+                telemetry.warning(
+                    f"Technical Options Analysis failed for {ticker}: {opt_exc}. "
+                    f"Skipping options metrics for this ticker this cycle."
+                )
 
     # 3. Core Processing
     telemetry.info("Routing data through Computational Core (Processing)...")
