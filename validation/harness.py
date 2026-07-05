@@ -38,6 +38,11 @@ from validation.multiple_testing import (
     format_multiple_testing_summary,
 )
 
+# Per-strategy cap on reports/history/<strategy>_validation_history.jsonl —
+# bounds on-disk growth from repeated dev/CI harness runs while still keeping
+# a useful multi-run trend window.
+MAX_VALIDATION_HISTORY_ROWS = 1000
+
 # Configure module logger
 logger = logging.getLogger("Validation_Harness")
 if not logger.handlers:
@@ -140,6 +145,24 @@ class ValidationReport:
     def to_summary_dict(self) -> dict:
         """Return a JSON-serialisable summary suitable for the preflight check and dashboard."""
         from datetime import datetime, timezone
+        import dataclasses
+
+        # family_multiple_testing["family_dsr"] holds FamilyDSRResult
+        # dataclass instances (validation/multiple_testing.py), which
+        # json.dumps cannot serialize on its own — convert to plain dicts so
+        # this summary round-trips through JSON (used by both the
+        # overwritten *_validation_summary.json snapshot and the appended
+        # validation-history JSONL rows).
+        family_mt = self.family_multiple_testing
+        if family_mt is not None:
+            family_mt = dict(family_mt)
+            family_dsr = family_mt.get("family_dsr")
+            if family_dsr is not None:
+                family_mt["family_dsr"] = [
+                    dataclasses.asdict(r) if dataclasses.is_dataclass(r) else r
+                    for r in family_dsr
+                ]
+
         return {
             "strategy_id": self.name,
             "deployable": self.deployable,
@@ -157,7 +180,7 @@ class ValidationReport:
             # strategy's *_validation_summary.json on disk, without needing to
             # re-run any backtest (see compute_family_multiple_testing_report).
             "n_trials": int(self.n_trials),
-            "family_multiple_testing": self.family_multiple_testing,
+            "family_multiple_testing": family_mt,
         }
 
 
@@ -296,6 +319,63 @@ def compute_family_multiple_testing_report(
         "n_strategies": len(strategy_ids),
         "summary_text": summary_text,
     }
+
+
+def read_validation_history(
+    strategy_id: str,
+    history_dir: str = "reports/history",
+) -> List[Dict[str, Any]]:
+    """Read the persisted run-over-run validation history for one strategy.
+
+    Unlike ``reports/<strategy>_validation_summary.json`` (overwritten every
+    harness run — the CURRENT snapshot only), ``StrategyValidationHarness``
+    also appends one row per run to
+    ``reports/history/<strategy>_validation_history.jsonl`` (see
+    ``_append_validation_history``), so PBO/DSR/Sharpe/MaxDD can be plotted
+    as a time series across runs.
+
+    Dead-letter resilient (CONSTRAINT #6): a missing directory/file or a
+    corrupt line is skipped rather than raising — returns ``[]`` (never
+    fabricates rows, CONSTRAINT #4) when no history exists yet.
+
+    Parameters
+    ----------
+    strategy_id:
+        The strategy's ``name`` (as passed to ``StrategyValidationHarness.run``).
+    history_dir:
+        Directory containing the per-strategy ``*_validation_history.jsonl``
+        files. Defaults to ``reports/history``.
+
+    Returns
+    -------
+    list[dict]
+        Chronological (oldest-first) list of ``ValidationReport.to_summary_dict()``
+        snapshots, one per past run. Empty list if none exist or the file
+        can't be read.
+    """
+    import json
+    from pathlib import Path
+
+    safe_name = strategy_id.replace(" ", "_").replace("/", "_")
+    target = Path(history_dir) / f"{safe_name}_validation_history.jsonl"
+    if not target.exists():
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    try:
+        for line in target.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except Exception as exc:  # noqa: BLE001 - one bad line must not abort the read
+                logger.debug("read_validation_history(%s): skipping corrupt line: %s", strategy_id, exc)
+                continue
+    except Exception as exc:
+        logger.warning("read_validation_history(%s): failed to read %s: %s", strategy_id, target, exc)
+        return []
+    return rows
 
 
 class StrategyValidationHarness:
@@ -519,6 +599,15 @@ class StrategyValidationHarness:
                 "correction failed (non-fatal): %s", strategy_name, exc,
             )
 
+        # 6c. Append this run's snapshot to the per-strategy history file
+        # (reports/history/<strategy>_validation_history.jsonl) so PBO/DSR/
+        # Sharpe/MaxDD can be plotted as a time series across runs — unlike
+        # the *_validation_summary.json above, this file is append-only
+        # (capped), not overwritten. One call per run() regardless of
+        # whether the family multiple-testing sweep above succeeded, so the
+        # history reflects the report's final state either way.
+        self._append_validation_history(report)
+
         # 7. Render HTML report (after family_multiple_testing is populated so
         # the template can surface it if desired).
         self._render_html_report(report)
@@ -526,7 +615,11 @@ class StrategyValidationHarness:
         return report
 
     def _write_json_summary(self, report: "ValidationReport") -> None:
-        """Write a compact JSON summary to reports/<strategy_id>_validation_summary.json."""
+        """Write a compact JSON summary to reports/<strategy_id>_validation_summary.json.
+
+        This is the CURRENT-snapshot file, overwritten on every run — see
+        ``_append_validation_history`` for the accumulated multi-run trend.
+        """
         import json
         from pathlib import Path
         try:
@@ -541,6 +634,48 @@ class StrategyValidationHarness:
             import logging
             logging.getLogger(__name__).warning(
                 "Failed to write validation JSON summary: %s", exc
+            )
+
+    def _append_validation_history(self, report: "ValidationReport") -> None:
+        """Append this run's summary as one row to
+        reports/history/<strategy_id>_validation_history.jsonl.
+
+        Unlike ``_write_json_summary``'s per-strategy snapshot (overwritten
+        every run), this file accumulates one JSON line per historical run
+        so PBO/DSR/Sharpe/MaxDD can be read back as a time series across
+        runs (see ``read_validation_history``). Capped to the most recent
+        ``MAX_VALIDATION_HISTORY_ROWS`` entries per strategy to bound on-disk
+        growth. Dead-letter resilient (CONSTRAINT #6): a failure here must
+        never abort an otherwise-successful validation run.
+        """
+        import json
+        from pathlib import Path
+        try:
+            history_dir = Path("reports") / "history"
+            history_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = report.name.replace(" ", "_").replace("/", "_")
+            dest = history_dir / f"{safe_name}_validation_history.jsonl"
+
+            rows: List[Dict[str, Any]] = []
+            if dest.exists():
+                for line in dest.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rows.append(json.loads(line))
+                    except Exception:
+                        continue  # skip a corrupt line rather than aborting
+
+            rows.append(report.to_summary_dict())
+            rows = rows[-MAX_VALIDATION_HISTORY_ROWS:]
+
+            dest.write_text(
+                "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to append validation history row for %s: %s", report.name, exc
             )
 
     def _apply_cost_model(self, returns: pd.Series, turnover: float = 0.05) -> pd.Series:
