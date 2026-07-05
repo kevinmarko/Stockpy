@@ -1653,3 +1653,57 @@ is attempted through the `gui/env_io` path (CONSTRAINT #3).  Edit them by hand i
 | `publish` exits non-zero immediately | `PROMPT_REGISTRY_PUBLISH_TOKEN` absent | Set the token in `.env` on the author machine only |
 | `rollback` says "fewer than 2 versions" | Only one version in cache | Run `sync` to fetch the remote manifest, then retry |
 | GUI "Prompts" tab shows all sources as "baseline" | Registry disabled or never synced | Enable registry and click "🔄 Sync" in the Prompts tab |
+
+---
+
+## AI Insights & AI Control Center
+
+Two Command Center tabs cover every AI-generated commentary/research feature on
+the platform. Both are strictly **advisory and operator-triggered** — no AI
+output here ever places or modifies an order.
+
+### 🪄 AI Insights tab
+
+Per-symbol, on-demand AI reads on top of the pipeline's own signals:
+
+| Section | What it does | Requires |
+|---|---|---|
+| Opal research brief | Qualitative thesis/catalysts/risk-factors brief grounded in real Finnhub news + earnings-calendar data (never invents numbers) | `OPAL_RESEARCH_ENABLED=true` + `OPENAI_API_KEY` (or `GEMINI_API_KEY` if routed to Gemini) |
+| Claude analyst note | Plain-English rationale for the current Action Signal | `LLM_COMMENTARY_ENABLED=true` + `ANTHROPIC_API_KEY` |
+| Gemini chart pattern read | Sends a 252-bar price chart to Gemini Vision and returns a structured pattern/trend/support-resistance read | `LLM_COMMENTARY_ENABLED=true` + `GEMINI_API_KEY` |
+| Claude vs. Gemini disagreement view | One row per watchlist symbol comparing the deterministic Action Signal against each AI's verdict | Populated once you've generated notes for symbols in the current session |
+
+Every section is button-gated — nothing calls out to an AI provider until you
+click it — and each toggle is independent, so you can run Opal alone without
+enabling Claude or Gemini commentary.
+
+### 🎛️ AI Control Center tab
+
+One place to see and control every AI capability on the platform, and to
+start/stop AI-adjacent scheduled runs:
+
+- **Section A — Capability grid.** One row per AI option (Claude analyst
+  rationale, Gemini alert commentary, Gemini chart vision, the Gravity AI
+  audit runner, Opal research) showing a `🟢 ready` / `⚪ disabled` /
+  `🟡 key missing` / `🚧 not built` badge and an on/off toggle. Toggles write
+  to `.env` and take effect on the **next** launch — never live.
+- **Section B — On-demand per-symbol actions.** Run the Claude note, Gemini
+  chart read, or Opal brief for a chosen symbol without leaving this tab
+  (reuses the exact same helpers as the AI Insights tab — no duplicated
+  logic, no duplicated cache).
+- **Section C — Gravity AI audit.** Runs the Gravity AI Review Suite on
+  demand.
+- **Section D — Scheduled run.** Start (and later stop) an `--interval` or
+  `--agent` background advisory loop. You start it, you stop it — nothing
+  runs on its own.
+
+Provider API keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
+are secret-only and can never be set from the GUI — edit `.env` directly.
+
+### Standing rule
+
+Every AI action on both tabs is either a button click or an operator-started,
+operator-stoppable loop. Nothing here calls another AI agent, watches a PR, or
+re-invokes itself automatically — the same "no automatic AI invocation" rule
+that applies to Claude Code sessions on this repo applies to the platform's
+own AI features.
