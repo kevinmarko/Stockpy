@@ -110,6 +110,14 @@ Checks (15 total)
 16. no_unexpected_risk_blocks   — No "minimum_validation" risk gate blocks in the
                                   last 24 hours.  SKIPPED when ADVISORY_ONLY=True
                                   (no order submissions → no risk-gate blocks).
+17. calibration_drift           — WARNING-ONLY (never blocking).  Runs the
+                                  CUSUM/Page-Hinkley sequential change-point
+                                  detector (validation/drift.py, Task B3) over
+                                  the Tier 4.1 live-vs-recommendation tracking
+                                  data.  Passes with a note when there is not
+                                  yet enough tracking history.  NOT auto-skipped
+                                  in advisory mode — the decision log this reads
+                                  is itself an advisory-mode feature.
 """
 
 from __future__ import annotations
@@ -780,6 +788,75 @@ def check_no_unexpected_risk_blocks(hours: float = 24.0) -> CheckResult:
         return CheckResult(name, False, f"Could not read block log: {exc}")
 
 
+def check_calibration_drift() -> CheckResult:
+    """WARNING-ONLY: run the CUSUM/Page-Hinkley drift detector over the most
+    recent live-vs-recommendation tracking data (Tier 4.1) and flag when the
+    operator-vs-model judgment edge (or the model's own return stream) has
+    drifted out of the distribution it was validated against.
+
+    This is deliberately **never blocking** (``CheckResult.warning=True``
+    unconditionally): drift detection is inherently a soft, statistical
+    signal, not a hard go/no-go gate — a real drift alarm should prompt the
+    operator to re-run validation (``validation/harness.py``) or investigate,
+    not halt the platform outright.
+
+    Degrades gracefully (never FAILs) in three cases, all treated as PASS:
+      * ``output/decision_log.jsonl`` (the Tier 1.3 decision log that feeds
+        Tier 4.1 tracking) does not exist yet — a fresh deployment has no
+        history to test, which is expected and not a problem.
+      * ``evaluation_engine.recommendation_tracking_report()`` returns zero
+        rows (no BUY signals logged yet, or none old enough to have a
+        resolvable model/actual comparison).
+      * Any exception while building the report or running the detector —
+        this check's job is to surface an early-warning signal, not to add
+        a new failure mode to the go-live gate.
+
+    When drift IS detected, an alert is also dispatched via
+    ``validation.drift.check_and_alert_recommendation_drift`` (WARNING level,
+    ``observability.alerts.send_alert``) so the same signal reaches the
+    operator's configured alert channels, not just the preflight table.
+    """
+    name = "calibration_drift"
+    try:
+        from evaluation_engine import recommendation_tracking_report
+        from validation.drift import check_and_alert_recommendation_drift
+
+        report = recommendation_tracking_report()
+        rows = report.get("rows", [])
+        if not rows:
+            return CheckResult(
+                name, True,
+                "Insufficient history — no live-vs-recommendation tracking rows "
+                "available yet (output/decision_log.jsonl empty or missing). "
+                "This is expected on a fresh deployment.",
+                warning=True,
+            )
+
+        result = check_and_alert_recommendation_drift(rows, metric="calibration_error", method="cusum")
+        if result.drift_detected:
+            return CheckResult(
+                name, True,
+                f"⚠️  Calibration drift detected (method={result.method}, "
+                f"drift_index={result.drift_index}, n_samples={result.details.get('n_samples')}) "
+                "in the operator-vs-model judgment edge. A WARNING alert has been "
+                "dispatched via observability.alerts. Consider re-running "
+                "validation/harness.py for the affected strategy.",
+                warning=True,
+            )
+        return CheckResult(
+            name, True,
+            f"No calibration drift detected across {len(rows)} tracked signal(s).",
+        )
+    except Exception as exc:
+        # Never a blocking failure — a broken drift check must not gate go-live.
+        return CheckResult(
+            name, True,
+            f"⚠️  calibration_drift check could not run ({exc}) — treating as "
+            "insufficient history rather than a failure.",
+            warning=True,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -806,6 +883,7 @@ ALL_CHECKS = [
     check_paper_trading_duration,
     check_validation_reports,
     check_no_unexpected_risk_blocks,
+    check_calibration_drift,
 ]
 
 

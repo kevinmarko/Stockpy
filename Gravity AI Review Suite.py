@@ -4337,6 +4337,8 @@ class GravityAIAuditor:
         self.step_70_pit_fundamentals_audit()
         # Bias/PIT gap closure — Multiple-testing correction across signal modules
         self.step_71_multiple_testing_correction_audit()
+        # Task B3/B4 — Calibration drift detector + signal-weight/regime-config validation
+        self.step_72_bias_drift_weight_validation_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -10863,6 +10865,255 @@ class GravityAIAuditor:
 
         self.report["step_71_multiple_testing_correction_audit"] = audit
 
+    def step_72_bias_drift_weight_validation_audit(self) -> None:
+        """Step 72 — Task B3/B4: calibration-drift detector + signal-weight/
+        regime-config validation audit.
+
+        10 checks:
+
+        1.  ``validation.drift`` importable; ``detect_drift``, ``DriftResult``,
+            ``adapt_recommendation_tracking_rows``,
+            ``check_and_alert_recommendation_drift`` all exist and are callable
+            (DriftResult is a dataclass type, not callable in the same sense —
+            checked separately).
+        2.  A stationary (no-drift) synthetic series does NOT trigger
+            ``drift_detected`` for either ``"cusum"`` or ``"page_hinkley"``.
+        3.  A synthetic series with an injected large mean-shift partway
+            through DOES trigger ``drift_detected`` for both methods.
+        4.  Dead-letter resilience (CONSTRAINT #6): empty and too-short input
+            never raise and return ``drift_detected=False``.
+        5.  ``check_and_alert_recommendation_drift`` dispatches a WARNING via
+            an injected ``send_alert_fn`` when drift is detected, and does NOT
+            call it when no drift is present.
+        6.  ``scripts.preflight_check.check_calibration_drift`` is registered
+            in ``ALL_CHECKS`` and is ALWAYS warning-only (never
+            ``passed=False``) — degrades gracefully with no tracking history.
+        7.  ``signals.aggregator.validate_signal_weight_config`` flags an
+            out-of-bounds weight (negative and absurdly-large) AND a mistyped
+            ``REGIME_SIGNAL_WEIGHTS`` key, while a clean config produces zero
+            violations.
+        8.  ``signals.aggregator.CANONICAL_REGIMES`` matches the authoritative
+            regime set from ``dto_models.MacroEconomicDTO`` / the
+            ``macro_engine.py`` Pandera schema
+            (``{"RISK ON","NEUTRAL","RECESSION","CREDIT EVENT"}``).
+          9. ``SignalAggregator.__init__`` triggers ``validate_signal_weight_config``
+            without raising, even for a maliciously bad weights dict.
+        10. Both new test files exist: ``tests/test_drift.py`` and
+            ``tests/test_signal_weight_validation.py``.
+        """
+        audit: dict = {
+            "step": "step_72_bias_drift_weight_validation_audit",
+            "description": (
+                "Task B3 (CUSUM/Page-Hinkley calibration drift detector) + "
+                "Task B4 (signal-weight & regime-config validation) audit"
+            ),
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        try:
+            # ── Check 1: validation.drift importable; key symbols exist ────
+            import validation.drift as _drift_mod
+            from validation.drift import (
+                detect_drift as _detect_drift,
+                DriftResult as _DriftResult,
+                adapt_recommendation_tracking_rows as _adapt_rows,
+                check_and_alert_recommendation_drift as _check_and_alert,
+            )
+            c1 = (
+                callable(_detect_drift)
+                and callable(_adapt_rows)
+                and callable(_check_and_alert)
+                and isinstance(_DriftResult, type)
+            )
+            audit["checks"].append({
+                "check": (
+                    "validation.drift importable; detect_drift/DriftResult/"
+                    "adapt_recommendation_tracking_rows/"
+                    "check_and_alert_recommendation_drift exist"
+                ),
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            # ── Check 2: stationary series → no drift, both methods ─────────
+            import numpy as _np
+            _rng = _np.random.default_rng(123)
+            _stationary = list(_rng.normal(0.0, 1.0, 200))
+            _r_cusum_stationary = _detect_drift(_stationary, method="cusum")
+            _r_ph_stationary = _detect_drift(_stationary, method="page_hinkley")
+            c2 = (
+                _r_cusum_stationary.drift_detected is False
+                and _r_ph_stationary.drift_detected is False
+            )
+            audit["checks"].append({
+                "check": "Stationary synthetic series does NOT trigger drift_detected (cusum + page_hinkley)",
+                "passed": c2,
+                "detail": {
+                    "cusum": _r_cusum_stationary.drift_detected,
+                    "page_hinkley": _r_ph_stationary.drift_detected,
+                },
+            })
+            all_pass = all_pass and c2
+
+            # ── Check 3: injected mean-shift → drift detected, both methods ─
+            _shifted = list(_rng.normal(0.0, 1.0, 100)) + list(_rng.normal(6.0, 1.0, 100))
+            _r_cusum_shift = _detect_drift(_shifted, method="cusum")
+            _r_ph_shift = _detect_drift(_shifted, method="page_hinkley")
+            c3 = _r_cusum_shift.drift_detected is True and _r_ph_shift.drift_detected is True
+            audit["checks"].append({
+                "check": "Injected mean-shift series DOES trigger drift_detected (cusum + page_hinkley)",
+                "passed": c3,
+                "detail": {
+                    "cusum_index": _r_cusum_shift.drift_index,
+                    "page_hinkley_index": _r_ph_shift.drift_index,
+                },
+            })
+            all_pass = all_pass and c3
+
+            # ── Check 4: dead-letter resilience — empty/short never raises ──
+            try:
+                _r_empty = _detect_drift([], method="cusum")
+                _r_short = _detect_drift([1.0, 2.0], method="page_hinkley")
+                c4 = _r_empty.drift_detected is False and _r_short.drift_detected is False
+            except Exception:
+                c4 = False
+            audit["checks"].append({
+                "check": "Empty/too-short input never raises; drift_detected=False (CONSTRAINT #6)",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # ── Check 5: alert wiring — WARNING dispatched iff drift found ──
+            _calls_drift = []
+            _rows_drift = (
+                [{"model_return": 0.0, "actual_return": 0.0} for _ in range(50)]
+                + [{"model_return": 0.0, "actual_return": 6.0} for _ in range(50)]
+            )
+            _result_drift = _check_and_alert(
+                _rows_drift, send_alert_fn=lambda *a, **k: _calls_drift.append((a, k))
+            )
+            _calls_no_drift = []
+            _rows_no_drift = [
+                {"model_return": float(x), "actual_return": float(x)}
+                for x in _rng.normal(0.0, 0.01, 50)
+            ]
+            _result_no_drift = _check_and_alert(
+                _rows_no_drift, send_alert_fn=lambda *a, **k: _calls_no_drift.append((a, k))
+            )
+            c5 = (
+                _result_drift.drift_detected is True
+                and len(_calls_drift) == 1
+                and _calls_drift[0][0][0] == "WARNING"
+                and _result_no_drift.drift_detected is False
+                and len(_calls_no_drift) == 0
+            )
+            audit["checks"].append({
+                "check": (
+                    "check_and_alert_recommendation_drift dispatches WARNING iff "
+                    "drift detected; silent otherwise"
+                ),
+                "passed": c5,
+                "detail": {
+                    "drift_alert_calls": len(_calls_drift),
+                    "no_drift_alert_calls": len(_calls_no_drift),
+                },
+            })
+            all_pass = all_pass and c5
+
+            # ── Check 6: preflight check registered + always warning-only ──
+            from scripts.preflight_check import ALL_CHECKS as _ALL_CHECKS, check_calibration_drift as _check_cal_drift
+            _registered = _check_cal_drift in _ALL_CHECKS
+            _cal_result = _check_cal_drift()
+            c6 = _registered and _cal_result.warning is True and _cal_result.passed is True
+            audit["checks"].append({
+                "check": (
+                    "check_calibration_drift registered in ALL_CHECKS and is "
+                    "always warning-only (never blocking)"
+                ),
+                "passed": c6,
+                "detail": {
+                    "registered": _registered,
+                    "warning": _cal_result.warning,
+                    "passed": _cal_result.passed,
+                    "reason": _cal_result.reason,
+                },
+            })
+            all_pass = all_pass and c6
+
+            # ── Check 7: validate_signal_weight_config flags bad config ─────
+            from signals.aggregator import validate_signal_weight_config as _validate_cfg
+            _viol_bad_weight = _validate_cfg(
+                {"bad_neg": -1.0, "bad_huge": 5000.0}, {}, force=True
+            )
+            _viol_bad_regime = _validate_cfg({}, {"RISK-ON": {}}, force=True)
+            _viol_clean = _validate_cfg({"macro_regime": 45.0}, {"RISK ON": {}}, force=True)
+            c7 = (
+                len(_viol_bad_weight) >= 2
+                and len(_viol_bad_regime) >= 1
+                and len(_viol_clean) == 0
+            )
+            audit["checks"].append({
+                "check": (
+                    "validate_signal_weight_config flags out-of-bounds weights AND "
+                    "mistyped regime keys; clean config produces zero violations"
+                ),
+                "passed": c7,
+                "detail": {
+                    "bad_weight_violations": len(_viol_bad_weight),
+                    "bad_regime_violations": len(_viol_bad_regime),
+                    "clean_violations": len(_viol_clean),
+                },
+            })
+            all_pass = all_pass and c7
+
+            # ── Check 8: CANONICAL_REGIMES matches the authoritative set ────
+            from signals.aggregator import CANONICAL_REGIMES as _CANON
+            _expected_regimes = frozenset({"RISK ON", "NEUTRAL", "RECESSION", "CREDIT EVENT"})
+            c8 = _CANON == _expected_regimes
+            audit["checks"].append({
+                "check": "CANONICAL_REGIMES matches dto_models/macro_engine authoritative regime set",
+                "passed": c8,
+                "detail": sorted(_CANON),
+            })
+            all_pass = all_pass and c8
+
+            # ── Check 9: SignalAggregator construction never raises ─────────
+            from signals.aggregator import SignalAggregator as _SigAgg
+            from signals.registry import SignalRegistry as _SigRegistry
+            try:
+                _SigAgg(_SigRegistry(), weights={"malicious": -9999.0})
+                c9 = True
+            except Exception:
+                c9 = False
+            audit["checks"].append({
+                "check": "SignalAggregator construction never raises on a malicious weights dict",
+                "passed": c9,
+            })
+            all_pass = all_pass and c9
+
+            # ── Check 10: both new test files exist ──────────────────────────
+            from pathlib import Path as _Path
+            c10 = (
+                _Path("tests/test_drift.py").exists()
+                and _Path("tests/test_signal_weight_validation.py").exists()
+            )
+            audit["checks"].append({
+                "check": "tests/test_drift.py and tests/test_signal_weight_validation.py exist",
+                "passed": c10,
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_72_bias_drift_weight_validation_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
