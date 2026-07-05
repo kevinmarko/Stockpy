@@ -165,10 +165,25 @@ CREATE TABLE IF NOT EXISTS fundamentals_history (
     operating_margin REAL,
     debt_to_equity  REAL,
     raw_json        TEXT,
+    report_date     TEXT,
     source          TEXT NOT NULL,
     fetched_at      TEXT NOT NULL,
     PRIMARY KEY (symbol, as_of)
 )
+"""
+
+# Additive migration for pre-existing databases created before the
+# ``report_date`` column existed (validation/pit_fundamentals.py, PIT
+# fundamentals audit). ``report_date`` is the genuine announcement/quarter-
+# end date recovered from the provider's raw payload (yfinance
+# ``mostRecentQuarter``/``lastFiscalYearEnd``), persisted as its own column
+# so PIT audits don't have to re-parse ``raw_json`` on every read. NULL when
+# the provider didn't expose a usable date (never fabricated — CONSTRAINT #4).
+# SQLite has no "ADD COLUMN IF NOT EXISTS"; ``_ensure_tables`` probes
+# ``PRAGMA table_info`` first and only issues the ALTER when the column is
+# genuinely missing, so this is idempotent and safe to run on every startup.
+_FUNDAMENTALS_HISTORY_ADD_REPORT_DATE_DDL = """
+ALTER TABLE fundamentals_history ADD COLUMN report_date TEXT
 """
 
 _FUNDAMENTALS_HISTORY_INDEX_DDL = """
@@ -249,8 +264,32 @@ class HistoricalStore:
                 conn.execute(_MACRO_HISTORY_DDL)
                 conn.execute(_MACRO_HISTORY_INDEX_DDL)
                 conn.commit()
+                self._migrate_add_report_date_column(conn)
         except Exception as exc:
             logger.warning("HistoricalStore._ensure_tables failed: %s", exc)
+
+    def _migrate_add_report_date_column(self, conn: sqlite3.Connection) -> None:
+        """Additive migration: add ``fundamentals_history.report_date`` to a
+        pre-existing DB that predates the PIT fundamentals audit column.
+
+        Idempotent — probes ``PRAGMA table_info`` first so a fresh DB (whose
+        ``CREATE TABLE`` already includes ``report_date``) never attempts a
+        duplicate ``ALTER TABLE``. Never raises (CONSTRAINT #6): a failed
+        migration just means ``report_date`` stays unavailable and PIT
+        audits fall back to parsing ``raw_json`` directly.
+        """
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(fundamentals_history)").fetchall()}
+            if "report_date" not in cols:
+                conn.execute(_FUNDAMENTALS_HISTORY_ADD_REPORT_DATE_DDL)
+                conn.commit()
+                logger.info(
+                    "HistoricalStore: migrated fundamentals_history — added report_date column."
+                )
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore._migrate_add_report_date_column failed (non-fatal): %s", exc
+            )
 
     @staticmethod
     def _now_utc_iso() -> str:
@@ -786,7 +825,16 @@ class HistoricalStore:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _read_fundamentals_row(self, symbol: str):
-        """Return ``(as_of_str, typed_dict, raw_json_str)`` or ``None``."""
+        """Return ``(as_of_str, typed_dict, raw_json_str)`` or ``None``.
+
+        Note: ``report_date`` (the genuine announcement/quarter-end date used
+        by ``validation/pit_fundamentals.py``) is stored in its own column
+        but intentionally NOT returned in this 3-tuple to keep the existing
+        call-site contract unchanged (``get_fundamentals()`` only ever
+        consumed ``typed_dict`` + ``raw_json_str``). Use
+        ``_read_fundamentals_row_with_report_date`` when the report date is
+        needed directly instead of re-parsing ``raw_json``.
+        """
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -816,6 +864,29 @@ class HistoricalStore:
         raw_json_str = row[9]
         return as_of_str, typed_dict, raw_json_str
 
+    def _read_fundamentals_report_date(self, symbol: str) -> Optional[str]:
+        """Return the stored ``report_date`` (ISO string) for the newest row
+        of *symbol*, or ``None`` if absent/unavailable. Never raises
+        (CONSTRAINT #6) — used by ``validation/pit_fundamentals.py``."""
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT report_date
+                    FROM fundamentals_history
+                    WHERE symbol = ?
+                    ORDER BY as_of DESC
+                    LIMIT 1
+                    """,
+                    (symbol.upper(),),
+                ).fetchone()
+            return row[0] if row and row[0] else None
+        except Exception as exc:
+            logger.debug(
+                "_read_fundamentals_report_date(%s) failed: %s", symbol, exc,
+            )
+            return None
+
     def _upsert_fundamentals(
         self,
         symbol: str,
@@ -827,6 +898,7 @@ class HistoricalStore:
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         now_ts = self._now_utc_iso()
         raw_json_str = json.dumps(raw, default=str)
+        report_date_str = self._extract_report_date_str(raw)
 
         def _db_val(v: float):
             """Convert NaN → None so SQLite stores NULL, not 'nan' text."""
@@ -840,8 +912,8 @@ class HistoricalStore:
                 INSERT OR REPLACE INTO fundamentals_history
                     (symbol, as_of, pe_ratio, pb_ratio, roe, dividend_yield,
                      market_cap, eps, operating_margin, debt_to_equity,
-                     raw_json, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     raw_json, report_date, source, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     symbol,
@@ -855,15 +927,37 @@ class HistoricalStore:
                     _db_val(typed.get("operating_margin", float("nan"))),
                     _db_val(typed.get("debt_to_equity", float("nan"))),
                     raw_json_str,
+                    report_date_str,
                     source,
                     now_ts,
                 ),
             )
             conn.commit()
         logger.debug(
-            "HistoricalStore: upserted fundamentals for %s (as_of=%s).",
-            symbol, today_str,
+            "HistoricalStore: upserted fundamentals for %s (as_of=%s, report_date=%s).",
+            symbol, today_str, report_date_str,
         )
+
+    @staticmethod
+    def _extract_report_date_str(raw: Dict[str, Any]) -> Optional[str]:
+        """Best-effort extraction of a genuine report/quarter-end date (ISO
+        string) from the raw provider payload, for persistence in the
+        ``fundamentals_history.report_date`` column.
+
+        Delegates to ``validation.pit_fundamentals._extract_report_date``
+        (imported lazily to avoid a module-load-order dependency between
+        ``data/`` and ``validation/``) so the date-recovery logic lives in
+        exactly one place. Returns ``None`` (never fabricated) when the
+        payload carries no usable date field — this is the expected,
+        common case for Finnhub-sourced payloads and is NOT an error.
+        """
+        try:
+            from validation.pit_fundamentals import _extract_report_date
+            report_d, _source_key = _extract_report_date(raw or {})
+            return report_d.isoformat() if report_d is not None else None
+        except Exception as exc:
+            logger.debug("HistoricalStore: report_date extraction failed: %s", exc)
+            return None
 
     # ─────────────────────────────────────────────────────────────────────────
     # Private implementation helpers — macro (Phase 3)
