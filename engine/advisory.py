@@ -114,10 +114,23 @@ CONFIG: Dict[str, Any] = {
     # Elevated conviction used when: holding below effective cost AND forecast is bearish
     "conviction_strong_sell": 0.80,
 
-    # ── Forecast direction threshold ─────────────────────────────────────────
-    # If (forecast_30d - current_price) / current_price < this value, the
-    # 30-day forecast is classified "bearish" and increases SELL pressure.
+    # ── Conviction × data-quality coupling (A1) ──────────────────────────────
+    # WHY: a recommendation built on degraded data must not carry the same
+    # confidence as one built on clean data.  After the action/holding overlay
+    # sets the base conviction, it is multiplied by the multiplier matching the
+    # final ``data_quality`` label so the number the operator sees actually
+    # reflects how much of the signal survived.  OK → ×1.0 (no key needed).
+    "conviction_partial_multiplier": 0.6,   # one or more engine stages failed
+    "conviction_stale_multiplier": 0.8,     # price quote flagged stale by provider
+
+    # ── Forecast direction thresholds ────────────────────────────────────────
+    # If (forecast_30d - current_price) / current_price < bearish threshold, the
+    # 30-day forecast is classified "bearish" and increases SELL pressure; above
+    # the (symmetric) bullish threshold it CONFIRMS a BUY — raising conviction
+    # and preventing the Case-C "already up, hold instead of buy" override from
+    # silencing a signal the forecast independently agrees with.
     "bearish_forecast_pct_threshold": -0.03,   # -3 %
+    "bullish_forecast_pct_threshold": 0.03,    # +3 %
 
     # ── Data requirements ────────────────────────────────────────────────────
     # Minimum bars required before running full technical indicators / strategy
@@ -201,6 +214,12 @@ class Recommendation:
                     always returns stale; Alpaca only when > 60 s old).
         "PARTIAL" — one or more modules failed; recommendation is still
                     returned but with reduced conviction.
+    synthetic_inputs : bool
+        True when OHLCV bar history was unavailable and a flat synthetic bar
+        (Open=High=Low=Close=price, Volume=0) was substituted.  In that case the
+        technical indicators (RSI, ATR, Aroon, …) are meaningless, so they are
+        omitted from ``rationale`` and reported as NaN in ``key_indicators``; the
+        flag lets downstream consumers / the GUI badge the recommendation.
     """
 
     symbol: str
@@ -229,6 +248,10 @@ class Recommendation:
     # existing positional ``Recommendation(...)`` constructions elsewhere in
     # the repo are unaffected by this new trailing field.
     research_brief: Optional[Dict[str, Any]] = None
+    # A2 — True when technical inputs were computed on a flat synthetic bar
+    # because real OHLCV history was missing.  Trailing default keeps existing
+    # positional ``Recommendation(...)`` constructions unaffected.
+    synthetic_inputs: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -595,11 +618,13 @@ def evaluate(
         unrealized_pl_pct = ((current_price - effective_cost) / effective_cost) * 100.0
         dividends_received = position.dividends_received
 
-    # Classify forecast direction
+    # Classify forecast direction (symmetric — A3)
     is_bearish_forecast = False
+    is_bullish_forecast = False
     if forecast_price is not None and forecast_price > 0 and current_price > 0:
         forecast_chg = (forecast_price - current_price) / current_price
         is_bearish_forecast = forecast_chg < CONFIG["bearish_forecast_pct_threshold"]
+        is_bullish_forecast = forecast_chg > CONFIG["bullish_forecast_pct_threshold"]
 
     # Derive flags for holding-aware rules
     _high_yield_holder = is_holding and (
@@ -664,17 +689,33 @@ def evaluate(
                     f"Dividend compounding reduces effective cost basis over time."
                 )
 
-        # ── CASE C: Meaningful unrealized gain + non-bearish forecast → HOLD ───
+        # ── CASE C: Meaningful unrealized gain + FLAT forecast → HOLD ──────────
         # Don't pile into a winner that has already appreciated past the gain
         # threshold — hold existing exposure instead of buying at elevated prices.
-        elif _significant_gain and final_action == "BUY" and not is_bearish_forecast:
+        # A3: only override when the forecast is genuinely flat.  A bullish
+        # forecast (confirmed continuation) keeps the BUY — the gain-capture
+        # heuristic must not silence a signal the forecast independently agrees
+        # with.
+        elif (
+            _significant_gain
+            and final_action == "BUY"
+            and not is_bearish_forecast
+            and not is_bullish_forecast
+        ):
             final_action = "HOLD"
             final_conviction = max(final_conviction, CONFIG["conviction_hold"])
             holding_override_reason = (
                 f"Position is already up {unrealized_pl_pct:.1f}% on a "
-                f"dividend-adjusted cost basis. Forecast is not bearish; hold "
-                f"existing exposure rather than adding at elevated prices."
+                f"dividend-adjusted cost basis. Forecast is flat, not bullish; "
+                f"hold existing exposure rather than adding at elevated prices."
             )
+
+    # A3 — Bullish-forecast confirmation of a surviving BUY.  Mirror image of
+    # Case A (loss + bearish → conviction_strong_sell): when the action is still
+    # BUY and the independent 30-day forecast confirms upside, raise conviction
+    # to the strong-buy level.
+    if final_action == "BUY" and is_bullish_forecast:
+        final_conviction = max(final_conviction, CONFIG["conviction_strong_buy"])
 
     # ──────────────────────────────────────────────────────────────────────────
     # Step 10 — Kelly-based position sizing (BUY only)
@@ -729,6 +770,17 @@ def evaluate(
         except Exception:
             pass  # CONSTRAINT #6 — docstring collection must never crash the pipeline
 
+    # A2 — When OHLCV history was missing, the technical indicators were computed
+    # on a flat synthetic bar and carry no information.  Suppress them from the
+    # rationale (passing None makes _build_rationale skip each driver) so the
+    # explanation never cites an "RSI"/"Aroon" that was fabricated from a
+    # single price point.
+    synthetic_inputs = "bar_dto_synthetic" in partial_flags
+    _r_rsi = None if synthetic_inputs else tech.get("RSI")
+    _r_aroon = None if synthetic_inputs else tech.get("Aroon Oscillator")
+    _r_rsi_2 = None if synthetic_inputs else tech.get("RSI_2")
+    _r_sma_200 = None if synthetic_inputs else tech.get("SMA_200")
+
     # ──────────────────────────────────────────────────────────────────────────
     # Step 11 — Plain-English rationale (top 2-3 drivers in standard mode;
     # four annotated verbose sections appended when RATIONALE_VERBOSITY=verbose)
@@ -746,8 +798,8 @@ def evaluate(
         dividends_received=dividends_received,
         is_holding=is_holding,
         holding_override_reason=holding_override_reason,
-        rsi=tech.get("RSI"),
-        aroon_osc=tech.get("Aroon Oscillator"),
+        rsi=_r_rsi,
+        aroon_osc=_r_aroon,
         garch_vol=garch_vol,
         macro_gate_reason=macro_gate_reason,
         # ── Task 1.5 verbose-rationale additions ────────────────────────────
@@ -758,8 +810,8 @@ def evaluate(
         win_rate_data=_verbose_win_rate,
         active_module_docs=_verbose_module_docs,
         strategy_explainer_notes=strategy_out.get("Strategy Explainer Notes", ""),
-        rsi_2=tech.get("RSI_2"),
-        sma_200=tech.get("SMA_200"),
+        rsi_2=_r_rsi_2,
+        sma_200=_r_sma_200,
         sector=fund_dto.sector or "",
     )
 
@@ -788,6 +840,13 @@ def evaluate(
         "kelly_raw": kelly_fraction_raw,
     }
 
+    # A2 — bar-derived technicals are meaningless on a synthetic flat bar; report
+    # them as NaN rather than a fabricated number so consumers can't be misled.
+    if synthetic_inputs:
+        for _tk in ("rsi", "rsi_2", "macd_line", "atr", "aroon_osc",
+                    "sortino", "max_drawdown", "rs_vs_spy"):
+            key_indicators[_tk] = nan
+
     # ──────────────────────────────────────────────────────────────────────────
     # Step 13 — Data quality
     # ──────────────────────────────────────────────────────────────────────────
@@ -798,6 +857,14 @@ def evaluate(
         data_quality = "STALE"
     else:
         data_quality = "OK"
+
+    # A1 — decay conviction to match data quality.  The base conviction reflects
+    # the action/holding overlay; here we discount it for degraded inputs so the
+    # number the operator sees is honest.  OK keeps ×1.0.
+    if data_quality == "PARTIAL":
+        final_conviction *= CONFIG["conviction_partial_multiplier"]
+    elif data_quality == "STALE":
+        final_conviction *= CONFIG["conviction_stale_multiplier"]
 
     strategy_name = _derive_strategy_name(raw_signal, score, macro_dto.market_regime, partial_flags)
 
@@ -811,6 +878,7 @@ def evaluate(
         forecast=forecast_price,
         key_indicators={k: round(v, 6) if not math.isnan(v) else v for k, v in key_indicators.items()},
         data_quality=data_quality,
+        synthetic_inputs=synthetic_inputs,
     )
 
 
