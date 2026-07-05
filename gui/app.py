@@ -67,6 +67,8 @@ import streamlit as st
 
 from settings import settings
 from gui import panels, run_mode
+from gui.export_utils import dataframe_to_csv_bytes, signals_snapshot_to_dataframe
+from gui.help_content import metric_help
 
 logging.basicConfig(level=getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO))
 logger = logging.getLogger("gui.app")
@@ -78,6 +80,28 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def _canonical_regimes() -> list[str]:
+    """Return the canonical market-regime set from ``macro_engine.MacroDataSchema``.
+
+    Sourced from the Pandera ``isin`` check on the ``market_regime`` column so
+    this list can never drift out of sync with the regime values the pipeline
+    actually produces. Falls back to the historically stable 4-regime set if
+    the schema is unreachable or its shape ever changes (dead-letter — a
+    sidebar filter must never crash the whole app over this).
+    """
+    try:
+        from macro_engine import MacroDataSchema
+
+        schema = MacroDataSchema.to_schema()
+        for check in schema.columns["market_regime"].checks:
+            allowed = getattr(check, "statistics", {}).get("allowed_values")
+            if allowed:
+                return list(allowed)
+    except Exception as exc:  # noqa: BLE001 - sidebar filter must degrade, never crash
+        logger.debug("Could not read canonical regimes from MacroDataSchema: %s", exc)
+    return ["RISK ON", "NEUTRAL", "RECESSION", "CREDIT EVENT"]
 
 
 def safe_panel(render_fn: Callable[[], None]) -> None:
@@ -114,6 +138,63 @@ st.sidebar.divider()
 if st.sidebar.button("🔄 Clear cached reads"):
     st.cache_data.clear()
     st.rerun()
+
+# ---------------------------------------------------------------------------
+# Cross-tab regime-conditional filter
+# ---------------------------------------------------------------------------
+# Stored in st.session_state so any panel COULD read it in the future without
+# needing to be wired today. Not yet consumed by any gui/panels/*.py render
+# function — this is the first concrete proof-of-use, scoped to gui/app.py's
+# own sidebar (a "N symbols match" count + CSV export), per the task's
+# low-conflict boundary with the other in-flight agents' panel work.
+st.sidebar.divider()
+st.sidebar.subheader("🌐 Regime Filter")
+_regime_options = ["All regimes"] + _canonical_regimes()
+st.session_state.setdefault("regime_filter", "All regimes")
+st.sidebar.selectbox(
+    "Filter by macro regime",
+    options=_regime_options,
+    key="regime_filter",
+    help=metric_help("sidebar.regime_filter"),
+)
+
+try:
+    _snap = panels.load_state_snapshot()
+    _signals = _snap.get("signals", []) if isinstance(_snap, dict) else []
+    _selected_regime = st.session_state.get("regime_filter", "All regimes")
+    if _selected_regime == "All regimes":
+        _matching = _signals
+    else:
+        _matching = [
+            s for s in _signals
+            if str(s.get("macro_status", "")).strip().upper() == _selected_regime.upper()
+        ]
+    st.sidebar.caption(
+        f"**{len(_matching)}** symbols match the selected regime "
+        f"(of {len(_signals)} in the last run).",
+        help=metric_help("sidebar.regime_match_count"),
+    )
+    if not _signals:
+        st.sidebar.caption(
+            "_No `output/state_snapshot.json` yet — run the pipeline "
+            "(Launcher tab) to populate signals._"
+        )
+
+    # ------------------------------------------------------------------
+    # CSV export — single, low-conflict download button.
+    # ------------------------------------------------------------------
+    _export_df = signals_snapshot_to_dataframe(_matching)
+    st.sidebar.download_button(
+        "⬇️ Download current signals as CSV",
+        data=dataframe_to_csv_bytes(_export_df),
+        file_name="investyo_signals_snapshot.csv",
+        mime="text/csv",
+        disabled=_export_df.empty,
+        help=metric_help("export.download_signals_csv"),
+    )
+except Exception as _regime_exc:  # noqa: BLE001 - sidebar section must never crash the app
+    logger.debug("Regime filter / export sidebar section soft-failed: %s", _regime_exc)
+    st.sidebar.caption("Regime filter unavailable (no snapshot data yet).")
 
 # Sidebar quick-help widget (3 most-common questions)
 try:
