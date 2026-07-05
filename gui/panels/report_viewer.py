@@ -224,7 +224,9 @@ def validate_brinson_fachler_weights(
 # ===========================================================================
 
 
-def _render_llm_commentary_button(row: dict, symbol: str) -> None:
+def _render_llm_commentary_button(
+    row: dict, symbol: str, key_prefix: str = "reports"
+) -> None:
     """Render the on-demand Claude analyst commentary control.
 
     Three render paths driven by :func:`gui.llm_commentary_panel.commentary_status`:
@@ -237,6 +239,18 @@ def _render_llm_commentary_button(row: dict, symbol: str) -> None:
       button.  On click, results are cached in ``st.session_state`` keyed by
       the same UTC-day + score-bucket convention as :mod:`llm.cache`, so
       repeat clicks within the same trading day never re-spend tokens.
+
+    ``key_prefix`` namespaces the Streamlit widget key by call site (Reports
+    tab, AI Insights tab, AI Control Center tab, ...). Streamlit executes
+    every ``st.tabs()`` body on each rerun regardless of which tab is
+    visually active, and this helper is called from three different tabs —
+    without a per-call-site prefix, two tabs showing the same symbol at the
+    same score bucket would derive the identical widget key (since
+    :func:`gui.llm_commentary_panel.commentary_state_key` is intentionally
+    tab-agnostic, so the cached LLM response is shared/reused across tabs)
+    and raise Streamlit's duplicate-key error. The ``session_state`` cache
+    slot (``session_slot``) deliberately does NOT get this prefix, so the
+    cache stays shared across tabs.
 
     Soft-fail (CONSTRAINT #6): every failure path (enricher raises, provider
     returns None, schema mismatch) ends in
@@ -273,7 +287,7 @@ def _render_llm_commentary_button(row: dict, symbol: str) -> None:
         )
         st.button(
             "🤖 Generate analyst commentary",
-            key=f"llm_cmt_btn_{symbol}",
+            key=f"llm_cmt_btn_{key_prefix}_{symbol}",
             disabled=True,
             width="stretch",
         )
@@ -302,7 +316,7 @@ def _render_llm_commentary_button(row: dict, symbol: str) -> None:
 
     if st.button(
         "🤖 Generate analyst commentary",
-        key=f"llm_cmt_btn_{cache_key}",
+        key=f"llm_cmt_btn_{key_prefix}_{cache_key}",
         width="stretch",
     ):
         with st.spinner(f"Asking Claude about {symbol}…"):
