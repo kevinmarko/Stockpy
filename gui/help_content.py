@@ -753,6 +753,56 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "agent reads it; it never auto-executes.",
         "#robinhood-execution-bridge",
     ),
+
+    # ── Strategy Matrix score decomposition / comparison (namespaced) ────────
+    "strategy_matrix.score_components": _g(
+        "Score Component Decomposition",
+        "Breaks a symbol's final aggregated score into each active signal "
+        "module's weighted contribution (module score x its configured weight). "
+        "Only modules that ran this cycle -- not disabled via the Strategy "
+        "Matrix, not suppressed by a regime gate -- are shown.  The base neutral "
+        "score is 50; the final score is 50 plus the sum of every shown "
+        "contribution.",
+        "#17-adjusting-signal-weights",
+    ),
+    "strategy_matrix.meta_label_composite": _g(
+        "Meta-Label Confidence Distribution",
+        "A histogram of `meta_label_composite` (the geometric mean of active "
+        "signal modules' meta-label probabilities) across every symbol in the "
+        "latest snapshot.  Until real MetaLabelers are trained and registered "
+        "(the current default), every symbol shows exactly 1.0 by design -- a "
+        "single spike, not an error.  It affects position sizing only, never "
+        "the BUY/HOLD/SELL action.",
+        "#6-understanding-the-output",
+    ),
+    "strategy_matrix.regime_multiplier": _g(
+        "Regime-Multiplier Sizing Impact",
+        "Compares the Kelly Target StrategyEngine computed before the HMM "
+        "regime multiplier was applied against the final value after that "
+        "multiplier (and the meta-label composite) were multiplied in and "
+        "re-clamped to the single-name ceiling.  Shows exactly how much current "
+        "macro conditions are discounting -- or occasionally boosting -- a "
+        "symbol's suggested position size right now.",
+        "#8-understanding-position-sizing-kelly-target",
+    ),
+    "comparison.symbol_comparison": _g(
+        "Symbol Comparison",
+        "A side-by-side view of 2-3 operator-chosen symbols: final score, "
+        "Kelly Target, conviction, GARCH volatility, and the per-module score "
+        "breakdown for each -- so a difference in ranking between two symbols "
+        "has a direct, inspectable answer instead of just two numbers.",
+        "#17-adjusting-signal-weights",
+    ),
+    # ── Sidebar: regime filter + CSV export ────────────────────────────────────
+    "sidebar.regime_filter": _g(
+        "Regime Filter",
+        "A sidebar control that lets you narrow the platform's view to symbols "
+        "last tagged with one specific macro regime (RISK ON / NEUTRAL / "
+        "RECESSION / CREDIT EVENT) instead of all of them.  The choice is stored "
+        "for the current browser session only — it does not change `.env` or "
+        "affect the pipeline's own regime-gating logic.",
+        "#9-the-macro-regime-system",
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -1014,6 +1064,16 @@ SECTION_HELP: Dict[str, str] = {
         "from it — re-run the pipeline for a fresh one. Placement, when enabled, "
         "always requires per-order human confirmation in the agent session."
     ),
+    "sidebar.regime_filter": (
+        "Filters the 'symbols matching' count below to the selected macro "
+        "regime. 'All regimes' shows every symbol from the last run regardless "
+        "of the regime tag recorded at that time."
+    ),
+    "export.download_signals_csv": (
+        "Exports the per-symbol rows from the last `state_snapshot.json` run — "
+        "action, score, Kelly target, buy/sell ranges, macro status — as a flat "
+        "CSV for offline post-trade analysis. Respects the regime filter above."
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -1126,6 +1186,74 @@ METRIC_HELP: Dict[str, str] = {
         "Sell Zone string showing upside target + trailing stop.  "
         "Same as Sell Zone — different column name in some report views."
     ),
+    "Value Z": (
+        "Cross-sectional z-score averaging book-to-market and earnings-yield "
+        "vs. the rest of your universe, winsorized to ±3.  Positive = cheaper "
+        "than peers.  Part of the multifactor composite (signals/multifactor.py)."
+    ),
+    "Quality Z": (
+        "Cross-sectional z-score of ROE + operating margin (falls back to "
+        "-debt/equity when unavailable), winsorized to ±3.  "
+        "Positive = higher quality than peers."
+    ),
+    "LowVol Z": (
+        "Cross-sectional z-score of negative 60-day realized volatility, "
+        "winsorized to ±3.  Positive = lower volatility than peers."
+    ),
+    "Size Z": (
+        "Cross-sectional z-score of negated log market cap, winsorized to ±3.  "
+        "Positive = smaller than peers (small-cap premium prior)."
+    ),
+    "Value_Z": "See 'Value Z' — identical metric, underscore column key.",
+    "Quality_Z": "See 'Quality Z' — identical metric, underscore column key.",
+    "LowVol_Z": "See 'LowVol Z' — identical metric, underscore column key.",
+    "Size_Z": "See 'Size Z' — identical metric, underscore column key.",
+    "Multifactor Composite": (
+        "Average of Value/Quality/LowVol/Size z-scores, re-clipped to ±3, "
+        "then mapped to [-1, +1] via tanh(z/2) for the signal aggregator.  "
+        "Microcap tickers (excluded from cross-sectional scoring) show 0 (neutral)."
+    ),
+    "XSec 12-1M Return": (
+        "12-month return skipping the most recent month (Jegadeesh-Titman "
+        "cross-sectional momentum convention — avoids short-term reversal bias)."
+    ),
+    "XSec Momentum Rank": (
+        "This ticker's percentile rank (0-1) by 12-1 month return within your "
+        "current universe.  Top half scores positive in the cross-sectional "
+        "momentum signal module; bottom half scores negative."
+    ),
+    "Buy Range": "ATR-based entry price range.  Buying within this range improves risk/reward.",
+    "Portfolio Delta": (
+        "Unweighted sum of ATM Delta across held symbols with an actionable "
+        "options directive.  Per-contract, not position-size-weighted — see "
+        "the Options tab caption for why weighting isn't fabricated."
+    ),
+    "Portfolio Gamma": (
+        "Unweighted sum of ATM Gamma across held symbols with an actionable "
+        "options directive.  Per-contract, not position-size-weighted."
+    ),
+    "Portfolio Vega": (
+        "Unweighted sum of ATM Vega across held symbols with an actionable "
+        "options directive.  Per-contract, not position-size-weighted."
+    ),
+    "Portfolio Theta": (
+        "Unweighted sum of ATM daily Theta across held symbols with an "
+        "actionable options directive.  Per-contract, not position-size-weighted."
+    ),
+    "Theta Carry Projection": (
+        "Cumulative Theta × 30, assuming price/IV stay flat for 30 days.  "
+        "A mechanical 'time decay floor' reference — NOT a forecast of "
+        "actual 30-day P&L, which also depends on gamma/vega repricing."
+    ),
+    "Meta-Label Composite": (
+        "Geometric mean of active signal modules' meta-label confidence "
+        "(Lopez de Prado 'is the primary signal correct?' probability), applied "
+        "as a multiplier on Kelly Target before the position-size cap.  Always "
+        "1.0 (no-op) until a MetaLabeler is trained and registered for a given "
+        "signal — see ml/meta_labeling.py.  Not currently written to a "
+        "per-symbol column in the dashboard; this platform surfaces it only "
+        "as a multiplicative effect already baked into Kelly Target."
+    ),
     "Intents Queued": (
         "Number of proposed orders in `output/execution_queue.json` this cycle.  "
         "Each has already been run through the risk gate in dry-run."
@@ -1148,6 +1276,44 @@ METRIC_HELP: Dict[str, str] = {
         "Whether `output/KILL_SWITCH` is active for THIS queue.  When active, "
         "placement is blocked for every intent regardless of mode — checked "
         "again by the agent immediately before each order."
+    ),
+
+    # ── Strategy Matrix score decomposition / comparison (namespaced) ────────
+    "strategy_matrix.score_components": (
+        "Weighted contribution (module score x weight) of each active signal "
+        "module to this symbol's final aggregated score.  Disabled or "
+        "regime-gated modules are omitted, never fabricated as zero-contribution rows."
+    ),
+    "strategy_matrix.meta_label_composite": (
+        "Geometric mean of active modules' meta-label P(signal correct).  "
+        "Exactly 1.0 for every symbol until a MetaLabeler is trained and "
+        "registered — the expected pre-Stage-4-deployment state, not an error."
+    ),
+    "strategy_matrix.regime_multiplier": (
+        "Kelly Target before vs. after the HMM regime multiplier and "
+        "meta-label composite were applied and the result re-clamped to the "
+        "single-name position ceiling."
+    ),
+    "strategy_matrix.kelly_target_pre_regime": (
+        "The fractional-Kelly / vol-target sizing weight StrategyEngine "
+        "computed BEFORE the HMM regime multiplier or meta-label composite "
+        "were applied — already clamped to `settings.MAX_POSITION_WEIGHT`."
+    ),
+    "strategy_matrix.kelly_target_post_regime": (
+        "The final Kelly Target after multiplying by the HMM regime "
+        "multiplier and meta-label composite and re-clamping to "
+        "`settings.MAX_POSITION_WEIGHT` — identical to the `Kelly Target` "
+        "column shown elsewhere in the platform."
+    ),
+    "comparison.symbol_comparison": (
+        "Side-by-side final score, Kelly Target, conviction, GARCH vol, and "
+        "meta-label/regime-multiplier readouts for 2-3 selected symbols, plus "
+        "each symbol's score-component breakdown for direct comparison."
+    ),
+    "sidebar.regime_match_count": (
+        "Count of symbols from the last pipeline run whose recorded macro "
+        "status matches the sidebar regime filter. Based on "
+        "`output/state_snapshot.json` — refresh the pipeline to update it."
     ),
 }
 

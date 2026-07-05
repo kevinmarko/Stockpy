@@ -4333,6 +4333,12 @@ class GravityAIAuditor:
         self.step_67_key_rotation_audit()
         # Stage 8 — Prompt Registry security + wiring audit
         self.step_69_prompt_registry_audit()
+        # Bias/PIT gap closure — Point-in-time fundamentals audit
+        self.step_70_pit_fundamentals_audit()
+        # Bias/PIT gap closure — Multiple-testing correction across signal modules
+        self.step_71_multiple_testing_correction_audit()
+        # Task B3/B4 — Calibration drift detector + signal-weight/regime-config validation
+        self.step_72_bias_drift_weight_validation_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -10529,6 +10535,585 @@ class GravityAIAuditor:
 
         self.report["step_69_prompt_registry_audit"] = audit
 
+    def step_70_pit_fundamentals_audit(self) -> None:
+        """Step 70 — Point-in-time (PIT) fundamentals audit (bias/PIT gap closure).
+
+        The platform's existing lookahead tests only verify PRICE/technical-
+        indicator causality via ``.shift(1)`` perturbation
+        (``tests/test_indicators_lookahead.py``). They say nothing about
+        whether a FUNDAMENTALS value (P/E, EPS, ROE, etc.) used in a
+        historical decision was genuinely public knowledge at that decision
+        date — earnings announcements, dividend ex-dates, and stock splits
+        create real look-ahead risk invisible to price-based checks.
+        ``validation/pit_fundamentals.py`` closes this gap.
+
+        Checks
+        ------
+        1. ``validation.pit_fundamentals`` importable; ``audit_fundamentals_snapshot``,
+           ``audit_from_historical_store``, ``PITAuditResult`` exist.
+        2. A report_date on/before the decision date -> verdict "PASS".
+        3. A report_date AFTER the decision date -> verdict "FAIL" (look-ahead
+           detected) — never silently passed.
+        4. No usable report-date field at all -> verdict "UNVERIFIABLE" (fail
+           closed, never a silent PASS) and ``passed`` is False.
+        5. Dead-letter resilience: an exception during evaluation (e.g. an
+           unparsable decision_date) still returns a well-formed
+           ``PITAuditResult`` rather than raising (CONSTRAINT #6).
+        6. ``data/historical_store.py``'s ``fundamentals_history`` table has
+           an additive ``report_date`` column (schema probe via
+           ``PRAGMA table_info``).
+        7. ``HistoricalStore._upsert_fundamentals`` persists a genuine
+           report_date recovered from the raw provider payload (yfinance
+           ``mostRecentQuarter``/``lastFiscalYearEnd``) — never fabricated
+           when absent (CONSTRAINT #4).
+        8. ``tests/test_pit_fundamentals.py`` exists and covers the PASS/
+           FAIL/UNVERIFIABLE/dead-letter matrix.
+        """
+        import tempfile as _tempfile70
+        from pathlib import Path as _Path70
+        from datetime import date as _date70, datetime as _datetime70, timezone as _timezone70
+
+        audit: dict = {
+            "step": "step_70_pit_fundamentals_audit",
+            "description": "Point-in-time (PIT) fundamentals audit",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        try:
+            from validation import pit_fundamentals as _pf
+
+            # ── Check 1: importable, expected symbols exist ──────────────────
+            c1 = all(
+                hasattr(_pf, name)
+                for name in ("audit_fundamentals_snapshot", "audit_from_historical_store", "PITAuditResult")
+            )
+            audit["checks"].append({
+                "check": "validation.pit_fundamentals importable with expected public API",
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            def _epoch70(d: _date70) -> float:
+                return _datetime70(d.year, d.month, d.day, tzinfo=_timezone70.utc).timestamp()
+
+            # ── Check 2: report_date on/before decision_date -> PASS ─────────
+            r_pass = _pf.audit_fundamentals_snapshot(
+                "AAPL", "2024-02-01", {"mostRecentQuarter": _epoch70(_date70(2024, 1, 1))}
+            )
+            c2 = r_pass.verdict == "PASS" and r_pass.passed is True
+            audit["checks"].append({
+                "check": "report_date on/before decision_date -> PASS",
+                "passed": c2,
+            })
+            all_pass = all_pass and c2
+
+            # ── Check 3: report_date AFTER decision_date -> FAIL ─────────────
+            r_fail = _pf.audit_fundamentals_snapshot(
+                "AAPL", "2024-02-01", {"mostRecentQuarter": _epoch70(_date70(2024, 3, 1))}
+            )
+            c3 = r_fail.verdict == "FAIL" and r_fail.passed is False
+            audit["checks"].append({
+                "check": "report_date AFTER decision_date -> FAIL (look-ahead detected)",
+                "passed": c3,
+            })
+            all_pass = all_pass and c3
+
+            # ── Check 4: no date field at all -> UNVERIFIABLE, fail closed ───
+            r_unverif = _pf.audit_fundamentals_snapshot("AAPL", "2024-02-01", {"trailingPE": 20.0})
+            c4 = r_unverif.verdict == "UNVERIFIABLE" and r_unverif.passed is False
+            audit["checks"].append({
+                "check": "no report-date field -> UNVERIFIABLE, passed=False (fail closed)",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # ── Check 5: dead-letter resilience on malformed input ───────────
+            try:
+                r_bad = _pf.audit_fundamentals_snapshot("AAPL", "not-a-date", {"mostRecentQuarter": 123})
+                c5 = isinstance(r_bad, _pf.PITAuditResult) and r_bad.passed is False and r_bad.error is not None
+            except Exception:
+                c5 = False
+            audit["checks"].append({
+                "check": "malformed decision_date returns degraded PITAuditResult, never raises",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            # ── Check 6: fundamentals_history.report_date column exists ─────
+            from data.historical_store import HistoricalStore
+            with _tempfile70.TemporaryDirectory() as _tmp70:
+                db_path70 = str(_Path70(_tmp70) / "gravity_pit_test.db")
+                store70 = HistoricalStore(db_path=db_path70)
+                import sqlite3 as _sqlite370
+                conn70 = _sqlite370.connect(db_path70)
+                cols70 = {row[1] for row in conn70.execute("PRAGMA table_info(fundamentals_history)").fetchall()}
+                conn70.close()
+                c6 = "report_date" in cols70
+                audit["checks"].append({
+                    "check": "fundamentals_history table has additive report_date column",
+                    "passed": c6,
+                })
+                all_pass = all_pass and c6
+
+                # ── Check 7: upsert persists genuine report_date, never fabricated ──
+                store70._upsert_fundamentals(
+                    "AAPL", {"pe_ratio": 20.0},
+                    {"mostRecentQuarter": _epoch70(_date70(2024, 1, 15))}, source="test",
+                )
+                stored70 = store70._read_fundamentals_report_date("AAPL")
+                store70._upsert_fundamentals("MSFT", {"pe_ratio": 15.0}, {"trailingPE": 15.0}, source="test")
+                stored_none70 = store70._read_fundamentals_report_date("MSFT")
+                c7 = (stored70 == "2024-01-15") and (stored_none70 is None)
+                audit["checks"].append({
+                    "check": "HistoricalStore persists real report_date; never fabricates when absent",
+                    "passed": c7,
+                    "detail": f"AAPL={stored70!r}, MSFT(no-date-field)={stored_none70!r}",
+                })
+                all_pass = all_pass and c7
+
+            # ── Check 8: test file exists ─────────────────────────────────────
+            c8 = _Path70("tests/test_pit_fundamentals.py").exists()
+            audit["checks"].append({
+                "check": "tests/test_pit_fundamentals.py exists",
+                "passed": c8,
+            })
+            all_pass = all_pass and c8
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_70_pit_fundamentals_audit"] = audit
+
+    def step_71_multiple_testing_correction_audit(self) -> None:
+        """Step 71 — Multiple-testing correction across signal modules (bias
+        gap closure).
+
+        ``validation/metrics.py``'s Deflated Sharpe Ratio (DSR) already
+        corrects for n_trials selection bias WITHIN a single strategy's own
+        hyperparameter search, but the platform runs ~17 independently
+        backtested signal modules (see ``signals/registry.py``) with no
+        family-wise (Bonferroni/FDR) correction across the whole family.
+        ``validation/multiple_testing.py`` closes this gap with a Benjamini-
+        Hochberg FDR procedure and a family-corrected DSR.
+
+        Checks
+        ------
+        1. ``validation.multiple_testing`` importable; ``benjamini_hochberg``,
+           ``deflated_sharpe_family``, ``FamilyDSRResult`` exist.
+        2. Benjamini-Hochberg hand-computed worked example
+           (p=[0.001,0.01,0.02,0.04,0.5], alpha=0.05) matches the expected
+           rejection set exactly.
+        3. Empty p-value list -> empty rejection list (no crash).
+        4. A NaN p-value is never rejected (never fabricated significance).
+        5. ``deflated_sharpe_family``'s single-strategy DSR is numerically
+           IDENTICAL to calling ``validation.metrics.deflated_sharpe_ratio``
+           directly with the same n_trials — confirms the math is reused,
+           not reimplemented.
+        6. The family-corrected DSR is <= the single-strategy DSR for the
+           same nominal Sharpe when the family's total trial count exceeds
+           any one strategy's own trial count (the correction is strictly
+           more conservative).
+        7. ``validation.thresholds.FAMILY_WISE_ALPHA`` exists as the single
+           source of truth for the family-wise alpha.
+        8. ``validation.harness.compute_family_multiple_testing_report`` is
+           wired in and dead-letter resilient (missing reports dir ->
+           empty result, never raises).
+        9. ``ValidationReport`` carries a ``family_multiple_testing`` field
+           and ``to_summary_dict()`` includes it.
+        10. ``tests/test_multiple_testing.py`` exists.
+        """
+        import tempfile as _tempfile71
+
+        audit: dict = {
+            "step": "step_71_multiple_testing_correction_audit",
+            "description": "Multiple-testing correction across signal modules",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        try:
+            from validation import multiple_testing as _mt
+
+            # ── Check 1: importable, expected symbols exist ──────────────────
+            c1 = all(
+                hasattr(_mt, name)
+                for name in ("benjamini_hochberg", "deflated_sharpe_family", "FamilyDSRResult")
+            )
+            audit["checks"].append({
+                "check": "validation.multiple_testing importable with expected public API",
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            # ── Check 2: BH hand-computed worked example ─────────────────────
+            pvalues71 = [0.001, 0.01, 0.02, 0.04, 0.5]
+            rejected71 = _mt.benjamini_hochberg(pvalues71, alpha=0.05)
+            c2 = rejected71 == [True, True, True, True, False]
+            audit["checks"].append({
+                "check": "BH worked example p=[0.001,0.01,0.02,0.04,0.5] alpha=0.05 matches hand-computed rejection set",
+                "passed": c2,
+                "detail": f"rejected={rejected71}",
+            })
+            all_pass = all_pass and c2
+
+            # ── Check 3: empty list -> empty result ──────────────────────────
+            c3 = _mt.benjamini_hochberg([], alpha=0.05) == []
+            audit["checks"].append({
+                "check": "empty p-value list -> empty rejection list",
+                "passed": c3,
+            })
+            all_pass = all_pass and c3
+
+            # ── Check 4: NaN p-value never rejected ──────────────────────────
+            rejected_nan71 = _mt.benjamini_hochberg([0.001, float("nan"), 0.02], alpha=0.05)
+            c4 = rejected_nan71[1] is False
+            audit["checks"].append({
+                "check": "NaN p-value is never rejected (no fabricated significance)",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # ── Check 5: single-strategy DSR matches metrics.deflated_sharpe_ratio ──
+            from validation.metrics import deflated_sharpe_ratio as _dsr_fn
+            expected71 = _dsr_fn(
+                sr_observed=1.5, n_trials=10, sr_variance=0.5,
+                skew=0.0, kurtosis=3.0, n_observations=500, freq=252,
+            )
+            fam_results71 = _mt.deflated_sharpe_family(
+                [1.5], [10], sr_variance=0.5, skew=0.0, kurtosis=3.0,
+                n_observations=500, freq=252,
+            )
+            c5 = abs(fam_results71[0].dsr_single_strategy - expected71) < 1e-9
+            audit["checks"].append({
+                "check": "deflated_sharpe_family reuses (not reimplements) validation.metrics.deflated_sharpe_ratio",
+                "passed": c5,
+            })
+            all_pass = all_pass and c5
+
+            # ── Check 6: family correction is stricter with large trial count ──
+            fam_results_big71 = _mt.deflated_sharpe_family(
+                [2.0, 1.8, 1.5], [10, 10, 10],
+                sr_variance=0.5, skew=0.0, kurtosis=3.0, n_observations=1000, freq=252,
+            )
+            c6 = all(r.dsr_family_corrected <= r.dsr_single_strategy + 1e-9 for r in fam_results_big71)
+            audit["checks"].append({
+                "check": "family-corrected DSR <= single-strategy DSR when family trial count is larger",
+                "passed": c6,
+            })
+            all_pass = all_pass and c6
+
+            # ── Check 7: FAMILY_WISE_ALPHA threshold exists ──────────────────
+            from validation import thresholds as _thr71
+            c7 = hasattr(_thr71, "FAMILY_WISE_ALPHA") and isinstance(_thr71.FAMILY_WISE_ALPHA, float)
+            audit["checks"].append({
+                "check": "validation.thresholds.FAMILY_WISE_ALPHA exists",
+                "passed": c7,
+            })
+            all_pass = all_pass and c7
+
+            # ── Check 8: harness aggregator wired in + dead-letter resilient ──
+            from validation import harness as _harness71
+            c8a = hasattr(_harness71, "compute_family_multiple_testing_report")
+            result_missing_dir71 = _harness71.compute_family_multiple_testing_report(
+                reports_dir="__gravity_nonexistent_dir__"
+            )
+            c8b = result_missing_dir71.get("n_strategies") == 0
+            c8 = c8a and c8b
+            audit["checks"].append({
+                "check": "validation.harness.compute_family_multiple_testing_report wired in + dead-letter resilient",
+                "passed": c8,
+            })
+            all_pass = all_pass and c8
+
+            # ── Check 9: ValidationReport carries family_multiple_testing ───
+            import inspect as _inspect71
+            sig71 = _inspect71.signature(_harness71.ValidationReport.__init__)
+            c9a = "family_multiple_testing" in sig71.parameters
+            src71 = _inspect71.getsource(_harness71.ValidationReport.to_summary_dict)
+            c9b = "family_multiple_testing" in src71
+            c9 = c9a and c9b
+            audit["checks"].append({
+                "check": "ValidationReport.__init__ + to_summary_dict carry family_multiple_testing",
+                "passed": c9,
+            })
+            all_pass = all_pass and c9
+
+            # ── Check 10: test file exists ────────────────────────────────────
+            from pathlib import Path as _Path71
+            c10 = _Path71("tests/test_multiple_testing.py").exists()
+            audit["checks"].append({
+                "check": "tests/test_multiple_testing.py exists",
+                "passed": c10,
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_71_multiple_testing_correction_audit"] = audit
+
+    def step_72_bias_drift_weight_validation_audit(self) -> None:
+        """Step 72 — Task B3/B4: calibration-drift detector + signal-weight/
+        regime-config validation audit.
+
+        10 checks:
+
+        1.  ``validation.drift`` importable; ``detect_drift``, ``DriftResult``,
+            ``adapt_recommendation_tracking_rows``,
+            ``check_and_alert_recommendation_drift`` all exist and are callable
+            (DriftResult is a dataclass type, not callable in the same sense —
+            checked separately).
+        2.  A stationary (no-drift) synthetic series does NOT trigger
+            ``drift_detected`` for either ``"cusum"`` or ``"page_hinkley"``.
+        3.  A synthetic series with an injected large mean-shift partway
+            through DOES trigger ``drift_detected`` for both methods.
+        4.  Dead-letter resilience (CONSTRAINT #6): empty and too-short input
+            never raise and return ``drift_detected=False``.
+        5.  ``check_and_alert_recommendation_drift`` dispatches a WARNING via
+            an injected ``send_alert_fn`` when drift is detected, and does NOT
+            call it when no drift is present.
+        6.  ``scripts.preflight_check.check_calibration_drift`` is registered
+            in ``ALL_CHECKS`` and is ALWAYS warning-only (never
+            ``passed=False``) — degrades gracefully with no tracking history.
+        7.  ``signals.aggregator.validate_signal_weight_config`` flags an
+            out-of-bounds weight (negative and absurdly-large) AND a mistyped
+            ``REGIME_SIGNAL_WEIGHTS`` key, while a clean config produces zero
+            violations.
+        8.  ``signals.aggregator.CANONICAL_REGIMES`` matches the authoritative
+            regime set from ``dto_models.MacroEconomicDTO`` / the
+            ``macro_engine.py`` Pandera schema
+            (``{"RISK ON","NEUTRAL","RECESSION","CREDIT EVENT"}``).
+          9. ``SignalAggregator.__init__`` triggers ``validate_signal_weight_config``
+            without raising, even for a maliciously bad weights dict.
+        10. Both new test files exist: ``tests/test_drift.py`` and
+            ``tests/test_signal_weight_validation.py``.
+        """
+        audit: dict = {
+            "step": "step_72_bias_drift_weight_validation_audit",
+            "description": (
+                "Task B3 (CUSUM/Page-Hinkley calibration drift detector) + "
+                "Task B4 (signal-weight & regime-config validation) audit"
+            ),
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        try:
+            # ── Check 1: validation.drift importable; key symbols exist ────
+            import validation.drift as _drift_mod
+            from validation.drift import (
+                detect_drift as _detect_drift,
+                DriftResult as _DriftResult,
+                adapt_recommendation_tracking_rows as _adapt_rows,
+                check_and_alert_recommendation_drift as _check_and_alert,
+            )
+            c1 = (
+                callable(_detect_drift)
+                and callable(_adapt_rows)
+                and callable(_check_and_alert)
+                and isinstance(_DriftResult, type)
+            )
+            audit["checks"].append({
+                "check": (
+                    "validation.drift importable; detect_drift/DriftResult/"
+                    "adapt_recommendation_tracking_rows/"
+                    "check_and_alert_recommendation_drift exist"
+                ),
+                "passed": c1,
+            })
+            all_pass = all_pass and c1
+
+            # ── Check 2: stationary series → no drift, both methods ─────────
+            import numpy as _np
+            _rng = _np.random.default_rng(123)
+            _stationary = list(_rng.normal(0.0, 1.0, 200))
+            _r_cusum_stationary = _detect_drift(_stationary, method="cusum")
+            _r_ph_stationary = _detect_drift(_stationary, method="page_hinkley")
+            c2 = (
+                _r_cusum_stationary.drift_detected is False
+                and _r_ph_stationary.drift_detected is False
+            )
+            audit["checks"].append({
+                "check": "Stationary synthetic series does NOT trigger drift_detected (cusum + page_hinkley)",
+                "passed": c2,
+                "detail": {
+                    "cusum": _r_cusum_stationary.drift_detected,
+                    "page_hinkley": _r_ph_stationary.drift_detected,
+                },
+            })
+            all_pass = all_pass and c2
+
+            # ── Check 3: injected mean-shift → drift detected, both methods ─
+            _shifted = list(_rng.normal(0.0, 1.0, 100)) + list(_rng.normal(6.0, 1.0, 100))
+            _r_cusum_shift = _detect_drift(_shifted, method="cusum")
+            _r_ph_shift = _detect_drift(_shifted, method="page_hinkley")
+            c3 = _r_cusum_shift.drift_detected is True and _r_ph_shift.drift_detected is True
+            audit["checks"].append({
+                "check": "Injected mean-shift series DOES trigger drift_detected (cusum + page_hinkley)",
+                "passed": c3,
+                "detail": {
+                    "cusum_index": _r_cusum_shift.drift_index,
+                    "page_hinkley_index": _r_ph_shift.drift_index,
+                },
+            })
+            all_pass = all_pass and c3
+
+            # ── Check 4: dead-letter resilience — empty/short never raises ──
+            try:
+                _r_empty = _detect_drift([], method="cusum")
+                _r_short = _detect_drift([1.0, 2.0], method="page_hinkley")
+                c4 = _r_empty.drift_detected is False and _r_short.drift_detected is False
+            except Exception:
+                c4 = False
+            audit["checks"].append({
+                "check": "Empty/too-short input never raises; drift_detected=False (CONSTRAINT #6)",
+                "passed": c4,
+            })
+            all_pass = all_pass and c4
+
+            # ── Check 5: alert wiring — WARNING dispatched iff drift found ──
+            _calls_drift = []
+            _rows_drift = (
+                [{"model_return": 0.0, "actual_return": 0.0} for _ in range(50)]
+                + [{"model_return": 0.0, "actual_return": 6.0} for _ in range(50)]
+            )
+            _result_drift = _check_and_alert(
+                _rows_drift, send_alert_fn=lambda *a, **k: _calls_drift.append((a, k))
+            )
+            _calls_no_drift = []
+            _rows_no_drift = [
+                {"model_return": float(x), "actual_return": float(x)}
+                for x in _rng.normal(0.0, 0.01, 50)
+            ]
+            _result_no_drift = _check_and_alert(
+                _rows_no_drift, send_alert_fn=lambda *a, **k: _calls_no_drift.append((a, k))
+            )
+            c5 = (
+                _result_drift.drift_detected is True
+                and len(_calls_drift) == 1
+                and _calls_drift[0][0][0] == "WARNING"
+                and _result_no_drift.drift_detected is False
+                and len(_calls_no_drift) == 0
+            )
+            audit["checks"].append({
+                "check": (
+                    "check_and_alert_recommendation_drift dispatches WARNING iff "
+                    "drift detected; silent otherwise"
+                ),
+                "passed": c5,
+                "detail": {
+                    "drift_alert_calls": len(_calls_drift),
+                    "no_drift_alert_calls": len(_calls_no_drift),
+                },
+            })
+            all_pass = all_pass and c5
+
+            # ── Check 6: preflight check registered + always warning-only ──
+            from scripts.preflight_check import ALL_CHECKS as _ALL_CHECKS, check_calibration_drift as _check_cal_drift
+            _registered = _check_cal_drift in _ALL_CHECKS
+            _cal_result = _check_cal_drift()
+            c6 = _registered and _cal_result.warning is True and _cal_result.passed is True
+            audit["checks"].append({
+                "check": (
+                    "check_calibration_drift registered in ALL_CHECKS and is "
+                    "always warning-only (never blocking)"
+                ),
+                "passed": c6,
+                "detail": {
+                    "registered": _registered,
+                    "warning": _cal_result.warning,
+                    "passed": _cal_result.passed,
+                    "reason": _cal_result.reason,
+                },
+            })
+            all_pass = all_pass and c6
+
+            # ── Check 7: validate_signal_weight_config flags bad config ─────
+            from signals.aggregator import validate_signal_weight_config as _validate_cfg
+            _viol_bad_weight = _validate_cfg(
+                {"bad_neg": -1.0, "bad_huge": 5000.0}, {}, force=True
+            )
+            _viol_bad_regime = _validate_cfg({}, {"RISK-ON": {}}, force=True)
+            _viol_clean = _validate_cfg({"macro_regime": 45.0}, {"RISK ON": {}}, force=True)
+            c7 = (
+                len(_viol_bad_weight) >= 2
+                and len(_viol_bad_regime) >= 1
+                and len(_viol_clean) == 0
+            )
+            audit["checks"].append({
+                "check": (
+                    "validate_signal_weight_config flags out-of-bounds weights AND "
+                    "mistyped regime keys; clean config produces zero violations"
+                ),
+                "passed": c7,
+                "detail": {
+                    "bad_weight_violations": len(_viol_bad_weight),
+                    "bad_regime_violations": len(_viol_bad_regime),
+                    "clean_violations": len(_viol_clean),
+                },
+            })
+            all_pass = all_pass and c7
+
+            # ── Check 8: CANONICAL_REGIMES matches the authoritative set ────
+            from signals.aggregator import CANONICAL_REGIMES as _CANON
+            _expected_regimes = frozenset({"RISK ON", "NEUTRAL", "RECESSION", "CREDIT EVENT"})
+            c8 = _CANON == _expected_regimes
+            audit["checks"].append({
+                "check": "CANONICAL_REGIMES matches dto_models/macro_engine authoritative regime set",
+                "passed": c8,
+                "detail": sorted(_CANON),
+            })
+            all_pass = all_pass and c8
+
+            # ── Check 9: SignalAggregator construction never raises ─────────
+            from signals.aggregator import SignalAggregator as _SigAgg
+            from signals.registry import SignalRegistry as _SigRegistry
+            try:
+                _SigAgg(_SigRegistry(), weights={"malicious": -9999.0})
+                c9 = True
+            except Exception:
+                c9 = False
+            audit["checks"].append({
+                "check": "SignalAggregator construction never raises on a malicious weights dict",
+                "passed": c9,
+            })
+            all_pass = all_pass and c9
+
+            # ── Check 10: both new test files exist ──────────────────────────
+            from pathlib import Path as _Path
+            c10 = (
+                _Path("tests/test_drift.py").exists()
+                and _Path("tests/test_signal_weight_validation.py").exists()
+            )
+            audit["checks"].append({
+                "check": "tests/test_drift.py and tests/test_signal_weight_validation.py exist",
+                "passed": c10,
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_72_bias_drift_weight_validation_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

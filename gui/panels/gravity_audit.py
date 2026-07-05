@@ -166,6 +166,23 @@ def _render_strategy_health() -> None:
 
     strategies = read_gravity_report()
 
+    # Freshness badge (Task C5): the report is only refreshed when the
+    # operator runs the Gravity AI Review Suite below, so its mtime — not a
+    # rolling TTL — is the honest "as of" signal here.
+    try:
+        from gui.styling import freshness_badge
+        _report_path = settings.OUTPUT_DIR / "gravity_verification_report.json"
+        _report_mtime = (
+            datetime.fromtimestamp(_report_path.stat().st_mtime, tz=timezone.utc)
+            if _report_path.exists() else None
+        )
+        st.caption(freshness_badge(
+            _report_mtime, ttl_seconds=settings.DASHBOARD_REFRESH_SECONDS,
+            label="Gravity verification report",
+        ))
+    except Exception as exc:  # noqa: BLE001 — cosmetic only
+        logger.debug("strategy health freshness badge unavailable: %s", exc)
+
     if not strategies:
         st.info(
             "No strategy health data yet. Run the Gravity AI Review Suite below "
@@ -202,11 +219,42 @@ def _render_strategy_health() -> None:
                 gate_rows.append({
                     "Metric": g.metric,
                     "Observed": f"{g.value:.4f}" if g.value is not None else "—",
+                    # Numeric twin of "Observed" used only for Sharpe severity
+                    # coloring (Task C5) — dropped from the displayed frame below.
+                    "_observed_num": g.value if g.metric.lower() == "sharpe" else None,
                     "Threshold": f"{g.threshold}",
                     "Direction": f"must be {g.direction} {g.threshold}",
                     "Gate": f"{icon} {'PASS' if g.passed else ('FAIL' if g.passed is False else 'N/A')}",
                 })
-            st.dataframe(pd.DataFrame(gate_rows), width="stretch", hide_index=True)
+            gate_df = pd.DataFrame(gate_rows)
+            has_sharpe_row = gate_df["_observed_num"].notna().any()
+            gate_df = gate_df.drop(columns=["_observed_num"])
+            if has_sharpe_row:
+                # Recompute the numeric column post-drop so style_severity has
+                # a real column to target — apply coloring directly to the
+                # "Observed" text column via a Sharpe-aware mask instead.
+                try:
+                    from gui.styling import _color_sharpe
+
+                    def _color_observed(row) -> list:
+                        styles = [""] * len(row)
+                        if str(row.get("Metric", "")).lower() == "sharpe":
+                            try:
+                                val = float(str(row["Observed"]))
+                                styles[gate_df.columns.get_loc("Observed")] = _color_sharpe(val)
+                            except (ValueError, TypeError):
+                                pass
+                        return styles
+
+                    st.dataframe(
+                        gate_df.style.apply(_color_observed, axis=1),
+                        width="stretch", hide_index=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 — styling is cosmetic only
+                    logger.debug("Sharpe severity styling unavailable: %s", exc)
+                    st.dataframe(gate_df, width="stretch", hide_index=True)
+            else:
+                st.dataframe(gate_df, width="stretch", hide_index=True)
 
             if health.is_options_selling:
                 stress_label = (
@@ -215,6 +263,159 @@ def _render_strategy_health() -> None:
                     else ("❌ Stress FAILED" if health.stress_passed is False else "— Not run")
                 )
                 st.caption(f"Options-selling strategy — tail-scenario stress gate: {stress_label}")
+
+
+# ===========================================================================
+# Task C6 — Validation & stress trend + regime timeline (Safety tab)
+# ===========================================================================
+
+
+def _render_validation_stress_regime_section() -> None:
+    """Cross-strategy validation snapshot + stress-scenario gate + regime timeline.
+
+    Three sub-sections, each with an honest data-availability caveat rather
+    than a fabricated trend (CONSTRAINT #4):
+
+    1. **Validation snapshot across strategies** — ``reports/*_validation_summary.json``
+       is written ONE FILE PER STRATEGY, overwritten every harness run
+       (``StrategyValidationHarness._write_json_summary``) — there is no
+       historical trend of PBO/DSR/Sharpe/MaxDD across RUNS persisted on
+       disk anywhere in this codebase today. This section shows the current
+       cross-strategy snapshot (still useful — "how does strategy A compare
+       to strategy B right now?") and states the trend limitation plainly
+       instead of inventing multi-run history.
+    2. **Stress-scenario gate** — ``ValidationReport.to_summary_dict()`` only
+       persists the AGGREGATE ``stress_gate_passed`` boolean, not a per-scenario
+       (OCT_2008/FEB_2018/MAR_2020/AUG_2024) breakdown — the per-scenario
+       ``StressResult`` objects live only in-memory during a harness run and
+       are rendered into the (separate, non-JSON) HTML report via Jinja, never
+       serialized to the JSON summary the GUI reads. So this table shows the
+       real STRATEGY-level pass/fail (from disk) with an explicit note that
+       per-scenario granularity is not currently persisted for the GUI to read.
+    3. **Macro regime timeline** — same ``output/history/`` rotated-snapshot
+       source as the Observability dashboard's equity-curve regime overlay.
+    """
+    from validation.stress_scenarios import STRESS_SCENARIOS
+
+    st.markdown("### 📐 Validation & Stress Trend")
+
+    # ── 1. Cross-strategy validation snapshot ────────────────────────────────
+    reports_dir = _REPO_ROOT / "reports"
+    summaries = []
+    if reports_dir.exists():
+        for f in reports_dir.glob("*_validation_summary.json"):
+            try:
+                summaries.append(json.loads(f.read_text(encoding="utf-8")))
+            except Exception as exc:
+                logger.debug("Could not parse %s: %s", f, exc)
+
+    st.markdown("**Current validation snapshot (all strategies)**")
+    if not summaries:
+        st.info(
+            "No `reports/*_validation_summary.json` files found yet. Run "
+            "`python -m validation.harness --strategy <name> --start ... --end ...` "
+            "to generate one."
+        )
+    else:
+        snap_df = pd.DataFrame(summaries)
+        show_cols = [c for c in
+                     ["strategy_id", "deployable", "pbo", "dsr", "sharpe",
+                      "max_drawdown", "is_options_selling", "stress_gate_passed",
+                      "report_date"]
+                     if c in snap_df.columns]
+        st.dataframe(snap_df[show_cols] if show_cols else snap_df,
+                     width="stretch", hide_index=True)
+        st.caption(
+            "⚠️ **No historical trend available.** Each strategy's summary "
+            "file is overwritten on every harness run — this codebase does "
+            "not currently persist a time series of PBO/DSR/Sharpe/MaxDD "
+            "across multiple runs, so only the CURRENT snapshot per strategy "
+            "is shown (not a trend line). A dated/rotated summary history "
+            "would be a reasonable follow-up to `validation/harness.py`."
+        )
+
+    st.divider()
+
+    # ── 2. Stress-scenario gate table ────────────────────────────────────────
+    st.markdown("**Tail-Scenario Stress Gate — options-selling strategies**")
+    st.caption(
+        "Canonical shock windows (`validation/stress_scenarios.STRESS_SCENARIOS`): "
+        + ", ".join(f"`{name}` ({s.start}–{s.end})" for name, s in STRESS_SCENARIOS.items())
+    )
+
+    options_selling = [s for s in summaries if s.get("is_options_selling")]
+    if not options_selling:
+        st.info(
+            "No options-selling strategy summaries found. This table populates "
+            "when a harness run is constructed with `is_options_selling=True`."
+        )
+    else:
+        stress_rows = [
+            {
+                "Strategy": s.get("strategy_id", "?"),
+                "Stress Gate": ("✅ PASSED" if s.get("stress_gate_passed") is True
+                                 else ("❌ FAILED" if s.get("stress_gate_passed") is False
+                                       else "— Not run")),
+                "Deployable": "✅" if s.get("deployable") else "❌",
+            }
+            for s in options_selling
+        ]
+        st.dataframe(pd.DataFrame(stress_rows), width="stretch", hide_index=True)
+        st.caption(
+            "⚠️ **Per-scenario (OCT_2008/FEB_2018/MAR_2020/AUG_2024) breakdown is "
+            "not persisted to the JSON summary** — only this AGGREGATE pass/fail "
+            "is written by `ValidationReport.to_summary_dict()`. The per-scenario "
+            "`StressResult` detail exists only in-memory during a harness run and "
+            "is rendered solely into that run's standalone HTML report. A "
+            "4-scenario × strategy heatmap would require persisting "
+            "`stress_test_results` into the JSON summary — not fabricated here."
+        )
+
+    st.divider()
+
+    # ── 3. Macro regime timeline (reuses output/history/, same as C2) ───────
+    st.markdown("**Macro Regime Timeline**")
+    try:
+        from scripts.snapshot_diff import list_rotated_snapshots, load_snapshot
+
+        rotated_paths = list_rotated_snapshots(settings.OUTPUT_DIR)
+        regime_points = []
+        for p in rotated_paths:
+            snap_hist = load_snapshot(p)
+            if not snap_hist:
+                continue
+            ts_raw = snap_hist.get("timestamp")
+            regime_raw = snap_hist.get("market_regime")
+            if ts_raw and regime_raw:
+                regime_points.append({"timestamp": ts_raw, "market_regime": str(regime_raw)})
+
+        if len(regime_points) >= 2:
+            regime_df = pd.DataFrame(regime_points)
+            regime_df["timestamp"] = pd.to_datetime(regime_df["timestamp"])
+            regime_df = regime_df.sort_values("timestamp")
+            # Only show rows where the regime actually changed from the prior
+            # rotated snapshot — a "transition timeline", not every raw row.
+            regime_df["changed"] = regime_df["market_regime"].ne(regime_df["market_regime"].shift())
+            transitions = regime_df[regime_df["changed"]].drop(columns=["changed"])
+            st.dataframe(
+                transitions.rename(columns={"timestamp": "Timestamp (UTC)",
+                                             "market_regime": "Market Regime"}),
+                width="stretch", hide_index=True,
+            )
+            st.caption(
+                f"{len(regime_points)} rotated snapshot(s) available "
+                f"(retained {settings.SNAPSHOT_HISTORY_DAYS} days); "
+                f"{len(transitions)} regime transition(s) shown."
+            )
+        else:
+            st.info(
+                f"Regime timeline needs ≥ 2 rotated snapshots in "
+                f"`output/history/` — currently {len(regime_points)}. "
+                "This accumulates automatically each time the orchestrator "
+                "or advisory loop runs; not fabricated here."
+            )
+    except Exception as exc:
+        st.caption(f"(regime timeline unavailable: {exc})")
 
 
 # ===========================================================================
@@ -372,6 +573,8 @@ def render_gravity_audit() -> None:
     st.subheader("🛡️ Safety — Circuit Breakers, Dependencies, Gravity Audit")
 
     _render_strategy_health()
+    st.divider()
+    _render_validation_stress_regime_section()
     st.divider()
     _render_circuit_breaker_dashboard()
     st.divider()

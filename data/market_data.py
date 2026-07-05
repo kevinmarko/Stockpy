@@ -448,27 +448,50 @@ class _FundamentalsCache:
     cause another Finnhub round-trip on every cycle within the TTL — this is
     the key behaviour that protects the free tier across back-to-back runs.
 
+    Positive and negative responses use DIFFERENT TTLs. A provider that was
+    rate-limited or briefly unavailable would otherwise incorrectly stay
+    "no data" for the full positive-cache TTL (up to 6 h by default) even
+    after it recovers — so negative (empty-dict) responses get a much
+    shorter TTL (default 15 min, ``settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS``)
+    while positive results keep the longer, slow-moving-data TTL.
+
     The cache is per-process and never written to disk (same constraint as
     ``_QuoteCache``).
     """
 
-    def __init__(self, ttl_seconds: int = 21_600) -> None:
+    def __init__(self, ttl_seconds: int = 21_600, neg_ttl_seconds: Optional[int] = None) -> None:
         self._ttl = max(1, int(ttl_seconds))
-        self._store: Dict[str, tuple[Dict[str, Any], float]] = {}
+        # Negative TTL defaults to settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS
+        # when not explicitly provided, so callers that don't know about the
+        # split (e.g. older test fixtures) still get the shorter recovery
+        # window rather than silently reusing the long positive TTL.
+        if neg_ttl_seconds is None:
+            try:
+                from settings import settings as _settings
+                neg_ttl_seconds = _settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS
+            except Exception:
+                neg_ttl_seconds = 900
+        self._neg_ttl = max(1, int(neg_ttl_seconds))
+        self._store: Dict[str, tuple[Dict[str, Any], float, bool]] = {}
 
     def get(self, symbol: str) -> Optional[Dict[str, Any]]:
         entry = self._store.get(symbol)
         if entry is None:
             return None
-        payload, cached_at = entry
-        if time.monotonic() - cached_at > self._ttl:
+        payload, cached_at, is_negative = entry
+        ttl = self._neg_ttl if is_negative else self._ttl
+        if time.monotonic() - cached_at > ttl:
             del self._store[symbol]
             return None
         # Defensive copy so callers cannot mutate the cached dict.
         return dict(payload)
 
     def put(self, symbol: str, payload: Dict[str, Any]) -> None:
-        self._store[symbol] = (dict(payload), time.monotonic())
+        # A falsy/empty payload is treated as a negative (no-data) response
+        # and gets the shorter negative TTL; any non-empty dict gets the
+        # standard (longer) positive TTL.
+        is_negative = not payload
+        self._store[symbol] = (dict(payload), time.monotonic(), is_negative)
 
     def clear(self) -> None:
         self._store.clear()
@@ -538,6 +561,7 @@ class FinnhubProvider:
         api_key: Optional[str],
         cache_ttl_seconds: Optional[int] = None,
         rate_limit_per_min: Optional[int] = None,
+        neg_cache_ttl_seconds: Optional[int] = None,
     ) -> None:
         self._api_key = api_key
         self._client: Optional[Any] = None
@@ -547,13 +571,19 @@ class FinnhubProvider:
         # Per-process fundamentals cache (positive + negative responses).
         # Defaults can be overridden via env vars to make ad-hoc tuning trivial
         # without touching code (e.g. raise to 24h on a stale-tolerant machine).
+        # Negative (empty-dict) responses use a much shorter TTL so a symbol
+        # that was rate-limited or briefly down recovers quickly instead of
+        # staying "no data" for the full positive TTL.
         ttl = cache_ttl_seconds if cache_ttl_seconds is not None else int(
             os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600")
+        )
+        neg_ttl = neg_cache_ttl_seconds if neg_cache_ttl_seconds is not None else int(
+            os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")
         )
         rpm = rate_limit_per_min if rate_limit_per_min is not None else int(
             os.environ.get("FINNHUB_RATE_LIMIT_PER_MIN", "50")
         )
-        self._cache = _FundamentalsCache(ttl_seconds=ttl)
+        self._cache = _FundamentalsCache(ttl_seconds=ttl, neg_ttl_seconds=neg_ttl)
         self._rate_limiter = _SlidingWindowRateLimiter(
             max_calls=rpm, window_seconds=60.0
         )
@@ -580,7 +610,8 @@ class FinnhubProvider:
         """
         if not hasattr(self, "_cache"):
             self._cache = _FundamentalsCache(
-                ttl_seconds=int(os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600"))
+                ttl_seconds=int(os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600")),
+                neg_ttl_seconds=int(os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")),
             )
         if not hasattr(self, "_rate_limiter"):
             self._rate_limiter = _SlidingWindowRateLimiter(
@@ -803,6 +834,7 @@ class CompositeProvider(MarketDataProvider):
         # protects the yfinance fallback path too.
         self._fundamentals_cache = _FundamentalsCache(
             ttl_seconds=int(os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600")),
+            neg_ttl_seconds=int(os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")),
         )
         self._quote_provider: MarketDataProvider = self._select_quote_provider()
         self._fundamentals_provider: FinnhubProvider = FinnhubProvider(
@@ -897,7 +929,8 @@ class CompositeProvider(MarketDataProvider):
         # Lazy-init for instances constructed via ``__new__`` (test fixtures).
         if not hasattr(self, "_fundamentals_cache"):
             self._fundamentals_cache = _FundamentalsCache(
-                ttl_seconds=int(os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600"))
+                ttl_seconds=int(os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600")),
+                neg_ttl_seconds=int(os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")),
             )
 
         sym = symbol.upper()

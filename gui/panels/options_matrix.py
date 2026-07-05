@@ -28,6 +28,7 @@ from gui.panels._shared import (  # noqa: E402
     logger,
 )
 from gui.panels import load_state_snapshot
+from gui.help_content import metric_help
 
 
 def render_options_matrix() -> None:
@@ -140,6 +141,20 @@ def render_options_matrix() -> None:
         st.info("No rows computed.")
         return
 
+    # Freshness badge (Task C5): quotes/bars used for this matrix are only as
+    # fresh as "just now" (the button click that triggered this compute), but
+    # each row's own quote can still be stale per-symbol (see Stale column) —
+    # this top-level badge is about the ON-DEMAND compute time, not per-quote
+    # staleness, which is separately called out via each row's Stale flag.
+    try:
+        from gui.styling import freshness_badge
+        st.caption(freshness_badge(
+            datetime.now(timezone.utc), ttl_seconds=settings.MARKET_DATA_QUOTE_TTL_SECONDS,
+            label="Matrix computed",
+        ))
+    except Exception as exc:  # noqa: BLE001 — cosmetic only
+        logger.debug("options matrix freshness badge unavailable: %s", exc)
+
     # Stable column order matching config.COLUMN_SCHEMA naming conventions where
     # they overlap. NaN columns are tolerated by Streamlit's dataframe widget.
     column_order = [
@@ -186,6 +201,114 @@ def render_options_matrix() -> None:
         "Aroon+Coppock sign agreement. **Stale=True** marks delayed (~15 min) yfinance "
         "quotes. Realizable Theta applies a DTE-scaled execution-friction haircut "
         "(40% @ 1DTE, 22% @ 7DTE, 12% @ 30DTE, 5% baseline)."
+    )
+
+    _render_portfolio_greeks_rollup(df)
+
+
+# ===========================================================================
+# Task C4 — Portfolio Greeks aggregate + theta-decay carry projection
+# ===========================================================================
+
+
+def _render_portfolio_greeks_rollup(df: pd.DataFrame) -> None:
+    """Aggregate ATM Greeks across held positions + a 30-day theta carry projection.
+
+    Weighting caveat (documented rather than fabricated)
+    -----------------------------------------------------
+    ``build_premium_directive`` returns PER-CONTRACT (or per-100-shares, ATM
+    convention) Greeks — it has no visibility into how many contracts/lots an
+    operator would actually trade per symbol. Robinhood share quantities (from
+    ``cache/account_snapshot.json``) tell us which symbols are HELD, but equity
+    share count is not a 1:1 proxy for options contract count (a covered call
+    is 1 contract per 100 shares; a spread strategy's sizing is a distinct
+    decision). Rather than fabricate a weighted number from an assumption we
+    cannot verify, this rollup:
+
+    1. Filters to symbols currently HELD (per the Robinhood account snapshot)
+       AND that have a non-"Cash/Wait" directive (an actual actionable
+       strategy) among the rows just computed.
+    2. Sums the RAW per-symbol ATM Greeks across that filtered set and labels
+       the result explicitly as an unweighted sum — never implying a
+       position-sized portfolio Greek.
+    """
+    st.markdown("---")
+    st.markdown("### 🧮 Portfolio Greeks Roll-Up (Held Positions)")
+
+    greek_cols = ["ATM_Delta", "ATM_Gamma", "ATM_Vega", "ATM_Theta_Daily"]
+    missing = [c for c in greek_cols if c not in df.columns]
+    if missing:
+        st.caption(f"Greeks columns not present in this run's directive output: {missing}")
+        return
+
+    held_syms = set(_held_symbols())
+    if not held_syms:
+        st.info(
+            "No Robinhood holdings found in `cache/account_snapshot.json` — "
+            "the roll-up only aggregates HELD positions (not the full "
+            "watchlist) since summing Greeks across symbols you don't hold "
+            "would misrepresent actual portfolio exposure. Run "
+            "`python3 main.py --refresh-account` to populate holdings."
+        )
+        return
+
+    held_df = df[df["Symbol"].astype(str).str.upper().isin(held_syms)].copy()
+    if "Strategy" in held_df.columns:
+        held_df = held_df[~held_df["Strategy"].astype(str).str.contains("Cash", case=False, na=False)]
+
+    for c in greek_cols:
+        held_df[c] = pd.to_numeric(held_df[c], errors="coerce")
+
+    actionable = held_df.dropna(subset=greek_cols)
+    if actionable.empty:
+        st.info(
+            "No held symbol currently has an actionable (non-Cash/Wait) "
+            "options directive with computable Greeks — nothing to aggregate "
+            "this cycle."
+        )
+        return
+
+    total_delta = float(actionable["ATM_Delta"].sum())
+    total_gamma = float(actionable["ATM_Gamma"].sum())
+    total_vega = float(actionable["ATM_Vega"].sum())
+    total_theta = float(actionable["ATM_Theta_Daily"].sum())
+
+    st.caption(
+        f"**Unweighted sum** of raw per-contract ATM Greeks across "
+        f"{len(actionable)} held symbol(s) with an actionable directive "
+        f"(no position-size/contract-count weighting — see caption above for why)."
+    )
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("Σ Delta", f"{total_delta:.3f}",
+              help=metric_help("Portfolio Delta") or "Sum of per-symbol ATM delta.")
+    g2.metric("Σ Gamma", f"{total_gamma:.4f}",
+              help=metric_help("Portfolio Gamma") or "Sum of per-symbol ATM gamma.")
+    g3.metric("Σ Vega", f"{total_vega:.3f}",
+              help=metric_help("Portfolio Vega") or "Sum of per-symbol ATM vega.")
+    g4.metric("Σ Theta / day", f"{total_theta:.3f}",
+              help=metric_help("Portfolio Theta") or "Sum of per-symbol ATM daily theta.")
+
+    # ── 30-day theta-decay carry projection ("if nothing moves") ─────────────
+    st.markdown("**30-Day Theta Carry Projection**")
+    carry_30d = total_theta * 30.0
+    st.metric(
+        "Cumulative Theta × 30 days",
+        f"{carry_30d:.2f}",
+        help=metric_help("Theta Carry Projection")
+        or "Cumulative theta decay if held 30 days with no price/vol movement.",
+    )
+    st.caption(
+        "⚠️ **This is NOT a forecast.** It is a mechanical projection of "
+        "today's theta held flat for 30 days, assuming zero price movement, "
+        "zero IV change, and no gamma/vega repricing — none of which is "
+        "realistic over a full month. Treat it only as a rough 'time decay "
+        "floor' reference, not an expected P&L."
+    )
+
+    st.dataframe(
+        actionable[["Symbol", "Strategy"] + greek_cols],
+        width="stretch",
+        hide_index=True,
     )
 
 

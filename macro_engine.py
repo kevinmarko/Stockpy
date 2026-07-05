@@ -68,10 +68,23 @@ class MacroEngine:
         self.data_engine = data_engine
         # Persists across calls within this MacroEngine instance's lifetime so the
         # retrain_freq_days gate (HMMRegimeDetector.fit) is meaningful for a
-        # long-lived process. main_orchestrator.py constructs a fresh MacroEngine
-        # per run, so in that batch context this effectively refits every run --
-        # expected for a one-shot script, not a bug (see regime/hmm_regime.py).
-        self._hmm_detector = HMMRegimeDetector(n_states=3, retrain_freq_days=7)
+        # long-lived process. Callers that loop within a single process
+        # (main.py's --interval mode / agent loop) MUST reuse ONE MacroEngine
+        # instance across cycles -- see main.py's module-level
+        # `_get_macro_engine()` singleton -- otherwise a fresh, never-fitted
+        # HMMRegimeDetector is constructed every cycle and the retrain gate is
+        # meaningless. main_orchestrator.py constructs a fresh MacroEngine per
+        # process invocation (one _main_body() call per launch, no internal
+        # loop), so that context always "refits" once per launch -- expected
+        # for a one-shot script, not a bug (see regime/hmm_regime.py).
+        # n_states / retrain_freq_days are operator-tunable via settings so
+        # this is not a hardcoded literal (see settings.HMM_N_STATES /
+        # settings.HMM_RETRAIN_FREQ_DAYS).
+        from settings import settings as _settings
+        self._hmm_detector = HMMRegimeDetector(
+            n_states=_settings.HMM_N_STATES,
+            retrain_freq_days=_settings.HMM_RETRAIN_FREQ_DAYS,
+        )
 
     # Minimum rows required for a numerically stable 3-state Gaussian HMM fit.
     HMM_MIN_FIT_ROWS = 100

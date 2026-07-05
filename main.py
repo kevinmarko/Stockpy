@@ -127,6 +127,52 @@ TAB_NAME_OUTPUT = "FidelityData_Automated"
 
 
 # ---------------------------------------------------------------------------
+# Per-process MacroEngine reuse (Task A4)
+# ---------------------------------------------------------------------------
+# _build_macro_dto() is called once per run_once() cycle. In --interval / agent
+# loop mode, run_once() is called repeatedly WITHIN THE SAME PROCESS. The
+# regime/hmm_regime.py HMMRegimeDetector.fit() gate (retrain_freq_days) is only
+# meaningful if the SAME detector instance persists across those cycles --
+# constructing a fresh MacroEngine (and therefore a fresh, never-fitted
+# HMMRegimeDetector) every cycle makes the gate a no-op and forces a full
+# EM refit every single cycle. This module-level cache keeps one MacroEngine
+# (and its DataEngine) alive for the lifetime of the process, keyed by the
+# FRED API key so a mid-process key rotation still gets a correctly-scoped
+# engine instead of silently reusing one built for a stale key.
+_MACRO_ENGINE_CACHE: Dict[str, Any] = {}
+
+
+def _get_macro_engine(fred_key: str):
+    """Return a process-lifetime MacroEngine for ``fred_key``, constructing it
+    once and reusing it on subsequent calls so the HMMRegimeDetector's
+    retrain_freq_days gate is honored across --interval / agent-loop cycles.
+
+    A distinct cache entry per fred_key means rotating the key mid-process
+    (rare, but handled) gets a fresh engine/detector rather than silently
+    reusing one fit against the old key's data.
+    """
+    cached = _MACRO_ENGINE_CACHE.get(fred_key)
+    if cached is not None:
+        return cached
+
+    from data_engine import DataEngine
+    from macro_engine import MacroEngine
+
+    de = DataEngine(fred_key)
+    me = MacroEngine(data_engine=de)
+    _MACRO_ENGINE_CACHE.clear()  # only one key's engine needs to live at a time
+    _MACRO_ENGINE_CACHE[fred_key] = me
+    return me
+
+
+def _reset_macro_engine_cache() -> None:
+    """Test-only helper: clears the process-lifetime MacroEngine cache so each
+    test gets a fresh engine/detector instead of bleeding HMM fit state across
+    tests."""
+    _MACRO_ENGINE_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
 # RunResult — immutable container for one full pipeline cycle
 # ---------------------------------------------------------------------------
 
@@ -261,13 +307,15 @@ def _build_macro_dto() -> MacroEconomicDTO:
         )
 
     try:
-        from data_engine import DataEngine
-        from macro_engine import MacroEngine
-
-        de = DataEngine(fred_key)
+        # Reuse ONE MacroEngine (and therefore one HMMRegimeDetector) across
+        # every run_once() cycle within this process -- see _get_macro_engine()
+        # docstring / Task A4. This makes the HMM's retrain_freq_days gate
+        # meaningful in --interval / agent-loop mode instead of forcing a full
+        # refit every single cycle.
+        me = _get_macro_engine(fred_key)
+        de = me.data_engine
         macro_raw = de.fetch_macro_raw()
 
-        me = MacroEngine(data_engine=de)
         spy_df: Optional[pd.DataFrame] = None
         try:
             spy_raw = de.fetch_technical_raw(["SPY"])
@@ -789,6 +837,17 @@ def _write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDT
                 "score": float(ki.get("score", 0.0) or 0.0),
                 "price": float(getattr(pos, "current_price", 0.0) or 0.0) if pos else 0.0,
                 "shares": shares,
+                # GUI Strategy Matrix decomposition (additive; consumed by
+                # gui/panels/strategy_matrix.py). Scalars sourced from
+                # engine.advisory.Recommendation.key_indicators;
+                # score_components is the one non-scalar field, carried
+                # separately on the Recommendation dataclass (None when the
+                # strategy engine failed this cycle — never fabricated).
+                "meta_label_composite": float(ki.get("meta_label_composite", 1.0) or 1.0),
+                "regime_multiplier": float(ki.get("regime_multiplier", 1.0) or 1.0),
+                "kelly_target_pre_regime": ki.get("kelly_target_pre_regime", float("nan")),
+                "kelly_target_post_regime": ki.get("kelly_target_post_regime", float("nan")),
+                "score_components": rec.score_components or {},
             })
 
         regime = "UNKNOWN"

@@ -95,7 +95,7 @@ def _load_state_snapshot_cached(path: str, _mtime: float) -> dict:
 from .launcher import (render_launcher, _render_launcher_safety_controls, _render_preflight_panel, _render_dead_letter_queue, _render_report_provenance_banner)
 from .report_viewer import (default_brinson_fachler_frame, parse_pasted_sector_matrix, build_brinson_fachler_inputs, compute_brinson_fachler, validate_brinson_fachler_weights, _render_llm_commentary_button, _render_decision_journal_section, _render_correlation_cluster_section, _render_recommendation_tracking_section, _render_calibration_section, _render_brinson_fachler_section, render_report_viewer)
 from .settings_manager import (_current_scalar, render_settings_manager)
-from .strategy_matrix import (_render_strategy_mode_toggle, _render_strategy_version_registry, render_strategy_matrix)
+from .strategy_matrix import (_render_strategy_mode_toggle, _render_strategy_version_registry, _render_score_decomposition, _render_meta_label_distribution, _render_regime_multiplier_impact, _render_symbol_comparison, render_strategy_matrix)
 from .paper_monitor import (render_paper_monitor)
 from .gravity_audit import (_render_circuit_breaker_dashboard, _render_dependency_map, _render_strategy_health, _render_gravity_ai_runner_section, render_gravity_audit, _parse_trailing_json)
 from .options_matrix import (render_options_matrix)
