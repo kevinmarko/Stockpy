@@ -6,6 +6,13 @@ below have been implemented and merged to `main`; see the "Tier 9 Scope 4" secti
 for the live, maintained description of the shipped feature. This spec is no longer an open task —
 treat any "not yet built" language below as describing the pre-implementation state only.
 
+> **Addendum (2026-07-05, commit `8513e6f`):** the routing design below (§4 STEP 4, §7a
+> settings) originally shipped OpenAI-only. Opal now also runs on Gemini —
+> `OPAL_RESEARCH_PROVIDER` accepts `"openai"` or `"gemini"` and routes to the matching API
+> key (`OPENAI_API_KEY` / `GEMINI_API_KEY`). See `docs/FEATURE_TIER_HISTORY.md` for the
+> accurate current provider-routing description; treat `OPAL_RESEARCH_PROVIDER: str = "openai"`
+> below as the original (now superseded) fixed default, not the live default behavior.
+
 ---
 
 ## 1. Context

@@ -25,12 +25,17 @@ flowchart TD
         DE["DataEngine / IDataProvider\ndata_engine.py\ndata/market_data.py"]
         HS["HistoricalStore\ndata/historical_store.py\n(SQLite WAL — bars, snapshots,\nfundamentals, macro series)"]
         RHP["robinhood_portfolio.py\nRead-only account snapshot\n(3-tier: DB → JSON cache → live)"]
+        PS["portfolio_sync.py\nTask 1.4 — holdings ∪ RH watchlists ∪\nfile watchlists, CoverageStatus"]
+        RHO["robinhood_orders.py\nTier 7 — FIFO realized P&L\n(ADVISORY ONLY, no order code)"]
     end
 
     YF & ALP & FHB --> DE
     FRED --> DE
     DE --> HS
     RH --> RHP
+    RH --> PS
+    DE --> PS
+    RH --> RHO
 
     %% ── DTOs ──────────────────────────────────────────────────────────────
     subgraph DTOS["Data Transfer Objects  (dto_models.py)"]
@@ -80,9 +85,10 @@ flowchart TD
         SM14["rsi2_mean_reversion\nw=10"]
         SM15["news_catalyst\nw=10"]
         SM16["regime_multiplier\nw=0\n(Kelly scalar only)"]
+        SM17["lgbm_ranker\nw=0.10\n(dormant until trained)"]
     end
 
-    PE --> SM1 & SM2 & SM3 & SM4 & SM5 & SM6 & SM7 & SM8 & SM9 & SM10 & SM11 & SM12 & SM13 & SM14 & SM15 & SM16
+    PE --> SM1 & SM2 & SM3 & SM4 & SM5 & SM6 & SM7 & SM8 & SM9 & SM10 & SM11 & SM12 & SM13 & SM14 & SM15 & SM16 & SM17
     MEDTO --> SM1 & SM14 & SM16
     FE --> SM11
     TOE --> SM2
@@ -93,7 +99,7 @@ flowchart TD
         MLR["MetaLabelerRegistry\nml/meta_labeling.py\nP(primary_signal_correct)\n— 1.0 until Stage 4 trains"]
     end
 
-    SM1 & SM2 & SM3 & SM4 & SM5 & SM6 & SM7 & SM8 & SM9 & SM10 & SM11 & SM12 & SM13 & SM14 & SM15 & SM16 --> SA
+    SM1 & SM2 & SM3 & SM4 & SM5 & SM6 & SM7 & SM8 & SM9 & SM10 & SM11 & SM12 & SM13 & SM14 & SM15 & SM16 & SM17 --> SA
     MLR --> SA
 
     %% ── Strategy Engine ───────────────────────────────────────────────────
@@ -160,7 +166,19 @@ flowchart TD
     OM -.-> RG -.-> BB
     KSW -.-> OM
 
+    %% ── Robinhood Execution Bridge (Tier 8, independent of ADVISORY_ONLY) ──
+    subgraph RHBRIDGE["Robinhood Execution Bridge\n(ROBINHOOD_EXECUTION_MODE, default off)"]
+        QB["execution/queue_builder.py\nGated dry-run proposed-order queue\noutput/execution_queue.json"]
+        RHMCP["Claude Code agent\n+ Robinhood Trading MCP\n(review_equity_order → place, human-confirmed)"]
+    end
+
+    REC -.->|"mode != off"| QB
+    RG -.-> QB
+    KSW -.-> QB
+    QB -.->|"mode == live, notional cap set"| RHMCP
+
     style BROKER fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+    style RHBRIDGE fill:#fef9c3,stroke:#ca8a04
     style SOURCES fill:#f0fdf4,stroke:#22c55e
     style DTOS fill:#eff6ff,stroke:#3b82f6
     style ENGINES fill:#fdf4ff,stroke:#a855f7
@@ -191,11 +209,13 @@ flowchart TD
 
 ## Module Ownership
 
-| Domain | Owner | Files |
-|--------|-------|-------|
-| Signal modules, strategy sizing, ML, regime, validation | **Claude Code** | `signals/`, `strategy_engine.py`, `sizing/`, `ml/`, `regime/`, `macro_engine.py`, `validation/`, `execution/`, `tests/` |
-| GUI, observability, reporting, scripts | **Antigravity IDE** | `gui/`, `observability/`, `reporting_engine.py`, `diagnostics_and_visuals.py`, `scripts/` |
-| Config, DTOs, data layer, orchestrators, requirements | **Shared** | `config.py`, `dto_models.py`, `data/`, `data_engine.py`, `main.py`, `main_orchestrator.py`, `requirements.txt` |
+Claude Code owns the entire repo — single-agent workflow, no domain split.
+
+| Domain | Files |
+|--------|-------|
+| Signal modules, strategy sizing, ML, regime, validation | `signals/`, `strategy_engine.py`, `sizing/`, `ml/`, `regime/`, `macro_engine.py`, `validation/`, `execution/`, `tests/` |
+| GUI, observability, reporting, scripts | `gui/`, `observability/`, `reporting_engine.py`, `diagnostics_and_visuals.py`, `scripts/` |
+| Config, DTOs, data layer, orchestrators, requirements | `config.py`, `dto_models.py`, `data/`, `data_engine.py`, `main.py`, `main_orchestrator.py`, `requirements.txt` |
 
 ---
 
@@ -206,8 +226,8 @@ flowchart TD
 | `python3 main.py` | Advisory refresh — fastest, broker-free | Calls `engine/advisory.py` directly; writes `output/daily_report.html` + `output/state_snapshot.json` |
 | `python3 main_orchestrator.py` | Full async pipeline with schema validation | Runs all 50+ dashboard columns through Pandera; writes `output/daily_report_dashboard.html` |
 | `streamlit run gui/app.py` | Visual control panel | Launches orchestrator as subprocess; reads file-backed state; never calls broker directly |
-| `python scripts/preflight_check.py` | Readiness gate | 13 checks; advisory-mode auto-skips 4 broker checks |
+| `python scripts/preflight_check.py` | Readiness gate | 17 checks; advisory-mode auto-skips 8 broker/false-positive checks |
 
 ---
 
-*Last updated: 2026-06-26. Reflects Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default.*
+*Last updated: 2026-07-05. Reflects the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default.*

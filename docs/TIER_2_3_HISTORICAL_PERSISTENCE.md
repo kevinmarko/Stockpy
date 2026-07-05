@@ -1,6 +1,13 @@
 # Tier 2.3 — Historical Persistence & Incremental Fetch
 
-**Status:** scoped, not started
+**Status: SHIPPED — all three phases complete.** This document is retained as the
+historical work order / design record. `data/historical_store.py` implements Phase 1
+(`price_bars`, wired into `main.py`/`main_orchestrator.py`), Phase 2
+(`account_snapshots`/`account_positions`, three-tier DB → JSON cache → live read order
+in `data/robinhood_portfolio.py`), and Phase 3 (`fundamentals_history` + `macro_history`,
+wired into `processing_engine.py` and `macro_engine.py`). See the `data/historical_store.py`
+bullet in `CLAUDE.md` for the live, maintained description. Treat any "Phase N — not
+started" / "agent prompt" language below as describing the pre-implementation state only.
 **Branch convention:** `agent/claude-code/tier-2-3-historical-persistence-phase-N`
 **Storage backend:** raw `sqlite3` in `quant_platform.db` (matches `forecasting/forecast_tracker.py`; not SQLAlchemy ORM)
 

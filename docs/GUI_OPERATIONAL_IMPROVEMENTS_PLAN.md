@@ -1,11 +1,19 @@
 # GUI Operational Efficiency, UX & Architectural Integration — Implementation Plan
 
-**Status:** Planning doc, ready for an implementing agent to pick up.
+**Status: SHIPPED.** This document is retained as the historical work order / design
+record. All four deliverables below have been implemented and merged to `main`:
+`gui/preflight_runner.py`, `gui/run_mode.py`, `gui/symbol_search.py`,
+`gui/strategy_health.py` all exist, `StageStatus` lives in `gui/orchestrator_runner.py`,
+and Gravity steps `step_47_launcher_safety_bundle_audit` through
+`step_50_strategy_health_audit` all run in CI (87 tests added). See the "GUI Operational
+Improvements (2026-06)" entry in `docs/FEATURE_TIER_HISTORY.md` for the live, maintained
+description. Treat any "to be created" / "AGENT HANDOFF NOTES" language below as
+describing the pre-implementation state only.
 **Authored:** 2026-06-26
-**Owner (current):** Claude Code session — handoff to next agent via the AGENT HANDOFF NOTES block at the bottom.
 
 This plan covers four operator-facing improvements to the InvestYo Command Center GUI
-(`gui/app.py` + `gui/panels.py`), plus the small architectural refactors they require.
+(`gui/app.py` + the `gui/panels/` package, split from a single `gui/panels.py` after this
+plan was authored), plus the small architectural refactors they require.
 Each section is independently mergeable; the recommended landing order is in
 [§8 Sequencing](#8-sequencing-for-the-implementing-agent).
 
