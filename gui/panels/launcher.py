@@ -439,9 +439,12 @@ def _render_robinhood_execution_status() -> None:
         EXECUTION_QUEUE_PATH,
         is_queue_stale,
         mfa_secret_configured,
+        notification_age_seconds,
+        ntfy_topic_configured,
         queue_age_seconds,
         read_execution_queue,
         read_execution_receipts,
+        read_notification_state,
     )
     from gui.robinhood_mode import read_robinhood_execution_mode
     from gui.help_content import SECTION_HELP
@@ -475,6 +478,24 @@ def _render_robinhood_execution_status() -> None:
             "to an interactive MFA prompt in the terminal. Set `RH_MFA_SECRET` in "
             "`.env` (Base32 TOTP secret) to avoid this."
         )
+
+    if not ntfy_topic_configured():
+        st.caption(
+            "🔕 Push notifications are off — set `NTFY_TOPIC` in `.env` to get an "
+            "ntfy.sh push when the queue gains a new or newly-placeable intent."
+        )
+    else:
+        notif_state = read_notification_state()
+        if notif_state is None:
+            st.caption("🔔 Push notifications are on — none sent yet.")
+        else:
+            notif_age_s = notification_age_seconds(notif_state)
+            notif_age_label = f"{notif_age_s / 60:.0f} min ago" if notif_age_s == notif_age_s else "unknown age"
+            priority_tag = "🔴 high priority" if notif_state.last_notified_priority == "high" else "🔵 default priority"
+            st.caption(
+                f"🔔 Last notification: **{notif_age_label}** — "
+                f"{notif_state.last_notified_count} new intent(s), {priority_tag}."
+            )
 
     snapshot = read_execution_queue()
     if snapshot is None:

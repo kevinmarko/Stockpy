@@ -22,7 +22,11 @@ Public API
 :func:`queue_age_seconds`        — age of the snapshot relative to ``now``.
 :func:`is_queue_stale`           — mirrors the skill's ~30-minute staleness rule.
 :func:`mfa_secret_configured`    — whether ``RH_MFA_SECRET`` is set (boolean only — never the value).
-:data:`EXECUTION_QUEUE_PATH`, :data:`EXECUTION_RECEIPTS_PATH` — canonical file paths.
+:class:`NotificationState`      — the last ntfy push `execution/queue_builder.py` attempted (frozen).
+:func:`read_notification_state`  — parse ``output/execution_queue_notified.json`` → state or ``None``.
+:func:`notification_age_seconds` — age of a `NotificationState` relative to ``now``.
+:func:`ntfy_topic_configured`    — whether ``NTFY_TOPIC`` is set (boolean only — never the value).
+:data:`EXECUTION_QUEUE_PATH`, :data:`EXECUTION_RECEIPTS_PATH`, :data:`NOTIFIED_STATE_PATH` — canonical file paths.
 
 Constraints honoured
 ---------------------
@@ -53,6 +57,7 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 EXECUTION_QUEUE_PATH: Path = _REPO_ROOT / "output" / "execution_queue.json"
 EXECUTION_RECEIPTS_PATH: Path = _REPO_ROOT / "output" / "execution_receipts.jsonl"
+NOTIFIED_STATE_PATH: Path = _REPO_ROOT / "output" / "execution_queue_notified.json"
 
 # Mirrors the staleness threshold documented in
 # .claude/skills/robinhood-execution/SKILL.md ("more than ~30 minutes old").
@@ -202,6 +207,81 @@ def is_queue_stale(snapshot: ExecutionQueueSnapshot, *, now: Optional[datetime] 
     """
     age = queue_age_seconds(snapshot, now=now)
     return True if age != age else age > STALE_QUEUE_SECONDS  # NaN check
+
+
+@dataclass(frozen=True)
+class NotificationState:
+    """Last ntfy push `execution/queue_builder.py` attempted (or none yet).
+
+    Mirrors ``output/execution_queue_notified.json`` verbatim; see
+    `execution.queue_builder._notify_new_intents` for how it's written.
+    """
+
+    last_notified_at: str
+    last_notified_title: str
+    last_notified_count: int
+    last_notified_priority: str
+
+
+def read_notification_state(path: Optional[Path] = None) -> Optional[NotificationState]:
+    """Parse the notify-dedup sidecar into the last-push state, or ``None``.
+
+    Returns ``None`` when the file is missing, corrupt, or no push has been
+    attempted yet (e.g. the queue has existed since before any intent cleared
+    the dedup check) — never raises (CONSTRAINT #6), never fabricates a push
+    that didn't happen (CONSTRAINT #4).
+    """
+    target = path or NOTIFIED_STATE_PATH
+    try:
+        if not target.exists():
+            return None
+        raw_text = target.read_text(encoding="utf-8").strip()
+        if not raw_text:
+            return None
+        payload = json.loads(raw_text)
+        if not isinstance(payload, dict):
+            return None
+        last_at = payload.get("last_notified_at")
+        if not last_at:
+            return None  # sidecar exists (dedup keys only) but nothing sent yet
+        return NotificationState(
+            last_notified_at=str(last_at),
+            last_notified_title=str(payload.get("last_notified_title") or ""),
+            last_notified_count=int(payload.get("last_notified_count") or 0),
+            last_notified_priority=str(payload.get("last_notified_priority") or "default"),
+        )
+    except Exception:
+        logger.debug("read_notification_state: failed to parse %s", target, exc_info=True)
+        return None
+
+
+def notification_age_seconds(state: NotificationState, *, now: Optional[datetime] = None) -> float:
+    """Seconds elapsed since ``state.last_notified_at``; ``NaN`` if unparsable (CONSTRAINT #4)."""
+    try:
+        sent = datetime.fromisoformat(state.last_notified_at)
+        if sent.tzinfo is None:
+            sent = sent.replace(tzinfo=timezone.utc)
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        return max(0.0, (current - sent).total_seconds())
+    except Exception:
+        return float("nan")
+
+
+def ntfy_topic_configured() -> bool:
+    """Whether ``NTFY_TOPIC`` is set to a non-empty value.
+
+    Returns a boolean only — mirrors `alerting.notify`'s own env read
+    (``NTFY_TOPIC`` is a plain ``os.environ`` var, not a pydantic Settings
+    field, and is classified as a GUI secret in `gui/env_io.py`, so its
+    cleartext must never be captured here — CONSTRAINT #3).
+    """
+    try:
+        import os  # noqa: PLC0415
+        return bool(os.environ.get("NTFY_TOPIC", "").strip())
+    except Exception:
+        return False
 
 
 def mfa_secret_configured(settings_obj: Any = None) -> bool:

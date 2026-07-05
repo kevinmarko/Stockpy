@@ -20,14 +20,19 @@ import pytest
 from gui.robinhood_execution_panel import (
     EXECUTION_QUEUE_PATH,
     EXECUTION_RECEIPTS_PATH,
+    NOTIFIED_STATE_PATH,
     ExecutionQueueSnapshot,
+    NotificationState,
     QueuedIntent,
     STALE_QUEUE_SECONDS,
     is_queue_stale,
     mfa_secret_configured,
+    notification_age_seconds,
+    ntfy_topic_configured,
     queue_age_seconds,
     read_execution_queue,
     read_execution_receipts,
+    read_notification_state,
 )
 
 
@@ -301,6 +306,105 @@ class TestMfaSecretConfigured:
                 raise RuntimeError("boom")
 
         assert mfa_secret_configured(Boom()) is False
+
+
+# ---------------------------------------------------------------------------
+# read_notification_state / notification_age_seconds / ntfy_topic_configured
+# ---------------------------------------------------------------------------
+
+class TestReadNotificationState:
+    def test_missing_file_returns_none(self, tmp_path):
+        assert read_notification_state(tmp_path / "nope.json") is None
+
+    def test_empty_file_returns_none(self, tmp_path):
+        p = tmp_path / "execution_queue_notified.json"
+        p.write_text("", encoding="utf-8")
+        assert read_notification_state(p) is None
+
+    def test_corrupt_json_returns_none(self, tmp_path):
+        p = tmp_path / "execution_queue_notified.json"
+        p.write_text("{not json", encoding="utf-8")
+        assert read_notification_state(p) is None
+
+    def test_non_object_json_returns_none(self, tmp_path):
+        p = tmp_path / "execution_queue_notified.json"
+        p.write_text("[1, 2, 3]", encoding="utf-8")
+        assert read_notification_state(p) is None
+
+    def test_dedup_only_sidecar_with_no_push_yet_returns_none(self, tmp_path):
+        # keys recorded but no notification ever attempted (e.g. the queue has
+        # only ever contained intents the operator was already told about).
+        p = tmp_path / "execution_queue_notified.json"
+        p.write_text(json.dumps({"keys": ["AAPL:buy:False"]}), encoding="utf-8")
+        assert read_notification_state(p) is None
+
+    def test_valid_state_round_trips(self, tmp_path):
+        p = tmp_path / "execution_queue_notified.json"
+        p.write_text(
+            json.dumps({
+                "keys": ["AAPL:buy:True"],
+                "last_notified_at": "2026-07-05T12:00:00+00:00",
+                "last_notified_title": "InvestYo — Trades Ready to Place",
+                "last_notified_count": 2,
+                "last_notified_priority": "high",
+            }),
+            encoding="utf-8",
+        )
+        state = read_notification_state(p)
+        assert state is not None
+        assert state.last_notified_count == 2
+        assert state.last_notified_priority == "high"
+
+    def test_default_path_used_when_none_given(self, monkeypatch, tmp_path):
+        fake_path = tmp_path / "execution_queue_notified.json"
+        fake_path.write_text(
+            json.dumps({"keys": [], "last_notified_at": "2026-07-05T12:00:00+00:00",
+                        "last_notified_title": "t", "last_notified_count": 1,
+                        "last_notified_priority": "default"}),
+            encoding="utf-8",
+        )
+        import gui.robinhood_execution_panel as mod
+        monkeypatch.setattr(mod, "NOTIFIED_STATE_PATH", fake_path)
+        assert read_notification_state() is not None
+
+
+class TestNotificationAge:
+    def test_fresh_notification_age_near_zero(self):
+        now = datetime.now(timezone.utc)
+        state = NotificationState(
+            last_notified_at=now.isoformat(), last_notified_title="t",
+            last_notified_count=1, last_notified_priority="default",
+        )
+        age = notification_age_seconds(state, now=now + timedelta(seconds=5))
+        assert age == pytest.approx(5.0, abs=1.0)
+
+    def test_unparsable_timestamp_returns_nan(self):
+        state = NotificationState(
+            last_notified_at="not-a-timestamp", last_notified_title="t",
+            last_notified_count=1, last_notified_priority="default",
+        )
+        age = notification_age_seconds(state)
+        assert age != age  # NaN
+
+
+class TestNtfyTopicConfigured:
+    def test_set_returns_true(self, monkeypatch):
+        monkeypatch.setenv("NTFY_TOPIC", "my-unguessable-topic")
+        assert ntfy_topic_configured() is True
+
+    def test_unset_returns_false(self, monkeypatch):
+        monkeypatch.delenv("NTFY_TOPIC", raising=False)
+        assert ntfy_topic_configured() is False
+
+    def test_whitespace_only_returns_false(self, monkeypatch):
+        monkeypatch.setenv("NTFY_TOPIC", "   ")
+        assert ntfy_topic_configured() is False
+
+
+class TestNotifiedStatePathConvention:
+    def test_canonical_path_points_at_output_dir(self):
+        assert NOTIFIED_STATE_PATH.name == "execution_queue_notified.json"
+        assert NOTIFIED_STATE_PATH.parent.name == "output"
 
 
 # ---------------------------------------------------------------------------
