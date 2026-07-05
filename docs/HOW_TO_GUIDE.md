@@ -516,8 +516,9 @@ Add the `is_options_selling=True` flag when constructing the harness in code. Th
 ### Where reports go
 
 Reports are saved to `reports/` as:
-- `reports/<strategy_name>_validation_summary.json` — machine-readable (consumed by preflight check)
+- `reports/<strategy_name>_validation_summary.json` — machine-readable CURRENT-run snapshot, overwritten every harness run (consumed by preflight check)
 - `reports/<strategy_name>_validation_report.html` — human-readable with Plotly charts
+- `reports/history/<strategy_name>_validation_history.jsonl` — append-only, one row per historical run (capped at `MAX_VALIDATION_HISTORY_ROWS`), so PBO/DSR/Sharpe/MaxDD can be plotted as a trend across runs (read via `validation.harness.read_validation_history`; rendered in the GUI's Gravity Audit / Safety tab under "Validation trend across runs")
 
 ### Walk-forward stability
 

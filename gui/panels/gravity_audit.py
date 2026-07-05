@@ -278,12 +278,17 @@ def _render_validation_stress_regime_section() -> None:
 
     1. **Validation snapshot across strategies** — ``reports/*_validation_summary.json``
        is written ONE FILE PER STRATEGY, overwritten every harness run
-       (``StrategyValidationHarness._write_json_summary``) — there is no
-       historical trend of PBO/DSR/Sharpe/MaxDD across RUNS persisted on
-       disk anywhere in this codebase today. This section shows the current
-       cross-strategy snapshot (still useful — "how does strategy A compare
-       to strategy B right now?") and states the trend limitation plainly
-       instead of inventing multi-run history.
+       (``StrategyValidationHarness._write_json_summary``); this section
+       shows the current cross-strategy snapshot ("how does strategy A
+       compare to strategy B right now?"). A separate, append-only
+       ``reports/history/<strategy>_validation_history.jsonl`` (written by
+       ``StrategyValidationHarness._append_validation_history``, one row per
+       run, capped at ``MAX_VALIDATION_HISTORY_ROWS``) is read via
+       ``validation.harness.read_validation_history`` to render the
+       run-over-run PBO/DSR/Sharpe/MaxDD trend beneath the snapshot table.
+       When a strategy has no accumulated history yet (fewer than 2 runs
+       since this feature shipped), that is stated plainly rather than
+       inventing points.
     2. **Stress-scenario gate** — ``ValidationReport.to_summary_dict()`` only
        persists the AGGREGATE ``stress_gate_passed`` boolean, not a per-scenario
        (OCT_2008/FEB_2018/MAR_2020/AUG_2024) breakdown — the per-scenario
@@ -296,6 +301,7 @@ def _render_validation_stress_regime_section() -> None:
        source as the Observability dashboard's equity-curve regime overlay.
     """
     from validation.stress_scenarios import STRESS_SCENARIOS
+    from validation.harness import MAX_VALIDATION_HISTORY_ROWS
 
     st.markdown("### 📐 Validation & Stress Trend")
 
@@ -325,14 +331,61 @@ def _render_validation_stress_regime_section() -> None:
                      if c in snap_df.columns]
         st.dataframe(snap_df[show_cols] if show_cols else snap_df,
                      width="stretch", hide_index=True)
-        st.caption(
-            "⚠️ **No historical trend available.** Each strategy's summary "
-            "file is overwritten on every harness run — this codebase does "
-            "not currently persist a time series of PBO/DSR/Sharpe/MaxDD "
-            "across multiple runs, so only the CURRENT snapshot per strategy "
-            "is shown (not a trend line). A dated/rotated summary history "
-            "would be a reasonable follow-up to `validation/harness.py`."
-        )
+
+        # ── 1b. Run-over-run trend from reports/history/*.jsonl ─────────────
+        st.markdown("**Validation trend across runs**")
+        from validation.harness import read_validation_history
+
+        history_dir = reports_dir / "history"
+        history_by_strategy: Dict[str, List[Dict[str, Any]]] = {}
+        for s in summaries:
+            sid = s.get("strategy_id")
+            if not sid:
+                continue
+            hist = read_validation_history(sid, history_dir=str(history_dir))
+            if len(hist) >= 2:
+                history_by_strategy[sid] = hist
+
+        if not history_by_strategy:
+            st.info(
+                "No run-over-run history yet. `validation/harness.py` now "
+                "appends one row per run to "
+                "`reports/history/<strategy>_validation_history.jsonl`; a "
+                "trend line appears here once a strategy has at least 2 "
+                "recorded runs."
+            )
+        else:
+            metric_labels = {
+                "dsr": "DSR", "pbo": "PBO",
+                "sharpe": "Sharpe", "max_drawdown": "Max Drawdown",
+            }
+            metric = st.selectbox(
+                "Metric", list(metric_labels.keys()),
+                format_func=lambda m: metric_labels[m],
+                key="validation_trend_metric",
+            )
+            trend_df = pd.DataFrame()
+            for sid, hist in history_by_strategy.items():
+                hdf = pd.DataFrame(hist)
+                if "report_date" not in hdf.columns or metric not in hdf.columns:
+                    continue
+                series = (
+                    hdf[["report_date", metric]]
+                    .dropna()
+                    .groupby("report_date")[metric]
+                    .last()
+                )
+                trend_df[sid] = series
+            if trend_df.empty:
+                st.info(f"No `{metric}` history recorded yet for any strategy.")
+            else:
+                st.line_chart(trend_df)
+            st.caption(
+                "One point per harness run (grouped by `report_date`, most "
+                f"recent {MAX_VALIDATION_HISTORY_ROWS} runs retained per "
+                "strategy); strategies with a single run are omitted above "
+                "until a second run accumulates."
+            )
 
     st.divider()
 
