@@ -164,7 +164,7 @@ class GeminiProvider(LLMProvider):
         self,
         api_key: str,
         *,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-2.5-flash",
         timeout_seconds: float = 8.0,
         max_output_tokens: int = 800,
     ) -> None:

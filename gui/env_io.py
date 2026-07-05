@@ -109,9 +109,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # surfaces them.  Provider credentials (ANTHROPIC/GEMINI/OPENAI keys) stay
     # in SECRET_KEYS below — CONSTRAINT #3, never GUI-writable.
     "GRAVITY_AI_RUNNER_ENABLED",         # bool — Gravity AI runner (Claude+Gemini)
-    "OPAL_RESEARCH_ENABLED",             # bool — Opal research agent (OpenAI)
-    "OPAL_RESEARCH_PROVIDER",            # "openai" | "none"
-    "OPAL_RESEARCH_MODEL",               # e.g. "gpt-4o"
+    "OPAL_RESEARCH_ENABLED",             # bool — Opal research agent (OpenAI or Gemini)
+    "OPAL_RESEARCH_PROVIDER",            # "openai" | "gemini" | "none"
+    "OPAL_RESEARCH_MODEL",               # e.g. "gpt-4o" or "gemini-2.5-flash"
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.

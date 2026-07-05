@@ -149,13 +149,15 @@ CAPABILITIES: Tuple[AICapability, ...] = (
     ),
     AICapability(
         key="opal_research",
-        label="Opal research agent (OpenAI)",
+        label="Opal research agent",
         enable_settings=("OPAL_RESEARCH_ENABLED", "OPAL_RESEARCH_PROVIDER"),
-        provider_key_settings=("OPENAI_API_KEY",),
-        module="llm.research",  # gated until the Opal backend ships (docs/OPAL_BUILD_SPEC.md)
+        provider_key_settings=("OPENAI_API_KEY", "GEMINI_API_KEY"),
+        module="llm.research",
         trigger="on_demand",
         toggle_key="OPAL_RESEARCH_ENABLED",
-        help="Grounded research brief per symbol (front-of-pipeline). Requires the Opal backend build.",
+        help="Grounded research brief per symbol (front-of-pipeline). Provider is "
+             "operator-chosen (OpenAI or Gemini) via OPAL_RESEARCH_PROVIDER.",
+        provider_selector_setting="OPAL_RESEARCH_PROVIDER",
     ),
 )
 

@@ -1,11 +1,13 @@
 """
-llm/research.py — Tier 9 Scope 4 Opal grounded research brief (OpenAI/GPT).
-============================================================================
+llm/research.py — Tier 9 Scope 4 Opal grounded research brief (OpenAI/Gemini).
+===============================================================================
 
 Public entry point :func:`generate_research_brief` takes a symbol (+ an
 optional context dict), assembles a grounding packet of REAL retrieved
 Finnhub company news + earnings date (+ an optional macro snippet from
-``context``), sends it to OpenAI via :meth:`OpenAIProvider.call_structured`,
+``context``), sends it to the operator-configured provider (``OpenAIProvider``
+or ``GeminiProvider``, chosen via ``OPAL_RESEARCH_PROVIDER`` and resolved by
+:func:`llm.router.get_research_provider`) via ``provider.call_structured``,
 and returns a schema-validated :class:`llm.schemas.ResearchBrief` — or
 ``None`` on any failure.
 
@@ -241,7 +243,7 @@ def generate_research_brief(
             return None
 
         cache_key = make_cache_key(
-            provider="openai",
+            provider=(getattr(settings, "OPAL_RESEARCH_PROVIDER", "openai") or "openai").lower(),
             schema_name=ResearchBrief.__name__,
             symbol=sym,
             score=0.0,
