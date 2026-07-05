@@ -2894,8 +2894,13 @@ class GravityAIAuditor:
                 first = fh2.get_fundamentals("BAC")
                 second = fh2.get_fundamentals("BAC")
             call_count_after_two = fh2._client.company_basic_financials.call_count
+            # The FIRST get_fundamentals() call makes 2 client calls on its own
+            # (initial attempt + the documented one-shot backoff retry on 429);
+            # the SECOND call must be served entirely from the negative cache,
+            # contributing zero further client calls -- so the total after both
+            # calls is 2, not 1.
             rate_limit_handled = (
-                first == {} and second == {} and call_count_after_two == 1
+                first == {} and second == {} and call_count_after_two == 2
             )
             audit["checks"]["finnhub_429_swallowed_and_cached"] = {
                 "status": "PASSED" if rate_limit_handled else "FAILED",
@@ -4085,7 +4090,7 @@ class GravityAIAuditor:
 
             # 4. No order functions defined in the gui/ package.
             import re as _re
-            gui_dir = _Path(__file__).resolve().parents[1] / "gui"
+            gui_dir = _Path(__file__).resolve().parent / "gui"
             order_pat = _re.compile(r"^\s*def\s+(submit_order|place_order|place_equity_order|"
                                     r"place_option_order|buy_order|sell_order|place_\w+)", _re.MULTILINE)
             offenders = []
@@ -4709,7 +4714,7 @@ class GravityAIAuditor:
 
             # ── (h) No order/execution function names in the module ─────
             import ast, pathlib
-            src = (pathlib.Path(__file__).resolve().parents[1]
+            src = (pathlib.Path(__file__).resolve().parent
                    / "data" / "portfolio_sync.py").read_text(encoding="utf-8")
             tree = ast.parse(src)
             forbidden = {
@@ -7589,11 +7594,15 @@ class GravityAIAuditor:
                     total_dividends=0.0,
                     fetched_at=datetime.datetime.now(datetime.timezone.utc),
                 )
+                # market_regime is a read-only derived property on
+                # MacroEconomicDTO (not a constructor field) -- it is NOT
+                # passed here. sahm_rule_indicator=0.7 (>= the 0.6
+                # _rules_based_regime threshold) is what actually drives
+                # market_regime to "RECESSION" for this scenario.
                 _macro = MacroEconomicDTO(
                     yield_curve_10y_2y=-0.5, high_yield_oas=5.0,
                     inflation_rate=3.0, nominal_10y=4.5,
                     vix_value=38.0, sahm_rule_indicator=0.7,
-                    market_regime="RECESSION",
                 )
 
                 with (
@@ -9421,7 +9430,7 @@ class GravityAIAuditor:
         try:
             import sys
             from pathlib import Path
-            _repo = Path(__file__).resolve().parents[1]
+            _repo = Path(__file__).resolve().parent
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
 
@@ -9559,7 +9568,7 @@ class GravityAIAuditor:
             from pathlib import Path
             from datetime import date, timedelta, datetime
 
-            _repo = Path(__file__).resolve().parents[1]
+            _repo = Path(__file__).resolve().parent
             import sys
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
@@ -9748,7 +9757,7 @@ class GravityAIAuditor:
             from pathlib import Path
             from unittest.mock import patch, MagicMock
 
-            _repo = Path(__file__).resolve().parents[1]
+            _repo = Path(__file__).resolve().parent
             import sys
             if str(_repo) not in sys.path:
                 sys.path.insert(0, str(_repo))
