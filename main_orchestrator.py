@@ -874,6 +874,24 @@ async def _execute_broker_orders(
         )
 
 
+def _safe_float_or_none(val) -> Optional[float]:
+    """Coerce *val* to float, or ``None`` when missing/NaN.
+
+    Used for optional analytics fields (cross-sectional momentum,
+    multifactor z-scores) written into ``state_snapshot.json`` — CONSTRAINT
+    #4 forbids fabricating a ``0.0`` default when a signal module simply
+    didn't produce a value for this ticker (e.g. microcap-excluded from
+    multifactor scoring, or insufficient history for the XSec rank).
+    ``json.dumps`` serialises ``None`` as JSON ``null``, which the GUI reader
+    treats identically to a missing key.
+    """
+    try:
+        f = float(val)
+        return None if pd.isna(f) else f
+    except (TypeError, ValueError):
+        return None
+
+
 def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: list) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
@@ -912,6 +930,32 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     "advisory_conviction":   float(row.get("Advisory_Conviction", 0.0) or 0.0),
                     "advisory_position_pct": float(row.get("Advisory_Position_Pct", 0.0) or 0.0),
                     "advisory_rationale":    str(row.get("Advisory_Rationale", "")),
+                    # GUI hidden-fields surfacing (Task C1): cross-sectional
+                    # momentum + multifactor z-scores are already computed by
+                    # global_registry.run_pre_compute() into dashboard_df
+                    # (see the Value_Z/Quality_Z/LowVol_Z/Size_Z/Multifactor_Composite
+                    # and XSec_12_1M/XSec_Momentum_Rank columns above) but were
+                    # never threaded through to state_snapshot.json, so the GUI
+                    # had no per-symbol source to read them from. NaN (never
+                    # fabricated) when the pre-compute hook didn't populate a
+                    # value for this ticker.
+                    "xsec_12_1m": _safe_float_or_none(row.get("XSec_12_1M")),
+                    "xsec_momentum_rank": _safe_float_or_none(row.get("XSec_Momentum_Rank")),
+                    "value_z": _safe_float_or_none(row.get("Value_Z")),
+                    "quality_z": _safe_float_or_none(row.get("Quality_Z")),
+                    "lowvol_z": _safe_float_or_none(row.get("LowVol_Z")),
+                    "size_z": _safe_float_or_none(row.get("Size_Z")),
+                    "multifactor_composite": _safe_float_or_none(row.get("Multifactor_Composite")),
+                    # Task C3 — post-trade evaluation metrics (evaluation_engine.py
+                    # EvaluationEngine.evaluate_portfolio()/calculate_edge_ratio()
+                    # already compute these into dashboard_df every cycle; they
+                    # were never persisted anywhere the GUI could read them from.
+                    # NaN (never fabricated) when no trade history exists yet for
+                    # the symbol — see EvaluationEngine.evaluate_portfolio().
+                    "mfe": _safe_float_or_none(row.get("MFE")),
+                    "mae": _safe_float_or_none(row.get("MAE")),
+                    "edge_ratio": _safe_float_or_none(row.get("Edge Ratio")),
+                    "realized_slippage": _safe_float_or_none(row.get("Realized Slippage")),
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

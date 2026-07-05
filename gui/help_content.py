@@ -1166,6 +1166,74 @@ METRIC_HELP: Dict[str, str] = {
         "Sell Zone string showing upside target + trailing stop.  "
         "Same as Sell Zone — different column name in some report views."
     ),
+    "Value Z": (
+        "Cross-sectional z-score averaging book-to-market and earnings-yield "
+        "vs. the rest of your universe, winsorized to ±3.  Positive = cheaper "
+        "than peers.  Part of the multifactor composite (signals/multifactor.py)."
+    ),
+    "Quality Z": (
+        "Cross-sectional z-score of ROE + operating margin (falls back to "
+        "-debt/equity when unavailable), winsorized to ±3.  "
+        "Positive = higher quality than peers."
+    ),
+    "LowVol Z": (
+        "Cross-sectional z-score of negative 60-day realized volatility, "
+        "winsorized to ±3.  Positive = lower volatility than peers."
+    ),
+    "Size Z": (
+        "Cross-sectional z-score of negated log market cap, winsorized to ±3.  "
+        "Positive = smaller than peers (small-cap premium prior)."
+    ),
+    "Value_Z": "See 'Value Z' — identical metric, underscore column key.",
+    "Quality_Z": "See 'Quality Z' — identical metric, underscore column key.",
+    "LowVol_Z": "See 'LowVol Z' — identical metric, underscore column key.",
+    "Size_Z": "See 'Size Z' — identical metric, underscore column key.",
+    "Multifactor Composite": (
+        "Average of Value/Quality/LowVol/Size z-scores, re-clipped to ±3, "
+        "then mapped to [-1, +1] via tanh(z/2) for the signal aggregator.  "
+        "Microcap tickers (excluded from cross-sectional scoring) show 0 (neutral)."
+    ),
+    "XSec 12-1M Return": (
+        "12-month return skipping the most recent month (Jegadeesh-Titman "
+        "cross-sectional momentum convention — avoids short-term reversal bias)."
+    ),
+    "XSec Momentum Rank": (
+        "This ticker's percentile rank (0-1) by 12-1 month return within your "
+        "current universe.  Top half scores positive in the cross-sectional "
+        "momentum signal module; bottom half scores negative."
+    ),
+    "Buy Range": "ATR-based entry price range.  Buying within this range improves risk/reward.",
+    "Portfolio Delta": (
+        "Unweighted sum of ATM Delta across held symbols with an actionable "
+        "options directive.  Per-contract, not position-size-weighted — see "
+        "the Options tab caption for why weighting isn't fabricated."
+    ),
+    "Portfolio Gamma": (
+        "Unweighted sum of ATM Gamma across held symbols with an actionable "
+        "options directive.  Per-contract, not position-size-weighted."
+    ),
+    "Portfolio Vega": (
+        "Unweighted sum of ATM Vega across held symbols with an actionable "
+        "options directive.  Per-contract, not position-size-weighted."
+    ),
+    "Portfolio Theta": (
+        "Unweighted sum of ATM daily Theta across held symbols with an "
+        "actionable options directive.  Per-contract, not position-size-weighted."
+    ),
+    "Theta Carry Projection": (
+        "Cumulative Theta × 30, assuming price/IV stay flat for 30 days.  "
+        "A mechanical 'time decay floor' reference — NOT a forecast of "
+        "actual 30-day P&L, which also depends on gamma/vega repricing."
+    ),
+    "Meta-Label Composite": (
+        "Geometric mean of active signal modules' meta-label confidence "
+        "(Lopez de Prado 'is the primary signal correct?' probability), applied "
+        "as a multiplier on Kelly Target before the position-size cap.  Always "
+        "1.0 (no-op) until a MetaLabeler is trained and registered for a given "
+        "signal — see ml/meta_labeling.py.  Not currently written to a "
+        "per-symbol column in the dashboard; this platform surfaces it only "
+        "as a multiplicative effect already baked into Kelly Target."
+    ),
     "Intents Queued": (
         "Number of proposed orders in `output/execution_queue.json` this cycle.  "
         "Each has already been run through the risk gate in dry-run."

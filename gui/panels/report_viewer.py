@@ -1037,6 +1037,253 @@ def _render_brinson_fachler_section() -> None:
 
 
 # ===========================================================================
+# Hidden-fields surfacing — Task C1 (Reports tab)
+# ===========================================================================
+
+
+def _render_hidden_fields_section(signals: list) -> None:
+    """Surface multifactor z-scores + cross-sectional momentum ranks.
+
+    These fields (``Value_Z``, ``Quality_Z``, ``LowVol_Z``, ``Size_Z``,
+    ``Multifactor_Composite``, ``XSec_12_1M``, ``XSec_Momentum_Rank``) are
+    computed every cycle by ``signals/multifactor.py`` and
+    ``main_orchestrator.compute_xsec_momentum_ranks()`` into
+    ``dashboard_df`` / ``config.COLUMN_SCHEMA`` but were never threaded
+    through to ``state_snapshot.json`` until this section's companion change
+    in ``main_orchestrator._write_state_snapshot`` — so no GUI surface could
+    previously display them.
+
+    Only populated when the pipeline ran via ``main_orchestrator.py`` (the
+    full async orchestrator that runs ``global_registry.run_pre_compute()``);
+    the lighter ``main.py`` advisory loop does not compute these factors, so
+    rows from that entry point show "—" here rather than a fabricated value.
+    """
+    st.markdown("---")
+    st.markdown("### 🧮 Multifactor & Cross-Sectional Momentum")
+    st.caption(
+        "Value / Quality / Low-Vol / Size z-scores (Fama-French-style, "
+        "`signals/multifactor.py`) and the 12-1 month cross-sectional momentum "
+        "rank (Jegadeesh-Titman, `main_orchestrator.compute_xsec_momentum_ranks`). "
+        "Only populated when the last run went through `main_orchestrator.py` "
+        "(the full async pipeline) — the lighter advisory loop in `main.py` "
+        "does not compute these cross-sectional factors."
+    )
+
+    if not signals:
+        st.info("No pipeline signals yet — run the orchestrator from the Launcher tab.")
+        return
+
+    factor_cols = [
+        ("symbol", "Symbol"),
+        ("value_z", "Value Z"),
+        ("quality_z", "Quality Z"),
+        ("lowvol_z", "LowVol Z"),
+        ("size_z", "Size Z"),
+        ("multifactor_composite", "Multifactor Composite"),
+        ("xsec_12_1m", "XSec 12-1M Return"),
+        ("xsec_momentum_rank", "XSec Momentum Rank"),
+    ]
+    rows = []
+    any_populated = False
+    for s in signals:
+        row = {}
+        for key, label in factor_cols:
+            v = s.get(key)
+            if key != "symbol" and v is not None:
+                any_populated = True
+            row[label] = v if v is not None else ("—" if key != "symbol" else s.get("symbol", "—"))
+        rows.append(row)
+
+    if not any_populated:
+        st.caption(
+            "No multifactor/cross-sectional data in the last snapshot — most "
+            "likely the last run used `main.py`'s advisory loop rather than "
+            "`main_orchestrator.py`. Run the full orchestrator from the "
+            "Launcher tab to populate this section."
+        )
+        return
+
+    factor_df = pd.DataFrame(rows)
+    st.dataframe(factor_df, width="stretch", hide_index=True)
+
+
+# ===========================================================================
+# Trade-Quality & Post-Trade Analytics — Task C3 (Reports tab)
+# ===========================================================================
+
+
+def _render_trade_quality_section(signals: list) -> None:
+    """MFE-vs-MAE scatter (current signals) + edge-ratio-by-strategy (closed trades).
+
+    Two independent sub-sections, each degrading gracefully to a friendly
+    empty-state message rather than crashing (CONSTRAINT #6):
+
+    1. **MFE vs. MAE scatter** — one point per symbol in the last snapshot,
+       sourced from the ``mfe``/``mae`` fields this task's companion change
+       added to ``state_snapshot.json`` (via
+       ``EvaluationEngine.evaluate_portfolio()``). Point size reflects
+       ``advisory_conviction`` when available (falls back to a fixed size);
+       color reflects ``action`` (a reasonable proxy for "entry regime" since
+       no entry-time regime label is persisted per signal — see caption).
+    2. **Edge-ratio-by-signal-module** — on-demand (button-triggered, like the
+       Correlation Cluster section) recomputation of MFE/MAE/Edge Ratio for
+       every CLOSED trade in ``TransactionsStore``, grouped by the
+       ``strategy`` column each trade was tagged with at entry. Requires
+       fetching historical OHLC bars per symbol via
+       ``HistoricalStore.get_bars()`` — deferred behind a button so the tab
+       doesn't do that work on every rerun.
+    """
+    st.markdown("---")
+    st.markdown("### 🎯 Trade Quality — MFE / MAE / Edge Ratio")
+    st.caption(
+        "Maximum Favorable/Adverse Excursion and Edge Ratio "
+        "(`evaluation_engine.EvaluationEngine`), surfaced for the first time in "
+        "this GUI. MFE/MAE are fractions of entry price (e.g. 0.05 = 5%)."
+    )
+
+    # ── 1. MFE vs MAE scatter (current signals) ──────────────────────────────
+    st.markdown("**MFE vs. MAE — current signals**")
+    scatter_rows = [
+        {
+            "symbol": s.get("symbol", "?"),
+            "mfe": s.get("mfe"),
+            "mae": s.get("mae"),
+            "edge_ratio": s.get("edge_ratio"),
+            "conviction": s.get("advisory_conviction"),
+            "action": s.get("action") or s.get("advisory_action") or "—",
+        }
+        for s in signals
+    ]
+    scatter_df = pd.DataFrame(
+        scatter_rows,
+        columns=["symbol", "mfe", "mae", "edge_ratio", "conviction", "action"],
+    ).dropna(subset=["mfe", "mae"])
+    if scatter_df.empty:
+        st.info(
+            "No MFE/MAE data in the last snapshot yet. These populate once a "
+            "symbol has trade history in `TransactionsStore` "
+            "(`EvaluationEngine.evaluate_portfolio()` computes them from the "
+            "most recent trade per symbol). Run the orchestrator after your "
+            "first recorded trade to see points here."
+        )
+    else:
+        try:
+            import altair as alt  # bundled with streamlit — no new dependency
+
+            has_conviction = scatter_df["conviction"].notna().any()
+            enc_size = (
+                alt.Size("conviction:Q", title="Conviction", scale=alt.Scale(range=[40, 400]))
+                if has_conviction else alt.value(120)
+            )
+            chart = (
+                alt.Chart(scatter_df)
+                .mark_circle(opacity=0.75)
+                .encode(
+                    x=alt.X("mae:Q", title="MAE (adverse excursion, fraction)"),
+                    y=alt.Y("mfe:Q", title="MFE (favorable excursion, fraction)"),
+                    size=enc_size,
+                    color=alt.Color("action:N", title="Action Signal"),
+                    tooltip=["symbol", "mfe", "mae", "edge_ratio", "conviction", "action"],
+                )
+                .interactive()
+            )
+            st.altair_chart(chart, use_container_width=True)
+            st.caption(
+                "Point size = conviction (when available). Color = current action "
+                "signal — used as a proxy for 'entry regime' since no per-signal "
+                "entry-time regime label is persisted; a real entry-regime tag "
+                "would need `market_regime` recorded per closed trade, which "
+                "`TransactionsStore.Trade` does not currently carry (known "
+                "follow-up, not fabricated here)."
+            )
+        except Exception as exc:  # noqa: BLE001 — plain fallback, never crash
+            logger.debug("Altair scatter failed, falling back to table: %s", exc)
+            st.dataframe(scatter_df, width="stretch", hide_index=True)
+
+    # ── 2. Edge-ratio-by-signal-module (on-demand, closed trades) ────────────
+    st.markdown("**Edge Ratio by Strategy / Signal Module — closed trades**")
+    st.caption(
+        "On-demand: recomputes MFE/MAE/Edge Ratio for every closed trade via "
+        "`HistoricalStore.get_bars()` + `EvaluationEngine.calculate_edge_ratio()`, "
+        "grouped by the `strategy` tag recorded on each trade at entry."
+    )
+
+    if st.button("📐 Compute edge ratio by strategy", key="edge_by_strategy_btn"):
+        try:
+            from transactions_store import TransactionsStore
+            from evaluation_engine import EvaluationEngine
+            from data.historical_store import HistoricalStore
+
+            store = TransactionsStore()
+            closed = store.closed_trades_df()
+            if closed.empty:
+                st.session_state["edge_by_strategy_result"] = pd.DataFrame()
+            else:
+                ee_local = EvaluationEngine()
+                hstore = HistoricalStore()
+                per_trade_rows = []
+                bars_cache: Dict[str, pd.DataFrame] = {}
+                for _, trade in closed.iterrows():
+                    sym = str(trade.get("symbol", "")).upper()
+                    if not sym:
+                        continue
+                    if sym not in bars_cache:
+                        try:
+                            bars_cache[sym] = hstore.get_bars(sym, lookback_days=756)
+                        except Exception:
+                            bars_cache[sym] = pd.DataFrame()
+                    bars = bars_cache[sym]
+                    if bars.empty:
+                        continue
+                    entry_price = trade.get("entry_price")
+                    entry_ts = trade.get("entry_ts")
+                    exit_ts = trade.get("exit_ts")
+                    if pd.isna(entry_price) or pd.isna(entry_ts) or pd.isna(exit_ts):
+                        continue
+                    edge = ee_local.calculate_edge_ratio(bars, float(entry_price), entry_ts, exit_ts)
+                    per_trade_rows.append({
+                        "strategy": trade.get("strategy") or "(untagged)",
+                        "symbol": sym,
+                        "MFE": edge["MFE"],
+                        "MAE": edge["MAE"],
+                        "Edge Ratio": edge["Edge Ratio"],
+                    })
+                per_trade_df = pd.DataFrame(per_trade_rows)
+                if per_trade_df.empty:
+                    st.session_state["edge_by_strategy_result"] = pd.DataFrame()
+                else:
+                    summary = (
+                        per_trade_df.dropna(subset=["Edge Ratio"])
+                        .groupby("strategy")
+                        .agg(
+                            n_trades=("Edge Ratio", "count"),
+                            mean_edge_ratio=("Edge Ratio", "mean"),
+                            median_edge_ratio=("Edge Ratio", "median"),
+                            mean_mfe=("MFE", "mean"),
+                            mean_mae=("MAE", "mean"),
+                        )
+                        .reset_index()
+                        .sort_values("mean_edge_ratio", ascending=False)
+                    )
+                    st.session_state["edge_by_strategy_result"] = summary
+        except Exception as exc:  # noqa: BLE001 — surface, never crash the tab
+            st.error(f"Edge-ratio-by-strategy computation failed: {exc}")
+            st.session_state["edge_by_strategy_result"] = pd.DataFrame()
+
+    result = st.session_state.get("edge_by_strategy_result")
+    if result is None:
+        st.caption("Click the button above to compute this table.")
+    elif result.empty:
+        st.info(
+            "No closed trades with recoverable OHLC history yet. This table "
+            "populates once trades close and historical bars are cached via "
+            "`HistoricalStore`."
+        )
+    else:
+        st.dataframe(result, width="stretch", hide_index=True)
+
+
+# ===========================================================================
 # Tab 1 — Launcher & Orchestration
 # ===========================================================================
 
@@ -1069,6 +1316,18 @@ def render_report_viewer() -> None:
     signals = snap.get("signals", [])
 
     _render_report_provenance_banner(snap)
+
+    # Freshness badge (Task C5): flags in red when the snapshot this whole
+    # tab reads from is older than the dashboard refresh TTL.
+    try:
+        from gui.styling import freshness_badge
+        _snap_ts_raw = snap.get("timestamp")
+        _snap_ts = datetime.fromisoformat(_snap_ts_raw.replace("Z", "+00:00")) if _snap_ts_raw else None
+        st.caption(freshness_badge(
+            _snap_ts, ttl_seconds=settings.DASHBOARD_REFRESH_SECONDS, label="Snapshot",
+        ))
+    except Exception as exc:  # noqa: BLE001 — cosmetic only, never block the tab
+        logger.debug("freshness badge unavailable: %s", exc)
 
     # ── Portfolio heat + edge from the engine ────────────────────────────────
     from evaluation_engine import EvaluationEngine
@@ -1118,7 +1377,23 @@ def render_report_viewer() -> None:
         chart_cols = [c for c in ["symbol", "score", "kelly_target"] if c in sig_df_display.columns]
         if chart_cols and not sig_df_display.empty:
             st.bar_chart(sig_df_display.set_index("symbol")[[c for c in chart_cols if c != "symbol"]])
-        st.dataframe(sig_df_display, width="stretch")
+
+        # Severity coloring (Task C5): Kelly Target red at/near the advisory
+        # ceiling, conviction green/yellow/red — see gui/styling.py for the
+        # exact thresholds (sourced from engine.advisory.CONFIG).
+        try:
+            from gui.styling import style_severity
+            st.dataframe(
+                style_severity(
+                    sig_df_display,
+                    kelly_cols=("kelly_target",),
+                    conviction_cols=("advisory_conviction",),
+                ),
+                width="stretch",
+            )
+        except Exception as exc:  # noqa: BLE001 — never let styling break the table
+            logger.debug("severity styling unavailable: %s", exc)
+            st.dataframe(sig_df_display, width="stretch")
 
         # ── Drill-down: pick a symbol → see its full signal row + recent
         #    closed trades from the TransactionsStore. Click-to-explain "why
@@ -1170,6 +1445,31 @@ def render_report_viewer() -> None:
                 st.caption("Signal frame has no `symbol` column to drill into.")
     else:
         st.caption("MFE/MAE/Edge populate once closed trades and signals exist.")
+
+    # ── Buy Range / Sell Range side-by-side (Task C1) ────────────────────────
+    # buyRange has long been in the wide signals table above; sellRange
+    # (strategy_engine.apply_sell_side_range) is equally always-populated but
+    # easy to miss buried in that wide table — call it out explicitly here.
+    st.markdown("**Tactical Ranges — Buy Zone vs. Sell Zone**")
+    if signals:
+        range_rows = [
+            {
+                "Symbol": s.get("symbol", "—"),
+                "Action": s.get("action", "—"),
+                "Buy Range": s.get("buy_range") or "—",
+                "Sell Range": s.get("sell_range") or "—",
+            }
+            for s in signals
+        ]
+        st.dataframe(pd.DataFrame(range_rows), width="stretch", hide_index=True)
+    else:
+        st.caption("Buy/Sell ranges populate once pipeline signals exist.")
+
+    # ── Multifactor z-scores + cross-sectional momentum (Task C1) ────────────
+    _render_hidden_fields_section(signals)
+
+    # ── Trade quality: MFE/MAE scatter + edge-ratio-by-strategy (Task C3) ────
+    _render_trade_quality_section(signals)
 
     # ── Correlation Cluster Awareness (Tier 2.5) ─────────────────────────────
     _render_correlation_cluster_section(signals)
