@@ -291,6 +291,51 @@ class TestRunOnce:
         assert result.duration_seconds >= 0.0
         assert result.started_at <= result.finished_at
 
+    @patch(_PATCH_BARS, return_value={})
+    @patch(_PATCH_MACRO)
+    @patch(_PATCH_EVALUATE)
+    @patch(_PATCH_PROVIDER)
+    @patch(_PATCH_SNAPSHOT)
+    def test_context_extras_computed_once_and_shared_across_symbols(
+        self,
+        mock_snap: MagicMock,
+        mock_provider: MagicMock,
+        mock_eval: MagicMock,
+        mock_macro: MagicMock,
+        _bars: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Task A6: _build_context_extras() must be computed exactly ONCE per
+        run_once() call (not per symbol), and the SAME object must be passed
+        as context_extras to every per-symbol advisory_evaluate() call -- so
+        cross-sectional momentum / multifactor signals see universe-relative
+        data identical to what the orchestrator path already provides."""
+        monkeypatch.setenv("WATCHLIST", "AAPL,MSFT,GOOG")
+        snap = _make_snapshot()
+        mock_snap.return_value = snap
+        mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
+        mock_eval.side_effect = lambda symbol, **kw: _make_recommendation(symbol, "HOLD")
+
+        sentinel_extras = {"xsec_percentile_ranks": {"AAPL": 0.9}, "multifactor_scores": {}}
+
+        with patch(_PATCH_CTX, return_value=sentinel_extras) as mock_ctx:
+            result = run_once()
+
+        assert isinstance(result, RunResult)
+        assert len(result.recommendations) == 3
+
+        # _build_context_extras computed exactly once for the whole cycle.
+        mock_ctx.assert_called_once()
+
+        # Every per-symbol advisory_evaluate() call received the EXACT SAME
+        # context_extras object (identity check, not just equality) --
+        # confirms it was computed once and passed through, not recomputed
+        # or rebuilt per symbol.
+        assert mock_eval.call_count == 3
+        for call in mock_eval.call_args_list:
+            _, kwargs = call
+            assert kwargs.get("context_extras") is sentinel_extras
+
     @patch(_PATCH_CTX, return_value={})
     @patch(_PATCH_BARS, return_value={})
     @patch(_PATCH_MACRO)
@@ -546,6 +591,80 @@ class TestAdvisoryConcurrency:
         res = self._run_with_workers(0, monkeypatch)
         assert len(res.recommendations) == 8
         assert res.errors == []
+
+
+# ---------------------------------------------------------------------------
+# Task A4 — per-process MacroEngine reuse (main._get_macro_engine)
+# ---------------------------------------------------------------------------
+
+class TestMacroEngineReuse:
+    """main._get_macro_engine() must construct exactly ONE MacroEngine per
+    FRED key for the lifetime of the process, so the HMMRegimeDetector's
+    retrain_freq_days gate is meaningful across --interval / agent-loop
+    cycles within a single run of main.py (as opposed to main_orchestrator.py,
+    which constructs a fresh MacroEngine once per process invocation anyway
+    since it has no internal loop)."""
+
+    def setup_method(self) -> None:
+        m._reset_macro_engine_cache()
+
+    def teardown_method(self) -> None:
+        m._reset_macro_engine_cache()
+
+    def test_get_macro_engine_reuses_same_instance_for_same_key(self) -> None:
+        # _get_macro_engine() imports DataEngine/MacroEngine lazily inside the
+        # function body (not at main.py module scope), so they must be
+        # patched at their defining modules, not via "main.DataEngine".
+        with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
+            MockDE.return_value = MagicMock()
+            MockME.side_effect = lambda data_engine: MagicMock(data_engine=data_engine)
+
+            engine_1 = m._get_macro_engine("FRED_KEY_A")
+            engine_2 = m._get_macro_engine("FRED_KEY_A")
+
+            assert engine_1 is engine_2
+            # MacroEngine (and therefore its HMMRegimeDetector) constructed
+            # exactly once for repeated calls with the same key.
+            MockME.assert_called_once()
+            MockDE.assert_called_once()
+
+    def test_get_macro_engine_rebuilds_on_key_rotation(self) -> None:
+        with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
+            MockDE.side_effect = lambda key: MagicMock(name=f"de_{key}")
+            MockME.side_effect = lambda data_engine: MagicMock(data_engine=data_engine)
+
+            engine_1 = m._get_macro_engine("FRED_KEY_A")
+            engine_2 = m._get_macro_engine("FRED_KEY_B")
+
+            assert engine_1 is not engine_2
+            assert MockME.call_count == 2
+
+    def test_build_macro_dto_reuses_engine_across_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_build_macro_dto() (called once per run_once() cycle) must route
+        through _get_macro_engine() so two consecutive cycles within the same
+        process reuse one MacroEngine instance instead of constructing a new
+        one (and therefore a fresh, never-fitted HMMRegimeDetector) every
+        cycle."""
+        monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
+
+        with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
+            fake_de = MagicMock()
+            fake_de.fetch_macro_raw.return_value = {}
+            fake_de.fetch_technical_raw.return_value = {}
+            MockDE.return_value = fake_de
+
+            fake_me = MagicMock()
+            fake_me.data_engine = fake_de
+            fake_me.compute_hmm_risk_on_probability.return_value = None
+            MockME.return_value = fake_me
+
+            m._build_macro_dto()
+            m._build_macro_dto()
+
+            # MacroEngine constructed once even though _build_macro_dto() was
+            # called twice (simulating two --interval cycles).
+            MockME.assert_called_once()
+            assert fake_me.compute_hmm_risk_on_probability.call_count == 2
 
 
 # ---------------------------------------------------------------------------

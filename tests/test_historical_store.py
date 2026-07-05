@@ -736,6 +736,60 @@ class TestMacroHistory:
         # DataEngine was called on second run (forced stale)
         de2.fetch_macro_history.assert_called_once()
 
+    def test_macro_upsert_applies_fred_revision(self, tmp_path):
+        """A later top-up that returns a DIFFERENT value for an already-stored
+        date (e.g. FRED revises a past VIXCLS/T10Y2Y print) must overwrite the
+        stored value with the latest one, not silently keep the first-written
+        value or raise on the primary-key (series_id, date) conflict.
+
+        macro_history's write path (_upsert_macro) uses ``INSERT OR REPLACE``
+        keyed on (series_id, date), which is SQLite's upsert idiom — this test
+        locks in that a revision is actually applied end-to-end through
+        get_macro(), not just at the raw SQL level.
+        """
+        import sqlite3 as _sqlite3
+
+        db = str(tmp_path / "macro.db")
+        store = HistoricalStore(db_path=db)
+
+        # First top-up: VIXCLS on the last date = 15.0 + 29*0.05 = 16.45
+        macro_df_v1 = _make_macro_df(30)
+        de_v1 = _make_mock_data_engine(macro_df_v1)
+        series_v1 = store.get_macro("VIXCLS", data_engine=de_v1)
+        last_date = macro_df_v1.index[-1]
+        original_value = float(macro_df_v1["VIXCLS"].iloc[-1])
+        assert series_v1.loc[last_date] == pytest.approx(original_value)
+
+        # Force stale so the next call actually tops up again.
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        with _sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE macro_history SET fetched_at=? WHERE series_id='VIXCLS'",
+                (stale_ts,),
+            )
+            conn.commit()
+
+        # Second top-up: FRED "revises" the same last date to a different value.
+        macro_df_v2 = macro_df_v1.copy()
+        revised_value = original_value + 5.0
+        macro_df_v2.loc[last_date, "VIXCLS"] = revised_value
+        de_v2 = _make_mock_data_engine(macro_df_v2)
+        series_v2 = store.get_macro("VIXCLS", data_engine=de_v2)
+
+        # The stored/returned value for that date must be the LATEST write,
+        # not the first one.
+        assert series_v2.loc[last_date] == pytest.approx(revised_value)
+        assert series_v2.loc[last_date] != pytest.approx(original_value)
+
+        # Row count for that date must still be exactly 1 (upsert, not a
+        # duplicate insert alongside the stale row).
+        with _sqlite3.connect(db) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM macro_history WHERE series_id='VIXCLS' AND date=?",
+                (last_date.strftime("%Y-%m-%d"),),
+            ).fetchone()[0]
+        assert count == 1
+
     def test_macro_fresh_cache_skips_data_engine(self, tmp_path):
         """Fresh rows (fetched_at < MACRO_REFRESH_HOURS ago) skip the top-up."""
         db = str(tmp_path / "macro.db")

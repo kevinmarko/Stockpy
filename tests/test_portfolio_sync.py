@@ -92,14 +92,23 @@ class _FakeProvider:
 
     quote_source = "alpaca"
 
-    def __init__(self, *, covered: Optional[set] = None, has_funds: Optional[set] = None):
+    def __init__(
+        self,
+        *,
+        covered: Optional[set] = None,
+        has_funds: Optional[set] = None,
+        stale: Optional[set] = None,
+    ):
         self._covered = covered or set()
         self._has_funds = has_funds or set()
+        self._stale = stale or set()
 
     def get_latest_quote(self, symbol: str) -> _FakeQuote:
         if symbol not in self._covered:
             raise RuntimeError(f"no quote for {symbol}")
-        return _FakeQuote(symbol=symbol, price=100.0 + len(symbol), is_stale=False)
+        return _FakeQuote(
+            symbol=symbol, price=100.0 + len(symbol), is_stale=symbol in self._stale,
+        )
 
     def get_intraday_bars(self, symbol: str, lookback_days: int = 5):
         if symbol not in self._covered:
@@ -194,6 +203,67 @@ def test_build_sync_report_happy_path(monkeypatch):
     assert report.n_full == 3  # AAPL, MSFT, NVDA
     assert report.n_equity_only == 0
     assert report.n_uncovered == 0
+
+
+# ---------------------------------------------------------------------------
+# Stale quote coverage — otherwise-FULL symbol with a stale quote → STALE
+# ---------------------------------------------------------------------------
+
+
+def test_stale_quote_produces_stale_status_not_full(monkeypatch):
+    """A symbol with quote + bars + fundamentals all reachable, but whose
+    quote is flagged ``is_stale=True`` (delayed feed / past the provider's
+    staleness threshold), must be classified STALE -- distinct from FULL --
+    rather than being silently folded into FULL."""
+    from data import portfolio_sync as ps
+    from data import robinhood_client as rc
+    import data.market_data as md
+
+    held = {"AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0)}
+    snap = _FakeSnapshot(positions=held)
+
+    client = _FakeRobinhoodClient(holdings=held, watchlists={})
+    monkeypatch.setattr(rc, "_watchlist_tickers", lambda name: [])
+
+    provider = _FakeProvider(
+        covered={"AAPL"}, has_funds={"AAPL"}, stale={"AAPL"},
+    )
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+
+    report = ps.build_sync_report(snap, client=client)
+
+    aapl = report.symbols["AAPL"]
+    assert aapl.is_stale_quote is True
+    assert aapl.coverage is ps.CoverageStatus.STALE
+    assert aapl.coverage is not ps.CoverageStatus.FULL
+    assert report.n_stale == 1
+    assert report.n_full == 0
+
+
+def test_fresh_quote_still_classifies_full(monkeypatch):
+    """Sanity check: a fresh quote with full coverage still produces FULL,
+    not STALE -- the new status must be additive, not a regression on the
+    existing happy path."""
+    from data import portfolio_sync as ps
+    from data import robinhood_client as rc
+    import data.market_data as md
+
+    held = {"AAPL": _FakePosition("AAPL", 10, 150.0, 175.0, 1_750.0)}
+    snap = _FakeSnapshot(positions=held)
+
+    client = _FakeRobinhoodClient(holdings=held, watchlists={})
+    monkeypatch.setattr(rc, "_watchlist_tickers", lambda name: [])
+
+    provider = _FakeProvider(covered={"AAPL"}, has_funds={"AAPL"}, stale=set())
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+
+    report = ps.build_sync_report(snap, client=client)
+
+    aapl = report.symbols["AAPL"]
+    assert aapl.is_stale_quote is False
+    assert aapl.coverage is ps.CoverageStatus.FULL
+    assert report.n_stale == 0
+    assert report.n_full == 1
 
 
 # ---------------------------------------------------------------------------

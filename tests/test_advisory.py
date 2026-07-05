@@ -700,6 +700,90 @@ class TestDataQuality:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Task A6 — context_extras threading (universe-relative signals)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestContextExtrasThreading:
+    """evaluate()'s optional context_extras kwarg must be threaded straight
+    through to StrategyEngine.evaluate_security() so cross-sectional momentum
+    and multifactor signals score with real universe-relative data instead of
+    silently falling back to neutral 0 (see signals/cross_sectional_momentum.py
+    and signals/multifactor.py's two-phase pre_compute/compute hook pattern).
+    """
+
+    def test_context_extras_passed_through_to_strategy_engine(self):
+        """When context_extras is supplied, evaluate_security() must be
+        called with that EXACT object as its context_extras kwarg."""
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+
+        sentinel_extras = {
+            "xsec_percentile_ranks": {"TEST": 0.87},
+            "multifactor_scores": {"TEST": {"Multifactor_Composite": 1.2}},
+        }
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            MockSE.return_value = se_instance
+
+            evaluate(
+                "TEST", None, market, _make_account_snapshot(),
+                transactions_store=ts,
+                context_extras=sentinel_extras,
+            )
+
+            assert se_instance.evaluate_security.called
+            _, kwargs = se_instance.evaluate_security.call_args
+            assert kwargs.get("context_extras") is sentinel_extras
+
+    def test_context_extras_omitted_defaults_to_none(self):
+        """Backward compatibility: when context_extras is omitted entirely,
+        evaluate_security() must still be called (with context_extras=None
+        or simply absent) -- existing call sites that predate this kwarg
+        must be unaffected."""
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            MockSE.return_value = se_instance
+
+            evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts)
+
+            assert se_instance.evaluate_security.called
+            _, kwargs = se_instance.evaluate_security.call_args
+            assert kwargs.get("context_extras") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Sizing tests
 # ─────────────────────────────────────────────────────────────────────────────
 

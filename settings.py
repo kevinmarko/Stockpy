@@ -126,6 +126,14 @@ class Settings(BaseSettings):
         default=21_600,
         description="In-process fundamentals cache TTL in seconds (default 6 h).",
     )
+    # Shorter TTL specifically for NEGATIVE (empty-dict) fundamentals responses
+    # -- a provider that was rate-limited or briefly down would otherwise stay
+    # "no data" for the full positive-cache TTL (up to 6 h) even after it
+    # recovers. Negative results are re-tried much sooner than positive ones.
+    FUNDAMENTALS_NEG_CACHE_TTL_SECONDS: int = Field(
+        default=900,
+        description="In-process NEGATIVE (empty) fundamentals cache TTL in seconds (default 15 min).",
+    )
     # Sliding-window call budget for FinnhubProvider (per 60 s).  Free tier is
     # 60 calls/minute; we default to 50 to leave headroom for the two auxiliary
     # endpoints (quote, company_profile2) that ``get_fundamentals`` invokes.
@@ -237,6 +245,16 @@ class Settings(BaseSettings):
     RISK_GATE_ENFORCE_MARKET_HOURS: bool = Field(
         default=True,
         description="Block orders outside NYSE RTH (09:30–16:00 ET).",
+    )
+
+    # --- HMM regime detector (regime/hmm_regime.py, macro_engine.py) ---
+    HMM_N_STATES: int = Field(
+        default=3,
+        description="Number of hidden states for the Gaussian HMM regime detector (bull/sideways/bear).",
+    )
+    HMM_RETRAIN_FREQ_DAYS: int = Field(
+        default=7,
+        description="Minimum days between HMM refits; fit() calls within this window of the last real fit are no-ops.",
     )
 
     # --- Kill switch (execution/kill_switch.py) ---
