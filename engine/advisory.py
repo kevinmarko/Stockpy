@@ -123,6 +123,14 @@ CONFIG: Dict[str, Any] = {
     "conviction_partial_multiplier": 0.6,   # one or more engine stages failed
     "conviction_stale_multiplier": 0.8,     # price quote flagged stale by provider
 
+    # ── Suggested exit fraction (SELL sizing) ────────────────────────────────
+    # WHY: a SELL/RISK REDUCE action previously carried no guidance on HOW MUCH
+    # of an existing position to reduce — only that you should.  These fractions
+    # (of the CURRENT held quantity) are only meaningful when the symbol is
+    # actually held; a non-held SELL has nothing to exit (never fabricated).
+    "exit_fraction_strong_sell": 1.0,   # Case A loss+bearish escalation -> full exit
+    "exit_fraction_normal_sell": 0.5,   # base-signal SELL/RISK REDUCE -> trim half
+
     # ── Forecast direction thresholds ────────────────────────────────────────
     # If (forecast_30d - current_price) / current_price < bearish threshold, the
     # 30-day forecast is classified "bearish" and increases SELL pressure; above
@@ -220,6 +228,20 @@ class Recommendation:
         technical indicators (RSI, ATR, Aroon, …) are meaningless, so they are
         omitted from ``rationale`` and reported as NaN in ``key_indicators``; the
         flag lets downstream consumers / the GUI badge the recommendation.
+    buy_range : str
+        Tactical buy-zone price band from ``strategy_engine.apply_tactical_ranges``
+        (e.g. ``"Buy Zone: $10.00 - $10.50"``), or ``""`` when the strategy
+        engine stage failed this cycle.
+    sell_range : str
+        Tactical sell-zone / stop price band from
+        ``strategy_engine.apply_sell_side_range``, or ``""`` when the strategy
+        engine stage failed this cycle.
+    suggested_exit_pct : float
+        Fraction (0.0-1.0) of the CURRENT HELD QUANTITY recommended for exit on
+        a SELL action; 0.0 when the action isn't SELL or the symbol isn't held
+        (nothing to exit — never fabricated).  ``exit_fraction_strong_sell``
+        (full exit) when Case A's loss+bearish-forecast escalation fired,
+        otherwise ``exit_fraction_normal_sell`` (a trim) for a base-signal SELL.
     """
 
     symbol: str
@@ -259,6 +281,13 @@ class Recommendation:
     # (module_name -> weighted contribution) for the symbol this cycle, or
     # ``None`` when the strategy engine failed (never fabricated — CONSTRAINT #4).
     score_components: Optional[Dict[str, float]] = None
+    # Tactical price bands, already computed by StrategyEngine.evaluate_security()
+    # every cycle but previously discarded before reaching the GUI/Sheets row —
+    # see CONFIG "buy/sell range wiring" note near the top of this file.
+    buy_range: str = ""
+    sell_range: str = ""
+    # Suggested fraction of the held quantity to exit on a SELL action.
+    suggested_exit_pct: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -663,6 +692,7 @@ def evaluate(
     final_action = base_action
     final_conviction = base_conviction
     holding_override_reason = ""
+    _case_a_fired = False  # loss+bearish-forecast escalation -> full-exit sizing
 
     if is_holding:
         # ── CASE A: Below effective cost + bearish forecast → escalate to SELL ──
@@ -672,6 +702,7 @@ def evaluate(
             if final_action in ("BUY", "HOLD"):
                 final_action = "SELL"
             final_conviction = max(final_conviction, CONFIG["conviction_strong_sell"])
+            _case_a_fired = True
             holding_override_reason = (
                 f"Position is {unrealized_pl_pct:.1f}% below the dividend-adjusted cost "
                 f"basis and the 30-day forecast implies further downside. "
@@ -723,6 +754,18 @@ def evaluate(
     # to the strong-buy level.
     if final_action == "BUY" and is_bullish_forecast:
         final_conviction = max(final_conviction, CONFIG["conviction_strong_buy"])
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Suggested exit sizing (SELL only) — how much of the HELD quantity to exit.
+    # Meaningless (and left at 0.0) unless the symbol is both a SELL and held;
+    # there is nothing to reduce in a non-held SELL (never fabricated).
+    # ──────────────────────────────────────────────────────────────────────────
+    suggested_exit_pct: float = 0.0
+    if final_action == "SELL" and is_holding:
+        suggested_exit_pct = (
+            CONFIG["exit_fraction_strong_sell"] if _case_a_fired
+            else CONFIG["exit_fraction_normal_sell"]
+        )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Step 10 — Kelly-based position sizing (BUY only)
@@ -904,6 +947,9 @@ def evaluate(
         data_quality=data_quality,
         synthetic_inputs=synthetic_inputs,
         score_components=score_components_out,
+        buy_range=str(strategy_out.get("buyRange") or ""),
+        sell_range=str(strategy_out.get("sellRange") or ""),
+        suggested_exit_pct=round(suggested_exit_pct, 4),
     )
 
 

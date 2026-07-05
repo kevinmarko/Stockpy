@@ -555,9 +555,12 @@ def _rec_to_sheet_row(
         # ── Dividends ────────────────────────────────────────────────────────
         "Dividend Yield": round(_f("dividend_yield"), 4),
 
-        # ── Execution ranges (not computed by advisory) ──────────────────────
-        "buyRange": "",
-        "sellRange": "",
+        # ── Execution ranges ──────────────────────────────────────────────────
+        # Now computed every cycle by StrategyEngine.evaluate_security() and
+        # carried on the Recommendation (see engine/advisory.py's "buy_range"/
+        # "sell_range" fields) — previously discarded before reaching this row.
+        "buyRange": rec.buy_range,
+        "sellRange": rec.sell_range,
         "Option Strategy": "",
 
         # ── Robinhood position ───────────────────────────────────────────────
@@ -848,6 +851,13 @@ def _write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDT
                 "kelly_target_pre_regime": ki.get("kelly_target_pre_regime", float("nan")),
                 "kelly_target_post_regime": ki.get("kelly_target_post_regime", float("nan")),
                 "score_components": rec.score_components or {},
+                # Tactical price bands (gui/panels/report_viewer.py's "Tactical
+                # Ranges" table already reads these keys) + suggested SELL exit
+                # sizing — both computed on Recommendation, previously dropped
+                # before reaching the GUI-facing snapshot.
+                "buy_range": rec.buy_range or "",
+                "sell_range": rec.sell_range or "",
+                "suggested_exit_pct": float(rec.suggested_exit_pct or 0.0),
             })
 
         regime = "UNKNOWN"

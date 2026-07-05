@@ -1458,6 +1458,11 @@ def render_report_viewer() -> None:
                 "Action": s.get("action", "—"),
                 "Buy Range": s.get("buy_range") or "—",
                 "Sell Range": s.get("sell_range") or "—",
+                "Suggested Exit %": (
+                    f"{float(s.get('suggested_exit_pct') or 0.0):.0%}"
+                    if s.get("action") == "SELL" and float(s.get("suggested_exit_pct") or 0.0) > 0
+                    else "—"
+                ),
             }
             for s in signals
         ]

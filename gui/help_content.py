@@ -803,6 +803,15 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "affect the pipeline's own regime-gating logic.",
         "#9-the-macro-regime-system",
     ),
+    # ── Reports tab: suggested SELL exit sizing ──────────────────────────────
+    "reports.suggested_exit_pct": _g(
+        "Suggested Exit %",
+        "Fraction of your CURRENT held quantity recommended for exit on a SELL "
+        "action — 100% when the loss+bearish-forecast escalation (Case A) fired, "
+        "50% for a base-signal SELL/RISK REDUCE (a trim). Blank for BUY/HOLD or "
+        "when the symbol isn't held — there is nothing to size in that case.",
+        "#price-ranges",
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -1314,6 +1323,11 @@ METRIC_HELP: Dict[str, str] = {
         "Count of symbols from the last pipeline run whose recorded macro "
         "status matches the sidebar regime filter. Based on "
         "`output/state_snapshot.json` — refresh the pipeline to update it."
+    ),
+    "reports.suggested_exit_pct": (
+        "Fraction of the currently held quantity recommended for exit on a "
+        "SELL action — 100% for the Case A loss+bearish-forecast escalation, "
+        "50% for a base-signal trim. Blank when not a held SELL."
     ),
 }
 
