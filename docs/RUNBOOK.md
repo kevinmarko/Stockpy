@@ -40,7 +40,7 @@ Then double-click `launch.command` again.
 and how to recreate `.venv` with Python 3.12.
 
 **Prefer a visual control panel?** Double-click **`launch_gui.command`** (or run
-`streamlit run gui/app.py`) to open the **Command Center** — a 10-tab GUI that launches
+`streamlit run gui/app.py`) to open the **Command Center** — a 14-tab GUI that launches
 the pipeline, shows live stage status, edits non-secret `.env` tunables (secrets stay
 masked/read-only), toggles signal modules and the pause gate (kill switch), and surfaces
 the Gravity audit. The GUI is read-only / file-backed: it launches `main_orchestrator.py`
@@ -86,10 +86,14 @@ The **Reports tab** includes:
 ## 1. ⚠ N/A in Advisory Mode — Paper → Live Switch
 
 > **This section is suppressed while `ADVISORY_ONLY=true`.**
-> The pre-launch readiness check (`scripts/preflight_check.py`) automatically skips all
-> broker-readiness checks (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`,
-> `paper_trading_duration`) and instead passes a single `advisory_only_active` check.
-> The GUI Strategy Matrix mode toggle (Simulation / Paper / Live) is also suppressed.
+> The pre-launch readiness check (`scripts/preflight_check.py`) automatically skips eight
+> checks: four broker-readiness checks (`alpaca_configured`, `alpaca_paper_mode`,
+> `dry_run_disabled`, `paper_trading_duration`), `alpaca_key_rotation_recent`, and three
+> runtime-state checks that are false-positives in advisory mode (`heartbeat_fresh`,
+> `validation_reports`, `no_unexpected_risk_blocks`) — and instead passes a single
+> `advisory_only_active` check. `robinhood_execution_mode` and `state_snapshot_fresh` are
+> never auto-skipped (see the Robinhood Execution Bridge section below). The GUI Strategy
+> Matrix mode toggle (Simulation / Paper / Live) is also suppressed.
 
 **To re-enable broker execution (future use):**
 
@@ -582,8 +586,10 @@ broker surface quarantined:
    an INFO log before any broker import is reached.
 2. **GUI** — `gui/app.py` renders a persistent `📋 ADVISORY MODE` banner; the Strategy
    Matrix mode toggle (Simulation / Paper / Live) is suppressed.
-3. **Preflight** — four broker-dependent checks auto-skip; `advisory_only_active` check
-   is PASS-loud (and PASS-with-warning when `ADVISORY_ONLY=false`).
+3. **Preflight** — eight broker-dependent / advisory-false-positive checks auto-skip;
+   `advisory_only_active` check is PASS-loud (and PASS-with-warning when
+   `ADVISORY_ONLY=false`). `robinhood_execution_mode` and `state_snapshot_fresh` are
+   never auto-skipped — the Robinhood execution bridge is orthogonal to this quarantine.
 
 **Re-enabling broker execution** requires ALL THREE flags to be `false` simultaneously:
 `ADVISORY_ONLY=false AND DRY_RUN=false AND ALPACA_PAPER=false`. Follow the procedure in
