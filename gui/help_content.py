@@ -22,7 +22,7 @@ Exported public API
 ``GLOSSARY``
     ``Dict[str, GlossaryEntry]`` keyed by lower-cased term.
 ``TAB_HELP``
-    ``Dict[str, TabHelp]`` keyed by the 10 Command Center tab IDs.
+    ``Dict[str, TabHelp]`` keyed by the 14 Command Center tab IDs.
 ``SECTION_HELP``
     ``Dict[str, str]`` — one-sentence tooltip per named panel section.
 ``METRIC_HELP``
@@ -756,7 +756,7 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
 }
 
 # ---------------------------------------------------------------------------
-# TAB_HELP — 10 Command Center tab IDs
+# TAB_HELP — 14 Command Center tab IDs
 # ---------------------------------------------------------------------------
 
 TAB_HELP: Dict[str, TabHelp] = {
@@ -882,6 +882,39 @@ TAB_HELP: Dict[str, TabHelp] = {
         "`DEFAULT_TICKERS` in `.env` for the next pipeline run.",
         ("live inventory", "advisory mode"),
         "#4-choosing-your-ticker-universe",
+    ),
+    "help": _t(
+        "help",
+        "❓ Help",
+        "In-app glossary and per-tab reference — search 60+ terms (Kelly Target, "
+        "PBO, DSR, Sahm Rule, IVR, HMM, …) with plain-English definitions and "
+        "'Read more →' links back to the How-To Guide, plus a tab-by-tab "
+        "description of every Command Center tab.  Purely informational.",
+        ("advisory mode",),
+        "#in-app-help--glossary",
+    ),
+    "prompts": _t(
+        "prompts",
+        "📝 Prompts",
+        "Shows the resolved version and source (pin / remote / disk cache / "
+        "baseline) of every AI-facing prompt in the Prompt Registry, with a "
+        "'🔄 Sync' button and a diff/rollback viewer.  Fetched prompts are "
+        "advisory text only — they can change what an AI is told, never what "
+        "the platform is permitted to do.",
+        ("advisory mode",),
+        "#16-remote-prompt-updates-prompt-registry",
+    ),
+    "ai_insights": _t(
+        "ai_insights",
+        "🪄 AI Insights",
+        "Per-symbol AI reads layered on top of the pipeline's own signals: an "
+        "Opal research brief (thesis/catalysts/risk factors grounded in real "
+        "Finnhub news), a Claude analyst rationale note, a Gemini chart-pattern "
+        "read, and a Claude-vs-Gemini disagreement view.  Every section is "
+        "button-gated — nothing calls an AI provider until you click it — and "
+        "purely informational: no AI output here places or modifies an order.",
+        ("advisory mode",),
+        "#ai-insights--ai-control-center",
     ),
     "ai_control_center": _t(
         "ai_control_center",

@@ -9,7 +9,7 @@ Coverage
 --------
 * GlossaryEntry and TabHelp are frozen dataclasses with the expected fields.
 * GLOSSARY contains every required term and returns correct types.
-* TAB_HELP contains all 10 Command Center tab IDs.
+* TAB_HELP contains all 14 Command Center tab IDs.
 * SECTION_HELP and METRIC_HELP are non-empty dicts.
 * get_tab_help / get_glossary return correct objects or None for unknown keys.
 * metric_help returns a non-empty string for known keys, empty string for unknown.
@@ -239,6 +239,10 @@ class TestTabHelp:
         "market_data",
         "observability",
         "live_inventory",
+        "help",
+        "prompts",
+        "ai_insights",
+        "ai_control_center",
     }
 
     def test_all_tab_ids_present(self) -> None:
@@ -247,12 +251,11 @@ class TestTabHelp:
         missing = self._EXPECTED_TAB_IDS - set(TAB_HELP.keys())
         assert not missing, f"Missing tab IDs: {missing}"
 
-    def test_exactly_10_tabs(self) -> None:
+    def test_exactly_14_tabs(self) -> None:
         from gui.help_content import TAB_HELP
 
-        # 10 original tabs + the AI Control Center tab (ai_insights and prompts
-        # intentionally carry no TAB_HELP entry — explain() no-ops for those).
-        assert len(TAB_HELP) == 11
+        # All 14 gui/app.py Command Center tabs now have a TAB_HELP entry.
+        assert len(TAB_HELP) == 14
 
     def test_values_are_tab_help(self) -> None:
         from gui.help_content import TAB_HELP, TabHelp
