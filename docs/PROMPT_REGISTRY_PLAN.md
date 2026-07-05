@@ -1,6 +1,16 @@
 # Remote-Updatable Prompt Registry — Implementation Plan
 
-**Status:** Planning doc, ready for an implementing agent to pick up.
+**Status: SHIPPED.** This document is retained as the historical work order / design
+record. The `prompt_registry/` package (`models.py`, `store.py`, `registry.py`,
+`__main__.py`, `guardrails.py`, `signing.py`, `cache.py`, `baseline/`) exists in full,
+matching the structure proposed below, and the GUI Prompts tab
+(`gui/panels/prompt_registry.py`) is live. `LocalJSONStore.publish()`
+(`prompt_registry/store.py:180`) is now a real read-modify-write implementation — not
+read-only as originally scoped below; `HTTPStore` and `FirestoreStore` remain read-only
+(`publish` raises `ReadOnlyStoreError`) as planned. Audited by Gravity
+`step_73_prompt_registry_audit` (the placeholder `step_69` references below were
+renumbered during implementation as other Gravity steps were added in between). See the
+"Prompt Registry" section of `docs/FEATURE_TIER_HISTORY.md` for the live description.
 **Authored:** 2026-06-30
 **Goal.** Move every AI-facing instruction (the **master pre-prompt**, the per-stage
 development prompts, and the runtime LLM prompts such as the Gravity auditor's
@@ -229,7 +239,7 @@ Verbose-rationale templates and news-sentiment prompts can migrate later via the
 | `rollback <id>` | repoint pin to previous cached version |
 | `diff <id> <vA> <vB>` | unified diff between two versions |
 | `verify` | re-check signatures + guardrails of cache; non-zero exit on failure |
-| `publish <id> <file>` | (publish creds only) push a new signed version to the remote |
+| `publish <id> <file>` | (publish creds only) push a new signed version to the remote. **Shipped as read-modify-write on `LocalJSONStore`**; `HTTPStore`/`FirestoreStore` still raise `ReadOnlyStoreError` as planned. |
 
 All commands dead-letter tolerant: a network/parse failure prints a clear message and exits
 non-zero, never tracebacks.

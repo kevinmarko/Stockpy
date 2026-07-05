@@ -85,7 +85,7 @@ This creates `quant_platform.db` (SQLite) with the correct schema for storing da
 python scripts/preflight_check.py
 ```
 
-This runs 15 automated readiness checks. On a fresh setup you will see some failures (especially `heartbeat_fresh` and `paper_trading_duration`) — that is normal. See [Section 13](#13-preflight-check--are-you-ready-to-go-live) for what each check means.
+This runs 17 automated readiness checks. On a fresh setup you will see some failures (especially `heartbeat_fresh` and `paper_trading_duration`) — that is normal. See [Section 13](#13-preflight-check--are-you-ready-to-go-live) for what each check means.
 
 ---
 
@@ -201,9 +201,9 @@ The **Command Center** is a graphical front-end over the same pipeline, ideal if
 streamlit run gui/app.py
 ```
 
-It opens in your browser with nine tabs:
+It opens in your browser with fourteen tabs:
 
-1. **🚀 Launcher** — **two** launch buttons: **▶️ Launch Pipeline** runs `main_orchestrator.py` (async, broker, full HTML report); **🔄 Refresh Data (Advisory)** runs `main.py` (synchronous advisory loop, broker-free — the canonical `.env`-loading entry point). Live stage indicators (Data Acquisition → Processing → Forecasting → Execution) for the orchestrator path, a heartbeat freshness gauge, and **two log expanders** — the active run log (`output/gui_run.log` or `output/gui_advisory.log`) plus the platform-wide structured telemetry stream from `alerting.setup_logging()` (`logs/investyo.log`). A **pre-launch env-readiness check** flags missing required variables (e.g. `FRED_API_KEY`) *before* you click, so a degraded run is diagnosed up front rather than after the fact. Optional **Dry run**, **Refresh Robinhood account**, and **Auto-refresh while running** (5 s ticker) toggles.
+1. **🚀 Launcher** — **two** launch buttons: **▶️ Launch Pipeline** runs `main_orchestrator.py` (async, broker, full HTML report); **🔄 Refresh Data (Advisory)** runs `main.py` (synchronous advisory loop, broker-free — the canonical `.env`-loading entry point). Live stage indicators (Data Acquisition → Processing → Forecasting → Execution) for the orchestrator path, a heartbeat freshness gauge, and **two log expanders** — the active run log (`output/gui_run.log` or `output/gui_advisory.log`) plus the platform-wide structured telemetry stream from `alerting.setup_logging()` (`logs/investyo.log`). A **pre-launch env-readiness check** flags missing required variables (e.g. `FRED_API_KEY`) *before* you click, so a degraded run is diagnosed up front rather than after the fact. Optional **Dry run**, **Refresh Robinhood account**, and **Auto-refresh while running** (5 s ticker) toggles. Also surfaces the Robinhood execution-bridge mode banner (see [Robinhood Execution Bridge](#robinhood-execution-bridge)).
 2. **📈 Reports** — portfolio heat, edge/MFE/MAE on the latest signals, one-click download of the generated HTML report / signals CSV, and a full **Brinson-Fachler Attribution Analysis** section. Edit the GICS-11 sector matrix directly (`st.data_editor`) or **bulk-paste TSV/CSV** from a spreadsheet, then click *Compute attribution* to see allocation / selection / interaction effects (top-line metrics + per-sector breakdown + bar chart, with CSV downloads for the editor input and the breakdown).
 3. **⚙️ Settings** — edit **non-secret** tunables (`RISK_FREE_RATE`, `KELLY_FRACTION`, `DEFAULT_TICKERS`, thresholds, …) and save them to `.env`. **Secrets (API keys, passwords, TOTP) are shown masked and are read-only here** — edit those directly in `.env`. Changes take effect on the **next** launch.
 4. **🧩 Strategy Matrix** — enable/disable individual signal modules (writes `DISABLED_SIGNAL_MODULES`), adjust their weights (writes `SIGNAL_WEIGHTS`), and manually activate/deactivate the **Macro Kill Switch**.
@@ -212,6 +212,11 @@ It opens in your browser with nine tabs:
 7. **🧮 Options** — Black-Scholes Greeks and an IV-Rank proxy per active symbol.
 8. **🛰️ Market Data** — which provider is active (Alpaca real-time vs. yfinance delayed), quote freshness, and a cache-reset control.
 9. **📊 Observability** — a compact macro-regime / VIX / HMM / P&L summary (the full standalone dashboard remains at `streamlit run observability/dashboard.py`).
+10. **📡 Live Inventory** — the full Task 1.4 sync view: holdings ∪ every Robinhood watchlist ∪ file-backed watchlists, each symbol's `CoverageStatus` (FULL / QUOTES_ONLY / EQUITY_ONLY / UNCOVERED), cost-basis delta, and forecast-availability flag. **🔄 Sync Now** refreshes the universe and persists it as `DEFAULT_TICKERS` in `.env`.
+11. **❓ Help** — the in-app glossary and per-tab/per-metric explainer tooltips plus the first-run onboarding tour; see [In-App Help & Glossary](#in-app-help--glossary).
+12. **📝 Prompts** — the Remote-Updatable Prompt Registry: view/publish versioned prompt text, verify signatures, and roll back; see [§16 Remote Prompt Updates (Prompt Registry)](#16-remote-prompt-updates-prompt-registry).
+13. **🪄 AI Insights** — Opal research brief, Claude analyst note, Gemini chart-pattern read, and an aggregate Claude-vs-Gemini disagreement view, all operator-triggered per symbol; see [AI Insights & AI Control Center](#ai-insights--ai-control-center).
+14. **🎛️ AI Control Center** — one place to toggle every AI capability (Claude commentary, Gemini alerts/vision, Gravity AI runner, Opal research), run each on demand, and start/stop a recurring pipeline run; see [AI Insights & AI Control Center](#ai-insights--ai-control-center).
 
 The Command Center is **read-only and file-backed**: it never talks to the broker directly — it launches the orchestrator and reads the files the orchestrator writes, so it stays usable even when the broker API is down. One-time setup: `chmod +x launch_gui.command`.
 
@@ -621,17 +626,19 @@ If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt
 python scripts/preflight_check.py
 ```
 
-Runs 15 checks total. Behaviour depends on `ADVISORY_ONLY`:
+Runs 17 checks total. Behaviour depends on `ADVISORY_ONLY`:
 
-* **`ADVISORY_ONLY=true` (default)**: seven checks are automatically skipped (shown
+* **`ADVISORY_ONLY=true` (default)**: eight checks are automatically skipped (shown
   as PASS with a per-check advisory-mode note): four broker-stack checks
   (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`,
   `paper_trading_duration`), one key-rotation check (`alpaca_key_rotation_recent` —
   Alpaca keys have no blast-radius risk while the broker surface is quarantined), and
-  two runtime-state checks that are false-positives for advisory runs
-  (`heartbeat_fresh`, `validation_reports`). `advisory_only_active` always passes
-  loudly. Exit 0 when the remaining checks pass.
-* **`ADVISORY_ONLY=false`**: all 15 checks run. Exit 0 only when ALL pass (required
+  three runtime-state checks that are false-positives for advisory runs
+  (`heartbeat_fresh`, `validation_reports`, `no_unexpected_risk_blocks`).
+  `advisory_only_active` always passes loudly, and `robinhood_execution_mode` /
+  `state_snapshot_fresh` are **never** auto-skipped (see below — they're the
+  advisory-relevant liveness/safety checks). Exit 0 when the remaining checks pass.
+* **`ADVISORY_ONLY=false`**: all 17 checks run. Exit 0 only when ALL pass (required
   before going live).
 
 | Check | Advisory skip? | Passes when | How to fix a failure |
@@ -640,17 +647,19 @@ Runs 15 checks total. Behaviour depends on `ADVISORY_ONLY`:
 | `key_rotation_recent` | No | `FRED_KEY_ROTATED_DATE` set and within 90 days — warning only, never blocking | Set `FRED_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` when you rotate |
 | `alpaca_key_rotation_recent` | **Yes** | `ALPACA_KEY_ROTATED_DATE` set and within 90 days — warning only, never blocking | Set `ALPACA_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` when you rotate |
 | `advisory_only_active` | No | Always — PASS-loud when `true`, PASS-with-warning when `false` | Set `ADVISORY_ONLY=true` to return to advisory mode |
+| `robinhood_execution_mode` | No | `ROBINHOOD_EXECUTION_MODE` is `off`/`review` (always passes), or `live` with a positive `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` — independent of `ADVISORY_ONLY` since the Robinhood bridge is orthogonal to the Alpaca quarantine | Set `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` to a per-order dollar cap before setting `ROBINHOOD_EXECUTION_MODE=live` |
 | `alpaca_configured` | **Yes** | Both Alpaca keys are set | Add keys to `.env` |
 | `macro_regime_gate_enabled` | No | `MACRO_REGIME_GATE_ENABLED=true` (blocks in live mode when off) | Set `MACRO_REGIME_GATE_ENABLED=true` in `.env` |
 | `alpaca_paper_mode` | **Yes** | `ALPACA_PAPER=true` — warning only | Change to `false` only when ready to go live |
 | `dry_run_disabled` | **Yes** | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
 | `env_not_committed` | No | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
 | `kill_switch_inactive` | No | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
+| `state_snapshot_fresh` | No | `output/state_snapshot.json` is < 2 hours old (written by BOTH `main.py` and `main_orchestrator.py` — the cross-mode liveness indicator, so never skipped even in advisory mode) | Run `python3 main.py` or `python3 main_orchestrator.py` to regenerate it |
 | `heartbeat_fresh` | **Yes** | `output/heartbeat.txt` is < 2 hours old (written by `main_orchestrator.py` only) | Run `python3 main_orchestrator.py` to generate it |
 | `db_exists` | No | `quant_platform.db` exists and is non-empty | Run `python3 database_setup.py` |
 | `paper_trading_duration` | **Yes** | ≥ 90 days since `PAPER_TRADING_START_DATE` | Wait — this is intentional; set your start date when you begin |
 | `validation_reports` | **Yes** | At least one report exists, deployable, and < 30 days old | Run `python -m validation.harness --strategy main_pipeline --start 2015-01-01 --end 2024-12-31` |
-| `no_unexpected_risk_blocks` | No | No `minimum_validation` blocks in last 24 h | Generate a validation report — the minimum_validation risk gate is blocking because no deployable reports exist |
+| `no_unexpected_risk_blocks` | **Yes** | No `minimum_validation` blocks in last 24 h | Generate a validation report — the minimum_validation risk gate is blocking because no deployable reports exist |
 
 ### JSON output (for automation)
 
@@ -972,7 +981,7 @@ pytest -x
 | `tests/test_risk_gate.py` | All 10 pre-trade risk gate checks |
 | `tests/test_kill_switch.py` | Kill switch lifecycle |
 | `tests/test_alerts.py` | Alert channel dispatch (Discord, Slack, email, file) |
-| `tests/test_preflight.py` | All 14 preflight checks |
+| `tests/test_preflight.py` | All 17 preflight checks |
 | `tests/test_hmm_synthetic.py` | HMM regime detector accuracy |
 | `tests/test_kelly.py` | Kelly sizing formula and fallback |
 | `tests/test_multifactor.py` | Fama-French multifactor signal |
@@ -1113,7 +1122,7 @@ account.
 | `main_orchestrator._execute_broker_orders` | Returns immediately with an INFO log — no broker imports reached |
 | `gui/app.py` header | Shows `📋 ADVISORY MODE` banner instead of Simulation / Paper / Live badge |
 | Strategy Matrix mode toggle | Suppressed — replaced by a read-only caption showing underlying flags |
-| `scripts/preflight_check.py` | Four broker checks auto-skip; `advisory_only_active` = PASS-loud |
+| `scripts/preflight_check.py` | Eight broker/advisory-false-positive checks auto-skip; `advisory_only_active` = PASS-loud; `robinhood_execution_mode` and `state_snapshot_fresh` always run |
 | Kill switch sentinel | Repurposes as a pause-recommendations gate (see §15) |
 
 ### Re-enabling broker execution
@@ -1124,7 +1133,7 @@ ADVISORY_ONLY=false
 DRY_RUN=false
 ALPACA_PAPER=true    # start with paper; change to false only for live
 
-# 2. Verify preflight (all 13 checks must pass)
+# 2. Verify preflight (all 17 checks must pass)
 python scripts/preflight_check.py
 
 # 3. Launch pipeline (paper mode)
@@ -1467,6 +1476,71 @@ operating procedure: see `docs/RUNBOOK.md` → "Robinhood Execution Bridge".
 
 ---
 
+## AI Insights & AI Control Center
+
+Tier 9 added three **operator-triggered, opt-in** LLM agents — Claude (per-symbol analyst
+notes), Gemini (alert text + chart-pattern vision), and Opal (front-of-pipeline research
+briefs, on OpenAI or Gemini) — plus a Gravity AI audit runner. All four are **off by
+default**, **soft-fail** to the deterministic template/signal when disabled or the
+API key is missing, and **never touch numeric pipeline scalars** (Kelly Target, score,
+regime) — they only add commentary/context alongside the existing deterministic output.
+
+### 🎛️ AI Control Center tab
+
+One place to turn every AI option on or off, run each on demand, and start/stop a
+recurring pipeline run — nothing here runs autonomously:
+
+- **Section A — master switches.** Toggles `LLM_COMMENTARY_ENABLED` (gates both Claude
+  commentary and Gemini alerts/vision), the Gravity AI runner, and `OPAL_RESEARCH_ENABLED`
+  (independent switch for the Opal research agent). Each capability shows a
+  ready / disabled / missing-key / not-built badge.
+- **Section B — on-demand actions.** Run a per-symbol Claude note, Gemini chart-vision
+  read, or Opal research brief without waiting for a full pipeline cycle.
+- **Section C — Gravity AI audit.** Runs the same audit as the 🛡️ Gravity Audit tab.
+- **Section D — run control.** Start/stop an `--interval` or `--agent` orchestrator run;
+  you can stop it at any time.
+
+Provider API keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) are
+**secret-only in `.env`** — never GUI-writable, per the same `gui/env_io.py` allowlist
+that protects every other secret. Toggle changes take effect on the **next** launch.
+
+### 🪄 AI Insights tab
+
+Four sections, front-of-pipeline first, for a symbol you pick from the current signal
+universe:
+
+0. **🔬 Opal research brief** — gated by its own `OPAL_RESEARCH_ENABLED` switch
+   (independent of the Claude/Gemini gate below) and routed via
+   `OPAL_RESEARCH_PROVIDER` (`openai` or `gemini` — requires the matching API key).
+   Rendered first since Opal's output threads into the Claude analyst call when both
+   are enabled.
+1. **🤖 Claude analyst note** — a plain-English per-symbol rationale, the same helper
+   used by the Reports tab's drill-down button.
+2. **📈 Gemini chart-pattern interpretation** — renders a 252-bar price chart and, on
+   click, sends it to Gemini Vision for a pattern read.
+3. **🔍 Aggregate Claude vs. Gemini disagreement** — one row per watchlist symbol
+   showing the deterministic action alongside the Claude and Gemini verdicts and
+   whether they disagree; populated as you run sections 1 and 2 across symbols.
+
+Every section degrades independently — one section's failure (e.g. a missing API key)
+renders an inline message without breaking the rest of the tab.
+
+### Relevant environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_COMMENTARY_ENABLED` | `false` | Master switch for Claude analyst notes + Gemini alerts/vision |
+| `ANTHROPIC_API_KEY` | _(none)_ | Required for Claude analyst notes |
+| `GEMINI_API_KEY` | _(none)_ | Required for Gemini alerts, chart vision, and Opal when `OPAL_RESEARCH_PROVIDER=gemini` |
+| `OPAL_RESEARCH_ENABLED` | `false` | Independent master switch for the Opal research agent |
+| `OPAL_RESEARCH_PROVIDER` | `openai` | `openai` or `gemini` — which backend runs Opal |
+| `OPENAI_API_KEY` | _(none)_ | Required when `OPAL_RESEARCH_PROVIDER=openai` |
+
+See `docs/FEATURE_TIER_HISTORY.md` (Tier 9 sections) for the full build history of
+each agent, and `docs/OPAL_BUILD_SPEC.md` for Opal's design record.
+
+---
+
 ## In-App Help & Glossary
 
 The **❓ Help tab** in the Command Center (`streamlit run gui/app.py`) gives instant access
@@ -1499,7 +1573,8 @@ file (`output/.gui_onboarded`). Delete that file to reset the tour.
 Metric tooltips are looked up via keys of the form `"<tab>.<metric_name>"` in
 `gui/help_content.METRIC_HELP`. A missing key returns `""` and renders no tooltip
 — it **never raises** (CONSTRAINT #6). All operator-facing definitions live in
-`gui/help_content.py`; never hard-code explainer prose directly in `gui/panels.py`.
+`gui/help_content.py`; never hard-code explainer prose directly in the `gui/panels/`
+per-tab modules.
 
 ### Anchor-contract invariant
 

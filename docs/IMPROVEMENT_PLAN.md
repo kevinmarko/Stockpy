@@ -1,6 +1,6 @@
 # InvestYo Platform — Improvement & Efficiency Plan
 
-**Status:** Active — Phases 0–1 in progress.
+**Status:** Phases 0–5 done; Phase 6 (Aggregator) conditional/open — see the Progress log at the bottom for the current state.
 **Authored:** 2026-06-29
 **Owner:** Claude Code session.
 

@@ -22,6 +22,7 @@
   (preflight check #3 — warning-only; auto-skipped when `ADVISORY_ONLY=true`; check wired in Stage 3 of the 2026-06-26 cleanup plan).
 - [ ] *(manual)* No sensitive data (account numbers, SSN, trade history) stored unencrypted on disk.
 - [ ] *(manual)* Broker account uses 2-factor authentication.
+- [ ] If `ROBINHOOD_EXECUTION_MODE=live` (Tier 8 execution bridge, independent of `ADVISORY_ONLY`), `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` is set to a positive per-order dollar ceiling — `check_robinhood_execution_mode` FAILS otherwise. This check is never auto-skipped under `ADVISORY_ONLY=true` since the Robinhood path is orthogonal to the Alpaca quarantine.
 
 ---
 
