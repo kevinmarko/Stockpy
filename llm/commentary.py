@@ -69,7 +69,7 @@ def _registry_prompt(prompt_id: str, default: str) -> str:
         from prompt_registry import get_registry  # noqa: PLC0415
 
         registry = get_registry()
-        body = registry.get(prompt_id)
+        body = registry.get(prompt_id, default)
     except Exception as exc:
         logger.debug("Prompt registry lookup for %s failed: %s", prompt_id, exc)
         return default

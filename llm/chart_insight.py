@@ -68,7 +68,7 @@ def _registry_prompt(prompt_id: str, default: str) -> str:
     try:
         from prompt_registry import get_registry  # noqa: PLC0415
 
-        body = get_registry().get(prompt_id)
+        body = get_registry().get(prompt_id, default)
         if isinstance(body, str) and body.strip():
             return body
     except Exception as exc:
