@@ -260,6 +260,80 @@ class TestPayloadSchema:
 # ===========================================================================
 
 
+class TestProactiveNotify:
+    """`emit_execution_queue` pushes an ntfy alert via `alerting.notify` for
+    genuinely new intents, and never re-notifies about an unchanged one on
+    the next `--interval` cycle.
+    """
+
+    def _patch_notify(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            "alerting.notify",
+            lambda title, message, priority="default": calls.append(
+                (title, message, priority)
+            ),
+        )
+        return calls
+
+    def test_new_intent_triggers_notify(self, tmp_path, no_cap, monkeypatch):
+        calls = self._patch_notify(monkeypatch)
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        qb.emit_execution_queue(rr, mode="review", output_dir=tmp_path, now=_RTH)
+        assert len(calls) == 1
+        title, message, priority = calls[0]
+        assert "NVDA" in message
+        assert priority == "default"  # review mode → never placeable
+
+    def test_unchanged_queue_does_not_renotify(self, tmp_path, no_cap, monkeypatch):
+        calls = self._patch_notify(monkeypatch)
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        qb.emit_execution_queue(rr, mode="review", output_dir=tmp_path, now=_RTH)
+        qb.emit_execution_queue(rr, mode="review", output_dir=tmp_path, now=_RTH)
+        assert len(calls) == 1  # second cycle: identical intent, no repeat push
+
+    def test_newly_placeable_intent_renotifies_with_high_priority(self, tmp_path, monkeypatch):
+        calls = self._patch_notify(monkeypatch)
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        monkeypatch.setattr(qb, "_max_notional", lambda: 0.0)
+        qb.emit_execution_queue(rr, mode="live", output_dir=tmp_path, now=_RTH)
+        monkeypatch.setattr(qb, "_max_notional", lambda: 5000.0)
+        qb.emit_execution_queue(rr, mode="live", output_dir=tmp_path, now=_RTH)
+        assert len(calls) == 2
+        assert calls[0][2] == "default"       # blocked (no cap) → not placeable
+        assert calls[1][2] == "high"          # now clears the gate → READY TO PLACE
+        assert "READY TO PLACE" in calls[1][1]
+
+    def test_empty_queue_skips_notify(self, tmp_path, no_cap, monkeypatch):
+        calls = self._patch_notify(monkeypatch)
+        rr = _rr([_Rec("IBM", "HOLD", 0.99)])  # dropped, produces zero intents
+        qb.emit_execution_queue(rr, mode="review", output_dir=tmp_path, now=_RTH)
+        assert calls == []
+
+    def test_notify_failure_does_not_break_emit(self, tmp_path, no_cap, monkeypatch):
+        monkeypatch.setattr(
+            "alerting.notify",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ntfy down")),
+        )
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        path = qb.emit_execution_queue(rr, mode="review", output_dir=tmp_path, now=_RTH)
+        assert path is not None and path.exists()  # queue write still succeeded
+
+    def test_notified_sidecar_is_readable_by_gui_panel(self, tmp_path, no_cap, monkeypatch):
+        # Cross-module contract: the GUI's read side must be able to parse
+        # what this module actually writes (gui/robinhood_execution_panel.py).
+        self._patch_notify(monkeypatch)
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        qb.emit_execution_queue(rr, mode="review", output_dir=tmp_path, now=_RTH)
+
+        from gui.robinhood_execution_panel import read_notification_state
+        state = read_notification_state(tmp_path / "execution_queue_notified.json")
+        assert state is not None
+        assert state.last_notified_at == _RTH.isoformat()
+        assert state.last_notified_count == 1
+        assert state.last_notified_priority == "default"
+
+
 class TestGateIntent:
     def test_gate_intent_returns_reasons_on_block(self):
         # Force a block: tiny equity so a large notional trips max_position_size.

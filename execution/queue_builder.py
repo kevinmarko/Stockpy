@@ -26,6 +26,13 @@
 # Function names here deliberately avoid the order-submission tokens the
 # repo-wide AST guard (`tests/test_pipeline_smoke.py::TestNoOrderFunctions`)
 # forbids — there is no `place_*` / `submit_order` / `*_order` definition.
+#
+# Proactive notification: `emit_execution_queue` fires an `alerting.notify()`
+# push (ntfy, no-op unless NTFY_TOPIC is set) whenever the written queue
+# contains an intent the operator hasn't already been told about — so the
+# operator can be pulled into the `robinhood-execution` skill from outside
+# the chat window instead of having to remember to check. See
+# `_notify_new_intents` below for the dedup rule.
 # =============================================================================
 
 from __future__ import annotations
@@ -339,6 +346,111 @@ def build_execution_queue(
     }
 
 
+_NOTIFIED_FILENAME = "execution_queue_notified.json"
+
+
+def _intent_notify_key(intent: Dict[str, Any]) -> str:
+    """Identity used to detect a genuinely NEW (or newly-placeable) intent.
+
+    Deliberately excludes ``client_order_id``: that id is bucketed by a 60s
+    timestamp (`execution.order_manager.make_client_order_id`), so it changes
+    every cycle even for an unchanged recommendation — keying on it would push
+    a duplicate notification on every `--interval` tick. Including
+    ``allow_place`` means a recommendation that was blocked and later clears
+    the gate (or the kill switch is lifted) is treated as notify-worthy again.
+    """
+    return f"{intent.get('symbol')}:{intent.get('side')}:{intent.get('allow_place')}"
+
+
+_NOTIFIED_STATE_DEFAULTS: Dict[str, Any] = {
+    "keys": [],
+    "last_notified_at": None,
+    "last_notified_title": None,
+    "last_notified_count": None,
+    "last_notified_priority": None,
+}
+
+
+def _load_notified_state(path: Path) -> Dict[str, Any]:
+    """Read the notify-dedup sidecar; tolerant of missing/corrupt/legacy files.
+
+    The GUI's `gui/robinhood_execution_panel.py` reads this same file
+    (read-only) to render a "last notification sent" indicator, so its schema
+    is a small public contract, not purely internal state.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, list):  # pre-GUI-indicator format: a bare key list
+            return {**_NOTIFIED_STATE_DEFAULTS, "keys": raw}
+        if isinstance(raw, dict):
+            return {**_NOTIFIED_STATE_DEFAULTS, **raw}
+    except Exception:
+        pass
+    return dict(_NOTIFIED_STATE_DEFAULTS)
+
+
+def _save_notified_state(path: Path, state: Dict[str, Any]) -> None:
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:
+        logger.debug("queue_builder: failed to persist notified-state sidecar (%s)", exc)
+
+
+def _notify_new_intents(payload: Dict[str, Any], output_dir: Path) -> None:
+    """Push an ntfy notification when the queue holds a genuinely new intent.
+
+    Best-effort and silent: `alerting.notify` is itself a no-op when
+    `NTFY_TOPIC` is unset, and any failure here is caught so a notification
+    problem can never affect whether the queue file itself was written. When a
+    push is attempted, records `last_notified_at`/`title`/`count`/`priority`
+    in the sidecar (timestamped from `payload["generated_at"]`, this build's
+    own clock) so the GUI can show "last notification sent" without needing
+    its own timer.
+    """
+    intents = payload.get("intents") or []
+    if not intents:
+        return
+    try:
+        from alerting import notify
+    except Exception as exc:
+        logger.debug("queue_builder: alerting import failed (%s); skipping notify", exc)
+        return
+
+    sidecar = output_dir / _NOTIFIED_FILENAME
+    state = _load_notified_state(sidecar)
+    prior_keys = set(state.get("keys") or [])
+    current_keys = {_intent_notify_key(i) for i in intents}
+    new_intents = [i for i in intents if _intent_notify_key(i) not in prior_keys]
+
+    if new_intents:
+        placeable = [i for i in new_intents if i["allow_place"]]
+        lines = [f"Mode: {payload['mode']}  |  {len(new_intents)} new of {len(intents)} queued"]
+        for i in new_intents[:5]:
+            notional = i["target_notional"] or 0.0
+            flag = "  READY TO PLACE" if i["allow_place"] else ""
+            lines.append(
+                f"  {i['action']:<4} {i['symbol']:<6} ${notional:,.0f}  "
+                f"conv={i['conviction']:.2f}{flag}"
+            )
+        if len(new_intents) > 5:
+            lines.append(f"  … +{len(new_intents) - 5} more")
+        title = "InvestYo — Trades Ready to Place" if placeable else "InvestYo — New Trade Proposals"
+        priority = "high" if placeable else "default"
+        try:
+            notify(title, "\n".join(lines), priority=priority)
+        except Exception as exc:
+            logger.debug("queue_builder: notify() raised unexpectedly (%s)", exc)
+        state["last_notified_at"] = payload.get("generated_at")
+        state["last_notified_title"] = title
+        state["last_notified_count"] = len(new_intents)
+        state["last_notified_priority"] = priority
+
+    state["keys"] = sorted(current_keys)
+    _save_notified_state(sidecar, state)
+
+
 def emit_execution_queue(
     run_result: Any,
     *,
@@ -374,7 +486,13 @@ def emit_execution_queue(
             "Execution queue written (mode=%s, intents=%d, placeable=%d) → %s",
             resolved_mode, payload["n_intents"], payload["n_placeable"], path,
         )
-        return path
     except Exception as exc:
         logger.warning("queue_builder: failed to emit execution queue (%s); skipping", exc)
         return None
+
+    try:
+        _notify_new_intents(payload, output_dir)
+    except Exception as exc:
+        logger.debug("queue_builder: notify step failed (%s); queue file is unaffected", exc)
+
+    return path

@@ -17,6 +17,17 @@ only writes a gated, dry-run proposed-order queue to
 queue and turn eligible intents into MCP calls — **previewing always, placing
 only under strict conditions.**
 
+You may arrive here two ways: the operator asks you to run this skill, or
+`execution/queue_builder.py` pushed them an ntfy notification (if
+`NTFY_TOPIC` is configured) because the queue gained a new or newly-placeable
+intent since the last cycle. Either way, treat this as a **conversation, not a
+script**: narrate what you're seeing and why in plain English, and actively
+invite the operator to ask questions, request more detail (their existing
+position, recent earnings, why the gate blocked or cleared something), or
+redirect before you move on. The procedure and hard stops below are the
+non-negotiable safety rails; how you talk through them with the operator is
+not — read them a checklist only if they ask for one.
+
 ## Prerequisites (verify before doing anything else)
 
 1. The `robinhood-trading` MCP server is connected (tools `review_equity_order`,
@@ -43,21 +54,32 @@ only under strict conditions.**
 
 ## Procedure
 
-1. **Load state.** Read `output/execution_queue.json`. Note `mode`,
-   `kill_switch_active`, `max_notional_per_order`, and the `intents` list.
-   Run the hard-stop checks above.
+1. **Load state and orient the operator.** Read `output/execution_queue.json`.
+   Note `mode`, `kill_switch_active`, `max_notional_per_order`, and the
+   `intents` list. Run the hard-stop checks above. Then, before touching any
+   MCP tool, give the operator a short spoken overview — mode, how many
+   intents, how many are `allow_place: true`, and the highest-conviction 1-2 —
+   and pause for questions. Don't front-load every detail; let the operator
+   pull on whatever they want to know more about.
 2. **Confirm the account.** Call `get_accounts` / `get_portfolio`. Identify the
    Agentic account and confirm it with the operator. Show buying power.
-3. **Preview every intent (ALWAYS).** For each intent, call
-   `review_equity_order` with its `symbol`, `side`, `order_type`, and quantity:
+3. **Preview every intent (ALWAYS), one at a time, narrated.** For each
+   intent, call `review_equity_order` with its `symbol`, `side`, `order_type`,
+   and quantity:
    - SELL intents carry a concrete `qty` (the held share count).
    - BUY intents carry `qty: null` and a `target_notional`. Call
      `get_equity_quotes` for a live price, compute
      `qty = floor(target_notional / price)`, and verify
      `qty * price <= max_notional_per_order` (and `> 0`). If
      `max_notional_per_order` is `0`, refuse to place (cap unset) — preview only.
-   Present each preview to the operator: symbol, side, qty, est. notional,
-   Robinhood's pre-trade warnings, and the queue's `conviction` + `rationale`.
+   Walk the operator through it in your own words — symbol, side, qty, est.
+   notional, Robinhood's pre-trade warnings, the queue's `conviction` and
+   `rationale`, and (for a blocked intent) *why* `gate_reasons` says what it
+   says. Then explicitly invite questions about this specific intent — e.g.
+   their current position/cost basis (`get_equity_positions`), upcoming
+   earnings (`get_earnings_calendar`), or a different size — and answer them
+   using whatever read-only MCP tools help, before moving to the confirm gate
+   in step 5. Don't rush past this into the next intent.
 4. **Mode gate.**
    - `mode == "review"` → **STOP after previews.** This is the paper/dry-run
      stage. Never call `place_equity_order`. Summarise the previews and end.
@@ -69,13 +91,15 @@ only under strict conditions.**
    a. Re-read `output/KILL_SWITCH`; if it now exists, abort the whole run.
    b. Show the final order and ask the operator to confirm THIS specific order
       ("place / skip / stop"). Require an explicit affirmative per order — never
-      batch-confirm.
+      batch-confirm, and never treat silence or a topic change as consent.
    c. On "place", call `place_equity_order`. On "skip", move on. On "stop", end.
    d. Append a one-line JSON record of the outcome to
       `output/execution_receipts.jsonl` (append-only): `{"ts","symbol","side",
       "qty","action":"reviewed|placed|skipped","mcp_order_id","note"}`.
-6. **Report.** Summarise what was previewed, placed, and skipped, and point the
-   operator to `output/execution_receipts.jsonl` and the Robinhood app.
+6. **Report, and stay open.** Summarise what was previewed, placed, and
+   skipped, point the operator to `output/execution_receipts.jsonl` and the
+   Robinhood app, and invite any follow-up questions rather than treating the
+   run as over the moment the last intent is handled.
 
 ## Invariants (never violate)
 
@@ -89,3 +113,7 @@ only under strict conditions.**
 - **Receipts, not intents.** You append outcomes to
   `execution_receipts.jsonl`; you never edit `execution_queue.json` (the
   platform owns it).
+- **Conversation, not consent.** Narrating, answering questions, and
+  discussing an intent is encouraged and never itself counts as the operator's
+  explicit per-order confirmation — that confirmation still has to be asked
+  for and given plainly, per step 5b.

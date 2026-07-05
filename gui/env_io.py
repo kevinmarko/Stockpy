@@ -130,6 +130,12 @@ SECRET_KEYS: tuple[str, ...] = (
     "ALERT_WEBHOOK_URL",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
+    # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood
+    # execution-queue notifier in execution/queue_builder.py). Functions like a
+    # bearer token: anyone who knows the topic name can publish to or read it —
+    # alerting.py's own docstring says to "keep the topic unguessable" — so it
+    # is classified alongside the webhook URLs, never GUI-writable.
+    "NTFY_TOPIC",
     "ALERT_EMAIL_FROM",
     "ALERT_EMAIL_TO",
     "ALERT_SMTP_HOST",
