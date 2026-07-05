@@ -88,6 +88,27 @@ class TestBlackScholesPricingAndGreeks:
         with pytest.raises(ValueError):
             rec.black_scholes_pricing_and_greeks(K=100.0, T=0.5, sigma=0.2, option_type="straddle")
 
+    def test_zero_sigma_call_returns_intrinsic_value_zero_greeks(self):
+        """Regression: a zero (or NaN) volatility previously reached the
+        d1 = ... / (sigma * sqrt(T)) division uncaught, crashing the whole
+        main_orchestrator.py pipeline with ZeroDivisionError. Must degrade to
+        the same intrinsic-value shape as the T<=0 branch instead."""
+        rec = OptionsPricingRecommender(stock_price=110.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=0.0, option_type="call")
+        assert result["Price"] == 10.0  # max(0, 110-100)
+        assert result == {**result, "Delta": 0.0, "Gamma": 0.0, "Vega": 0.0, "Theta_Daily": 0.0}
+
+    def test_negative_sigma_treated_same_as_zero(self):
+        rec = OptionsPricingRecommender(stock_price=90.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=-0.1, option_type="put")
+        assert result["Price"] == 10.0  # max(0, 100-90)
+
+    def test_nan_sigma_does_not_raise(self):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=float("nan"), option_type="call")
+        assert result["Delta"] == 0.0
+        assert not math.isnan(result["Price"])
+
     def test_call_delta_in_zero_one_range(self):
         rec = OptionsPricingRecommender(stock_price=100.0)
         result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=0.25, option_type="call")
@@ -150,6 +171,39 @@ class TestFindStrikeForDelta:
         with mock.patch("technical_options_engine.brentq", side_effect=ValueError("no bracket")):
             strike = rec.find_strike_for_delta(0.30, T=30 / 365.0, sigma=0.25, option_type="call")
         assert strike == round(123.37 * 2) / 2
+
+    def test_zero_sigma_never_raises(self):
+        """Regression: find_strike_for_delta's brentq bracketing calls
+        black_scholes_pricing_and_greeks internally with the same sigma it was
+        given -- a zero sigma must not raise ZeroDivisionError here either."""
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        strike = rec.find_strike_for_delta(0.30, T=30 / 365.0, sigma=0.0, option_type="call")
+        assert strike > 0.0
+
+
+# ============================================================================
+# generate_strategy_pricing_matrix — end-to-end zero-sigma regression
+# ============================================================================
+
+class TestGenerateStrategyPricingMatrixZeroSigma:
+    """Reproduces the exact production crash (main_orchestrator.py ->
+    generate_option_strategy_matrix -> generate_strategy_pricing_matrix ->
+    black_scholes_pricing_and_greeks, ZeroDivisionError on a zero current_iv)
+    end-to-end across every trend_bias/true_ivr branch, none of which validated
+    sigma before today."""
+
+    @pytest.mark.parametrize("true_ivr,trend_bias", [
+        (70.0, "Bullish"), (70.0, "Bearish"), (70.0, "Neutral"),
+        (20.0, "Bullish"), (20.0, "Bearish"),
+        (50.0, "Bullish"), (50.0, "Bearish"),
+    ])
+    def test_zero_sigma_does_not_crash_any_branch(self, true_ivr, trend_bias):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        directive = rec.generate_strategy_pricing_matrix(
+            true_ivr=true_ivr, current_iv=0.0, trend_bias=trend_bias, target_dte=30,
+        )
+        assert isinstance(directive, dict)
+        assert "Strategy" in directive
 
 
 # ============================================================================

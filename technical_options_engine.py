@@ -83,7 +83,15 @@ class OptionsPricingRecommender:
         """
         # Prevent division by zero errors for expired options
         if T <= 0:
-            return {'Price': max(0.0, self.S - K) if option_type == 'call' else max(0.0, K - self.S), 
+            return {'Price': max(0.0, self.S - K) if option_type == 'call' else max(0.0, K - self.S),
+                    'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0}
+
+        # Prevent division by zero / NaN propagation when volatility is zero,
+        # negative, or unavailable (e.g. a degenerate upstream IV/GARCH read).
+        # Degrades to the same intrinsic-value, zero-Greeks shape as the T<=0
+        # branch above rather than crashing (CONSTRAINT #6).
+        if sigma <= 0 or np.isnan(sigma):
+            return {'Price': max(0.0, self.S - K) if option_type == 'call' else max(0.0, K - self.S),
                     'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0}
 
         d1 = (np.log(self.S / K) + (self.r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
