@@ -573,6 +573,139 @@ if not closed_df.empty:
 else:
     st.info("No closed trades yet.")
 
+# ── Row 6.5: Equity Curve + Drawdown + Regime Overlay (new) ──────────────────
+# Computed from TransactionsStore.closed_trades_df() — the ledger of closed
+# round-trip trades. This is the first equity-curve / drawdown view anywhere
+# in the GUI; every other panel is point-in-time only.
+#
+# realized_pnl is NOT a stored column on the Trade model (it only stores raw
+# entry/exit price + shares + side) — computed here as
+# (exit_price - entry_price) * shares for longs, inverted for shorts. This is
+# the same sign convention TransactionsStore.record_trade()/close_trade()
+# implies from the 'side' field.
+#
+# Regime overlay: sourced from output/history/state_snapshot_*.json (written
+# by scripts.snapshot_diff.rotate_snapshot on every orchestrator/advisory run).
+# If fewer than 2 rotated snapshots exist yet, no fabricated regime history is
+# shown — the limitation is stated plainly instead.
+
+st.subheader("📈 Equity Curve, Drawdown & Regime Overlay")
+
+# Freshness badge (Task C5): "as of" the most recent closed-trade exit, since
+# that — not a rolling TTL — is what actually determines whether this curve
+# reflects your latest activity. Falls back to "unknown" when no closed
+# trades exist yet (handled by the empty-state branch just below).
+try:
+    from gui.styling import freshness_badge
+    _latest_exit = None
+    if not closed_df.empty and "exit_ts" in closed_df.columns:
+        _exit_series = pd.to_datetime(closed_df["exit_ts"], errors="coerce").dropna()
+        if not _exit_series.empty:
+            _latest_exit = _exit_series.max().to_pydatetime().replace(tzinfo=timezone.utc)
+    st.caption(freshness_badge(
+        _latest_exit, ttl_seconds=settings.DASHBOARD_REFRESH_SECONDS,
+        label="Most recent closed trade",
+    ))
+except Exception as _fb_exc:
+    st.caption(f"(freshness badge unavailable: {_fb_exc})")
+
+if closed_df.empty or "exit_ts" not in closed_df.columns:
+    st.info(
+        "No closed trades yet — the equity curve populates once "
+        "`TransactionsStore` has at least one closed round-trip trade "
+        "(entry + exit recorded via `record_trade()` / `close_trade()`)."
+    )
+else:
+    _eq_df = closed_df.dropna(subset=["exit_ts", "entry_price", "exit_price", "shares"]).copy()
+    if _eq_df.empty:
+        st.info("Closed trades exist but are missing price/quantity fields needed for P&L.")
+    else:
+        _eq_df["exit_ts"] = pd.to_datetime(_eq_df["exit_ts"])
+        _eq_df["side"] = _eq_df.get("side", "long").fillna("long").str.lower()
+        _sign = _eq_df["side"].map(lambda s: -1.0 if s == "short" else 1.0)
+        _eq_df["realized_pnl"] = (
+            (_eq_df["exit_price"] - _eq_df["entry_price"]) * _eq_df["shares"] * _sign
+        )
+        _eq_df = _eq_df.sort_values("exit_ts")
+        _eq_df["cumulative_pnl"] = _eq_df["realized_pnl"].cumsum()
+        _eq_df["running_peak"] = _eq_df["cumulative_pnl"].cummax()
+        # Drawdown as % of peak equity above zero (peak floor of $1 avoids a
+        # divide-by-zero / meaningless percentage while cumulative P&L is
+        # still ≤ 0 — i.e. before the strategy has ever been net profitable).
+        _peak_floor = _eq_df["running_peak"].clip(lower=1.0)
+        _eq_df["drawdown_pct"] = (
+            (_eq_df["cumulative_pnl"] - _eq_df["running_peak"]) / _peak_floor
+        )
+
+        ec1, ec2, ec3 = st.columns(3)
+        ec1.metric("Closed Trades", len(_eq_df))
+        ec2.metric("Cumulative Realized P&L", f"${_eq_df['cumulative_pnl'].iloc[-1]:,.2f}")
+        ec3.metric("Max Drawdown", f"{_eq_df['drawdown_pct'].min():.1%}")
+
+        equity_chart_df = _eq_df.set_index("exit_ts")[["cumulative_pnl"]].rename(
+            columns={"cumulative_pnl": "Cumulative P&L ($)"}
+        )
+        st.line_chart(equity_chart_df, width='stretch')
+
+        drawdown_chart_df = _eq_df.set_index("exit_ts")[["drawdown_pct"]].rename(
+            columns={"drawdown_pct": "Drawdown (%)"}
+        )
+        st.area_chart(drawdown_chart_df, width='stretch')
+
+        # ── Regime overlay (best-effort, real history only) ──────────────────
+        try:
+            from scripts.snapshot_diff import list_rotated_snapshots, load_snapshot
+
+            rotated_paths = list_rotated_snapshots(settings.OUTPUT_DIR)
+            regime_points = []
+            for p in rotated_paths:
+                snap_hist = load_snapshot(p)
+                if not snap_hist:
+                    continue
+                ts_raw = snap_hist.get("timestamp")
+                regime_raw = snap_hist.get("market_regime")
+                if ts_raw and regime_raw:
+                    regime_points.append({
+                        "timestamp": pd.to_datetime(ts_raw),
+                        "market_regime": str(regime_raw),
+                    })
+            if len(regime_points) >= 2:
+                regime_hist_df = pd.DataFrame(regime_points).sort_values("timestamp")
+                st.markdown("**Macro Regime Over Time** (from `output/history/`)")
+                st.dataframe(
+                    regime_hist_df.rename(
+                        columns={"timestamp": "Timestamp (UTC)", "market_regime": "Market Regime"}
+                    ),
+                    width='stretch',
+                )
+                st.caption(
+                    f"{len(regime_points)} rotated snapshot(s) found "
+                    f"(retained {settings.SNAPSHOT_HISTORY_DAYS} days). "
+                    "Shown as a table rather than a shaded chart overlay because "
+                    "regime changes are sparse/irregular events, not a dense "
+                    "time series aligned to trade exits."
+                )
+            else:
+                st.caption(
+                    "⚠️ Regime overlay not available: only "
+                    f"{len(regime_points)} rotated snapshot(s) exist in "
+                    "`output/history/` so far (need ≥ 2 to show a regime-over-time "
+                    "table). This is a genuine data limitation, not a bug — "
+                    "regime history accumulates one entry per orchestrator/"
+                    "advisory run via `scripts.snapshot_diff.rotate_snapshot()`. "
+                    "Run the pipeline more than once to populate this."
+                )
+        except Exception as exc:
+            st.caption(f"(regime history unavailable: {exc})")
+
+        with st.expander("🔬 Underlying closed-trade P&L table"):
+            st.dataframe(
+                _eq_df[["symbol", "strategy", "side", "entry_ts", "entry_price",
+                        "exit_ts", "exit_price", "shares", "realized_pnl",
+                        "cumulative_pnl", "drawdown_pct"]],
+                width='stretch',
+            )
+
 st.divider()
 
 # ── Row 7: Risk gate block log ────────────────────────────────────────────────
