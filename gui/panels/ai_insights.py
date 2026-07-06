@@ -66,8 +66,16 @@ def _render_gemini_chart_section(symbol: str) -> None:
         key=f"ai_insights_gemini_btn_{symbol}",
         width="stretch",
     ):
-        with st.spinner(f"Asking Gemini to read the {symbol} chart…"):
-            result = generate_chart_pattern_read(symbol, bars)
+        with st.status(f"Asking Gemini to read the {symbol} chart…", expanded=True) as status:
+            try:
+                result = generate_chart_pattern_read(symbol, bars)
+            except Exception as exc:
+                status.update(label=f"❌ Gemini chart read failed: {exc}", state="error")
+                st.error(f"Gemini chart read failed: {exc}")
+                return
+            status.update(
+                label=f"✅ Gemini chart read complete for {symbol}", state="complete"
+            )
         payload = result.model_dump() if result is not None else None
         st.session_state[session_slot] = payload
         # Mirror map for the aggregate view.
@@ -271,8 +279,14 @@ def _render_opal_research_section(symbol: str) -> None:
         key=f"ai_insights_opal_btn_{symbol}",
         width="stretch",
     ):
-        with st.spinner(f"Opal researching {symbol}…"):
-            result = generate_research_brief(symbol, context={})
+        with st.status(f"Opal researching {symbol}…", expanded=True) as status:
+            try:
+                result = generate_research_brief(symbol, context={})
+            except Exception as exc:
+                status.update(label=f"❌ Opal research failed: {exc}", state="error")
+                st.error(f"Opal research failed: {exc}")
+                return
+            status.update(label=f"✅ Research brief ready for {symbol}", state="complete")
         st.session_state[session_slot] = result.model_dump() if result is not None else None
 
     cached = st.session_state.get(session_slot)

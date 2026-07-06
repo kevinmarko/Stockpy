@@ -494,14 +494,19 @@ def _render_maintenance_diagnostics() -> None:
                 except ImportError:
                     st.info("Command runner not available in this build.")
                 else:
-                    with st.spinner("Generating briefing…"):
+                    with st.status("Generating briefing…", expanded=True) as status:
                         result = run_daily_briefing()
-                    if result.ok:
-                        st.success("Briefing generated.")
-                        if result.stdout:
-                            st.code(result.stdout, language="text")
-                    else:
-                        st.error(result.error or result.stderr or "Briefing failed.")
+                        if result.ok:
+                            status.update(
+                                label="✅ Briefing generated", state="complete"
+                            )
+                            if result.stdout:
+                                st.code(result.stdout, language="text")
+                        else:
+                            status.update(
+                                label="❌ Briefing generation failed", state="error"
+                            )
+                            st.error(result.error or result.stderr or "Briefing failed.")
             st.caption(
                 "Runs the daily briefing generator. The result is also viewable "
                 "in the **Report Library** tab."
@@ -518,14 +523,21 @@ def _render_maintenance_diagnostics() -> None:
                 except ImportError:
                     st.info("Command runner not available in this build.")
                 else:
-                    with st.spinner("Rebuilding database schema…"):
+                    with st.status(
+                        "Rebuilding database schema…", expanded=True
+                    ) as status:
                         result = run_database_setup()
-                    if result.ok:
-                        st.success("Database schema rebuilt.")
-                        if result.stdout:
-                            st.code(result.stdout, language="text")
-                    else:
-                        st.error(result.error or result.stderr or "DB rebuild failed.")
+                        if result.ok:
+                            status.update(
+                                label="✅ Database schema rebuilt", state="complete"
+                            )
+                            if result.stdout:
+                                st.code(result.stdout, language="text")
+                        else:
+                            status.update(
+                                label="❌ Database rebuild failed", state="error"
+                            )
+                            st.error(result.error or result.stderr or "DB rebuild failed.")
             st.caption(
                 "Rebuilds the `DailySignals` / `ExecutionLogs` schema "
                 "(`CREATE TABLE IF NOT EXISTS` — non-destructive)."

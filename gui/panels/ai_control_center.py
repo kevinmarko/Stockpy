@@ -33,6 +33,37 @@ from gui.panels.gravity_audit import _render_gravity_ai_runner_section
 from gui.panels.report_viewer import _render_llm_commentary_button
 
 
+# ---------------------------------------------------------------------------
+# Section D — scheduled-run log tail (live fragment)
+# ---------------------------------------------------------------------------
+# Same two-decorated-variant idiom used in gui/panels/launcher.py's
+# _live_log_fragment_live / _live_log_fragment_static: ``run_every`` is fixed
+# at decoration time, so we keep a ticking and a static variant and dispatch
+# based on the operator's auto-refresh checkbox (rendered OUTSIDE the
+# fragment, since a widget that controls a ``run_every`` fragment's cadence
+# cannot live inside it).
+
+
+def _render_scheduled_log_body(handle: Optional[orchestrator_runner.RunHandle]) -> None:
+    """Render the scheduled-run log-tail expander (re-tailed on each tick)."""
+    try:
+        tail = orchestrator_runner.read_log_tail(handle=handle)
+        with st.expander("Scheduled-run log tail"):
+            st.code(tail or "(no output yet)", language="log")
+    except Exception:
+        pass
+
+
+@st.fragment(run_every="5s")
+def _scheduled_log_fragment_live(handle: Optional[orchestrator_runner.RunHandle]) -> None:
+    _render_scheduled_log_body(handle)
+
+
+@st.fragment
+def _scheduled_log_fragment_static(handle: Optional[orchestrator_runner.RunHandle]) -> None:
+    _render_scheduled_log_body(handle)
+
+
 def render_ai_control_center() -> None:
     """Single operator-facing surface for every AI option on the platform.
 
@@ -167,9 +198,13 @@ def render_ai_control_center() -> None:
                     slot = f"acc_opal_payload_{sym}"
                     if st.button("🔬 Generate research brief (Opal)", key=f"acc_opal_btn_{sym}",
                                  width="stretch"):
-                        with st.spinner(f"Opal researching {sym}…"):
-                            res = generate_research_brief(sym, {})
-                        st.session_state[slot] = res.model_dump() if res is not None else None
+                        with st.status(f"Opal researching {sym}…", expanded=True) as status:
+                            try:
+                                res = generate_research_brief(sym, {})
+                                st.session_state[slot] = res.model_dump() if res is not None else None
+                                status.update(label=f"✅ Research brief ready for {sym}", state="complete")
+                            except Exception as exc:
+                                status.update(label=f"❌ Opal research failed: {exc}", state="error")
                     cached = st.session_state.get(slot)
                     if cached is not None or slot in st.session_state:
                         st.json(cached if cached is not None else {"status": "unavailable"})
@@ -224,6 +259,10 @@ def render_ai_control_center() -> None:
             except Exception as exc:
                 st.error(f"Failed to start agent loop: {exc}")
     else:
+        live_tail = st.checkbox(
+            "Auto-refresh scheduled-run log (5s)", value=False,
+            key="acc_scheduled_auto_refresh",
+        )
         st.info(f"Scheduled run active — pid {getattr(handle, 'pid', '?')} "
                 f"(mode: {getattr(handle, 'mode', '?')}).")
         if dcol2.button("⏹ Stop", key="acc_stop", width="stretch"):
@@ -234,12 +273,7 @@ def render_ai_control_center() -> None:
                 st.rerun()
             except Exception as exc:
                 st.error(f"Failed to stop: {exc}")
-        try:
-            tail = orchestrator_runner.read_log_tail(handle=handle)
-            with st.expander("Scheduled-run log tail"):
-                st.code(tail or "(no output yet)", language="log")
-        except Exception:
-            pass
+        (_scheduled_log_fragment_live if live_tail else _scheduled_log_fragment_static)(handle)
 
 
 

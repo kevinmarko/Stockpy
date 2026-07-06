@@ -319,21 +319,31 @@ def _render_llm_commentary_button(
         key=f"llm_cmt_btn_{key_prefix}_{cache_key}",
         width="stretch",
     ):
-        with st.spinner(f"Asking Claude about {symbol}…"):
-            payload = generate_for_symbol_row(row, research_brief=cached_opal_brief)
-        st.session_state[session_slot] = payload
-        # Mirror into a symbol-keyed map (separate from the cache-key-keyed
-        # session_slot above) so cross-tab aggregate views — the AI Insights
-        # tab's Claude-vs-Gemini disagreement table — can look up the latest
-        # Claude payload for this symbol without knowing the cache-key hash.
-        # Mirrors the analogous gemini_by_symbol map in
-        # _render_gemini_chart_section.
-        claude_mirror = st.session_state.get("ai_insights_claude_by_symbol", {})
-        if payload is not None:
-            claude_mirror[symbol] = payload
-        else:
-            claude_mirror.pop(symbol, None)
-        st.session_state["ai_insights_claude_by_symbol"] = claude_mirror
+        with st.status(f"Asking Claude about {symbol}…", expanded=True) as status:
+            try:
+                payload = generate_for_symbol_row(row, research_brief=cached_opal_brief)
+            except Exception as exc:
+                status.update(
+                    label=f"❌ Claude analysis failed: {exc}", state="error"
+                )
+                st.error(f"Claude analysis failed: {exc}")
+                raise
+            st.session_state[session_slot] = payload
+            # Mirror into a symbol-keyed map (separate from the cache-key-keyed
+            # session_slot above) so cross-tab aggregate views — the AI Insights
+            # tab's Claude-vs-Gemini disagreement table — can look up the latest
+            # Claude payload for this symbol without knowing the cache-key hash.
+            # Mirrors the analogous gemini_by_symbol map in
+            # _render_gemini_chart_section.
+            claude_mirror = st.session_state.get("ai_insights_claude_by_symbol", {})
+            if payload is not None:
+                claude_mirror[symbol] = payload
+            else:
+                claude_mirror.pop(symbol, None)
+            st.session_state["ai_insights_claude_by_symbol"] = claude_mirror
+            status.update(
+                label=f"✅ Claude analysis ready for {symbol}", state="complete"
+            )
 
     cached = st.session_state.get(session_slot)
     if cached is not None or session_slot in st.session_state:
@@ -552,21 +562,40 @@ def _render_correlation_cluster_section(signals: list) -> None:
             )
 
         if st.button("🔗 Compute Clusters", key="compute_clusters_btn"):
-            with st.spinner(f"Fetching {lookback}-day returns for {len(syms)} symbols…"):
+            with st.status(
+                f"Computing correlation clusters for {len(syms)} symbols…",
+                expanded=True,
+            ) as status:
                 try:
                     from research_engine import fetch_returns_for_clustering, compute_correlation_clusters
+                    status.update(
+                        label=f"Fetching {lookback}-day returns for {len(syms)} symbols…",
+                        state="running",
+                    )
                     returns_df = fetch_returns_for_clustering(syms, lookback_days=lookback)
                     if returns_df.empty:
                         st.warning("Could not fetch returns data. Check network connectivity.")
+                        status.update(
+                            label="⚠️ Could not fetch returns data", state="error"
+                        )
                         return
+                    status.update(
+                        label="Computing correlation clusters…", state="running"
+                    )
                     labels, summary = compute_correlation_clusters(
                         returns_df, distance_threshold=threshold
                     )
                     st.session_state["cluster_labels"] = labels
                     st.session_state["cluster_summary"] = summary
                     st.session_state["cluster_signals"] = signals
+                    status.update(
+                        label=f"✅ Clustered {len(syms)} symbols", state="complete"
+                    )
                 except Exception as exc:
                     st.error(f"Clustering failed: {exc}")
+                    status.update(
+                        label=f"❌ Clustering failed: {exc}", state="error"
+                    )
                     return
 
         labels = st.session_state.get("cluster_labels")

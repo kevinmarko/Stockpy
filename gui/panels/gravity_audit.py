@@ -569,17 +569,30 @@ def _render_gravity_ai_runner_section() -> None:
 
     if st.button("▶️ Run AI Gravity audit (Claude + Gemini)",
                  key="gravity_ai_run_btn", type="primary", width="stretch"):
-        with st.spinner("Calling Claude + Gemini for each of the 7 audit steps…"):
+        with st.status("Running AI Gravity audit (0/7 steps)…", expanded=True) as status:
             try:
                 from engine.gravity_ai_runner import run_all, write_report  # noqa: PLC0415
 
-                fresh = run_all()
+                def _on_step(n, result):
+                    # CONSTRAINT #4: only report real per-step progress —
+                    # step_title is the StepRunResult field (see step_rows()
+                    # usage below, which maps "step_title" -> "Title").
+                    title = getattr(result, "step_title", f"Step {n}")
+                    status.update(label=f"Step {n}/7: {title} — done…")
+
+                fresh = run_all(on_step=_on_step)
                 write_report(fresh)
                 # Refresh the loaded view from disk so the table updates in-place.
                 report = load_audit_report()
                 summary = summarise_run(report)
+                status.update(
+                    label=f"✅ AI Gravity audit complete — {summary.total_steps} steps.",
+                    state="complete",
+                )
             except Exception as exc:
-                st.error(f"AI Gravity runner failed: {exc}")
+                # CONSTRAINT #6: never swallow the failure silently — surface it
+                # via the status label/state (equivalent to the prior st.error).
+                status.update(label=f"❌ AI Gravity runner failed: {exc}", state="error")
 
     rows = step_rows(report)
     if rows:
