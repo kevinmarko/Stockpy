@@ -408,10 +408,12 @@ class StrategyValidationHarness:
                 the stress gate fails closed (strategy is not deployable).
             reports_dir: Directory for JSON summaries, run history, and
                 rendered HTML reports (default "reports" — the real repo
-                directory consumed by scripts/preflight_check.py and
-                observability/dashboard.py). Tests and audit sandboxes MUST
-                override this to an isolated tmp directory so smoke-test/
-                negative-control runs never clobber real strategy reports.
+                directory consumed by scripts/preflight_check.py and the
+                Command Center's Observability / Gravity Audit tabs
+                (gui/panels/observability.py, gui/panels/gravity_audit.py)).
+                Tests and audit sandboxes MUST override this to an isolated
+                tmp directory so smoke-test/negative-control runs never
+                clobber real strategy reports.
         """
         self.strategy_fn = strategy_fn
         self.universe_fn = universe_fn

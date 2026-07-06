@@ -211,7 +211,7 @@ It opens in your browser with fourteen tabs:
 6. **🛡️ Gravity Audit** — runs the Gravity AI Review Suite and shows pass/fail per step; review this before authorizing a live run.
 7. **🧮 Options** — Black-Scholes Greeks and an IV-Rank proxy per active symbol.
 8. **🛰️ Market Data** — which provider is active (Alpaca real-time vs. yfinance delayed), quote freshness, and a cache-reset control.
-9. **📊 Observability** — a compact macro-regime / VIX / HMM / P&L summary (the full standalone dashboard remains at `streamlit run observability/dashboard.py`).
+9. **📊 Observability** — Mission Control: macro-regime / VIX / HMM summary, account holdings & P&L, open positions vs. pipeline signals, portfolio heat/gross/net exposure, validation report status, recent closed trades, an equity-curve/drawdown/regime-overlay chart, the risk gate block log, plus heartbeat trend, system telemetry, latency heatmap, and error log — the single observability surface for the platform (the former standalone `streamlit run observability/dashboard.py` app has been retired; see [§12 The Observability Dashboard](#12-the-observability-dashboard)).
 10. **📡 Live Inventory** — the full Task 1.4 sync view: holdings ∪ every Robinhood watchlist ∪ file-backed watchlists, each symbol's `CoverageStatus` (FULL / QUOTES_ONLY / EQUITY_ONLY / UNCOVERED), cost-basis delta, and forecast-availability flag. **🔄 Sync Now** refreshes the universe and persists it as `DEFAULT_TICKERS` in `.env`.
 11. **❓ Help** — the in-app glossary and per-tab/per-metric explainer tooltips plus the first-run onboarding tour; see [In-App Help & Glossary](#in-app-help--glossary).
 12. **📝 Prompts** — the Remote-Updatable Prompt Registry: view/publish versioned prompt text, verify signatures, and roll back; see [§16 Remote Prompt Updates (Prompt Registry)](#16-remote-prompt-updates-prompt-registry).
@@ -576,10 +576,10 @@ Or use `launchd` on macOS (more reliable than cron for Mac):
 ### Monitor while running
 
 ```bash
-streamlit run observability/dashboard.py
+streamlit run gui/app.py
 ```
 
-Opens a browser dashboard at `http://localhost:8501` with live P&L, open positions, kill switch status, and the last 100 risk gate blocks.
+Opens the Command Center at `http://localhost:8501` — open the **📊 Observability** tab for live P&L, open positions, kill switch status, and the last 100 risk gate blocks (see [§12](#12-the-observability-dashboard)).
 
 ### Minimum paper trading period
 
@@ -590,26 +590,35 @@ The preflight check requires **90 days** of continuous paper trading before goin
 ## 12. The Observability Dashboard
 
 ```bash
-streamlit run observability/dashboard.py
+streamlit run gui/app.py
 ```
 
-Auto-refreshes every 30 seconds (configurable via `DASHBOARD_REFRESH_SECONDS`).
-Use the **🔄 Refresh now** button in the sidebar to force an immediate refresh
-(clears all cached reads) without waiting for the auto-refresh interval.
+Open the **📊 Observability** tab. This tab is the platform's single
+observability surface — the former standalone `streamlit run
+observability/dashboard.py` app has been retired and every panel it used to
+render now lives here.
+
+Panels refresh whenever the tab re-renders (Streamlit's normal script rerun,
+e.g. on interaction or a manual page reload); the underlying `state_snapshot.json`
+read is additionally keyed on the file's mtime so a fresh orchestrator/advisory
+run is picked up on the very next render rather than after a fixed TTL.
 
 ### What you'll see
 
 | Panel | Data source | What it shows |
 |-------|-------------|--------------|
 | Kill switch banner | `output/KILL_SWITCH` file | Red = active (all orders blocked), Green = inactive |
-| Macro regime | `output/state_snapshot.json` | Current regime, VIX, HMM risk-on probability |
+| Macro regime / VIX / HMM | `output/state_snapshot.json` | Current regime, VIX, HMM risk-on probability |
+| Macro Regime Gate | `.env` (`MACRO_REGIME_GATE_ENABLED`) | Toggle + live Sahm Rule / HY OAS / yield-curve telemetry |
 | **Account Holdings & P&L** | **`cache/account_snapshot.json`** | **Total equity, buying power, unrealized P&L, dividends, and a per-position table with green/red-coloured unrealized P&L. Falls back to a "run `main.py --refresh-account`" note when no snapshot exists.** |
 | Strategy P&L | `quant_platform.db` | Realized P&L by strategy |
 | Open positions | `quant_platform.db` vs signals | Internal book vs pipeline recommendations |
-| Portfolio heat | State snapshot | Adverse unrealized P&L as % of equity |
-| Validation status | `reports/*_validation_summary.json` | Deployable / not deployable per strategy |
+| Portfolio risk metrics | `quant_platform.db` | Portfolio heat, gross exposure, net exposure |
+| Validation status | `reports/*_validation_summary.json` | Deployable / not deployable per strategy (run-over-run trend lives in the Gravity Audit tab) |
 | Recent closed trades | `quant_platform.db` | Last 20 fills |
+| Equity curve & regime overlay | `quant_platform.db` + `output/history/` | Cumulative realized P&L, drawdown, and macro regime over time |
 | Risk gate block log | `output/risk_gate_blocks.jsonl` | Last 100 blocked orders and which check blocked them |
+| Heartbeat trend, system telemetry, latency heatmap, error log | `output/heartbeat.txt`, host/process metrics, `logs/investyo.log` | Orchestrator liveness trend, CPU/memory/disk, per-symbol fetch latency, classified error log |
 
 The Account Holdings panel reads the same Robinhood snapshot the advisory
 report uses — it is the source of truth for account state (holdings, cost
@@ -617,7 +626,7 @@ basis, dividends, equity) and never contains credentials.
 
 ### Staleness warning
 
-If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt`), the dashboard shows a yellow staleness warning. This means no fresh signals are available.
+If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt`), the Heartbeat Age Trend panel shows a stale/slow status badge. This means no fresh signals are available.
 
 ---
 

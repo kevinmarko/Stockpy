@@ -8,7 +8,9 @@ quant platform.  Launched via::
 
 or by double-clicking ``launch_gui.command`` on macOS.
 
-Design principles (mirroring the existing ``observability/dashboard.py``):
+Design principles (the platform's single observability surface — the former
+standalone ``streamlit run observability/dashboard.py`` app has been retired;
+its panels now live in the Observability tab, ``gui/panels/observability.py``):
 
 *   **Read-only / file-backed where possible.**  The GUI never calls async
     broker code directly — it launches ``main_orchestrator.py`` as a subprocess

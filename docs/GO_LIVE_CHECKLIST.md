@@ -79,9 +79,9 @@
   from observability.alerts import send_alert
   send_alert("CRITICAL", "PREFLIGHT TEST — ignore", channels=["discord"])
   ```
-- [ ] Streamlit dashboard launches without errors:
+- [ ] Command Center launches without errors and the Observability tab renders:
   ```
-  streamlit run observability/dashboard.py
+  streamlit run gui/app.py
   ```
 - [ ] Heartbeat file refreshes every 60 s: `ls -la output/heartbeat.txt`
 - [ ] *(manual)* Watchdog process (cron / supervisor) configured to activate kill switch if heartbeat goes stale.
