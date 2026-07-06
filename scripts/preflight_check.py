@@ -84,6 +84,9 @@ Checks (15 total)
  8. dry_run_disabled            — DRY_RUN=False (orders reach the broker).
                                   SKIPPED when ADVISORY_ONLY=True.
  9. env_not_committed           — .env file is git-untracked (``git ls-files``).
+   env_no_duplicate_keys        — .env has no repeated top-level KEY= (last-wins
+                                  shadowing).  Warning-only; reports KEY NAMES
+                                  (never values).
 10. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
 11. state_snapshot_fresh        — output/state_snapshot.json exists and its
                                   embedded timestamp is < 2 hours old.  Both
@@ -504,6 +507,68 @@ def check_env_not_committed() -> CheckResult:
     return CheckResult(name, True, ".env exists and is not git-tracked")
 
 
+def check_env_no_duplicate_keys() -> CheckResult:
+    """Warn if ``.env`` defines the same top-level key more than once.
+
+    ``python-dotenv`` and ``pydantic-settings`` both resolve a repeated key to
+    its **last** occurrence, so a duplicate silently shadows the earlier line.
+    That makes it ambiguous which value is live and is a common source of
+    "I changed it but nothing happened" confusion (the operator edits the first
+    occurrence while the second one wins).
+
+    This check parses ``.env`` line-by-line for ``KEY=`` assignments (ignoring
+    comments and blank lines) and reports any KEY NAMES that appear more than
+    once.  It is **warning-only** (never blocking) — a duplicate is a hygiene
+    problem, not a go/no-go gate, and the file still loads with a deterministic
+    (last-wins) value.
+
+    Locates ``.env`` the same way as :func:`check_env_not_committed`
+    (``_REPO_ROOT / ".env"``).  A missing ``.env`` is a PASS (nothing to check);
+    :func:`check_env_not_committed` already fails when ``.env`` is absent, so we
+    do not double-report here.
+
+    IMPORTANT: the ``reason`` string reports only KEY NAMES, never values —
+    ``.env`` contains secrets and this check must never surface them.
+    """
+    name = "env_no_duplicate_keys"
+    env_file = _REPO_ROOT / ".env"
+    if not env_file.exists():
+        # Absent .env is handled by check_env_not_committed; nothing to dedupe.
+        return CheckResult(name, True, "No .env file present — nothing to check for duplicates")
+    try:
+        seen: dict[str, int] = {}
+        for raw in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw.lstrip()
+            if not line or line.startswith("#"):
+                continue
+            # Only treat KEY=... assignment lines as keys (env var name syntax).
+            eq = line.find("=")
+            if eq <= 0:
+                continue
+            key = line[:eq].strip()
+            if not key or not all(c.isalnum() or c == "_" for c in key):
+                continue
+            seen[key] = seen.get(key, 0) + 1
+        dupes = sorted(k for k, count in seen.items() if count > 1)
+        if dupes:
+            # KEY NAMES only — never values.
+            return CheckResult(
+                name, True,
+                "⚠️  .env has duplicate keys (last occurrence wins, earlier lines are "
+                f"silently shadowed): {', '.join(dupes)}. Remove the earlier "
+                "duplicate line(s) so the live value is unambiguous.",
+                warning=True,
+            )
+        return CheckResult(name, True, "No duplicate keys in .env")
+    except Exception as exc:
+        # Never blocking: a parse error here must not gate go-live.
+        return CheckResult(
+            name, True,
+            f"⚠️  Could not scan .env for duplicate keys ({exc}) — skipping check.",
+            warning=True,
+        )
+
+
 def check_kill_switch_inactive() -> CheckResult:
     """Verify that the global kill switch is not active.
 
@@ -876,6 +941,7 @@ ALL_CHECKS = [
     check_alpaca_paper_mode,
     check_dry_run_disabled,
     check_env_not_committed,
+    check_env_no_duplicate_keys,
     check_kill_switch_inactive,
     check_state_snapshot_fresh,
     check_heartbeat_fresh,
