@@ -4593,8 +4593,8 @@ class GravityAIAuditor:
           (a) Module is importable + public API present
               (CoverageStatus, SymbolStatus, SyncReport, build_sync_report,
               async_sync_now, write_cache, read_cache).
-          (b) CoverageStatus carries the five mandated values
-              (FULL/QUOTES_ONLY/EQUITY_ONLY/UNCOVERED/UNKNOWN).
+          (b) CoverageStatus carries the six mandated values
+              (FULL/STALE/QUOTES_ONLY/EQUITY_ONLY/UNCOVERED/UNKNOWN).
           (c) SymbolStatus + SyncReport are frozen dataclasses.
           (d) Discovery helpers exist on data.robinhood_client
               (discover_watchlists, discover_universe, _file_tickers,
@@ -4626,7 +4626,7 @@ class GravityAIAuditor:
             audit["checks"]["module_importable"] = {"status": "PASSED"}
 
             # ── (b) CoverageStatus values ────────────────────────────────
-            expected = {"full", "quotes_only", "equity_only", "uncovered", "unknown"}
+            expected = {"full", "stale", "quotes_only", "equity_only", "uncovered", "unknown"}
             actual = {c.value for c in CoverageStatus}
             audit["checks"]["coverage_status_values"] = {
                 "status": "PASSED" if expected == actual else "FAILED",
@@ -8421,13 +8421,20 @@ class GravityAIAuditor:
             from settings import settings as _s
             from engine.advisory import _build_rationale, CONFIG
 
-            # 1. Setting exists with correct default
-            _has_setting = hasattr(_s, "RATIONALE_VERBOSITY") and _s.RATIONALE_VERBOSITY == "standard"
+            # 1. Setting exists with correct default. Checked against the pydantic
+            # Field's declared default (type(_s).model_fields[...].default), NOT
+            # the live singleton's current value — an operator's own .env may
+            # legitimately set RATIONALE_VERBOSITY=verbose, which is a valid
+            # runtime configuration, not a regression of the shipped default.
+            _declared_default = getattr(
+                type(_s).model_fields.get("RATIONALE_VERBOSITY"), "default", None
+            )
+            _has_setting = hasattr(_s, "RATIONALE_VERBOSITY") and _declared_default == "standard"
             all_pass = all_pass and _has_setting
             audit["checks"].append({
-                "check": "settings.RATIONALE_VERBOSITY exists and defaults to 'standard'",
+                "check": "settings.RATIONALE_VERBOSITY exists and its declared default is 'standard'",
                 "passed": _has_setting,
-                "detail": getattr(_s, "RATIONALE_VERBOSITY", "<missing>"),
+                "detail": _declared_default,
             })
 
             # 2. New CONFIG keys for RSI invalidation levels
@@ -9910,7 +9917,9 @@ class GravityAIAuditor:
            (auto-skip behaviour confirmed via ``run_checks``).
         7. ``validation_reports`` is skipped under ``ADVISORY_ONLY=True``.
         8. ``no_unexpected_risk_blocks`` is skipped under ``ADVISORY_ONLY=True``.
-        9. Total ``ALL_CHECKS`` count is 16 (15 from Stage 2 + 1 from Stage 3).
+        9. Total ``ALL_CHECKS`` count is 19 (15 from Stage 2 + 1 from Stage 3 +
+           check_robinhood_execution_mode + check_env_no_duplicate_keys +
+           check_calibration_drift added since).
         10. ``tests/test_preflight.py`` contains ``TestStateSnapshotFresh``
             and ``TestAdvisoryAutoSkip`` class definitions.
         """
@@ -10071,10 +10080,12 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: total ALL_CHECKS count is 17 (16 from Stage 2 + alpaca_key_rotation_recent from Stage 3)
-            c9 = len(preflight_check.ALL_CHECKS) == 17
+            # Check 9: total ALL_CHECKS count is 19 (16 from Stage 2 + alpaca_key_rotation_recent
+            # from Stage 3 + check_robinhood_execution_mode + check_env_no_duplicate_keys +
+            # check_calibration_drift added since)
+            c9 = len(preflight_check.ALL_CHECKS) == 19
             audit["checks"].append({
-                "check": f"ALL_CHECKS has 17 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "check": f"ALL_CHECKS has 19 entries (got {len(preflight_check.ALL_CHECKS)})",
                 "passed": c9,
             })
             all_pass = all_pass and c9
