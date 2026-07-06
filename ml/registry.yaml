@@ -5,14 +5,24 @@
 #
 # Fields
 # ------
-# role:          what the model does in the pipeline
-# path:          path relative to repo root (or absolute)
-# trained_date:  ISO date of most recent training run
-# cpcv_dsr:      Deflated Sharpe Ratio from CPCV path evaluation (target > 0.95)
-# pbo:           Probability of Backtest Overfitting from CPCV (target < 0.50)
-# n_train:       number of training samples in the most recent run
-# notes:         any caveats, data limitations, or scope restrictions
-# deployable:    true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
+# role:            what the model does in the pipeline
+# path:            conventional model location, informational only — the runtime loader
+#                  (<Class>.load_latest()) never reads this field; it discovers the model
+#                  by glob-sorting dated ml/models/<prefix>_<YYYYMMDD>.pkl files. See
+#                  artifact_file below for the exact binary behind a given run's metrics.
+# trained_date:    ISO date of most recent training run
+# cpcv_dsr:        Deflated Sharpe Ratio from CPCV path evaluation (target > 0.95)
+# pbo:             Probability of Backtest Overfitting from CPCV (target < 0.50)
+# n_train:         number of training samples in the most recent run
+# notes:           any caveats, data limitations, or scope restrictions
+# deployable:      true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
+#
+# Provenance fields (optional; captured for reproducibility — never affect `deployable`)
+# ----------------------------------------------------------------------------------------
+# artifact_file:   exact dated pickle filename actually written this run (e.g. lgbm_20260706.pkl)
+# hyperparameters: the model's training hyperparameters (dict)
+# train_window:    the data-split window {start, end, n_dates} (dates as YYYY-MM-DD strings)
+# features:        the ordered feature-column list the model trained with (list)
 
 models:
   lgbm_ranker:
