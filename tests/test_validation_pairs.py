@@ -5,7 +5,7 @@ from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 from signals.pairs_trading import generate_pairs_signals
 
-def test_validation_harness_runs_on_pairs_strategy():
+def test_validation_harness_runs_on_pairs_strategy(tmp_path):
     """
     Smoke-tests the StrategyValidationHarness on our Kalman-based pairs strategy
     using synthetic cointegrated series.
@@ -54,7 +54,8 @@ def test_validation_harness_runs_on_pairs_strategy():
         universe_fn=mock_universe_fn,
         cost_model=cost_model,
         n_cpcv_splits=5,  # Fewer splits for fast unit testing
-        n_test_splits=2
+        n_test_splits=2,
+        reports_dir=str(tmp_path)
     )
     
     # Run the harness

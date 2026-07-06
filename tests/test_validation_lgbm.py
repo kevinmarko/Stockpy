@@ -77,7 +77,7 @@ def _build_planted_alpha_panel(
 
 
 @pytest.mark.slow
-def test_lgbm_validation_harness_runs_end_to_end():
+def test_lgbm_validation_harness_runs_end_to_end(tmp_path):
     """Smoke-test: harness runs without crashing; report has required fields."""
     X_panel, y_panel, price_df = _build_planted_alpha_panel(n_dates=120, n_tickers=10)
     dates = price_df.index
@@ -132,6 +132,7 @@ def test_lgbm_validation_harness_runs_end_to_end():
         cost_model=cost_model,
         n_cpcv_splits=4,
         n_test_splits=2,
+        reports_dir=str(tmp_path),
     )
 
     report = harness.run(
@@ -151,7 +152,7 @@ def test_lgbm_validation_harness_runs_end_to_end():
 
 
 @pytest.mark.slow
-def test_lgbm_deployability_gate_respected():
+def test_lgbm_deployability_gate_respected(tmp_path):
     """The gate must block deployment when metrics fail — wiring check only."""
     X_panel, y_panel, price_df = _build_planted_alpha_panel(n_dates=80, n_tickers=8)
     dates = price_df.index
@@ -181,6 +182,7 @@ def test_lgbm_deployability_gate_respected():
         cost_model=cost_model,
         n_cpcv_splits=4,
         n_test_splits=2,
+        reports_dir=str(tmp_path),
     )
 
     report = harness.run(

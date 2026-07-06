@@ -148,7 +148,7 @@ def test_xsec_momentum_no_nan_returns(harness_data):
     assert not X["xsec_score"].isna().all(), "XSec score is all-NaN"
 
 
-def test_xsec_momentum_positive_return(harness_data):
+def test_xsec_momentum_positive_return(harness_data, tmp_path):
     """
     Long-winners strategy on a 5-ETF proxy universe 2010-2024 should
     achieve net Sharpe >= 0.3 after TieredCostModel transaction costs.
@@ -192,6 +192,7 @@ def test_xsec_momentum_positive_return(harness_data):
         cost_model=cost_model,
         n_cpcv_splits=8,
         n_test_splits=2,
+        reports_dir=str(tmp_path),
     )
 
     report = harness.run(

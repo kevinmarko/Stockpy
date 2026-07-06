@@ -102,7 +102,7 @@ def _realized_vol_60d(close: pd.Series) -> pd.Series:
     return daily_returns.rolling(window=60).std() * np.sqrt(252)
 
 
-def test_low_vol_and_size_proxy_validation_harness_runs(price_history, current_shares_outstanding):
+def test_low_vol_and_size_proxy_validation_harness_runs(price_history, current_shares_outstanding, tmp_path):
     """Smoke-tests the StrategyValidationHarness end-to-end on a Low-Vol +
     Size multifactor proxy built from real historical prices. As with
     tests/test_validation_rsi2.py, we assert a well-formed report (not NaN,
@@ -184,6 +184,7 @@ def test_low_vol_and_size_proxy_validation_harness_runs(price_history, current_s
         cost_model=cost_model,
         n_cpcv_splits=10,
         n_test_splits=2,
+        reports_dir=str(tmp_path),
     )
 
     report = harness.run(

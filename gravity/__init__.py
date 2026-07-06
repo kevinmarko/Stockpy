@@ -662,8 +662,16 @@ class GravityAIAuditor:
         """
         harness_report = {}
         try:
+            import tempfile
             from validation.harness import StrategyValidationHarness
             from execution.cost_model import TieredCostModel
+
+            # Random_Audit/Trending_Audit are synthetic negative/positive
+            # controls for wiring verification only, not real strategies —
+            # isolate their reports so they never clobber reports/*_validation_summary.json
+            # for actual production strategies (or get picked up by
+            # scripts/preflight_check.py's validation_reports gate).
+            audit_reports_dir = tempfile.mkdtemp(prefix="gravity_harness_audit_")
 
             # 1. Random strategy (should fail deployability)
             np.random.seed(42)
@@ -692,7 +700,8 @@ class GravityAIAuditor:
                 universe_fn=mock_universe_fn,
                 cost_model=cost_model,
                 n_cpcv_splits=5,
-                n_test_splits=1
+                n_test_splits=1,
+                reports_dir=audit_reports_dir
             )
 
             report_random = harness.run(
@@ -727,7 +736,8 @@ class GravityAIAuditor:
                 universe_fn=mock_universe_fn,
                 cost_model=cost_model,
                 n_cpcv_splits=5,
-                n_test_splits=1
+                n_test_splits=1,
+                reports_dir=audit_reports_dir
             )
 
             report_trend = harness_trend.run(

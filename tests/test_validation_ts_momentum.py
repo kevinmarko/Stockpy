@@ -5,7 +5,7 @@ import yfinance as yf
 from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 
-def test_validation_tsmom_spy():
+def test_validation_tsmom_spy(tmp_path):
     # 1. Download SPY data from 2000 to 2023
     df = yf.download("SPY", start="2000-01-01", end="2023-12-31", progress=False)
     assert not df.empty, "Failed to download SPY data"
@@ -91,9 +91,10 @@ def test_validation_tsmom_spy():
         universe_fn=mock_universe_fn,
         cost_model=cost_model,
         n_cpcv_splits=10,
-        n_test_splits=2
+        n_test_splits=2,
+        reports_dir=str(tmp_path)
     )
-    
+
     report = harness.run(
         start_date=str(valid_idx[0].date()),
         end_date=str(valid_idx[-1].date()),

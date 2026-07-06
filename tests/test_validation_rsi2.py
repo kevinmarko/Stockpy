@@ -152,7 +152,7 @@ def test_regime_gate_actually_suppresses_signal_during_2020_crash(spy_history):
     assert suppressed_days.any(), "Gate never suppressed signal during the 2020 crash window"
 
 
-def test_validation_harness_runs_on_gated_rsi2_strategy(spy_history):
+def test_validation_harness_runs_on_gated_rsi2_strategy(spy_history, tmp_path):
     """Smoke-tests the StrategyValidationHarness end-to-end on the gated RSI(2)
     strategy. We assert the harness produces a well-formed report (not NaN,
     deployable is a bool) rather than asserting deployability itself -- a
@@ -198,6 +198,7 @@ def test_validation_harness_runs_on_gated_rsi2_strategy(spy_history):
         cost_model=cost_model,
         n_cpcv_splits=10,
         n_test_splits=2,
+        reports_dir=str(tmp_path),
     )
 
     report = harness.run(
