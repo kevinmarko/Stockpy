@@ -46,13 +46,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from ml.feature_engineering import (  # noqa: E402
-    FEATURE_COLUMNS,
-    build_forward_return_ranks,
-    build_pit_feature_matrix,
-)
+from ml.feature_engineering import FEATURE_COLUMNS  # noqa: E402
 from ml.lgbm_ranker import LGBMCrossSectionalRanker  # noqa: E402
 from ml.registry_io import update_model_metrics  # noqa: E402
+from ml.training_data import build_training_panel as _shared_build_training_panel  # noqa: E402
 from validation.metrics import (  # noqa: E402
     deflated_sharpe_ratio,
     probability_of_backtest_overfitting,
@@ -83,112 +80,15 @@ class TrainingPanel:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Panel construction
+# Panel construction — delegates to the shared ml.training_data foundation.
 #
-# NOTE (merge coordination): a parallel PR (Agent 1) is adding a canonical
-# ``ml/training_data.build_training_panel()`` helper.  Once it lands, this inline
-# ``build_training_panel`` should be REFACTORED to import and delegate to that
-# shared helper instead of duplicating the panel-assembly logic here.  We build
-# it inline for now to keep this PR self-contained and avoid a merge conflict on
-# ``ml/training_data.py`` (which this PR deliberately does NOT create).
+# This used to duplicate its own date-grid PIT panel builder inline (to avoid a
+# merge conflict while ``ml/training_data.py`` was landing in a parallel PR).
+# Now that both are on main, this wraps the shared
+# ``ml.training_data.build_training_panel()`` instead of reimplementing it —
+# same PIT feature math (including the GARCH_Vol realized-vol proxy, which
+# ``ml/training_data.py`` now also computes), one source of truth.
 # ──────────────────────────────────────────────────────────────────────────────
-
-
-def _bars_to_close_panel(bars: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Wide close-price frame: columns=tickers, index=dates (tz-naive)."""
-    closes: dict[str, pd.Series] = {}
-    for sym, df in bars.items():
-        if df is None or df.empty or "Close" not in df.columns:
-            continue
-        s = df["Close"].copy()
-        # Normalize index to tz-naive midnight dates for cross-ticker alignment.
-        idx = pd.to_datetime(s.index)
-        if getattr(idx, "tz", None) is not None:
-            idx = idx.tz_localize(None)
-        s.index = idx.normalize()
-        s = s[~s.index.duplicated(keep="last")]
-        closes[sym] = s
-    if not closes:
-        return pd.DataFrame()
-    return pd.DataFrame(closes).sort_index()
-
-
-def _pit_features_for_date(
-    close_panel: pd.DataFrame,
-    as_of: pd.Timestamp,
-) -> pd.DataFrame:
-    """Build a per-ticker feature row as of ``as_of`` from price history only.
-
-    We derive the price-based feature inputs that ``build_pit_feature_matrix``
-    consumes (ROC_12M, ROC_6M, RSI, RSI_2, GARCH_Vol proxy).  Fundamental /
-    factor-Z columns are absent here and correctly fall through to NaN inside
-    ``build_pit_feature_matrix`` — that function is the single source of truth
-    for feature ordering and cross-sectional ranking, so we only supply raw
-    inputs and let it rank.
-    """
-    hist = close_panel.loc[:as_of]
-    if len(hist) < 22:
-        return pd.DataFrame()
-
-    rows = {}
-    for sym in close_panel.columns:
-        s = hist[sym].dropna()
-        if len(s) < 22:
-            continue
-        px = float(s.iloc[-1])
-        if not np.isfinite(px) or px <= 0:
-            continue
-        # Rate-of-change momentum (causal — uses only history up to as_of).
-        roc_12m = _roc(s, 252)
-        roc_6m = _roc(s, 126)
-        rsi_14 = _rsi(s, 14)
-        rsi_2 = _rsi(s, 2)
-        garch_vol = _realized_vol(s, 20)   # realized-vol proxy for GARCH_Vol
-        rows[sym] = {
-            "ROC_12M": roc_12m,
-            "ROC_6M": roc_6m,
-            "RSI": rsi_14,
-            "RSI_2": rsi_2,
-            "GARCH_Vol": garch_vol,
-        }
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows).T
-
-
-def _roc(s: pd.Series, n: int) -> float:
-    if len(s) <= n:
-        return np.nan
-    p0 = float(s.iloc[-n - 1])
-    p1 = float(s.iloc[-1])
-    if p0 <= 0:
-        return np.nan
-    return (p1 - p0) / p0
-
-
-def _rsi(s: pd.Series, n: int) -> float:
-    if len(s) <= n:
-        return np.nan
-    delta = s.diff().dropna()
-    gain = delta.clip(lower=0).rolling(n).mean()
-    loss = (-delta.clip(upper=0)).rolling(n).mean()
-    if gain.empty or loss.empty:
-        return np.nan
-    last_gain = float(gain.iloc[-1])
-    last_loss = float(loss.iloc[-1])
-    if not np.isfinite(last_gain) or not np.isfinite(last_loss):
-        return np.nan
-    if last_loss == 0:
-        return 100.0
-    rs = last_gain / last_loss
-    return 100.0 - (100.0 / (1.0 + rs))
-
-
-def _realized_vol(s: pd.Series, n: int) -> float:
-    rets = s.pct_change().dropna()
-    if len(rets) < n:
-        return np.nan
-    return float(rets.iloc[-n:].std() * np.sqrt(252))
 
 
 def build_training_panel(
@@ -198,77 +98,55 @@ def build_training_panel(
     horizon_days: int = 21,
     step_days: int = 5,
     min_dates: int = 12,
+    lookback_days: int = 3 * 365,
 ) -> TrainingPanel:
     """Assemble a supervised (date, ticker) training panel from historical bars.
 
-    Fetches OHLCV via the injected ``data_engine`` (DataEngine live, or
-    MockDataEngine offline), builds PIT features per sampled date via
-    ``build_pit_feature_matrix``, and pairs them with forward-return rank
-    targets from ``build_forward_return_ranks``.
+    Thin wrapper around ``ml.training_data.build_training_panel`` — walks a
+    generous ``[today - lookback_days, today]`` window (the shared builder
+    self-bounds to whatever bars actually exist per ticker), thinning to every
+    ``step_days``-th trading date to keep CPCV fold cost bounded.  Falls back
+    to full date density (``step_days=1``) if thinning leaves too few dates.
     """
-    bars = data_engine.fetch_technical_raw(tickers)
-    close_panel = _bars_to_close_panel(bars)
+    end = pd.Timestamp.now().normalize()
+    start = end - pd.Timedelta(days=lookback_days)
 
-    if close_panel.empty or close_panel.shape[1] < 2:
-        logger.warning("Training panel: insufficient tickers with bars (%d).",
-                       0 if close_panel.empty else close_panel.shape[1])
-        return TrainingPanel(pd.DataFrame(), pd.Series(dtype=float), pd.Series(dtype=float), 0)
+    def _build(step: int) -> TrainingPanel:
+        X, y, t1, _price_history = _shared_build_training_panel(
+            start, end, tickers,
+            data_engine=data_engine, horizon_days=horizon_days, step_days=step,
+        )
+        if X.empty:
+            return TrainingPanel(pd.DataFrame(), pd.Series(dtype=float), pd.Series(dtype=float), 0)
+        # Two honesty filters, both dropping rows rather than fabricating values:
+        #  1. Forward-return rank is NaN when the horizon window runs off the
+        #     end of a ticker's history.
+        #  2. ROC_12M is NaN for as-of dates inside the first ~252 trading days
+        #     of a ticker's history (the momentum lookback isn't satisfied yet).
+        #     The shared builder isn't calendar-bounded by `start` (it fetches
+        #     all available bars per ticker), so `start` alone doesn't skip
+        #     these early, feature-incomplete dates — drop them explicitly
+        #     instead of training the ranker on a systematically weaker slice.
+        valid = y.notna() & X["ROC_12M"].notna()
+        X, y, t1 = X.loc[valid], y.loc[valid], t1.loc[valid]
+        if X.empty:
+            return TrainingPanel(pd.DataFrame(), pd.Series(dtype=float), pd.Series(dtype=float), 0)
+        n_dates = X.index.get_level_values(0).nunique()
+        return TrainingPanel(X[list(FEATURE_COLUMNS)], y, t1, n_dates)
 
-    all_dates = close_panel.index
-    # Sample as-of dates that leave room for the forward-return horizon.
-    usable = all_dates[:-horizon_days] if len(all_dates) > horizon_days else all_dates[:0]
-    as_of_dates = pd.DatetimeIndex(usable[252::step_days]) if len(usable) > 252 else \
-        pd.DatetimeIndex(usable[::step_days])
+    panel = _build(step_days)
+    if panel.n_dates < min_dates and step_days > 1:
+        logger.info(
+            "Training panel: only %d dates at step_days=%d — retrying at full density.",
+            panel.n_dates, step_days,
+        )
+        panel = _build(1)
 
-    if len(as_of_dates) < min_dates:
-        # Loosen: sample everything we can (still requires >=22 rows of history
-        # per date inside _pit_features_for_date, so early dates self-skip).
-        as_of_dates = pd.DatetimeIndex(usable[::step_days])
-
-    fwd_ranks = build_forward_return_ranks(close_panel, as_of_dates, horizon_days=horizon_days)
-
-    X_parts: list[pd.DataFrame] = []
-    y_parts: list[pd.Series] = []
-    t1_parts: list[pd.Series] = []
-
-    for dt in as_of_dates:
-        if dt not in fwd_ranks.index:
-            continue
-        raw_feat = _pit_features_for_date(close_panel, dt)
-        if raw_feat.empty:
-            continue
-        feat = build_pit_feature_matrix(raw_feat, as_of_date=dt, macro_vix=None)
-        target = fwd_ranks.loc[dt]  # Series indexed by ticker
-
-        common = feat.index.intersection(target.dropna().index)
-        if len(common) < 2:
-            continue
-        feat = feat.loc[common]
-        tgt = target.loc[common].astype(float)
-
-        # MultiIndex (date, ticker) so LambdaRank groups by date (query).
-        mi = pd.MultiIndex.from_product([[dt], common], names=["date", "ticker"])
-        feat.index = mi
-        tgt.index = mi
-        # Event end = as_of + horizon (forward-return realizes then).
-        t1 = pd.Series(dt + pd.Timedelta(days=horizon_days), index=mi)
-
-        X_parts.append(feat)
-        y_parts.append(tgt)
-        t1_parts.append(t1)
-
-    if not X_parts:
-        logger.warning("Training panel empty after assembly (0 usable dates).")
-        return TrainingPanel(pd.DataFrame(), pd.Series(dtype=float), pd.Series(dtype=float), 0)
-
-    X = pd.concat(X_parts)[list(FEATURE_COLUMNS)]
-    y = pd.concat(y_parts)
-    t1 = pd.concat(t1_parts)
-    n_dates = X.index.get_level_values(0).nunique()
-
-    logger.info("Training panel: %d rows across %d dates, %d features.",
-                len(X), n_dates, X.shape[1])
-    return TrainingPanel(X, y, t1, n_dates)
+    logger.info(
+        "Training panel: %d rows across %d dates, %d features.",
+        len(panel.X), panel.n_dates, panel.X.shape[1] if not panel.X.empty else 0,
+    )
+    return panel
 
 
 # ──────────────────────────────────────────────────────────────────────────────

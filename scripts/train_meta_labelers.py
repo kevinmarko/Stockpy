@@ -25,17 +25,18 @@ This script builds its training panel self-contained. It uses the live
 falls back to a deterministic synthetic geometric-random-walk panel so the
 script (and its offline tests) never depend on the network.
 
-    NOTE (convergence): a parallel PR (Agent 1) is adding
-    ``ml.training_data.build_training_panel()`` as the shared PIT source for
-    training data. Once that lands, replace ``_build_price_panel()`` below with
-    a call to it. Kept local here to avoid a merge conflict with that PR.
+    Deliberately NOT converged onto ``ml.training_data.build_training_panel()``:
+    that helper builds a date-grid forward-return-rank panel for the LGBM
+    ranker (see ``scripts/train_lgbm.py``). Meta-labeler training needs
+    CUSUM-sampled *event* rows with triple-barrier labels
+    (``ml/triple_barrier.py``) — a different panel shape entirely, not a
+    duplicate of the ranker's panel builder.
 
 Registry write
 --------------
-The YAML-update helper (``_update_registry_row``) is intentionally local to this
-script. A parallel PR (Agent 2) is adding ``ml/registry_io.py`` as the shared
-registry-write utility; converge this local helper onto it once that lands (do
-NOT create ml/registry_io.py here).
+Converged onto ``ml/registry_io.update_model_metrics`` (the shared,
+honesty-enforcing registry writer also used by ``scripts/train_lgbm.py``) —
+no more local YAML round-tripping here.
 
 Metric honesty
 --------------
@@ -73,6 +74,7 @@ if str(_REPO_ROOT) not in sys.path:
 from ml.meta_labeling import MetaLabeler  # noqa: E402
 from ml.triple_barrier import apply_triple_barrier, cusum_filter, get_volatility  # noqa: E402
 from ml.meta_bootstrap import META_LABELED_SIGNAL_IDS  # noqa: E402
+from ml.registry_io import update_model_metrics  # noqa: E402
 
 logger = logging.getLogger("ML.TrainMetaLabelers")
 
@@ -265,7 +267,7 @@ def _assemble_training_set(
 
 
 # ---------------------------------------------------------------------------
-# 3. Registry write (local; converge onto ml/registry_io.py later — Agent 2 PR)
+# 3. Registry write — converged onto ml.registry_io.update_model_metrics
 # ---------------------------------------------------------------------------
 
 def _update_registry_row(
@@ -275,45 +277,29 @@ def _update_registry_row(
     n_train: int,
     cpcv_dsr: Optional[float],
     pbo: Optional[float],
-    deployable: bool,
     registry_path: Optional[Path] = None,
 ) -> bool:
     """Update the ``meta_labeler_<signal_id>`` row in ml/registry.yaml.
 
-    Small, self-contained YAML round-trip. Returns True on success, False (and
-    a logged warning) on any failure — never raises (dead-letter).
-
-    ``registry_path`` defaults to the module-level ``_REGISTRY_PATH`` resolved at
-    call time (so tests can monkeypatch it).
-
-    Future: replace with ``ml.registry_io.update_model_row(...)`` (Agent 2 PR).
+    Thin wrapper around the shared ``ml.registry_io.update_model_metrics`` (the
+    same writer ``scripts/train_lgbm.py`` uses) — ``deployable`` is derived
+    there from ``cpcv_dsr``/``pbo``, never passed in (no spoofing the gate).
+    ``registry_path`` defaults to the module-level ``_REGISTRY_PATH`` resolved
+    at call time (so tests can monkeypatch it). Returns True on success, False
+    (and a logged warning) on any failure — never raises (dead-letter).
     """
     if registry_path is None:
         registry_path = _REGISTRY_PATH
-    try:
-        import yaml  # noqa: PLC0415
-    except Exception as exc:
-        logger.warning("PyYAML unavailable (%s) — skipping registry update.", exc)
-        return False
-
     model_key = f"meta_labeler_{signal_id}"
     try:
-        with open(registry_path, "r") as f:
-            data = yaml.safe_load(f) or {}
-        models = data.get("models", {})
-        if model_key not in models:
-            logger.warning("Registry has no row %r — skipping update.", model_key)
-            return False
-        row = models[model_key]
-        row["trained_date"] = trained_date
-        row["n_train"] = int(n_train)
-        row["cpcv_dsr"] = cpcv_dsr
-        row["pbo"] = pbo
-        row["deployable"] = bool(deployable)
-        models[model_key] = row
-        data["models"] = models
-        with open(registry_path, "w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+        update_model_metrics(
+            model_key,
+            trained_date=trained_date,
+            cpcv_dsr=cpcv_dsr,
+            pbo=pbo,
+            n_train=n_train,
+            path=registry_path,
+        )
         logger.info("Updated registry row %r (n_train=%d).", model_key, n_train)
         return True
     except Exception as exc:
@@ -378,11 +364,11 @@ def train_signal(
             signal_id,
             trained_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             n_train=labeler._n_train_samples,
-            # No CPCV run here — leave metrics null (no fabrication) so the row
-            # stays non-deployable until real validation populates them.
+            # No CPCV run here — leave metrics null (no fabrication) so
+            # update_model_metrics derives deployable=False until real
+            # validation populates them.
             cpcv_dsr=None,
             pbo=None,
-            deployable=False,
         )
 
     logger.info(
