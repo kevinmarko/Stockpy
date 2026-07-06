@@ -26,6 +26,7 @@ import sys
 import json
 import logging
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
@@ -308,20 +309,21 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     forecast_cols = ['Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
                      'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
                      'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper']
-    forecast_results = {}
-    for idx, row in dashboard_df.iterrows():
+    def _forecast_one(row) -> tuple[str, dict | None]:
+        # Captures fe and tech_raw from the enclosing scope (read-only). The engine
+        # is stateless across tickers, so this is safe to run concurrently.
         ticker = row['Symbol']
         price = row['Price']
         if not price or price == 0:
-            continue
-        
+            return ticker, None
+
         history_df = tech_raw.get(ticker)
         history_series = history_df['Close'] if history_df is not None else None
 
         # ML Fallback wrapping: ensures CNN-LSTM failure does not crash execution
         try:
             forecasts = fe.generate_forecast(row, price, history_series, history_df=history_df)
-            forecast_results[ticker] = forecasts
+            return ticker, forecasts
         except Exception as ml_err:
             telemetry.warning(f"Forecasting Engine failure for {ticker}: {ml_err}. Reverting to baseline default.")
             # Calculate standard Monte Carlo and ARIMA manually as fallback
@@ -331,7 +333,7 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                 returns = np.log(history_series / history_series.shift(1)).dropna()
                 mu = float(returns.mean())
                 sigma = float(returns.std())
-            
+
             mc_target, mc_low, mc_high = fe.run_monte_carlo(price, mu, sigma, 30)
             # BUG-FIX: Forecast_10/60/90 previously used a naive linear formula
             # `price * (1 + mu * N)` which is not a valid GBM estimate and
@@ -340,7 +342,7 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
             mc_10, _, _ = fe.run_monte_carlo(price, mu, sigma, 10)
             mc_60, _, _ = fe.run_monte_carlo(price, mu, sigma, 60)
             mc_90, _, _ = fe.run_monte_carlo(price, mu, sigma, 90)
-            forecast_results[ticker] = {
+            return ticker, {
                 'Target_Days': 30,
                 'ARIMA': price,
                 'MC_Target': mc_target,
@@ -353,6 +355,15 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                 'Forecast_30_Prophet_Lower': mc_low,
                 'Forecast_30_Prophet_Upper': mc_high
             }
+
+    workers = max(1, int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)))
+    rows = [row for _, row in dashboard_df.iterrows()]
+    if workers == 1 or len(rows) <= 1:
+        pairs = [_forecast_one(r) for r in rows]
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(rows))) as pool:
+            pairs = list(pool.map(_forecast_one, rows))
+    forecast_results = {tk: fc for tk, fc in pairs if fc is not None}
 
     # Vectorized mapping to avoid iterrows mutation (Constraint #3)
     for col in forecast_cols:
