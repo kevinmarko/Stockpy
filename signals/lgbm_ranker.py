@@ -9,9 +9,11 @@ Two-phase:
                                        per-ticker rank in context.lgbm_scores.
   compute(row, context)              — maps stored rank to [-1, +1] signal score.
 
-Weight: 0.10 (one ensemble member — see settings.SIGNAL_WEIGHTS).
-This module NEVER overrides the rules-based signal stack; it is one input among
-many to SignalAggregator.aggregate().
+Weight is defined solely by settings.SIGNAL_WEIGHTS["lgbm_ranker"] (SignalAggregator
+never reads a per-module default) — kept at 0.0 while the persisted model remains
+non-deployable per ml/registry.yaml (cpcv_dsr far below the 0.95 gate). This module
+NEVER overrides the rules-based signal stack; it is one input among many to
+SignalAggregator.aggregate().
 
 Monthly retraining is the *caller's* responsibility (main_orchestrator.py or a
 scheduled job); this module just loads the latest persisted model.  If no model
@@ -36,10 +38,9 @@ _NAME = "lgbm_ranker"
 
 
 class LGBMRankerSignal(SignalModule):
-    """Cross-sectional LightGBM ranker signal module (weight=0.10)."""
+    """Cross-sectional LightGBM ranker signal module (weight from settings.SIGNAL_WEIGHTS)."""
 
     name = _NAME
-    default_weight = 0.10   # deliberately modest — see CLAUDE.md
 
     def pre_compute(self, universe_df: pd.DataFrame, context: SignalContext) -> None:
         """Score the full cross-section using the latest persisted LGBMRanker.
@@ -114,5 +115,6 @@ class LGBMRankerSignal(SignalModule):
 
 
 # Auto-register module (one input among many to SignalAggregator.aggregate();
-# contributes a neutral 0.0 score until a model is trained and deployed).
+# contributes nothing to final_score while settings.SIGNAL_WEIGHTS["lgbm_ranker"]
+# is 0.0 — see the module docstring for the deployability gate that governs it).
 global_registry.register(LGBMRankerSignal())
