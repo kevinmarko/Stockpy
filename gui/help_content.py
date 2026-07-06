@@ -153,6 +153,7 @@ _KELLY_CAP_PCT = int(settings.KELLY_CAP * 100)
 _KELLY_FRACTION = settings.KELLY_FRACTION
 _CONV_DELTA = settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD
 _RH_QUEUE_STALE_MIN = int(_RH_QUEUE_STALE_SECONDS // 60)
+_RH_MAX_NOTIONAL = settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
 
 GLOSSARY: Dict[str, GlossaryEntry] = {
     # ── Action signals ────────────────────────────────────────────────────────
@@ -1073,6 +1074,22 @@ SECTION_HELP: Dict[str, str] = {
         "from it — re-run the pipeline for a fresh one. Placement, when enabled, "
         "always requires per-order human confirmation in the agent session."
     ),
+    "robinhood_execution.intent_status": (
+        "Per-intent status derived by cross-referencing the queue against the "
+        "agent's receipts log (`output/execution_receipts.jsonl`), matched by "
+        "symbol + side. **queued** = waiting; **blocked** = the pre-trade risk "
+        "gate refused it (reasons shown); **previewed** = the agent ran a "
+        "review-only preview; **skipped** = the operator declined it; "
+        "**placed** = a real order was submitted. This panel only reads these "
+        "files — it never contacts Robinhood."
+    ),
+    "robinhood_execution.reconciliation": (
+        "Cross-check of the append-only placement ledger "
+        "(`output/execution_placed.jsonl`) against `placed` receipts, matched by "
+        "symbol + side. A non-zero 'Unmatched' count means the ledger recorded a "
+        "placement the receipts log doesn't confirm — investigate before the next "
+        "run. The ledger is tolerated as absent (no placements yet)."
+    ),
     "sidebar.regime_filter": (
         "Filters the 'symbols matching' count below to the selected macro "
         "regime. 'All regimes' shows every symbol from the last run regardless "
@@ -1285,6 +1302,23 @@ METRIC_HELP: Dict[str, str] = {
         "Whether `output/KILL_SWITCH` is active for THIS queue.  When active, "
         "placement is blocked for every intent regardless of mode — checked "
         "again by the agent immediately before each order."
+    ),
+
+    # ── Robinhood execution bridge — per-intent status + reconciliation ──────
+    "robinhood_execution.placed_count": (
+        "Rows in the append-only placement ledger "
+        "(`output/execution_placed.jsonl`) — one per real order the agent "
+        "submitted (each capped at "
+        f"${_RH_MAX_NOTIONAL:,.2f} notional/order via "
+        "`ROBINHOOD_MAX_NOTIONAL_PER_ORDER`)."
+    ),
+    "robinhood_execution.matched": (
+        "Placement-ledger entries that have a corresponding `placed` receipt "
+        "(matched by symbol + side).  A healthy run has matched == placed."
+    ),
+    "robinhood_execution.unmatched": (
+        "Placement-ledger entries with NO matching `placed` receipt — a possible "
+        "ledger/receipt divergence to investigate.  Should normally be zero."
     ),
 
     # ── Strategy Matrix score decomposition / comparison (namespaced) ────────

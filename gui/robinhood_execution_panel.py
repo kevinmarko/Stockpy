@@ -26,7 +26,10 @@ Public API
 :func:`read_notification_state`  — parse ``output/execution_queue_notified.json`` → state or ``None``.
 :func:`notification_age_seconds` — age of a `NotificationState` relative to ``now``.
 :func:`ntfy_topic_configured`    — whether ``NTFY_TOPIC`` is set (boolean only — never the value).
-:data:`EXECUTION_QUEUE_PATH`, :data:`EXECUTION_RECEIPTS_PATH`, :data:`NOTIFIED_STATE_PATH` — canonical file paths.
+:func:`read_placed_ledger`       — tail ``output/execution_placed.jsonl`` → list[dict] (absent-file tolerant).
+:func:`derive_intent_status`     — map one queued intent + receipts → a :class:`IntentStatus` badge.
+:func:`build_reconciliation_summary` — cross-check the placed ledger against receipts → :class:`ReconciliationSummary`.
+:data:`EXECUTION_QUEUE_PATH`, :data:`EXECUTION_RECEIPTS_PATH`, :data:`NOTIFIED_STATE_PATH`, :data:`EXECUTION_PLACED_PATH` — canonical file paths.
 
 Constraints honoured
 ---------------------
@@ -58,6 +61,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 EXECUTION_QUEUE_PATH: Path = _REPO_ROOT / "output" / "execution_queue.json"
 EXECUTION_RECEIPTS_PATH: Path = _REPO_ROOT / "output" / "execution_receipts.jsonl"
 NOTIFIED_STATE_PATH: Path = _REPO_ROOT / "output" / "execution_queue_notified.json"
+# Append-only placement ledger written by the execution agent's receipts store
+# (a sibling module — this panel reads the file format directly and never
+# imports that module, so the two stay decoupled).
+EXECUTION_PLACED_PATH: Path = _REPO_ROOT / "output" / "execution_placed.jsonl"
 
 # Mirrors the staleness threshold documented in
 # .claude/skills/robinhood-execution/SKILL.md ("more than ~30 minutes old").
@@ -184,6 +191,237 @@ def read_execution_receipts(path: Optional[Path] = None, max_lines: int = 50) ->
         if isinstance(parsed, dict):
             entries.append(parsed)
     return entries[-max_lines:] if max_lines > 0 else entries
+
+
+# ---------------------------------------------------------------------------
+# Per-intent status derivation
+# ---------------------------------------------------------------------------
+# Canonical status strings a queued intent can carry once cross-referenced with
+# the agent-authored receipts log.  Ordered by "how far along" the intent is so
+# the GUI can pick a colour deterministically.
+STATUS_QUEUED = "queued"
+STATUS_BLOCKED = "blocked"
+STATUS_PREVIEWED = "previewed"
+STATUS_SKIPPED = "skipped"
+STATUS_PLACED = "placed"
+
+# Receipt ``action`` field → panel status.  The receipts schema uses
+# ``"reviewed"`` for a preview-only outcome; the GUI surfaces that as
+# ``"previewed"`` for consistency with the queue-side vocabulary.
+_RECEIPT_ACTION_TO_STATUS: Dict[str, str] = {
+    "reviewed": STATUS_PREVIEWED,
+    "previewed": STATUS_PREVIEWED,
+    "placed": STATUS_PLACED,
+    "skipped": STATUS_SKIPPED,
+}
+
+# Colour band for each status — consumed by the GUI to tint the status cell.
+# "success" (green) / "warning" (amber) / "neutral" (grey).
+STATUS_COLOR: Dict[str, str] = {
+    STATUS_PLACED: "success",
+    STATUS_PREVIEWED: "neutral",
+    STATUS_SKIPPED: "warning",
+    STATUS_BLOCKED: "warning",
+    STATUS_QUEUED: "neutral",
+}
+
+# Precedence when multiple receipts match one intent: the most-advanced /
+# most-informative outcome wins (a later "placed" trumps an earlier "reviewed").
+_STATUS_PRECEDENCE: Dict[str, int] = {
+    STATUS_QUEUED: 0,
+    STATUS_BLOCKED: 1,
+    STATUS_SKIPPED: 2,
+    STATUS_PREVIEWED: 3,
+    STATUS_PLACED: 4,
+}
+
+
+@dataclass(frozen=True)
+class IntentStatus:
+    """Derived status badge for one queued intent.
+
+    Attributes
+    ----------
+    symbol, side : str
+        The intent's identity (matched against receipts by symbol+side).
+    status : str
+        One of the ``STATUS_*`` constants.
+    color : str
+        ``"success"`` / ``"warning"`` / ``"neutral"`` — a colour band the GUI
+        maps to green / amber / grey.
+    detail : str
+        Human-readable annotation (gate reasons for ``blocked``, the receipt
+        note / mcp_order_id for placed/skipped/previewed, or "" for queued).
+    """
+
+    symbol: str
+    side: str
+    status: str
+    color: str
+    detail: str
+
+
+def _matching_receipts(symbol: str, side: str, receipts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Receipts whose symbol+side match the given intent (case-insensitive)."""
+    sym = (symbol or "").strip().upper()
+    sd = (side or "").strip().lower()
+    out: List[Dict[str, Any]] = []
+    for r in receipts:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("symbol", "")).strip().upper() != sym:
+            continue
+        if str(r.get("side", "")).strip().lower() != sd:
+            continue
+        out.append(r)
+    return out
+
+
+def derive_intent_status(
+    intent: QueuedIntent, receipts: List[Dict[str, Any]]
+) -> IntentStatus:
+    """Derive a status badge for one queued intent.
+
+    Rules (in order):
+      1. A matching receipt (by symbol+side) wins — its ``action`` maps to
+         ``placed`` / ``previewed`` / ``skipped``.  When several receipts match,
+         the most-advanced outcome wins (placed > previewed > skipped).
+      2. No receipt + ``allow_place`` False → ``blocked`` (gate reasons shown).
+      3. Otherwise → ``queued`` (default).
+
+    Never raises (CONSTRAINT #6); never fabricates a receipt that doesn't
+    exist (CONSTRAINT #4).
+    """
+    matches = _matching_receipts(intent.symbol, intent.side, receipts)
+    if matches:
+        best: Optional[Dict[str, Any]] = None
+        best_rank = -1
+        for r in matches:
+            status = _RECEIPT_ACTION_TO_STATUS.get(
+                str(r.get("action", "")).strip().lower()
+            )
+            if status is None:
+                continue
+            rank = _STATUS_PRECEDENCE.get(status, 0)
+            if rank > best_rank:
+                best_rank = rank
+                best = r
+        if best is not None:
+            status = _RECEIPT_ACTION_TO_STATUS[str(best.get("action", "")).strip().lower()]
+            note = str(best.get("note", "") or "").strip()
+            oid = str(best.get("mcp_order_id", "") or "").strip()
+            detail = note or (f"order {oid}" if oid else "")
+            return IntentStatus(
+                symbol=intent.symbol,
+                side=intent.side,
+                status=status,
+                color=STATUS_COLOR.get(status, "neutral"),
+                detail=detail,
+            )
+
+    if not intent.allow_place:
+        detail = "; ".join(intent.gate_reasons) if intent.gate_reasons else "not placeable"
+        return IntentStatus(
+            symbol=intent.symbol,
+            side=intent.side,
+            status=STATUS_BLOCKED,
+            color=STATUS_COLOR[STATUS_BLOCKED],
+            detail=detail,
+        )
+
+    return IntentStatus(
+        symbol=intent.symbol,
+        side=intent.side,
+        status=STATUS_QUEUED,
+        color=STATUS_COLOR[STATUS_QUEUED],
+        detail="",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Placement ledger + reconciliation
+# ---------------------------------------------------------------------------
+
+
+def read_placed_ledger(path: Optional[Path] = None, max_lines: int = 200) -> List[Dict[str, Any]]:
+    """Tail the append-only placement ledger ``output/execution_placed.jsonl``.
+
+    Schema per line: ``{"ts","dedup_key","symbol","side","qty","target_notional",
+    "client_order_id","mcp_order_id"}``.  Returns ``[]`` when the file is absent
+    or every line is corrupt — never raises (CONSTRAINT #6).  Malformed lines
+    are skipped individually (dead-letter tolerant).
+    """
+    target = path or EXECUTION_PLACED_PATH
+    try:
+        if not target.exists():
+            return []
+        lines = target.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        logger.debug("read_placed_ledger: failed to read %s", target, exc_info=True)
+        return []
+
+    entries: List[Dict[str, Any]] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            entries.append(parsed)
+    return entries[-max_lines:] if max_lines > 0 else entries
+
+
+@dataclass(frozen=True)
+class ReconciliationSummary:
+    """Cross-check of the placement ledger against the receipts log.
+
+    Attributes
+    ----------
+    placed_count : int
+        Number of entries in ``execution_placed.jsonl``.
+    matched : list[dict]
+        Ledger entries that have a corresponding ``placed`` receipt (matched by
+        symbol+side).
+    unmatched : list[dict]
+        Ledger entries with no corresponding ``placed`` receipt — surfaced so
+        the operator can investigate a possible receipt/ledger divergence.
+    """
+
+    placed_count: int
+    matched: List[Dict[str, Any]]
+    unmatched: List[Dict[str, Any]]
+
+
+def build_reconciliation_summary(
+    placed_ledger: List[Dict[str, Any]], receipts: List[Dict[str, Any]]
+) -> ReconciliationSummary:
+    """Reconcile the placement ledger against ``placed`` receipts.
+
+    A ledger entry is "matched" when at least one receipt with
+    ``action == "placed"`` shares its symbol+side.  Never raises (CONSTRAINT
+    #6); never fabricates ledger rows (CONSTRAINT #4).
+    """
+    placed_receipts = [
+        r for r in receipts
+        if isinstance(r, dict) and str(r.get("action", "")).strip().lower() == "placed"
+    ]
+    matched: List[Dict[str, Any]] = []
+    unmatched: List[Dict[str, Any]] = []
+    for entry in placed_ledger:
+        if not isinstance(entry, dict):
+            continue
+        if _matching_receipts(str(entry.get("symbol", "")), str(entry.get("side", "")), placed_receipts):
+            matched.append(entry)
+        else:
+            unmatched.append(entry)
+    return ReconciliationSummary(
+        placed_count=len(placed_ledger),
+        matched=matched,
+        unmatched=unmatched,
+    )
 
 
 def queue_age_seconds(snapshot: ExecutionQueueSnapshot, *, now: Optional[datetime] = None) -> float:
