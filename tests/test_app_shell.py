@@ -245,51 +245,99 @@ class TestExceptionDuringWindow(BaseAppShellTest):
         stop_ui_server.assert_called_once()
 
 
+class _FakeWatcherThread:
+    """Stand-in for threading.Thread that captures its target/daemon args
+    instead of actually starting a background thread. Tests invoke the
+    captured target manually to simulate "the signal arrived", since
+    signal.sigwait() is separately mocked to return immediately rather than
+    genuinely blocking on an OS signal.
+    """
+
+    instances: list["_FakeWatcherThread"] = []
+
+    def __init__(self, target=None, daemon=None, **kw):
+        self.target = target
+        self.daemon = daemon
+        self.started = False
+        _FakeWatcherThread.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+
 class TestSigtermHandling(BaseAppShellTest):
     """Covers the SIGTERM hardening: an external `kill <pid>` (as opposed to
     the user clicking the window's own close button) must still tear down
-    both child processes, since Python's default SIGTERM disposition skips
-    pending `finally` blocks and pywebview's native event loop may not check
-    for pending signals promptly. `os._exit` is always mocked here so
-    invoking the handler never actually terminates the test process.
+    both child processes.
+
+    A plain `signal.signal(SIGTERM, ...)` handler does NOT work here in
+    practice: CPython only invokes a Python-level signal handler when the
+    interpreter's bytecode loop regains control, and pywebview's native
+    Cocoa event loop never hands control back while the window is open --
+    confirmed with a real `kill -TERM` against a real running window not
+    terminating the process even after 20+ seconds. The fix instead blocks
+    SIGTERM via `signal.pthread_sigmask` and spawns a dedicated daemon
+    thread that calls the genuinely-blocking `signal.sigwait()`, which the
+    kernel wakes directly regardless of what the main thread is doing.
+
+    These tests mock `threading.Thread` (capturing its target instead of
+    really starting a thread), `signal.sigwait` (returns immediately instead
+    of blocking), and `os._exit` (never actually terminates the test
+    process) so the watcher's logic is exercised deterministically and
+    synchronously.
     """
 
-    def test_handler_installed_during_main_and_restored_after_clean_exit(self):
-        previous_handler = signal.getsignal(signal.SIGTERM)
-        captured = {}
+    def setUp(self):
+        super().setUp()
+        _FakeWatcherThread.instances = []
+        self._thread_patcher = patch("app_shell.threading.Thread", _FakeWatcherThread)
+        self._thread_patcher.start()
+        self._sigwait_patcher = patch("app_shell.signal.sigwait", return_value=signal.SIGTERM)
+        self._sigwait_patcher.start()
+        self.addCleanup(self._thread_patcher.stop)
+        self.addCleanup(self._sigwait_patcher.stop)
 
-        def _webview_start_side_effect(*a, **kw):
-            captured["mid_run_handler"] = signal.getsignal(signal.SIGTERM)
+    def _watcher_target(self):
+        """The single watcher thread's captured target callable."""
+        self.assertEqual(len(_FakeWatcherThread.instances), 1)
+        return _FakeWatcherThread.instances[0].target
 
-        self.fake_webview.start.side_effect = _webview_start_side_effect
-
-        rc = self.app_shell.main(interval_seconds=60, ui_port=1234)
+    def test_watcher_thread_started_as_daemon_with_sigterm_blocked(self):
+        with patch("app_shell.signal.pthread_sigmask") as mock_mask:
+            rc = self.app_shell.main(interval_seconds=60, ui_port=1234)
 
         self.assertEqual(rc, 0)
-        self.assertIsNot(captured["mid_run_handler"], previous_handler)
-        self.assertEqual(signal.getsignal(signal.SIGTERM), previous_handler)
+        instance = _FakeWatcherThread.instances[0]
+        self.assertTrue(instance.started)
+        self.assertTrue(instance.daemon)
+        self.assertIsNotNone(instance.target)
+        mock_mask.assert_any_call(signal.SIG_BLOCK, {signal.SIGTERM})
+
+    def test_pthread_sigmask_unblocked_on_clean_exit(self):
+        with patch("app_shell.signal.pthread_sigmask") as mock_mask:
+            self.app_shell.main(interval_seconds=60, ui_port=1234)
+
+        mock_mask.assert_any_call(signal.SIG_UNBLOCK, {signal.SIGTERM})
 
     def test_sigterm_during_window_tears_down_and_force_exits(self):
         """Simulates an external `kill <pid>` arriving while the window is
-        open: invoking the installed handler directly must call
-        stop_engine/stop_ui_server and then force-exit via os._exit.
+        open: invoking the captured watcher target directly (as sigwait()
+        returning would) must call stop_engine/stop_ui_server and then
+        force-exit via os._exit.
         """
         from desktop.engine_supervisor import stop_engine
         from desktop.ui_server import stop_ui_server
 
-        captured = {}
-
         def _webview_start_side_effect(*a, **kw):
-            captured["handler"] = signal.getsignal(signal.SIGTERM)
+            # Simulate the OS delivering SIGTERM: invoke the watcher's
+            # target the same way the real thread would once sigwait()
+            # (mocked to return immediately) unblocks it.
+            self._watcher_target()()
 
         self.fake_webview.start.side_effect = _webview_start_side_effect
 
         with patch("app_shell.os._exit") as mock_exit:
             self.app_shell.main(interval_seconds=60, ui_port=1234)
-            # Simulate the OS delivering SIGTERM by invoking the installed
-            # handler directly (os._exit is mocked so this doesn't actually
-            # kill the test process).
-            captured["handler"](signal.SIGTERM, None)
 
         stop_engine.assert_called_once()
         stop_ui_server.assert_called_once()
@@ -303,12 +351,11 @@ class TestSigtermHandling(BaseAppShellTest):
         from desktop.ui_server import stop_ui_server
 
         def _webview_start_side_effect(*a, **kw):
-            handler = signal.getsignal(signal.SIGTERM)
             # os._exit is mocked to a no-op so control returns here instead
             # of the process actually exiting, letting us prove the
             # subsequent `finally` path doesn't double-call teardown.
             with patch("app_shell.os._exit"):
-                handler(signal.SIGTERM, None)
+                self._watcher_target()()
 
         self.fake_webview.start.side_effect = _webview_start_side_effect
 
@@ -321,17 +368,13 @@ class TestSigtermHandling(BaseAppShellTest):
         """A SIGTERM arriving right as start_ui_server is called -- before
         `ui_popen`/`engine_handle` are assigned in main()'s scope -- must not
         raise or call stop_engine/stop_ui_server; there is nothing to tear
-        down yet. (The handler is only installed just before start_ui_server
-        is invoked, so start_ui_server's own call is the earliest point at
-        which the real handler can be observed -- find_free_port() runs
-        before the handler is installed and would see the prior handler.)
+        down yet.
         """
         from desktop.engine_supervisor import stop_engine
         from desktop.ui_server import start_ui_server, stop_ui_server
 
         def _start_ui_server_side_effect(*a, **kw):
-            handler = signal.getsignal(signal.SIGTERM)
-            handler(signal.SIGTERM, None)
+            self._watcher_target()()
             return MagicMock(name="ui_popen")
 
         start_ui_server.side_effect = _start_ui_server_side_effect

@@ -38,17 +38,32 @@ Supervisor sequence (main())
 
 SIGTERM hardening
 ------------------
-Python's default SIGTERM disposition terminates the interpreter immediately
-WITHOUT running pending ``finally`` blocks, and pywebview's native event loop
-can hold the GIL for long stretches without the interpreter checking for
-pending signals — so an external ``kill <pid>`` (as opposed to the user
-clicking the window's own close button) is NOT guaranteed to unwind back
-through ``main()``'s ``finally`` block. ``main()`` therefore installs its own
-``signal.signal(SIGTERM, ...)`` handler that runs the same idempotent
-teardown directly and then force-exits the process, so a hard kill of the
-supervisor still reaps the Streamlit UI server and the advisory engine loop
-instead of orphaning them. (SIGKILL can never be caught by any process, by
-design — nothing running inside the killed process can prevent that one.)
+An external ``kill <pid>`` (as opposed to the user clicking the window's own
+close button) is NOT guaranteed to unwind back through ``main()``'s
+``finally`` block. Two things make this true:
+
+  1. Python's default SIGTERM disposition terminates the interpreter
+     immediately WITHOUT running pending ``finally`` blocks.
+  2. A ``signal.signal(SIGTERM, ...)`` Python-level handler is NOT a
+     reliable fix for this: CPython only invokes a Python-level signal
+     handler when the interpreter's bytecode loop regains control, and
+     pywebview's native Cocoa event loop (entered via ``webview.start()``)
+     never hands control back to that loop while the window is open.
+     Confirmed in practice: a plain ``signal.signal(SIGTERM, ...)`` handler
+     was registered, but an external ``kill -TERM`` against a real running
+     window did not terminate the process even after 20+ seconds — the
+     handler was scheduled but never actually invoked.
+
+``main()`` instead blocks SIGTERM at the process level via
+``signal.pthread_sigmask`` and spawns a dedicated daemon thread that calls
+``signal.sigwait()`` — a genuine blocking OS-level syscall. The kernel wakes
+that thread directly the moment the signal arrives, entirely independent of
+what the main thread is doing (blocked in a native event loop or not). That
+thread runs the same idempotent teardown and then force-exits via
+``os._exit``, so a hard kill of the supervisor still reaps the Streamlit UI
+server and the advisory engine loop instead of orphaning them. (SIGKILL can
+never be caught by any process, by design — nothing running inside the
+killed process can prevent that one.)
 """
 
 from __future__ import annotations
@@ -57,6 +72,7 @@ import argparse
 import logging
 import os
 import signal
+import threading
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -96,8 +112,8 @@ def main(interval_seconds: int = 300, ui_port: Optional[int] = None) -> int:
     -------
     int
         Process exit code — ``0`` on a normal window-close shutdown. A
-        SIGTERM forces process exit directly (see ``_handle_sigterm`` below)
-        and never returns to the caller.
+        SIGTERM forces process exit directly (see ``_run_sigterm_watcher``
+        below) and never returns to the caller.
     """
     _load_dotenv(override=False)
 
@@ -141,17 +157,22 @@ def main(interval_seconds: int = 300, ui_port: Optional[int] = None) -> int:
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error stopping UI server subprocess: %s", exc)
 
-    def _handle_sigterm(signum, frame) -> None:  # noqa: ARG001 - required signal handler signature
-        """Tear down child processes on an external SIGTERM, then force exit.
+    def _run_sigterm_watcher() -> None:
+        """Block (in a dedicated thread) until SIGTERM is pending, then tear
+        down and force-exit.
 
-        Relying solely on this function's ``finally`` block to unwind is not
-        safe here: pywebview's native event loop can hold the GIL for long
-        stretches without the interpreter checking for pending signals, so a
-        plain ``kill <pid>`` is not guaranteed to reach Python control flow.
-        This handler runs the same idempotent ``_teardown()`` directly, then
-        force-exits via ``os._exit`` rather than trying to unwind back
-        through code that may never resume.
+        See the module docstring's "SIGTERM hardening" section for why a
+        plain ``signal.signal(SIGTERM, ...)`` handler does not work here:
+        it is only invoked when the interpreter's bytecode loop regains
+        control, which never happens while pywebview's native event loop
+        owns the main thread. ``signal.sigwait()`` is a genuine blocking
+        syscall this dedicated thread can wait on; the kernel wakes it
+        directly, independent of what the main thread is doing. SIGTERM is
+        blocked via ``pthread_sigmask`` before this thread is spawned so it
+        inherits the blocked mask -- required for ``sigwait()`` to receive
+        it instead of the (would-be ineffective) default disposition.
         """
+        signal.sigwait({signal.SIGTERM})
         logger.warning(
             "Received SIGTERM (pid=%d) — tearing down child processes before exit.",
             os.getpid(),
@@ -160,7 +181,9 @@ def main(interval_seconds: int = 300, ui_port: Optional[int] = None) -> int:
         logging.shutdown()
         os._exit(0)
 
-    previous_sigterm_handler = signal.signal(signal.SIGTERM, _handle_sigterm)
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+    _sigterm_watcher_thread = threading.Thread(target=_run_sigterm_watcher, daemon=True)
+    _sigterm_watcher_thread.start()
 
     try:
         # ── Start UI server (headless Streamlit, no browser tab) ────────────
@@ -202,11 +225,12 @@ def main(interval_seconds: int = 300, ui_port: Optional[int] = None) -> int:
         # KeyboardInterrupt, or on the normal window-close return path — so
         # no orphaned child process survives the supervisor exiting through
         # ordinary Python control flow. (The SIGTERM path above is handled
-        # separately since it may never reach this point at all.)
+        # separately since it may never reach this point at all -- it
+        # force-exits the whole process before unwinding gets here.)
         try:
-            signal.signal(signal.SIGTERM, previous_sigterm_handler)
-        except Exception as exc:  # noqa: BLE001 - restoring the handler must never mask the real error
-            logger.error("Error restoring previous SIGTERM handler: %s", exc)
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+        except Exception as exc:  # noqa: BLE001 - restoring the mask must never mask the real error
+            logger.error("Error restoring SIGTERM signal mask: %s", exc)
         _teardown()
 
 
