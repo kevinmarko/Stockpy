@@ -114,7 +114,7 @@ def test_train_signal_no_registry_flag_skips_yaml(tmp_models_dir, tmp_registry):
 # 2. Runtime registration wires the model into the global registry
 # ---------------------------------------------------------------------------
 
-def test_bootstrap_registers_saved_model(tmp_models_dir):
+def test_bootstrap_registers_saved_model(tmp_models_dir, tmp_registry):
     """After a model is saved, bootstrap_meta_registry() registers it."""
     # Train + save into the temp models dir.
     labeler = trainer.train_signal("timeseries_momentum", force_synthetic=True, seed=1)
@@ -142,7 +142,7 @@ def test_bootstrap_noop_when_no_model(tmp_models_dir):
         )
 
 
-def test_bootstrap_respects_disabled_setting(tmp_models_dir, monkeypatch):
+def test_bootstrap_respects_disabled_setting(tmp_models_dir, tmp_registry, monkeypatch):
     """META_LABELING_ENABLED=False disables registration even with a saved model."""
     trainer.train_signal("timeseries_momentum", force_synthetic=True, seed=1)
 
