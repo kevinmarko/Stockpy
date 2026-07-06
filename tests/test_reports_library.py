@@ -9,6 +9,15 @@ Covers:
   (b) A light smoke check that ``gui.panels.reports_library.render_reports_library``
       imports cleanly and is callable (the module import pulls in streamlit,
       which is available in this repo's test environment).
+  (c) ``streamlit.testing.v1.AppTest``-driven interaction tests for
+      ``_html_file_block``'s inline-view toggle — proving the "Hide report"
+      button actually closes the embedded report. ``gui/app.py`` uses
+      ``layout="wide"``, which leaves little/no page margin outside the
+      embedded ``components.html`` iframe; once a tall report is open,
+      mouse-wheel scroll while hovering it scrolls the iframe, not the page,
+      so the operator can't wheel back up to the original checkbox to close
+      it. The "Hide report" button (rendered directly below the iframe) is
+      the fix, and this suite locks in that it actually clears the checkbox.
 """
 
 from __future__ import annotations
@@ -92,3 +101,58 @@ class TestRenderImportable:
 
         assert hasattr(panels, "render_reports_library")
         assert callable(panels.render_reports_library)
+
+
+def _html_block_script() -> str:
+    """A minimal Streamlit script exercising ``_html_file_block`` in
+    isolation, for ``AppTest`` interaction simulation."""
+    return (
+        "import streamlit as st\n"
+        "from settings import settings\n"
+        "from gui.panels.reports_library import _html_file_block\n"
+        "\n"
+        "settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)\n"
+        "report_path = settings.OUTPUT_DIR / 'daily_report.html'\n"
+        "report_path.write_text('<html><body>hi</body></html>', encoding='utf-8')\n"
+        "_html_file_block(report_path, download_label='dl')\n"
+    )
+
+
+class TestInlineViewToggle:
+    """AppTest-driven proof that the inline report viewer can be closed.
+
+    Regression coverage for the "can't exit out of the report" bug: checking
+    the "View inline" checkbox must reveal a "Hide report" button, and
+    clicking that button must clear the checkbox (closing the report) —
+    without requiring the operator to interact with the original checkbox
+    again, since it's not reliably reachable once a tall report traps
+    mouse-wheel scroll inside its iframe under the app's wide layout.
+    """
+
+    def test_hide_button_absent_until_report_opened(self, tmp_path, monkeypatch) -> None:
+        from streamlit.testing.v1 import AppTest
+        from settings import settings
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        at = AppTest.from_string(_html_block_script())
+        at.run()
+
+        assert at.checkbox[0].value is False
+        assert not any("Hide" in b.label for b in at.button)
+
+    def test_hide_button_closes_the_report(self, tmp_path, monkeypatch) -> None:
+        from streamlit.testing.v1 import AppTest
+        from settings import settings
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        at = AppTest.from_string(_html_block_script())
+        at.run()
+
+        at.checkbox[0].check().run()
+        assert at.checkbox[0].value is True
+        hide_buttons = [b for b in at.button if "Hide" in b.label]
+        assert len(hide_buttons) == 1
+
+        hide_buttons[0].click().run()
+        assert at.checkbox[0].value is False
+        assert not any("Hide" in b.label for b in at.button)
