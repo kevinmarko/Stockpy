@@ -3,9 +3,11 @@
 InvestYo Quant Platform - LGBM Cross-Sectional Ranker Training Job
 =================================================================
 CLI that trains the ``lgbm_ranker`` model registered in ``ml/registry.yaml``,
-computes out-of-sample DSR / PBO via CPCV, persists the model to
-``ml/models/lgbm_latest.pkl``, and updates the registry row (including the
-``deployable`` gate: DSR > 0.95 AND PBO < 0.5).
+computes out-of-sample DSR / PBO via CPCV, persists the model to a dated
+``ml/models/lgbm_<YYYYMMDD>.pkl`` artifact (auto-named by
+``LGBMCrossSectionalRanker.save()``), and updates the registry row (including
+the ``deployable`` gate: DSR > 0.95 AND PBO < 0.5, and the ``artifact_file``
+provenance field naming the exact binary that produced these metrics).
 
 Reuses (does NOT reimplement):
   - ml.lgbm_ranker.LGBMCrossSectionalRanker      (train / save)
@@ -59,7 +61,6 @@ from validation.metrics import (  # noqa: E402
 logger = logging.getLogger("ML.TrainLGBM")
 
 _MODEL_KEY = "lgbm_ranker"
-_MODEL_PATH = _REPO_ROOT / "ml" / "models" / "lgbm_latest.pkl"
 
 # A modest default universe for offline / smoke runs.  Live runs can override
 # with --tickers.
@@ -341,8 +342,14 @@ def run_training(
     An explicit ``data_engine`` (any object with ``fetch_technical_raw``) can be
     injected for tests; otherwise ``offline`` selects the synthetic engine and
     the default selects the live ``DataEngine``.
+
+    When ``save_path`` is not given, the model is persisted to a fresh dated
+    ``ml/models/lgbm_<YYYYMMDD>.pkl`` (via ``LGBMCrossSectionalRanker.save(None)``)
+    rather than a mutable ``*_latest.pkl`` pointer — so the registry's
+    ``artifact_file`` provenance field always names the exact, unique binary
+    that produced a given run's metrics.
     """
-    save_path = Path(save_path) if save_path is not None else _MODEL_PATH
+    save_path = Path(save_path) if save_path is not None else None
 
     # 1. Data engine
     if data_engine is not None:
@@ -377,7 +384,7 @@ def run_training(
     # 5. Persist model (only if it actually trained — no fabricated artifact)
     model_saved = False
     if ranker._model is not None:
-        ranker.save(save_path)
+        save_path = ranker.save(save_path)
         model_saved = True
         logger.info("Model persisted to %s", save_path)
     else:
@@ -428,7 +435,8 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--offline", action="store_true",
                    help="Use MockDataEngine (no network).")
     p.add_argument("--save-path", type=str, default=None,
-                   help="Override model output path (default ml/models/lgbm_latest.pkl).")
+                   help="Override model output path (default: auto-dated "
+                        "ml/models/lgbm_<YYYYMMDD>.pkl).")
     p.add_argument("--registry-path", type=str, default=None,
                    help="Override registry.yaml path (for tests).")
     p.add_argument("--log-level", type=str, default="INFO")
