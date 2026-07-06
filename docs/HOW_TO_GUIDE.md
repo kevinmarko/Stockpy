@@ -166,8 +166,50 @@ See [Section 18](#18-google-sheets-integration-legacy) for the Sheet setup.
 
 ## 5. Running the Pipeline
 
-### The easiest way — double-click on macOS
+### The recommended way — the unified desktop app
 
+`launch_app.command` at the project root is the recommended everyday way to start the
+platform. Double-click it from **Finder** or the **Dock** and a single native desktop
+window opens with the full Command Center inside it — no browser tab, no separate
+terminal window to babysit.
+
+**This is a behavior change from the old model, and it's worth being explicit about:**
+the background refresh loop that keeps prices, indicators, and signals current now runs
+**automatically for as long as the window stays open**, and **stops the moment you close
+the window** — you don't start or stop it separately, and there's nothing left running
+in the background after you quit. (The old model — `launch.command`'s headless interval
+loop and `launch_gui.command`'s browser-tab GUI — required you to separately manage a
+terminal loop and a browser tab, and either could keep running after you thought you'd
+closed things down.)
+
+A small freshness indicator in the sidebar shows how recently the background loop last
+refreshed, so you always know at a glance whether what you're looking at is current.
+
+Under the hood, `launch_app.command` runs:
+
+```bash
+python3 app_shell.py [--interval N]
+```
+
+`app_shell.py` opens `gui/app.py` in a native window (via `pywebview`) and supervises the
+background refresh loop tied to that window's lifecycle. Everything described below for
+the browser-tab Command Center — the fourteen tabs, the Launcher, Settings, Strategy
+Matrix, and so on — is the same GUI, just hosted in a native window instead of your
+browser.
+
+**One-time setup** (already done — listed here for reference if you ever recreate the file):
+
+```bash
+chmod +x launch_app.command
+```
+
+**To add to the Dock**: drag `launch_app.command` to your Dock → right-click → Options → Keep in Dock.
+
+---
+
+### The headless way — double-click on macOS
+
+Prefer a terminal-only, no-GUI loop, or need something scriptable for a scheduled task?
 `launch.command` at the project root is a macOS launcher you can double-click from **Finder** or the **Dock**. It:
 
 1. Navigates to the project root automatically.
@@ -193,15 +235,15 @@ REFRESH_INTERVAL_SECONDS=60   # change to 0 for a single run
 
 ---
 
-### The Command Center — visual control panel (recommended)
+### The Command Center — visual control panel
 
-The **Command Center** is a graphical front-end over the same pipeline, ideal if you prefer clicking to typing. Launch it by double-clicking **`launch_gui.command`** (macOS) or running:
+The **Command Center** is a graphical front-end over the same pipeline, ideal if you prefer clicking to typing. The recommended way to open it is `launch_app.command` (see above), which hosts it in a native desktop window. If you'd rather have it in a browser tab instead (e.g. for headless/dev use), double-click **`launch_gui.command`** (macOS) or run:
 
 ```bash
 streamlit run gui/app.py
 ```
 
-It opens in your browser with fourteen tabs:
+Either way it's the same GUI, with fourteen tabs:
 
 1. **🚀 Launcher** — **two** launch buttons: **▶️ Launch Pipeline** runs `main_orchestrator.py` (async, broker, full HTML report); **🔄 Refresh Data (Advisory)** runs `main.py` (synchronous advisory loop, broker-free — the canonical `.env`-loading entry point). Live stage indicators (Data Acquisition → Processing → Forecasting → Execution) for the orchestrator path, a heartbeat freshness gauge, and **two log expanders** — the active run log (`output/gui_run.log` or `output/gui_advisory.log`) plus the platform-wide structured telemetry stream from `alerting.setup_logging()` (`logs/investyo.log`). A **pre-launch env-readiness check** flags missing required variables (e.g. `FRED_API_KEY`) *before* you click, so a degraded run is diagnosed up front rather than after the fact. Optional **Dry run**, **Refresh Robinhood account**, and **Auto-refresh while running** (5 s ticker) toggles. Also surfaces the Robinhood execution-bridge mode banner (see [Robinhood Execution Bridge](#robinhood-execution-bridge)).
 2. **📈 Reports** — portfolio heat, edge/MFE/MAE on the latest signals, one-click download of the generated HTML report / signals CSV, and a full **Brinson-Fachler Attribution Analysis** section. Edit the GICS-11 sector matrix directly (`st.data_editor`) or **bulk-paste TSV/CSV** from a spreadsheet, then click *Compute attribution* to see allocation / selection / interaction effects (top-line metrics + per-sector breakdown + bar chart, with CSV downloads for the editor input and the breakdown).
@@ -211,7 +253,7 @@ It opens in your browser with fourteen tabs:
 6. **🛡️ Gravity Audit** — runs the Gravity AI Review Suite and shows pass/fail per step; review this before authorizing a live run.
 7. **🧮 Options** — Black-Scholes Greeks and an IV-Rank proxy per active symbol.
 8. **🛰️ Market Data** — which provider is active (Alpaca real-time vs. yfinance delayed), quote freshness, and a cache-reset control.
-9. **📊 Observability** — a compact macro-regime / VIX / HMM / P&L summary (the full standalone dashboard remains at `streamlit run observability/dashboard.py`).
+9. **📊 Observability** — Mission Control: macro-regime / VIX / HMM summary, account holdings & P&L, open positions vs. pipeline signals, portfolio heat/gross/net exposure, validation report status, recent closed trades, an equity-curve/drawdown/regime-overlay chart, the risk gate block log, plus heartbeat trend, system telemetry, latency heatmap, and error log — the single observability surface for the platform (the former standalone `streamlit run observability/dashboard.py` app has been retired; see [§12 The Observability Dashboard](#12-the-observability-dashboard)).
 10. **📡 Live Inventory** — the full Task 1.4 sync view: holdings ∪ every Robinhood watchlist ∪ file-backed watchlists, each symbol's `CoverageStatus` (FULL / QUOTES_ONLY / EQUITY_ONLY / UNCOVERED), cost-basis delta, and forecast-availability flag. **🔄 Sync Now** refreshes the universe and persists it as `DEFAULT_TICKERS` in `.env`.
 11. **❓ Help** — the in-app glossary and per-tab/per-metric explainer tooltips plus the first-run onboarding tour; see [In-App Help & Glossary](#in-app-help--glossary).
 12. **📝 Prompts** — the Remote-Updatable Prompt Registry: view/publish versioned prompt text, verify signatures, and roll back; see [§16 Remote Prompt Updates (Prompt Registry)](#16-remote-prompt-updates-prompt-registry).
@@ -575,11 +617,12 @@ Or use `launchd` on macOS (more reliable than cron for Mac):
 
 ### Monitor while running
 
+Open the Command Center (`launch_app.command`, or `launch_gui.command` / `streamlit run gui/app.py`) and go to the **📊 Observability** tab for live P&L, open positions, kill switch status, and the last 100 risk gate blocks — see [§12 The Observability Dashboard](#12-the-observability-dashboard) for the full panel breakdown (now folded into this tab; the standalone `streamlit run observability/dashboard.py` app has been retired).
 ```bash
-streamlit run observability/dashboard.py
+streamlit run gui/app.py
 ```
 
-Opens a browser dashboard at `http://localhost:8501` with live P&L, open positions, kill switch status, and the last 100 risk gate blocks.
+Opens the Command Center at `http://localhost:8501` — open the **📊 Observability** tab for live P&L, open positions, kill switch status, and the last 100 risk gate blocks (see [§12](#12-the-observability-dashboard)).
 
 ### Minimum paper trading period
 
@@ -589,27 +632,47 @@ The preflight check requires **90 days** of continuous paper trading before goin
 
 ## 12. The Observability Dashboard
 
+> **The standalone `streamlit run observability/dashboard.py` app has been retired.**
+> Everything described in this section now lives in the Command Center's **📊 Observability**
+> tab — open it via `launch_app.command` (recommended; native desktop window, always-on
+> background refresh) or `launch_gui.command` / `streamlit run gui/app.py` (browser tab).
+> There is no longer a second app to separately launch or keep running.
+
+Inside the Command Center, the Observability tab auto-refreshes alongside the rest of
+the GUI. When running under `launch_app.command`, the always-on background refresh loop
+keeps this tab's data current for as long as the window stays open; when running the
+browser-tab GUI, use the tab's own refresh control to force an immediate update without
+waiting for the next auto-refresh.
 ```bash
-streamlit run observability/dashboard.py
+streamlit run gui/app.py
 ```
 
-Auto-refreshes every 30 seconds (configurable via `DASHBOARD_REFRESH_SECONDS`).
-Use the **🔄 Refresh now** button in the sidebar to force an immediate refresh
-(clears all cached reads) without waiting for the auto-refresh interval.
+Open the **📊 Observability** tab. This tab is the platform's single
+observability surface — the former standalone `streamlit run
+observability/dashboard.py` app has been retired and every panel it used to
+render now lives here.
+
+Panels refresh whenever the tab re-renders (Streamlit's normal script rerun,
+e.g. on interaction or a manual page reload); the underlying `state_snapshot.json`
+read is additionally keyed on the file's mtime so a fresh orchestrator/advisory
+run is picked up on the very next render rather than after a fixed TTL.
 
 ### What you'll see
 
 | Panel | Data source | What it shows |
 |-------|-------------|--------------|
 | Kill switch banner | `output/KILL_SWITCH` file | Red = active (all orders blocked), Green = inactive |
-| Macro regime | `output/state_snapshot.json` | Current regime, VIX, HMM risk-on probability |
+| Macro regime / VIX / HMM | `output/state_snapshot.json` | Current regime, VIX, HMM risk-on probability |
+| Macro Regime Gate | `.env` (`MACRO_REGIME_GATE_ENABLED`) | Toggle + live Sahm Rule / HY OAS / yield-curve telemetry |
 | **Account Holdings & P&L** | **`cache/account_snapshot.json`** | **Total equity, buying power, unrealized P&L, dividends, and a per-position table with green/red-coloured unrealized P&L. Falls back to a "run `main.py --refresh-account`" note when no snapshot exists.** |
 | Strategy P&L | `quant_platform.db` | Realized P&L by strategy |
 | Open positions | `quant_platform.db` vs signals | Internal book vs pipeline recommendations |
-| Portfolio heat | State snapshot | Adverse unrealized P&L as % of equity |
-| Validation status | `reports/*_validation_summary.json` | Deployable / not deployable per strategy |
+| Portfolio risk metrics | `quant_platform.db` | Portfolio heat, gross exposure, net exposure |
+| Validation status | `reports/*_validation_summary.json` | Deployable / not deployable per strategy (run-over-run trend lives in the Gravity Audit tab) |
 | Recent closed trades | `quant_platform.db` | Last 20 fills |
+| Equity curve & regime overlay | `quant_platform.db` + `output/history/` | Cumulative realized P&L, drawdown, and macro regime over time |
 | Risk gate block log | `output/risk_gate_blocks.jsonl` | Last 100 blocked orders and which check blocked them |
+| Heartbeat trend, system telemetry, latency heatmap, error log | `output/heartbeat.txt`, host/process metrics, `logs/investyo.log` | Orchestrator liveness trend, CPU/memory/disk, per-symbol fetch latency, classified error log |
 
 The Account Holdings panel reads the same Robinhood snapshot the advisory
 report uses — it is the source of truth for account state (holdings, cost
@@ -617,7 +680,8 @@ basis, dividends, equity) and never contains credentials.
 
 ### Staleness warning
 
-If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt`), the dashboard shows a yellow staleness warning. This means no fresh signals are available.
+If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt`), the Observability tab shows a yellow staleness warning. This means no fresh signals are available.
+If the orchestrator hasn't run for > 2 hours (detected via `output/heartbeat.txt`), the Heartbeat Age Trend panel shows a stale/slow status badge. This means no fresh signals are available.
 
 ---
 

@@ -133,6 +133,13 @@ finnhub-python>=2.4.0
 # Without it, a built-in keyword lexicon is used automatically (no crash).
 transformers>=4.35.0
 
+# Native desktop shell (pywebview) — hosts gui/app.py's Streamlit UI in a
+# real window instead of a browser tab. macOS backend needs pyobjc.
+pywebview>=5.0
+pyobjc-core>=10.0; sys_platform == 'darwin'
+pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
+pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'
+
 # Read-only web-API scaffold (api/state_api.py) — future web/mobile frontend foundation
 fastapi>=0.110.0
 uvicorn>=0.29.0

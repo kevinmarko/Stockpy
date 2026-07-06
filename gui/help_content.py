@@ -922,12 +922,15 @@ TAB_HELP: Dict[str, TabHelp] = {
     "observability": _t(
         "observability",
         "📊 Observability",
-        "Compact system-health panel: macro regime / VIX / HMM risk-on probability, "
-        "heartbeat trend sparkline, system resource metrics (CPU, memory, disk), "
+        "The platform's single observability surface (the former standalone "
+        "`streamlit run observability/dashboard.py` app has been retired): "
+        "macro regime / VIX / HMM risk-on probability, account holdings & P&L, "
+        "open positions vs. pipeline signals, portfolio heat/gross/net exposure, "
+        "validation report status, recent closed trades, an equity-curve/"
+        "drawdown/regime-overlay chart, the risk gate block log, a heartbeat "
+        "trend sparkline, system resource metrics (CPU, memory, disk), a "
         "latency heatmap (populated by the Market Data tab), and a structured "
-        "log viewer with contextual error classification.  "
-        "See the standalone dashboard (`streamlit run observability/dashboard.py`) "
-        "for the full real-time P&L view.",
+        "log viewer with contextual error classification.",
         ("heartbeat", "state snapshot", "macro regime", "vix", "hmm"),
         "#12-the-observability-dashboard",
     ),

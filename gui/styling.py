@@ -5,8 +5,8 @@ Shared pandas-Styler helpers for severity-based conditional highlighting and
 "as of" freshness badges — Task C5.
 
 Extends the color-coding pattern already established by
-``observability/dashboard.py``'s ``_color_pnl`` / ``_style_holdings``
-(green/red P&L) to two more metrics that appear across several tabs:
+``gui/panels/observability.py``'s ``_color_pnl`` / ``_style_holdings``-style
+helpers (green/red P&L) to two more metrics that appear across several tabs:
 
 * **Kelly Target / suggested position size** — thresholds sourced from
   ``engine.advisory.CONFIG["max_single_position_pct"]`` (the advisory-layer
@@ -28,10 +28,9 @@ Extends the color-coding pattern already established by
   ``validation/harness.py`` and ``gui/strategy_health.py`` use for the
   deployability gate.
 
-No imports from ``gui.panels.*`` (kept dependency-free so
-``observability/dashboard.py``, which lives outside the ``gui.panels``
-package, can use these helpers too without pulling in Streamlit-panel
-machinery).
+No imports from ``gui.panels.*`` (kept dependency-free so any future
+top-level consumer outside the ``gui.panels`` package could use these
+helpers too without pulling in Streamlit-panel machinery).
 """
 
 from __future__ import annotations
@@ -72,9 +71,9 @@ VALIDATION_SHARPE_MIN: float = float(NET_SHARPE_MIN)
 def _color_pnl(val) -> str:
     """CSS colour rule for a P&L-like cell: green if >0, red if <0.
 
-    Mirrors ``observability/dashboard.py``'s ``_color_pnl`` exactly so both
-    modules render identically; kept here too so ``gui/panels/*`` tabs can
-    reuse it without importing the standalone dashboard script.
+    Shared by every ``gui/panels/*`` tab that renders P&L-coloured cells
+    (e.g. the Observability tab's Account Holdings & P&L table) so the
+    green/red convention is identical everywhere it appears.
     """
     try:
         v = float(val)
@@ -140,8 +139,8 @@ def style_severity(
     be present in *df* — missing columns are silently skipped so a partially
     populated frame still renders (dead-letter-safe, no exception).
 
-    Uses ``Styler.map`` (pandas >= 2.1), the same API
-    ``observability/dashboard.py._style_holdings`` already relies on.
+    Uses ``Styler.map`` (pandas >= 2.1), the same API the Observability tab's
+    account-holdings table relies on.
     """
     styler = df.style
     for col in kelly_cols:
