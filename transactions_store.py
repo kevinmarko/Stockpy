@@ -3,8 +3,10 @@ import os
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional, Union
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, inspect, text
+from sqlalchemy import Column, Integer, String, Float, DateTime, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+from db_config import resolve_database_url, create_db_engine, session_scope
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +32,9 @@ class Trade(Base):
     conviction = Column(Float, nullable=True)  # advisory signal conviction [0,1] at entry
 
 class TransactionsStore:
-    def __init__(self, db_url: str = DATABASE_URL):
-        self.engine = create_engine(db_url, echo=False)
+    def __init__(self, db_url: Optional[str] = None):
+        db_url = db_url or resolve_database_url()
+        self.engine = create_db_engine(db_url)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self._ensure_conviction_column()
@@ -59,8 +62,7 @@ class TransactionsStore:
         conviction: Optional[float] = None,
     ) -> int:
         """Records a new open trade. Returns the trade_id."""
-        session = self.Session()
-        try:
+        with session_scope(self.Session) as session:
             # Ensure naive datetime for SQL consistency
             naive_entry_ts = entry_ts.replace(tzinfo=None) if entry_ts else datetime.now(timezone.utc).replace(tzinfo=None)
             trade = Trade(
@@ -74,19 +76,13 @@ class TransactionsStore:
                 conviction=float(conviction) if conviction is not None else None,
             )
             session.add(trade)
-            session.commit()
+            session.flush()  # populate the autoincrement PK before the session closes
             trade_id = int(trade.trade_id)
-            return trade_id
-        except Exception as e:
-            session.rollback()
-            raise e
-        finally:
-            session.close()
+        return trade_id
 
     def close_trade(self, trade_id: int, exit_ts: datetime, exit_price: float) -> None:
         """Closes an open trade by trade_id."""
-        session = self.Session()
-        try:
+        with session_scope(self.Session) as session:
             trade = session.query(Trade).filter(Trade.trade_id == trade_id).first()
             if not trade:
                 raise ValueError(f"Trade ID {trade_id} not found.")
@@ -94,12 +90,6 @@ class TransactionsStore:
             naive_exit_ts = exit_ts.replace(tzinfo=None) if exit_ts else datetime.now(timezone.utc).replace(tzinfo=None)
             trade.exit_ts = naive_exit_ts
             trade.exit_price = float(exit_price)
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            raise e
-        finally:
-            session.close()
 
     def open_trades_df(self) -> pd.DataFrame:
         """Returns all open trades as a pandas DataFrame."""
