@@ -55,6 +55,13 @@ def _mtime_caption(path: Path, *, label: str = "Last modified") -> None:
         st.caption(f"{label}: {ts.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
 
+def _close_inline_view(view_key: str) -> None:
+    """``on_click`` callback: clear a report's inline-view checkbox via
+    session_state before the rerun, so the ``st.button`` below the iframe can
+    close it without the operator needing to scroll back up past the report."""
+    st.session_state[view_key] = False
+
+
 def _html_file_block(path: Path, *, download_label: str, height: int = 800) -> None:
     """Render one HTML report: mtime caption, an on-demand inline viewer, and
     a download button.
@@ -66,13 +73,27 @@ def _html_file_block(path: Path, *, download_label: str, height: int = 800) -> N
     call in ``with st.expander(...):`` alone does NOT skip it. Checking the
     checkbox's boolean return value is what actually defers the ~1.9 MB
     `read_text()` + `components.html()` call until the operator opts in.
+
+    The page uses ``layout="wide"`` (gui/app.py), so there is little/no
+    margin outside the embedded iframe to scroll the outer page. Once a tall
+    report is open, hovering it and scrolling the mouse wheel scrolls INSIDE
+    the iframe, not the page — the operator can't wheel back up to the
+    checkbox to close it. A "Hide report" button rendered right below the
+    iframe gives a close affordance reachable without leaving the report.
     """
     _mtime_caption(path)
-    if st.checkbox("🔎 View inline", key=f"view_{path.name}"):
+    view_key = f"view_{path.name}"
+    if st.checkbox("🔎 View inline", key=view_key):
         import streamlit.components.v1 as components
 
         html_text = path.read_text(encoding="utf-8", errors="replace")
         components.html(html_text, height=height, scrolling=True)
+        st.button(
+            "❌ Hide report",
+            key=f"hide_{path.name}",
+            on_click=_close_inline_view,
+            args=(view_key,),
+        )
     st.download_button(
         download_label,
         data=path.read_bytes(),
