@@ -16,6 +16,7 @@ require pywebview to be installed.
 
 from __future__ import annotations
 
+import signal
 import sys
 import types
 import unittest
@@ -242,6 +243,105 @@ class TestExceptionDuringWindow(BaseAppShellTest):
 
         stop_engine.assert_called_once()
         stop_ui_server.assert_called_once()
+
+
+class TestSigtermHandling(BaseAppShellTest):
+    """Covers the SIGTERM hardening: an external `kill <pid>` (as opposed to
+    the user clicking the window's own close button) must still tear down
+    both child processes, since Python's default SIGTERM disposition skips
+    pending `finally` blocks and pywebview's native event loop may not check
+    for pending signals promptly. `os._exit` is always mocked here so
+    invoking the handler never actually terminates the test process.
+    """
+
+    def test_handler_installed_during_main_and_restored_after_clean_exit(self):
+        previous_handler = signal.getsignal(signal.SIGTERM)
+        captured = {}
+
+        def _webview_start_side_effect(*a, **kw):
+            captured["mid_run_handler"] = signal.getsignal(signal.SIGTERM)
+
+        self.fake_webview.start.side_effect = _webview_start_side_effect
+
+        rc = self.app_shell.main(interval_seconds=60, ui_port=1234)
+
+        self.assertEqual(rc, 0)
+        self.assertIsNot(captured["mid_run_handler"], previous_handler)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), previous_handler)
+
+    def test_sigterm_during_window_tears_down_and_force_exits(self):
+        """Simulates an external `kill <pid>` arriving while the window is
+        open: invoking the installed handler directly must call
+        stop_engine/stop_ui_server and then force-exit via os._exit.
+        """
+        from desktop.engine_supervisor import stop_engine
+        from desktop.ui_server import stop_ui_server
+
+        captured = {}
+
+        def _webview_start_side_effect(*a, **kw):
+            captured["handler"] = signal.getsignal(signal.SIGTERM)
+
+        self.fake_webview.start.side_effect = _webview_start_side_effect
+
+        with patch("app_shell.os._exit") as mock_exit:
+            self.app_shell.main(interval_seconds=60, ui_port=1234)
+            # Simulate the OS delivering SIGTERM by invoking the installed
+            # handler directly (os._exit is mocked so this doesn't actually
+            # kill the test process).
+            captured["handler"](signal.SIGTERM, None)
+
+        stop_engine.assert_called_once()
+        stop_ui_server.assert_called_once()
+        mock_exit.assert_called_once_with(0)
+
+    def test_sigterm_teardown_is_idempotent_with_normal_finally(self):
+        """If SIGTERM arrives (and is handled) mid-run, main()'s own
+        `finally` teardown afterward must not double-stop anything.
+        """
+        from desktop.engine_supervisor import stop_engine
+        from desktop.ui_server import stop_ui_server
+
+        def _webview_start_side_effect(*a, **kw):
+            handler = signal.getsignal(signal.SIGTERM)
+            # os._exit is mocked to a no-op so control returns here instead
+            # of the process actually exiting, letting us prove the
+            # subsequent `finally` path doesn't double-call teardown.
+            with patch("app_shell.os._exit"):
+                handler(signal.SIGTERM, None)
+
+        self.fake_webview.start.side_effect = _webview_start_side_effect
+
+        self.app_shell.main(interval_seconds=60, ui_port=1234)
+
+        stop_engine.assert_called_once()
+        stop_ui_server.assert_called_once()
+
+    def test_sigterm_before_children_started_is_a_harmless_noop(self):
+        """A SIGTERM arriving right as start_ui_server is called -- before
+        `ui_popen`/`engine_handle` are assigned in main()'s scope -- must not
+        raise or call stop_engine/stop_ui_server; there is nothing to tear
+        down yet. (The handler is only installed just before start_ui_server
+        is invoked, so start_ui_server's own call is the earliest point at
+        which the real handler can be observed -- find_free_port() runs
+        before the handler is installed and would see the prior handler.)
+        """
+        from desktop.engine_supervisor import stop_engine
+        from desktop.ui_server import start_ui_server, stop_ui_server
+
+        def _start_ui_server_side_effect(*a, **kw):
+            handler = signal.getsignal(signal.SIGTERM)
+            handler(signal.SIGTERM, None)
+            return MagicMock(name="ui_popen")
+
+        start_ui_server.side_effect = _start_ui_server_side_effect
+
+        with patch("app_shell.os._exit") as mock_exit:
+            self.app_shell.main(interval_seconds=60, ui_port=1234)
+
+        stop_engine.assert_not_called()
+        stop_ui_server.assert_not_called()
+        mock_exit.assert_called_once_with(0)
 
 
 class TestArgparse(BaseAppShellTest):
