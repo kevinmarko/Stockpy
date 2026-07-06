@@ -91,6 +91,18 @@ def no_cap(monkeypatch):
     monkeypatch.setattr(qb, "_max_notional", lambda: 0.0)
 
 
+@pytest.fixture
+def buffer_off(monkeypatch):
+    """Explicitly pin the limit buffer to 0 (MARKET behaviour)."""
+    monkeypatch.setattr(qb, "_limit_buffer_bps", lambda: 0)
+
+
+@pytest.fixture
+def buffer_25bps(monkeypatch):
+    """Configure a 25 bps limit-order buffer (LIMIT behaviour)."""
+    monkeypatch.setattr(qb, "_limit_buffer_bps", lambda: 25)
+
+
 # ===========================================================================
 # Mode staging
 # ===========================================================================
@@ -232,7 +244,8 @@ class TestPayloadSchema:
         rr = _rr([_Rec("NVDA", "SELL", 0.9)])
         p = qb.build_execution_queue(rr, mode="review", now=_RTH)
         for k in ("generated_at", "mode", "kill_switch_active",
-                  "max_notional_per_order", "n_intents", "n_placeable", "intents"):
+                  "max_notional_per_order", "limit_buffer_bps",
+                  "n_intents", "n_placeable", "intents"):
             assert k in p, k
         intent = p["intents"][0]
         for k in ("client_order_id", "symbol", "action", "side", "qty",
@@ -332,6 +345,59 @@ class TestProactiveNotify:
         assert state.last_notified_at == _RTH.isoformat()
         assert state.last_notified_count == 1
         assert state.last_notified_priority == "default"
+
+
+class TestLimitOrderBuffer:
+    """`ROBINHOOD_LIMIT_BUFFER_BPS` flips MARKET → LIMIT additively, preserving
+    every gating/safety invariant.  buffer==0 must be byte-identical to legacy.
+    """
+
+    def test_buffer_zero_is_market(self, no_cap, buffer_off):
+        rr = _rr([_Rec("NVDA", "SELL", 0.9),
+                  _Rec("AAPL", "BUY", 0.9, suggested_position_pct=0.05)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH)
+        assert p["limit_buffer_bps"] == 0
+        for i in p["intents"]:
+            assert i["order_type"] == "market"
+            assert i["limit_price"] is None
+            assert "limit_offset_bps" not in i  # absent → byte-identical to legacy
+
+    def test_buffer_positive_is_limit(self, no_cap, buffer_25bps):
+        rr = _rr([_Rec("NVDA", "SELL", 0.9),
+                  _Rec("AAPL", "BUY", 0.9, suggested_position_pct=0.05)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH)
+        assert p["limit_buffer_bps"] == 25
+        for i in p["intents"]:
+            assert i["order_type"] == "limit"
+            assert i["limit_price"] is None          # resolved downstream at review time
+            assert i["limit_offset_bps"] == 25
+
+    def test_buffer_default_via_settings_is_market(self, no_cap):
+        # No fixture override → reads real settings default (0) → MARKET.
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH)
+        assert p["limit_buffer_bps"] == 0
+        assert p["intents"][0]["order_type"] == "market"
+        assert "limit_offset_bps" not in p["intents"][0]
+
+    def test_limit_buffer_preserves_gating(self, cap5k, buffer_25bps):
+        # LIMIT is additive: allow_place computation unchanged.
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        p = qb.build_execution_queue(rr, mode="live", now=_RTH)
+        i = p["intents"][0]
+        assert i["order_type"] == "limit"
+        assert i["allow_place"] is True   # same gate outcome as MARKET
+        assert p["n_placeable"] == 1
+
+    def test_limit_buffer_negative_setting_coerced_to_market(self, monkeypatch, no_cap):
+        # A negative/garbage setting must degrade to 0 (MARKET), never negative.
+        import settings as settings_mod
+        monkeypatch.setattr(settings_mod.settings, "ROBINHOOD_LIMIT_BUFFER_BPS", -5,
+                            raising=False)
+        assert qb._limit_buffer_bps() == 0
+        rr = _rr([_Rec("NVDA", "SELL", 0.9)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH)
+        assert p["intents"][0]["order_type"] == "market"
 
 
 class TestGateIntent:

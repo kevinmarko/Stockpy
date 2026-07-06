@@ -27,6 +27,13 @@
 # repo-wide AST guard (`tests/test_pipeline_smoke.py::TestNoOrderFunctions`)
 # forbids — there is no `place_*` / `submit_order` / `*_order` definition.
 #
+# Order type: MARKET by default.  When `settings.ROBINHOOD_LIMIT_BUFFER_BPS > 0`
+# every intent becomes a LIMIT order carrying `order_type="limit"` +
+# `limit_offset_bps` (the configured buffer); `limit_price` stays null and is
+# resolved downstream from a live MCP quote at review time (see the verbatim
+# LIMIT-PRICE CONTRACT block in `_intent_dict`).  A buffer of 0 is byte-identical
+# to the legacy MARKET-only behaviour (no `limit_offset_bps` key emitted).
+#
 # Proactive notification: `emit_execution_queue` fires an `alerting.notify()`
 # push (ntfy, no-op unless NTFY_TOPIC is set) whenever the written queue
 # contains an intent the operator hasn't already been told about — so the
@@ -102,6 +109,21 @@ def _max_notional() -> float:
         return max(0.0, _f(getattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0)))
     except Exception:
         return 0.0
+
+
+def _limit_buffer_bps() -> int:
+    """Return the configured limit-order buffer in basis points (>=0).
+
+    0 (default) → MARKET orders, byte-identical to the legacy behaviour.
+    A positive value → LIMIT orders with a ``limit_offset_bps`` field; the actual
+    limit price is resolved DOWNSTREAM by the execution skill from a live quote
+    (the headless pipeline has no live price). Never negative.
+    """
+    try:
+        from settings import settings
+        return max(0, int(_f(getattr(settings, "ROBINHOOD_LIMIT_BUFFER_BPS", 0))))
+    except Exception:
+        return 0
 
 
 def _build_risk_context(snapshot: Any, now: datetime) -> RiskContext:
@@ -189,6 +211,7 @@ def _intent_dict(
     now: datetime,
     min_conviction: float,
     strategy_id: str,
+    limit_buffer_bps: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """Translate one Recommendation into a gated queue-intent dict, or ``None``.
 
@@ -239,6 +262,20 @@ def _intent_dict(
         gate_qty = held_qty
         target_notional = round(_f(getattr(held, "market_value", 0.0)), 2)
 
+    # -----------------------------------------------------------------------
+    # LIMIT-PRICE CONTRACT (verbatim — the robinhood-execution skill/docs copy
+    # this rule as-is).  When `limit_buffer_bps > 0` every intent is a LIMIT
+    # order carrying only the buffer; the ACTUAL limit price stays null here and
+    # is resolved DOWNSTREAM from a LIVE MCP quote at review time (the headless
+    # pipeline has no live price).  The price the skill computes MUST satisfy:
+    #     BUY  limit <= quote * (1 + bps/1e4)   (never pay more than buffered up)
+    #     SELL limit >= quote * (1 - bps/1e4)   (never sell below buffered down)
+    # When `limit_buffer_bps == 0` the order is a MARKET order (legacy default)
+    # and no `limit_offset_bps` is emitted — byte-identical to prior behaviour.
+    # -----------------------------------------------------------------------
+    use_limit = limit_buffer_bps > 0
+    order_type = OrderType.LIMIT if use_limit else OrderType.MARKET
+
     client_order_id = make_client_order_id(
         strategy_id, symbol, side.value, gate_qty, timestamp=now,
     )
@@ -247,7 +284,7 @@ def _intent_dict(
         symbol=symbol,
         side=side,
         qty=gate_qty,
-        order_type=OrderType.MARKET,
+        order_type=order_type,
         client_order_id=client_order_id,
         dry_run=True,
     )
@@ -264,14 +301,16 @@ def _intent_dict(
     if mode == "live" and not notional_cap_ok and "notional_cap_unset" not in gate_reasons:
         gate_reasons = gate_reasons + ["notional_cap_unset"]
 
-    return {
+    out: Dict[str, Any] = {
         "client_order_id": client_order_id,
         "symbol": symbol,
         "action": action,
         "side": side.value,
         "qty": qty,
         "target_notional": target_notional,
-        "order_type": OrderType.MARKET.value,
+        "order_type": order_type.value,
+        # Resolved DOWNSTREAM from a live MCP quote at review time (see the
+        # LIMIT-PRICE CONTRACT block above); always null in the headless queue.
         "limit_price": None,
         "conviction": round(conviction, 4),
         "gate_allowed": gate_allowed,
@@ -279,6 +318,11 @@ def _intent_dict(
         "allow_place": allow_place,
         "rationale": str(getattr(rec, "strategy", "") or getattr(rec, "rationale", ""))[:240],
     }
+    if use_limit:
+        # Only present on LIMIT intents — absent for MARKET so buffer==0 output
+        # is byte-identical to the legacy MARKET-only queue.
+        out["limit_offset_bps"] = limit_buffer_bps
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +356,7 @@ def build_execution_queue(
         logger.debug("queue_builder: kill-switch check failed (%s); assuming inactive", exc)
 
     max_notional = _max_notional()
+    limit_buffer_bps = _limit_buffer_bps()
     gate = PreTradeRiskGate()
     context = _build_risk_context(snapshot, now)
 
@@ -328,6 +373,7 @@ def build_execution_queue(
                 now=now,
                 min_conviction=float(cfg["min_conviction"]),
                 strategy_id=str(cfg["strategy_id"]),
+                limit_buffer_bps=limit_buffer_bps,
             )
             if d is not None:
                 intents.append(d)
@@ -340,6 +386,7 @@ def build_execution_queue(
         "mode": resolved_mode,
         "kill_switch_active": kill_switch_active,
         "max_notional_per_order": max_notional,
+        "limit_buffer_bps": limit_buffer_bps,
         "n_intents": len(intents),
         "n_placeable": sum(1 for i in intents if i["allow_place"]),
         "intents": intents,

@@ -218,6 +218,22 @@ class Settings(BaseSettings):
         default=0.0,
         description="Max USD notional per Robinhood order when building the queue (0 = unset).",
     )
+    # Limit-order buffer in basis points (1 bps = 0.01%) applied when building the
+    # execution queue.  0 (default) = MARKET orders, byte-identical to the legacy
+    # behaviour.  A positive value flips every emitted intent to a LIMIT order and
+    # stamps `limit_offset_bps` on it; the ACTUAL limit_price stays null in the
+    # queue and is resolved DOWNSTREAM by the robinhood-execution skill from a live
+    # MCP quote at review time, applying:
+    #     BUY  limit <= quote * (1 + bps/10000)
+    #     SELL limit >= quote * (1 - bps/10000)
+    # (the headless pipeline has no live price, so it only carries the buffer).
+    ROBINHOOD_LIMIT_BUFFER_BPS: int = Field(
+        default=0,
+        description=(
+            "Limit-order buffer in basis points for the Robinhood queue "
+            "(0 = MARKET orders; >0 = LIMIT orders, price resolved downstream)."
+        ),
+    )
 
     # Slack / Discord incoming-webhook URL for reconciliation drift alerts.
     ALERT_WEBHOOK_URL: Optional[str] = Field(
