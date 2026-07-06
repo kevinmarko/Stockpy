@@ -87,6 +87,23 @@ def _kill_switch():
     return GlobalKillSwitch(sentinel_file=settings.OUTPUT_DIR / "KILL_SWITCH")
 
 
+def list_report_files(
+    directory: Path, pattern: str, *, newest_first: bool = True
+) -> List[Path]:
+    """Return files in ``directory`` matching glob ``pattern``, sorted by mtime
+    (newest first by default). Returns ``[]`` if the directory doesn't exist or
+    on any error (dead-letter — never raises)."""
+    try:
+        if not directory.exists() or not directory.is_dir():
+            return []
+        files = [p for p in directory.glob(pattern) if p.is_file()]
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=newest_first)
+        return files
+    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise
+        logger.debug("list_report_files(%s, %s) failed: %s", directory, pattern, exc)
+        return []
+
+
 def _signal_symbols(snap: dict) -> List[str]:
     """Active symbols from the last snapshot, falling back to DEFAULT_TICKERS."""
     syms = [s.get("symbol") for s in snap.get("signals", []) if s.get("symbol")]
