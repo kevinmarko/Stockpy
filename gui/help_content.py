@@ -849,6 +849,22 @@ TAB_HELP: Dict[str, TabHelp] = {
         ),
         "#reports-tab--live-vs-backtested-provenance--drill-down",
     ),
+    "report_library": _t(
+        "report_library",
+        "📁 Report Library",
+        "Browse and view — inline, right in the app — every report file the "
+        "platform generates.  Covers the live daily HTML report (regenerated on "
+        "every advisory refresh cycle, so it is always current), the per-day "
+        "daily briefings (one per day, and you can generate today's from here), "
+        "the orchestrator dashboards (the daily report and its volatility bands, "
+        "which only refresh when you kick off a manual full-orchestrator run), "
+        "and validation reports (which appear once a strategy has been through "
+        "the validation harness).  Every file can be viewed inline or "
+        "downloaded.  Read-only and file-backed — this tab never calls the "
+        "broker.",
+        ("advisory mode", "dead letter", "walk-forward validation", "pbo", "dsr"),
+        "#17-report-library",
+    ),
     "settings": _t(
         "settings",
         "⚙️ Settings",
