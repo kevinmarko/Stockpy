@@ -14,17 +14,26 @@ Operational reference for day-to-day use, incident response, and maintenance.
 
 ## 0. Everyday Startup (macOS double-click)
 
-The fastest way to start the platform is to **double-click `launch.command`** in Finder
-or the Dock. The script:
+The fastest way to start the platform is to **double-click `launch_app.command`** in
+Finder or the Dock. This opens the unified Command Center in its own native desktop
+window (no browser tab) and starts an always-on background refresh loop that runs for
+as long as the window stays open, stopping automatically when you close it. This is
+now the recommended everyday launcher — it replaces separately running `launch.command`
+and `launch_gui.command`.
+
+`launch.command` (headless interval loop) and `launch_gui.command` (Command Center in
+a browser tab) still work and remain useful for headless/scripted runs or development,
+but are no longer the primary day-to-day path:
 
 1. Verifies `.venv` exists and Python is exactly 3.12.x before starting.
 2. Prints a clear error (and pauses for you to read it) if either check fails.
-3. Runs `python main.py --interval 60` by default — refreshes every 60 s until you close
-   the window.
+3. `launch.command` runs `python main.py --interval 60` by default — refreshes every
+   60 s until you close the window.
 4. Pauses with "Press any key to close" after exit so final output is always visible.
 
 **To change the interval**: open `launch.command` in any text editor, set
-`REFRESH_INTERVAL_SECONDS=N` at the top (`0` = single run).
+`REFRESH_INTERVAL_SECONDS=N` at the top (`0` = single run). `launch_app.command`'s
+background refresh loop is controlled the same way via `app_shell.py --interval N`.
 
 **If `.venv` is missing** (e.g., fresh clone):
 
@@ -34,18 +43,20 @@ python3.12 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-Then double-click `launch.command` again.
+Then double-click `launch_app.command` again.
 
 **If the wrong Python version is detected**: the launcher tells you which version was found
 and how to recreate `.venv` with Python 3.12.
 
-**Prefer a visual control panel?** Double-click **`launch_gui.command`** (or run
+**Still prefer a browser-tab control panel?** Double-click **`launch_gui.command`** (or run
 `streamlit run gui/app.py`) to open the **Command Center** — a 14-tab GUI that launches
 the pipeline, shows live stage status, edits non-secret `.env` tunables (secrets stay
 masked/read-only), toggles signal modules and the pause gate (kill switch), and surfaces
 the Gravity audit. The GUI is read-only / file-backed: it launches `main_orchestrator.py`
 (or `main.py` for the advisory refresh path) as a subprocess and reads the files it writes,
-so it never touches a broker directly.
+so it never touches a broker directly. The standalone `streamlit run observability/dashboard.py`
+paper-trading dashboard has been retired — its panels now live in the Command Center's
+Observability tab, available from either launch path.
 
 The **Launcher tab** exposes two distinct entry points:
 
@@ -173,12 +184,12 @@ Run this EVERY trading morning before 09:00 ET:
 
 | Check | Command / Action |
 |-------|-----------------|
-| **Start pipeline** | Double-click `launch.command` or use `🔄 Refresh Data (Advisory)` in Launcher tab |
+| **Start pipeline** | Double-click `launch_app.command` (or `launch.command` / use `🔄 Refresh Data (Advisory)` in Launcher tab) |
 | Advisory mode active | Launcher tab banner shows `📋 ADVISORY MODE` (blue) |
 | Heartbeat recent | `ls -la output/heartbeat.txt` (< 2 h old); or Observability tab → heartbeat sparkline |
 | Preflight pass | `python scripts/preflight_check.py` (exit 0; `advisory_only_active` = PASS) |
 | Account snapshot fresh | `python3 main.py --refresh-account` if snapshot age > 20 h |
-| Holdings & P&L sane | Dashboard → **Account Holdings & P&L** — equity, buying power, per-position unrealized P&L. If empty, force refresh above. |
+| Holdings & P&L sane | Observability tab → **Account Holdings & P&L** — equity, buying power, per-position unrealized P&L. If empty, force refresh above. |
 | No dead-letter failures | Launcher tab → Dead-Letter Queue (all symbols completed) |
 | Δ Since Last Run reviewed | Open `output/daily_report.html` — check top band for unexpected action flips or conviction drops |
 | Regime & VIX checked | Observability tab → recession telemetry (Sahm Rule / HY OAS / VIX / regime) |
