@@ -3,13 +3,21 @@ gui/engine_status.py
 =====================
 Sidebar-facing badge for the always-on background refresh loop.
 
-A parallel workstream drives ``main.py --interval N`` as a long-lived
-subprocess tied to the desktop shell's lifecycle. The existing GUI has no
+The desktop shell (``app_shell.py``) drives ``main.py --interval N`` as a
+long-lived subprocess tied to its own lifecycle. The existing GUI has no
 visible indicator of whether that loop is alive or how fresh its data is.
-``gui.orchestrator_runner.heartbeat_age_seconds()`` already exposes exactly
-what's needed (seconds since ``output/heartbeat.txt`` was last written, or
-``None`` if the file doesn't exist yet) — this module turns that single
-number into a compact ``(emoji, text)`` badge for ``st.sidebar.caption``.
+
+Two liveness signals exist, written by different entry points:
+  - ``output/heartbeat.txt`` — ``main_orchestrator.py`` ONLY (its async
+    ``_heartbeat()`` task). ``main.py`` never writes this file, including in
+    ``--interval``/``--agent`` mode -- so relying on it alone means the badge
+    can never go green under the desktop shell's actual engine loop.
+  - ``output/state_snapshot.json`` — rewritten by EVERY ``run_once()`` cycle
+    in ``main.py`` (interval/agent mode included) AND by
+    ``main_orchestrator.py``.
+
+This module takes the freshest (minimum age) of both, so the badge is
+correct regardless of which entry point is actually driving the refresh.
 
 Dead-letter by design (CONSTRAINT #6): a badge helper must never crash the
 sidebar render, so any failure degrades to a neutral "unavailable" badge
@@ -18,7 +26,25 @@ rather than propagating.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from gui import orchestrator_runner
+
+
+def _freshest_age() -> Optional[float]:
+    """Return the smaller of the two liveness signals' ages, or None if
+    neither file exists yet. Each lookup is independently guarded so one
+    signal being unavailable/erroring never hides the other."""
+    ages = []
+    for lookup in (orchestrator_runner.heartbeat_age_seconds,
+                   orchestrator_runner.state_snapshot_age_seconds):
+        try:
+            age = lookup()
+        except Exception:
+            age = None
+        if age is not None:
+            ages.append(age)
+    return min(ages) if ages else None
 
 
 def engine_status(fresh_threshold_seconds: float = 600.0) -> tuple[str, str]:
@@ -27,19 +53,19 @@ def engine_status(fresh_threshold_seconds: float = 600.0) -> tuple[str, str]:
     Parameters
     ----------
     fresh_threshold_seconds:
-        Heartbeat age (seconds) at or below which the engine is considered
-        "live" rather than "idle". Default 600s (10 minutes).
+        Age (seconds) at or below which the engine is considered "live"
+        rather than "idle". Default 600s (10 minutes).
 
     Returns
     -------
     tuple[str, str]
-        ``('⚪', 'Engine not started')`` — no heartbeat file yet.
-        ``('🟢', 'Engine live · refreshed {age}s ago')`` — fresh heartbeat.
-        ``('🟠', 'Engine idle · last refresh {age}s ago')`` — stale heartbeat.
-        ``('⚪', 'Engine status unavailable')`` — any error reading the heartbeat.
+        ``('⚪', 'Engine not started')`` — neither signal file exists yet.
+        ``('🟢', 'Engine live · refreshed {age}s ago')`` — fresh signal.
+        ``('🟠', 'Engine idle · last refresh {age}s ago')`` — stale signal.
+        ``('⚪', 'Engine status unavailable')`` — unexpected error computing age.
     """
     try:
-        age = orchestrator_runner.heartbeat_age_seconds()
+        age = _freshest_age()
     except Exception:
         return ("⚪", "Engine status unavailable")
 
