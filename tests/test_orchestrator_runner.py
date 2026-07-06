@@ -91,6 +91,49 @@ def test_read_log_tail_returns_hint_when_missing(runner):
     assert "no run log yet" in txt.lower()
 
 
+# ---------------------------------------------------------------------------
+# heartbeat_age_seconds / state_snapshot_age_seconds
+# ---------------------------------------------------------------------------
+# heartbeat.txt is orchestrator-only (main_orchestrator.py); state_snapshot.json
+# is rewritten by EVERY run_once() cycle in BOTH main.py (interval/agent mode
+# included) and main_orchestrator.py -- gui/engine_status.py depends on this
+# distinction to show a correct badge regardless of which entry point is
+# actually driving the refresh loop.
+
+def test_heartbeat_age_seconds_none_when_missing(runner):
+    assert runner.heartbeat_age_seconds() is None
+
+
+def test_heartbeat_age_seconds_reflects_file_mtime(runner):
+    hb = runner.settings.OUTPUT_DIR / "heartbeat.txt"
+    hb.write_text("2026-01-01T00:00:00Z", encoding="utf-8")
+    age = runner.heartbeat_age_seconds()
+    assert age is not None
+    assert 0.0 <= age < 5.0
+
+
+def test_state_snapshot_age_seconds_none_when_missing(runner):
+    assert runner.state_snapshot_age_seconds() is None
+
+
+def test_state_snapshot_age_seconds_reflects_file_mtime(runner):
+    snap = runner.settings.OUTPUT_DIR / "state_snapshot.json"
+    snap.write_text("{}", encoding="utf-8")
+    age = runner.state_snapshot_age_seconds()
+    assert age is not None
+    assert 0.0 <= age < 5.0
+
+
+def test_state_snapshot_age_seconds_independent_of_heartbeat(runner):
+    """main.py --interval mode: only state_snapshot.json is ever written --
+    state_snapshot_age_seconds() must report freshness with no heartbeat.txt
+    present at all."""
+    snap = runner.settings.OUTPUT_DIR / "state_snapshot.json"
+    snap.write_text("{}", encoding="utf-8")
+    assert runner.heartbeat_age_seconds() is None
+    assert runner.state_snapshot_age_seconds() is not None
+
+
 def test_read_telemetry_tail_missing_returns_hint(runner):
     txt = runner.read_telemetry_tail()
     assert "no telemetry yet" in txt.lower()

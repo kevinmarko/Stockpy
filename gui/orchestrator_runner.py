@@ -498,13 +498,36 @@ def heartbeat_age_seconds() -> Optional[float]:
     """Seconds since ``output/heartbeat.txt`` was last written, or None if absent.
 
     A fresh heartbeat (< ~90 s) means the orchestrator is alive; a stale or
-    missing one means it is idle or crashed.
+    missing one means it is idle or crashed. ``output/heartbeat.txt`` is
+    written ONLY by ``main_orchestrator.py``'s async ``_heartbeat()`` task --
+    ``main.py`` (including its ``--interval``/``--agent`` scheduled-run modes)
+    never writes it. Callers wanting a liveness signal that covers BOTH
+    entry points should use :func:`state_snapshot_age_seconds` instead, or
+    combine both (see ``gui/engine_status.py``).
     """
     hb = settings.OUTPUT_DIR / "heartbeat.txt"
     if not hb.exists():
         return None
     try:
         return max(0.0, time.time() - hb.stat().st_mtime)
+    except Exception:
+        return None
+
+
+def state_snapshot_age_seconds() -> Optional[float]:
+    """Seconds since ``output/state_snapshot.json`` was last written, or None
+    if absent.
+
+    Unlike :func:`heartbeat_age_seconds` (orchestrator-only), BOTH ``main.py``
+    (every ``run_once()`` cycle, including ``--interval``/``--agent`` mode)
+    and ``main_orchestrator.py`` rewrite this file, so it is the one liveness
+    signal common to every scheduled-run entry point this platform supports.
+    """
+    snap = settings.OUTPUT_DIR / "state_snapshot.json"
+    if not snap.exists():
+        return None
+    try:
+        return max(0.0, time.time() - snap.stat().st_mtime)
     except Exception:
         return None
 
