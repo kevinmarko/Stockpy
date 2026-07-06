@@ -867,15 +867,19 @@ def check_heartbeat_fresh(max_age_hours: float = 2.0) -> CheckResult:
 
 
 def check_db_exists() -> CheckResult:
-    """Verify that the SQLite database exists and is non-empty.
+    """Verify that the local SQLite database exists and is non-empty.
 
     An empty file (0 bytes) indicates that ``database_setup.py`` was not run
-    after cloning the repository.  A missing file indicates the same, or that
-    ``settings.DATABASE_URL`` points to a different location.
+    after cloning the repository.  A missing file indicates the same.
 
-    We check ``_REPO_ROOT / "quant_platform.db"`` rather than parsing
-    ``settings.DATABASE_URL`` because the URL may be a full ``sqlite:///``
-    connection string that would need to be stripped of the scheme prefix.
+    This check always validates the local ``quant_platform.db`` file
+    regardless of ``settings.DATABASE_URL`` (see ``db_config.py``): the
+    SQLite-backed caches -- ``HistoricalStore``, ``ForecastTracker``, and the
+    ``DailySignals``/``ExecutionLogs`` tables from ``database_setup.py`` --
+    always live in this local file. Only the SQLAlchemy ORM stores
+    (``transactions_store.py``'s ``trades`` table and
+    ``volatility/iv_engine.py``'s ``iv_history`` table) honor ``DATABASE_URL``
+    and may instead live in Postgres.
     """
     name = "db_exists"
     db = _REPO_ROOT / "quant_platform.db"

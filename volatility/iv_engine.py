@@ -5,8 +5,10 @@ from datetime import datetime, date, timedelta
 from typing import Optional, Any, Tuple, List, Dict
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine, Column, Integer, String, Float, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+from db_config import resolve_database_url, create_db_engine, session_scope
 
 logger = logging.getLogger("IV_Engine")
 
@@ -33,8 +35,9 @@ class IVHistory(Base):
     )
 
 class IVHistoryStore:
-    def __init__(self, db_url: str = DATABASE_URL):
-        self.engine = create_engine(db_url, echo=False)
+    def __init__(self, db_url: Optional[str] = None):
+        db_url = db_url or resolve_database_url()
+        self.engine = create_db_engine(db_url)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
@@ -42,34 +45,30 @@ class IVHistoryStore:
         """
         Inserts or updates an IV record for a specific ticker and date.
         """
-        session = self.Session()
         try:
-            # Parse date to standard string format
-            date_str = _parse_date_to_str(date_val)
-            ticker_clean = ticker.upper().strip()
-            
-            # Check if record already exists
-            record = session.query(IVHistory).filter(
-                IVHistory.ticker == ticker_clean,
-                IVHistory.date == date_str
-            ).first()
-            
-            if record:
-                record.iv_30d_atm = float(iv_val)
-            else:
-                record = IVHistory(
-                    ticker=ticker_clean,
-                    date=date_str,
-                    iv_30d_atm=float(iv_val)
-                )
-                session.add(record)
-            session.commit()
+            with session_scope(self.Session) as session:
+                # Parse date to standard string format
+                date_str = _parse_date_to_str(date_val)
+                ticker_clean = ticker.upper().strip()
+
+                # Check if record already exists
+                record = session.query(IVHistory).filter(
+                    IVHistory.ticker == ticker_clean,
+                    IVHistory.date == date_str
+                ).first()
+
+                if record:
+                    record.iv_30d_atm = float(iv_val)
+                else:
+                    record = IVHistory(
+                        ticker=ticker_clean,
+                        date=date_str,
+                        iv_30d_atm=float(iv_val)
+                    )
+                    session.add(record)
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to record IV for {ticker} on {date_val}: {e}")
             raise e
-        finally:
-            session.close()
 
     def get_historical_ivs(self, ticker: str, as_of_date: Any, lookback_days: int = 252) -> List[float]:
         """

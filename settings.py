@@ -453,6 +453,32 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Database Backend (db_config.py — dual-backend seam) ---
+    # Full SQLAlchemy connection URL. When unset (None), the platform's
+    # SQLAlchemy ORM stores (transactions_store, volatility/iv_engine) resolve
+    # to the local quant_platform.db SQLite file — today's behavior, unchanged.
+    # Set to a postgresql://user:pass@host/db URL to move the trades / iv_history
+    # tables to Postgres. May embed credentials — this value is NEVER logged.
+    DATABASE_URL: Optional[str] = Field(
+        default=None,
+        description=(
+            "Full SQLAlchemy DB URL (postgresql://… or sqlite:///…). None → local "
+            "quant_platform.db. May embed credentials; never logged."
+        ),
+    )
+    DB_POOL_SIZE: int = Field(
+        default=5,
+        description=(
+            "SQLAlchemy connection pool size (Postgres backend only; ignored for SQLite)."
+        ),
+    )
+    DB_MAX_OVERFLOW: int = Field(
+        default=10,
+        description=(
+            "SQLAlchemy pool max overflow connections (Postgres backend only; ignored for SQLite)."
+        ),
+    )
+
     # --- Historical Persistence (data/historical_store.py, Tier 2.3) ---
     # Gates all DB read/write routing through HistoricalStore.  Setting False
     # reproduces today's behavior exactly — every call goes directly to the
