@@ -1187,6 +1187,17 @@ def run_once(force_account: bool = False) -> RunResult:
     # ── Stage C: Macro context ────────────────────────────────────────────────
     macro_dto = _build_macro_dto()
 
+    # ── Meta-labeler runtime registration (once per run, before signals) ──────
+    # Load any trained meta-labeler pickles into global_meta_registry so the
+    # SignalAggregator's meta_hard_gate can fire. Strict no-op (logged) when no
+    # saved model exists — preserves the exact pre-model behavior. Lazy import
+    # mirrors HistoricalStore's lazy-import pattern; dead-letter resilient.
+    try:
+        from ml.meta_bootstrap import bootstrap_meta_registry
+        bootstrap_meta_registry()
+    except Exception as _meta_exc:  # never let meta-label wiring crash the run
+        logger.warning("Meta-labeler bootstrap failed (%s); continuing.", _meta_exc)
+
     # ── Stage D: Context pre-compute (universe-wide, before per-symbol loop) ──
     market = get_provider()
     bars_dict = _fetch_bars_for_universe(symbols, market)
