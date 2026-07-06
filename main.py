@@ -1647,6 +1647,29 @@ def main() -> None:
             )
         # ─────────────────────────────────────────────────────────────────────
 
+        # ── Robinhood OPTIONS execution queue (Tier 8) — non-fatal, advisory ──
+        # Sibling of the equity queue above, for multi-leg premium-selling
+        # directives.  Emits a GATED, DRY-RUN queue to
+        # output/options_execution_queue.json for the Robinhood execution agent.
+        # Same off-mode no-op + best-effort try/except contract as the equity
+        # path; NEVER contacts a broker or places an order.
+        try:
+            from execution.options_queue_builder import (  # noqa: PLC0415
+                emit_options_execution_queue,
+            )
+
+            _opt_queue_path = emit_options_execution_queue(result)
+            if _opt_queue_path is not None:
+                logger.info(
+                    "Robinhood options execution queue emitted → %s", _opt_queue_path,
+                )
+        except Exception as _opt_queue_exc:
+            logger.warning(
+                "Options execution queue emit failed (non-critical): %s",
+                _opt_queue_exc,
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
         market = get_provider()
         _write_to_sheet(result, market=market)
 
