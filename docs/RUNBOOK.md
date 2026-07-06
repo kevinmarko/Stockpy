@@ -772,6 +772,101 @@ Outcomes the agent placed/previewed/skipped are appended to `output/execution_re
 (agent-authored); the platform owns `output/execution_queue.json` (Python-authored intents).
 Both are gitignored.
 
+---
+
+## Robinhood Live Execution Procedure
+
+This is the day-to-day operator procedure for driving the Robinhood Execution
+Bridge end to end — from a fresh queue to a confirmed fill. It sits **inside**
+advisory-mode framing: it never arms the Alpaca broker (those sections stay
+marked **⚠ N/A in Advisory Mode**), it only ever touches a small, separately-
+funded **Agentic** account, and every placement requires an explicit human
+confirmation. If you have not done the one-time setup above ("Robinhood
+Execution Bridge (Tier 8)"), do that first.
+
+### Step 0 — Set the execution mode and the dollar cap
+
+`ROBINHOOD_EXECUTION_MODE` rolls out strictly `off → review → live`; never skip a
+stage. `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` is the hard per-order dollar ceiling
+and is **required `> 0` for `live`** — preflight fails without it.
+
+```bash
+# .env — start here for every new cutover
+ROBINHOOD_EXECUTION_MODE=review          # off (default) | review (paper) | live
+ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500     # $ ceiling per order; must be > 0 before going live
+```
+
+### Step 1 — Emit the queue
+
+```bash
+python3 main.py                          # runs run_once(); writes output/execution_queue.json
+```
+
+In `review` the queue carries `allow_place: false` on every intent; in `live` it
+carries `allow_place: true` only where the risk gate passed, the kill switch is
+clear, and a positive notional cap is set. In `off` nothing is written.
+
+### Step 2 — Invoke the execution skill
+
+In Claude Code, run the `robinhood-execution` skill (`/rh-execute`). It loads the
+queue, runs its hard-stops (kill switch, stale queue > ~30 min, Agentic-account
+requirement), and previews **every** intent via `review_equity_order` before it
+will place anything. It also runs an idempotency check against the placed-intent
+ledger (`output/execution_placed.jsonl`) so an intent already placed today
+(`dedup_key = YYYY-MM-DD:SYMBOL:SIDE`, UTC) is skipped, never double-filled.
+
+### Step 3 — Paper-first review stage (`review`)
+
+Stay in `review` until you trust the output. The skill previews each order and
+**stops** — it never calls `place_equity_order` in `review` mode. Read the
+previews: sizes, estimated notionals, Robinhood's pre-trade warnings, and the
+queue's conviction/rationale. This is the paper/dry-run stage; treat several
+clean review runs as the prerequisite for cutover.
+
+### Step 4 — Go-live cutover (small size first)
+
+Only after you are satisfied with the paper output:
+
+```bash
+# .env
+ROBINHOOD_EXECUTION_MODE=live
+ROBINHOOD_MAX_NOTIONAL_PER_ORDER=100     # start SMALL — raise the cap only after clean live fills
+python scripts/preflight_check.py        # check_robinhood_execution_mode: warns (live) / fails (cap unset)
+python3 main.py                          # queue now stamps allow_place=true where gated-OK
+```
+
+Then run `/rh-execute` again. For each `allow_place: true` intent it previews,
+then asks for an **explicit per-order confirmation** ("place / skip / stop")
+before calling `place_equity_order`. Keep the cap small (e.g. `100`) for the
+first few live sessions and raise it only once real fills reconcile cleanly.
+After each placement the skill appends to `output/execution_placed.jsonl` (the
+idempotency ledger) and `output/execution_receipts.jsonl` (the outcome audit
+trail); `execution/receipts_store.py` reconciles both against actual Robinhood
+fills, surfaced in the GUI Command Center's Robinhood panel — check it after
+every live run.
+
+### Step 5 — Kill-switch pause (stop placement immediately)
+
+The kill switch blocks all placement (checked when the queue is built and again
+immediately before each order):
+
+```bash
+python -m execution.kill_switch --activate --reason "halt robinhood execution"
+# resume only when the issue is resolved:
+python -m execution.kill_switch --deactivate
+```
+
+To disable the bridge entirely, set `ROBINHOOD_EXECUTION_MODE=off` — the next
+`python3 main.py` emits no queue. The advisory pause gate (§6) also short-
+circuits `run_once()`, so a paused cycle produces nothing to place.
+
+### Preflight
+
+`python scripts/preflight_check.py` includes the Robinhood execution checks —
+`check_robinhood_execution_mode` warns when `mode=live` and fails when a live
+mode has no positive `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` cap. Run it before every
+go-live cutover and treat a non-zero exit as a stop.
+
 ## §7 Prompt Registry — Publish & Rollback Playbooks
 
 > **Security boundary:** Prompt-registry operations touch advisory text only.

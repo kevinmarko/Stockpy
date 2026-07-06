@@ -1473,7 +1473,42 @@ python -m execution.kill_switch --activate --reason "halt robinhood execution"
 ```
 
 Or set `ROBINHOOD_EXECUTION_MODE=off` so the next run emits nothing. Full
-operating procedure: see `docs/RUNBOOK.md` → "Robinhood Execution Bridge".
+operating procedure: see `docs/RUNBOOK.md` → "Robinhood Live Execution
+Procedure".
+
+### Limit orders and idempotency
+
+An intent may request a **limit order** rather than a market order: it carries
+`order_type: "limit"` and a `limit_offset_bps` (the maximum slippage you'll
+tolerate in basis points). When `/rh-execute` handles such an intent it resolves
+the limit price from the *live* quote at review time — a BUY caps at
+`quote × (1 + bps/10000)`, a SELL floors at `quote × (1 − bps/10000)` — so you
+never chase a stale price. Market orders (the default) behave as before.
+
+Placement is also **idempotent**: every filled order is recorded in an
+append-only ledger (`output/execution_placed.jsonl`, keyed by
+`date:symbol:side`), and before placing anything the skill checks whether that
+same order was already placed today. If it was, it is skipped — so re-running the
+queue after a partial session never double-fills.
+
+### The Robinhood panel in the Command Center
+
+The GUI Command Center (`streamlit run gui/app.py`) has a **Robinhood** panel
+that gives you a single read-only view of the whole execution loop:
+
+- **Queue** — the current `output/execution_queue.json`: each proposed intent,
+  its mode, whether it is placeable (`allow_place`), and — for blocked intents —
+  the gate reasons.
+- **Receipts** — what the agent actually previewed, placed, and skipped, read
+  from `output/execution_receipts.jsonl` and the placed-intent ledger.
+- **Reconciliation** — `execution/receipts_store.py` matches those receipts and
+  ledger entries against your account's *actual* Robinhood fills, so you can
+  confirm every recorded placement has a real fill (and spot any drift). Check
+  this panel after every live run.
+
+The panel never places orders itself — placement always goes through the
+`/rh-execute` skill with per-order confirmation. It is purely the operator's
+window into the queue, the outcomes, and the reconciliation.
 
 ---
 
