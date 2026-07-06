@@ -1882,3 +1882,43 @@ operator-stoppable loop. Nothing here calls another AI agent, watches a PR, or
 re-invokes itself automatically — the same "no automatic AI invocation" rule
 that applies to Claude Code sessions on this repo applies to the platform's
 own AI features.
+
+## 17. Report Library
+
+The **📁 Report Library** tab is a single place to browse and read every report
+file the platform produces. It is read-only and file-backed — it renders files
+that already exist on disk and never calls the broker or fetches live market
+data. Think of it as a document viewer over the pipeline's output folder.
+
+### What it surfaces
+
+- **Daily HTML report.** The primary end-of-cycle report (holdings, P&L, action
+  signals, rationale). This file is regenerated on **every** advisory refresh
+  cycle, so it is always current — whatever the most recent run produced is what
+  you see here.
+- **Daily briefings.** One human-readable briefing per day. Older briefings stay
+  available so you can look back at a previous day's read. You can also generate
+  **today's** briefing from within the tab if it hasn't been produced yet.
+- **Orchestrator dashboards.** The full-pipeline daily report and its
+  volatility-band chart. Unlike the daily HTML report, these only refresh when
+  you kick off a **manual full-orchestrator run** (from the Launcher tab). If
+  they look out of date, that just means no full-orchestrator run has happened
+  since — run one to refresh them.
+- **Validation reports.** Per-strategy validation output (PBO / DSR / Sharpe /
+  Max Drawdown gate verdicts and the walk-forward/CPCV detail). A validation
+  report appears here only **once a strategy has been through the validation
+  harness** — until then there is nothing to show for that strategy.
+
+### Viewing and downloading
+
+Each file can be **viewed inline** (rendered directly in the app) or
+**downloaded** to your machine for archiving or sharing. Nothing is modified —
+opening or downloading a report never changes it or re-runs any analysis.
+
+### A note on freshness
+
+Keep the two refresh cadences in mind: the **daily HTML report is always
+current** (rebuilt every advisory cycle), while the **orchestrator dashboards
+lag until you run the full orchestrator manually**. When a dashboard and the
+daily report seem to disagree, the dashboard is usually just older — launch a
+full-orchestrator run to bring it up to date.
