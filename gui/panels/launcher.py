@@ -188,6 +188,9 @@ def render_launcher() -> None:
     # ── Preflight readiness gate ───────────────────────────────────────────
     _render_preflight_panel()
 
+    # ── Maintenance & Diagnostics command shortcuts ────────────────────────
+    _render_maintenance_diagnostics()
+
     # ── Active run log (kind picked from the active handle) ────────────────
     log_label = "📜 Advisory log tail" if (handle and handle.mode == "advisory") else "📜 Orchestrator log tail"
     with st.expander(log_label, expanded=running):
@@ -347,6 +350,183 @@ def _render_preflight_panel() -> None:
                 "Reason": c.reason,
             })
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Launcher — Maintenance & Diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _render_maintenance_diagnostics() -> None:
+    """Four command shortcuts for the maintenance/diagnostics gaps.
+
+    Most platform commands already run from the GUI (orchestrator, advisory,
+    preflight, dead-letter retry). This section wires the remaining four:
+
+    *   **📝 Generate today's briefing** — ``run_daily_briefing()`` (blocking,
+        subprocess-captured via ``gui.command_runner``). Result also lands in
+        the Report Library tab.
+    *   **🗄️ Rebuild database** — ``run_database_setup()`` (blocking). Runs the
+        ``CREATE TABLE IF NOT EXISTS`` schema build — non-destructive.
+    *   **✅ Run tests (pytest)** / **🧪 Run full verify (make verify)** — both
+        LONG-running, so they use the NON-BLOCKING ``RunHandle`` pattern
+        (mirroring how :func:`render_launcher` drives the orchestrator handle):
+        the handle is stored in ``st.session_state["maintenance_run_handle"]``,
+        its log is tailed via :func:`orchestrator_runner.read_log_tail`, and an
+        opt-in 5 s auto-refresh keeps the tail scrolling while it runs.
+
+    Every import of the parallel-built runner modules (``gui.command_runner``
+    for the blocking commands, ``launch_pytest``/``launch_verify`` on
+    ``gui.orchestrator_runner`` for the long-running ones) is done *inside* the
+    click branch and wrapped in ``try/except ImportError`` so this section
+    degrades gracefully in a build where those workstreams haven't merged yet.
+    """
+    with st.expander("🔧 Maintenance & Diagnostics", expanded=False):
+        st.caption(
+            "Command shortcuts for the maintenance gaps not already covered by "
+            "the launch/preflight/retry buttons above."
+        )
+
+        # ── Blocking commands (briefing + DB rebuild) ──────────────────────
+        c_brief, c_db = st.columns(2)
+
+        with c_brief:
+            if st.button(
+                "📝 Generate today's briefing",
+                key="maint_briefing_run",
+                use_container_width=True,
+            ):
+                try:
+                    from gui.command_runner import run_daily_briefing
+                except ImportError:
+                    st.info("Command runner not available in this build.")
+                else:
+                    with st.spinner("Generating briefing…"):
+                        result = run_daily_briefing()
+                    if result.ok:
+                        st.success("Briefing generated.")
+                        if result.stdout:
+                            st.code(result.stdout, language="text")
+                    else:
+                        st.error(result.error or result.stderr or "Briefing failed.")
+            st.caption(
+                "Runs the daily briefing generator. The result is also viewable "
+                "in the **Report Library** tab."
+            )
+
+        with c_db:
+            if st.button(
+                "🗄️ Rebuild database",
+                key="maint_db_rebuild",
+                use_container_width=True,
+            ):
+                try:
+                    from gui.command_runner import run_database_setup
+                except ImportError:
+                    st.info("Command runner not available in this build.")
+                else:
+                    with st.spinner("Rebuilding database schema…"):
+                        result = run_database_setup()
+                    if result.ok:
+                        st.success("Database schema rebuilt.")
+                        if result.stdout:
+                            st.code(result.stdout, language="text")
+                    else:
+                        st.error(result.error or result.stderr or "DB rebuild failed.")
+            st.caption(
+                "Rebuilds the `DailySignals` / `ExecutionLogs` schema "
+                "(`CREATE TABLE IF NOT EXISTS` — non-destructive)."
+            )
+
+        st.divider()
+
+        # ── Long-running commands (pytest + verify) — non-blocking handles ──
+        st.markdown("**Long-running diagnostics**")
+        st.caption(
+            "These spawn a detached subprocess and stream its log below — the "
+            "GUI stays responsive while they run (same pattern as the pipeline "
+            "launch above)."
+        )
+
+        maint_handle: Optional[orchestrator_runner.RunHandle] = st.session_state.get(
+            "maintenance_run_handle"
+        )
+        maint_running = maint_handle is not None and maint_handle.is_running()
+
+        c_pytest, c_verify = st.columns(2)
+
+        with c_pytest:
+            if st.button(
+                "✅ Run tests (pytest)",
+                key="maint_pytest_run",
+                use_container_width=True,
+                disabled=maint_running,
+            ):
+                try:
+                    from gui.orchestrator_runner import launch_pytest
+                except ImportError:
+                    st.info("Test runner not available in this build.")
+                else:
+                    maint_handle = launch_pytest()
+                    st.session_state["maintenance_run_handle"] = maint_handle
+                    st.rerun()
+
+        with c_verify:
+            if st.button(
+                "🧪 Run full verify (make verify)",
+                key="maint_verify_run",
+                use_container_width=True,
+                disabled=maint_running,
+            ):
+                try:
+                    from gui.orchestrator_runner import launch_verify
+                except ImportError:
+                    st.info("Verify runner not available in this build.")
+                else:
+                    maint_handle = launch_verify()
+                    st.session_state["maintenance_run_handle"] = maint_handle
+                    st.rerun()
+
+        # ── Status + log tail for the active maintenance run ───────────────
+        if maint_handle is not None:
+            mode_label = (maint_handle.mode or "diagnostic").title()
+            if maint_running:
+                st.success(f"🟢 Running ({mode_label}, PID {maint_handle.pid})")
+            else:
+                rc = maint_handle.returncode()
+                if rc is None:
+                    st.info(f"⏹️ Finished ({mode_label})")
+                elif rc == 0:
+                    st.success(f"✅ Finished cleanly ({mode_label}, exit 0)")
+                else:
+                    st.error(f"❌ Finished with errors ({mode_label}, exit {rc})")
+
+            if st.button("⏹ Stop", key="maint_stop"):
+                orchestrator_runner.stop_run(maint_handle)
+                st.session_state.pop("maintenance_run_handle", None)
+                st.rerun()
+
+            with st.expander(
+                f"📜 {mode_label} log tail", expanded=maint_running
+            ):
+                st.code(
+                    orchestrator_runner.read_log_tail(
+                        max_lines=200, handle=maint_handle
+                    ),
+                    language="text",
+                )
+
+            # Auto-refresh while running so the tail keeps scrolling — mirrors
+            # the opt-in ticker render_launcher uses for the orchestrator handle.
+            maint_auto_refresh = st.checkbox(
+                "Auto-refresh while running",
+                value=False,
+                key="maintenance_auto_refresh",
+                help="Re-render every 5 s while the diagnostic run is active.",
+            )
+            if maint_running and maint_auto_refresh:
+                time.sleep(5)
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
