@@ -18,6 +18,28 @@ from data_engine import MockDataEngine
 from processing_engine import ProcessingEngine
 from strategy_engine import StrategyEngine
 
+import ml.meta_labeling as meta_labeling
+from ml.meta_labeling import MetaLabelerRegistry
+
+
+@pytest.fixture(autouse=True)
+def _reset_meta_registry():
+    """test_main_orchestrator_pipeline runs the real main_orchestrator
+    pipeline, which calls ml.meta_bootstrap.bootstrap_meta_registry() and
+    loads the committed ml/models/meta_*.pkl pickles into the process-global
+    ml.meta_labeling.global_meta_registry singleton. Left unreset, that
+    registration leaks into every later test in this file: e.g.
+    test_garch_and_edge_scoring's evaluate_security() call then finds a
+    trained meta-labeler active for cross_sectional_momentum, which can trip
+    the meta_hard_gate and force its Kelly Target to 0.0 -- reproducing only
+    when the file runs as a whole, never in isolation. Reset before and after
+    every test so this file's tests are order-independent (same pattern as
+    tests/test_train_meta_labelers.py's _reset_registry fixture).
+    """
+    meta_labeling.global_meta_registry = MetaLabelerRegistry()
+    yield
+    meta_labeling.global_meta_registry = MetaLabelerRegistry()
+
 
 # =============================================================================
 # 1. DATA TRANSFER OBJECT (DTO) IMMUTABILITY & COERCION TESTS
