@@ -702,6 +702,8 @@ class GravityAIAuditor:
             harness_report["random_strategy_deployable"] = report_random.deployable
             harness_report["random_strategy_pbo"] = report_random.pbo
             harness_report["random_strategy_dsr"] = report_random.dsr
+            harness_report["random_strategy_sharpe"] = report_random.sharpe
+            harness_report["random_strategy_max_dd"] = report_random.max_dd
 
             # 2. Trending buy & hold strategy (should pass deployability)
             y_trend = pd.Series(0.002 + np.random.normal(0, 0.001, 100), index=dates)
@@ -8058,8 +8060,8 @@ class GravityAIAuditor:
                     "Random_Audit",
                     harness.get("random_strategy_pbo"),
                     harness.get("random_strategy_dsr"),
-                    None,  # harness doesn't expose sharpe per strategy via dict
-                    None,
+                    harness.get("random_strategy_sharpe"),
+                    harness.get("random_strategy_max_dd"),
                 ))
             if harness.get("trending_strategy_pbo") is not None:
                 strategies.append(_make_entry(
