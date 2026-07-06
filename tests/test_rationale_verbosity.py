@@ -61,8 +61,13 @@ class TestSettingsField:
         assert hasattr(live_settings, "RATIONALE_VERBOSITY")
 
     def test_default_is_standard(self):
-        # The default must be "standard" so existing deployments see no change.
-        assert live_settings.RATIONALE_VERBOSITY == "standard"
+        # The declared field default must be "standard" so existing
+        # deployments see no change. Checked against the schema's default
+        # (not `live_settings.RATIONALE_VERBOSITY` directly) since the live
+        # singleton reads whatever the real .env in this checkout sets --
+        # an operator running with RATIONALE_VERBOSITY=verbose configured is
+        # a legitimate deployment state, not a violation of this default.
+        assert type(live_settings).model_fields["RATIONALE_VERBOSITY"].default == "standard"
 
 
 # ---------------------------------------------------------------------------

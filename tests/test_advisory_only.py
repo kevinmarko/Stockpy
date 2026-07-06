@@ -173,7 +173,17 @@ def test_advisory_only_check_warns_when_flag_disabled(monkeypatch):
 
 def test_settings_default_advisory_only_is_true():
     """The project default MUST be ADVISORY_ONLY=True so a fresh clone does
-    not accidentally route orders to the broker."""
-    assert getattr(settings, "ADVISORY_ONLY", None) is True, (
+    not accidentally route orders to the broker.
+
+    Checked against a freshly-constructed, .env-isolated Settings instance
+    (not the live `settings` singleton) since an operator may have
+    legitimately set ADVISORY_ONLY=false in their own .env to intentionally
+    re-enable broker execution -- that is a valid deployment state, not a
+    violation of the class default this test is pinning down.
+    """
+    from settings import Settings
+
+    isolated = Settings(_env_file=None)
+    assert isolated.ADVISORY_ONLY is True, (
         "settings.ADVISORY_ONLY default must be True (Tier 5.1)"
     )
