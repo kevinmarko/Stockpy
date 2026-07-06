@@ -100,6 +100,12 @@ PYTEST_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_pytest.log"
 # so the operator can tail the full readiness gate independently of a refresh.
 VERIFY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_verify.log"
 
+# Log written by ``launch_gravity_audit`` — the Gravity Audit tab's "Run Gravity
+# AI Review Suite" button.  Distinct file so the operator can tail the audit run
+# and the parsed JSON report is read back from this log independently of any
+# concurrent orchestrator/advisory/pytest refresh log.
+GRAVITY_LOG_PATH: Path = settings.OUTPUT_DIR / "gravity_run.log"
+
 # Telemetry log written by ``alerting.setup_logging()`` and shared by both
 # entry points. Surfaced in the Launcher tab so the operator sees structured
 # diagnostics from across the platform (CONSTRAINT #2 — observable feedback).
@@ -441,6 +447,62 @@ def launch_pytest() -> RunHandle:
         refresh_account=False,
         log_path=PYTEST_LOG_PATH,
         mode="pytest",
+        _popen=popen,
+    )
+
+
+def launch_gravity_audit() -> RunHandle:
+    """Spawn the Gravity AI Review Suite as a non-blocking subprocess.
+
+    This backs the Gravity Audit tab's non-blocking run.  The Gravity AI Review
+    Suite is a long-running static-analysis + simulation audit, so — like every
+    other launcher in this module — it is spawned via a detached
+    :class:`subprocess.Popen` rather than run inline, keeping the Streamlit UI
+    responsive while the operator tails the streamed log.
+
+    The child runs ``[sys.executable, "Gravity AI Review Suite.py"]`` from the
+    repo root, inheriting the current environment (so ``.env`` is available).
+    stdout+stderr are redirected to :data:`GRAVITY_LOG_PATH`, truncated at launch
+    so the UI tails only the current run; the parsed JSON report is read back from
+    the trailing lines of this log after the run completes.  Using
+    ``sys.executable`` guarantees the ``.venv`` interpreter is used rather than a
+    stray system Python.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="gravity"``, ``log_path=GRAVITY_LOG_PATH``) for polling
+        status, tailing the log via :func:`read_log_tail`, and stopping via
+        :func:`stop_run`.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "Gravity AI Review Suite.py"]
+
+    log_file = open(GRAVITY_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo Gravity AI Review Suite launch @ {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched Gravity AI Review Suite pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=False,
+        log_path=GRAVITY_LOG_PATH,
+        mode="gravity",
         _popen=popen,
     )
 

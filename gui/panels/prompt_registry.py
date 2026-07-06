@@ -208,16 +208,22 @@ def render_prompt_registry() -> None:
         if not is_enabled:
             st.warning("Enable the registry first (`PROMPT_REGISTRY_ENABLED=true`).")
         else:
-            with st.spinner("Syncing remote manifest…"):
+            with st.status("Syncing remote manifest…", expanded=True) as status:
                 try:
                     reg.sync()
                     _pr_all_known_ids.clear()  # bust the ID cache
-                    st.success(
-                        f"Sync complete. "
-                        f"Manifest: `{getattr(reg._manifest, 'registry_version', '?')}`"
+                    version = getattr(reg._manifest, "registry_version", "?")
+                    st.success(f"Sync complete. Manifest: `{version}`")
+                    status.update(
+                        label=f"✅ Manifest synced (version `{version}`)",
+                        state="complete",
                     )
                 except Exception as exc:
                     st.error(f"Sync failed (registry fell back to cache/baseline): {exc}")
+                    status.update(
+                        label=f"❌ Manifest sync failed: {exc}",
+                        state="error",
+                    )
 
     st.divider()
 

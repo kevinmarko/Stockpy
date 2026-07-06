@@ -145,18 +145,28 @@ def _render_briefings_section() -> None:
         except ImportError:
             st.info("Briefing generator not available in this build.")
         else:
-            with st.spinner("Generating today's briefing…"):
+            with st.status(
+                "Generating today's briefing…", expanded=True
+            ) as status:
                 result = run_daily_briefing()
-            ok = getattr(result, "ok", None)
-            error = getattr(result, "error", None)
-            stdout = getattr(result, "stdout", "") or ""
-            if error:
-                st.error(error)
-            elif ok is False:
-                st.error(stdout or "Briefing generation failed.")
-            else:
-                if stdout:
-                    st.code(stdout)
+                ok = getattr(result, "ok", None)
+                error = getattr(result, "error", None)
+                stdout = getattr(result, "stdout", "") or ""
+                if error:
+                    status.update(
+                        label="❌ Briefing generation failed", state="error"
+                    )
+                    st.error(error)
+                elif ok is False:
+                    status.update(
+                        label="❌ Briefing generation failed", state="error"
+                    )
+                    st.error(stdout or "Briefing generation failed.")
+                else:
+                    status.update(label="✅ Briefing generated", state="complete")
+                    if stdout:
+                        st.code(stdout)
+            if not error and ok is not False:
                 st.rerun()
 
     briefings = list_report_files(

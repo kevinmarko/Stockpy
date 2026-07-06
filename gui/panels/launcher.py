@@ -4,7 +4,6 @@ from __future__ import annotations
 import io
 import json
 import logging
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -125,10 +124,83 @@ def render_launcher() -> None:
             st.session_state["last_launch_kind"] = "advisory"
             st.success(f"🔄  Launched advisory main.py (PID {handle.pid}).")
 
-    # ── Status row ─────────────────────────────────────────────────────────
+    # ── Auto-refresh control (MUST live OUTSIDE the run_every fragment) ─────
+    # The widget that sets the refresh interval cannot live inside a
+    # ``run_every`` fragment, so it is rendered here on its own line (moved out
+    # of the old 3-column status row) and its value is threaded into the
+    # fragment below.
+    auto_refresh = st.checkbox(
+        "Auto-refresh while running", value=False, key="launcher_auto_refresh",
+        help="Refresh just the live status/stages/log every 5 s while a run is active.",
+    )
+
+    # ── Live status row + stage indicators (fragment) ──────────────────────
+    # ``run_every`` is fixed at decoration time, so we keep two decorated
+    # variants (a 5 s-ticking one and a static one) and dispatch based on
+    # whether a run is active AND auto-refresh is on — this avoids pointless
+    # idle ticks while still redrawing just this region when live.
+    running = handle is not None and handle.is_running()
+    _status_ticking = bool(running and auto_refresh)
+    (_live_status_fragment_live if _status_ticking else _live_status_fragment_static)(handle)
+
+    # ── Safety controls (kill switch + safe-mode toggle) ──────────────────
+    st.divider()
+    _render_launcher_safety_controls()
+    st.divider()
+
+    # ── Preflight readiness gate ───────────────────────────────────────────
+    _render_preflight_panel()
+
+    # ── Maintenance & Diagnostics command shortcuts ────────────────────────
+    _render_maintenance_diagnostics()
+
+    # ── Active run log (fragment — same two-variant run_every dispatch) ────
+    log_label = "📜 Advisory log tail" if (handle and handle.mode == "advisory") else "📜 Orchestrator log tail"
+    _log_ticking = bool((handle is not None and handle.is_running()) and auto_refresh)
+    (_live_log_fragment_live if _log_ticking else _live_log_fragment_static)(
+        handle, log_label
+    )
+
+    # ── Platform-wide structured telemetry (alerting.py / logs/investyo.log) ──
+    with st.expander("🛰️ Telemetry log (logs/investyo.log)", expanded=False):
+        st.caption(
+            "Structured logs written by `alerting.setup_logging()` — shared by "
+            "both entry points. Rotates at 10 MB × 5 backups."
+        )
+        st.code(orchestrator_runner.read_telemetry_tail(max_lines=120), language="text")
+
+    # ── Dead-Letter Queue ───────────────────────────────────────────────────
+    st.divider()
+    _render_dead_letter_queue()
+
+    # ── Robinhood Execution Bridge status ───────────────────────────────────
+    st.divider()
+    _render_robinhood_execution_status()
+
+
+# ---------------------------------------------------------------------------
+# Launcher — Live fragments (status/stages + log tail)
+# ---------------------------------------------------------------------------
+#
+# ``st.fragment(run_every=…)`` fixes the tick interval at decoration time, so
+# each live region is exposed as TWO decorated variants sharing one body
+# helper: a 5 s-ticking ``…_live`` variant used while a run is active AND
+# auto-refresh is on, and a static ``…_static`` variant used otherwise.  Only
+# the fragment's own region reruns on each tick — the 15-tab page no longer
+# does a full ``time.sleep(5); st.rerun()`` flicker.  The auto-refresh
+# checkboxes that pick which variant to call are rendered OUTSIDE the fragments
+# (a ``run_every`` fragment may not contain the widget that sets its interval).
+
+
+def _render_live_status_body(handle: Optional[orchestrator_runner.RunHandle]) -> None:
+    """Render the running-state metric, heartbeat age, and pipeline stages.
+
+    Heartbeat age and stage status are re-polled here (not passed in) so that
+    each fragment tick reflects the latest on-disk state.
+    """
     running = handle is not None and handle.is_running()
     hb_age = orchestrator_runner.heartbeat_age_seconds()
-    cols = st.columns(3)
+    cols = st.columns(2)
     with cols[0]:
         if handle is None:
             st.info("No run launched this session.")
@@ -150,11 +222,6 @@ def render_launcher() -> None:
         else:
             fresh = "🟢" if hb_age < 90 else "🔴"
             st.metric("Heartbeat age", f"{fresh} {hb_age:.0f}s")
-    with cols[2]:
-        auto_refresh = st.checkbox(
-            "Auto-refresh while running", value=False, key="launcher_auto_refresh",
-            help="Re-render this tab every 5 s while a run is active so the log tail keeps scrolling.",
-        )
 
     # ── Stage indicators (orchestrator only — advisory has its own log shape) ──
     if handle is None or handle.mode == "orchestrator":
@@ -180,42 +247,41 @@ def render_launcher() -> None:
                 ico = _stage_icons.get(status, "⚪")
                 st.metric(label, f"{ico} {status.value if isinstance(status, StageStatus) else status}")
 
-    # ── Safety controls (kill switch + safe-mode toggle) ──────────────────
-    st.divider()
-    _render_launcher_safety_controls()
-    st.divider()
 
-    # ── Preflight readiness gate ───────────────────────────────────────────
-    _render_preflight_panel()
+@st.fragment(run_every="5s")
+def _live_status_fragment_live(handle: Optional[orchestrator_runner.RunHandle]) -> None:
+    _render_live_status_body(handle)
 
-    # ── Maintenance & Diagnostics command shortcuts ────────────────────────
-    _render_maintenance_diagnostics()
 
-    # ── Active run log (kind picked from the active handle) ────────────────
-    log_label = "📜 Advisory log tail" if (handle and handle.mode == "advisory") else "📜 Orchestrator log tail"
+@st.fragment
+def _live_status_fragment_static(handle: Optional[orchestrator_runner.RunHandle]) -> None:
+    _render_live_status_body(handle)
+
+
+def _render_live_log_body(
+    handle: Optional[orchestrator_runner.RunHandle], log_label: str
+) -> None:
+    """Render the active-run log-tail expander (re-tailed on each tick)."""
+    running = handle is not None and handle.is_running()
     with st.expander(log_label, expanded=running):
-        st.code(orchestrator_runner.read_log_tail(max_lines=200, handle=handle), language="text")
-
-    # ── Platform-wide structured telemetry (alerting.py / logs/investyo.log) ──
-    with st.expander("🛰️ Telemetry log (logs/investyo.log)", expanded=False):
-        st.caption(
-            "Structured logs written by `alerting.setup_logging()` — shared by "
-            "both entry points. Rotates at 10 MB × 5 backups."
+        st.code(
+            orchestrator_runner.read_log_tail(max_lines=200, handle=handle),
+            language="text",
         )
-        st.code(orchestrator_runner.read_telemetry_tail(max_lines=120), language="text")
 
-    # ── Dead-Letter Queue ───────────────────────────────────────────────────
-    st.divider()
-    _render_dead_letter_queue()
 
-    # ── Robinhood Execution Bridge status ───────────────────────────────────
-    st.divider()
-    _render_robinhood_execution_status()
+@st.fragment(run_every="5s")
+def _live_log_fragment_live(
+    handle: Optional[orchestrator_runner.RunHandle], log_label: str
+) -> None:
+    _render_live_log_body(handle, log_label)
 
-    # ── Auto-refresh ticker (opt-in; cheap because Streamlit reruns are fast) ──
-    if running and auto_refresh:
-        time.sleep(5)
-        st.rerun()
+
+@st.fragment
+def _live_log_fragment_static(
+    handle: Optional[orchestrator_runner.RunHandle], log_label: str
+) -> None:
+    _render_live_log_body(handle, log_label)
 
 
 # ---------------------------------------------------------------------------
@@ -317,9 +383,36 @@ def _render_preflight_panel() -> None:
     )
 
     if st.button("🏁 Run preflight checks", key="launcher_preflight_run"):
-        with st.spinner("Running preflight checks…"):
-            preflight_report = run_preflight()
-        st.session_state["preflight_report"] = preflight_report
+        # ``st.status`` gives a live, honest terminal state: ``complete`` only
+        # when the checks actually ran and all passed, ``error`` otherwise
+        # (blocking failure, script/timeout error, or an unexpected crash —
+        # CONSTRAINT #4, never fabricate success). Defensive try/except even
+        # though ``run_preflight`` is contractually non-raising.
+        with st.status("Running preflight checks…", expanded=True) as status:
+            try:
+                preflight_report = run_preflight()
+                st.session_state["preflight_report"] = preflight_report
+                total = len(preflight_report.checks)
+                passed = sum(1 for c in preflight_report.checks if c.passed)
+                if preflight_report.error is not None:
+                    status.update(
+                        label=f"❌ Preflight could not complete: {preflight_report.error}",
+                        state="error",
+                    )
+                elif preflight_report.all_passed:
+                    status.update(
+                        label=f"✅ {passed}/{total} checks passed — cleared for launch.",
+                        state="complete",
+                    )
+                else:
+                    status.update(
+                        label=f"❌ {passed}/{total} checks passed — review before launching.",
+                        state="error",
+                    )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("preflight run crashed in launcher: %s", exc)
+                st.session_state["preflight_report"] = None
+                status.update(label=f"❌ Preflight crashed: {exc}", state="error")
 
     pr = st.session_state.get("preflight_report")
     if pr is None:
@@ -401,14 +494,19 @@ def _render_maintenance_diagnostics() -> None:
                 except ImportError:
                     st.info("Command runner not available in this build.")
                 else:
-                    with st.spinner("Generating briefing…"):
+                    with st.status("Generating briefing…", expanded=True) as status:
                         result = run_daily_briefing()
-                    if result.ok:
-                        st.success("Briefing generated.")
-                        if result.stdout:
-                            st.code(result.stdout, language="text")
-                    else:
-                        st.error(result.error or result.stderr or "Briefing failed.")
+                        if result.ok:
+                            status.update(
+                                label="✅ Briefing generated", state="complete"
+                            )
+                            if result.stdout:
+                                st.code(result.stdout, language="text")
+                        else:
+                            status.update(
+                                label="❌ Briefing generation failed", state="error"
+                            )
+                            st.error(result.error or result.stderr or "Briefing failed.")
             st.caption(
                 "Runs the daily briefing generator. The result is also viewable "
                 "in the **Report Library** tab."
@@ -425,14 +523,21 @@ def _render_maintenance_diagnostics() -> None:
                 except ImportError:
                     st.info("Command runner not available in this build.")
                 else:
-                    with st.spinner("Rebuilding database schema…"):
+                    with st.status(
+                        "Rebuilding database schema…", expanded=True
+                    ) as status:
                         result = run_database_setup()
-                    if result.ok:
-                        st.success("Database schema rebuilt.")
-                        if result.stdout:
-                            st.code(result.stdout, language="text")
-                    else:
-                        st.error(result.error or result.stderr or "DB rebuild failed.")
+                        if result.ok:
+                            status.update(
+                                label="✅ Database schema rebuilt", state="complete"
+                            )
+                            if result.stdout:
+                                st.code(result.stdout, language="text")
+                        else:
+                            status.update(
+                                label="❌ Database rebuild failed", state="error"
+                            )
+                            st.error(result.error or result.stderr or "DB rebuild failed.")
             st.caption(
                 "Rebuilds the `DailySignals` / `ExecutionLogs` schema "
                 "(`CREATE TABLE IF NOT EXISTS` — non-destructive)."
@@ -501,32 +606,30 @@ def _render_maintenance_diagnostics() -> None:
                 else:
                     st.error(f"❌ Finished with errors ({mode_label}, exit {rc})")
 
+            # Stop button stays OUTSIDE the fragment so its ``st.rerun()``
+            # reruns the whole page (clearing the popped session-state handle),
+            # not just the fragment.
             if st.button("⏹ Stop", key="maint_stop"):
                 orchestrator_runner.stop_run(maint_handle)
                 st.session_state.pop("maintenance_run_handle", None)
                 st.rerun()
 
-            with st.expander(
-                f"📜 {mode_label} log tail", expanded=maint_running
-            ):
-                st.code(
-                    orchestrator_runner.read_log_tail(
-                        max_lines=200, handle=maint_handle
-                    ),
-                    language="text",
-                )
-
-            # Auto-refresh while running so the tail keeps scrolling — mirrors
-            # the opt-in ticker render_launcher uses for the orchestrator handle.
+            # Auto-refresh checkbox MUST live outside the run_every fragment
+            # (it sets the tick interval) — mirrors the launcher's pattern.
             maint_auto_refresh = st.checkbox(
                 "Auto-refresh while running",
                 value=False,
                 key="maintenance_auto_refresh",
-                help="Re-render every 5 s while the diagnostic run is active.",
+                help="Refresh just the diagnostic log tail every 5 s while it runs.",
             )
-            if maint_running and maint_auto_refresh:
-                time.sleep(5)
-                st.rerun()
+
+            # Only the log-tail expander ticks; two decorated variants dispatch
+            # on running AND auto-refresh so an idle handle never re-runs.
+            maint_log_label = f"📜 {mode_label} log tail"
+            _maint_ticking = bool(maint_running and maint_auto_refresh)
+            (_live_log_fragment_live if _maint_ticking else _live_log_fragment_static)(
+                maint_handle, maint_log_label
+            )
 
 
 # ---------------------------------------------------------------------------

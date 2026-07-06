@@ -65,7 +65,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Repo root for module-style invocation.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -404,8 +404,15 @@ def run_all(
     *,
     claude=None,
     gemini=None,
+    on_step: Optional[Callable[[int, "StepRunResult"], None]] = None,
 ) -> RunReport:
-    """Run every step in :data:`_STEP_FILE_MAP` and aggregate the report."""
+    """Run every step in :data:`_STEP_FILE_MAP` and aggregate the report.
+
+    ``on_step``, if provided, is called with ``(step_number, StepRunResult)``
+    after each step completes (success or uncaught failure) so a caller (e.g.
+    a GUI progress indicator) can report real per-step progress; callback
+    failures are caught and logged, never aborting the audit run itself.
+    """
     try:
         from settings import settings as _s  # noqa: PLC0415
 
@@ -438,6 +445,12 @@ def run_all(
                 notes=[f"uncaught error: {exc}"],
                 timestamp=_utc_iso(),
             ))
+
+        if on_step is not None:
+            try:
+                on_step(n, steps[-1])
+            except Exception:
+                logger.warning("gravity_ai_runner: on_step callback raised", exc_info=True)
 
     summary = _summarise(steps)
     return RunReport(
