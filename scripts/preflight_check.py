@@ -65,6 +65,20 @@ Checks (15 total)
                                   SKIPPED when ADVISORY_ONLY=True (Alpaca keys
                                   have no blast-radius risk while the broker
                                   surface is quarantined).
+   robinhood_execution_mode     — ROBINHOOD_EXECUTION_MODE is one of off/review/
+                                  live; when live, ROBINHOOD_MAX_NOTIONAL_PER_ORDER
+                                  must be > 0.  Invalid mode → FAIL.  Orthogonal to
+                                  the Alpaca ADVISORY_ONLY quarantine (never
+                                  auto-skipped).
+   robinhood_kill_switch_clear  — when mode=live, the global kill switch must be
+                                  inactive (else the queue can never place).
+                                  Non-live → pass.  Never auto-skipped.
+   robinhood_queue_fresh        — when mode=live, output/execution_queue.json must
+                                  exist and its generated_at be < 30 min old.
+                                  Non-live → pass.  Never auto-skipped.
+   robinhood_mfa_configured     — WARNING-only: RH_MFA_SECRET set (else login
+                                  falls back to interactive MFA, breaking
+                                  unattended runs).  Any mode.  Never auto-skipped.
  4. advisory_only_active        — settings.ADVISORY_ONLY=True (Tier 5.1
                                   quarantine).  When True, the broker-readiness
                                   checks (alpaca_configured / alpaca_paper_mode
@@ -335,10 +349,23 @@ def check_advisory_only_active() -> CheckResult:
     )
 
 
-def check_robinhood_execution_mode() -> CheckResult:
-    """Surface the Robinhood execution-bridge mode (Tier 8).
+def _robinhood_mode() -> str:
+    """Return the normalized Robinhood execution mode (``off``/``review``/``live``).
 
-    Independent of ADVISORY_ONLY (which gates the Alpaca surface).  Three modes:
+    Centralizes the read + lower-casing so every Robinhood check agrees on the
+    active mode.  Defaults to ``off`` when the setting is unset/empty.  Unknown
+    values are returned as-is (lower-cased) so callers can treat them as ``off``
+    — the settings validator already coerces unknown values, but each check
+    guards defensively regardless.
+    """
+    return str(getattr(settings, "ROBINHOOD_EXECUTION_MODE", "off") or "off").lower()
+
+
+def check_robinhood_execution_mode() -> CheckResult:
+    """Verify the Robinhood execution-bridge mode is valid + safely configured (Tier 8).
+
+    Independent of ADVISORY_ONLY (which gates the Alpaca surface).  Recognized
+    modes:
       * ``off``    — (default) the bridge emits nothing; PASS, no warning.
       * ``review`` — paper/dry-run; the queue is emitted but only
         ``review_equity_order`` simulations run downstream; PASS, no warning.
@@ -348,12 +375,19 @@ def check_robinhood_execution_mode() -> CheckResult:
         (``ROBINHOOD_MAX_NOTIONAL_PER_ORDER<=0``) — going live with no dollar
         ceiling is unsafe.
 
+    Any value that is not one of ``off``/``review``/``live`` is a **FAIL**: an
+    unrecognized mode is a configuration typo and must not silently degrade to a
+    surprising behavior.
+
     Never auto-skipped under ADVISORY_ONLY — the Robinhood path is orthogonal to
     the Alpaca quarantine.
     """
     name = "robinhood_execution_mode"
-    mode = str(getattr(settings, "ROBINHOOD_EXECUTION_MODE", "off") or "off").lower()
-    cap = float(getattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0) or 0.0)
+    try:
+        mode = _robinhood_mode()
+        cap = float(getattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0) or 0.0)
+    except Exception as exc:
+        return CheckResult(name, False, f"Check raised: {exc}")
     if mode in ("off", "review"):
         return CheckResult(
             name, True,
@@ -375,8 +409,155 @@ def check_robinhood_execution_mode() -> CheckResult:
             f"confirm). Confirm this is intentional.",
             warning=True,
         )
-    # Unknown values are coerced to 'off' by the settings validator, but guard anyway.
-    return CheckResult(name, True, f"ROBINHOOD_EXECUTION_MODE={mode!r} treated as off.")
+    # Any other value is an invalid mode — fail loudly rather than degrade silently.
+    return CheckResult(
+        name, False,
+        f"ROBINHOOD_EXECUTION_MODE={mode!r} is invalid — must be one of "
+        "'off', 'review', or 'live'. Fix the value in .env.",
+    )
+
+
+def check_robinhood_kill_switch_clear() -> CheckResult:
+    """When Robinhood is live, verify the global kill switch is inactive.
+
+    The Robinhood execution bridge (``execution/queue_builder.py``) computes
+    ``allow_place`` as False whenever the kill switch is active, so a live-mode
+    launch with an active kill switch would emit a queue that can never place.
+    This is a distinct, Robinhood-scoped kill-switch gate (separate from the
+    general ``kill_switch_inactive`` check) so the failure reason points the
+    operator directly at the Robinhood path.
+
+    Non-live modes (``off``/``review``) → PASS (no real placement possible, so
+    the kill switch is irrelevant to the Robinhood bridge).
+
+    ``GlobalKillSwitch`` is imported lazily (inside the function) so tests can
+    patch ``execution.kill_switch.KILL_SWITCH_FILE`` before the import resolves.
+
+    Never auto-skipped under ADVISORY_ONLY — the Robinhood path is orthogonal to
+    the Alpaca quarantine.
+    """
+    name = "robinhood_kill_switch_clear"
+    try:
+        mode = _robinhood_mode()
+        if mode != "live":
+            return CheckResult(
+                name, True,
+                f"ROBINHOOD_EXECUTION_MODE={mode} — kill switch not relevant to the "
+                "Robinhood bridge (no real placement possible).",
+            )
+        from execution.kill_switch import GlobalKillSwitch
+        ks = GlobalKillSwitch()
+        if ks.is_active():
+            return CheckResult(
+                name, False,
+                "ROBINHOOD_EXECUTION_MODE=live but the kill switch is ACTIVE — the "
+                "Robinhood queue will refuse to place orders. Deactivate with: "
+                "python -m execution.kill_switch --deactivate  "
+                f"(reason: {ks.reason() or '(none)'})",
+            )
+        return CheckResult(
+            name, True,
+            "ROBINHOOD_EXECUTION_MODE=live and kill switch is inactive — bridge may place orders.",
+        )
+    except Exception as exc:
+        return CheckResult(name, False, f"Check raised: {exc}")
+
+
+def check_robinhood_queue_fresh(max_age_minutes: float = 30.0) -> CheckResult:
+    """When Robinhood is live, verify the proposed-order queue is present + fresh.
+
+    ``execution/queue_builder.emit_execution_queue`` writes
+    ``OUTPUT_DIR/execution_queue.json`` with a ``generated_at`` ISO-8601 UTC
+    timestamp.  Before placing real orders the operator (or the Claude Code
+    agent that consumes the queue) must be working from a recently-generated
+    queue — a stale queue reflects prices/signals that may have moved.
+
+    FAILs in live mode when the queue file is missing OR its ``generated_at`` is
+    older than ``max_age_minutes`` (default 30).  Non-live modes → PASS.
+
+    Uses ``datetime.now(timezone.utc)`` (this module standardizes on tz-aware
+    UTC).  ``max_age_minutes`` is parameterized for testing without datetime
+    patching.
+
+    Never auto-skipped under ADVISORY_ONLY — the Robinhood path is orthogonal to
+    the Alpaca quarantine.
+    """
+    name = "robinhood_queue_fresh"
+    try:
+        mode = _robinhood_mode()
+    except Exception as exc:
+        return CheckResult(name, False, f"Check raised: {exc}")
+    if mode != "live":
+        return CheckResult(
+            name, True,
+            f"ROBINHOOD_EXECUTION_MODE={mode} — no live queue freshness requirement.",
+        )
+    queue_path = settings.OUTPUT_DIR / "execution_queue.json"
+    if not queue_path.exists():
+        return CheckResult(
+            name, False,
+            "ROBINHOOD_EXECUTION_MODE=live but output/execution_queue.json not found — "
+            "run the pipeline to emit a proposed-order queue before placing orders.",
+        )
+    try:
+        data = json.loads(queue_path.read_text(encoding="utf-8"))
+        ts_str = data.get("generated_at", "")
+        if not ts_str:
+            return CheckResult(
+                name, False,
+                "output/execution_queue.json has no 'generated_at' timestamp — "
+                "cannot verify freshness; regenerate the queue.",
+            )
+        ts = datetime.fromisoformat(ts_str)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - ts
+        if age > timedelta(minutes=max_age_minutes):
+            return CheckResult(
+                name, False,
+                f"Execution queue is {age.total_seconds()/60:.0f} min old "
+                f"(limit {max_age_minutes:.0f} min) — regenerate before placing orders.",
+            )
+        return CheckResult(
+            name, True,
+            f"Execution queue is {age.total_seconds()/60:.0f} min old "
+            f"(within {max_age_minutes:.0f} min window).",
+        )
+    except Exception as exc:
+        return CheckResult(name, False, f"Could not read execution queue: {exc}")
+
+
+def check_robinhood_mfa_configured() -> CheckResult:
+    """WARNING-ONLY: flag when RH_MFA_SECRET is unset (interactive MFA fallback).
+
+    ``data/robinhood_portfolio.py`` and ``data/robinhood_client.py`` fall back to
+    prompting for the 6-digit MFA code interactively when ``RH_MFA_SECRET`` is
+    empty.  That is fine for an attended session but breaks unattended/scheduled
+    runs, which will block forever waiting on stdin.  This is a hygiene reminder,
+    not a hard gate, so it is **warning-only** (never blocking) and applies in
+    every mode.
+
+    Never auto-skipped under ADVISORY_ONLY — the Robinhood path is orthogonal to
+    the Alpaca quarantine.
+    """
+    name = "robinhood_mfa_configured"
+    try:
+        secret = getattr(settings, "RH_MFA_SECRET", None)
+    except Exception as exc:
+        return CheckResult(
+            name, True,
+            f"⚠️  Could not read RH_MFA_SECRET ({exc}) — skipping check.",
+            warning=True,
+        )
+    if not secret:
+        return CheckResult(
+            name, True,
+            "⚠️  RH_MFA_SECRET is not set — Robinhood login will fall back to "
+            "interactive MFA (prompts for a 6-digit code). Unattended/scheduled "
+            "runs will block on stdin. Set RH_MFA_SECRET in .env for headless auth.",
+            warning=True,
+        )
+    return CheckResult(name, True, "RH_MFA_SECRET is configured (headless MFA available).")
 
 
 def check_alpaca_configured() -> CheckResult:
@@ -936,6 +1117,9 @@ ALL_CHECKS = [
     check_alpaca_key_rotation_recent,
     check_advisory_only_active,
     check_robinhood_execution_mode,
+    check_robinhood_kill_switch_clear,
+    check_robinhood_queue_fresh,
+    check_robinhood_mfa_configured,
     check_alpaca_configured,
     check_macro_regime_gate_enabled,
     check_alpaca_paper_mode,

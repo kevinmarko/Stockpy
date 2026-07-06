@@ -75,6 +75,13 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     # Key-rotation dates — default None (unset = warning-level PASS, not blocking).
     m.FRED_KEY_ROTATED_DATE = overrides.get("FRED_KEY_ROTATED_DATE", None)
     m.ALPACA_KEY_ROTATED_DATE = overrides.get("ALPACA_KEY_ROTATED_DATE", None)
+    # Robinhood execution bridge (Tier 8) — default off/no cap/MFA configured so
+    # the Robinhood checks are clean-PASS unless a test overrides them.
+    m.ROBINHOOD_EXECUTION_MODE = overrides.get("ROBINHOOD_EXECUTION_MODE", "off")
+    m.ROBINHOOD_MAX_NOTIONAL_PER_ORDER = overrides.get(
+        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0
+    )
+    m.RH_MFA_SECRET = overrides.get("RH_MFA_SECRET", "TESTMFASECRET")
     return m
 
 
@@ -756,6 +763,264 @@ class TestAdvisoryModeAutoSkip:
             assert r is not None, f"{check_name} missing from run_checks output"
             assert r.passed, f"{check_name} should be skipped (PASS) under advisory mode"
             assert "skipped" in r.reason.lower(), f"{check_name} skip reason unclear: {r.reason}"
+
+
+# ---------------------------------------------------------------------------
+# Robinhood live-readiness checks (Tier 8 execution bridge)
+# ---------------------------------------------------------------------------
+
+class TestRobinhoodExecutionMode:
+    """check_robinhood_execution_mode — mode validity + live-mode notional cap.
+
+    Orthogonal to the Alpaca ADVISORY_ONLY quarantine: these checks are never
+    auto-skipped.
+    """
+
+    def test_off_mode_passes_clean(self, tmp_path):
+        """Default off mode → clean PASS, no warning."""
+        from scripts.preflight_check import check_robinhood_execution_mode
+        s = _settings(tmp_path, ROBINHOOD_EXECUTION_MODE="off")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_execution_mode()
+        assert r.passed
+        assert not r.warning
+        assert r.name == "robinhood_execution_mode"
+        assert r.reason
+
+    def test_review_mode_passes_clean(self, tmp_path):
+        """review mode → clean PASS, no warning (paper/dry-run)."""
+        from scripts.preflight_check import check_robinhood_execution_mode
+        s = _settings(tmp_path, ROBINHOOD_EXECUTION_MODE="review")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_execution_mode()
+        assert r.passed
+        assert not r.warning
+        assert "review" in r.reason.lower()
+
+    def test_live_without_cap_fails(self, tmp_path):
+        """live mode with no notional cap → FAIL naming the cap setting."""
+        from scripts.preflight_check import check_robinhood_execution_mode
+        s = _settings(
+            tmp_path,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=0.0,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_execution_mode()
+        assert not r.passed
+        assert "ROBINHOOD_MAX_NOTIONAL_PER_ORDER" in r.reason
+
+    def test_live_with_cap_warns(self, tmp_path):
+        """live mode with a positive cap → warning-level PASS."""
+        from scripts.preflight_check import check_robinhood_execution_mode
+        s = _settings(
+            tmp_path,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500.0,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_execution_mode()
+        assert r.passed
+        assert r.warning
+        assert "live" in r.reason.lower()
+
+    def test_invalid_mode_fails(self, tmp_path):
+        """An unrecognized mode → FAIL (config typo must not degrade silently)."""
+        from scripts.preflight_check import check_robinhood_execution_mode
+        s = _settings(tmp_path, ROBINHOOD_EXECUTION_MODE="paper")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_execution_mode()
+        assert not r.passed
+        assert "invalid" in r.reason.lower()
+
+
+class TestRobinhoodKillSwitchClear:
+    """check_robinhood_kill_switch_clear — live mode requires an inactive kill switch."""
+
+    def test_non_live_passes_without_checking_switch(self, tmp_path):
+        """off/review mode → PASS regardless of kill-switch state."""
+        from scripts.preflight_check import check_robinhood_kill_switch_clear
+        # Even if a sentinel exists, non-live mode must pass.
+        sentinel = tmp_path / "KILL_SWITCH"
+        sentinel.write_text("x", encoding="utf-8")
+        s = _settings(tmp_path, ROBINHOOD_EXECUTION_MODE="review")
+        with patch("scripts.preflight_check.settings", s):
+            with patch("execution.kill_switch.KILL_SWITCH_FILE", sentinel):
+                r = check_robinhood_kill_switch_clear()
+        assert r.passed
+        assert r.name == "robinhood_kill_switch_clear"
+
+    def test_live_with_active_switch_fails(self, tmp_path):
+        """live mode with an active kill switch → FAIL mentioning the switch."""
+        from scripts.preflight_check import check_robinhood_kill_switch_clear
+        sentinel = tmp_path / "KILL_SWITCH"
+        sentinel.write_text("halt", encoding="utf-8")
+        s = _settings(
+            tmp_path,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500.0,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            with patch("execution.kill_switch.KILL_SWITCH_FILE", sentinel):
+                r = check_robinhood_kill_switch_clear()
+        assert not r.passed
+        assert "ACTIVE" in r.reason.upper()
+
+    def test_live_with_inactive_switch_passes(self, tmp_path):
+        """live mode with an inactive kill switch → PASS."""
+        from scripts.preflight_check import check_robinhood_kill_switch_clear
+        sentinel = tmp_path / "KILL_SWITCH"  # not written → inactive
+        s = _settings(
+            tmp_path,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500.0,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            with patch("execution.kill_switch.KILL_SWITCH_FILE", sentinel):
+                r = check_robinhood_kill_switch_clear()
+        assert r.passed
+        assert r.reason
+
+
+class TestRobinhoodQueueFresh:
+    """check_robinhood_queue_fresh — live mode requires a fresh execution queue."""
+
+    def test_non_live_passes_without_queue(self, tmp_path):
+        """off/review mode → PASS even when no queue file exists."""
+        from scripts.preflight_check import check_robinhood_queue_fresh
+        s = _settings(tmp_path, ROBINHOOD_EXECUTION_MODE="off", OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_queue_fresh()
+        assert r.passed
+        assert r.name == "robinhood_queue_fresh"
+
+    def test_live_missing_queue_fails(self, tmp_path):
+        """live mode with no execution_queue.json → FAIL with 'not found'."""
+        from scripts.preflight_check import check_robinhood_queue_fresh
+        s = _settings(
+            tmp_path,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500.0,
+            OUTPUT_DIR=tmp_path,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_queue_fresh()
+        assert not r.passed
+        assert "not found" in r.reason
+
+    def test_live_fresh_queue_passes(self, tmp_path):
+        """live mode with a recently-generated queue → PASS."""
+        from scripts.preflight_check import check_robinhood_queue_fresh
+        queue = tmp_path / "execution_queue.json"
+        queue.write_text(
+            json.dumps({"generated_at": datetime.now(timezone.utc).isoformat()}),
+            encoding="utf-8",
+        )
+        s = _settings(
+            tmp_path,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500.0,
+            OUTPUT_DIR=tmp_path,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_queue_fresh(max_age_minutes=30.0)
+        assert r.passed
+
+    def test_live_stale_queue_fails(self, tmp_path):
+        """live mode with a queue older than the limit → FAIL with age info."""
+        from scripts.preflight_check import check_robinhood_queue_fresh
+        queue = tmp_path / "execution_queue.json"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        queue.write_text(json.dumps({"generated_at": stale_ts}), encoding="utf-8")
+        s = _settings(
+            tmp_path,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500.0,
+            OUTPUT_DIR=tmp_path,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_queue_fresh(max_age_minutes=30.0)
+        assert not r.passed
+        assert "old" in r.reason.lower()
+
+    def test_live_queue_without_timestamp_fails(self, tmp_path):
+        """live mode with a queue missing generated_at → FAIL (cannot verify)."""
+        from scripts.preflight_check import check_robinhood_queue_fresh
+        queue = tmp_path / "execution_queue.json"
+        queue.write_text(json.dumps({"orders": []}), encoding="utf-8")
+        s = _settings(
+            tmp_path,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500.0,
+            OUTPUT_DIR=tmp_path,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_queue_fresh()
+        assert not r.passed
+        assert "generated_at" in r.reason
+
+
+class TestRobinhoodMfaConfigured:
+    """check_robinhood_mfa_configured — WARNING-only reminder about headless MFA."""
+
+    def test_empty_mfa_warns(self, tmp_path):
+        """Unset RH_MFA_SECRET → warning-level PASS (never blocking)."""
+        from scripts.preflight_check import check_robinhood_mfa_configured
+        s = _settings(tmp_path, RH_MFA_SECRET=None)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_mfa_configured()
+        assert r.passed  # warning-only — NEVER False
+        assert r.warning
+        assert r.name == "robinhood_mfa_configured"
+        assert "RH_MFA_SECRET" in r.reason
+
+    def test_empty_string_mfa_warns(self, tmp_path):
+        """Empty-string RH_MFA_SECRET → warning-level PASS."""
+        from scripts.preflight_check import check_robinhood_mfa_configured
+        s = _settings(tmp_path, RH_MFA_SECRET="")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_mfa_configured()
+        assert r.passed
+        assert r.warning
+
+    def test_configured_mfa_passes_clean(self, tmp_path):
+        """A non-empty RH_MFA_SECRET → clean PASS, no warning."""
+        from scripts.preflight_check import check_robinhood_mfa_configured
+        s = _settings(tmp_path, RH_MFA_SECRET="ABCDEF123456")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_robinhood_mfa_configured()
+        assert r.passed
+        assert not r.warning
+
+
+class TestRobinhoodChecksNotAutoSkipped:
+    """All Robinhood checks are orthogonal to ADVISORY_ONLY — never auto-skipped."""
+
+    def test_robinhood_checks_absent_from_advisory_auto_skip(self):
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        for name in (
+            "robinhood_execution_mode",
+            "robinhood_kill_switch_clear",
+            "robinhood_queue_fresh",
+            "robinhood_mfa_configured",
+        ):
+            assert name not in _ADVISORY_AUTO_SKIP
+
+    def test_robinhood_checks_run_under_advisory_mode(self, tmp_path):
+        """Under ADVISORY_ONLY=True the Robinhood checks still execute real logic."""
+        from scripts.preflight_check import run_checks
+        # live mode without a cap must still FAIL even in advisory mode.
+        s = _settings(
+            tmp_path,
+            ADVISORY_ONLY=True,
+            ROBINHOOD_EXECUTION_MODE="live",
+            ROBINHOOD_MAX_NOTIONAL_PER_ORDER=0.0,
+        )
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+                results = run_checks()
+        by_name = {r.name: r for r in results}
+        assert not by_name["robinhood_execution_mode"].passed
 
 
 # ---------------------------------------------------------------------------
