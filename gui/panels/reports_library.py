@@ -56,13 +56,19 @@ def _mtime_caption(path: Path, *, label: str = "Last modified") -> None:
 
 
 def _html_file_block(path: Path, *, download_label: str, height: int = 800) -> None:
-    """Render one HTML report: mtime caption, an on-demand inline viewer
-    (rendered ONLY when the expander is opened), and a download button."""
+    """Render one HTML report: mtime caption, an on-demand inline viewer, and
+    a download button.
+
+    The inline viewer is gated behind a checkbox's VALUE (an ``if``), not a
+    container like ``st.expander`` — Streamlit re-executes a script's full
+    body on every rerun regardless of whether an expander is collapsed or
+    open (only the visual disclosure differs), so wrapping the read/render
+    call in ``with st.expander(...):`` alone does NOT skip it. Checking the
+    checkbox's boolean return value is what actually defers the ~1.9 MB
+    `read_text()` + `components.html()` call until the operator opts in.
+    """
     _mtime_caption(path)
-    with st.expander("🔎 View inline"):
-        # `components.html` is only evaluated when Streamlit renders this
-        # expander body (i.e. when the operator opens it), so a ~1.9 MB
-        # dashboard is never re-injected on every rerun.
+    if st.checkbox("🔎 View inline", key=f"view_{path.name}"):
         import streamlit.components.v1 as components
 
         html_text = path.read_text(encoding="utf-8", errors="replace")
