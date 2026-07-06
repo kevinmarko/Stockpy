@@ -33,14 +33,30 @@ Supervisor sequence (main())
   6. Open a native desktop window pointed at the local UI server; block until
      the user closes it.
   7. ALWAYS tear down both child processes in a ``finally`` block — including
-     on KeyboardInterrupt, SIGTERM, or any exception raised while creating or
-     running the window — so no orphaned child processes are left behind.
+     on KeyboardInterrupt or any exception raised while creating or running
+     the window — so no orphaned child processes are left behind.
+
+SIGTERM hardening
+------------------
+Python's default SIGTERM disposition terminates the interpreter immediately
+WITHOUT running pending ``finally`` blocks, and pywebview's native event loop
+can hold the GIL for long stretches without the interpreter checking for
+pending signals — so an external ``kill <pid>`` (as opposed to the user
+clicking the window's own close button) is NOT guaranteed to unwind back
+through ``main()``'s ``finally`` block. ``main()`` therefore installs its own
+``signal.signal(SIGTERM, ...)`` handler that runs the same idempotent
+teardown directly and then force-exits the process, so a hard kill of the
+supervisor still reaps the Streamlit UI server and the advisory engine loop
+instead of orphaning them. (SIGKILL can never be caught by any process, by
+design — nothing running inside the killed process can prevent that one.)
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
+import signal
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -79,7 +95,9 @@ def main(interval_seconds: int = 300, ui_port: Optional[int] = None) -> int:
     Returns
     -------
     int
-        Process exit code — ``0`` on a normal window-close shutdown.
+        Process exit code — ``0`` on a normal window-close shutdown. A
+        SIGTERM forces process exit directly (see ``_handle_sigterm`` below)
+        and never returns to the caller.
     """
     _load_dotenv(override=False)
 
@@ -96,6 +114,54 @@ def main(interval_seconds: int = 300, ui_port: Optional[int] = None) -> int:
 
     ui_popen = None
     engine_handle = None
+    _torn_down = False
+
+    def _teardown() -> None:
+        """Idempotent teardown of both child processes.
+
+        Shared by the normal-return ``finally`` block below and the SIGTERM
+        handler — safe to call more than once (e.g. once from the signal
+        handler and once from ``finally`` unwinding afterward) since it
+        no-ops after the first call.
+        """
+        nonlocal _torn_down
+        if _torn_down:
+            return
+        _torn_down = True
+        if engine_handle is not None:
+            try:
+                stop_engine(engine_handle)
+                logger.info("Engine supervisor stopped.")
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Error stopping engine supervisor: %s", exc)
+        if ui_popen is not None:
+            try:
+                stop_ui_server(ui_popen)
+                logger.info("UI server subprocess stopped.")
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Error stopping UI server subprocess: %s", exc)
+
+    def _handle_sigterm(signum, frame) -> None:  # noqa: ARG001 - required signal handler signature
+        """Tear down child processes on an external SIGTERM, then force exit.
+
+        Relying solely on this function's ``finally`` block to unwind is not
+        safe here: pywebview's native event loop can hold the GIL for long
+        stretches without the interpreter checking for pending signals, so a
+        plain ``kill <pid>`` is not guaranteed to reach Python control flow.
+        This handler runs the same idempotent ``_teardown()`` directly, then
+        force-exits via ``os._exit`` rather than trying to unwind back
+        through code that may never resume.
+        """
+        logger.warning(
+            "Received SIGTERM (pid=%d) — tearing down child processes before exit.",
+            os.getpid(),
+        )
+        _teardown()
+        logging.shutdown()
+        os._exit(0)
+
+    previous_sigterm_handler = signal.signal(signal.SIGTERM, _handle_sigterm)
+
     try:
         # ── Start UI server (headless Streamlit, no browser tab) ────────────
         ui_popen = start_ui_server(resolved_port, headless=True)
@@ -133,20 +199,15 @@ def main(interval_seconds: int = 300, ui_port: Optional[int] = None) -> int:
     finally:
         # Always tear down both child processes — this branch runs even if
         # start_ui_server/start_engine/wait_for_http/webview.* raised, or on
-        # KeyboardInterrupt/SIGTERM — so no orphaned child process survives
-        # the supervisor exiting.
-        if engine_handle is not None:
-            try:
-                stop_engine(engine_handle)
-                logger.info("Engine supervisor stopped.")
-            except Exception as exc:  # noqa: BLE001
-                logger.error("Error stopping engine supervisor: %s", exc)
-        if ui_popen is not None:
-            try:
-                stop_ui_server(ui_popen)
-                logger.info("UI server subprocess stopped.")
-            except Exception as exc:  # noqa: BLE001
-                logger.error("Error stopping UI server subprocess: %s", exc)
+        # KeyboardInterrupt, or on the normal window-close return path — so
+        # no orphaned child process survives the supervisor exiting through
+        # ordinary Python control flow. (The SIGTERM path above is handled
+        # separately since it may never reach this point at all.)
+        try:
+            signal.signal(signal.SIGTERM, previous_sigterm_handler)
+        except Exception as exc:  # noqa: BLE001 - restoring the handler must never mask the real error
+            logger.error("Error restoring previous SIGTERM handler: %s", exc)
+        _teardown()
 
 
 def _parse_args(argv: Optional[list] = None) -> argparse.Namespace:
