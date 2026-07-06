@@ -643,51 +643,97 @@ def render_gravity_audit() -> None:
         "Review before authorizing a live run."
     )
 
+    # Non-blocking launch: spawn the audit as a detached subprocess via
+    # orchestrator_runner (streams to GRAVITY_LOG_PATH) and stash the RunHandle
+    # in session_state so it survives Streamlit reruns.  This replaces the old
+    # blocking subprocess.run(..., timeout=600) that froze the entire UI for up
+    # to 10 minutes.
     if st.button("▶️ Run Gravity audit", type="primary"):
-        with st.spinner("Running Gravity AI Review Suite (this can take a minute)…"):
+        existing = st.session_state.get("gravity_handle")
+        if existing is not None and existing.is_running():
+            st.warning(f"A Gravity audit is already running (PID {existing.pid}).")
+        else:
             try:
-                import subprocess
-                import sys
-
-                proc = subprocess.run(
-                    [sys.executable, "Gravity AI Review Suite.py"],
-                    cwd=str(_REPO_ROOT),
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
+                handle = orchestrator_runner.launch_gravity_audit()
+                st.session_state["gravity_handle"] = handle
+                st.success(
+                    f"Launched Gravity audit (PID {handle.pid}). Tailing below…"
                 )
-                st.session_state["gravity_stdout"] = proc.stdout
-                st.session_state["gravity_returncode"] = proc.returncode
-            except Exception as exc:
-                st.session_state["gravity_stdout"] = ""
-                st.session_state["gravity_error"] = str(exc)
+            except Exception as exc:  # noqa: BLE001 - dead-letter UI (CONSTRAINT #6)
+                st.error(f"Audit failed to launch: {exc}")
 
-    stdout = st.session_state.get("gravity_stdout", "")
-    if st.session_state.get("gravity_error"):
-        st.error(f"Audit failed to launch: {st.session_state['gravity_error']}")
+    @st.fragment(run_every="3s")
+    def _gravity_live_status() -> None:
+        """Live status + log tail for the Gravity audit subprocess.
 
-    if stdout:
-        report = _parse_trailing_json(stdout)
-        if report is None:
-            st.warning("Could not parse a JSON report from the audit output.")
-            st.code(stdout[-4000:], language="text")
+        Polls every 3 s.  While the audit runs it shows a status line + the
+        streamed log tail; once finished it renders the pass/fail table from
+        the FINISHED log via the unchanged ``_parse_trailing_json`` /
+        ``_derive_step_status`` helpers.  When finished the redraw is a cheap
+        static render — the 3 s cadence is harmless (no live process to poll),
+        so we simply return the static finished/idle view rather than gate the
+        fragment.
+
+        CONSTRAINT #4 (fail-closed): a non-zero exit code OR an unparseable log
+        renders as a FAILURE — never a fabricated success.
+        CONSTRAINT #6: the whole body is try/except-guarded so a transient IO
+        error degrades to an inline caption instead of crashing the tab.
+        """
+        handle = st.session_state.get("gravity_handle")
+        if handle is None:
+            st.caption("No audit run this session.")
             return
 
-        rows = []
-        for key, val in report.items():
-            if not isinstance(val, dict):
-                continue
-            ok, status = _derive_step_status(key, val)
-            rows.append({"Step": key, "Status": ("✅ " if ok else "❌ ") + status})
-        if rows:
-            st.dataframe(pd.DataFrame(rows), width="stretch")
-            failed = [r for r in rows if "✅" not in r["Status"]]
-            if failed:
-                st.error(f"{len(failed)} audit step(s) failed — NOT cleared for live.")
-            else:
-                st.success("All audit steps passed — cleared for live readiness review.")
-        with st.expander("🔬 Full audit JSON"):
-            st.json(report)
+        try:
+            if handle.is_running():
+                st.info("🟡 Running…")
+                with st.expander("📜 Live audit log", expanded=True):
+                    st.code(
+                        orchestrator_runner.read_log_tail(max_lines=200, handle=handle),
+                        language="text",
+                    )
+                return
+
+            # ── Finished ──────────────────────────────────────────────────────
+            rc = handle.returncode()
+            # Large max_lines == read the whole finished log for JSON parsing.
+            log_text = orchestrator_runner.read_log_tail(max_lines=100_000, handle=handle)
+            report = _parse_trailing_json(log_text)
+
+            if report is None:
+                # Fail-closed: no parseable report is NOT a pass.
+                st.warning("Could not parse a JSON report from the audit output.")
+                if rc is not None and rc != 0:
+                    st.error(f"Audit process exited with code {rc} — NOT cleared for live.")
+                st.code(log_text[-4000:], language="text")
+                return
+
+            rows = []
+            for key, val in report.items():
+                if not isinstance(val, dict):
+                    continue
+                ok, status = _derive_step_status(key, val)
+                rows.append({"Step": key, "Status": ("✅ " if ok else "❌ ") + status})
+            if rows:
+                st.dataframe(pd.DataFrame(rows), width="stretch")
+                failed = [r for r in rows if "✅" not in r["Status"]]
+                # A non-zero exit fails closed even if every parsed step passed.
+                if failed or (rc is not None and rc != 0):
+                    n_failed = len(failed)
+                    detail = (
+                        f"{n_failed} audit step(s) failed"
+                        if n_failed
+                        else f"audit process exited with code {rc}"
+                    )
+                    st.error(f"{detail} — NOT cleared for live.")
+                else:
+                    st.success("All audit steps passed — cleared for live readiness review.")
+            with st.expander("🔬 Full audit JSON"):
+                st.json(report)
+        except Exception as exc:  # noqa: BLE001 - dead-letter UI (CONSTRAINT #6)
+            st.caption(f"(Gravity audit status unavailable: {exc})")
+
+    _gravity_live_status()
 
 
 

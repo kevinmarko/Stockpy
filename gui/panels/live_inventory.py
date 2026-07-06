@@ -174,10 +174,17 @@ def render_live_inventory() -> None:
             if s.get("symbol")
         ]
 
-        with st.spinner("Reconciling portfolio against market-data feeds…"):
+        with st.status("Syncing portfolio…", expanded=True) as status:
             try:
+                status.update(
+                    label="Discovering universe (holdings ∪ watchlists ∪ files)…",
+                    state="running",
+                )
                 loop = asyncio.new_event_loop()
                 try:
+                    status.update(
+                        label="Probing market-data coverage…", state="running"
+                    )
                     report = loop.run_until_complete(
                         async_sync_now(
                             snapshot_obj,
@@ -188,13 +195,18 @@ def render_live_inventory() -> None:
                     )
                 finally:
                     loop.close()
+                status.update(
+                    label="Persisting DEFAULT_TICKERS…", state="running"
+                )
                 st.session_state["last_sync_report"] = report
                 st.success(
                     f"Synced {report.n_total} symbols "
                     f"({report.n_full} full, {report.n_equity_only} equity-only, "
                     f"{report.n_uncovered} uncovered). DEFAULT_TICKERS updated."
                 )
+                status.update(label="✅ Sync complete", state="complete")
             except Exception as exc:  # noqa: BLE001
+                status.update(label="❌ Sync failed", state="error")
                 st.error(f"Sync failed: {exc}")
 
     # ------------------------------------------------------------------ #

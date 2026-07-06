@@ -30,6 +30,41 @@ from gui.panels._shared import (  # noqa: E402
 from gui.panels import load_state_snapshot
 
 
+def _system_health_fragment() -> None:
+    """Cheap kill-switch / regime / VIX / HMM health bar, isolated into its own
+    fragment so it can refresh independently of the heavy Observability tab
+    (equity curve, latency heatmap, telemetry). ``load_state_snapshot()`` is
+    mtime-cached, so the re-read here is cheap and reflects fresh orchestrator
+    writes. Registered with ``run_every`` via the call-form gate in
+    ``render_observability()`` (see the "Live health bar" checkbox)."""
+    snap = load_state_snapshot()
+    ks = _kill_switch()
+
+    c_ks, c_reg, c_vix, c_hmm = st.columns(4)
+    with c_ks:
+        if ks.is_active():
+            st.error("🚨 Kill switch ACTIVE")
+        else:
+            st.success("✅ Kill switch inactive")
+    with c_reg:
+        regime = snap.get("market_regime", "—")
+        colour = ("🟢" if "RISK ON" in str(regime)
+                  else ("🔴" if "RECESSION" in str(regime) else "🟡"))
+        st.metric("Macro Regime", f"{colour} {regime}")
+    with c_vix:
+        vix = snap.get("vix")
+        st.metric("VIX", f"{vix:.1f}" if isinstance(vix, (int, float)) else "—",
+                  delta=None, help="Kill-switch threshold: 30")
+    with c_hmm:
+        hmm_vals = [s.get("hmm_risk_on") for s in snap.get("signals", [])
+                    if s.get("hmm_risk_on") is not None]
+        st.metric("HMM Risk-On", f"{hmm_vals[0]:.1%}" if hmm_vals else "—",
+                  help="Gaussian-HMM second opinion; below 20% → hmm_regime gate fires")
+
+    last = snap.get("timestamp", "—")
+    st.caption(f"Pipeline last run: **{last}**")
+
+
 def render_observability() -> None:
     """Macro / regime / P&L / account / risk view — Mission Control for the
     platform.
@@ -67,32 +102,17 @@ def render_observability() -> None:
     )
 
     snap = load_state_snapshot()
-    ks = _kill_switch()
 
     # ── 1. System-health bar ─────────────────────────────────────────────────
-    c_ks, c_reg, c_vix, c_hmm = st.columns(4)
-    with c_ks:
-        if ks.is_active():
-            st.error("🚨 Kill switch ACTIVE")
-        else:
-            st.success("✅ Kill switch inactive")
-    with c_reg:
-        regime = snap.get("market_regime", "—")
-        colour = ("🟢" if "RISK ON" in str(regime)
-                  else ("🔴" if "RECESSION" in str(regime) else "🟡"))
-        st.metric("Macro Regime", f"{colour} {regime}")
-    with c_vix:
-        vix = snap.get("vix")
-        st.metric("VIX", f"{vix:.1f}" if isinstance(vix, (int, float)) else "—",
-                  delta=None, help="Kill-switch threshold: 30")
-    with c_hmm:
-        hmm_vals = [s.get("hmm_risk_on") for s in snap.get("signals", [])
-                    if s.get("hmm_risk_on") is not None]
-        st.metric("HMM Risk-On", f"{hmm_vals[0]:.1%}" if hmm_vals else "—",
-                  help="Gaussian-HMM second opinion; below 20% → hmm_regime gate fires")
-
-    last = snap.get("timestamp", "—")
-    st.caption(f"Pipeline last run: **{last}**")
+    # Isolated into a fragment: it is a cheap health bar (kill switch / regime /
+    # VIX / HMM) that can auto-refresh on its own without redrawing the rest of
+    # this expensive tab (equity curve, latency heatmap, telemetry). The tab is
+    # costly, so the live tick defaults OFF (manual refresh).
+    live_health = st.checkbox(
+        "🔴 Live health bar (30s)", value=False, key="obs_health_live",
+        help="Auto-refresh just the health bar every 30s (rest of tab stays static)."
+    )
+    st.fragment(run_every="30s" if live_health else None)(_system_health_fragment)()
 
     st.divider()
 
