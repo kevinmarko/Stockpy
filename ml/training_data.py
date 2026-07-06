@@ -67,6 +67,7 @@ logger = logging.getLogger("ML.TrainingData")
 _ROC_12M_LB = 252   # ≈ 12 months of trading days
 _ROC_6M_LB = 126    # ≈ 6 months
 _REALIZED_VOL_WINDOW = 60
+_GARCH_PROXY_WINDOW = 20   # matches scripts/train_lgbm.py's pre-convergence proxy
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -83,6 +84,14 @@ def _bars_for_symbol(
     Precedence: an injected ``data_engine`` (offline/testing) wins; otherwise
     fall back to :meth:`HistoricalStore.get_bars`.  Never raises — returns an
     empty frame so the caller can dead-letter the symbol.
+
+    NOTE: this fetches ONE symbol at a time.  When ``data_engine`` is supplied,
+    prefer :func:`_bars_for_universe` instead — some data providers'
+    ``fetch_technical_raw`` distributes per-ticker dispersion by the ticker's
+    POSITION within the list passed to a single call (e.g. ``enumerate(tickers)``
+    seeding); calling it once per symbol collapses every symbol to the same
+    "position 0" result.  This function remains for the ``HistoricalStore``
+    fallback path (inherently per-symbol) and as an isolated per-symbol retry.
     """
     try:
         if data_engine is not None:
@@ -103,6 +112,55 @@ def _bars_for_symbol(
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("training_data: bars fetch failed for %s: %s", symbol, exc)
         return pd.DataFrame()
+
+
+def _bars_for_universe(
+    universe: list,
+    *,
+    data_engine=None,
+    lookback_days: int = 504,
+) -> dict:
+    """Return ``{symbol: OHLCV DataFrame}`` for the whole universe.
+
+    When ``data_engine`` is supplied, this fetches ALL symbols in ONE batched
+    call — matching ``IDataProvider.fetch_technical_raw(tickers: list)``'s
+    batch contract, and required for correctness with providers whose
+    per-ticker dispersion depends on ticker POSITION within that call's list
+    (calling it once per symbol would make every symbol look like "position 0").
+    If the batch call itself raises, falls back to isolated per-symbol calls
+    (via :func:`_bars_for_symbol`) so one bad symbol can't take down the rest
+    (CONSTRAINT #6).  When ``data_engine`` is ``None``, sources per-symbol from
+    ``HistoricalStore.get_bars`` (that API has no batch form).
+    """
+    if data_engine is None:
+        return {
+            symbol: bars
+            for symbol in universe
+            if not (bars := _bars_for_symbol(symbol, data_engine=None, lookback_days=lookback_days)).empty
+        }
+
+    try:
+        raw = data_engine.fetch_technical_raw(list(universe)) or {}
+    except Exception as exc:
+        logger.warning(
+            "training_data: batch bars fetch failed (%s) — retrying per-symbol.", exc
+        )
+        return {
+            symbol: bars
+            for symbol in universe
+            if not (bars := _bars_for_symbol(symbol, data_engine=data_engine)).empty
+        }
+
+    out: dict = {}
+    for symbol in universe:
+        df = raw.get(symbol)
+        if df is None or df.empty:
+            continue
+        try:
+            out[symbol] = _normalize_bars(df)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("training_data: normalize failed for %s: %s", symbol, exc)
+    return out
 
 
 def _normalize_bars(df: pd.DataFrame) -> pd.DataFrame:
@@ -151,9 +209,10 @@ def _pit_ticker_row(close: pd.Series) -> dict:
     Every value is ``NaN`` when it cannot be honestly computed (CONSTRAINT #4).
 
     Only the price-derivable dashboard columns are populated here:
-    ``ROC_12M``, ``ROC_6M``, ``RSI``, ``RSI_2``, ``low_vol_score``.  The
-    remaining feature-matrix inputs (``GARCH_Vol``, fundamentals, factor
-    Z-scores) are absent → ``build_pit_feature_matrix`` fills them with ``NaN``.
+    ``ROC_12M``, ``ROC_6M``, ``RSI``, ``RSI_2``, ``low_vol_score``,
+    ``GARCH_Vol`` (a realized-vol proxy — see module docstring).  The
+    remaining feature-matrix inputs (fundamentals, factor Z-scores) are
+    absent → ``build_pit_feature_matrix`` fills them with ``NaN``.
     """
     row: dict[str, float] = {}
 
@@ -186,6 +245,17 @@ def _pit_ticker_row(close: pd.Series) -> dict:
     else:
         row["low_vol_score"] = float("nan")
 
+    # GARCH_Vol proxy: annualized 20-day realized vol (a legitimate causal
+    # approximation, not a fabricated value — full GJR-GARCH lives in
+    # technical_options_engine.py and isn't reproduced here).
+    if len(daily_ret) >= _GARCH_PROXY_WINDOW:
+        garch_proxy = float(
+            daily_ret.iloc[-_GARCH_PROXY_WINDOW:].std(ddof=1) * np.sqrt(252.0)
+        )
+        row["GARCH_Vol"] = garch_proxy if np.isfinite(garch_proxy) else float("nan")
+    else:
+        row["GARCH_Vol"] = float("nan")
+
     return row
 
 
@@ -212,6 +282,7 @@ def build_training_panel(
     *,
     data_engine=None,
     horizon_days: int = 21,
+    step_days: int = 1,
 ) -> Tuple[pd.DataFrame, pd.Series, pd.Series, pd.DataFrame]:
     """Build the supervised PIT training panel over ``[start, end]``.
 
@@ -230,6 +301,13 @@ def build_training_panel(
     horizon_days :
         Forward-return horizon (in trading rows) for the label ``y`` and the
         ``t1`` forward-window end timestamps.  Default 21 (≈ one month).
+    step_days :
+        Thin the walked ``as_of_dates`` to every ``step_days``-th trading date
+        (default 1 = every date, the original behavior).  Callers that need
+        many dates of history but want to bound CPCV fold cost (e.g.
+        ``scripts/train_lgbm.py``) can pass e.g. ``step_days=5``.  Thinning
+        happens BEFORE the per-date walk, so it also saves computation (never
+        walks dates it then discards).
 
     Returns
     -------
@@ -254,12 +332,13 @@ def build_training_panel(
         logger.info("build_training_panel: empty universe → empty panel.")
         return _empty_panel(universe)
 
-    # ── 1. Load per-ticker bars (dead-lettered) and assemble price_history ──────
+    # ── 1. Load universe bars (batched; dead-lettered) and assemble price_history ──
+    bars_by_symbol = _bars_for_universe(universe, data_engine=data_engine)
     close_by_ticker: dict[str, pd.Series] = {}
     for symbol in universe:
         try:
-            bars = _bars_for_symbol(symbol, data_engine=data_engine)
-            if bars.empty or "Close" not in bars.columns:
+            bars = bars_by_symbol.get(symbol)
+            if bars is None or bars.empty or "Close" not in bars.columns:
                 logger.info("build_training_panel: no usable bars for %s — skipped.", symbol)
                 continue
             close_by_ticker[symbol] = bars["Close"].astype(float)
@@ -279,6 +358,8 @@ def build_training_panel(
     if len(as_of_dates) == 0:
         logger.info("build_training_panel: no trading dates in window → empty panel.")
         return _empty_panel(universe)
+    if step_days > 1:
+        as_of_dates = as_of_dates[::step_days]
 
     store = PITFeatureStore()
 
