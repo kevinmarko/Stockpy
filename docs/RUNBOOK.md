@@ -651,6 +651,57 @@ python3 main.py                          # queue now carries allow_place=true wh
 - **Notional ceilings**: `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` (platform) + the Agentic account's
   funded balance (Robinhood).
 
+### The review → gate → (place) loop (as exercised)
+
+The end-to-end path has two actors and one hand-off file:
+
+1. **Platform (Python) writes the queue.** `python3 main.py` runs `run_once()`,
+   which calls `execution/queue_builder.py::emit_execution_queue`. That builds
+   each actionable Recommendation into an `OrderIntent`, runs it through the
+   **same** `PreTradeRiskGate` + `GlobalKillSwitch` stack the Alpaca path uses
+   (all in dry-run — no broker contact), stamps `allow_place`, and atomically
+   writes `output/execution_queue.json`. In `off` mode nothing is written.
+2. **Agent (the `robinhood-execution` skill) reads the queue and previews.**
+   `/rh-execute` loads the queue, runs its hard-stops (below), calls
+   `review_equity_order` for **every** intent, and — only in `live` mode, only
+   for `allow_place: true` intents, only with an explicit per-order human
+   confirmation — calls `place_equity_order`. Outcomes are appended to
+   `output/execution_receipts.jsonl` (agent-authored; the platform never edits
+   the queue).
+
+**Hard-stops the `robinhood-execution` skill enforces** (see
+`.claude/skills/robinhood-execution/SKILL.md` — do not weaken these):
+
+- **Kill switch** — `output/KILL_SWITCH` present **OR** queue
+  `kill_switch_active: true` → refuse all placement (re-checked immediately
+  before each order).
+- **Mode `off`** → nothing to do.
+- **Stale queue** — `generated_at` more than ~30 minutes old → refuse to place;
+  re-run `python3 main.py` first. (The queue's `generated_at` is an ISO-8601
+  UTC timestamp precisely so this staleness check is computable from the file
+  alone.)
+- **Agentic-account requirement** — `get_accounts` must show a dedicated,
+  separately-funded **Agentic** account and the operator must confirm it; the
+  skill never operates against the main account.
+- **Review-only unless live** — never calls `place_equity_order` in `review`
+  mode, and never for an `allow_place: false` intent.
+- **One explicit human confirmation per placed order** — never batch-confirmed.
+
+**Regression coverage.** The core gating invariant — `allow_place` is `True`
+ONLY when `mode == "live"` AND the risk gate passed AND the kill switch is clear
+AND a positive notional cap is set (each condition flipped individually forces
+`False`; `review`/`off` are never placeable; `gate_intent()` fails **closed** on
+an internal gate exception; a present kill-switch sentinel blocks placement) —
+is pinned by **`tests/test_execution_queue_gating.py`** (fully offline; the risk
+gate and kill switch are monkeypatched). That file also provides the canonical
+deterministic non-empty review-mode queue fixture. Run it with
+`pytest tests/test_execution_queue_gating.py`.
+
+> **Note on the live MCP walkthrough:** the actual `review_equity_order` /
+> `place_equity_order` MCP calls are an **operator-driven** step performed
+> through the `robinhood-execution` skill against a real Agentic account — they
+> are deliberately NOT part of any automated test (no live broker calls in CI).
+
 ### Pausing / disabling
 
 ```bash
