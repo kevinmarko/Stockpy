@@ -18,13 +18,23 @@ from types import SimpleNamespace
 import pytest
 
 from gui.robinhood_execution_panel import (
+    EXECUTION_PLACED_PATH,
     EXECUTION_QUEUE_PATH,
     EXECUTION_RECEIPTS_PATH,
     NOTIFIED_STATE_PATH,
+    STATUS_BLOCKED,
+    STATUS_PLACED,
+    STATUS_PREVIEWED,
+    STATUS_QUEUED,
+    STATUS_SKIPPED,
     ExecutionQueueSnapshot,
+    IntentStatus,
     NotificationState,
     QueuedIntent,
+    ReconciliationSummary,
     STALE_QUEUE_SECONDS,
+    build_reconciliation_summary,
+    derive_intent_status,
     is_queue_stale,
     mfa_secret_configured,
     notification_age_seconds,
@@ -33,7 +43,18 @@ from gui.robinhood_execution_panel import (
     read_execution_queue,
     read_execution_receipts,
     read_notification_state,
+    read_placed_ledger,
 )
+
+
+def _make_intent(**overrides) -> QueuedIntent:
+    base = dict(
+        symbol="AAPL", action="BUY", side="buy", qty=None, target_notional=25.0,
+        conviction=0.85, gate_allowed=True, gate_reasons=[], allow_place=False,
+        rationale="x", client_order_id="1",
+    )
+    base.update(overrides)
+    return QueuedIntent(**base)
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +426,243 @@ class TestNotifiedStatePathConvention:
     def test_canonical_path_points_at_output_dir(self):
         assert NOTIFIED_STATE_PATH.name == "execution_queue_notified.json"
         assert NOTIFIED_STATE_PATH.parent.name == "output"
+
+
+# ---------------------------------------------------------------------------
+# derive_intent_status
+# ---------------------------------------------------------------------------
+
+class TestDeriveIntentStatus:
+    def test_no_receipt_placeable_is_queued(self):
+        intent = _make_intent(allow_place=True)
+        status = derive_intent_status(intent, [])
+        assert isinstance(status, IntentStatus)
+        assert status.status == STATUS_QUEUED
+        assert status.color == "neutral"
+
+    def test_no_receipt_not_placeable_is_blocked_with_reasons(self):
+        intent = _make_intent(allow_place=False, gate_reasons=["max_position_size", "heat"])
+        status = derive_intent_status(intent, [])
+        assert status.status == STATUS_BLOCKED
+        assert status.color == "warning"
+        assert "max_position_size" in status.detail
+        assert "heat" in status.detail
+
+    def test_blocked_without_reasons_has_fallback_detail(self):
+        intent = _make_intent(allow_place=False, gate_reasons=[])
+        status = derive_intent_status(intent, [])
+        assert status.status == STATUS_BLOCKED
+        assert status.detail  # non-empty fallback
+
+    def test_placed_receipt_wins(self):
+        intent = _make_intent(symbol="AAPL", side="buy", allow_place=True)
+        receipts = [{"symbol": "AAPL", "side": "buy", "action": "placed",
+                     "mcp_order_id": "ord-1", "note": "filled"}]
+        status = derive_intent_status(intent, receipts)
+        assert status.status == STATUS_PLACED
+        assert status.color == "success"
+        assert status.detail == "filled"
+
+    def test_reviewed_receipt_maps_to_previewed(self):
+        intent = _make_intent(symbol="AAPL", side="buy", allow_place=True)
+        receipts = [{"symbol": "AAPL", "side": "buy", "action": "reviewed"}]
+        status = derive_intent_status(intent, receipts)
+        assert status.status == STATUS_PREVIEWED
+
+    def test_skipped_receipt_maps_to_skipped(self):
+        intent = _make_intent(symbol="AAPL", side="buy", allow_place=True)
+        receipts = [{"symbol": "AAPL", "side": "buy", "action": "skipped", "note": "declined"}]
+        status = derive_intent_status(intent, receipts)
+        assert status.status == STATUS_SKIPPED
+        assert status.color == "warning"
+        assert status.detail == "declined"
+
+    def test_matching_is_case_insensitive(self):
+        intent = _make_intent(symbol="AAPL", side="buy", allow_place=True)
+        receipts = [{"symbol": "aapl", "side": "BUY", "action": "placed"}]
+        status = derive_intent_status(intent, receipts)
+        assert status.status == STATUS_PLACED
+
+    def test_side_mismatch_does_not_match(self):
+        intent = _make_intent(symbol="AAPL", side="buy", allow_place=True)
+        receipts = [{"symbol": "AAPL", "side": "sell", "action": "placed"}]
+        status = derive_intent_status(intent, receipts)
+        # No matching receipt -> falls through to queued (placeable)
+        assert status.status == STATUS_QUEUED
+
+    def test_most_advanced_receipt_wins_over_earlier(self):
+        intent = _make_intent(symbol="AAPL", side="buy", allow_place=True)
+        receipts = [
+            {"symbol": "AAPL", "side": "buy", "action": "reviewed"},
+            {"symbol": "AAPL", "side": "buy", "action": "placed", "mcp_order_id": "z9"},
+        ]
+        status = derive_intent_status(intent, receipts)
+        assert status.status == STATUS_PLACED
+        assert status.detail == "order z9"
+
+    def test_placed_wins_regardless_of_line_order(self):
+        intent = _make_intent(symbol="AAPL", side="buy", allow_place=True)
+        receipts = [
+            {"symbol": "AAPL", "side": "buy", "action": "placed"},
+            {"symbol": "AAPL", "side": "buy", "action": "reviewed"},
+        ]
+        status = derive_intent_status(intent, receipts)
+        assert status.status == STATUS_PLACED
+
+    def test_unknown_receipt_action_ignored_falls_back_to_gate(self):
+        intent = _make_intent(symbol="AAPL", side="buy", allow_place=False,
+                              gate_reasons=["macro_kill_switch"])
+        receipts = [{"symbol": "AAPL", "side": "buy", "action": "totally-bogus"}]
+        status = derive_intent_status(intent, receipts)
+        assert status.status == STATUS_BLOCKED
+
+    def test_frozen_dataclass(self):
+        status = derive_intent_status(_make_intent(allow_place=True), [])
+        with pytest.raises(Exception):
+            status.status = "placed"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# read_placed_ledger
+# ---------------------------------------------------------------------------
+
+class TestReadPlacedLedger:
+    def test_missing_file_returns_empty_list(self, tmp_path):
+        assert read_placed_ledger(tmp_path / "nope.jsonl") == []
+
+    def test_valid_lines_round_trip(self, tmp_path):
+        p = tmp_path / "execution_placed.jsonl"
+        lines = [
+            json.dumps({"ts": "t1", "dedup_key": "k1", "symbol": "AAPL", "side": "buy",
+                        "qty": 1, "target_notional": 25.0, "client_order_id": "c1",
+                        "mcp_order_id": "m1"}),
+            json.dumps({"ts": "t2", "symbol": "MSFT", "side": "buy"}),
+        ]
+        p.write_text("\n".join(lines), encoding="utf-8")
+        entries = read_placed_ledger(p)
+        assert len(entries) == 2
+        assert entries[0]["symbol"] == "AAPL"
+
+    def test_malformed_lines_are_skipped(self, tmp_path):
+        p = tmp_path / "execution_placed.jsonl"
+        p.write_text(
+            "{broken\n" + json.dumps({"symbol": "AAPL"}) + "\n\n[1,2,3]\n",
+            encoding="utf-8",
+        )
+        entries = read_placed_ledger(p)
+        assert len(entries) == 1
+        assert entries[0]["symbol"] == "AAPL"
+
+    def test_empty_file_returns_empty_list(self, tmp_path):
+        p = tmp_path / "execution_placed.jsonl"
+        p.write_text("", encoding="utf-8")
+        assert read_placed_ledger(p) == []
+
+    def test_max_lines_tails(self, tmp_path):
+        p = tmp_path / "execution_placed.jsonl"
+        lines = [json.dumps({"symbol": f"S{i}"}) for i in range(10)]
+        p.write_text("\n".join(lines), encoding="utf-8")
+        entries = read_placed_ledger(p, max_lines=3)
+        assert len(entries) == 3
+        assert entries[-1]["symbol"] == "S9"
+
+    def test_default_path_used_when_none_given(self, monkeypatch, tmp_path):
+        fake = tmp_path / "execution_placed.jsonl"
+        fake.write_text(json.dumps({"symbol": "AAPL"}), encoding="utf-8")
+        import gui.robinhood_execution_panel as mod
+        monkeypatch.setattr(mod, "EXECUTION_PLACED_PATH", fake)
+        assert read_placed_ledger() == [{"symbol": "AAPL"}]
+
+
+# ---------------------------------------------------------------------------
+# build_reconciliation_summary
+# ---------------------------------------------------------------------------
+
+class TestBuildReconciliationSummary:
+    def test_empty_ledger_yields_zero_counts(self):
+        summary = build_reconciliation_summary([], [])
+        assert isinstance(summary, ReconciliationSummary)
+        assert summary.placed_count == 0
+        assert summary.matched == []
+        assert summary.unmatched == []
+
+    def test_matched_entry(self):
+        ledger = [{"symbol": "AAPL", "side": "buy", "mcp_order_id": "m1"}]
+        receipts = [{"symbol": "AAPL", "side": "buy", "action": "placed"}]
+        summary = build_reconciliation_summary(ledger, receipts)
+        assert summary.placed_count == 1
+        assert len(summary.matched) == 1
+        assert summary.unmatched == []
+
+    def test_unmatched_entry_flagged(self):
+        ledger = [{"symbol": "AAPL", "side": "buy"}]
+        receipts = []  # no placed receipt
+        summary = build_reconciliation_summary(ledger, receipts)
+        assert summary.placed_count == 1
+        assert summary.matched == []
+        assert len(summary.unmatched) == 1
+
+    def test_only_placed_receipts_count_as_matches(self):
+        ledger = [{"symbol": "AAPL", "side": "buy"}]
+        # a "reviewed" receipt must NOT confirm a placement
+        receipts = [{"symbol": "AAPL", "side": "buy", "action": "reviewed"}]
+        summary = build_reconciliation_summary(ledger, receipts)
+        assert len(summary.unmatched) == 1
+
+    def test_case_insensitive_matching(self):
+        ledger = [{"symbol": "aapl", "side": "BUY"}]
+        receipts = [{"symbol": "AAPL", "side": "buy", "action": "placed"}]
+        summary = build_reconciliation_summary(ledger, receipts)
+        assert len(summary.matched) == 1
+
+    def test_mixed_ledger(self):
+        ledger = [
+            {"symbol": "AAPL", "side": "buy"},
+            {"symbol": "MSFT", "side": "sell"},
+        ]
+        receipts = [{"symbol": "AAPL", "side": "buy", "action": "placed"}]
+        summary = build_reconciliation_summary(ledger, receipts)
+        assert summary.placed_count == 2
+        assert len(summary.matched) == 1
+        assert len(summary.unmatched) == 1
+        assert summary.unmatched[0]["symbol"] == "MSFT"
+
+    def test_non_dict_ledger_rows_ignored(self):
+        summary = build_reconciliation_summary(["junk", {"symbol": "AAPL", "side": "buy"}], [])
+        assert len(summary.unmatched) == 1
+
+
+# ---------------------------------------------------------------------------
+# Help-content keys for the new sections/metrics
+# ---------------------------------------------------------------------------
+
+class TestHelpContentKeys:
+    def test_section_help_keys_present(self):
+        from gui.help_content import SECTION_HELP
+        assert SECTION_HELP.get("robinhood_execution.intent_status")
+        assert SECTION_HELP.get("robinhood_execution.reconciliation")
+
+    def test_metric_help_keys_present(self):
+        from gui.help_content import metric_help
+        assert metric_help("robinhood_execution.placed_count")
+        assert metric_help("robinhood_execution.matched")
+        assert metric_help("robinhood_execution.unmatched")
+
+    def test_unknown_metric_key_returns_empty_string(self):
+        from gui.help_content import metric_help
+        assert metric_help("robinhood_execution.does_not_exist") == ""
+
+    def test_placed_count_help_cites_settings_notional_cap(self):
+        from gui.help_content import metric_help
+        from settings import settings
+        text = metric_help("robinhood_execution.placed_count")
+        assert f"{settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER:,.2f}" in text
+
+
+class TestPlacedLedgerPathConvention:
+    def test_canonical_path_points_at_output_dir(self):
+        assert EXECUTION_PLACED_PATH.name == "execution_placed.jsonl"
+        assert EXECUTION_PLACED_PATH.parent.name == "output"
 
 
 # ---------------------------------------------------------------------------
