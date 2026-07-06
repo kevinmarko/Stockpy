@@ -437,6 +437,8 @@ def _render_robinhood_execution_status() -> None:
     """
     from gui.robinhood_execution_panel import (
         EXECUTION_QUEUE_PATH,
+        build_reconciliation_summary,
+        derive_intent_status,
         is_queue_stale,
         mfa_secret_configured,
         notification_age_seconds,
@@ -445,6 +447,7 @@ def _render_robinhood_execution_status() -> None:
         read_execution_queue,
         read_execution_receipts,
         read_notification_state,
+        read_placed_ledger,
     )
     from gui.robinhood_mode import read_robinhood_execution_mode
     from gui.help_content import SECTION_HELP
@@ -531,36 +534,71 @@ def _render_robinhood_execution_status() -> None:
             "refuse to place from it. Re-run `python3 main.py` for a fresh queue."
         )
 
+    # Fetch a wider receipts window for status/reconciliation matching than we
+    # display in the "recent receipts" expander below — an older receipt still
+    # determines an intent's status even if it has scrolled out of the last 20.
+    all_receipts = read_execution_receipts(max_lines=200)
+
+    _STATUS_BADGE = {
+        "success": "🟢",
+        "warning": "🟡",
+        "neutral": "⚪",
+    }
+
     if snapshot.intents:
-        queue_df = pd.DataFrame(
-            [
-                {
-                    "Symbol": intent.symbol,
-                    "Action": intent.action,
-                    "Qty": intent.qty,
-                    "Target $": intent.target_notional,
-                    "Conviction": intent.conviction,
-                    "Gate OK": "✅" if intent.gate_allowed else "🚫",
-                    "Placeable": "✅" if intent.allow_place else "—",
-                    "Gate reasons": "; ".join(intent.gate_reasons) if intent.gate_reasons else "",
-                }
-                for intent in snapshot.intents
-            ]
-        )
+        rows = []
+        for intent in snapshot.intents:
+            status = derive_intent_status(intent, all_receipts)
+            rows.append({
+                "Symbol": intent.symbol,
+                "Action": intent.action,
+                "Qty": intent.qty,
+                "Target $": intent.target_notional,
+                "Conviction": intent.conviction,
+                "Gate OK": "✅" if intent.gate_allowed else "🚫",
+                "Placeable": "✅" if intent.allow_place else "—",
+                "Status": f"{_STATUS_BADGE.get(status.color, '⚪')} {status.status}",
+                "Status detail": status.detail,
+                "Gate reasons": "; ".join(intent.gate_reasons) if intent.gate_reasons else "",
+            })
+        queue_df = pd.DataFrame(rows)
         st.dataframe(queue_df, width="stretch", hide_index=True)
     else:
         st.caption("Queue is empty — no eligible BUY/SELL signals this cycle.")
 
-    receipts = read_execution_receipts(max_lines=20)
-    with st.expander(f"📜 Recent execution receipts ({len(receipts)})", expanded=False):
-        if receipts:
-            st.dataframe(pd.DataFrame(receipts), width="stretch", hide_index=True)
+    display_receipts = all_receipts[-20:]
+    with st.expander(f"📜 Recent execution receipts ({len(display_receipts)})", expanded=False):
+        if display_receipts:
+            st.dataframe(pd.DataFrame(display_receipts), width="stretch", hide_index=True)
         else:
             st.caption(
                 "No receipts yet — outcomes are appended to "
                 "`output/execution_receipts.jsonl` by the `/rh-execute` agent session, "
                 "not by the pipeline."
             )
+
+    placed_ledger = read_placed_ledger()
+    recon = build_reconciliation_summary(placed_ledger, all_receipts)
+    with st.expander(
+        f"🧾 Placement reconciliation ({recon.placed_count} placed)", expanded=False
+    ):
+        if recon.placed_count == 0:
+            st.caption(
+                "No placed orders yet — `output/execution_placed.jsonl` is populated by "
+                "the `/rh-execute` agent session after a live placement."
+            )
+        else:
+            st.caption(
+                f"{len(recon.matched)} of {recon.placed_count} ledger entries have a "
+                "matching 'placed' receipt."
+            )
+            if recon.unmatched:
+                st.warning(
+                    f"⚠️ {len(recon.unmatched)} ledger entr"
+                    f"{'y has' if len(recon.unmatched) == 1 else 'ies have'} no matching "
+                    "receipt — investigate a possible receipt/ledger divergence."
+                )
+                st.dataframe(pd.DataFrame(recon.unmatched), width="stretch", hide_index=True)
 
 
 # ===========================================================================

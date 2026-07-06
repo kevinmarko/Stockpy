@@ -52,6 +52,11 @@ import pytest
 from engine.advisory import Recommendation
 from execution.kill_switch import GlobalKillSwitch
 from execution.queue_builder import build_execution_queue, emit_execution_queue
+from execution.receipts_store import (
+    already_placed,
+    append_placed,
+    make_dedup_key,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -200,40 +205,6 @@ class SkillAbort(RuntimeError):
     """Raised by the driver when a hard-stop refuses the whole run."""
 
 
-def _dedup_key(symbol: str, side: str, day: str) -> str:
-    """The documented idempotency key: 'YYYY-MM-DD:SYMBOL:SIDE'."""
-    return f"{day}:{symbol.upper()}:{side.upper()}"
-
-
-def _already_placed(output_dir: Path, key: str) -> bool:
-    """Inline idempotency check against output/execution_placed.jsonl.
-
-    (If ``execution/receipts_store.py`` ever ships an ``already_placed`` helper,
-    this driver would import it instead — it does not exist in this worktree, so
-    we implement the check inline against the placed-ledger, per the task spec.)
-    """
-    ledger = output_dir / _PLACED_LEDGER_FILENAME
-    if not ledger.exists():
-        return False
-    for line in ledger.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if rec.get("dedup_key") == key:
-            return True
-    return False
-
-
-def _record_placed(output_dir: Path, key: str) -> None:
-    ledger = output_dir / _PLACED_LEDGER_FILENAME
-    with ledger.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"dedup_key": key}) + "\n")
-
-
 def _append_receipt(output_dir: Path, receipt: Dict[str, Any]) -> None:
     """Append one JSON line with the documented receipt schema."""
     path = output_dir / _RECEIPTS_FILENAME
@@ -316,8 +287,6 @@ def run_execution_skill(
         raise SkillAbort("no dedicated Agentic account — refusing to place")
     mcp.get_portfolio()
 
-    day = now.date().isoformat()
-
     # -- Step 3: preview EVERY intent (always) -----------------------------
     for intent in intents:
         symbol = intent["symbol"]
@@ -395,8 +364,7 @@ def run_execution_skill(
             continue
 
         # b. idempotency — never double-place the same symbol/side on the same day.
-        key = _dedup_key(symbol, side, day)
-        if _already_placed(output_dir, key):
+        if already_placed(symbol, side, output_dir, on_date=now):
             _append_receipt(output_dir, {
                 "ts": now.isoformat(), "symbol": symbol, "side": side,
                 "qty": qty, "action": "skipped", "mcp_order_id": None,
@@ -423,7 +391,13 @@ def run_execution_skill(
         result = mcp.place_equity_order(symbol=symbol, side=side,
                                         order_type=order_type, quantity=qty)
         order_id = result.get("order_id")
-        _record_placed(output_dir, key)
+        append_placed(
+            {"ts": now.isoformat(), "symbol": symbol, "side": side,
+             "qty": qty, "target_notional": intent.get("target_notional"),
+             "client_order_id": intent.get("client_order_id"),
+             "mcp_order_id": order_id},
+            output_dir,
+        )
         _append_receipt(output_dir, {
             "ts": now.isoformat(), "symbol": symbol, "side": side,
             "qty": qty, "action": "placed", "mcp_order_id": order_id,
@@ -678,8 +652,8 @@ class TestInvariant5_NoDoublePlace:
         keys = {json.loads(l)["dedup_key"]
                 for l in ledger.read_text(encoding="utf-8").splitlines() if l.strip()}
         assert keys == {
-            _dedup_key("MSFT", "buy", FIXED_NOW.date().isoformat()),
-            _dedup_key("AAPL", "sell", FIXED_NOW.date().isoformat()),
+            make_dedup_key("MSFT", "buy", FIXED_NOW),
+            make_dedup_key("AAPL", "sell", FIXED_NOW),
         }
 
 
