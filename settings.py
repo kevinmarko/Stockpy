@@ -392,6 +392,22 @@ class Settings(BaseSettings):
             "always reassembled in deterministic symbol order regardless of value."
         ),
     )
+    # Number of worker threads for the per-ticker forecasting loop in
+    # main_orchestrator.run_pipeline(). Each ForecastingEngine.generate_forecast()
+    # call fits models on local arrays and returns a dict — the engine is stateless
+    # across tickers, so the loop parallelizes safely. The win is native-compute
+    # sections (numpy/pandas/statsmodels/arch/keras release the GIL). Each ticker's
+    # try/except Monte-Carlo fallback still isolates per-ticker failures.
+    # Set to 1 to force the original sequential, fully-deterministic path.
+    FORECAST_MAX_CONCURRENCY: int = Field(
+        default=8,
+        description=(
+            "Worker-thread count for the per-ticker forecasting loop in "
+            "main_orchestrator.run_pipeline(). 1 = sequential (original behavior). "
+            "Results are always reassembled deterministically by symbol regardless "
+            "of value."
+        ),
+    )
     SIGNAL_WEIGHTS: dict[str, float] = Field(
         default_factory=lambda: {
             "macro_regime": 45.0,
