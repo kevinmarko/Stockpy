@@ -4,4 +4,3 @@ Empty package marker. Sub-modules under this package provide a small,
 desktop-specific import surface over the existing GUI/orchestrator plumbing
 so a native shell doesn't need to reach into ``gui.*`` internals directly.
 """
-"""desktop package — native desktop shell supervisor modules for InvestYo."""
