@@ -400,6 +400,17 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         fundamentals=_stub_fund,
         macro=_shared_macro_dto,
     )
+    # Meta-labeler runtime registration (once per pipeline run, before signals
+    # run). Loads any trained meta-labeler pickles into global_meta_registry so
+    # the SignalAggregator's meta_hard_gate can fire. Strict no-op (logged) when
+    # no saved model exists -- preserves the exact pre-model behavior. Lazy
+    # import mirrors HistoricalStore's lazy-import pattern; dead-letter resilient.
+    try:
+        from ml.meta_bootstrap import bootstrap_meta_registry
+        bootstrap_meta_registry()
+    except Exception as _meta_exc:  # never let meta-label wiring crash the run
+        telemetry.warning("Meta-labeler bootstrap failed (%s); continuing.", _meta_exc)
+
     # Trigger pre_compute on all signal modules (most are no-ops; XSec fills rank
     # dict; MultifactorSignal fills multifactor_scores -- see signals/multifactor.py)
     global_registry.run_pre_compute(dashboard_df, shared_context)
@@ -407,6 +418,37 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         "Cross-sectional pre_compute complete. %d tickers ranked.",
         len(shared_context.xsec_percentile_ranks),
     )
+
+    # ── Forward-going PIT snapshot capture (ML training-panel foundation) ───────
+    # Persist TODAY's cross-sectional feature matrix so the Stage-4 ML layer
+    # accumulates real point-in-time snapshots for future incremental retrains.
+    # Guarded by PIT_CAPTURE_ENABLED and fully dead-lettered — a capture failure
+    # must never crash the analysis pipeline (CONSTRAINT #6).
+    if settings.PIT_CAPTURE_ENABLED:
+        try:
+            from ml.feature_engineering import build_pit_feature_matrix
+            from ml.data.store import PITFeatureStore
+
+            _pit_df = dashboard_df.copy()
+            if 'Symbol' in _pit_df.columns:
+                _pit_df = _pit_df.set_index('Symbol')
+            _pit_vix = None
+            if macro_dto is not None:
+                _pit_vix = getattr(macro_dto, 'vix', None)
+            _pit_as_of = pd.Timestamp(datetime.now(timezone.utc)).normalize()
+            _pit_feat = build_pit_feature_matrix(
+                _pit_df, as_of_date=_pit_as_of, macro_vix=_pit_vix,
+            )
+            # Drop the non-serializable Timestamp .attrs before Parquet write.
+            _pit_feat = _pit_feat.copy()
+            _pit_feat.attrs = {}
+            PITFeatureStore().write(_pit_as_of, _pit_feat)
+            telemetry.info(
+                "PIT snapshot captured: %s (%d tickers).",
+                _pit_as_of.date(), len(_pit_feat),
+            )
+        except Exception as _pit_exc:
+            telemetry.warning("PIT snapshot capture failed (non-fatal): %s", _pit_exc)
 
     # Write multifactor Z-scores back into dashboard_df (computed by
     # MultifactorSignal.pre_compute above; not available before this point).

@@ -38,6 +38,8 @@ venv/
 # monthly retraining job; never committed (the tracked ml/registry.yaml records
 # the metrics/provenance instead). ml/models/.gitkeep + *.py stay tracked.
 ml/models/*.pkl
+# ML PIT feature-store cache artifacts (regenerated on demand; never committed)
+ml/data/cache/
 
 # Scratch files
 scratch_*.py

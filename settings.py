@@ -460,6 +460,17 @@ class Settings(BaseSettings):
             "per day while not running stale for longer than half a trading session."
         ),
     )
+    PIT_CAPTURE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True, the orchestrator writes TODAY's cross-sectional PIT "
+            "feature snapshot to ml/data/cache/ (via ml.data.store.PITFeatureStore) "
+            "right after signal pre_compute, so the ML training panel accumulates "
+            "real point-in-time snapshots for future incremental retrains. "
+            "Dead-lettered: any capture failure is logged and never crashes the "
+            "pipeline. Set False to disable forward-going capture entirely."
+        ),
+    )
 
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
@@ -543,6 +554,21 @@ class Settings(BaseSettings):
             "Minimum meta-label probability for a primary signal to contribute "
             "to sizing. If predict_proba < META_LABEL_MIN_CONFIDENCE, the "
             "meta_label_composite is forced to 0.0 (position zeroed for the cycle)."
+        ),
+    )
+    # Master switch for the runtime registration of trained meta-labelers
+    # (ml/meta_bootstrap.bootstrap_meta_registry). When True (default), both
+    # entry points attempt to load any saved meta-labeler pickle at startup and
+    # register it into global_meta_registry so the aggregator's meta_hard_gate
+    # can fire. When no saved model exists this is a strict no-op (behavior
+    # identical to the pre-meta-label platform). Set to False to disable all
+    # meta-label registration regardless of saved models.
+    META_LABELING_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Enable startup registration of trained meta-labelers into "
+            "global_meta_registry (ml/meta_bootstrap.py). No-op when no saved "
+            "model exists; set False to disable meta-labeling entirely."
         ),
     )
 
