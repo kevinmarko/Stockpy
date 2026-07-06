@@ -20,10 +20,22 @@ Run standalone:
     uvicorn api.state_api:app --port 8600
 
 Endpoints:
-  GET /health   -> liveness check for this API process (not the trading engine)
-  GET /state    -> full parsed output/state_snapshot.json, or 404 if absent
-  GET /signals  -> just the "signals" list from that same snapshot
-  GET /trades   -> closed trades from TransactionsStore, or [] if none
+  GET /health   -> liveness check for this API process (not the trading engine).
+                   ALWAYS open (no auth), so a load balancer / watchdog can
+                   probe liveness without a token.
+  GET /state    -> full parsed output/state_snapshot.json, or 404 if absent.
+                   Requires ``Authorization: Bearer <token>`` WHEN
+                   ``STATE_API_TOKEN`` is set (fail-open when unset).
+  GET /signals  -> just the "signals" list from that same snapshot.
+                   Requires a bearer token WHEN ``STATE_API_TOKEN`` is set.
+  GET /trades   -> closed trades from TransactionsStore, or [] if none.
+                   Requires a bearer token WHEN ``STATE_API_TOKEN`` is set.
+
+Auth is FAIL-OPEN: when ``STATE_API_TOKEN`` is unset/empty, the three data
+endpoints are UNAUTHENTICATED (zero-config local use) and a startup warning is
+logged. When a token IS configured, the data endpoints require a matching
+bearer token (constant-time compare; the token is never logged — CONSTRAINT #3).
+CORS is restricted to ``settings.CORS_ALLOWED_ORIGINS`` (GET only).
 
 CONSTRAINT #4 (never fabricate data): a missing snapshot returns a 404 with
 a clear error body — it never returns a placeholder/synthetic snapshot.
@@ -31,13 +43,16 @@ a clear error body — it never returns a placeholder/synthetic snapshot.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from settings import settings
 from transactions_store import TransactionsStore
@@ -54,6 +69,38 @@ app = FastAPI(
     ),
     version="0.1.0",
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def require_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> None:
+    """Bearer-token guard. FAIL-OPEN when STATE_API_TOKEN is unset (zero-config
+    local use); when a token IS configured, require a matching bearer token.
+    Constant-time compare (never ==) so no timing leak. The token is NEVER logged
+    (CONSTRAINT #3)."""
+    token = settings.STATE_API_TOKEN
+    if not token:            # unset/empty -> auth disabled (open)
+        return
+    presented = credentials.credentials if credentials else ""
+    if not hmac.compare_digest(presented, token):
+        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+
+
+if not settings.STATE_API_TOKEN:
+    logger.warning(
+        "STATE_API_TOKEN not set — /state, /signals, /trades are UNAUTHENTICATED. "
+        "Set STATE_API_TOKEN to require a bearer token before exposing this API."
+    )
 
 _MISSING_SNAPSHOT_DETAIL = "No state snapshot yet — run the pipeline first."
 
@@ -86,7 +133,7 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/state")
+@app.get("/state", dependencies=[Depends(require_token)])
 def get_state() -> Dict[str, Any]:
     """Return the full parsed contents of output/state_snapshot.json.
 
@@ -101,7 +148,7 @@ def get_state() -> Dict[str, Any]:
     return snapshot
 
 
-@app.get("/signals")
+@app.get("/signals", dependencies=[Depends(require_token)])
 def get_signals() -> List[Any]:
     """Return just the ``signals`` field from output/state_snapshot.json —
     same key/shape already consumed by gui/panels/observability.py via
@@ -117,7 +164,7 @@ def get_signals() -> List[Any]:
     return snapshot.get("signals", []) if isinstance(snapshot, dict) else []
 
 
-@app.get("/trades")
+@app.get("/trades", dependencies=[Depends(require_token)])
 def get_trades() -> List[Dict[str, Any]]:
     """Return closed trades from TransactionsStore as a JSON list of records.
 

@@ -93,6 +93,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "DEFAULT_TICKERS",
     "SIGNAL_WEIGHTS",
     "DISABLED_SIGNAL_MODULES",
+    # State API CORS policy — non-secret list of allowed browser origins
+    # (JSON-encoded; see _JSON_KEYS). GUI-writable.
+    "CORS_ALLOWED_ORIGINS",
     # Prompt Registry tunables (non-secret; credentials live in SECRET_KEYS below).
     # See docs/PROMPT_REGISTRY_PLAN.md §8 and settings.PROMPT_REGISTRY_*.
     "PROMPT_REGISTRY_ENABLED",   # bool master switch (baseline-only when False)
@@ -128,6 +131,9 @@ SECRET_KEYS: tuple[str, ...] = (
     "RH_PASSWORD",
     "RH_MFA_SECRET",
     "ALERT_WEBHOOK_URL",
+    # Bearer token for the read-only State API (api/state_api.py). Treated like a
+    # webhook/token secret — masked, never GUI-writable (CONSTRAINT #3).
+    "STATE_API_TOKEN",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood
@@ -162,6 +168,7 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "DEFAULT_TICKERS",
         "SIGNAL_WEIGHTS",
         "DISABLED_SIGNAL_MODULES",
+        "CORS_ALLOWED_ORIGINS",  # list[str] of allowed browser origins
         "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}
     }
 )
