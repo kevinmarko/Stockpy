@@ -485,6 +485,63 @@ Both GARCH tests must PASS with no `arch` warning.
 | Quarterly | Full review of `MAX_POSITION_WEIGHT`, `KELLY_FRACTION`, `KELLY_CAP`; check calibration curve for systematic bias |
 | Annually | Full stress-test re-run for options-selling strategies; re-review `ADVISORY_ONLY` status if broker execution is intended |
 
+### 5.1 Unattended daily-advisory scheduler (macOS launchd)
+
+The 90-day paper-trading gate and the conviction-calibration history
+(`output/decision_log.jsonl`) only fill if the advisory actually runs each
+day. A macOS **launchd** timer runs the existing headless `main.py` once per
+weekday pre-market. This is an OS timer invoking `main.py` only — there is no
+autonomous self-scheduling agent loop.
+
+**Install** (double-click, recommended):
+
+```bash
+chmod +x scripts/install_schedule.command   # one-time
+# then double-click scripts/install_schedule.command from Finder
+```
+
+The helper verifies `.venv` / Python 3.12, rewrites
+`scripts/com.investyo.daily-advisory.plist` to this repo's absolute path,
+copies it to `~/Library/LaunchAgents/`, then `launchctl unload` (any prior
+job) + `launchctl load`. It runs `.venv/bin/python3 main.py` at **08:45
+America/New_York** on Mon–Fri, logging to
+`output/scheduled_advisory.out` / `.err`.
+
+**Check status / logs:**
+
+```bash
+launchctl list | grep com.investyo.daily-advisory
+tail -f output/scheduled_advisory.out
+python scripts/track_record_status.py        # gate progress + calibration depth + staleness
+```
+
+**Uninstall:**
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
+rm ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
+```
+
+> **Timezone note:** launchd's `StartCalendarInterval` fires in the machine's
+> local timezone. Keep the Mac set to America/New_York (or edit the `Hour` in
+> the plist) so 08:45 lands pre-market ET. If the Mac is asleep at 08:45, the
+> job runs at the next wake.
+
+### 5.2 Track-record status report
+
+`scripts/track_record_status.py` (no network calls) reports how close you are
+to the 90-day go-live gate and whether the calibration history is filling:
+
+* days elapsed since `PAPER_TRADING_START_DATE` vs the 90-day gate + days remaining;
+* `output/decision_log.jsonl` row count (calibration-history depth);
+* 30-day conviction-calibration MAE (reused from `scripts/daily_briefing`);
+* last-run staleness from `heartbeat.txt` / `state_snapshot.json` mtimes.
+
+```bash
+python scripts/track_record_status.py          # human-readable
+python scripts/track_record_status.py --json   # machine-readable
+```
+
 ---
 
 ## 6. Advisory Pause and Restart Procedure
