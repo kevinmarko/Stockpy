@@ -400,6 +400,17 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         fundamentals=_stub_fund,
         macro=_shared_macro_dto,
     )
+    # Meta-labeler runtime registration (once per pipeline run, before signals
+    # run). Loads any trained meta-labeler pickles into global_meta_registry so
+    # the SignalAggregator's meta_hard_gate can fire. Strict no-op (logged) when
+    # no saved model exists -- preserves the exact pre-model behavior. Lazy
+    # import mirrors HistoricalStore's lazy-import pattern; dead-letter resilient.
+    try:
+        from ml.meta_bootstrap import bootstrap_meta_registry
+        bootstrap_meta_registry()
+    except Exception as _meta_exc:  # never let meta-label wiring crash the run
+        telemetry.warning("Meta-labeler bootstrap failed (%s); continuing.", _meta_exc)
+
     # Trigger pre_compute on all signal modules (most are no-ops; XSec fills rank
     # dict; MultifactorSignal fills multifactor_scores -- see signals/multifactor.py)
     global_registry.run_pre_compute(dashboard_df, shared_context)

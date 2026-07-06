@@ -545,6 +545,21 @@ class Settings(BaseSettings):
             "meta_label_composite is forced to 0.0 (position zeroed for the cycle)."
         ),
     )
+    # Master switch for the runtime registration of trained meta-labelers
+    # (ml/meta_bootstrap.bootstrap_meta_registry). When True (default), both
+    # entry points attempt to load any saved meta-labeler pickle at startup and
+    # register it into global_meta_registry so the aggregator's meta_hard_gate
+    # can fire. When no saved model exists this is a strict no-op (behavior
+    # identical to the pre-meta-label platform). Set to False to disable all
+    # meta-label registration regardless of saved models.
+    META_LABELING_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Enable startup registration of trained meta-labelers into "
+            "global_meta_registry (ml/meta_bootstrap.py). No-op when no saved "
+            "model exists; set False to disable meta-labeling entirely."
+        ),
+    )
 
     # --- Snapshot rotation & Δ-band diff (scripts/snapshot_diff.py) ---
     # Each orchestrator/advisory run writes output/state_snapshot.json AND
