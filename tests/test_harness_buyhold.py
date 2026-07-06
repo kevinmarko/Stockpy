@@ -3,7 +3,7 @@ from datetime import date
 from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 
-def test_validation_harness_buy_and_hold_spy():
+def test_validation_harness_buy_and_hold_spy(tmp_path):
     """
     Verify that Buy-and-Hold SPY during a strongly trending period (2013-2014)
     passes the validation harness checks and returns deployable=True.
@@ -25,7 +25,8 @@ def test_validation_harness_buy_and_hold_spy():
     harness = StrategyValidationHarness(
         strategy_fn=spy_bh_strategy,
         universe_fn=mock_universe_fn,
-        cost_model=cost_model
+        cost_model=cost_model,
+        reports_dir=str(tmp_path)
     )
     
     # Run on 2013-2014 where SPY was strongly trending up with low drawdowns

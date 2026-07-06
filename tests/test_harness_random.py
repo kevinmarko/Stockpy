@@ -3,7 +3,7 @@ import pandas as pd
 from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 
-def test_validation_harness_random_strategy():
+def test_validation_harness_random_strategy(tmp_path):
     """
     Verify that a random coin-flip strategy has deployable=False
     and PBO is around 0.5.
@@ -36,9 +36,10 @@ def test_validation_harness_random_strategy():
         universe_fn=mock_universe_fn,
         cost_model=cost_model,
         n_cpcv_splits=5,
-        n_test_splits=1
+        n_test_splits=1,
+        reports_dir=str(tmp_path)
     )
-    
+
     report = harness.run(
         start_date="2020-01-01",
         end_date="2020-10-01",

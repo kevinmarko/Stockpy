@@ -392,6 +392,7 @@ class StrategyValidationHarness:
         n_test_splits: int = 2,
         is_options_selling: bool = False,
         stress_returns_fn: Optional[Callable[[str, str], pd.Series]] = None,
+        reports_dir: str = "reports",
     ):
         """
         Args:
@@ -405,6 +406,12 @@ class StrategyValidationHarness:
                 Series, used to replay the strategy across each dated shock
                 window. REQUIRED for options-selling strategies — if omitted,
                 the stress gate fails closed (strategy is not deployable).
+            reports_dir: Directory for JSON summaries, run history, and
+                rendered HTML reports (default "reports" — the real repo
+                directory consumed by scripts/preflight_check.py and
+                observability/dashboard.py). Tests and audit sandboxes MUST
+                override this to an isolated tmp directory so smoke-test/
+                negative-control runs never clobber real strategy reports.
         """
         self.strategy_fn = strategy_fn
         self.universe_fn = universe_fn
@@ -413,6 +420,7 @@ class StrategyValidationHarness:
         self.n_test_splits = n_test_splits
         self.is_options_selling = is_options_selling
         self.stress_returns_fn = stress_returns_fn
+        self.reports_dir = reports_dir
 
     def run(
         self,
@@ -588,7 +596,9 @@ class StrategyValidationHarness:
         # Dead-letter resilient: any failure here must never abort an
         # otherwise-successful validation run.
         try:
-            report.family_multiple_testing = compute_family_multiple_testing_report()
+            report.family_multiple_testing = compute_family_multiple_testing_report(
+                reports_dir=self.reports_dir
+            )
             # Re-write the JSON summary now that family_multiple_testing is
             # populated, so downstream consumers (preflight, dashboard) see it
             # without needing a second harness run.
@@ -623,7 +633,7 @@ class StrategyValidationHarness:
         import json
         from pathlib import Path
         try:
-            reports_dir = Path("reports")
+            reports_dir = Path(self.reports_dir)
             reports_dir.mkdir(parents=True, exist_ok=True)
             safe_name = report.name.replace(" ", "_").replace("/", "_")
             dest = reports_dir / f"{safe_name}_validation_summary.json"
@@ -651,7 +661,7 @@ class StrategyValidationHarness:
         import json
         from pathlib import Path
         try:
-            history_dir = Path("reports") / "history"
+            history_dir = Path(self.reports_dir) / "history"
             history_dir.mkdir(parents=True, exist_ok=True)
             safe_name = report.name.replace(" ", "_").replace("/", "_")
             dest = history_dir / f"{safe_name}_validation_history.jsonl"
@@ -688,7 +698,13 @@ class StrategyValidationHarness:
         return net_returns
 
     def _render_html_report(self, report: ValidationReport) -> None:
-        """Renders validation report via Jinja2."""
+        """Renders validation report via Jinja2.
+
+        The Jinja2 template itself is a checked-in source asset that always
+        lives in the real repo ``reports/`` directory regardless of
+        ``self.reports_dir`` — only the rendered OUTPUT HTML is written to
+        the (possibly isolated) ``self.reports_dir``.
+        """
         template_dir = "reports"
         template_file = "validation_report_template.html.j2"
         
@@ -739,9 +755,9 @@ class StrategyValidationHarness:
         )
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_filename = f"reports/validation_{report.name.lower()}_{timestamp}.html"
-        
-        os.makedirs("reports", exist_ok=True)
+        report_filename = f"{self.reports_dir}/validation_{report.name.lower()}_{timestamp}.html"
+
+        os.makedirs(self.reports_dir, exist_ok=True)
         with open(report_filename, "w") as f:
             f.write(html_out)
         logger.info(f"Validation HTML report successfully written to {report_filename}")
