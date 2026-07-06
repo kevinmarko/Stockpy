@@ -34,6 +34,9 @@ venv/
 *.jsonl
 !Gravity_Verification_Report.json
 
+# ML PIT feature-store cache artifacts (regenerated on demand; never committed)
+ml/data/cache/
+
 # Scratch files
 scratch_*.py
 combined_code.*

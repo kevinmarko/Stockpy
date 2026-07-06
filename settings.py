@@ -460,6 +460,17 @@ class Settings(BaseSettings):
             "per day while not running stale for longer than half a trading session."
         ),
     )
+    PIT_CAPTURE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True, the orchestrator writes TODAY's cross-sectional PIT "
+            "feature snapshot to ml/data/cache/ (via ml.data.store.PITFeatureStore) "
+            "right after signal pre_compute, so the ML training panel accumulates "
+            "real point-in-time snapshots for future incremental retrains. "
+            "Dead-lettered: any capture failure is logged and never crashes the "
+            "pipeline. Set False to disable forward-going capture entirely."
+        ),
+    )
 
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
