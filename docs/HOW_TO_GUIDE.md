@@ -1922,3 +1922,89 @@ current** (rebuilt every advisory cycle), while the **orchestrator dashboards
 lag until you run the full orchestrator manually**. When a dashboard and the
 daily report seem to disagree, the dashboard is usually just older — launch a
 full-orchestrator run to bring it up to date.
+
+---
+
+## 21. Running the Read-Only State API Securely
+
+The platform ships a small, **standalone read-only API** (`api/state_api.py`)
+that serves the state the pipeline has already persisted to disk. It is a
+foundation for a future web/mobile frontend — **not the trading engine**. It
+never touches the broker, never fetches live market data, and never runs any
+analysis. It only reads `output/state_snapshot.json` and the closed-trades
+table, exposing four endpoints:
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /health` | `{"status":"ok"}` liveness of the API process (always open, no token) |
+| `GET /state` | The full parsed `output/state_snapshot.json` (404 if no snapshot yet) |
+| `GET /signals` | Just the `signals` list from that snapshot |
+| `GET /trades` | Closed trades from the transactions store (`[]` when there are none) |
+
+It is deliberately **not wired into the desktop shell, the GUI, or any
+orchestrator** — you launch it yourself, on demand, when you want a read-only
+HTTP view of the persisted state.
+
+### 1. Generate a bearer token
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Copy the printed value — that is your token.
+
+### 2. Configure `.env`
+
+Add the token and the allowed browser origins to your `.env`:
+
+```
+STATE_API_TOKEN=<paste-the-token-here>
+CORS_ALLOWED_ORIGINS=["http://localhost:3000"]
+```
+
+`STATE_API_TOKEN` is a **secret** (masked in the GUI, never GUI-writable).
+`CORS_ALLOWED_ORIGINS` is a JSON list of the browser origins allowed to call
+the API; the default is `["http://localhost:3000"]`. The API answers `GET`
+requests only.
+
+### 3. Launch the API
+
+```bash
+uvicorn api.state_api:app --port 8600
+```
+
+No extra dependencies are needed — `fastapi`/`uvicorn` are already in
+`requirements.txt`.
+
+### 4. Call it with curl
+
+Health is always open (no token required):
+
+```bash
+curl -s localhost:8600/health
+# {"status":"ok"}
+```
+
+Once `STATE_API_TOKEN` is set, the data endpoints require the token. Without
+it you get a `401`:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" localhost:8600/state
+# 401
+```
+
+With the token, the request succeeds:
+
+```bash
+curl -s -H "Authorization: Bearer <token>" localhost:8600/state
+```
+
+### ⚠️ Warning: leaving the token blank disables auth
+
+Authentication is **fail-open**: if `STATE_API_TOKEN` is unset or empty, the
+`/state`, `/signals`, and `/trades` endpoints are served **without any
+authentication** (and the API logs a startup warning to that effect). This is
+convenient for zero-config local use — a localhost-only API bound to your own
+machine is fine unauthenticated. But if you expose port 8600 to a network or
+the internet, **always set `STATE_API_TOKEN`** first; otherwise anyone who can
+reach the port can read your persisted state and closed-trade history.

@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # =========================================================================
     # FIELD SECTIONS (in declaration order below)
     # -------------------------------------------------------------------------
-    #   1.  Secrets / credentials .............. FRED, Alpaca
+    #   1.  Secrets / credentials .............. FRED, Alpaca, State API token
     #   2.  Market-data layer .................. provider, Finnhub, cache TTLs
     #   3.  Robinhood — legacy SMS login ....... ROBINHOOD_USERNAME/PASSWORD
     #   4.  Robinhood — portfolio TOTP ......... RH_USERNAME/PASSWORD/MFA_SECRET
@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     #   9.  Key rotation / preflight dates ..... paper-start, FRED/Alpaca rotated
     #   10. Financial constants ................ risk-free, premium, heat
     #   11. Position sizing .................... Kelly, vol-target, leverage caps
-    #   12. Runtime / IO ....................... OUTPUT_DIR, tickers, log, concurrency
+    #   12. Runtime / IO ....................... OUTPUT_DIR, tickers, log, concurrency, CORS origins
     #   13. Signal weights ..................... flat + regime overrides + disabled
     #   14. Multifactor ........................ microcap threshold
     #   15. Meta-labeling ...................... min-confidence hard gate
@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
     ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
     ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
+    STATE_API_TOKEN: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bearer token for the read-only State API (api/state_api.py). "
+            "SECRET — never GUI-writable, never logged. When unset, the API's "
+            "data endpoints are unauthenticated (fail-open for local use)."
+        ),
+    )
 
     # --- Market-data layer (data/market_data.py) ---
     # Explicit provider override.  When absent the platform auto-selects:
@@ -360,6 +368,14 @@ class Settings(BaseSettings):
     # --- Runtime / IO ---
     OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
+    CORS_ALLOWED_ORIGINS: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000"],
+        description=(
+            "Allowed browser origins for the read-only State API CORS policy. "
+            "JSON array in .env, e.g. "
+            '["http://localhost:3000", "https://app.example.com"].'
+        ),
+    )
     LOG_LEVEL: str = "INFO"
     # Number of worker threads for the per-symbol advisory loop in main.run_once().
     # Each engine.advisory.evaluate() call is independent (per-call engine

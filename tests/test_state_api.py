@@ -187,6 +187,173 @@ def test_trades_returns_empty_list_on_db_error():
 
 
 # ---------------------------------------------------------------------------
+# Bearer-token auth (require_token dependency)
+# ---------------------------------------------------------------------------
+#
+# Contract (implemented in api/state_api.py):
+#   - settings.STATE_API_TOKEN falsy/None -> data endpoints OPEN (fail-open).
+#     This is the DEFAULT, so every existing test above passes unchanged.
+#   - settings.STATE_API_TOKEN set -> data endpoints require
+#     ``Authorization: Bearer <token>``; correct -> 200, wrong/missing -> 401
+#     with detail == "Invalid or missing bearer token".
+#   - /health is ALWAYS open regardless of the token.
+#
+# ``require_token`` reads ``settings.STATE_API_TOKEN`` live on every request,
+# so ``mock.patch.object(settings, "STATE_API_TOKEN", ...)`` takes effect
+# without a module reload (unlike the CORS middleware, which captures its
+# origins at app-construction time — see TestCORS below).
+
+_INVALID_TOKEN_DETAIL = "Invalid or missing bearer token"
+
+
+def _write_snapshot(tmp_path, fixture=None):
+    """Write a minimal valid state_snapshot.json into tmp_path and return it.
+
+    Used by the auth tests so a token-authorized request can reach a real 200
+    (rather than a snapshot-missing 404 that would mask the auth outcome)."""
+    if fixture is None:
+        fixture = {"signals": [{"symbol": "AAPL", "action": "BUY"}], "macro_regime": "NEUTRAL"}
+    snap_path = tmp_path / "state_snapshot.json"
+    snap_path.write_text(json.dumps(fixture), encoding="utf-8")
+    return fixture
+
+
+class TestAuth:
+    """Bearer-token guard on /state, /signals, /trades (never /health)."""
+
+    def test_state_open_when_token_unset(self, tmp_path):
+        # Token unset (default None) -> fail-open: a present snapshot yields 200
+        # with no Authorization header at all.
+        fixture = _write_snapshot(tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/state")
+        assert resp.status_code == 200
+        assert resp.json() == fixture
+
+    def test_state_ok_with_correct_bearer_token(self, tmp_path):
+        fixture = _write_snapshot(tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get(
+                    "/state", headers={"Authorization": "Bearer secret-tok"}
+                )
+        assert resp.status_code == 200
+        assert resp.json() == fixture
+
+    def test_state_401_with_wrong_bearer_token(self, tmp_path):
+        _write_snapshot(tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get(
+                    "/state", headers={"Authorization": "Bearer WRONG-tok"}
+                )
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == _INVALID_TOKEN_DETAIL
+
+    def test_state_401_with_no_authorization_header(self, tmp_path):
+        _write_snapshot(tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/state")
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == _INVALID_TOKEN_DETAIL
+
+    def test_health_open_even_when_token_set(self):
+        # /health is never guarded — no Authorization header even with a token
+        # configured still yields 200.
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+    def test_signals_401_when_token_set_and_missing_header(self, tmp_path):
+        _write_snapshot(tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/signals")
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == _INVALID_TOKEN_DETAIL
+
+    def test_signals_ok_when_token_set_and_correct_header(self, tmp_path):
+        fixture = _write_snapshot(tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get(
+                    "/signals", headers={"Authorization": "Bearer secret-tok"}
+                )
+        assert resp.status_code == 200
+        assert resp.json() == fixture["signals"]
+
+    def test_signals_open_when_token_unset(self, tmp_path):
+        fixture = _write_snapshot(tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/signals")
+        assert resp.status_code == 200
+        assert resp.json() == fixture["signals"]
+
+    def test_trades_401_when_token_set_and_missing_header(self, tmp_path):
+        # The guard runs before the handler body, so the DB is never touched on
+        # a 401 — but patch TransactionsStore anyway (mirrors the existing
+        # /trades tests) so a stray call could never hit a real DB.
+        db_path = tmp_path / "auth_trades.db"
+        store = TransactionsStore(db_url=f"sqlite:///{db_path}")
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            with mock.patch.object(state_api, "TransactionsStore", return_value=store):
+                resp = client.get("/trades")
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == _INVALID_TOKEN_DETAIL
+
+    def test_trades_ok_when_token_set_and_correct_header(self, tmp_path):
+        db_path = tmp_path / "auth_trades_ok.db"
+        store = TransactionsStore(db_url=f"sqlite:///{db_path}")
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
+            with mock.patch.object(state_api, "TransactionsStore", return_value=store):
+                resp = client.get(
+                    "/trades", headers={"Authorization": "Bearer secret-tok"}
+                )
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_trades_open_when_token_unset(self, tmp_path):
+        db_path = tmp_path / "auth_trades_open.db"
+        store = TransactionsStore(db_url=f"sqlite:///{db_path}")
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(state_api, "TransactionsStore", return_value=store):
+                resp = client.get("/trades")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# CORS policy
+# ---------------------------------------------------------------------------
+#
+# NOTE: CORSMiddleware captures ``settings.CORS_ALLOWED_ORIGINS`` at
+# app-construction time (module import), so a per-test monkeypatch of settings
+# would NOT retroactively change the middleware's allow-list. These tests
+# therefore assert against the REAL default origin ("http://localhost:3000")
+# without patching — which is exactly the production default and the value the
+# middleware actually captured.
+
+
+class TestCORS:
+    """CORS origin reflection for the read-only API (GET only)."""
+
+    def test_allowed_origin_is_reflected(self):
+        resp = client.get("/health", headers={"Origin": "http://localhost:3000"})
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+    def test_disallowed_origin_not_reflected(self):
+        resp = client.get("/health", headers={"Origin": "http://evil.example"})
+        assert resp.status_code == 200
+        # The disallowed origin must never be echoed back.
+        assert resp.headers.get("access-control-allow-origin") != "http://evil.example"
+
+
+# ---------------------------------------------------------------------------
 # Architectural guard: no engine/broker imports in api/state_api.py
 # ---------------------------------------------------------------------------
 

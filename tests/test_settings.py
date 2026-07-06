@@ -27,6 +27,10 @@ def test_settings_load_from_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("ALPACA_PAPER", "false")
     monkeypatch.setenv("DEFAULT_TICKERS", '["NVDA", "TSLA"]')
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("STATE_API_TOKEN", "tok-123")
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS", '["https://a.com", "http://localhost:3000"]'
+    )
 
     s = Settings(_env_file=None)
 
@@ -35,6 +39,8 @@ def test_settings_load_from_environment(monkeypatch, tmp_path):
     assert s.ALPACA_PAPER is False
     assert s.DEFAULT_TICKERS == ["NVDA", "TSLA"]
     assert s.OUTPUT_DIR == (tmp_path / "reports")
+    assert s.STATE_API_TOKEN == "tok-123"
+    assert s.CORS_ALLOWED_ORIGINS == ["https://a.com", "http://localhost:3000"]
 
 
 # =============================================================================
@@ -42,7 +48,14 @@ def test_settings_load_from_environment(monkeypatch, tmp_path):
 # =============================================================================
 def test_settings_defaults(monkeypatch, tmp_path):
     # Ensure nothing leaks in from the host environment.
-    for key in ("FRED_API_KEY", "RISK_FREE_RATE", "ALPACA_PAPER", "DEFAULT_TICKERS"):
+    for key in (
+        "FRED_API_KEY",
+        "RISK_FREE_RATE",
+        "ALPACA_PAPER",
+        "DEFAULT_TICKERS",
+        "STATE_API_TOKEN",
+        "CORS_ALLOWED_ORIGINS",
+    ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
 
@@ -57,6 +70,9 @@ def test_settings_defaults(monkeypatch, tmp_path):
     assert s.MAX_PORTFOLIO_HEAT == pytest.approx(0.06)
     assert s.DEFAULT_TICKERS == ["AAPL", "MSFT", "JNJ", "AGNC"]
     assert s.LOG_LEVEL == "INFO"
+    # CORS + bearer-token auth hardening defaults.
+    assert s.STATE_API_TOKEN is None
+    assert s.CORS_ALLOWED_ORIGINS == ["http://localhost:3000"]
 
 
 # =============================================================================
