@@ -62,9 +62,11 @@ class TestPanelsSnapshotFreshness:
         assert panels._load_state_snapshot_cached(str(snap), snap.stat().st_mtime) == {"vix": 21.0}
         assert panels._load_state_snapshot_cached(str(tmp_path / "nope.json"), 0.0) == {}
 
-    def test_dashboard_uses_same_pattern(self) -> None:
-        # Source-level guard: observability/dashboard.py applies the identical
-        # mtime-keyed idiom (kept in sync with gui/panels.py).
-        src = Path("observability/dashboard.py").read_text(encoding="utf-8")
-        assert "_load_state_snapshot_cached" in src
-        assert "st_mtime" in src
+    # NOTE: a third test, ``test_dashboard_uses_same_pattern``, used to assert
+    # (via a source-level guard) that the now-retired standalone
+    # ``observability/dashboard.py`` applied the identical mtime-keyed cache
+    # idiom. That module was deleted once its panels were ported into
+    # ``gui/panels/observability.py`` (the Command Center's Observability tab
+    # is now the sole observability surface), so the cross-module
+    # kept-in-sync assertion no longer has a second module to compare against
+    # and was removed rather than pointed at a nonexistent file.

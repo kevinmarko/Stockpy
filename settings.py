@@ -281,7 +281,7 @@ class Settings(BaseSettings):
         description="Log CRITICAL position-flatten reminder when kill switch activates.",
     )
 
-    # --- Observability / alerts (observability/alerts.py, observability/dashboard.py) ---
+    # --- Observability / alerts (observability/alerts.py, gui/panels/observability.py) ---
     DISCORD_WEBHOOK_URL: Optional[str] = Field(
         default=None,
         description="Discord incoming-webhook URL for alert dispatch.",

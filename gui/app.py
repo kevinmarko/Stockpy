@@ -130,6 +130,9 @@ st.sidebar.markdown(
     f"- **Dry run default:** `{settings.DRY_RUN}`\n"
     f"- **Refresh TTL:** `{settings.DASHBOARD_REFRESH_SECONDS}s`"
 )
+from gui.engine_status import engine_status
+_engine_badge, _engine_text = engine_status()
+st.sidebar.caption(f"{_engine_badge} {_engine_text}")
 if settings.DISABLED_SIGNAL_MODULES:
     st.sidebar.warning(
         "Disabled modules: " + ", ".join(settings.DISABLED_SIGNAL_MODULES)
