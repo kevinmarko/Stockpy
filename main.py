@@ -61,7 +61,6 @@ import argparse
 import logging
 import signal
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,7 +112,24 @@ from signals.base import SignalContext
 # inside main() — do NOT call logging.basicConfig() at module level here).
 # ---------------------------------------------------------------------------
 from alerting import notify, setup_logging, summarize_run
-from execution.kill_switch import GlobalKillSwitch
+from pipeline.context import RunContext
+from pipeline.runner import PipelineRunner
+from pipeline.steps import (
+    AccountStep,
+    AdvisoryEvalStep,
+    KillSwitchGateStep,
+    MacroStep,
+    PrecomputeStep,
+    UniverseStep,
+)
+from reporting.sheets_client import (
+    CREDENTIALS_FILE,
+    SHEET_NAME,
+    TAB_NAME_OUTPUT,
+    get_service_account_client,
+)
+from reporting.sheet_publisher import write_recommendations as _write_to_sheet
+from reporting.html_publisher import write_html_report as _write_html_report
 
 logger = logging.getLogger("InvestYo.main")
 
@@ -121,9 +137,6 @@ logger = logging.getLogger("InvestYo.main")
 # Constants
 # ---------------------------------------------------------------------------
 WATCHLIST_FILE = "watchlist.txt"      # one ticker per line; '#' lines ignored
-CREDENTIALS_FILE = "credentials.json" # Google Sheets service-account key
-SHEET_NAME = "Stock Dashboard Py"
-TAB_NAME_OUTPUT = "FidelityData_Automated"
 
 
 # ---------------------------------------------------------------------------
@@ -236,12 +249,10 @@ def _load_tickers_from_sheet2() -> List[str]:
     WATCHLIST / watchlist.txt is configured.  Silently returns [] when
     credentials.json is absent, Sheet2 doesn't exist, or any error occurs.
     """
-    if not Path(CREDENTIALS_FILE).exists():
+    gc = get_service_account_client()
+    if gc is None:
         return []
     try:
-        import gspread  # type: ignore[import]
-
-        gc = gspread.service_account(filename=CREDENTIALS_FILE)
         sh = gc.open(SHEET_NAME)
         ws = sh.worksheet("Sheet2")
         col_a = ws.col_values(1)  # 1-indexed; returns list of strings
@@ -494,530 +505,6 @@ def _build_context_extras(
 
 
 # ---------------------------------------------------------------------------
-# Sheet sink helpers
-# ---------------------------------------------------------------------------
-
-def _rec_to_sheet_row(
-    rec: Recommendation,
-    snapshot: AccountSnapshot,
-    price: float,
-) -> dict:
-    """Map one Recommendation + position to a Sheet-compatible row dict.
-
-    Columns not derivable from advisory output are left as "" or 0.  The row
-    uses internal column keys from config.COLUMN_SCHEMA; get_rename_mapping()
-    translates them to display headers before writing.
-    """
-    ki = rec.key_indicators
-    pos: Optional[PortfolioPosition] = snapshot.positions.get(rec.symbol)
-
-    def _f(key: str, default: float = 0.0) -> float:
-        v = ki.get(key, default)
-        if v is None:
-            return default
-        try:
-            f = float(v)
-            return default if (f != f) else f  # NaN guard
-        except (TypeError, ValueError):
-            return default
-
-    forecast_30 = float(rec.forecast) if rec.forecast is not None else 0.0
-    forecast_pct = _f("forecast_30d_pct")
-
-    return {
-        # ── Core identity ────────────────────────────────────────────────────
-        "Symbol": rec.symbol,
-        "Price": round(price, 4),
-
-        # ── Signal & advice ──────────────────────────────────────────────────
-        "Action Signal": rec.action,
-        "Advice": rec.rationale[:200] if rec.rationale else "",
-        "Actionable Advice Signal": f"{rec.action}: {rec.strategy}",
-        "Score": round(_f("score", 50.0), 2),
-        "Kelly Target": round(_f("kelly_raw"), 6),
-        "Edge Ratio": 0.0,
-
-        # ── Technical indicators ─────────────────────────────────────────────
-        "RSI": round(_f("rsi", 50.0), 2),
-        "RSI_2": round(_f("rsi_2", 50.0), 2),
-        "MACD_Line": round(_f("macd_line"), 4),
-        "ATR": round(_f("atr"), 4),
-        "Aroon Oscillator": round(_f("aroon_osc"), 2),
-        "Sortino Ratio": round(_f("sortino"), 4),
-        "Max Drawdown": round(_f("max_drawdown"), 4),
-        "RS vs SPY": round(_f("rs_vs_spy"), 4),
-        "GARCH_Vol": round(_f("garch_vol"), 6),
-
-        # ── Forecast ─────────────────────────────────────────────────────────
-        "Forecast_30": round(forecast_30, 2),
-        "Forecast_30_Pct": round(forecast_pct, 6),
-
-        # ── Dividends ────────────────────────────────────────────────────────
-        "Dividend Yield": round(_f("dividend_yield"), 4),
-
-        # ── Execution ranges ──────────────────────────────────────────────────
-        # Now computed every cycle by StrategyEngine.evaluate_security() and
-        # carried on the Recommendation (see engine/advisory.py's "buy_range"/
-        # "sell_range" fields) — previously discarded before reaching this row.
-        "buyRange": rec.buy_range,
-        "sellRange": rec.sell_range,
-        "Option Strategy": "",
-
-        # ── Robinhood position ───────────────────────────────────────────────
-        "Robinhood Shares": float(pos.quantity) if pos else 0.0,
-        "Robinhood Avg Cost": float(pos.average_cost) if pos else 0.0,
-        "Robinhood Dividends": float(pos.dividends_received) if pos else 0.0,
-        "Robinhood Advice": (
-            f"Hold {pos.quantity:.0f} @ avg ${pos.average_cost:.2f}"
-            if pos else "Not held"
-        ),
-
-        # ── Advisory overlay ─────────────────────────────────────────────────
-        "Advisory_Action": rec.action,
-        "Advisory_Conviction": round(rec.conviction, 4),
-        "Advisory_Rationale": rec.rationale,
-        "Advisory_Position_Pct": round(rec.suggested_position_pct, 6),
-        "Advisory_Data_Quality": rec.data_quality,
-
-        # ── Placeholders for full-pipeline columns not produced by advisory ──
-        "Strategy Explainer Notes": rec.rationale[:150] if rec.rationale else "",
-        "Macro Status": "",
-        "HMM_Risk_On_Probability": float("nan"),
-    }
-
-
-def _write_to_sheet(result: RunResult, market: Optional[MarketDataProvider] = None) -> None:
-    """Write RunResult to Google Sheets (Stage F).
-
-    Silently skipped when credentials.json is absent.  Errors are caught and
-    logged — the Sheet is best-effort; analysis value must not depend on it.
-    """
-    if not os.path.exists(CREDENTIALS_FILE):
-        logger.info("Sheet write skipped — %s not found.", CREDENTIALS_FILE)
-        return
-
-    try:
-        import gspread
-        from gspread_dataframe import set_with_dataframe
-
-        gc = gspread.service_account(filename=CREDENTIALS_FILE)
-        sh = gc.open(SHEET_NAME)
-        try:
-            ws = sh.worksheet(TAB_NAME_OUTPUT)
-        except gspread.WorksheetNotFound:
-            ws = sh.add_worksheet(
-                title=TAB_NAME_OUTPUT,
-                rows=500,
-                cols=len(config.get_headers()),
-            )
-
-        # ── Build rows for successful recommendations ─────────────────────────
-        rows: List[dict] = []
-        for rec in result.recommendations:
-            price = 0.0
-            if market is not None:
-                try:
-                    q = market.get_latest_quote(rec.symbol)
-                    price = q.price
-                except Exception:
-                    pass
-            rows.append(_rec_to_sheet_row(rec, result.snapshot, price))
-
-        # ── Dead-letter rows (one per errored symbol) ─────────────────────────
-        for err in result.errors:
-            rows.append({
-                "Symbol": err["symbol"],
-                "Action Signal": "ERROR",
-                "Advice": (
-                    f"[{err['stage']}] {err['error_type']}: "
-                    f"{err['message'][:80]}"
-                ),
-                "Advisory_Data_Quality": "PARTIAL",
-            })
-
-        if not rows:
-            logger.info("Sheet write skipped — no rows to write.")
-            return
-
-        df = pd.DataFrame(rows)
-
-        # Rename internal keys → display headers
-        rename_map = config.get_rename_mapping()
-        df.rename(columns=rename_map, inplace=True)
-
-        # Ensure all expected columns are present (fill missing with "")
-        final_headers = config.get_headers()
-        for h in final_headers:
-            if h not in df.columns:
-                df[h] = ""
-        df = df[[h for h in final_headers if h in df.columns]]
-        df = df.replace([np.inf, -np.inf], np.nan).fillna("")
-
-        set_with_dataframe(
-            ws, df,
-            row=1, col=1,
-            include_column_header=True,
-            resize=True,
-        )
-        logger.info("Sheet updated: %d rows → '%s'.", len(df), TAB_NAME_OUTPUT)
-
-        # Apply conditional formatting (non-fatal)
-        try:
-            _apply_conditional_formatting(sh, ws, list(df.columns))
-        except Exception as cf_exc:
-            logger.warning("Conditional formatting failed (non-critical): %s", cf_exc)
-
-    except Exception as exc:
-        logger.error("Sheet write failed: %s", exc)
-
-
-def _apply_conditional_formatting(
-    sh: Any,
-    ws: Any,
-    headers: List[str],
-) -> None:
-    """Apply conditional formatting rules to the output Sheet.
-
-    Highlights Action Signal, Dividend Payback Horizon, Leverage Distress
-    Factor, and Options IV Edge columns — matching old main.py behaviour.
-    """
-    sheet_id = ws.id
-    requests = []
-
-    # Action Signal colour banding
-    if "Action Signal" in headers:
-        col_idx = headers.index("Action Signal")
-        for text, rgb in [
-            ("STRONG BUY",  {"red": 0.20, "green": 0.80, "blue": 0.20}),
-            ("BUY",         {"red": 0.70, "green": 0.95, "blue": 0.70}),
-            ("HOLD",        {"red": 1.00, "green": 1.00, "blue": 0.80}),
-            ("SELL",        {"red": 0.95, "green": 0.70, "blue": 0.70}),
-            ("RISK REDUCE", {"red": 0.95, "green": 0.60, "blue": 0.60}),
-            ("ERROR",       {"red": 0.90, "green": 0.80, "blue": 0.80}),
-        ]:
-            requests.append({
-                "addConditionalFormatRule": {
-                    "rule": {
-                        "ranges": [{
-                            "sheetId": sheet_id,
-                            "startRowIndex": 1, "endRowIndex": 1000,
-                            "startColumnIndex": col_idx,
-                            "endColumnIndex": col_idx + 1,
-                        }],
-                        "booleanRule": {
-                            "condition": {
-                                "type": "TEXT_EQ",
-                                "values": [{"userEnteredValue": text}],
-                            },
-                            "format": {"backgroundColor": rgb},
-                        },
-                    },
-                    "index": 0,
-                }
-            })
-
-    # Dividend Payback Horizon — green (short) to red (long)
-    if "Dividend Payback Horizon" in headers:
-        dph_idx = headers.index("Dividend Payback Horizon")
-        requests.append({
-            "addConditionalFormatRule": {
-                "rule": {
-                    "ranges": [{
-                        "sheetId": sheet_id,
-                        "startRowIndex": 1, "endRowIndex": 1000,
-                        "startColumnIndex": dph_idx, "endColumnIndex": dph_idx + 1,
-                    }],
-                    "gradientRule": {
-                        "minpoint": {
-                            "color": {"red": 0.85, "green": 0.95, "blue": 0.85},
-                            "type": "NUMBER", "value": "8",
-                        },
-                        "midpoint": {
-                            "color": {"red": 1.0, "green": 1.0, "blue": 0.85},
-                            "type": "NUMBER", "value": "11.5",
-                        },
-                        "maxpoint": {
-                            "color": {"red": 0.95, "green": 0.85, "blue": 0.85},
-                            "type": "NUMBER", "value": "15",
-                        },
-                    },
-                },
-                "index": 0,
-            }
-        })
-
-    # Leverage Distress Factor — red if < 0.3
-    if "Leverage Distress Factor" in headers:
-        lev_idx = headers.index("Leverage Distress Factor")
-        requests.append({
-            "addConditionalFormatRule": {
-                "rule": {
-                    "ranges": [{
-                        "sheetId": sheet_id,
-                        "startRowIndex": 1, "endRowIndex": 1000,
-                        "startColumnIndex": lev_idx, "endColumnIndex": lev_idx + 1,
-                    }],
-                    "booleanRule": {
-                        "condition": {
-                            "type": "NUMBER_LESS",
-                            "values": [{"userEnteredValue": "0.3"}],
-                        },
-                        "format": {
-                            "backgroundColor": {"red": 0.98, "green": 0.82, "blue": 0.82}
-                        },
-                    },
-                },
-                "index": 0,
-            }
-        })
-
-    # Options IV Edge — green if > 0
-    if "Options IV Edge" in headers:
-        opt_idx = headers.index("Options IV Edge")
-        requests.append({
-            "addConditionalFormatRule": {
-                "rule": {
-                    "ranges": [{
-                        "sheetId": sheet_id,
-                        "startRowIndex": 1, "endRowIndex": 1000,
-                        "startColumnIndex": opt_idx, "endColumnIndex": opt_idx + 1,
-                    }],
-                    "booleanRule": {
-                        "condition": {
-                            "type": "NUMBER_GREATER",
-                            "values": [{"userEnteredValue": "0.0"}],
-                        },
-                        "format": {
-                            "backgroundColor": {"red": 0.85, "green": 0.95, "blue": 0.85}
-                        },
-                    },
-                },
-                "index": 0,
-            }
-        })
-
-    if requests:
-        sh.batch_update({"requests": requests})
-
-
-# ---------------------------------------------------------------------------
-# HTML report (Stage G)
-# ---------------------------------------------------------------------------
-
-def _write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO]) -> None:
-    """Persist OUTPUT_DIR/state_snapshot.json + rotate into history/.
-
-    Mirrors ``main_orchestrator._write_state_snapshot`` so the
-    ``scripts.snapshot_diff`` reader sees a consistent schema across both
-    entry points. Errors are swallowed (CONSTRAINT #6) — the daily report
-    must always render.
-    """
-    try:
-        import json
-        from datetime import datetime, timezone
-
-        snap = result.snapshot
-        positions = getattr(snap, "positions", {}) or {}
-        holdings = sorted(
-            sym.upper() for sym, p in positions.items()
-            if float(getattr(p, "quantity", 0.0) or 0.0) > 0
-        )
-
-        signals: List[Dict[str, Any]] = []
-        for rec in result.recommendations:
-            pos = positions.get(rec.symbol)
-            ki = rec.key_indicators or {}
-            shares = float(getattr(pos, "quantity", 0.0) or 0.0) if pos else 0.0
-            signals.append({
-                "symbol": rec.symbol,
-                # advisory entry point: action == advisory_action (single source).
-                "action": rec.action,
-                "advisory_action": rec.action,
-                "advisory_conviction": float(rec.conviction or 0.0),
-                "advisory_position_pct": float(rec.suggested_position_pct or 0.0),
-                "advisory_rationale": rec.rationale or "",
-                "kelly_target": float(rec.suggested_position_pct or 0.0),
-                "score": float(ki.get("score", 0.0) or 0.0),
-                "price": float(getattr(pos, "current_price", 0.0) or 0.0) if pos else 0.0,
-                "shares": shares,
-                # GUI Strategy Matrix decomposition (additive; consumed by
-                # gui/panels/strategy_matrix.py). Scalars sourced from
-                # engine.advisory.Recommendation.key_indicators;
-                # score_components is the one non-scalar field, carried
-                # separately on the Recommendation dataclass (None when the
-                # strategy engine failed this cycle — never fabricated).
-                "meta_label_composite": float(ki.get("meta_label_composite", 1.0) or 1.0),
-                "regime_multiplier": float(ki.get("regime_multiplier", 1.0) or 1.0),
-                "kelly_target_pre_regime": ki.get("kelly_target_pre_regime", float("nan")),
-                "kelly_target_post_regime": ki.get("kelly_target_post_regime", float("nan")),
-                "score_components": rec.score_components or {},
-                # Tactical price bands (gui/panels/report_viewer.py's "Tactical
-                # Ranges" table already reads these keys) + suggested SELL exit
-                # sizing — both computed on Recommendation, previously dropped
-                # before reaching the GUI-facing snapshot.
-                "buy_range": rec.buy_range or "",
-                "sell_range": rec.sell_range or "",
-                "suggested_exit_pct": float(rec.suggested_exit_pct or 0.0),
-            })
-
-        regime = "UNKNOWN"
-        vix = 0.0
-        if macro_dto is not None:
-            regime = getattr(macro_dto, "market_regime", "UNKNOWN") or "UNKNOWN"
-            vix = float(getattr(macro_dto, "vix_value", 0.0) or 0.0)
-
-        snapshot = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tickers": [r.symbol for r in result.recommendations],
-            "holdings": holdings,
-            "market_regime": str(regime),
-            "vix": vix,
-            "kill_switch_active": (settings.OUTPUT_DIR / "KILL_SWITCH").exists(),
-            "macro_regime_gate_enabled": settings.MACRO_REGIME_GATE_ENABLED,
-            "signals": signals,
-        }
-        snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
-        snap_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-        try:
-            from scripts.snapshot_diff import rotate_snapshot
-            rotate_snapshot(
-                snapshot,
-                settings.OUTPUT_DIR,
-                max_age_days=settings.SNAPSHOT_HISTORY_DAYS,
-            )
-        except Exception as rot_exc:
-            logger.debug("Snapshot rotation skipped: %s", rot_exc)
-    except Exception as exc:
-        logger.warning("State snapshot write failed (non-critical): %s", exc)
-
-
-def _load_snapshot_diff_for_report() -> Optional[Dict[str, Any]]:
-    """Return the latest Δ Since Last Run diff dict (or ``None`` if unavailable).
-
-    Always called AFTER ``_write_state_snapshot`` so the just-written
-    snapshot is the "curr" side of the comparison; the prior rotated
-    snapshot is "prev". Returns ``None`` on any failure or first ever run
-    so the report template hides the band entirely.
-    """
-    try:
-        from scripts.snapshot_diff import compute_diff_from_history
-        diff = compute_diff_from_history(
-            settings.OUTPUT_DIR,
-            conviction_delta_threshold=settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD,
-        )
-        if diff.prev_ts is None and diff.curr_ts is None:
-            return None
-        return diff.to_dict()
-    except Exception as exc:
-        logger.debug("Δ-band diff unavailable: %s", exc)
-        return None
-
-
-def _write_html_report(result: RunResult, macro_dto: Optional[MacroEconomicDTO] = None) -> None:
-    """Generate the daily HTML report from RunResult (non-fatal on error)."""
-    try:
-        from diagnostics_and_visuals import generate_html_report
-
-        portfolio_dicts = []
-        for rec in result.recommendations:
-            ki = rec.key_indicators
-            pos = result.snapshot.positions.get(rec.symbol)
-            d = {
-                "Symbol": rec.symbol,
-                "Action Signal": rec.action,
-                "Score": ki.get("score", 0.0) or 0.0,
-                "RSI": ki.get("rsi", 0.0) or 0.0,
-                "GARCH_Vol": ki.get("garch_vol", 0.0) or 0.0,
-                "Forecast_30": float(rec.forecast or 0.0),
-                "Max Drawdown": ki.get("max_drawdown", 0.0) or 0.0,
-                "Max_Drawdown": ki.get("max_drawdown", 0.0) or 0.0,
-                "Kelly Target": ki.get("kelly_raw", 0.0) or 0.0,
-                "Advice": rec.rationale or "",
-                "Advisory_Action": rec.action,
-                "Advisory_Conviction": rec.conviction,
-                "Advisory_Rationale": rec.rationale or "",
-                "Advisory_Position_Pct": rec.suggested_position_pct,
-                "data_quality": rec.data_quality,
-                "strategy": rec.strategy,
-                # ── Holdings & P&L (source of truth: Robinhood AccountSnapshot,
-                #    CONSTRAINT #4). Zero-filled for non-held watchlist symbols
-                #    so the report renders "—" rather than fabricating a position.
-                "Robinhood Shares": float(pos.quantity) if pos else 0.0,
-                "Robinhood Avg Cost": float(pos.average_cost) if pos else 0.0,
-                "Robinhood Current Price": float(pos.current_price) if pos else 0.0,
-                "Robinhood Market Value": float(pos.market_value) if pos else 0.0,
-                "Robinhood Unrealized PL": float(pos.unrealized_pl) if pos else 0.0,
-                "Robinhood Unrealized PL Pct": float(pos.unrealized_pl_pct) if pos else 0.0,
-                "Robinhood Dividends": float(pos.dividends_received) if pos else 0.0,
-                "Company Name": (pos.name if pos else "") or "",
-            }
-            portfolio_dicts.append(d)
-
-        regime = "NEUTRAL"
-        kw: Dict[str, Any] = {}
-        if macro_dto is not None:
-            regime = macro_dto.market_regime
-            kw = {
-                "yield_curve": getattr(macro_dto, "yield_curve", 0.5),
-                "credit_spread": getattr(macro_dto, "credit_spread", 3.5),
-                "sahm_rule": getattr(macro_dto, "sahm_rule_indicator", 0.0),
-                "real_yield": getattr(macro_dto, "real_yield", 0.0),
-            }
-
-        # ── Portfolio summary band (account-level totals) ───────────────────
-        #   Driven by the Robinhood AccountSnapshot — the source of truth for
-        #   account state. Wrapped defensively so a degraded/empty snapshot
-        #   (e.g. Robinhood down) never aborts report generation; the band is
-        #   simply omitted (account_summary=None) when no positions exist.
-        account_summary: Optional[Dict[str, Any]] = None
-        try:
-            snap = result.snapshot
-            positions = getattr(snap, "positions", {}) or {}
-            total_unrealized_pl = sum(
-                float(getattr(p, "unrealized_pl", 0.0) or 0.0) for p in positions.values()
-            )
-            n_buy = sum(1 for r in result.recommendations if r.action == "BUY")
-            n_hold = sum(1 for r in result.recommendations if r.action == "HOLD")
-            n_sell = sum(1 for r in result.recommendations if r.action == "SELL")
-            fetched_at = getattr(snap, "fetched_at", None)
-            account_summary = {
-                "total_equity": float(getattr(snap, "total_equity", 0.0) or 0.0),
-                "buying_power": float(getattr(snap, "buying_power", 0.0) or 0.0),
-                "total_dividends": float(getattr(snap, "total_dividends", 0.0) or 0.0),
-                "total_unrealized_pl": total_unrealized_pl,
-                "num_positions": len(positions),
-                "n_buy": n_buy,
-                "n_hold": n_hold,
-                "n_sell": n_sell,
-                "n_total": len(result.recommendations),
-                "fetched_at": (fetched_at.strftime("%Y-%m-%d %H:%M UTC")
-                               if fetched_at is not None else "—"),
-                "age_hours": float(snap.age_hours()) if hasattr(snap, "age_hours") else 0.0,
-                "is_stale": bool(snap.is_stale(24.0)) if hasattr(snap, "is_stale") else False,
-            }
-        except Exception as summ_exc:  # never let summary build abort the report
-            logger.debug("Account summary band skipped: %s", summ_exc)
-            account_summary = None
-
-        out_path = str(settings.OUTPUT_DIR / "daily_report.html")
-        # Δ Since Last Run band: write+rotate the snapshot for THIS run first,
-        # then load the diff against the previously-rotated snapshot. The
-        # template hides the band entirely when snapshot_diff is None.
-        _write_state_snapshot(result, macro_dto)
-        snapshot_diff = _load_snapshot_diff_for_report()
-        generate_html_report(
-            portfolio_dicts, regime, out_path,
-            account_summary=account_summary,
-            snapshot_diff=snapshot_diff,
-            **kw,
-        )
-        logger.info("HTML report written to %s.", out_path)
-
-    except Exception as exc:
-        logger.warning("HTML report failed (non-critical): %s", exc)
-
-
-# ---------------------------------------------------------------------------
 # Run summary
 # ---------------------------------------------------------------------------
 
@@ -1092,195 +579,40 @@ def run_once(force_account: bool = False) -> RunResult:
         need real env vars.
     """
     started_at = datetime.now(timezone.utc)
-    recommendations: List[Recommendation] = []
-    errors: List[dict] = []
 
-    # ── Stage A: Account snapshot (Robinhood, daily cache) ───────────────────
-    snapshot: AccountSnapshot
-    try:
-        snapshot = fetch_account_snapshot(max_age_hours=20.0, force=force_account)
-        age_h = snapshot.age_hours()
-        if force_account:
-            cache_msg = "force-refreshed"
-        elif age_h < 1.0:
-            cache_msg = "served from cache (fresh)"
-        else:
-            cache_msg = f"served from cache (age={age_h:.1f}h)"
-        logger.info(
-            "Account snapshot %s — equity=$%.0f  positions=%d.",
-            cache_msg,
-            snapshot.total_equity,
-            len(snapshot.positions),
-        )
-    except Exception as rh_exc:
-        logger.warning(
-            "Robinhood snapshot unavailable (%s); proceeding with empty account. "
-            "Watchlist universe will still be evaluated.",
-            rh_exc,
-        )
-        snapshot = AccountSnapshot(
-            positions={},
-            buying_power=0.0,
-            total_equity=0.0,
-            total_dividends=0.0,
-            fetched_at=datetime.now(timezone.utc),
-        )
-
-    # ── Stage B: Universe ─────────────────────────────────────────────────────
-    symbols = _build_universe(snapshot)
-    if not symbols:
-        # Held positions are empty AND WATCHLIST is unset AND watchlist.txt is
-        # absent / empty.  Spell out every possible fix so the user can act
-        # without spelunking through the source.
-        logger.warning(
-            "Empty symbol universe — nothing to evaluate. "
-            "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET (optional) in "
-            ".env so Robinhood positions populate the universe, (2) set the "
-            "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), (3) "
-            "create %s with one ticker per line, or (4) add tickers to "
-            "Sheet2 column A in the '%s' Google Sheet (requires credentials.json).",
-            WATCHLIST_FILE,
-            SHEET_NAME,
-        )
-        finished_at = datetime.now(timezone.utc)
-        return RunResult(
-            snapshot=snapshot,
-            recommendations=[],
-            errors=[],
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_seconds=(finished_at - started_at).total_seconds(),
-        )
-
-    # ── Kill-switch advisory pause gate ──────────────────────────────────────
-    # Checked after Stage B so the universe is known (for telemetry), but
-    # BEFORE Stage C (macro) and the expensive per-symbol pipeline.
-    # When the sentinel is active we return an empty RunResult rather than
-    # crashing or producing stale recommendations.  The observability dashboard
-    # continues reading the last state_snapshot.json written by a normal run.
-    _ks = GlobalKillSwitch()
-    if _ks.is_active():
-        _ks_reason = _ks.reason() or "(no reason recorded)"
-        logger.info(
-            "Advisory paused by kill-switch sentinel — skipping evaluation cycle. "
-            "Reason: %s  |  Universe would have been: %s  |  "
-            "Deactivate with: python -m execution.kill_switch --deactivate",
-            _ks_reason,
-            ", ".join(symbols[:10]) + ("..." if len(symbols) > 10 else ""),
-        )
-        finished_at = datetime.now(timezone.utc)
-        return RunResult(
-            snapshot=snapshot,
-            recommendations=[],
-            errors=[{
-                "symbol": "_advisory",
-                "stage": "kill_switch_gate",
-                "error_type": "AdvisoryPaused",
-                "message": f"Kill-switch sentinel active: {_ks_reason}",
-                "timestamp": finished_at.isoformat(),
-            }],
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_seconds=(finished_at - started_at).total_seconds(),
-        )
-
-    # ── Stage C: Macro context ────────────────────────────────────────────────
-    macro_dto = _build_macro_dto()
-
-    # ── Meta-labeler runtime registration (once per run, before signals) ──────
-    # Load any trained meta-labeler pickles into global_meta_registry so the
-    # SignalAggregator's meta_hard_gate can fire. Strict no-op (logged) when no
-    # saved model exists — preserves the exact pre-model behavior. Lazy import
-    # mirrors HistoricalStore's lazy-import pattern; dead-letter resilient.
-    try:
-        from ml.meta_bootstrap import bootstrap_meta_registry
-        bootstrap_meta_registry()
-    except Exception as _meta_exc:  # never let meta-label wiring crash the run
-        logger.warning("Meta-labeler bootstrap failed (%s); continuing.", _meta_exc)
-
-    # ── Stage D: Context pre-compute (universe-wide, before per-symbol loop) ──
-    market = get_provider()
-    bars_dict = _fetch_bars_for_universe(symbols, market)
-    context_extras = _build_context_extras(symbols, bars_dict, macro_dto)
-
-    # ── Stage E: Per-symbol advisory evaluation ───────────────────────────────
-    # Each evaluate() call is independent (engine.advisory constructs its engines
-    # per call; the shared inputs — snapshot, market, macro_dto, context_extras —
-    # are read-only during the loop), so the loop parallelizes across a bounded
-    # thread pool.  The win is per-symbol network I/O (quote fetch) plus the
-    # native-compute sections (numpy/pandas/statsmodels/arch release the GIL).
-    # Results are reassembled in the ORIGINAL symbol order so the Sheet/HTML/
-    # snapshot output and logs are byte-identical regardless of completion order
-    # or worker count.  Dead-letter semantics are preserved exactly: a per-symbol
-    # exception becomes an entry in RunResult.errors and never aborts the run.
-    logger.info("Evaluating %d symbols...", len(symbols))
-
-    def _eval_one(symbol: str):
-        """Return ('ok', Recommendation) or ('err', error_dict) for one symbol.
-
-        Never raises — mirrors the original per-symbol try/except so a single
-        bad ticker is dead-lettered, not propagated (CONSTRAINT #6).
-        """
-        try:
-            position = snapshot.positions.get(symbol)
-            rec = advisory_evaluate(
-                symbol=symbol,
-                position=position,
-                market=market,
-                snapshot=snapshot,
-                macro_dto=macro_dto,
-                context_extras=context_extras,
-            )
-            return ("ok", rec)
-        except Exception as exc:
-            return ("err", {
-                "symbol": symbol,
-                "stage": "advisory_evaluate",
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-
-    workers = max(1, int(getattr(settings, "ADVISORY_MAX_CONCURRENCY", 8)))
-    if workers == 1 or len(symbols) <= 1:
-        # Sequential path — original, fully-deterministic behavior.
-        results_by_symbol = {sym: _eval_one(sym) for sym in symbols}
-    else:
-        with ThreadPoolExecutor(max_workers=min(workers, len(symbols))) as pool:
-            # executor.map preserves input order; we still key by symbol below
-            # so the assembly pass is order-explicit and robust.
-            mapped = pool.map(_eval_one, symbols)
-            results_by_symbol = {sym: res for sym, res in zip(symbols, mapped)}
-
-    # Ordered assembly: rebuild recommendations/errors and emit logs in the
-    # original symbol order so output is deterministic.
-    for symbol in symbols:
-        kind, payload = results_by_symbol[symbol]
-        if kind == "ok":
-            rec = payload
-            recommendations.append(rec)
-            logger.info(
-                "  %-6s  %-10s  conviction=%.2f  quality=%-7s  pos=%.1f%%",
-                symbol,
-                rec.action,
-                rec.conviction,
-                rec.data_quality,
-                rec.suggested_position_pct * 100.0,
-            )
-        else:
-            logger.warning("Advisory failed for %s: %s", symbol, payload["message"])
-            errors.append(payload)
+    ctx = RunContext(
+        force_account=force_account,
+        started_at=started_at,
+        watchlist_file=WATCHLIST_FILE,
+        fetch_account_snapshot_fn=fetch_account_snapshot,
+        build_universe_fn=_build_universe,
+        build_macro_dto_fn=_build_macro_dto,
+        get_provider_fn=get_provider,
+        fetch_bars_fn=_fetch_bars_for_universe,
+        build_context_extras_fn=_build_context_extras,
+        advisory_evaluate_fn=advisory_evaluate,
+    )
+    steps = [
+        AccountStep(),
+        UniverseStep(),
+        KillSwitchGateStep(),
+        MacroStep(),
+        PrecomputeStep(),
+        AdvisoryEvalStep(),
+    ]
+    PipelineRunner(steps).run(ctx)
 
     finished_at = datetime.now(timezone.utc)
     result = RunResult(
-        snapshot=snapshot,
-        recommendations=recommendations,
-        errors=errors,
+        snapshot=ctx.snapshot,
+        recommendations=ctx.recommendations,
+        errors=ctx.errors,
         started_at=started_at,
         finished_at=finished_at,
         duration_seconds=(finished_at - started_at).total_seconds(),
     )
-    _log_summary(result)
+    if not ctx.stopped:
+        _log_summary(result)
     return result
 
 
