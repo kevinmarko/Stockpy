@@ -16,6 +16,7 @@ from datetime import datetime
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
 from data_engine import MockDataEngine
 from processing_engine import ProcessingEngine
+from settings import settings
 from strategy_engine import StrategyEngine
 
 import ml.meta_labeling as meta_labeling
@@ -159,11 +160,19 @@ def test_macro_economic_risk_gates():
 # =============================================================================
 # 4. STRATEGY ENGINE CORRIDOR & OPTIONS OVERLAY TESTS
 # =============================================================================
-def test_strategy_engine_buy_range_and_options_overlays():
+def test_strategy_engine_buy_range_and_options_overlays(monkeypatch):
     """
     Asserts that StrategyEngine dynamically calculates the volatility-adjusted buy range
     and selects the correct delta strikes and option types based on stock sectors.
     """
+    # Pin SIGNAL_WEIGHTS to the declared defaults so this test's hardcoded
+    # expected scores/actions are deterministic regardless of whatever the
+    # real .env in this checkout has tuned them to (operator-customized
+    # weights via the Strategy Matrix tab are a legitimate deployment state,
+    # not a violation of this test's assumptions).
+    monkeypatch.setattr(
+        settings, "SIGNAL_WEIGHTS", type(settings)(_env_file=None).SIGNAL_WEIGHTS
+    )
     engine = StrategyEngine()
 
     # Case 1: Standard Equity in a Strong Buy setup (JNJ - Healthcare)
@@ -1054,7 +1063,7 @@ def test_aroon_oscillator_chop_filter():
     assert "Bullish technical trend (Aroon >= 50)" in res_legacy["Strategy Explainer Notes"]
 
 
-def test_garch_and_edge_scoring():
+def test_garch_and_edge_scoring(monkeypatch):
     """
     Asserts GARCH volatility penalties, Edge Ratio rewards and penalties,
     and Kelly sizing rule constraints under high mathematical edge.
@@ -1063,6 +1072,14 @@ def test_garch_and_edge_scoring():
     from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
     from transactions_store import TransactionsStore
     from datetime import datetime
+
+    # Pin SIGNAL_WEIGHTS to the declared defaults -- see the identical note
+    # in test_strategy_engine_buy_range_and_options_overlays above -- so this
+    # test's hardcoded expected Score values are deterministic regardless of
+    # the real .env's (operator-tunable) weights.
+    monkeypatch.setattr(
+        settings, "SIGNAL_WEIGHTS", type(settings)(_env_file=None).SIGNAL_WEIGHTS
+    )
 
     # Inject an empty in-memory store so this test's Kelly-sizing assertions are
     # deterministic regardless of how many real closed trades exist in the live

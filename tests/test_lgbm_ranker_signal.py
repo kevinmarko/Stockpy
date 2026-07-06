@@ -59,7 +59,15 @@ def test_registry_and_weights_are_consistent():
 
 
 def test_lgbm_ranker_has_a_weight():
-    assert settings.SIGNAL_WEIGHTS.get("lgbm_ranker") == pytest.approx(0.10)
+    # Checked against a freshly-constructed, .env-isolated Settings instance
+    # (not the live `settings` singleton) since an operator may have
+    # legitimately re-tuned SIGNAL_WEIGHTS via the Strategy Matrix tab -- a
+    # valid deployment state, not a violation of the declared class default
+    # this test is pinning down.
+    from settings import Settings
+
+    isolated_weights = Settings(_env_file=None).SIGNAL_WEIGHTS
+    assert isolated_weights.get("lgbm_ranker") == pytest.approx(0.10)
 
 
 # ---------------------------------------------------------------------------

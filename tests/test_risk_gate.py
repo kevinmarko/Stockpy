@@ -27,6 +27,7 @@ from execution.broker_base import (
     PositionSnapshot,
 )
 from execution.risk_gate import PreTradeRiskGate, RiskContext
+from settings import settings
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +265,14 @@ class TestDailyLossLimitCheck:
 # ---------------------------------------------------------------------------
 
 class TestMacroKillSwitchCheck:
+    @pytest.fixture(autouse=True)
+    def _macro_regime_gate_enabled(self, monkeypatch):
+        """Pin the operator-controlled gate to enabled (the class default) so
+        these tests exercise the real macro kill-switch logic regardless of
+        the ambient .env's MACRO_REGIME_GATE_ENABLED value (this check is a
+        no-op pass-through when the operator has disabled the gate)."""
+        monkeypatch.setattr(settings, "MACRO_REGIME_GATE_ENABLED", True)
+
     def test_passes_when_not_active(self):
         gate = PreTradeRiskGate()
         ctx = RiskContext(macro=_macro(kill_switch=False))
@@ -475,6 +484,13 @@ class TestMaxOrderRateCheck:
 # ---------------------------------------------------------------------------
 
 class TestRunAll:
+    @pytest.fixture(autouse=True)
+    def _macro_regime_gate_enabled(self, monkeypatch):
+        """See TestMacroKillSwitchCheck._macro_regime_gate_enabled — several
+        of these integration tests trigger the macro check specifically and
+        need it enabled regardless of the ambient .env value."""
+        monkeypatch.setattr(settings, "MACRO_REGIME_GATE_ENABLED", True)
+
     def _valid_context(self) -> RiskContext:
         """A context that passes all checks."""
         return RiskContext(

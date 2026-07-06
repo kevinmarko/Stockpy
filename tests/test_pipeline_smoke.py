@@ -174,6 +174,18 @@ class TestRunOncePipeline:
     _P_BARS     = "main._fetch_bars_for_universe"
     _P_CTX      = "main._build_context_extras"
 
+    @pytest.fixture(autouse=True)
+    def _isolate_watchlist_file(self, monkeypatch, tmp_path):
+        """Point main.WATCHLIST_FILE at a nonexistent tmp path so these
+        tests' universe-building assertions are deterministic regardless of
+        whether a real watchlist.txt happens to exist in the repo root (e.g.
+        one written by the Live Inventory "Sync Now" feature) -- these tests
+        intend to exercise only the mocked positions / WATCHLIST env var,
+        never whatever real watchlist.txt file a given checkout has on disk.
+        """
+        import main as m
+        monkeypatch.setattr(m, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
+
     def _neutral_macro(self) -> MagicMock:
         m = MagicMock()
         m.market_regime = "RISK ON"
