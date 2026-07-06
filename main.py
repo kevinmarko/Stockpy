@@ -61,7 +61,6 @@ import argparse
 import logging
 import signal
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,7 +112,16 @@ from signals.base import SignalContext
 # inside main() — do NOT call logging.basicConfig() at module level here).
 # ---------------------------------------------------------------------------
 from alerting import notify, setup_logging, summarize_run
-from execution.kill_switch import GlobalKillSwitch
+from pipeline.context import RunContext
+from pipeline.runner import PipelineRunner
+from pipeline.steps import (
+    AccountStep,
+    AdvisoryEvalStep,
+    KillSwitchGateStep,
+    MacroStep,
+    PrecomputeStep,
+    UniverseStep,
+)
 from reporting.sheets_client import (
     CREDENTIALS_FILE,
     SHEET_NAME,
@@ -571,195 +579,40 @@ def run_once(force_account: bool = False) -> RunResult:
         need real env vars.
     """
     started_at = datetime.now(timezone.utc)
-    recommendations: List[Recommendation] = []
-    errors: List[dict] = []
 
-    # ── Stage A: Account snapshot (Robinhood, daily cache) ───────────────────
-    snapshot: AccountSnapshot
-    try:
-        snapshot = fetch_account_snapshot(max_age_hours=20.0, force=force_account)
-        age_h = snapshot.age_hours()
-        if force_account:
-            cache_msg = "force-refreshed"
-        elif age_h < 1.0:
-            cache_msg = "served from cache (fresh)"
-        else:
-            cache_msg = f"served from cache (age={age_h:.1f}h)"
-        logger.info(
-            "Account snapshot %s — equity=$%.0f  positions=%d.",
-            cache_msg,
-            snapshot.total_equity,
-            len(snapshot.positions),
-        )
-    except Exception as rh_exc:
-        logger.warning(
-            "Robinhood snapshot unavailable (%s); proceeding with empty account. "
-            "Watchlist universe will still be evaluated.",
-            rh_exc,
-        )
-        snapshot = AccountSnapshot(
-            positions={},
-            buying_power=0.0,
-            total_equity=0.0,
-            total_dividends=0.0,
-            fetched_at=datetime.now(timezone.utc),
-        )
-
-    # ── Stage B: Universe ─────────────────────────────────────────────────────
-    symbols = _build_universe(snapshot)
-    if not symbols:
-        # Held positions are empty AND WATCHLIST is unset AND watchlist.txt is
-        # absent / empty.  Spell out every possible fix so the user can act
-        # without spelunking through the source.
-        logger.warning(
-            "Empty symbol universe — nothing to evaluate. "
-            "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET (optional) in "
-            ".env so Robinhood positions populate the universe, (2) set the "
-            "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), (3) "
-            "create %s with one ticker per line, or (4) add tickers to "
-            "Sheet2 column A in the '%s' Google Sheet (requires credentials.json).",
-            WATCHLIST_FILE,
-            SHEET_NAME,
-        )
-        finished_at = datetime.now(timezone.utc)
-        return RunResult(
-            snapshot=snapshot,
-            recommendations=[],
-            errors=[],
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_seconds=(finished_at - started_at).total_seconds(),
-        )
-
-    # ── Kill-switch advisory pause gate ──────────────────────────────────────
-    # Checked after Stage B so the universe is known (for telemetry), but
-    # BEFORE Stage C (macro) and the expensive per-symbol pipeline.
-    # When the sentinel is active we return an empty RunResult rather than
-    # crashing or producing stale recommendations.  The observability dashboard
-    # continues reading the last state_snapshot.json written by a normal run.
-    _ks = GlobalKillSwitch()
-    if _ks.is_active():
-        _ks_reason = _ks.reason() or "(no reason recorded)"
-        logger.info(
-            "Advisory paused by kill-switch sentinel — skipping evaluation cycle. "
-            "Reason: %s  |  Universe would have been: %s  |  "
-            "Deactivate with: python -m execution.kill_switch --deactivate",
-            _ks_reason,
-            ", ".join(symbols[:10]) + ("..." if len(symbols) > 10 else ""),
-        )
-        finished_at = datetime.now(timezone.utc)
-        return RunResult(
-            snapshot=snapshot,
-            recommendations=[],
-            errors=[{
-                "symbol": "_advisory",
-                "stage": "kill_switch_gate",
-                "error_type": "AdvisoryPaused",
-                "message": f"Kill-switch sentinel active: {_ks_reason}",
-                "timestamp": finished_at.isoformat(),
-            }],
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_seconds=(finished_at - started_at).total_seconds(),
-        )
-
-    # ── Stage C: Macro context ────────────────────────────────────────────────
-    macro_dto = _build_macro_dto()
-
-    # ── Meta-labeler runtime registration (once per run, before signals) ──────
-    # Load any trained meta-labeler pickles into global_meta_registry so the
-    # SignalAggregator's meta_hard_gate can fire. Strict no-op (logged) when no
-    # saved model exists — preserves the exact pre-model behavior. Lazy import
-    # mirrors HistoricalStore's lazy-import pattern; dead-letter resilient.
-    try:
-        from ml.meta_bootstrap import bootstrap_meta_registry
-        bootstrap_meta_registry()
-    except Exception as _meta_exc:  # never let meta-label wiring crash the run
-        logger.warning("Meta-labeler bootstrap failed (%s); continuing.", _meta_exc)
-
-    # ── Stage D: Context pre-compute (universe-wide, before per-symbol loop) ──
-    market = get_provider()
-    bars_dict = _fetch_bars_for_universe(symbols, market)
-    context_extras = _build_context_extras(symbols, bars_dict, macro_dto)
-
-    # ── Stage E: Per-symbol advisory evaluation ───────────────────────────────
-    # Each evaluate() call is independent (engine.advisory constructs its engines
-    # per call; the shared inputs — snapshot, market, macro_dto, context_extras —
-    # are read-only during the loop), so the loop parallelizes across a bounded
-    # thread pool.  The win is per-symbol network I/O (quote fetch) plus the
-    # native-compute sections (numpy/pandas/statsmodels/arch release the GIL).
-    # Results are reassembled in the ORIGINAL symbol order so the Sheet/HTML/
-    # snapshot output and logs are byte-identical regardless of completion order
-    # or worker count.  Dead-letter semantics are preserved exactly: a per-symbol
-    # exception becomes an entry in RunResult.errors and never aborts the run.
-    logger.info("Evaluating %d symbols...", len(symbols))
-
-    def _eval_one(symbol: str):
-        """Return ('ok', Recommendation) or ('err', error_dict) for one symbol.
-
-        Never raises — mirrors the original per-symbol try/except so a single
-        bad ticker is dead-lettered, not propagated (CONSTRAINT #6).
-        """
-        try:
-            position = snapshot.positions.get(symbol)
-            rec = advisory_evaluate(
-                symbol=symbol,
-                position=position,
-                market=market,
-                snapshot=snapshot,
-                macro_dto=macro_dto,
-                context_extras=context_extras,
-            )
-            return ("ok", rec)
-        except Exception as exc:
-            return ("err", {
-                "symbol": symbol,
-                "stage": "advisory_evaluate",
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-
-    workers = max(1, int(getattr(settings, "ADVISORY_MAX_CONCURRENCY", 8)))
-    if workers == 1 or len(symbols) <= 1:
-        # Sequential path — original, fully-deterministic behavior.
-        results_by_symbol = {sym: _eval_one(sym) for sym in symbols}
-    else:
-        with ThreadPoolExecutor(max_workers=min(workers, len(symbols))) as pool:
-            # executor.map preserves input order; we still key by symbol below
-            # so the assembly pass is order-explicit and robust.
-            mapped = pool.map(_eval_one, symbols)
-            results_by_symbol = {sym: res for sym, res in zip(symbols, mapped)}
-
-    # Ordered assembly: rebuild recommendations/errors and emit logs in the
-    # original symbol order so output is deterministic.
-    for symbol in symbols:
-        kind, payload = results_by_symbol[symbol]
-        if kind == "ok":
-            rec = payload
-            recommendations.append(rec)
-            logger.info(
-                "  %-6s  %-10s  conviction=%.2f  quality=%-7s  pos=%.1f%%",
-                symbol,
-                rec.action,
-                rec.conviction,
-                rec.data_quality,
-                rec.suggested_position_pct * 100.0,
-            )
-        else:
-            logger.warning("Advisory failed for %s: %s", symbol, payload["message"])
-            errors.append(payload)
+    ctx = RunContext(
+        force_account=force_account,
+        started_at=started_at,
+        watchlist_file=WATCHLIST_FILE,
+        fetch_account_snapshot_fn=fetch_account_snapshot,
+        build_universe_fn=_build_universe,
+        build_macro_dto_fn=_build_macro_dto,
+        get_provider_fn=get_provider,
+        fetch_bars_fn=_fetch_bars_for_universe,
+        build_context_extras_fn=_build_context_extras,
+        advisory_evaluate_fn=advisory_evaluate,
+    )
+    steps = [
+        AccountStep(),
+        UniverseStep(),
+        KillSwitchGateStep(),
+        MacroStep(),
+        PrecomputeStep(),
+        AdvisoryEvalStep(),
+    ]
+    PipelineRunner(steps).run(ctx)
 
     finished_at = datetime.now(timezone.utc)
     result = RunResult(
-        snapshot=snapshot,
-        recommendations=recommendations,
-        errors=errors,
+        snapshot=ctx.snapshot,
+        recommendations=ctx.recommendations,
+        errors=ctx.errors,
         started_at=started_at,
         finished_at=finished_at,
         duration_seconds=(finished_at - started_at).total_seconds(),
     )
-    _log_summary(result)
+    if not ctx.stopped:
+        _log_summary(result)
     return result
 
 

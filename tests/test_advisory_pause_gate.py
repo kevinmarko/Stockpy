@@ -266,7 +266,7 @@ class TestKillSwitchPauseGate:
         with (
             mock.patch("main.fetch_account_snapshot", return_value=empty_snap),
             mock.patch("main._build_universe", return_value=["AAPL", "MSFT"]),
-            mock.patch("main.GlobalKillSwitch", side_effect=lambda: GlobalKillSwitch(sentinel_file=sentinel)),
+            mock.patch("pipeline.steps.GlobalKillSwitch", side_effect=lambda: GlobalKillSwitch(sentinel_file=sentinel)),
         ):
             import main as _main_mod
             result = _main_mod.run_once()
@@ -291,7 +291,7 @@ class TestKillSwitchPauseGate:
         with (
             mock.patch("main.fetch_account_snapshot", return_value=empty_snap),
             mock.patch("main._build_universe", return_value=["AAPL"]),
-            mock.patch("main.GlobalKillSwitch", side_effect=lambda: GlobalKillSwitch(sentinel_file=sentinel)),
+            mock.patch("pipeline.steps.GlobalKillSwitch", side_effect=lambda: GlobalKillSwitch(sentinel_file=sentinel)),
         ):
             import main as _main_mod
             result = _main_mod.run_once()
@@ -329,7 +329,7 @@ class TestKillSwitchPauseGate:
         with (
             mock.patch("main.fetch_account_snapshot", return_value=empty_snap),
             mock.patch("main._build_universe", return_value=["AAPL"]),
-            mock.patch("main.GlobalKillSwitch", side_effect=lambda: GlobalKillSwitch(sentinel_file=sentinel)),
+            mock.patch("pipeline.steps.GlobalKillSwitch", side_effect=lambda: GlobalKillSwitch(sentinel_file=sentinel)),
             mock.patch("main.advisory_evaluate", return_value=fake_rec),
             mock.patch("main._build_macro_dto"),
             mock.patch("main.get_provider"),
