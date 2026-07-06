@@ -299,11 +299,11 @@ class TestMomentumMetricsLookahead:
 # ============================================================================
 
 class TestCalculateFundamentalMetrics:
-    """NOTE: the committed quant_platform.db ships with real cached fundamentals
-    for common tickers (e.g. AAPL) under settings.HISTORICAL_STORE_ENABLED=True
-    (the project default). Most tests here disable the HistoricalStore overlay
-    so results are hermetic and depend only on the injected DTO -- the one test
-    that targets the HistoricalStore integration explicitly re-enables it."""
+    """quant_platform.db is per-machine runtime state (not checked into git),
+    so these tests never depend on its on-disk content. Most tests here
+    disable the HistoricalStore overlay so results are hermetic and depend
+    only on the injected DTO -- the one test that targets the HistoricalStore
+    integration mocks HistoricalStore directly rather than reading real data."""
 
     @pytest.fixture(autouse=True)
     def _disable_historical_store(self, disable_historical_store):

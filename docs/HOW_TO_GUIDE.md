@@ -77,7 +77,7 @@ Everything else has a working default. See [Section 3](#3-configuring-your-envir
 python3 database_setup.py
 ```
 
-This creates `quant_platform.db` (SQLite) with the correct schema for storing daily signals and execution logs. The file already exists in the repo but **ships with an empty `trades` table** — you only need to re-run this if you want to reset it or if the schema has changed. The closed-trade population that powers Kelly sizing and the calibration tracker is reconstructed on demand from your Robinhood filled-order history by `data/robinhood_orders.py` (Tier 7) and accumulates live as advisory runs record trades.
+This creates `quant_platform.db` (SQLite) with the correct schema for storing daily signals and execution logs. The file is **not** checked into git (it's per-machine runtime state, gitignored via `*.db`) — every fresh clone needs this step once. The `trades` table starts empty; the closed-trade population that powers Kelly sizing and the calibration tracker is reconstructed on demand from your Robinhood filled-order history by `data/robinhood_orders.py` (Tier 7) and accumulates live as advisory runs record trades.
 
 ### Step 4 — Verify your setup
 
