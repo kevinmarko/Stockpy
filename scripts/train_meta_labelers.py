@@ -278,12 +278,18 @@ def _update_registry_row(
     cpcv_dsr: Optional[float],
     pbo: Optional[float],
     registry_path: Optional[Path] = None,
+    artifact_file: Optional[str] = None,
+    hyperparameters: Optional[dict] = None,
+    train_window: Optional[dict] = None,
+    features: Optional[list] = None,
 ) -> bool:
     """Update the ``meta_labeler_<signal_id>`` row in ml/registry.yaml.
 
     Thin wrapper around the shared ``ml.registry_io.update_model_metrics`` (the
     same writer ``scripts/train_lgbm.py`` uses) — ``deployable`` is derived
     there from ``cpcv_dsr``/``pbo``, never passed in (no spoofing the gate).
+    Optional provenance (``artifact_file``, ``hyperparameters``, ``train_window``,
+    ``features``) is forwarded verbatim and never affects the gate.
     ``registry_path`` defaults to the module-level ``_REGISTRY_PATH`` resolved
     at call time (so tests can monkeypatch it). Returns True on success, False
     (and a logged warning) on any failure — never raises (dead-letter).
@@ -299,6 +305,10 @@ def _update_registry_row(
             pbo=pbo,
             n_train=n_train,
             path=registry_path,
+            artifact_file=artifact_file,
+            hyperparameters=hyperparameters,
+            train_window=train_window,
+            features=features,
         )
         logger.info("Updated registry row %r (n_train=%d).", model_key, n_train)
         return True
@@ -360,6 +370,19 @@ def train_signal(
         return None
 
     if update_registry:
+        # Provenance: the training window spans the union of the price panel's
+        # per-symbol date ranges (the events were CUSUM-sampled from within it).
+        train_window: Optional[dict] = None
+        starts = [s.index.min() for s in panel.values() if len(s)]
+        ends = [s.index.max() for s in panel.values() if len(s)]
+        if starts and ends:
+            train_window = {
+                "start": pd.Timestamp(min(starts)).strftime("%Y-%m-%d"),
+                "end": pd.Timestamp(max(ends)).strftime("%Y-%m-%d"),
+                "n_dates": len(pd.DatetimeIndex(np.concatenate(
+                    [s.index.values for s in panel.values() if len(s)]
+                )).normalize().unique()),
+            }
         _update_registry_row(
             signal_id,
             trained_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -369,6 +392,10 @@ def train_signal(
             # validation populates them.
             cpcv_dsr=None,
             pbo=None,
+            artifact_file=Path(path).name,
+            hyperparameters=labeler.lgbm_params,
+            train_window=train_window,
+            features=list(labeler._feature_names),
         )
 
     logger.info(

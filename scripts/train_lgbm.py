@@ -387,6 +387,16 @@ def run_training(
     trained_date = (
         datetime.now(timezone.utc).strftime("%Y-%m-%d") if model_saved else None
     )
+    # Provenance — only populated when a model actually trained + persisted, so
+    # the YAML never records a window/artifact for a run that produced nothing.
+    train_window: Optional[dict] = None
+    if model_saved and not panel.X.empty:
+        dates = panel.X.index.get_level_values(0)
+        train_window = {
+            "start": pd.Timestamp(dates.min()).strftime("%Y-%m-%d"),
+            "end": pd.Timestamp(dates.max()).strftime("%Y-%m-%d"),
+            "n_dates": panel.n_dates,
+        }
     entry = update_model_metrics(
         _MODEL_KEY,
         trained_date=trained_date,
@@ -394,6 +404,10 @@ def run_training(
         pbo=pbo,
         n_train=len(panel.X) if model_saved else None,
         path=registry_path,
+        artifact_file=save_path.name if model_saved else None,
+        hyperparameters=ranker.params if model_saved else None,
+        train_window=train_window,
+        features=list(FEATURE_COLUMNS) if model_saved else None,
     )
 
     return {

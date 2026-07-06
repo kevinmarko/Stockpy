@@ -81,6 +81,46 @@ def test_registry_metric_ranges():
 
 
 # ---------------------------------------------------------------------------
+# Test 4b: optional provenance fields are correctly typed when present
+# ---------------------------------------------------------------------------
+
+def test_registry_provenance_fields_typed_when_present():
+    """The optional provenance fields (artifact_file, hyperparameters,
+    train_window, features), when present on a row, are the expected types
+    (str / dict / dict / list) or None. Absent fields are tolerated (the
+    fields are backward-compatible additions)."""
+    with open(_REGISTRY_PATH) as f:
+        data = yaml.safe_load(f)
+    for model_id, spec in data["models"].items():
+        if "artifact_file" in spec and spec["artifact_file"] is not None:
+            assert isinstance(spec["artifact_file"], str), (
+                f"artifact_file for '{model_id}' must be a str or None"
+            )
+        if "hyperparameters" in spec and spec["hyperparameters"] is not None:
+            assert isinstance(spec["hyperparameters"], dict), (
+                f"hyperparameters for '{model_id}' must be a dict or None"
+            )
+        if "train_window" in spec and spec["train_window"] is not None:
+            assert isinstance(spec["train_window"], dict), (
+                f"train_window for '{model_id}' must be a dict or None"
+            )
+        if "features" in spec and spec["features"] is not None:
+            assert isinstance(spec["features"], list), (
+                f"features for '{model_id}' must be a list or None"
+            )
+
+
+def test_provenance_never_affects_deployable():
+    """A row with rich provenance but failing metrics is still NOT deployable —
+    provenance is decoupled from the DSR/PBO gate."""
+    from ml import registry_io
+
+    # Bad metrics (DSR too low) despite rich provenance → not deployable.
+    assert registry_io.compute_deployable(0.10, 0.10) is False
+    # The gate only reads DSR/PBO; provenance args aren't even accepted by it.
+
+
+# ---------------------------------------------------------------------------
 # Test 5: PITFeatureStore round-trip (in-memory cache)
 # ---------------------------------------------------------------------------
 

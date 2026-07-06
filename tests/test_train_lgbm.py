@@ -121,6 +121,42 @@ def test_update_model_metrics_writes_and_derives_gate(tmp_registry):
     assert data["models"]["meta_labeler_timeseries_momentum"]["deployable"] is False
 
 
+def test_update_model_metrics_provenance_round_trip(tmp_registry):
+    """Optional provenance survives the YAML round-trip, the banner header is
+    preserved, and provenance never influences the deployable gate."""
+    entry = registry_io.update_model_metrics(
+        "lgbm_ranker",
+        trained_date="2026-07-06",
+        cpcv_dsr=0.10,   # deliberately failing → not deployable despite rich provenance
+        pbo=0.10,
+        n_train=260,
+        path=tmp_registry,
+        hyperparameters={"num_leaves": 31},
+        train_window={"start": "2020-01-01", "end": "2026-01-01", "n_dates": 260},
+        features=["a", "b"],
+        artifact_file="lgbm_20260706.pkl",
+    )
+    # Provenance did NOT rescue a failing gate.
+    assert entry["deployable"] is False
+
+    # Re-load through the public API and confirm every field survived.
+    data = registry_io.load_registry(tmp_registry)
+    row = data["models"]["lgbm_ranker"]
+    assert row["hyperparameters"] == {"num_leaves": 31}
+    assert row["train_window"] == {"start": "2020-01-01", "end": "2026-01-01", "n_dates": 260}
+    assert row["features"] == ["a", "b"]
+    assert row["artifact_file"] == "lgbm_20260706.pkl"
+    assert row["deployable"] is False
+
+    # The banner header comment block is re-emitted verbatim on write.
+    text = tmp_registry.read_text()
+    assert text.startswith("# InvestYo ML Model Registry")
+    assert "# artifact_file:" in text
+    assert "# hyperparameters:" in text
+    assert "# train_window:" in text
+    assert "# features:" in text
+
+
 def test_update_model_metrics_null_is_not_deployable(tmp_registry):
     entry = registry_io.update_model_metrics(
         "lgbm_ranker", trained_date=None, cpcv_dsr=None, pbo=None,
