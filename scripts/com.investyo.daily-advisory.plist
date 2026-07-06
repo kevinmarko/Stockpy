@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.investyo.daily-advisory.plist
+  =================================
+  macOS launchd job: run the InvestYo advisory pipeline ONCE each weekday
+  pre-market (08:45 America/New_York) via the existing headless `main.py`
+  entrypoint. This is an OS timer only — it does NOT create any autonomous
+  self-invoking agent loop.
+
+  What it does: at 08:45 local time on Mon-Fri, launchd invokes
+  `.venv/bin/python3 main.py` (a single run cycle) with WorkingDirectory set
+  to the repo root, redirecting stdout/stderr to output/scheduled_advisory.out
+  and output/scheduled_advisory.err.
+
+  INSTALL (recommended): double-click scripts/install_schedule.command, or run
+      launchctl load  ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
+
+  UNINSTALL:
+      launchctl unload ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
+      rm ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
+
+  STATUS / LOGS:
+      launchctl list | grep com.investyo.daily-advisory
+      tail -f /Users/kevinlee/Desktop/Stockpy/output/scheduled_advisory.out
+
+  NOTE: launchd StartCalendarInterval fires in the machine's LOCAL timezone.
+  Keep the Mac set to America/New_York (or adjust the Hour below) so 08:45
+  lands pre-market ET. If the Mac is asleep at 08:45, launchd runs the job at
+  the next wake. Paths below are absolute (launchd does not expand ~ or $HOME
+  inside string values) — edit them if the repo lives elsewhere.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.investyo.daily-advisory</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kevinlee/Desktop/Stockpy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kevinlee/Desktop/Stockpy/.venv/bin/python3</string>
+        <string>main.py</string>
+    </array>
+
+    <!-- Mon(1)-Fri(5) at 08:45 local time. Sunday=0, Saturday=6. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+    </array>
+
+    <!-- Do NOT run at load time; only on the calendar schedule above. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/scheduled_advisory.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/scheduled_advisory.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
