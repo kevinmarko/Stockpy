@@ -42,7 +42,10 @@ _REGISTRY_HEADER = """\
 # Fields
 # ------
 # role:            what the model does in the pipeline
-# path:            path relative to repo root (or absolute) — the mutable *_latest.pkl pointer
+# path:            conventional model location, informational only — the runtime loader
+#                  (<Class>.load_latest()) never reads this field; it discovers the model
+#                  by glob-sorting dated ml/models/<prefix>_<YYYYMMDD>.pkl files. See
+#                  artifact_file below for the exact binary behind a given run's metrics.
 # trained_date:    ISO date of most recent training run
 # cpcv_dsr:        Deflated Sharpe Ratio from CPCV path evaluation (target > 0.95)
 # pbo:             Probability of Backtest Overfitting from CPCV (target < 0.50)
