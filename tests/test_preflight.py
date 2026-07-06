@@ -468,6 +468,100 @@ class TestValidationReports:
 
 
 # ---------------------------------------------------------------------------
+# env_no_duplicate_keys
+# ---------------------------------------------------------------------------
+
+class TestEnvNoDuplicateKeys:
+    """Verify check_env_no_duplicate_keys.
+
+    The check locates ``.env`` at ``_REPO_ROOT / ".env"`` (same as
+    check_env_not_committed), so tests patch ``_REPO_ROOT`` to a ``tmp_path``
+    containing a fixture ``.env``.  It is warning-only and reports KEY NAMES
+    (never values).
+    """
+
+    def _write_env(self, tmp_path, lines: str) -> None:
+        (tmp_path / ".env").write_text(lines, encoding="utf-8")
+
+    def test_warns_on_duplicate_key(self, tmp_path):
+        """A .env with a repeated key → warning-level PASS naming the key."""
+        from scripts.preflight_check import check_env_no_duplicate_keys
+        self._write_env(
+            tmp_path,
+            "# header comment\n"
+            "FRED_API_KEY=first\n"
+            "SOME_FLAG=true\n"
+            "FRED_API_KEY=second\n",
+        )
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_env_no_duplicate_keys()
+        assert r.passed  # warning, not blocking
+        assert r.warning
+        assert "FRED_API_KEY" in r.reason
+        assert "SOME_FLAG" not in r.reason  # only the duplicate is named
+
+    def test_reports_multiple_duplicates(self, tmp_path):
+        """Multiple duplicate keys are all named in the reason (KEY NAMES only)."""
+        from scripts.preflight_check import check_env_no_duplicate_keys
+        self._write_env(
+            tmp_path,
+            "AAA=1\nBBB=1\nAAA=2\nCCC=1\nBBB=2\n",
+        )
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_env_no_duplicate_keys()
+        assert r.passed and r.warning
+        assert "AAA" in r.reason
+        assert "BBB" in r.reason
+        assert "CCC" not in r.reason
+
+    def test_does_not_leak_values(self, tmp_path):
+        """The reason string must report KEY NAMES only — never the value."""
+        from scripts.preflight_check import check_env_no_duplicate_keys
+        secret = "super-secret-token-xyz"
+        self._write_env(
+            tmp_path,
+            f"API_TOKEN=old\nAPI_TOKEN={secret}\n",
+        )
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_env_no_duplicate_keys()
+        assert "API_TOKEN" in r.reason
+        assert secret not in r.reason
+
+    def test_passes_on_clean_env(self, tmp_path):
+        """A .env with no duplicates → PASS, no warning."""
+        from scripts.preflight_check import check_env_no_duplicate_keys
+        self._write_env(
+            tmp_path,
+            "# comment\nFRED_API_KEY=abc\nALPACA_PAPER=true\n\nDRY_RUN=false\n",
+        )
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_env_no_duplicate_keys()
+        assert r.passed
+        assert not r.warning
+        assert "No duplicate keys" in r.reason
+
+    def test_ignores_comments_and_blanks(self, tmp_path):
+        """Commented-out and blank lines never count as key definitions."""
+        from scripts.preflight_check import check_env_no_duplicate_keys
+        self._write_env(
+            tmp_path,
+            "KEY_A=1\n# KEY_A=commented-out\n\n   \n#KEY_A=also-commented\n",
+        )
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_env_no_duplicate_keys()
+        assert r.passed and not r.warning
+
+    def test_missing_env_passes(self, tmp_path):
+        """A missing .env → PASS (env_not_committed handles absence separately)."""
+        from scripts.preflight_check import check_env_no_duplicate_keys
+        # tmp_path has no .env
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_env_no_duplicate_keys()
+        assert r.passed
+        assert not r.warning
+
+
+# ---------------------------------------------------------------------------
 # Key-rotation checks (Stage 3 — 2026-06-26 cleanup)
 # ---------------------------------------------------------------------------
 
