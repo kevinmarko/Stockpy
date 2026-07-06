@@ -41,14 +41,21 @@ _REGISTRY_HEADER = """\
 #
 # Fields
 # ------
-# role:          what the model does in the pipeline
-# path:          path relative to repo root (or absolute)
-# trained_date:  ISO date of most recent training run
-# cpcv_dsr:      Deflated Sharpe Ratio from CPCV path evaluation (target > 0.95)
-# pbo:           Probability of Backtest Overfitting from CPCV (target < 0.50)
-# n_train:       number of training samples in the most recent run
-# notes:         any caveats, data limitations, or scope restrictions
-# deployable:    true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
+# role:            what the model does in the pipeline
+# path:            path relative to repo root (or absolute) — the mutable *_latest.pkl pointer
+# trained_date:    ISO date of most recent training run
+# cpcv_dsr:        Deflated Sharpe Ratio from CPCV path evaluation (target > 0.95)
+# pbo:             Probability of Backtest Overfitting from CPCV (target < 0.50)
+# n_train:         number of training samples in the most recent run
+# notes:           any caveats, data limitations, or scope restrictions
+# deployable:      true iff cpcv_dsr > 0.95 AND pbo < 0.50 AND meets Gravity gates
+#
+# Provenance fields (optional; captured for reproducibility — never affect `deployable`)
+# ----------------------------------------------------------------------------------------
+# artifact_file:   exact dated pickle filename actually written this run (e.g. lgbm_20260706.pkl)
+# hyperparameters: the model's training hyperparameters (dict)
+# train_window:    the data-split window {start, end, n_dates} (dates as YYYY-MM-DD strings)
+# features:        the ordered feature-column list the model trained with (list)
 """
 
 
@@ -85,12 +92,23 @@ def update_model_metrics(
     pbo: Optional[float] = None,
     n_train: Optional[int] = None,
     path: Optional[Path] = None,
+    artifact_file: Optional[str] = None,
+    hyperparameters: Optional[dict] = None,
+    train_window: Optional[dict] = None,
+    features: Optional[list] = None,
 ) -> dict:
     """Update ``models.<model_key>.{trained_date,cpcv_dsr,pbo,n_train,deployable}``.
 
     The ``deployable`` flag is (re)derived from ``cpcv_dsr``/``pbo`` via
     :func:`compute_deployable` — callers do NOT pass it directly, so the gate
     can never be spoofed.
+
+    Provenance (all optional, backward-compatible, and independent of the gate):
+    ``artifact_file`` (the exact dated pickle filename written this run),
+    ``hyperparameters`` (the model's training params dict), ``train_window``
+    (the data-split window ``{start, end, n_dates}``), and ``features`` (the
+    ordered feature-column list). Each is written into the entry verbatim; a
+    ``None`` value is stored as-is and never influences ``deployable``.
 
     Returns the resulting model sub-dict.  Raises ``KeyError`` if the model key
     does not already exist in the registry (we update in place, never invent
@@ -112,6 +130,12 @@ def update_model_metrics(
     entry["pbo"] = float(pbo) if pbo is not None else None
     entry["n_train"] = int(n_train) if n_train is not None else None
     entry["deployable"] = compute_deployable(cpcv_dsr, pbo)
+
+    # Optional provenance — captured for reproducibility, never gate-affecting.
+    entry["artifact_file"] = artifact_file
+    entry["hyperparameters"] = dict(hyperparameters) if hyperparameters is not None else None
+    entry["train_window"] = dict(train_window) if train_window is not None else None
+    entry["features"] = list(features) if features is not None else None
 
     _dump_registry(data, reg_path)
     logger.info(

@@ -3,7 +3,7 @@ Tests for scripts/train_lgbm.py and ml/registry_io.py
 =====================================================
 Fully offline: uses a small synthetic/injected data engine (no network) and a
 temp registry + model path so nothing touches the tracked ml/registry.yaml or
-ml/models/lgbm_latest.pkl.
+writes into the real ml/models/ directory.
 
 Coverage
 --------
@@ -121,6 +121,42 @@ def test_update_model_metrics_writes_and_derives_gate(tmp_registry):
     assert data["models"]["meta_labeler_timeseries_momentum"]["deployable"] is False
 
 
+def test_update_model_metrics_provenance_round_trip(tmp_registry):
+    """Optional provenance survives the YAML round-trip, the banner header is
+    preserved, and provenance never influences the deployable gate."""
+    entry = registry_io.update_model_metrics(
+        "lgbm_ranker",
+        trained_date="2026-07-06",
+        cpcv_dsr=0.10,   # deliberately failing → not deployable despite rich provenance
+        pbo=0.10,
+        n_train=260,
+        path=tmp_registry,
+        hyperparameters={"num_leaves": 31},
+        train_window={"start": "2020-01-01", "end": "2026-01-01", "n_dates": 260},
+        features=["a", "b"],
+        artifact_file="lgbm_20260706.pkl",
+    )
+    # Provenance did NOT rescue a failing gate.
+    assert entry["deployable"] is False
+
+    # Re-load through the public API and confirm every field survived.
+    data = registry_io.load_registry(tmp_registry)
+    row = data["models"]["lgbm_ranker"]
+    assert row["hyperparameters"] == {"num_leaves": 31}
+    assert row["train_window"] == {"start": "2020-01-01", "end": "2026-01-01", "n_dates": 260}
+    assert row["features"] == ["a", "b"]
+    assert row["artifact_file"] == "lgbm_20260706.pkl"
+    assert row["deployable"] is False
+
+    # The banner header comment block is re-emitted verbatim on write.
+    text = tmp_registry.read_text()
+    assert text.startswith("# InvestYo ML Model Registry")
+    assert "# artifact_file:" in text
+    assert "# hyperparameters:" in text
+    assert "# train_window:" in text
+    assert "# features:" in text
+
+
 def test_update_model_metrics_null_is_not_deployable(tmp_registry):
     entry = registry_io.update_model_metrics(
         "lgbm_ranker", trained_date=None, cpcv_dsr=None, pbo=None,
@@ -168,6 +204,48 @@ def test_training_produces_model_and_real_metrics(tmp_path, tmp_registry):
     assert row["cpcv_dsr"] is not None
     assert row["pbo"] is not None
     assert row["n_train"] == summary["n_train"]
+
+
+def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, monkeypatch):
+    """run_training(save_path=None) must NOT force a mutable *_latest.pkl name.
+
+    Regression test: train_lgbm.py used to default save_path to a hardcoded
+    ml/models/lgbm_latest.pkl, which meant every retraining overwrote the same
+    binary and registry.artifact_file could never name a unique artifact. The
+    fix removes that hardcoded default so None flows through to
+    LGBMCrossSectionalRanker.save(None), which auto-dates to
+    lgbm_<YYYYMMDD>.pkl. This test stubs .save() (never touching the real
+    ml/models/ directory) and asserts (a) it is invoked with path=None when the
+    caller supplies no save_path, and (b) run_training's returned model_path /
+    registry artifact_file reflect whatever path .save() actually returns.
+    """
+    fake_dated_path = tmp_path / "lgbm_20260706.pkl"
+    received_args = {}
+
+    def _fake_save(self, path=None):
+        received_args["path"] = path
+        fake_dated_path.write_bytes(b"fake-pickle")
+        return fake_dated_path
+
+    monkeypatch.setattr(train_lgbm.LGBMCrossSectionalRanker, "save", _fake_save)
+
+    summary = train_lgbm.run_training(
+        _TICKERS,
+        data_engine=_DistinctEngine(),
+        save_path=None,
+        registry_path=tmp_registry,
+    )
+
+    assert received_args["path"] is None, (
+        "run_training must pass path=None through to ranker.save() by default "
+        "so it self-dates, instead of forcing a mutable *_latest.pkl name"
+    )
+    assert summary["model_path"] == str(fake_dated_path)
+
+    data = yaml.safe_load(tmp_registry.read_text())
+    row = data["models"]["lgbm_ranker"]
+    assert row["artifact_file"] == "lgbm_20260706.pkl"
+    assert "latest" not in row["artifact_file"]
 
 
 def test_deployable_flag_matches_gate_exactly(tmp_path, tmp_registry):
