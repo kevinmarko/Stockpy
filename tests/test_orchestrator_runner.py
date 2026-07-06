@@ -38,6 +38,8 @@ def runner(monkeypatch, tmp_path):
     # Redirect every FS sink the module writes to.
     monkeypatch.setattr(runner, "RUN_LOG_PATH", tmp_path / "gui_run.log")
     monkeypatch.setattr(runner, "ADVISORY_LOG_PATH", tmp_path / "gui_advisory.log")
+    monkeypatch.setattr(runner, "PYTEST_LOG_PATH", tmp_path / "gui_pytest.log")
+    monkeypatch.setattr(runner, "VERIFY_LOG_PATH", tmp_path / "gui_verify.log")
     monkeypatch.setattr(runner, "TELEMETRY_LOG_PATH", tmp_path / "investyo.log")
     monkeypatch.setattr(runner.settings, "OUTPUT_DIR", tmp_path)
     return runner
@@ -198,6 +200,48 @@ def test_launch_orchestrator_routes_to_orchestrator_log(monkeypatch, runner):
     assert handle.log_path == runner.RUN_LOG_PATH
     assert handle.dry_run is True
     assert runner.RUN_LOG_PATH.exists()
+
+
+def test_launch_pytest_routes_to_pytest_log(monkeypatch, runner):
+    captured: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["stdout"] = kwargs.get("stdout")
+        return _FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    handle = runner.launch_pytest()
+
+    assert handle.mode == "pytest"
+    assert handle.log_path == runner.PYTEST_LOG_PATH
+    assert handle.dry_run is False
+    assert handle.refresh_account is False
+    # Command must run pytest quietly via the current interpreter.
+    assert captured["cmd"] == [sys.executable, "-m", "pytest", "-q"]
+    # Log file must exist (truncated header line written).
+    assert runner.PYTEST_LOG_PATH.exists()
+
+
+def test_launch_verify_routes_to_verify_log(monkeypatch, runner):
+    captured: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["stdout"] = kwargs.get("stdout")
+        return _FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    handle = runner.launch_verify()
+
+    assert handle.mode == "verify"
+    assert handle.log_path == runner.VERIFY_LOG_PATH
+    assert handle.dry_run is False
+    assert handle.refresh_account is False
+    # Command must be the make target, NOT sys.executable — make is the exe.
+    assert captured["cmd"] == ["make", "verify"]
+    # Log file must exist (truncated header line written).
+    assert runner.VERIFY_LOG_PATH.exists()
 
 
 def test_compute_stage_status_handles_advisory_log(monkeypatch, runner):

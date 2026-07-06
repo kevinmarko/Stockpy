@@ -90,6 +90,16 @@ RETRY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_retry.log"
 # distinct so the Control Center tails only its own scheduled run.
 SCHEDULED_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_scheduled.log"
 
+# Log written by ``launch_pytest`` — the Maintenance tab's "Run test suite"
+# button.  Kept distinct so the long-running pytest tail never collides with a
+# concurrent orchestrator/advisory refresh log.
+PYTEST_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_pytest.log"
+
+# Log written by ``launch_verify`` — the Maintenance tab's "Run make verify"
+# button (env-var check → pytest → one live run_once + summary).  Distinct file
+# so the operator can tail the full readiness gate independently of a refresh.
+VERIFY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_verify.log"
+
 # Telemetry log written by ``alerting.setup_logging()`` and shared by both
 # entry points. Surfaced in the Launcher tab so the operator sees structured
 # diagnostics from across the platform (CONSTRAINT #2 — observable feedback).
@@ -376,6 +386,116 @@ def launch_scheduled_advisory(
         refresh_account=refresh_account,
         log_path=SCHEDULED_LOG_PATH,
         mode="scheduled",
+        _popen=popen,
+    )
+
+
+def launch_pytest() -> RunHandle:
+    """Spawn the full ``pytest`` suite as a non-blocking subprocess.
+
+    This backs the Maintenance tab's "Run test suite" button.  ``pytest`` is a
+    long-running maintenance command (the full suite takes minutes), so — like
+    every other launcher in this module — it is spawned via a detached
+    :class:`subprocess.Popen` rather than run inline, keeping the Streamlit UI
+    responsive while the operator tails the streamed log.
+
+    The child runs ``[sys.executable, "-m", "pytest", "-q"]`` from the repo
+    root, inheriting the current environment (so ``.env`` is available to any
+    test that reads it).  stdout+stderr are redirected to :data:`PYTEST_LOG_PATH`,
+    truncated at launch so the UI tails only the current run.  Using
+    ``sys.executable`` guarantees the ``.venv`` interpreter is used rather than a
+    stray system Python.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="pytest"``, ``log_path=PYTEST_LOG_PATH``) for polling
+        status, tailing the log via :func:`read_log_tail`, and stopping via
+        :func:`stop_run`.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "-m", "pytest", "-q"]
+
+    log_file = open(PYTEST_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo pytest launch @ {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched pytest pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=False,
+        log_path=PYTEST_LOG_PATH,
+        mode="pytest",
+        _popen=popen,
+    )
+
+
+def launch_verify() -> RunHandle:
+    """Spawn the ``make verify`` readiness gate as a non-blocking subprocess.
+
+    This backs the Maintenance tab's "Run make verify" button.  ``make verify``
+    runs the full readiness gate — env-var check → pytest → one live
+    ``run_once()`` cycle → print summary — and is therefore long-running, so it
+    is spawned via a detached :class:`subprocess.Popen` (never inline) with a
+    tailed log, exactly like the other launchers in this module.
+
+    Note the command is ``["make", "verify"]``, NOT ``sys.executable`` — ``make``
+    is the executable here, and the Makefile's ``verify`` target itself invokes
+    ``.venv/bin/python3`` for the pytest + ``run_once()`` steps.  The child runs
+    from the repo root inheriting the current environment; stdout+stderr are
+    redirected to :data:`VERIFY_LOG_PATH`, truncated at launch so the UI tails
+    only the current run.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="verify"``, ``log_path=VERIFY_LOG_PATH``) for polling
+        status, tailing the log via :func:`read_log_tail`, and stopping via
+        :func:`stop_run`.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = ["make", "verify"]
+
+    log_file = open(VERIFY_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo make-verify launch @ {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched make verify pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=False,
+        log_path=VERIFY_LOG_PATH,
+        mode="verify",
         _popen=popen,
     )
 
