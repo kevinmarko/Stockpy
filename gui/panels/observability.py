@@ -31,24 +31,39 @@ from gui.panels import load_state_snapshot
 
 
 def render_observability() -> None:
-    """Compact macro / regime / P&L view — Mission Control for the platform.
+    """Macro / regime / P&L / account / risk view — Mission Control for the
+    platform.
+
+    This tab is the single observability surface for InvestYo — the former
+    standalone ``streamlit run observability/dashboard.py`` app has been
+    retired; every panel it rendered now lives here (or, for validation-report
+    trend analysis, in the Gravity Audit Logs tab — cross-referenced below).
 
     Sections
     --------
-    1.  System-health bar      — kill switch, macro regime, VIX, HMM risk-on.
-    2.  Macro Regime Gate      — operator toggle (MACRO_REGIME_GATE_ENABLED) with
-                                 live Sahm-Rule and HY-OAS telemetry.  Writes the
-                                 setting to .env via gui.env_io (CONSTRAINT #3).
-    3.  Recession indicators   — Sahm Rule / HY OAS / yield curve with threshold
-                                 colour-coding so the operator can judge whether
-                                 a "Risk Off" trigger is genuine or idiosyncratic.
-    4.  Strategy P&L           — realized P&L by strategy from TransactionsStore.
+    1.  System-health bar         — kill switch, macro regime, VIX, HMM risk-on.
+    2.  Macro Regime Gate         — operator toggle (MACRO_REGIME_GATE_ENABLED)
+                                    with live Sahm-Rule and HY-OAS telemetry.
+                                    Writes the setting to .env via gui.env_io
+                                    (CONSTRAINT #3).
+    3.  Recession indicators      — Sahm Rule / HY OAS / yield curve with
+                                    threshold colour-coding so the operator can
+                                    judge whether a "Risk Off" trigger is
+                                    genuine or idiosyncratic.
+    4.  Strategy P&L               — realized P&L by strategy from TransactionsStore.
+    4a-1. Account Holdings & P&L  — Robinhood snapshot (cache/account_snapshot.json).
+    4a-2. Open Positions          — internal book vs. latest pipeline signals.
+    4a-3. Portfolio Risk Metrics  — heat / gross / net exposure.
+    4a-4. Validation Report Status — per-strategy deployability snapshot.
+    4a-5. Recent Closed Trades    — last 20 exits from TransactionsStore.
+    4a-6. Equity Curve            — cumulative realized P&L, drawdown, regime overlay.
+    4a-7. Risk Gate Block Log     — last 100 blocked orders.
+    4b+.  Heartbeat trend / system telemetry / latency heatmap / error log.
     """
     help_widgets.explain("observability")
     st.subheader("📊 Observability — Mission Control")
     st.caption(
-        "Summary of the file-backed state last written by the orchestrator. "
-        "Full standalone dashboard: `streamlit run observability/dashboard.py`"
+        "Summary of the file-backed state last written by the orchestrator."
     )
 
     snap = load_state_snapshot()
@@ -264,6 +279,27 @@ def render_observability() -> None:
         st.caption(f"(transactions store unavailable: {exc})")
 
     st.divider()
+    _render_observability_account_holdings()
+
+    st.divider()
+    _render_observability_open_positions_vs_signals(snap)
+
+    st.divider()
+    _render_observability_portfolio_risk_metrics()
+
+    st.divider()
+    _render_observability_validation_status()
+
+    st.divider()
+    _render_observability_recent_closed_trades()
+
+    st.divider()
+    _render_observability_equity_curve()
+
+    st.divider()
+    _render_observability_risk_gate_block_log()
+
+    st.divider()
     _render_observability_heartbeat_trend()
 
     st.divider()
@@ -274,6 +310,462 @@ def render_observability() -> None:
 
     st.divider()
     _render_observability_error_log()
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4a-1: Account Holdings & P&L
+#
+# Ported from the retired ``observability/dashboard.py`` standalone Streamlit
+# app (its "💼 Account Holdings & P&L" row). Source of truth for account
+# state (CONSTRAINT #4) is ``cache/account_snapshot.json``, written by
+# ``data.robinhood_portfolio.fetch_account_snapshot()``. Uses the shared
+# ``gui.styling`` Styler helpers (``_color_pnl`` / ``style_severity``) instead
+# of re-implementing the green/red P&L coloring that used to live directly in
+# the standalone dashboard module.
+# ---------------------------------------------------------------------------
+
+
+def _load_account_snapshot_cache() -> Dict[str, Any]:
+    """Load the cached Robinhood account snapshot (holdings + P&L).
+
+    Reads ``cache/account_snapshot.json`` directly (no live Robinhood call) —
+    the same file :func:`gui.panels._shared._held_symbols` reads, but this
+    loader returns the FULL parsed payload (positions + equity + buying power
+    + dividends), not just the symbol list. Returns ``{}`` on any read/parse
+    failure so the panel degrades to an instructional message rather than a
+    traceback (dead-letter pattern used throughout this codebase).
+    """
+    cache_path = _REPO_ROOT / "cache" / "account_snapshot.json"
+    if not cache_path.exists():
+        return {}
+    try:
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("account_snapshot.json read failed: %s", exc)
+        return {}
+
+
+def _render_observability_account_holdings() -> None:
+    """Account Holdings & P&L — headline metrics + per-position table.
+
+    Mirrors ``observability/dashboard.py``'s account-snapshot row: Total
+    Equity / Buying Power / Unrealized P&L / Dividends Received metrics, plus
+    a per-position table colour-coded green/red on Unrealized P&L and P&L %
+    via :func:`gui.styling.style_severity`.
+    """
+    from gui.styling import style_severity
+
+    st.markdown("### 💼 Account Holdings & P&L")
+    account = _load_account_snapshot_cache()
+
+    if not account:
+        st.info(
+            "No account snapshot found at `cache/account_snapshot.json`. "
+            "Run `python3 main.py --refresh-account` to fetch holdings from Robinhood."
+        )
+        return
+
+    positions = account.get("positions", {}) or {}
+    total_equity = float(account.get("total_equity", 0.0) or 0.0)
+    buying_power = float(account.get("buying_power", 0.0) or 0.0)
+    total_dividends = float(account.get("total_dividends", 0.0) or 0.0)
+    total_unrealized = sum(
+        float(p.get("unrealized_pl", 0.0) or 0.0) for p in positions.values()
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Equity", f"${total_equity:,.0f}")
+    m2.metric("Buying Power", f"${buying_power:,.0f}")
+    m3.metric("Unrealized P&L", f"${total_unrealized:,.0f}", delta=f"{total_unrealized:,.0f}")
+    m4.metric("Dividends Received", f"${total_dividends:,.0f}")
+
+    fetched = account.get("fetched_at", "—")
+    st.caption(f"Snapshot fetched: {fetched}  ·  {len(positions)} position(s) held")
+
+    if not positions:
+        st.info("Account snapshot has no open positions.")
+        return
+
+    holdings_df = pd.DataFrame([
+        {
+            "Symbol": p.get("symbol", sym),
+            "Name": p.get("name", "") or "",
+            "Qty": float(p.get("quantity", 0.0) or 0.0),
+            "Avg Cost": float(p.get("average_cost", 0.0) or 0.0),
+            "Price": float(p.get("current_price", 0.0) or 0.0),
+            "Market Value": float(p.get("market_value", 0.0) or 0.0),
+            "Unrealized P&L": float(p.get("unrealized_pl", 0.0) or 0.0),
+            "P&L %": float(p.get("unrealized_pl_pct", 0.0) or 0.0),
+            "Dividends": float(p.get("dividends_received", 0.0) or 0.0),
+        }
+        for sym, p in positions.items()
+    ]).sort_values("Market Value", ascending=False)
+
+    fmt = {
+        "Qty": "{:.2f}",
+        "Avg Cost": "${:.2f}",
+        "Price": "${:.2f}",
+        "Market Value": "${:,.0f}",
+        "Unrealized P&L": "${:,.0f}",
+        "P&L %": "{:.1%}",
+        "Dividends": "${:,.2f}",
+    }
+    fmt = {k: v for k, v in fmt.items() if k in holdings_df.columns}
+    styler = style_severity(holdings_df, pnl_cols=("Unrealized P&L", "P&L %")).format(fmt)
+    st.dataframe(styler, width="stretch")
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4a-2: Open Positions (internal book) vs. Pipeline
+# Signals
+#
+# Ported from ``observability/dashboard.py``'s "📂 Open Positions" row —
+# side-by-side comparison so the operator can spot reconciliation gaps
+# between the internal TransactionsStore book and the last pipeline snapshot.
+# ---------------------------------------------------------------------------
+
+
+def _render_observability_open_positions_vs_signals(snap: Dict[str, Any]) -> None:
+    st.markdown("### 📂 Open Positions")
+
+    try:
+        from transactions_store import TransactionsStore
+
+        open_df = TransactionsStore().open_trades_df()
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"(transactions store unavailable: {exc})")
+        open_df = pd.DataFrame()
+
+    col_open, col_signals = st.columns(2)
+
+    with col_open:
+        st.caption("From transactions_store (internal book)")
+        if not open_df.empty:
+            display_cols = [
+                c for c in ["symbol", "strategy_id", "entry_price", "entry_ts", "qty"]
+                if c in open_df.columns
+            ]
+            st.dataframe(open_df[display_cols] if display_cols else open_df, width="stretch")
+        else:
+            st.info("No open positions in the internal book.")
+
+    with col_signals:
+        st.caption("Latest pipeline signals")
+        signals = snap.get("signals", [])
+        if signals:
+            sigs_df = pd.DataFrame(signals)
+            if "kelly_target" in sigs_df.columns:
+                sigs_df["kelly_target"] = (
+                    sigs_df["kelly_target"] * 100
+                ).round(1).astype(str) + "%"
+            st.dataframe(sigs_df, width="stretch")
+        else:
+            st.info("No signals in last snapshot.")
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4a-3: Portfolio Risk Metrics (heat / gross / net)
+#
+# Ported from ``observability/dashboard.py``'s "🌡️ Portfolio Risk Metrics"
+# row. Heat/gross/net all derive from the internal TransactionsStore open
+# book — the same caveat as the original applies: the 100_000 heat
+# denominator is a placeholder pending equity coming from the broker account
+# snapshot in the state snapshot; degrades to "—" when the required columns
+# are absent (dead-letter, CONSTRAINT #4 — no fabricated metrics).
+# ---------------------------------------------------------------------------
+
+
+def _render_observability_portfolio_risk_metrics() -> None:
+    st.markdown("### 🌡️ Portfolio Risk Metrics")
+
+    try:
+        from transactions_store import TransactionsStore
+
+        open_df = TransactionsStore().open_trades_df()
+    except Exception:
+        open_df = pd.DataFrame()
+
+    col_heat, col_gross, col_net = st.columns(3)
+
+    with col_heat:
+        if not open_df.empty and "unrealized_pnl" in open_df.columns:
+            adverse = open_df[open_df["unrealized_pnl"] < 0]["unrealized_pnl"].abs().sum()
+            heat_pct = adverse / 100_000
+            heat_colour = "🔴" if heat_pct > 0.05 else ("🟡" if heat_pct > 0.03 else "🟢")
+            st.metric("Portfolio Heat", f"{heat_colour} {heat_pct:.1%}")
+        else:
+            st.metric("Portfolio Heat", "—")
+
+    with col_gross:
+        if not open_df.empty and "market_value" in open_df.columns:
+            gross = open_df["market_value"].abs().sum()
+            st.metric("Gross Exposure", f"${gross:,.0f}")
+        else:
+            st.metric("Gross Exposure", "—")
+
+    with col_net:
+        if not open_df.empty and "market_value" in open_df.columns:
+            net = open_df["market_value"].sum()
+            st.metric("Net Exposure", f"${net:,.0f}")
+        else:
+            st.metric("Net Exposure", "—")
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4a-4: Validation Report Status
+#
+# Ported from ``observability/dashboard.py``'s "🏷️ Validation Report Status"
+# row. NOTE: a richer, cross-strategy version of this table — plus
+# run-over-run PBO/DSR/Sharpe/MaxDD trend lines — already lives in the
+# Gravity Audit tab's ``_render_validation_stress_regime_section()``. Rather
+# than duplicate that logic, this section renders the same compact summary
+# the standalone dashboard used to show (so the Observability tab alone is
+# still a full superset) and points to the richer view for trend analysis.
+# ---------------------------------------------------------------------------
+
+
+def _load_validation_reports() -> List[Dict[str, Any]]:
+    """Load all ``reports/*_validation_summary.json`` files.
+
+    Same glob :func:`gui.panels.gravity_audit._render_validation_stress_regime_section`
+    already uses — duplicated here as a small local read (not re-exported)
+    rather than importing across panel modules, since ``gui/panels/_shared.py``
+    is the sanctioned place for cross-panel-module reuse and this one-line
+    glob does not warrant promoting there.
+    """
+    reports_dir = _REPO_ROOT / "reports"
+    if not reports_dir.exists():
+        return []
+    summaries: List[Dict[str, Any]] = []
+    for f in reports_dir.glob("*_validation_summary.json"):
+        try:
+            summaries.append(json.loads(f.read_text(encoding="utf-8")))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not parse %s: %s", f, exc)
+    return summaries
+
+
+def _render_observability_validation_status() -> None:
+    st.markdown("### 🏷️ Validation Report Status")
+    st.caption(
+        "For run-over-run PBO/DSR/Sharpe/MaxDD trend lines and the "
+        "tail-scenario stress gate breakdown, see **Gravity Audit Logs → "
+        "📐 Validation & Stress Trend**."
+    )
+
+    val_reports = _load_validation_reports()
+    if not val_reports:
+        st.warning(
+            "No validation summaries found in reports/.  "
+            "Run: `python -m validation.harness --strategy <name> "
+            "--start YYYY-MM-DD --end YYYY-MM-DD`"
+        )
+        return
+
+    vr_df = pd.DataFrame(val_reports)
+    status_col = vr_df["deployable"].map({True: "✅ DEPLOYABLE", False: "❌ REJECTED"})
+    vr_df.insert(1, "Status", status_col)
+    show_cols = [
+        c for c in
+        ["strategy_id", "Status", "pbo", "dsr", "sharpe", "max_drawdown", "report_date"]
+        if c in vr_df.columns
+    ]
+    st.dataframe(vr_df[show_cols] if show_cols else vr_df, width="stretch")
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4a-5: Recent Closed Trades
+#
+# Ported from ``observability/dashboard.py``'s "🗒️ Recent Closed Trades" row.
+# ---------------------------------------------------------------------------
+
+
+def _render_observability_recent_closed_trades() -> None:
+    st.markdown("### 🗒️ Recent Closed Trades")
+
+    try:
+        from transactions_store import TransactionsStore
+
+        closed_df = TransactionsStore().closed_trades_df()
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"(transactions store unavailable: {exc})")
+        return
+
+    if closed_df.empty:
+        st.info("No closed trades yet.")
+        return
+
+    display = closed_df.tail(20).copy()
+    if "exit_ts" in display.columns:
+        display = display.sort_values("exit_ts", ascending=False)
+    show_cols = [
+        c for c in
+        ["symbol", "strategy_id", "entry_price", "exit_price", "realized_pnl", "exit_ts"]
+        if c in display.columns
+    ]
+    st.dataframe(display[show_cols] if show_cols else display, width="stretch")
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4a-6: Equity Curve, Drawdown & Regime Overlay
+#
+# Ported from ``observability/dashboard.py``'s "📈 Equity Curve, Drawdown &
+# Regime Overlay" row (added there after the initial dashboard-vs-GUI split,
+# so it never had a GUI-side counterpart). Computed from
+# ``TransactionsStore.closed_trades_df()``.  ``realized_pnl`` is NOT a stored
+# column on the ``Trade`` model — it is derived here exactly as the original
+# dashboard did: ``(exit_price - entry_price) * shares`` for longs, inverted
+# for shorts, matching ``TransactionsStore.record_trade()``/``close_trade()``'s
+# sign convention.
+#
+# Regime overlay: sourced from ``output/history/state_snapshot_*.json`` via
+# ``scripts.snapshot_diff`` — the same rotated-snapshot source the Gravity
+# Audit tab's Macro Regime Timeline uses. If fewer than 2 rotated snapshots
+# exist, no fabricated regime history is shown (CONSTRAINT #4).
+# ---------------------------------------------------------------------------
+
+
+def _render_observability_equity_curve() -> None:
+    from gui.styling import freshness_badge
+
+    st.markdown("### 📈 Equity Curve, Drawdown & Regime Overlay")
+
+    try:
+        from transactions_store import TransactionsStore
+
+        closed_df = TransactionsStore().closed_trades_df()
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"(transactions store unavailable: {exc})")
+        return
+
+    # Freshness badge: "as of" the most recent closed-trade exit.
+    try:
+        latest_exit = None
+        if not closed_df.empty and "exit_ts" in closed_df.columns:
+            exit_series = pd.to_datetime(closed_df["exit_ts"], errors="coerce").dropna()
+            if not exit_series.empty:
+                latest_exit = exit_series.max().to_pydatetime().replace(tzinfo=timezone.utc)
+        st.caption(freshness_badge(
+            latest_exit, ttl_seconds=settings.DASHBOARD_REFRESH_SECONDS,
+            label="Most recent closed trade",
+        ))
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"(freshness badge unavailable: {exc})")
+
+    if closed_df.empty or "exit_ts" not in closed_df.columns:
+        st.info(
+            "No closed trades yet — the equity curve populates once "
+            "`TransactionsStore` has at least one closed round-trip trade "
+            "(entry + exit recorded via `record_trade()` / `close_trade()`)."
+        )
+        return
+
+    eq_df = closed_df.dropna(subset=["exit_ts", "entry_price", "exit_price", "shares"]).copy()
+    if eq_df.empty:
+        st.info("Closed trades exist but are missing price/quantity fields needed for P&L.")
+        return
+
+    eq_df["exit_ts"] = pd.to_datetime(eq_df["exit_ts"])
+    eq_df["side"] = eq_df.get("side", "long").fillna("long").str.lower()
+    sign = eq_df["side"].map(lambda s: -1.0 if s == "short" else 1.0)
+    eq_df["realized_pnl"] = (eq_df["exit_price"] - eq_df["entry_price"]) * eq_df["shares"] * sign
+    eq_df = eq_df.sort_values("exit_ts")
+    eq_df["cumulative_pnl"] = eq_df["realized_pnl"].cumsum()
+    eq_df["running_peak"] = eq_df["cumulative_pnl"].cummax()
+    # Drawdown as % of peak equity above zero; peak floor of $1 avoids a
+    # divide-by-zero / meaningless percentage while cumulative P&L is still
+    # <= 0 (i.e. before the strategy has ever been net profitable).
+    peak_floor = eq_df["running_peak"].clip(lower=1.0)
+    eq_df["drawdown_pct"] = (eq_df["cumulative_pnl"] - eq_df["running_peak"]) / peak_floor
+
+    ec1, ec2, ec3 = st.columns(3)
+    ec1.metric("Closed Trades", len(eq_df))
+    ec2.metric("Cumulative Realized P&L", f"${eq_df['cumulative_pnl'].iloc[-1]:,.2f}")
+    ec3.metric("Max Drawdown", f"{eq_df['drawdown_pct'].min():.1%}")
+
+    equity_chart_df = eq_df.set_index("exit_ts")[["cumulative_pnl"]].rename(
+        columns={"cumulative_pnl": "Cumulative P&L ($)"}
+    )
+    st.line_chart(equity_chart_df, width="stretch")
+
+    drawdown_chart_df = eq_df.set_index("exit_ts")[["drawdown_pct"]].rename(
+        columns={"drawdown_pct": "Drawdown (%)"}
+    )
+    st.area_chart(drawdown_chart_df, width="stretch")
+
+    # ── Regime overlay (best-effort, real history only) ──────────────────────
+    try:
+        from scripts.snapshot_diff import list_rotated_snapshots, load_snapshot
+
+        rotated_paths = list_rotated_snapshots(settings.OUTPUT_DIR)
+        regime_points = []
+        for p in rotated_paths:
+            snap_hist = load_snapshot(p)
+            if not snap_hist:
+                continue
+            ts_raw = snap_hist.get("timestamp")
+            regime_raw = snap_hist.get("market_regime")
+            if ts_raw and regime_raw:
+                regime_points.append({
+                    "timestamp": pd.to_datetime(ts_raw),
+                    "market_regime": str(regime_raw),
+                })
+        if len(regime_points) >= 2:
+            regime_hist_df = pd.DataFrame(regime_points).sort_values("timestamp")
+            st.markdown("**Macro Regime Over Time** (from `output/history/`)")
+            st.dataframe(
+                regime_hist_df.rename(
+                    columns={"timestamp": "Timestamp (UTC)", "market_regime": "Market Regime"}
+                ),
+                width="stretch",
+            )
+            st.caption(
+                f"{len(regime_points)} rotated snapshot(s) found "
+                f"(retained {settings.SNAPSHOT_HISTORY_DAYS} days). "
+                "Shown as a table rather than a shaded chart overlay because "
+                "regime changes are sparse/irregular events, not a dense "
+                "time series aligned to trade exits. See also Gravity Audit "
+                "Logs → Macro Regime Timeline."
+            )
+        else:
+            st.caption(
+                "⚠️ Regime overlay not available: only "
+                f"{len(regime_points)} rotated snapshot(s) exist in "
+                "`output/history/` so far (need ≥ 2 to show a regime-over-time "
+                "table). This is a genuine data limitation, not a bug — "
+                "regime history accumulates one entry per orchestrator/"
+                "advisory run via `scripts.snapshot_diff.rotate_snapshot()`. "
+                "Run the pipeline more than once to populate this."
+            )
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"(regime history unavailable: {exc})")
+
+    with st.expander("🔬 Underlying closed-trade P&L table"):
+        st.dataframe(
+            eq_df[["symbol", "strategy", "side", "entry_ts", "entry_price",
+                   "exit_ts", "exit_price", "shares", "realized_pnl",
+                   "cumulative_pnl", "drawdown_pct"]],
+            width="stretch",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4a-7: Risk Gate Block Log
+#
+# Ported from ``observability/dashboard.py``'s "🚧 Risk Gate Block Log" row.
+# Reuses the already-shared ``gui.panels._shared.load_block_log`` loader
+# (identical to the one the standalone dashboard defined locally) rather than
+# duplicating the JSONL-tail-read logic.
+# ---------------------------------------------------------------------------
+
+
+def _render_observability_risk_gate_block_log() -> None:
+    st.markdown("### 🚧 Risk Gate Block Log (last 100)")
+    block_log = load_block_log()
+    if block_log:
+        st.dataframe(pd.DataFrame(block_log), width="stretch")
+    else:
+        st.success("No blocked orders in the log.")
 
 
 # ---------------------------------------------------------------------------

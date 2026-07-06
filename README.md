@@ -159,8 +159,7 @@ make verify          # env check → test suite → one live cycle → print sum
 pytest                                      # full test suite
 pytest tests/test_pipeline_smoke.py -v     # end-to-end smoke tests only
 make smoke                                  # same
-streamlit run observability/dashboard.py    # live observability dashboard (file-backed)
-streamlit run gui/app.py                    # full Command Center GUI (10 tabs)
+streamlit run gui/app.py                    # full Command Center GUI (10 tabs, incl. Observability)
 python scripts/preflight_check.py           # pre-live readiness gate (exit 0 = pass)
 python scripts/preflight_check.py --json    # machine-readable output
 python -m execution.kill_switch --status    # check / toggle the advisory pause gate
