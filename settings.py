@@ -427,6 +427,19 @@ class Settings(BaseSettings):
             "by symbol regardless of value."
         ),
     )
+    # Refresh cadence (seconds) for the persistent orchestrator daemon's
+    # internal timer thread (desktop/daemon_runtime.py). 0 (the default)
+    # disables the timer entirely -- the daemon then only runs cycles when
+    # explicitly triggered (on-demand via the future command API). The
+    # standalone entrypoint's --interval CLI flag overrides this when passed.
+    ORCHESTRATOR_INTERVAL_SECONDS: int = Field(
+        default=0,
+        description=(
+            "Seconds between automatic orchestrator daemon cycles. 0 = "
+            "on-demand only (no internal timer). Overridable via the "
+            "daemon entrypoint's --interval flag."
+        ),
+    )
     SIGNAL_WEIGHTS: dict[str, float] = Field(
         default_factory=lambda: {
             "macro_regime": 45.0,
