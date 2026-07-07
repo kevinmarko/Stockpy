@@ -83,6 +83,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "DASHBOARD_REFRESH_SECONDS",
     "LOG_LEVEL",
     "DRY_RUN",
+    # Persistent orchestrator daemon cutover flag. Non-secret (no credential
+    # material); the command token that actually guards the daemon's
+    # POST /run is ORCHESTRATOR_DAEMON_TOKEN, which stays in SECRET_KEYS.
+    "ORCHESTRATOR_DAEMON_ENABLED",
     # Execution mode toggle — paper sandbox vs. live endpoint. Writeable from
     # the Strategy Matrix tab's global Simulation/Paper/Live selector. Never a
     # secret: the broker keys themselves are SECRET_KEYS.
