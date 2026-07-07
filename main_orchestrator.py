@@ -27,6 +27,7 @@ import json
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
@@ -141,9 +142,55 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
     return macro_raw, fund_raw, tech_raw
 
 
+@dataclass
+class EngineContext:
+    """Holds long-lived, expensive-to-construct engine instances so a
+    persistent caller (e.g. the future orchestrator daemon) can build them
+    ONCE and reuse them across many ``run_pipeline()`` cycles instead of
+    paying full import+init cost every run.
+
+    ``MacroEngine`` is the highest-value entry: it holds a persistent
+    ``regime.hmm_regime.HMMRegimeDetector(retrain_freq_days=7)`` whose
+    expanding-window fit is silently discarded whenever a fresh MacroEngine is
+    constructed, which is exactly what happens on every cycle today.
+
+    Every field defaults to ``None``. ``run_pipeline`` falls back to
+    constructing a given engine fresh (today's exact behavior) whenever the
+    corresponding field is ``None`` — so passing ``engines=None`` entirely, or
+    a partially-populated context (e.g. to force one engine to rebuild next
+    cycle), both degrade gracefully. Nothing else about ``run_pipeline``'s
+    behavior changes when a full context is supplied; it is purely a
+    construction-site substitution.
+    """
+    macro_engine: Optional[MacroEngine] = None
+    technical_options_engine: Optional[TechnicalOptionsEngine] = None
+    iv_history_store: Optional[IVHistoryStore] = None
+    processing_engine: Optional[ProcessingEngine] = None
+    forecasting_engine: Optional[ForecastingEngine] = None
+    strategy_engine: Optional[StrategyEngine] = None
+    evaluation_engine: Optional[EvaluationEngine] = None
+
+    @classmethod
+    def build(cls, *, data_engine: Optional[Any] = None) -> "EngineContext":
+        """Construct one instance of every engine now, paying the one-time
+        cost so a long-lived caller can reuse them across many
+        ``run_pipeline()`` calls. ``data_engine`` is threaded into
+        ``MacroEngine`` exactly as ``run_pipeline`` would today."""
+        return cls(
+            macro_engine=MacroEngine(data_engine=data_engine),
+            technical_options_engine=TechnicalOptionsEngine(),
+            iv_history_store=IVHistoryStore(),
+            processing_engine=ProcessingEngine(),
+            forecasting_engine=ForecastingEngine(),
+            strategy_engine=StrategyEngine(),
+            evaluation_engine=EvaluationEngine(),
+        )
+
+
 def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                   data_engine: Optional[Any] = None,
                   robinhood_positions: Optional[dict] = None,
+                  engines: Optional[EngineContext] = None,
 ) -> tuple:
     """
     Synchronous execution of the quantitative engines:
@@ -156,7 +203,16 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
         historical VIX/yield-curve series (regime/hmm_regime.py's second
         opinion). None (the default) disables the HMM second opinion --
         market_regime/killSwitch then behave exactly as before this feature
-        existed (no fabricated probability).
+        existed (no fabricated probability). Ignored for any engine supplied
+        via ``engines`` (that engine was already constructed with whatever
+        data_engine its builder chose).
+    engines : EngineContext, optional
+        Pre-built, long-lived engine instances for a persistent caller (e.g.
+        the orchestrator daemon) to reuse across cycles instead of paying
+        full construction cost every call. None (the default) reproduces
+        today's exact behavior: every engine is constructed fresh inside this
+        function. A partially-populated EngineContext is also honored --
+        engines left as None on the context are still constructed fresh here.
 
     Returns
     -------
@@ -176,7 +232,8 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     """
     # 1. Macro Economic Regime Analysis
     telemetry.info("Routing data through Macro Engine...")
-    me = MacroEngine(data_engine=data_engine)
+    me = (engines.macro_engine if engines is not None and engines.macro_engine is not None
+          else MacroEngine(data_engine=data_engine))
     # BUG-FIX: was `me._fallback_sentiment("")` which always returns 0.0 (NLP
     # sentiment helper on empty text). The Sahm Rule indicator is a FRED-derived
     # recession signal and must be fetched via calculate_sahm_rule(). Calling
@@ -206,9 +263,13 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
     # 2. Technical Options Analysis
     telemetry.info("Routing data through Technical Options Engine...")
-    toe = TechnicalOptionsEngine()
+    toe = (engines.technical_options_engine
+           if engines is not None and engines.technical_options_engine is not None
+           else TechnicalOptionsEngine())
     tech_opt_indicators = {}
-    iv_store = IVHistoryStore()
+    iv_store = (engines.iv_history_store
+                if engines is not None and engines.iv_history_store is not None
+                else IVHistoryStore())
     for ticker in tickers:
         df_hist = tech_raw.get(ticker)
         if df_hist is not None and not df_hist.empty:
@@ -264,7 +325,8 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
     # 3. Core Processing
     telemetry.info("Routing data through Computational Core (Processing)...")
-    pe = ProcessingEngine()
+    pe = (engines.processing_engine if engines is not None and engines.processing_engine is not None
+          else ProcessingEngine())
     regime_metrics = pe.process_macro_regime(macro_dto)
     tech_metrics = pe.calculate_technical_metrics(tech_raw, transactions_df=None)
     
@@ -305,7 +367,8 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
     # 4. Multi-Horizon Forecasting (with robust ML exception safety)
     telemetry.info("Routing data through Forecasting Engine...")
-    fe = ForecastingEngine()
+    fe = (engines.forecasting_engine if engines is not None and engines.forecasting_engine is not None
+          else ForecastingEngine())
     forecast_cols = ['Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
                      'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
                      'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper']
@@ -493,8 +556,10 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
     # 6. Strategy & Sizing Evaluations
     telemetry.info("Routing data through Strategy and Evaluation Engines...")
-    se = StrategyEngine()
-    ee = EvaluationEngine()
+    se = (engines.strategy_engine if engines is not None and engines.strategy_engine is not None
+          else StrategyEngine())
+    ee = (engines.evaluation_engine if engines is not None and engines.evaluation_engine is not None
+          else EvaluationEngine())
     
     # 'sellRange' is the dedicated sell-side execution band (strategy_engine.
     # apply_sell_side_range) — always populated alongside buyRange, never empty
