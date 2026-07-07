@@ -3,11 +3,24 @@
 Pins the exact call contract of ``desktop/engine_supervisor.py`` — a thin
 pass-through wrapper over ``gui.orchestrator_runner``'s already-tested
 ``launch_scheduled_advisory`` / ``stop_run`` functions (WS3 of the
-always-on-desktop-app unification).
+always-on-desktop-app unification), OR, behind
+``settings.ORCHESTRATOR_DAEMON_ENABLED``, ``launch_daemon_engine`` (see
+tests/test_orchestrator_runner_daemon_cutover.py for that branch's own
+dedicated coverage).
 
 These tests monkeypatch the underlying ``gui.orchestrator_runner`` functions
 so they exercise only the wrapper's argument-mapping and pass-through
 behavior, never the real subprocess machinery.
+
+The default-path tests below explicitly pin
+``settings.ORCHESTRATOR_DAEMON_ENABLED = False`` rather than relying on the
+field's own default. ``Settings`` reads the real ``.env`` file directly via
+pydantic-settings' ``env_file=".env"`` config -- independent of any
+``load_dotenv()`` call -- so an operator's real ``.env`` (e.g. one who has
+locally enabled the daemon for their own use) would otherwise silently flip
+these "default behavior" tests onto the daemon branch instead. Pinning here
+is the same pattern already used throughout
+tests/test_orchestrator_runner_daemon_cutover.py.
 """
 
 from __future__ import annotations
@@ -21,6 +34,7 @@ class _SentinelHandle:
 
 
 def test_start_engine_default_maps_to_launch_scheduled_advisory(monkeypatch):
+    monkeypatch.setattr(orchestrator_runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", False)
     captured = {}
     sentinel = _SentinelHandle()
 
@@ -45,6 +59,7 @@ def test_start_engine_default_maps_to_launch_scheduled_advisory(monkeypatch):
 
 
 def test_start_engine_maps_custom_interval_and_refresh_account(monkeypatch):
+    monkeypatch.setattr(orchestrator_runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", False)
     captured = {}
     sentinel = _SentinelHandle()
 
