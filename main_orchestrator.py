@@ -1187,21 +1187,45 @@ def _validate_dashboard(final_df, *, strict: bool) -> bool:
         return False
 
 
-async def _main_body(effective_dry_run: bool, strict: bool = False) -> None:
-    """Core pipeline logic — separated from main() so the heartbeat try/finally is clean."""
+async def _main_body(effective_dry_run: bool, strict: bool = False,
+                      *, engines: Optional[EngineContext] = None,
+                      data_engine: Optional[Any] = None) -> None:
+    """Core pipeline logic — separated from main() so the heartbeat try/finally is clean.
+
+    Parameters
+    ----------
+    engines : EngineContext, optional
+        Pre-built, long-lived engines for a persistent caller (the
+        orchestrator daemon) to reuse across cycles. Threaded straight
+        through to ``run_pipeline(engines=...)``. None (the default)
+        reproduces today's exact behavior (every engine constructed fresh).
+    data_engine : IDataProvider, optional
+        A pre-built, long-lived data provider for a persistent caller to
+        reuse across cycles instead of constructing a fresh DataEngine (and
+        re-checking ``credentials.json``) every call. When supplied, the
+        ``credentials.json`` / MockDataEngine fallback branch below is
+        skipped entirely and ``settings.DEFAULT_TICKERS`` is used directly —
+        it is the daemon's job to have validated FRED configuration and
+        constructed a real DataEngine once at startup. None (the default)
+        reproduces today's exact per-call construction behavior.
+    """
     # Surface a CRITICAL alert if the previously leaked FRED key is still in use.
     settings.warn_if_fred_key_leaked(telemetry)
 
-    # Initialize real or mock data engine based on credentials
-    creds_exist = os.path.exists("credentials.json")
-    if creds_exist:
-        settings.ensure_fred_configured()
-        de = DataEngine(settings.FRED_API_KEY)
+    if data_engine is not None:
+        de = data_engine
         tickers = settings.DEFAULT_TICKERS
     else:
-        telemetry.warning("credentials.json not found. Operating with deterministic MockDataEngine.")
-        de = MockDataEngine()
-        tickers = ["AAPL"]  # Use mock ticker
+        # Initialize real or mock data engine based on credentials
+        creds_exist = os.path.exists("credentials.json")
+        if creds_exist:
+            settings.ensure_fred_configured()
+            de = DataEngine(settings.FRED_API_KEY)
+            tickers = settings.DEFAULT_TICKERS
+        else:
+            telemetry.warning("credentials.json not found. Operating with deterministic MockDataEngine.")
+            de = MockDataEngine()
+            tickers = ["AAPL"]  # Use mock ticker
 
     # Integrate Robinhood Holdings
     rh_client = RobinhoodClient()
@@ -1247,6 +1271,7 @@ async def _main_body(effective_dry_run: bool, strict: bool = False) -> None:
         final_df, macro_dto, shared_context = run_pipeline(
             tickers, macro_raw, fund_raw, tech_raw,
             data_engine=de, robinhood_positions=rh_positions,
+            engines=engines,
         )
     except Exception as pipe_err:
         # exc_info=True logs the full traceback so future crashes are diagnosable
