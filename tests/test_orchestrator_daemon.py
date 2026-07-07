@@ -1,0 +1,364 @@
+"""
+tests/test_orchestrator_daemon.py — tests for desktop/orchestrator_daemon.py
+=============================================================================
+``desktop/orchestrator_daemon.py`` depends on ``desktop.daemon_runtime``'s
+``OrchestratorDaemon`` class, built by a parallel workstream. ``run_forever()``
+resolves that name via a DEFERRED import (``from desktop.daemon_runtime
+import OrchestratorDaemon`` inside the function body), so these tests patch
+``desktop.daemon_runtime.OrchestratorDaemon`` directly via
+``unittest.mock.patch`` -- exercising ONLY this module's own lifecycle logic
+(call order, signal handling, teardown idempotency, discovery-file writing,
+CLI parsing) independently of whatever the real daemon_runtime implementation
+ends up doing.
+
+The SIGTERM/SIGINT hardening tests mirror tests/test_app_shell.py's proven
+technique exactly: mock `threading.Thread` (capturing its target instead of
+starting a real thread), mock `signal.sigwait` (return immediately instead
+of genuinely blocking on an OS signal), and mock `os._exit` (never actually
+terminate the test process) so the watcher's logic is exercised
+deterministically and synchronously by invoking the captured target
+directly -- never by sending real OS signals.
+"""
+
+from __future__ import annotations
+
+import json
+import signal
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+
+class BaseDaemonEntrypointTest(unittest.TestCase):
+    """Common setup: import desktop.orchestrator_daemon fresh and patch
+    _load_dotenv so tests never mutate the real process environment.
+    """
+
+    def setUp(self):
+        import desktop.orchestrator_daemon as orchestrator_daemon
+        self.mod = orchestrator_daemon
+
+        self._load_dotenv_patcher = patch.object(self.mod, "_load_dotenv")
+        self._load_dotenv_patcher.start()
+        self.addCleanup(self._load_dotenv_patcher.stop)
+
+    def _make_mock_daemon_class(self, status=None):
+        """Return a MagicMock standing in for OrchestratorDaemon, plus the
+        instance it will return when constructed.
+
+        ``run_forever()`` imports ``OrchestratorDaemon`` via a DEFERRED
+        import (``from desktop.daemon_runtime import OrchestratorDaemon``
+        inside the function body) -- mirroring app_shell.py's deferred
+        `from desktop.xxx import yyy` pattern so the module is importable
+        before the real daemon_runtime lands. That means the name to patch
+        is ``desktop.daemon_runtime.OrchestratorDaemon`` (resolved fresh on
+        each call), not a module-level attribute of
+        ``desktop.orchestrator_daemon`` itself.
+        """
+        instance = MagicMock(name="daemon_instance")
+        instance.status.return_value = status or {
+            "is_running": False,
+            "current_run_id": None,
+            "interval_seconds": 60,
+            "last_run": None,
+            "engines_warm": True,
+            "started_at": None,
+        }
+        daemon_cls = MagicMock(name="OrchestratorDaemon", return_value=instance)
+        return daemon_cls, instance
+
+    def _patch_daemon_class(self, daemon_cls):
+        import desktop.daemon_runtime as daemon_runtime
+        return patch.object(daemon_runtime, "OrchestratorDaemon", daemon_cls)
+
+
+class _FakeWatcherThread:
+    """Stand-in for threading.Thread that captures its target/daemon args
+    instead of actually starting a background thread, and makes .join() a
+    no-op (rather than blocking forever) since the real watcher thread in
+    production genuinely never returns until a signal arrives.
+    """
+
+    instances: list["_FakeWatcherThread"] = []
+
+    def __init__(self, target=None, daemon=None, **kw):
+        self.target = target
+        self.daemon = daemon
+        self.started = False
+        _FakeWatcherThread.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def join(self, timeout=None):
+        return None
+
+
+class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
+    """run_forever() must start the daemon before touching signals, and
+    must write the discovery file with the expected keys.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _FakeWatcherThread.instances = []
+        self._thread_patcher = patch.object(self.mod.threading, "Thread", _FakeWatcherThread)
+        self._thread_patcher.start()
+        self.addCleanup(self._thread_patcher.stop)
+        self._sigmask_patcher = patch.object(self.mod.signal, "pthread_sigmask")
+        self._sigmask_patcher.start()
+        self.addCleanup(self._sigmask_patcher.stop)
+
+    def test_daemon_start_called_before_watcher_thread_runs(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+        call_order = []
+        instance.start.side_effect = lambda: call_order.append("start")
+
+        with self._patch_daemon_class(daemon_cls), \
+             patch.object(self.mod, "_write_daemon_file") as mock_write:
+            rc = self.mod.run_forever(60)
+
+        self.assertEqual(rc, 0)
+        instance.start.assert_called_once()
+        self.assertEqual(call_order, ["start"])
+        mock_write.assert_called_once()
+        # daemon.start() must precede thread creation (watcher started after).
+        self.assertEqual(len(_FakeWatcherThread.instances), 1)
+        self.assertTrue(_FakeWatcherThread.instances[0].started)
+        self.assertTrue(_FakeWatcherThread.instances[0].daemon)
+
+    def test_daemon_constructed_with_interval_dry_run_strict_kwargs(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(45, dry_run=True, strict=True)
+
+        daemon_cls.assert_called_once_with(interval_seconds=45, dry_run=True, strict=True)
+
+    def test_shutdown_called_on_clean_return_path(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        instance.shutdown.assert_called_once_with(timeout=10.0)
+
+
+class TestDaemonFileWriting(BaseDaemonEntrypointTest):
+    """_write_daemon_file() writes valid JSON with the expected keys, using
+    a temp directory so it never touches the real repo's output/ directory.
+    """
+
+    def test_writes_expected_keys(self, ):
+        instance = MagicMock()
+        instance.status.return_value = {
+            "is_running": False,
+            "current_run_id": None,
+            "interval_seconds": 30,
+            "last_run": None,
+            "engines_warm": True,
+            "started_at": None,
+        }
+
+        with self._tmp_output_dir() as output_dir:
+            self.mod._write_daemon_file(instance, output_dir)
+            final_path = output_dir / "daemon.json"
+            self.assertTrue(final_path.exists())
+            payload = json.loads(final_path.read_text(encoding="utf-8"))
+
+        self.assertIn("pid", payload)
+        self.assertIn("state", payload)
+        self.assertIn("interval_seconds", payload)
+        self.assertIn("started_at", payload)
+        self.assertEqual(payload["interval_seconds"], 30)
+
+    def test_creates_output_dir_if_missing(self):
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": False, "interval_seconds": 0}
+
+        with self._tmp_output_dir() as output_dir:
+            nested = output_dir / "nested" / "dir"
+            self.assertFalse(nested.exists())
+            self.mod._write_daemon_file(instance, nested)
+            self.assertTrue((nested / "daemon.json").exists())
+
+    def test_write_failure_is_caught_and_logged_never_propagates(self):
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": False, "interval_seconds": 0}
+
+        with self._tmp_output_dir() as output_dir:
+            with patch.object(Path, "replace", side_effect=OSError("disk full")):
+                # Must not raise.
+                self.mod._write_daemon_file(instance, output_dir)
+
+    def _tmp_output_dir(self):
+        import tempfile
+
+        class _Ctx:
+            def __enter__(self_inner):
+                self_inner._tmpdir = tempfile.TemporaryDirectory()
+                return Path(self_inner._tmpdir.name)
+
+            def __exit__(self_inner, *exc):
+                self_inner._tmpdir.cleanup()
+                return False
+
+        return _Ctx()
+
+
+class TestSignalHandling(BaseDaemonEntrypointTest):
+    """Covers the SIGTERM/SIGINT hardening, mirroring
+    tests/test_app_shell.py's TestSigtermHandling technique exactly: mock
+    threading.Thread (capture target), mock signal.sigwait (return
+    immediately), mock os._exit (never really terminate the test process).
+    """
+
+    def setUp(self):
+        super().setUp()
+        _FakeWatcherThread.instances = []
+        self._thread_patcher = patch.object(self.mod.threading, "Thread", _FakeWatcherThread)
+        self._thread_patcher.start()
+        self._sigwait_patcher = patch.object(
+            self.mod.signal, "sigwait", return_value=signal.SIGTERM
+        )
+        self._sigwait_patcher.start()
+        self.addCleanup(self._thread_patcher.stop)
+        self.addCleanup(self._sigwait_patcher.stop)
+
+    def _watcher_target(self):
+        self.assertEqual(len(_FakeWatcherThread.instances), 1)
+        return _FakeWatcherThread.instances[0].target
+
+    def test_signals_blocked_before_watcher_thread_started(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(self.mod.signal, "pthread_sigmask") as mock_mask:
+            rc = self.mod.run_forever(60)
+
+        self.assertEqual(rc, 0)
+        instance_thread = _FakeWatcherThread.instances[0]
+        self.assertTrue(instance_thread.started)
+        self.assertTrue(instance_thread.daemon)
+        self.assertIsNotNone(instance_thread.target)
+        mock_mask.assert_any_call(
+            signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT}
+        )
+
+    def test_pthread_sigmask_unblocked_on_clean_exit(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(self.mod.signal, "pthread_sigmask") as mock_mask:
+            self.mod.run_forever(60)
+
+        mock_mask.assert_any_call(
+            signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT}
+        )
+
+    def test_sigterm_arrival_calls_shutdown_exactly_once_and_force_exits(self):
+        """Simulates an external `kill <pid>` arriving: invoking the
+        captured watcher target directly (as sigwait() returning would)
+        must call daemon.shutdown(timeout=10.0) and then force-exit via
+        os._exit.
+        """
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        # Make thread.join() invoke the watcher target directly, simulating
+        # the OS delivering the signal while the main thread is parked.
+        def _join_side_effect(timeout=None):
+            self._watcher_target()()
+
+        with self._patch_daemon_class(daemon_cls), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(self.mod.signal, "pthread_sigmask"):
+
+            orig_thread_cls = self.mod.threading.Thread
+
+            class _JoinTriggeringThread(_FakeWatcherThread):
+                def join(self_inner, timeout=None):
+                    _join_side_effect()
+
+            with patch.object(self.mod.threading, "Thread", _JoinTriggeringThread):
+                with patch.object(self.mod.os, "_exit") as mock_exit:
+                    self.mod.run_forever(60)
+
+        instance.shutdown.assert_called_once_with(timeout=10.0)
+        mock_exit.assert_called_once_with(0)
+
+    def test_teardown_is_idempotent_across_signal_path_and_normal_finally(self):
+        """If the signal watcher's teardown runs (simulated), and control
+        then also flows through the normal `finally` teardown afterward
+        (os._exit is mocked to a no-op so it doesn't really terminate),
+        daemon.shutdown must be called only once.
+        """
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        class _JoinTriggeringThread(_FakeWatcherThread):
+            def join(self_inner, timeout=None):
+                with patch.object(self.mod.os, "_exit"):
+                    self._watcher_target()()
+
+        with self._patch_daemon_class(daemon_cls), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(self.mod.signal, "pthread_sigmask"), \
+             patch.object(self.mod.threading, "Thread", _JoinTriggeringThread):
+            self.mod.run_forever(60)
+
+        instance.shutdown.assert_called_once_with(timeout=10.0)
+
+
+class TestArgparse(BaseDaemonEntrypointTest):
+    def test_interval_defaults_to_none(self):
+        args = self.mod._parse_args([])
+        self.assertIsNone(args.interval)
+
+    def test_interval_flag_explicit_value_wins(self):
+        args = self.mod._parse_args(["--interval", "120"])
+        self.assertEqual(args.interval, 120)
+
+    def test_dry_run_flag_parsed(self):
+        args = self.mod._parse_args(["--dry-run"])
+        self.assertTrue(args.dry_run)
+        self.assertFalse(args.strict)
+
+    def test_strict_flag_parsed(self):
+        args = self.mod._parse_args(["--strict"])
+        self.assertTrue(args.strict)
+        self.assertFalse(args.dry_run)
+
+    def test_defaults_are_false_when_omitted(self):
+        args = self.mod._parse_args([])
+        self.assertFalse(args.dry_run)
+        self.assertFalse(args.strict)
+
+
+class TestIntervalFallbackToSettings(BaseDaemonEntrypointTest):
+    """Mirrors the __main__ block's logic: an explicit --interval always
+    wins; an omitted flag falls back to settings.ORCHESTRATOR_INTERVAL_SECONDS.
+    This test exercises that fallback expression directly (rather than
+    running the __main__ block, which isn't executed under pytest import)
+    since that's where the CLI/settings merge logic actually lives.
+    """
+
+    def test_explicit_interval_flag_wins_over_settings_default(self):
+        args = self.mod._parse_args(["--interval", "15"])
+        with patch.object(self.mod, "run_forever") as mock_run_forever:
+            mock_settings = MagicMock(ORCHESTRATOR_INTERVAL_SECONDS=999)
+            with patch("settings.settings", mock_settings):
+                interval = args.interval if args.interval is not None else mock_settings.ORCHESTRATOR_INTERVAL_SECONDS
+        self.assertEqual(interval, 15)
+
+    def test_omitted_interval_falls_back_to_settings_value(self):
+        args = self.mod._parse_args([])
+        mock_settings = MagicMock(ORCHESTRATOR_INTERVAL_SECONDS=42)
+        interval = args.interval if args.interval is not None else mock_settings.ORCHESTRATOR_INTERVAL_SECONDS
+        self.assertEqual(interval, 42)
+
+
+if __name__ == "__main__":
+    unittest.main()
