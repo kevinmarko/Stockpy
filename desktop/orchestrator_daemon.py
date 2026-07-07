@@ -47,9 +47,12 @@ import logging
 import os
 import signal
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+import uvicorn
 
 # ---------------------------------------------------------------------------
 # .env loading convention (mirrors main_orchestrator.py's async main() /
@@ -63,10 +66,17 @@ from dotenv import load_dotenv as _load_dotenv
 logger = logging.getLogger("InvestYo.orchestrator_daemon")
 
 
-def _write_daemon_file(daemon, output_dir: Path) -> None:
+def _write_daemon_file(daemon, output_dir: Path, *, port: Optional[int] = None) -> None:
     """Write ``<output_dir>/daemon.json`` — a discovery file for external
     tooling (e.g. a future CLI/GUI probe) to find this daemon's pid and
     basic state without talking to it directly.
+
+    ``port`` (when given) is the TCP port the Control API
+    (``api/control_api.py``) is bound to, so external tooling can discover
+    it from this one file alongside pid/state/interval_seconds/started_at.
+    Callers should only pass a port once the Control API server has
+    actually started listening — see ``run_forever``'s call site for the
+    ordering rationale.
 
     Uses the same atomic write-then-rename idiom as
     ``execution/kill_switch.py``'s ``GlobalKillSwitch.activate()`` and
@@ -86,6 +96,7 @@ def _write_daemon_file(daemon, output_dir: Path) -> None:
             "state": "running" if status.get("is_running") else "started",
             "interval_seconds": status.get("interval_seconds"),
             "started_at": datetime.now(timezone.utc).isoformat(),
+            "port": port,
         }
         final_path = output_dir / "daemon.json"
         tmp_path = final_path.with_suffix(".tmp")
@@ -107,6 +118,23 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
     """
     _load_dotenv(override=False)
 
+    # SIGTERM/SIGINT MUST be blocked here, before ANY other thread is
+    # created (daemon.start()'s optional interval-timer thread, the Control
+    # API's uvicorn thread below, the sigwait watcher thread itself) --
+    # signal.pthread_sigmask() sets the CALLING THREAD's mask, not a
+    # process-wide one. Every new thread inherits its creator's mask at the
+    # moment of creation; a thread spawned before this call would keep
+    # SIGTERM UNBLOCKED for its own lifetime regardless of what the main
+    # thread does afterward. Since a plain `kill -TERM <pid>` is delivered
+    # by the kernel to ANY one thread that doesn't have the signal blocked,
+    # such a thread would silently take the signal's default disposition
+    # (process termination) instead of the sigwait watcher below -- bypassing
+    # all of this module's teardown logic with zero log output, since the
+    # process dies before our code ever runs. Confirmed by direct testing:
+    # moving this call after starting the Control API's uvicorn thread
+    # reproduced exactly that silent-kill failure mode.
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+
     # Deferred import: mirrors app_shell.py's deferred `from desktop.xxx
     # import yyy` imports -- keeps `import desktop.orchestrator_daemon`
     # side-effect-free/importable even before desktop.daemon_runtime exists
@@ -124,12 +152,52 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
 
     from settings import settings
 
-    _write_daemon_file(daemon, settings.OUTPUT_DIR)
+    # Deferred import (mirrors the OrchestratorDaemon import above): host the
+    # Control API (api/control_api.py) inside this process so external
+    # callers can query run status / trigger a cycle over HTTP without a
+    # second process. `set_daemon` wires the just-started daemon instance
+    # into that module's registry.
+    from api.control_api import app as control_api_app, set_daemon as set_control_api_daemon
+
+    set_control_api_daemon(daemon)
+
+    # uvicorn.Config + uvicorn.Server (NOT uvicorn.run(), which blocks the
+    # calling thread and has no clean stop hook) so the API server runs in a
+    # background thread and can be told to stop gracefully during teardown
+    # via `api_server.should_exit = True` (uvicorn's documented mechanism).
+    # 127.0.0.1-bound only -- this is a local-machine-only service, defense
+    # -in-depth alongside the auth tokens (no external network exposure).
+    api_config = uvicorn.Config(
+        control_api_app,
+        host="127.0.0.1",
+        port=settings.ORCHESTRATOR_API_PORT,
+        log_level="warning",
+    )
+    api_server = uvicorn.Server(api_config)
+    api_thread = threading.Thread(target=api_server.run, daemon=True, name="OrchestratorControlAPI")
+    api_thread.start()
+
+    # Bounded poll for the API server to report ready (uvicorn.Server exposes
+    # a `started` flag) before writing the discovery file -- a discovery file
+    # pointing at a not-yet-bound port is worse than no file at all. Bounded
+    # to avoid ever blocking daemon startup indefinitely if the server fails
+    # to come up; falls through and writes the file anyway after the
+    # deadline so discovery isn't silently lost on a slow-starting server.
+    _api_ready_deadline = time.monotonic() + 5.0
+    while not getattr(api_server, "started", False) and time.monotonic() < _api_ready_deadline:
+        time.sleep(0.05)
+    if not getattr(api_server, "started", False):
+        logger.warning(
+            "Control API did not report 'started' within 5s; writing discovery "
+            "file anyway (port may not be bound yet)."
+        )
+
+    _write_daemon_file(daemon, settings.OUTPUT_DIR, port=settings.ORCHESTRATOR_API_PORT)
 
     _torn_down = False
 
     def _teardown() -> None:
-        """Idempotent teardown of the daemon.
+        """Idempotent teardown of the daemon AND the Control API server.
 
         Shared by the SIGTERM/SIGINT watcher path and the normal-return
         ``finally`` block below -- safe to call more than once (mirrors
@@ -140,6 +208,11 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
         if _torn_down:
             return
         _torn_down = True
+        try:
+            api_server.should_exit = True
+            api_thread.join(timeout=5.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Error shutting down orchestrator Control API: %s", exc)
         try:
             daemon.shutdown(timeout=10.0)
             logger.info("Orchestrator daemon shut down cleanly.")
@@ -168,7 +241,9 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
         logging.shutdown()
         os._exit(0)
 
-    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+    # The signal mask was already blocked at the top of run_forever(), before
+    # daemon.start()/the Control API thread were created -- this thread,
+    # created here, inherits that already-blocked mask.
     _watcher_thread = threading.Thread(target=_run_signal_watcher, daemon=True)
     _watcher_thread.start()
 
