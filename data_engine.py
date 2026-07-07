@@ -9,14 +9,16 @@ It provides both the live DataEngine and the deterministic MockDataEngine.
 """
 
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import numpy as np
 import yfinance as yf
 from fredapi import Fred
 from datetime import datetime, timedelta
 import logging
-import time
 from typing import Dict, List, Any, Optional
+
+from settings import settings
 
 # Configure module-level logger
 logger = logging.getLogger("Data_Engine")
@@ -136,32 +138,53 @@ class DataEngine(IDataProvider):
 
     def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
         """
-        Fetches daily historical pricing (OHLCV) spanning the last 250 trading days.
+        Fetches daily historical pricing (OHLCV) spanning the last 2 years, in
+        parallel across tickers (network I/O bound -- yfinance's blocking HTTP
+        call releases the GIL, so a thread pool collapses wall-clock time to
+        roughly N/workers instead of N sequential round-trips). Each ticker's
+        fetch is isolated in try/except so one bad symbol never aborts the
+        batch (dead-letter resilience). Set settings.DATA_FETCH_MAX_CONCURRENCY=1
+        to force the original sequential path.
         """
-        raw_tech = {}
-        for symbol in tickers:
+        def _fetch_one(symbol: str) -> tuple[str, Optional[pd.DataFrame]]:
             try:
                 # Require historical lookback window to calculate 200-day rolling states & indicators
                 ticker = yf.Ticker(symbol)
                 df = ticker.history(period="2y")
                 if not df.empty:
-                    raw_tech[symbol] = df
                     logger.info(f"Retrieved technical time series for {symbol}")
-                else:
-                    logger.warning(f"No technical series found for {symbol}")
+                    return symbol, df
+                logger.warning(f"No technical series found for {symbol}")
             except Exception as e:
                 logger.error(f"Failed to fetch technical series for {symbol}: {e}")
-        return raw_tech
+            return symbol, None
+
+        workers = max(1, int(getattr(settings, "DATA_FETCH_MAX_CONCURRENCY", 8)))
+        if workers == 1 or len(tickers) <= 1:
+            pairs = [_fetch_one(symbol) for symbol in tickers]
+        else:
+            with ThreadPoolExecutor(max_workers=min(workers, len(tickers))) as pool:
+                pairs = list(pool.map(_fetch_one, tickers))
+        return {symbol: df for symbol, df in pairs if df is not None}
 
     def fetch_fundamentals_raw(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         """
-        Fetches yfinance corporate profiling metrics and balance sheets.
+        Fetches yfinance corporate profiling metrics and balance sheets, in
+        parallel across tickers (network I/O bound, same rationale as
+        fetch_technical_raw). The bounded worker count is also the de-facto
+        rate limit, replacing the old serial sleep(0.1)-every-5-tickers
+        throttle (which only made sense when fetches ran one at a time). Each
+        ticker is isolated in try/except (dead-letter resilience). Set
+        settings.DATA_FETCH_MAX_CONCURRENCY=1 to force the original sequential
+        path.
         """
-        raw_fundamentals = {}
+        from dto_models import normalize_yfinance_dividend_yield
+
         total = len(tickers)
-        for idx, symbol in enumerate(tickers, 1):
+
+        def _fetch_one(indexed_symbol: tuple[int, str]) -> tuple[str, Optional[Dict[str, Any]]]:
+            idx, symbol = indexed_symbol
             try:
-                from dto_models import normalize_yfinance_dividend_yield
                 t = yf.Ticker(symbol)
                 # yfinance returns dividendYield as a PERCENT; normalise to the
                 # fraction the platform expects (mirrors the Finnhub /100 path).
@@ -170,15 +193,20 @@ class DataEngine(IDataProvider):
                     'dividends': t.dividends if hasattr(t, 'dividends') else pd.Series(dtype='float64'),
                     'financials': t.financials if hasattr(t, 'financials') else pd.DataFrame()
                 }
-                raw_fundamentals[symbol] = ticker_data
                 logger.info(f"Fund data fetched: {idx}/{total} - {symbol}")
-                
-                # Dynamic throttling to comply with API rate limits
-                if idx % 5 == 0:
-                    time.sleep(0.1)
+                return symbol, ticker_data
             except Exception as e:
                 logger.warning(f"Failed fundamental parsing for {symbol}: {e}")
-        return raw_fundamentals
+            return symbol, None
+
+        workers = max(1, int(getattr(settings, "DATA_FETCH_MAX_CONCURRENCY", 8)))
+        indexed = list(enumerate(tickers, 1))
+        if workers == 1 or len(tickers) <= 1:
+            pairs = [_fetch_one(item) for item in indexed]
+        else:
+            with ThreadPoolExecutor(max_workers=min(workers, len(tickers))) as pool:
+                pairs = list(pool.map(_fetch_one, indexed))
+        return {symbol: data for symbol, data in pairs if data is not None}
 
     def fetch_options_chain(self, ticker: str, expiration: Optional[str] = None) -> Any:
         """
