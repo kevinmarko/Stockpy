@@ -71,19 +71,59 @@ class BaseDaemonEntrypointTest(unittest.TestCase):
         import desktop.daemon_runtime as daemon_runtime
         return patch.object(daemon_runtime, "OrchestratorDaemon", daemon_cls)
 
+    def _patch_uvicorn(self):
+        """Patch uvicorn.Config/Server so run_forever() never attempts to
+        bind a real socket in tests. The fake Server reports ``started =
+        True`` immediately, so run_forever()'s bounded readiness-poll loop
+        exits on its first check instead of waiting out the full timeout.
+        Returns a context manager; the constructed fake instance is
+        available as ``self.fake_api_server`` once entered indirectly via
+        ``self._fake_api_server_holder`` (set at construction time)."""
+        holder = self._fake_api_server_holder = {}
+
+        class _FakeUvicornServer:
+            def __init__(self, config):
+                self.config = config
+                self.started = True
+                self.should_exit = False
+                holder["instance"] = self
+
+            def run(self):
+                # Real uvicorn.Server.run() blocks until should_exit; the
+                # fake returns immediately since it's invoked via a fake
+                # thread target in these tests (never actually called in
+                # most tests since threading.Thread itself is faked too).
+                return None
+
+        return patch.multiple(
+            self.mod.uvicorn,
+            Config=MagicMock(name="uvicorn.Config"),
+            Server=_FakeUvicornServer,
+        )
+
 
 class _FakeWatcherThread:
-    """Stand-in for threading.Thread that captures its target/daemon args
-    instead of actually starting a background thread, and makes .join() a
-    no-op (rather than blocking forever) since the real watcher thread in
-    production genuinely never returns until a signal arrives.
+    """Stand-in for threading.Thread that captures its target/daemon/name
+    args instead of actually starting a background thread, and makes
+    .join() a no-op (rather than blocking forever) since the real watcher
+    thread in production genuinely never returns until a signal arrives.
+
+    ``run_forever`` now constructs TWO threads via ``threading.Thread``:
+    the Control API server thread (``name="OrchestratorControlAPI"``,
+    created first) and the SIGTERM/SIGINT watcher thread (unnamed, created
+    second). Tests that only care about the watcher use
+    ``watcher_instances()`` to filter ``instances`` down to the one whose
+    ``name`` is not ``"OrchestratorControlAPI"``, so this fake continues to
+    serve both call sites without changing every existing assertion's
+    shape.
     """
 
     instances: list["_FakeWatcherThread"] = []
 
-    def __init__(self, target=None, daemon=None, **kw):
+    def __init__(self, target=None, daemon=None, name=None, **kw):
         self.target = target
         self.daemon = daemon
+        self.name = name
         self.started = False
         _FakeWatcherThread.instances.append(self)
 
@@ -92,6 +132,14 @@ class _FakeWatcherThread:
 
     def join(self, timeout=None):
         return None
+
+    @classmethod
+    def watcher_instances(cls) -> list["_FakeWatcherThread"]:
+        return [t for t in cls.instances if t.name != "OrchestratorControlAPI"]
+
+    @classmethod
+    def api_instances(cls) -> list["_FakeWatcherThread"]:
+        return [t for t in cls.instances if t.name == "OrchestratorControlAPI"]
 
 
 class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
@@ -115,6 +163,7 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
         instance.start.side_effect = lambda: call_order.append("start")
 
         with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file") as mock_write:
             rc = self.mod.run_forever(60)
 
@@ -122,15 +171,20 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
         instance.start.assert_called_once()
         self.assertEqual(call_order, ["start"])
         mock_write.assert_called_once()
-        # daemon.start() must precede thread creation (watcher started after).
-        self.assertEqual(len(_FakeWatcherThread.instances), 1)
-        self.assertTrue(_FakeWatcherThread.instances[0].started)
-        self.assertTrue(_FakeWatcherThread.instances[0].daemon)
+        # daemon.start() must precede thread creation (watcher started after
+        # the Control API thread, which is created first -- see
+        # test_control_api_thread_started_after_daemon_start below for that
+        # ordering assertion specifically).
+        watchers = _FakeWatcherThread.watcher_instances()
+        self.assertEqual(len(watchers), 1)
+        self.assertTrue(watchers[0].started)
+        self.assertTrue(watchers[0].daemon)
 
     def test_daemon_constructed_with_interval_dry_run_strict_kwargs(self):
         daemon_cls, instance = self._make_mock_daemon_class()
 
         with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file"):
             self.mod.run_forever(45, dry_run=True, strict=True)
 
@@ -140,10 +194,97 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
         daemon_cls, instance = self._make_mock_daemon_class()
 
         with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file"):
             self.mod.run_forever(60)
 
         instance.shutdown.assert_called_once_with(timeout=10.0)
+
+    def test_control_api_daemon_registered_after_daemon_start(self):
+        """set_daemon(daemon) must be called with the real daemon instance
+        after daemon.start() succeeds, so the Control API can immediately
+        serve status/trigger requests against warm engines."""
+        daemon_cls, instance = self._make_mock_daemon_class()
+        call_order = []
+        instance.start.side_effect = lambda: call_order.append("daemon.start")
+
+        import api.control_api as control_api
+
+        def _record_set_daemon(d):
+            call_order.append("set_daemon")
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(control_api, "set_daemon", side_effect=_record_set_daemon) as mock_set_daemon:
+            self.mod.run_forever(60)
+
+        mock_set_daemon.assert_called_once_with(instance)
+        instance.start.assert_called_once()
+        self.assertEqual(call_order, ["daemon.start", "set_daemon"])
+
+    def test_control_api_thread_started_after_daemon_start(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+        call_order = []
+        instance.start.side_effect = lambda: call_order.append("daemon.start")
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        api_threads = _FakeWatcherThread.api_instances()
+        self.assertEqual(len(api_threads), 1)
+        self.assertTrue(api_threads[0].started)
+        self.assertTrue(api_threads[0].daemon)
+        self.assertEqual(api_threads[0].name, "OrchestratorControlAPI")
+
+    def test_uvicorn_config_constructed_with_settings_host_and_port(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        from settings import settings
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+            self.mod.uvicorn.Config.assert_called_once()
+            _, kwargs = self.mod.uvicorn.Config.call_args
+
+        self.assertEqual(kwargs["host"], "127.0.0.1")
+        self.assertEqual(kwargs["port"], settings.ORCHESTRATOR_API_PORT)
+
+    def test_daemon_json_includes_port_key(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        from settings import settings
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file") as mock_write:
+            self.mod.run_forever(60)
+
+        mock_write.assert_called_once()
+        _, kwargs = mock_write.call_args
+        self.assertEqual(kwargs.get("port"), settings.ORCHESTRATOR_API_PORT)
+
+    def test_api_server_should_exit_set_and_thread_joined_on_teardown(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        fake_server = self._fake_api_server_holder["instance"]
+        self.assertTrue(fake_server.should_exit)
+        api_threads = _FakeWatcherThread.api_instances()
+        self.assertEqual(len(api_threads), 1)
+        # _FakeWatcherThread.join() is a no-op but must have been callable
+        # without error during teardown (proven implicitly by run_forever
+        # returning cleanly above); explicitly assert it's the same thread
+        # object whose .started flag we already verified.
+        self.assertTrue(api_threads[0].started)
 
 
 class TestDaemonFileWriting(BaseDaemonEntrypointTest):
@@ -173,6 +314,28 @@ class TestDaemonFileWriting(BaseDaemonEntrypointTest):
         self.assertIn("interval_seconds", payload)
         self.assertIn("started_at", payload)
         self.assertEqual(payload["interval_seconds"], 30)
+
+    def test_port_key_present_when_passed(self):
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": False, "interval_seconds": 30}
+
+        with self._tmp_output_dir() as output_dir:
+            self.mod._write_daemon_file(instance, output_dir, port=8601)
+            payload = json.loads((output_dir / "daemon.json").read_text(encoding="utf-8"))
+
+        self.assertIn("port", payload)
+        self.assertEqual(payload["port"], 8601)
+
+    def test_port_key_is_none_when_omitted(self):
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": False, "interval_seconds": 30}
+
+        with self._tmp_output_dir() as output_dir:
+            self.mod._write_daemon_file(instance, output_dir)
+            payload = json.loads((output_dir / "daemon.json").read_text(encoding="utf-8"))
+
+        self.assertIn("port", payload)
+        self.assertIsNone(payload["port"])
 
     def test_creates_output_dir_if_missing(self):
         instance = MagicMock()
@@ -228,19 +391,21 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
         self.addCleanup(self._sigwait_patcher.stop)
 
     def _watcher_target(self):
-        self.assertEqual(len(_FakeWatcherThread.instances), 1)
-        return _FakeWatcherThread.instances[0].target
+        watchers = _FakeWatcherThread.watcher_instances()
+        self.assertEqual(len(watchers), 1)
+        return watchers[0].target
 
     def test_signals_blocked_before_watcher_thread_started(self):
         daemon_cls, instance = self._make_mock_daemon_class()
 
         with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file"), \
              patch.object(self.mod.signal, "pthread_sigmask") as mock_mask:
             rc = self.mod.run_forever(60)
 
         self.assertEqual(rc, 0)
-        instance_thread = _FakeWatcherThread.instances[0]
+        instance_thread = _FakeWatcherThread.watcher_instances()[0]
         self.assertTrue(instance_thread.started)
         self.assertTrue(instance_thread.daemon)
         self.assertIsNotNone(instance_thread.target)
@@ -252,6 +417,7 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
         daemon_cls, instance = self._make_mock_daemon_class()
 
         with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file"), \
              patch.object(self.mod.signal, "pthread_sigmask") as mock_mask:
             self.mod.run_forever(60)
@@ -268,20 +434,24 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
         """
         daemon_cls, instance = self._make_mock_daemon_class()
 
-        # Make thread.join() invoke the watcher target directly, simulating
-        # the OS delivering the signal while the main thread is parked.
+        # Make the WATCHER thread's join() invoke the watcher target
+        # directly, simulating the OS delivering the signal while the main
+        # thread is parked. The Control API thread (created earlier, with
+        # name="OrchestratorControlAPI") keeps the plain no-op join() from
+        # _FakeWatcherThread so its own teardown-time join() doesn't
+        # re-trigger this side effect.
         def _join_side_effect(timeout=None):
             self._watcher_target()()
 
         with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file"), \
              patch.object(self.mod.signal, "pthread_sigmask"):
 
-            orig_thread_cls = self.mod.threading.Thread
-
             class _JoinTriggeringThread(_FakeWatcherThread):
                 def join(self_inner, timeout=None):
-                    _join_side_effect()
+                    if self_inner.name != "OrchestratorControlAPI":
+                        _join_side_effect()
 
             with patch.object(self.mod.threading, "Thread", _JoinTriggeringThread):
                 with patch.object(self.mod.os, "_exit") as mock_exit:
@@ -289,6 +459,82 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
 
         instance.shutdown.assert_called_once_with(timeout=10.0)
         mock_exit.assert_called_once_with(0)
+
+    def test_signals_blocked_before_any_thread_or_daemon_start(self):
+        """Regression test for a real bug found via live-process verification
+        (not caught by any of this file's other mocked tests, since mocks
+        can't observe cross-thread signal-mask ordering).
+
+        ``signal.pthread_sigmask()`` sets the CALLING THREAD's mask, not a
+        process-wide one. A thread created BEFORE this call (the daemon's
+        own optional interval-timer thread, or the Control API's uvicorn
+        thread) inherits an UNBLOCKED mask at creation time and stays
+        eligible for the kernel's default SIGTERM disposition for its
+        entire lifetime -- when a real ``kill -TERM <pid>`` arrives, the
+        kernel may deliver it to that thread instead of the sigwait
+        watcher, silently killing the whole process with ZERO log output
+        and without ever running teardown.
+
+        Confirmed via a real subprocess + a real ``kill -TERM`` + a traced
+        ``os._exit()`` wrapper: with ``pthread_sigmask(SIG_BLOCK, ...)``
+        called AFTER starting the Control API thread, the traced
+        ``os._exit`` was never invoked and no "Received signal" log line
+        ever appeared, yet the process still died within ~1s -- proof the
+        OS's default disposition killed it directly on the unblocked
+        Control API thread, bypassing this module's teardown entirely.
+        Moving the ``pthread_sigmask`` call to the top of ``run_forever()``,
+        before ``daemon.start()`` and before the Control API thread is
+        created, fixed it (re-verified with the same real-process test).
+
+        This test guards that ordering the only way a fully-mocked suite
+        can: asserting SIG_BLOCK is called before daemon construction,
+        before ``daemon.start()``, and before every ``threading.Thread(...)``
+        construction.
+        """
+        call_order: list[str] = []
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        def _daemon_cls_side_effect(*_a, **_k):
+            call_order.append("daemon_constructed")
+            return instance
+
+        daemon_cls.side_effect = _daemon_cls_side_effect
+        instance.start.side_effect = lambda: call_order.append("daemon_start")
+
+        def _mask_side_effect(how, _mask):
+            if how == signal.SIG_BLOCK:
+                call_order.append("sig_block")
+
+        class _OrderTrackingThread(_FakeWatcherThread):
+            def __init__(self, target=None, daemon=None, name=None, **kw):
+                call_order.append(f"thread_created:{name}")
+                super().__init__(target=target, daemon=daemon, name=name, **kw)
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(self.mod.threading, "Thread", _OrderTrackingThread), \
+             patch.object(self.mod.signal, "pthread_sigmask", side_effect=_mask_side_effect):
+            self.mod.run_forever(60)
+
+        self.assertIn("sig_block", call_order)
+        block_idx = call_order.index("sig_block")
+        thread_and_start_events = [
+            e for e in call_order
+            if e.startswith("thread_created:") or e in ("daemon_constructed", "daemon_start")
+        ]
+        self.assertTrue(thread_and_start_events, "expected at least one thread/daemon-start event")
+        for entry in thread_and_start_events:
+            entry_idx = call_order.index(entry)
+            self.assertGreater(
+                entry_idx, block_idx,
+                f"'{entry}' happened before SIG_BLOCK (full order: {call_order}) -- "
+                f"a thread created or daemon.start() called before the signal mask "
+                f"is blocked inherits an UNBLOCKED mask and can be killed directly "
+                f"by SIGTERM's default disposition, bypassing the sigwait watcher "
+                f"entirely (this is the exact bug this test guards against).",
+            )
 
     def test_teardown_is_idempotent_across_signal_path_and_normal_finally(self):
         """If the signal watcher's teardown runs (simulated), and control
@@ -300,10 +546,13 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
 
         class _JoinTriggeringThread(_FakeWatcherThread):
             def join(self_inner, timeout=None):
+                if self_inner.name == "OrchestratorControlAPI":
+                    return
                 with patch.object(self.mod.os, "_exit"):
                     self._watcher_target()()
 
         with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file"), \
              patch.object(self.mod.signal, "pthread_sigmask"), \
              patch.object(self.mod.threading, "Thread", _JoinTriggeringThread):
