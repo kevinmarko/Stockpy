@@ -408,6 +408,25 @@ class Settings(BaseSettings):
             "of value."
         ),
     )
+    # Number of worker threads for DataEngine.fetch_technical_raw() and
+    # fetch_fundamentals_raw() (data_engine.py). Both were originally a serial
+    # `for symbol in tickers:` loop making one blocking yfinance HTTP call at a
+    # time -- pure I/O wait, so a thread pool collapses wall-clock time to
+    # roughly N/workers. Each ticker's fetch is still isolated in try/except
+    # (dead-letter resilience) regardless of concurrency. The bounded worker
+    # count also serves as the de-facto rate limit, replacing the old serial
+    # sleep(0.1)-every-5-tickers throttle in fetch_fundamentals_raw (which only
+    # made sense when fetches didn't overlap).
+    # Set to 1 to force the original sequential path.
+    DATA_FETCH_MAX_CONCURRENCY: int = Field(
+        default=8,
+        description=(
+            "Worker-thread count for DataEngine.fetch_technical_raw()/"
+            "fetch_fundamentals_raw() in data_engine.py. 1 = sequential "
+            "(original behavior). Results are always reassembled deterministically "
+            "by symbol regardless of value."
+        ),
+    )
     SIGNAL_WEIGHTS: dict[str, float] = Field(
         default_factory=lambda: {
             "macro_regime": 45.0,
