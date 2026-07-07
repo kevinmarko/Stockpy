@@ -71,6 +71,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("MasterOrchestrator")
 
 
+class PipelineFatalError(RuntimeError):
+    """A fatal error in a single pipeline cycle (data-fetch crash, pipeline
+    crash, or strict-mode schema validation failure).
+
+    Raised INSTEAD of ``sys.exit(1)`` so that a long-lived caller (e.g. the
+    persistent orchestrator daemon) can catch it, record a FAILED run, and keep
+    serving — a per-run failure must never terminate the host process. The
+    standalone CLI entry point (``python3 main_orchestrator.py``) catches this
+    at the ``__main__`` boundary and converts it to ``sys.exit(1)``, preserving
+    the "CI / make verify get a non-zero exit on failure" contract that the old
+    inline ``sys.exit(1)`` calls provided.
+
+    Subclasses ``RuntimeError`` (not ``SystemExit``) precisely so ordinary
+    ``try/except Exception`` boundaries in a daemon catch it.
+    """
+
+
 # =============================================================================
 # CROSS-SECTIONAL MOMENTUM HELPER (Jegadeesh-Titman 1993)
 # =============================================================================
@@ -1067,8 +1084,10 @@ def _validate_dashboard(final_df, *, strict: bool) -> bool:
       one pass (rather than aborting at the first bad column). Failures are
       logged and the pipeline CONTINUES — the HTML report / JSON payload still
       carry value and must not be held hostage to a single coerced column.
-    * **CI / --strict (strict=True):** a validation failure is FATAL
-      (``sys.exit(1)``) so schema drift can never silently ship.
+    * **CI / --strict (strict=True):** a validation failure raises
+      ``PipelineFatalError`` so schema drift can never silently ship. The CLI
+      entry point converts that to ``sys.exit(1)`` for CI; a daemon can catch it
+      and record a FAILED run instead of dying.
 
     Returns ``True`` when the frame validates (or is empty), ``False`` on any
     violation in non-strict mode. Never raises in non-strict mode (CONSTRAINT #6).
@@ -1093,13 +1112,13 @@ def _validate_dashboard(final_df, *, strict: bool) -> bool:
         )
         if strict:
             telemetry.critical("Strict mode (--strict): aborting on schema validation failure.")
-            sys.exit(1)
+            raise PipelineFatalError("DashboardSchema validation failed (strict mode)") from schema_errs
         return False
     except Exception as schema_err:
         telemetry.error(f"❌ Final compiled DataFrame failed DashboardSchema validation: {schema_err}")
         if strict:
             telemetry.critical("Strict mode (--strict): aborting on schema validation failure.")
-            sys.exit(1)
+            raise PipelineFatalError("DashboardSchema validation failed (strict mode)") from schema_err
         return False
 
 
@@ -1134,7 +1153,7 @@ async def _main_body(effective_dry_run: bool, strict: bool = False) -> None:
         macro_raw, fund_raw, tech_raw = await fetch_all_data_async(de, tickers)
     except Exception as fetch_err:
         telemetry.critical(f"Asynchronous data gathering crashed: {fetch_err}")
-        sys.exit(1)
+        raise PipelineFatalError("Asynchronous data gathering crashed") from fetch_err
 
     # Fail-safe check: If offline or data is empty, fall back to MockDataEngine for verification
     if not tech_raw or all(df.empty for df in tech_raw.values()):
@@ -1168,7 +1187,7 @@ async def _main_body(effective_dry_run: bool, strict: bool = False) -> None:
         # exc_info=True logs the full traceback so future crashes are diagnosable
         # from the log alone rather than requiring a debugger attach.
         telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}", exc_info=True)
-        sys.exit(1)
+        raise PipelineFatalError("Platform execution pipeline crashed") from pipe_err
 
     # 3. Schema Validation (two-tier: lazy/non-fatal in prod, fatal under --strict)
     _validate_dashboard(final_df, strict=strict)
@@ -1399,4 +1418,12 @@ if __name__ == "__main__":
         help="Treat DashboardSchema validation failures as fatal (exit 1). For CI / schema-drift gating.",
     )
     _args = _parser.parse_args()
-    asyncio.run(main(dry_run=_args.dry_run, strict=_args.strict))
+    # The pipeline now raises PipelineFatalError instead of calling sys.exit(1)
+    # inline, so a long-lived daemon can catch it and survive. The standalone
+    # CLI path preserves the original "exit non-zero on fatal failure" contract
+    # (CI / make verify / GUI subprocess returncode) by converting it here.
+    try:
+        asyncio.run(main(dry_run=_args.dry_run, strict=_args.strict))
+    except PipelineFatalError as _fatal:
+        telemetry.critical("Fatal pipeline error — exiting non-zero: %s", _fatal)
+        sys.exit(1)

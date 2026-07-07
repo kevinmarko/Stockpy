@@ -8,8 +8,9 @@ Verifies ``main_orchestrator._validate_dashboard``:
   * a fully-populated, schema-conformant frame validates True;
   * an invalid frame in NON-strict mode logs and returns False — never raises
     (CONSTRAINT #6: the report must not be held hostage to a coerced column);
-  * the SAME invalid frame in STRICT mode is fatal (SystemExit(1)) so CI can
-    gate on schema drift;
+  * the SAME invalid frame in STRICT mode raises PipelineFatalError (NOT
+    sys.exit) so a long-lived daemon can catch it and survive, while the CLI
+    entry point still converts it to a non-zero exit for CI schema-drift gating;
   * lazy=True is used so ALL violations aggregate into one report.
 
 No network, no orchestrator run — the helper is exercised directly.
@@ -55,11 +56,31 @@ class TestValidateDashboard:
         result = mo._validate_dashboard(bad, strict=False)
         assert result is False  # logged + degraded, never raised
 
-    def test_invalid_frame_strict_exits_1(self) -> None:
+    def test_invalid_frame_strict_raises_pipeline_fatal_not_systemexit(self) -> None:
+        # De-fatalization contract: strict-mode validation failure raises
+        # PipelineFatalError (a RuntimeError subclass) instead of sys.exit(1),
+        # so a daemon's try/except Exception catches it. It must NOT be a
+        # SystemExit any more.
         bad = pd.DataFrame({"Symbol": ["WAYTOOLONGSYMBOL"]})
-        with pytest.raises(SystemExit) as excinfo:
+        with pytest.raises(mo.PipelineFatalError):
             mo._validate_dashboard(bad, strict=True)
-        assert excinfo.value.code == 1
+        # Explicitly assert it is catchable as an ordinary Exception (not
+        # SystemExit) — that is the whole point of the change.
+        assert issubclass(mo.PipelineFatalError, Exception)
+        assert not issubclass(mo.PipelineFatalError, SystemExit)
+
+    def test_cli_entrypoint_converts_pipeline_fatal_to_exit_1(self) -> None:
+        """The standalone-CLI contract: the __main__ block must catch
+        PipelineFatalError and convert it to a non-zero exit, so CI /
+        make verify / the GUI subprocess still see a failing returncode even
+        though the pipeline no longer calls sys.exit(1) inline."""
+        import inspect
+
+        src = inspect.getsource(mo)
+        # The __main__ block wraps asyncio.run(main(...)) in a handler that
+        # maps PipelineFatalError -> sys.exit(1).
+        assert "except PipelineFatalError" in src
+        assert "sys.exit(1)" in src
 
     def test_main_threads_strict_flag(self) -> None:
         """`main(strict=...)` and `--strict` must wire through to _main_body."""
