@@ -199,6 +199,22 @@ class OrchestratorDaemon:
                 )
             run_id = str(uuid.uuid4())
             self._current_run_id = run_id
+            # Insert a RUNNING placeholder immediately (same lock acquisition
+            # that claims the single-flight slot) so get_run(run_id) can find
+            # this run the instant it's accepted -- a caller polling right
+            # after trigger_run() returns must never see a false "unknown
+            # run_id" for a run that is legitimately in flight. _run_one_cycle
+            # overwrites this record in place (same run_id, no second append)
+            # once the cycle finishes.
+            self._run_history[run_id] = RunRecord(
+                run_id=run_id, state=RunState.RUNNING,
+                started_at=datetime.now(timezone.utc), finished_at=None,
+                duration_seconds=None, error=None, reason=reason,
+            )
+            self._run_order.append(run_id)
+            while len(self._run_order) > self._run_history_size:
+                oldest = self._run_order.pop(0)
+                self._run_history.pop(oldest, None)
 
         thread = threading.Thread(
             target=self._run_one_cycle, args=(run_id, reason),
@@ -250,11 +266,10 @@ class OrchestratorDaemon:
         )
 
         with self._lock:
+            # Overwrite the RUNNING placeholder inserted by trigger_run() in
+            # place -- run_id is already in _run_order from that call, so no
+            # second append/eviction pass is needed here.
             self._run_history[run_id] = record
-            self._run_order.append(run_id)
-            while len(self._run_order) > self._run_history_size:
-                oldest = self._run_order.pop(0)
-                self._run_history.pop(oldest, None)
             self._current_run_id = None
 
         self._worker_threads.pop(run_id, None)

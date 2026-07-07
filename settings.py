@@ -98,6 +98,25 @@ class Settings(BaseSettings):
             "data endpoints are unauthenticated (fail-open for local use)."
         ),
     )
+    ORCHESTRATOR_DAEMON_TOKEN: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bearer token guarding POST /run on the orchestrator Control API "
+            "(api/control_api.py). SECRET — never GUI-writable, never logged. "
+            "Unlike STATE_API_TOKEN, this is FAIL-CLOSED: when unset, the "
+            "command endpoint is disabled entirely (403) rather than open — "
+            "triggering a real pipeline run is a materially different risk "
+            "than reading already-persisted state."
+        ),
+    )
+    ORCHESTRATOR_API_PORT: int = Field(
+        default=8601,
+        description=(
+            "TCP port the orchestrator Control API (api/control_api.py) binds "
+            "to when hosted inside the orchestrator daemon process "
+            "(desktop/orchestrator_daemon.py). Bound to 127.0.0.1 only."
+        ),
+    )
 
     # --- Market-data layer (data/market_data.py) ---
     # Explicit provider override.  When absent the platform auto-selects:

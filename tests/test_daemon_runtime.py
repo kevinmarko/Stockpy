@@ -151,6 +151,47 @@ class TestSingleFlight:
             d.shutdown(timeout=2.0)
 
 
+class TestGetRunVisibleWhileInFlight:
+    """A caller polling get_run(run_id) immediately after trigger_run()
+    returns must find the run in RunState.RUNNING, not a false "unknown
+    run_id" -- this is the seam the control API's GET /run/{id}/status
+    depends on."""
+
+    def test_get_run_returns_running_placeholder_before_completion(self, monkeypatch):
+        release_event = threading.Event()
+        entered_event = threading.Event()
+
+        async def _blocking(*_a, **_k):
+            entered_event.set()
+            import asyncio
+            await asyncio.to_thread(release_event.wait)
+
+        monkeypatch.setattr(main_orchestrator, "_main_body", _blocking)
+
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            result = d.trigger_run(reason="manual")
+            assert entered_event.wait(timeout=3.0), "run never entered _main_body"
+
+            record = d.get_run(result.run_id)
+            assert record is not None, "get_run() must find an in-flight run, not just a finished one"
+            assert record.state == RunState.RUNNING
+            assert record.finished_at is None
+            assert record.duration_seconds is None
+
+            release_event.set()
+            completed = _poll_until(lambda: not d.is_running, timeout=3.0)
+            assert completed
+
+            final_record = d.get_run(result.run_id)
+            assert final_record.state == RunState.SUCCEEDED
+            assert final_record.finished_at is not None
+        finally:
+            release_event.set()
+            d.shutdown(timeout=2.0)
+
+
 class TestFatalErrorSurvival:
     def test_pipeline_fatal_error_marks_failed_and_daemon_survives(self, monkeypatch):
         """The core promise of this redesign: a PipelineFatalError from one

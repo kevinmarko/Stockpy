@@ -134,6 +134,9 @@ SECRET_KEYS: tuple[str, ...] = (
     # Bearer token for the read-only State API (api/state_api.py). Treated like a
     # webhook/token secret — masked, never GUI-writable (CONSTRAINT #3).
     "STATE_API_TOKEN",
+    # Bearer token guarding POST /run on the orchestrator Control API
+    # (api/control_api.py). Same secret treatment as STATE_API_TOKEN.
+    "ORCHESTRATOR_DAEMON_TOKEN",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood
