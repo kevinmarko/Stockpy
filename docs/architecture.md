@@ -13,10 +13,10 @@ quarantined and never reached during normal operation.
 flowchart TD
     %% ── External Data Sources ─────────────────────────────────────────────
     subgraph SOURCES["External Data Sources"]
-        YF["Yahoo Finance\n(OHLCV, fundamentals)"]
+        YF["Yahoo Finance\n(OHLCV, statement-derived fundamentals)"]
         FRED["FRED API\n(VIX, yield curve, Sahm Rule,\nHY OAS, CPI, DGS10)"]
         ALP["Alpaca IEX\n(real-time quotes & bars)"]
-        FHB["Finnhub\n(fundamentals, news)"]
+        FHB["Finnhub\n(news catalyst headlines only)"]
         RH["Robinhood\n(account snapshot — ADVISORY ONLY)"]
     end
 
@@ -29,7 +29,7 @@ flowchart TD
         RHO["robinhood_orders.py\nTier 7 — FIFO realized P&L\n(ADVISORY ONLY, no order code)"]
     end
 
-    YF & ALP & FHB --> DE
+    YF & ALP --> DE
     FRED --> DE
     DE --> HS
     RH --> RHP
@@ -92,6 +92,7 @@ flowchart TD
     MEDTO --> SM1 & SM14 & SM16
     FE --> SM11
     TOE --> SM2
+    FHB --> SM15
 
     %% ── Aggregation ───────────────────────────────────────────────────────
     subgraph AGG["Signal Aggregation"]
@@ -199,7 +200,7 @@ flowchart TD
 |---|-----------|
 | 1 | **DTO boundary** — all data crossing into calculation code must be coerced into `dto_models.py` types. No raw-dict lookups in signal or strategy code. |
 | 2 | **Single sizing SSOT** — Kelly Target is computed **only** in `StrategyEngine._calculate_kelly_sizing()` → `sizing/kelly.py` / `sizing/vol_target.py`. No score-derived win-probability formulas anywhere else. |
-| 3 | **Source-of-truth separation** — Robinhood is the source of truth for account state (qty, cost basis, dividends, equity). Market data providers (Alpaca / yfinance / Finnhub) are the source of truth for prices, bars, and fundamentals. These roles never cross. |
+| 3 | **Source-of-truth separation** — Robinhood is the source of truth for account state (qty, cost basis, dividends, equity). Market data providers (Alpaca / yfinance) are the source of truth for prices, bars, and fundamentals — fundamentals are Yahoo statement-derived (`data/yahoo_fundamentals.py`), with raw yfinance `.info` as the fallback; Finnhub feeds the news_catalyst signal only. These roles never cross. |
 | 4 | **No fabricated data** — missing fields are `NaN`, never `0.0`. Held symbols without live quotes get `EQUITY_ONLY` coverage; their equity view uses `qty × avg_cost`, not a fabricated current price. |
 | 5 | **Dead-letter resilience** — every per-symbol calculation is wrapped in try/except. One symbol's failure never aborts the run; it is captured in the dead-letter queue (`output/dead_letter.json`). |
 | 6 | **Broker quarantine** — `ADVISORY_ONLY=true` (the project default) causes `main_orchestrator._execute_broker_orders` to return immediately before any broker import. The OrderManager / BrokerBase path (shown in red above) is never reached. |
@@ -230,4 +231,4 @@ Claude Code owns the entire repo — single-agent workflow, no domain split.
 
 ---
 
-*Last updated: 2026-07-05. Reflects the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default.*
+*Last updated: 2026-07-08. Reflects the Yahoo statement-derived fundamentals engine (`data/yahoo_fundamentals.py`, replacing Finnhub as the fundamentals source; Finnhub is now news_catalyst-only), the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default.*

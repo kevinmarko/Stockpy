@@ -131,9 +131,12 @@ class Settings(BaseSettings):
     FINNHUB_API_KEY: Optional[str] = Field(
         default=None,
         description=(
-            "Finnhub API key for fundamental data (company_basic_financials). "
-            "Free tier available at https://finnhub.io. "
-            "When absent, fundamentals fall back to yfinance .info (no crash)."
+            "Finnhub API key used ONLY by the news_catalyst signal "
+            "(signals/news_catalyst.py — company news / earnings headlines). "
+            "Free tier available at https://finnhub.io. Fundamentals are NO "
+            "longer sourced from Finnhub: they are Yahoo statement-derived "
+            "(data/yahoo_fundamentals.py) with a yfinance .info fallback, so "
+            "an absent key only disables the news catalyst signal (no crash)."
         ),
     )
     # TTL (seconds) for the in-process quote cache in CompositeProvider.
@@ -167,6 +170,20 @@ class Settings(BaseSettings):
     FINNHUB_RATE_LIMIT_PER_MIN: int = Field(
         default=50,
         description="Finnhub sliding-window call budget per 60 s (free tier ceiling: 60).",
+    )
+    BETA_LOOKBACK_DAYS: int = Field(
+        default=504,
+        description=(
+            "Trailing calendar days of daily returns used to compute beta in the "
+            "Yahoo-derived fundamentals engine (Cov(stock,SPY)/Var(SPY)). ~2 years."
+        ),
+    )
+    FUNDAMENTALS_SOURCE: str = Field(
+        default="yahoo",
+        description=(
+            "Primary fundamentals backend: 'yahoo' (statement-derived, default) or "
+            "'yfinance_info' (raw .info fallback). Finnhub is no longer a fundamentals source."
+        ),
     )
     # --- Robinhood Integration (legacy data/robinhood_client.py — SMS login) ---
     ROBINHOOD_USERNAME: Optional[str] = Field(default=None, description="Robinhood username (email).")

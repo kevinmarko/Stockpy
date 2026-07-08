@@ -50,12 +50,12 @@ class DataSource(str, Enum):
     """
 
     # Free / open
-    YFINANCE = "yfinance"          # delayed bars + .info fundamentals fallback
+    YFINANCE = "yfinance"          # delayed bars + Yahoo statement-derived fundamentals (+ .info fallback)
     FRED = "fred"                  # macro series (VIX, yield curve, Sahm)
 
     # Paid-tier-but-free APIs we already use
     ALPACA = "alpaca"              # real-time IEX quotes/bars (free tier)
-    FINNHUB = "finnhub"            # fundamentals (free tier)
+    FINNHUB = "finnhub"            # company news / earnings headlines (news_catalyst signal)
 
     # Account state
     ROBINHOOD = "robinhood"        # holdings, cost basis, dividends (read-only)
@@ -72,10 +72,10 @@ class DataSource(str, Enum):
 
 
 _LABELS: Dict[DataSource, str] = {
-    DataSource.YFINANCE:         "yfinance (delayed quotes/bars + fundamentals fallback)",
+    DataSource.YFINANCE:         "yfinance (delayed quotes/bars + Yahoo statement-derived fundamentals)",
     DataSource.FRED:             "FRED (macro series)",
     DataSource.ALPACA:           "Alpaca IEX (real-time quotes/bars)",
-    DataSource.FINNHUB:          "Finnhub (fundamentals)",
+    DataSource.FINNHUB:          "Finnhub (news catalyst headlines)",
     DataSource.ROBINHOOD:        "Robinhood (account snapshot, dividends)",
     DataSource.TRANSACTIONS_DB:  "TransactionsStore (closed-trade ledger)",
     DataSource.STATE_SNAPSHOT:   "state_snapshot.json (last orchestrator run)",
@@ -141,6 +141,11 @@ _FUNDAMENTALS_CONSUMERS: tuple[Consumer, ...] = (
              "Brinson-Fachler attribution needs fundamentals to map sectors."),
 )
 
+_NEWS_CONSUMERS: tuple[Consumer, ...] = (
+    Consumer("news_catalyst signal", "strategy",
+             "Company news / earnings headline sentiment (Finnhub company_news)."),
+)
+
 _MACRO_CONSUMERS: tuple[Consumer, ...] = (
     Consumer("macro_engine",         "engine",
              "Sahm Rule, yield curve, HY OAS, killSwitch state."),
@@ -187,9 +192,13 @@ _SNAPSHOT_CONSUMERS: tuple[Consumer, ...] = (
 # quote consumers — we record both edges so the operator sees that
 # yfinance going down still leaves a path via Alpaca, and vice versa).
 CONSUMERS: Dict[DataSource, tuple[Consumer, ...]] = {
-    DataSource.YFINANCE:        _QUOTE_CONSUMERS + (_FUNDAMENTALS_CONSUMERS[0],),
+    # yfinance now backs BOTH quotes/bars AND fundamentals: the primary
+    # Yahoo statement-derived engine (data/yahoo_fundamentals.py) and the raw
+    # .info fallback both draw on yfinance, so every fundamentals consumer maps
+    # here. Finnhub is no longer a fundamentals source — it feeds news only.
+    DataSource.YFINANCE:        _QUOTE_CONSUMERS + _FUNDAMENTALS_CONSUMERS,
     DataSource.ALPACA:          _QUOTE_CONSUMERS,
-    DataSource.FINNHUB:         _FUNDAMENTALS_CONSUMERS,
+    DataSource.FINNHUB:         _NEWS_CONSUMERS,
     DataSource.FRED:            _MACRO_CONSUMERS,
     DataSource.ROBINHOOD:       _ACCOUNT_CONSUMERS,
     DataSource.TRANSACTIONS_DB: _TXN_CONSUMERS,

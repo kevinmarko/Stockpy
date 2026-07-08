@@ -15,12 +15,16 @@ All network I/O is monkeypatched.  The suite verifies:
   - CompositeProvider selects yfinance when Alpaca keys are absent
   - CompositeProvider raises RuntimeError on unknown MARKET_DATA_PROVIDER value
   - CompositeProvider caches quotes and avoids redundant provider calls
-  - CompositeProvider.get_fundamentals falls back to yfinance when Finnhub empty
+  - CompositeProvider routes fundamentals to YahooFundamentalsProvider (primary)
+    and falls back to raw yfinance .info when the primary returns {}
+  - YahooFundamentalsProvider delegates math to compute_fundamentals and degrades
+    to {} on any yfinance failure
   - reset_provider() forces re-initialisation on next get_provider() call
 """
 
 import importlib
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -380,6 +384,118 @@ class TestFinnhubProvider:
 
 
 # ---------------------------------------------------------------------------
+# 5b. YahooFundamentalsProvider (primary fundamentals source)
+# ---------------------------------------------------------------------------
+
+class TestYahooFundamentalsProvider:
+    """YahooFundamentalsProvider is an I/O shell over compute_fundamentals.
+
+    yfinance is not installed in this environment, so we register a stub
+    ``yfinance`` module in sys.modules (the provider imports it lazily inside
+    ``get_fundamentals`` / ``_spy_returns``).
+    """
+
+    def _annual(self):
+        dates = pd.to_datetime(["2025-12-31", "2024-12-31"])
+        return pd.DataFrame(
+            {dates[0]: [200.0, 1000.0], dates[1]: [180.0, 900.0]},
+            index=["Net Income", "Total Revenue"],
+        )
+
+    def _quarterly(self):
+        dates = pd.to_datetime(
+            ["2025-12-31", "2025-09-30", "2025-06-30", "2025-03-31"]
+        )
+        return pd.DataFrame(
+            {d: [50.0, 250.0, 0.5] for d in dates},
+            index=["Net Income", "Total Revenue", "Diluted EPS"],
+        )
+
+    def _balance_sheet(self):
+        dates = pd.to_datetime(["2025-12-31", "2024-12-31"])
+        return pd.DataFrame(
+            {
+                dates[0]: [1000.0, 1500.0, 800.0, 400.0],
+                dates[1]: [900.0, 1400.0, 700.0, 350.0],
+            },
+            index=[
+                "Stockholders Equity", "Total Debt",
+                "Current Assets", "Current Liabilities",
+            ],
+        )
+
+    def _dividends(self):
+        return pd.Series(
+            [1.0, 1.0, 1.0, 1.0],
+            index=pd.to_datetime(
+                ["2025-01-15", "2025-04-15", "2025-07-15", "2025-10-15"]
+            ),
+        )
+
+    def _history(self):
+        idx = pd.date_range("2024-01-01", periods=80, freq="B", tz="UTC")
+        return pd.DataFrame({"Close": [100.0 + i * 0.1 for i in range(80)]}, index=idx)
+
+    def _make_ticker(self):
+        m = MagicMock()
+        m.info = {
+            "sector": "Technology",
+            "shortName": "Apple Inc.",
+            "longName": "Apple Inc.",
+            "sharesOutstanding": 100.0,
+        }
+        m.fast_info = {"last_price": 150.0, "previous_close": 149.0, "shares": 100.0}
+        m.income_stmt = self._annual()
+        m.quarterly_income_stmt = self._quarterly()
+        m.balance_sheet = self._balance_sheet()
+        m.quarterly_balance_sheet = self._balance_sheet()
+        m.cashflow = pd.DataFrame()
+        m.quarterly_cashflow = pd.DataFrame()
+        m.dividends = self._dividends()
+        m.institutional_holders = None
+        m.history.return_value = self._history()
+        return m
+
+    def _install_yf(self, monkeypatch, ticker_factory):
+        import types
+        fake = types.ModuleType("yfinance")
+        fake.Ticker = ticker_factory
+        monkeypatch.setitem(sys.modules, "yfinance", fake)
+
+    def test_source_constant(self):
+        from data.market_data import YahooFundamentalsProvider
+        assert YahooFundamentalsProvider.SOURCE == "yahoo_computed"
+        assert YahooFundamentalsProvider().source_name == "yahoo_computed"
+
+    def test_get_fundamentals_returns_dividend_yield_fraction(self, monkeypatch):
+        from data.market_data import YahooFundamentalsProvider
+        ticker = self._make_ticker()
+        self._install_yf(monkeypatch, lambda symbol: ticker)
+
+        provider = YahooFundamentalsProvider()
+        fund = provider.get_fundamentals("AAPL")
+
+        assert isinstance(fund, dict)
+        # dividendYield emitted as a FRACTION (4.00 / 150 ~= 0.0267), not 2.67.
+        assert fund["dividendYield"] == pytest.approx(4.0 / 150.0, abs=1e-4)
+        assert fund["dividendYield"] < 1.0
+        # Sanity: a couple of straight-through / computed values.
+        assert fund["currentPrice"] == pytest.approx(150.0, abs=1e-9)
+        assert fund["debtToEquity"] == pytest.approx(150.0, abs=1e-6)
+        assert fund["shortName"] == "Apple Inc."
+
+    def test_get_fundamentals_returns_empty_on_total_failure(self, monkeypatch):
+        from data.market_data import YahooFundamentalsProvider
+        # Ticker construction itself blows up -> dead-letter to {}.
+        self._install_yf(
+            monkeypatch,
+            MagicMock(side_effect=RuntimeError("network down")),
+        )
+        provider = YahooFundamentalsProvider()
+        assert provider.get_fundamentals("AAPL") == {}
+
+
+# ---------------------------------------------------------------------------
 # 6. CompositeProvider selection
 # ---------------------------------------------------------------------------
 
@@ -475,7 +591,9 @@ class TestCompositeProviderCache:
         )
         mock_provider.get_fundamentals = MagicMock(return_value={})
         cp._quote_provider = mock_provider
-        cp._fundamentals_provider = MagicMock(spec=FinnhubProvider)
+        # Fundamentals now route to YahooFundamentalsProvider (primary), not Finnhub.
+        from data.market_data import YahooFundamentalsProvider
+        cp._fundamentals_provider = MagicMock(spec=YahooFundamentalsProvider)
         cp._fundamentals_provider.get_fundamentals.return_value = {}
         return cp, mock_provider
 
@@ -500,24 +618,56 @@ class TestCompositeProviderCache:
         cp.get_latest_quote("AAPL")
         assert mock_provider.get_latest_quote.call_count == 2
 
-    def test_fundamentals_fallback_to_yfinance_when_finnhub_empty(self):
-        """When FinnhubProvider returns {}, CompositeProvider falls back to YFinanceProvider."""
+    def test_fundamentals_fallback_to_yfinance_when_primary_empty(self):
+        """When the primary (Yahoo) provider returns {}, the composite falls back
+        to raw yfinance .info via YFinanceProvider.get_fundamentals."""
         from data.market_data import CompositeProvider
         cp = CompositeProvider.__new__(CompositeProvider)
-        from data.market_data import _QuoteCache, FinnhubProvider, YFinanceProvider
+        from data.market_data import (
+            _QuoteCache,
+            YahooFundamentalsProvider,
+            YFinanceProvider,
+        )
         cp._cache = _QuoteCache(ttl_seconds=30)
         cp._quote_provider = MagicMock()
 
-        mock_finnhub = MagicMock(spec=FinnhubProvider)
-        mock_finnhub.get_fundamentals.return_value = {}
-        cp._fundamentals_provider = mock_finnhub
+        mock_primary = MagicMock(spec=YahooFundamentalsProvider)
+        mock_primary.get_fundamentals.return_value = {}
+        cp._fundamentals_provider = mock_primary
 
         yf_fund = {"trailingPE": 28.5}
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "key"}), \
-             patch.object(YFinanceProvider, "get_fundamentals", return_value=yf_fund):
+        with patch.object(YFinanceProvider, "get_fundamentals", return_value=yf_fund):
             result = cp.get_fundamentals("AAPL")
 
+        # Primary was consulted first, then the yfinance .info fallback fired.
+        mock_primary.get_fundamentals.assert_called_once()
         assert result == yf_fund
+
+    def test_fundamentals_uses_primary_when_non_empty(self):
+        """When the primary (Yahoo) provider returns data, the composite uses it
+        and never touches the yfinance .info fallback."""
+        from data.market_data import CompositeProvider
+        cp = CompositeProvider.__new__(CompositeProvider)
+        from data.market_data import (
+            _QuoteCache,
+            YahooFundamentalsProvider,
+            YFinanceProvider,
+        )
+        cp._cache = _QuoteCache(ttl_seconds=30)
+        cp._quote_provider = MagicMock()
+
+        primary_fund = {"dividendYield": 0.0267, "trailingPE": 30.0}
+        mock_primary = MagicMock(spec=YahooFundamentalsProvider)
+        mock_primary.get_fundamentals.return_value = primary_fund
+        cp._fundamentals_provider = mock_primary
+
+        with patch.object(
+            YFinanceProvider, "get_fundamentals", return_value={"trailingPE": 999.0}
+        ) as yf_fallback:
+            result = cp.get_fundamentals("AAPL")
+
+        assert result == primary_fund
+        yf_fallback.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -675,27 +825,36 @@ class TestFinnhubRateLimitAndCache:
 
 
 class TestCompositeProviderFundamentalsCache:
-    """The composite-level cache prevents BOTH Finnhub AND yfinance re-hammering."""
+    """The composite-level cache prevents the fundamentals provider re-hammering.
 
-    def test_composite_caches_final_result(self, monkeypatch):
-        from data.market_data import CompositeProvider, YFinanceProvider
+    Fundamentals now come from ``YahooFundamentalsProvider`` (primary), not
+    Finnhub. This test injects a call-counting fake onto the composite's
+    ``_fundamentals_provider`` so it stays fully offline (no yfinance network)
+    and proves the composite TTL cache deduplicates repeat lookups.
+    """
+
+    def test_composite_caches_final_result(self):
+        from data.market_data import CompositeProvider
         with patch.dict(os.environ, {
             "FINNHUB_API_KEY": "", "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": "",
         }):
             cp = CompositeProvider()
-            yf_call_count = {"n": 0}
+            call_count = {"n": 0}
 
-            def _fake_yf(self, sym):  # noqa: ARG001
-                yf_call_count["n"] += 1
-                return {"trailingPE": 28.5}
+            class _FakePrimary:
+                source_name = "yahoo_computed"
 
-            monkeypatch.setattr(YFinanceProvider, "get_fundamentals", _fake_yf)
+                def get_fundamentals(self, sym):  # noqa: ARG002
+                    call_count["n"] += 1
+                    return {"trailingPE": 28.5}
+
+            cp._fundamentals_provider = _FakePrimary()
 
             cp.get_fundamentals("AAPL")
             cp.get_fundamentals("AAPL")
             cp.get_fundamentals("AAPL")
 
-            assert yf_call_count["n"] == 1  # Composite cache deduplicates
+            assert call_count["n"] == 1  # Composite cache deduplicates
 
 
 # ---------------------------------------------------------------------------

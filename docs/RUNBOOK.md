@@ -633,6 +633,12 @@ accuracy changes.
 
 When a data source (Alpaca market data, Finnhub, FRED, Robinhood) is reporting errors:
 
+> **Note:** Finnhub now feeds only the `news_catalyst` signal (company news / earnings
+> headlines). Fundamentals are Yahoo statement-derived (`data/yahoo_fundamentals.py`, free)
+> with a raw yfinance `.info` fallback, so a Finnhub outage no longer degrades any
+> fundamentals-dependent consumer (`processing_engine`, `multifactor`, Graham/Gordon,
+> dividend quality) — only news-catalyst sentiment is lost.
+
 1. Open Safety tab → Dependency Map (`gui/dependency_map.py`).
 2. Multi-select the degraded sources.
 3. Read the impacted-consumers table — this is the authoritative list of

@@ -382,6 +382,204 @@ class YFinanceProvider(MarketDataProvider):
 
 
 # ---------------------------------------------------------------------------
+# Yahoo-derived statement-computed fundamentals provider
+# ---------------------------------------------------------------------------
+
+class YahooFundamentalsProvider:
+    """Statement-derived fundamentals from free Yahoo Finance data.
+
+    Fetches yfinance financial-statement frames + a cached SPY daily-return
+    series (for beta) and delegates ALL math to
+    ``data.yahoo_fundamentals.compute_fundamentals`` (pure, offline-testable).
+    Replaces FinnhubProvider as the primary fundamentals source. Degrades to an
+    empty dict (never raises) on any failure — CONSTRAINT #6 dead-letter.
+
+    The math module is kept strictly pure: this class is an I/O shell only. It
+    performs no financial computation itself — every yfinance attribute is
+    pulled inside its own try/except so one flaky frame (``.info`` in
+    particular) never aborts the rest of the fetch.
+    """
+
+    SOURCE = "yahoo_computed"
+
+    # Refetch SPY market-return series at most every ~6 h.
+    _SPY_CACHE_TTL_SECONDS = 6 * 3600
+
+    def __init__(self) -> None:
+        # SPY market-return cache (shared across symbols within a run so we
+        # don't refetch the benchmark once per ticker).
+        self._spy_returns_cache: Optional[pd.Series] = None
+        self._spy_cached_at: float = 0.0
+
+    @property
+    def source_name(self) -> str:
+        return self.SOURCE
+
+    @staticmethod
+    def _beta_period() -> str:
+        """Map ``BETA_LOOKBACK_DAYS`` (default 504 = ~2y) to a yfinance period."""
+        try:
+            days = int(os.environ.get("BETA_LOOKBACK_DAYS", "504"))
+        except Exception:
+            days = 504
+        if days <= 30:
+            return "1mo"
+        if days <= 90:
+            return "3mo"
+        if days <= 180:
+            return "6mo"
+        if days <= 252:
+            return "1y"
+        if days <= 504:
+            return "2y"
+        if days <= 1260:
+            return "5y"
+        return "10y"
+
+    @staticmethod
+    def _tz_strip(idx: pd.Index) -> pd.Index:
+        """Return a timezone-naive, date-normalised index (matches SPY/pipeline)."""
+        try:
+            if getattr(idx, "tz", None) is not None:
+                idx = idx.tz_localize(None)
+            return pd.to_datetime(idx).normalize()
+        except Exception:
+            return idx
+
+    def _spy_returns(self) -> Optional[pd.Series]:
+        """Fetch SPY daily returns once, cached with a ~6 h monotonic TTL.
+
+        Returns ``None`` on any failure (``compute_fundamentals`` then emits
+        ``beta = NaN``). Index is tz-stripped so it aligns with per-symbol
+        returns.
+        """
+        now = time.monotonic()
+        if (
+            self._spy_returns_cache is not None
+            and (now - self._spy_cached_at) <= self._SPY_CACHE_TTL_SECONDS
+        ):
+            return self._spy_returns_cache
+        try:
+            import yfinance as yf  # type: ignore
+
+            hist = yf.Ticker("SPY").history(period=self._beta_period(), auto_adjust=True)
+            if hist is None or hist.empty or "Close" not in hist.columns:
+                return self._spy_returns_cache  # keep any prior good series
+            rets = hist["Close"].pct_change().dropna()
+            rets.index = self._tz_strip(rets.index)
+            self._spy_returns_cache = rets
+            self._spy_cached_at = now
+            return rets
+        except Exception as exc:  # noqa: BLE001 — dead-letter, beta degrades to NaN
+            logger.warning(
+                "YahooFundamentalsProvider: SPY market-return fetch failed: %s — "
+                "beta will be NaN",
+                exc,
+            )
+            return self._spy_returns_cache
+
+    def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
+        """Fetch yfinance statement frames and delegate math to
+        ``compute_fundamentals``. Returns an empty dict (never raises) on any
+        top-level failure.
+        """
+        try:
+            import yfinance as yf  # type: ignore
+            from data.yahoo_fundamentals import compute_fundamentals
+
+            t = yf.Ticker(symbol)
+
+            # --- .info is the flaky one; wrap it defensively. ------------------
+            try:
+                info = t.info or {}
+            except Exception:
+                info = {}
+
+            # --- price + shares via fast_info (cheap, avoids .info round-trip) -
+            try:
+                fi = t.fast_info
+                price = fi.get("last_price") or fi.get("previous_close")
+            except Exception:
+                fi = None
+                price = None
+            try:
+                shares_current = fi.get("shares") if fi is not None else None
+            except Exception:
+                shares_current = None
+            if not shares_current:
+                shares_current = info.get("sharesOutstanding")
+
+            sector = info.get("sector", "N/A")
+            company_name = info.get("shortName") or info.get("longName") or ""
+            shares_diluted = info.get("sharesOutstanding") or shares_current
+
+            # --- Statement frames — each isolated so one bad pull isn't fatal. -
+            def _pull(attr: str):
+                try:
+                    return getattr(t, attr)
+                except Exception:
+                    return None
+
+            income_stmt = _pull("income_stmt")
+            income_stmt_quarterly = _pull("quarterly_income_stmt")
+
+            # Prefer the most recent quarter for point-in-time equity.
+            balance_sheet = _pull("quarterly_balance_sheet")
+            if balance_sheet is None or (
+                hasattr(balance_sheet, "empty") and balance_sheet.empty
+            ):
+                balance_sheet = _pull("balance_sheet")
+
+            cashflow = _pull("cashflow")
+            cashflow_quarterly = _pull("quarterly_cashflow")
+            dividends = _pull("dividends")
+            inst_holders = _pull("institutional_holders")
+
+            # --- Per-symbol daily returns (for beta), tz-stripped. ------------
+            try:
+                hist = t.history(period=self._beta_period(), auto_adjust=True)
+                if hist is not None and not hist.empty and "Close" in hist.columns:
+                    stock_returns = hist["Close"].pct_change().dropna()
+                    stock_returns.index = self._tz_strip(stock_returns.index)
+                else:
+                    stock_returns = None
+            except Exception:
+                stock_returns = None
+
+            market_returns = self._spy_returns()
+
+            return compute_fundamentals(
+                symbol,
+                price=price,
+                shares_current=shares_current,
+                shares_diluted=shares_diluted,
+                income_stmt=income_stmt,
+                income_stmt_quarterly=income_stmt_quarterly,
+                balance_sheet=balance_sheet,
+                cashflow=cashflow,
+                cashflow_quarterly=cashflow_quarterly,
+                dividends=dividends,
+                inst_holders=inst_holders,
+                stock_returns=stock_returns,
+                market_returns=market_returns,
+                sector=sector,
+                company_name=company_name,
+            )
+        except Exception as exc:  # noqa: BLE001 — dead-letter, never raise
+            logger.warning(
+                "YahooFundamentalsProvider.get_fundamentals(%s) failed: %s — "
+                "returning empty dict",
+                symbol, exc,
+            )
+            return {}
+
+    def clear_spy_cache(self) -> None:
+        """Evict the cached SPY market-return series (forced refresh)."""
+        self._spy_returns_cache = None
+        self._spy_cached_at = 0.0
+
+
+# ---------------------------------------------------------------------------
 # Finnhub provider (fundamentals only)
 # ---------------------------------------------------------------------------
 
@@ -499,6 +697,10 @@ class _FundamentalsCache:
 
 class FinnhubProvider:
     """Fundamentals-only provider backed by the Finnhub free tier.
+
+    DEPRECATED as a fundamentals source (2026-07): no longer wired into
+    CompositeProvider; retained for reference/manual use. news_catalyst uses its
+    own Finnhub client.
 
     Uses ``company_basic_financials`` for balance-sheet metrics, shaped to
     match the yfinance ``.info`` dict keys consumed by
@@ -802,7 +1004,7 @@ class _QuoteCache:
 
 class CompositeProvider(MarketDataProvider):
     """Auto-selecting composite that routes quotes/bars to one backend and
-    fundamentals to Finnhub (with yfinance fallback).
+    fundamentals to the Yahoo-derived statement engine (with yfinance fallback).
 
     Provider selection order
     ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -811,9 +1013,11 @@ class CompositeProvider(MarketDataProvider):
     3. Env-var absent, ``ALPACA_API_KEY`` + ``ALPACA_SECRET_KEY`` set → Alpaca
     4. Otherwise → ``YFinanceProvider``
 
-    Fundamentals always come from ``FinnhubProvider`` when
-    ``FINNHUB_API_KEY`` is set; ``YFinanceProvider.get_fundamentals()`` is the
-    fallback when Finnhub is not configured.
+    Fundamentals come from the Yahoo-derived statement-computed engine
+    (``YahooFundamentalsProvider``) as the primary source, with a raw yfinance
+    ``.info`` fallback (``YFinanceProvider.get_fundamentals()``) when the primary
+    returns nothing. ``FUNDAMENTALS_SOURCE=yfinance_info`` forces the raw
+    ``.info`` provider as primary. Finnhub is no longer wired in.
 
     Parameters
     ----------
@@ -837,9 +1041,13 @@ class CompositeProvider(MarketDataProvider):
             neg_ttl_seconds=int(os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")),
         )
         self._quote_provider: MarketDataProvider = self._select_quote_provider()
-        self._fundamentals_provider: FinnhubProvider = FinnhubProvider(
-            api_key=os.environ.get("FINNHUB_API_KEY")
-        )
+        # Fundamentals source: Yahoo-derived statement engine (primary) or raw
+        # yfinance .info when FUNDAMENTALS_SOURCE=yfinance_info.
+        src = os.environ.get("FUNDAMENTALS_SOURCE", "yahoo").strip().lower()
+        if src == "yfinance_info":
+            self._fundamentals_provider = YFinanceProvider()
+        else:
+            self._fundamentals_provider = YahooFundamentalsProvider()
         # Log startup banner once
         self._log_startup_banner()
 
@@ -872,14 +1080,14 @@ class CompositeProvider(MarketDataProvider):
         provider_name = type(self._quote_provider).__name__
         is_realtime = isinstance(self._quote_provider, AlpacaProvider)
         latency_note = "real-time (IEX)" if is_realtime else "delayed (~15 min, unofficial)"
-        finnhub_note = (
-            "Finnhub (FINNHUB_API_KEY configured)"
-            if os.environ.get("FINNHUB_API_KEY")
-            else "yfinance fallback (FINNHUB_API_KEY not set)"
+        fundamentals_note = (
+            "yfinance .info"
+            if isinstance(self._fundamentals_provider, YFinanceProvider)
+            else "Yahoo-derived (statement-computed)"
         )
         logger.info(
             "MarketData: quotes/bars via %s [%s]; fundamentals via %s",
-            provider_name, latency_note, finnhub_note,
+            provider_name, latency_note, fundamentals_note,
         )
 
     # ------------------------------------------------------------------
@@ -917,14 +1125,18 @@ class CompositeProvider(MarketDataProvider):
     def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
         """Return fundamental metrics shaped as a yfinance .info dict.
 
-        Source priority: Finnhub (when FINNHUB_API_KEY set) → yfinance .info
-        fallback.  Always returns a dict, never raises.
+        Source priority: the Yahoo-derived statement-computed engine
+        (``YahooFundamentalsProvider``, or raw yfinance ``.info`` when
+        ``FUNDAMENTALS_SOURCE=yfinance_info``) → raw yfinance ``.info`` emergency
+        fallback when the primary returns nothing. Always returns a dict, never
+        raises.
 
         Results — including empty dicts — are cached for
-        ``FUNDAMENTALS_CACHE_TTL_SECONDS`` (default 6 h) so neither Finnhub nor
-        yfinance is re-hammered within the window.  This is what prevents the
-        Finnhub free-tier (60 calls/min) from being exhausted by a large
-        watchlist sync.
+        ``FUNDAMENTALS_CACHE_TTL_SECONDS`` (default 6 h) so the statement frames
+        are not re-fetched within the window. The Yahoo-derived output's
+        ``dividendYield`` is already a fraction and is NEVER routed through
+        ``normalize_yfinance_dividend_yield``; only the raw ``.info`` fallback
+        normalises, and it does so internally.
         """
         # Lazy-init for instances constructed via ``__new__`` (test fixtures).
         if not hasattr(self, "_fundamentals_cache"):
@@ -939,22 +1151,30 @@ class CompositeProvider(MarketDataProvider):
         if cached is not None:
             return cached
 
-        # Try Finnhub first
-        fund: Dict[str, Any] = {}
-        if os.environ.get("FINNHUB_API_KEY"):
-            fund = self._fundamentals_provider.get_fundamentals(sym)
-            if fund:
-                self._fundamentals_cache.put(sym, fund)
-                return fund
-
-        # Fallback to yfinance .info
-        fund = YFinanceProvider().get_fundamentals(sym)
+        fund = self._fundamentals_provider.get_fundamentals(sym) or {}
+        if not fund:
+            # emergency fallback to raw yfinance .info (keeps its own
+            # dividendYield normalization)
+            fund = YFinanceProvider().get_fundamentals(sym)
         self._fundamentals_cache.put(sym, fund)
         return fund
 
     # ------------------------------------------------------------------
     # Convenience accessors
     # ------------------------------------------------------------------
+
+    @property
+    def source_name(self) -> str:
+        """Provider name string for the active fundamentals source.
+
+        Downstream (e.g. ``data/historical_store.py``) reads this to label the
+        provenance of cached fundamentals rows.
+        """
+        return getattr(
+            self._fundamentals_provider,
+            "source_name",
+            type(self._fundamentals_provider).__name__.lower(),
+        )
 
     @property
     def is_realtime(self) -> bool:
@@ -982,12 +1202,17 @@ class CompositeProvider(MarketDataProvider):
         """Wipe the in-process fundamentals cache (e.g. on session restart)."""
         if hasattr(self, "_fundamentals_cache"):
             self._fundamentals_cache.clear()
-        # Also reset the FinnhubProvider's internal cache so a forced refresh
-        # actually re-issues the network calls.
+        # Also reset the inner provider's caches so a forced refresh actually
+        # re-issues the network calls. Both are guarded — harmless when the
+        # active provider doesn't expose them (e.g. the legacy Finnhub
+        # ``_cache`` or the Yahoo provider's SPY market-return cache).
         provider = getattr(self, "_fundamentals_provider", None)
         inner_cache = getattr(provider, "_cache", None)
         if inner_cache is not None:
             inner_cache.clear()
+        clear_spy = getattr(provider, "clear_spy_cache", None)
+        if callable(clear_spy):
+            clear_spy()
 
 
 # ---------------------------------------------------------------------------
