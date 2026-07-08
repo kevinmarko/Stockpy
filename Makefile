@@ -3,13 +3,14 @@
 # Usage:
 #   make verify      env-var check → test suite → one live advisory cycle
 #   make test        pytest only
+#   make ci          offline pytest only (mirrors GitHub Actions: -m "not network")
 #   make smoke       smoke tests only
 #
 # All targets assume Python 3.12 lives in .venv; run ./setup.sh first.
 
 PYTHON := .venv/bin/python3
 
-.PHONY: verify test smoke
+.PHONY: verify test ci smoke
 
 # ── Main gate ─────────────────────────────────────────────────────────────────
 verify: _check_env test _live_run
@@ -34,6 +35,11 @@ test:
 	@echo ""
 	@echo "=== Step 2 / 3  Test suite ==="
 	@$(PYTHON) -m pytest -v --tb=short
+
+ci:
+	@echo ""
+	@echo "=== Offline test suite (mirrors GitHub Actions CI) ==="
+	@$(PYTHON) -m pytest -m "not network" -v --tb=short
 
 smoke:
 	@echo ""

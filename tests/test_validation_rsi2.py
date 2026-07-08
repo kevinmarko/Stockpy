@@ -40,6 +40,11 @@ import yfinance as yf
 from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 
+# Exercises the validation harness against REAL SPY history pulled live from
+# Yahoo Finance (see the module-scoped ``spy_history`` fixture) — network-
+# dependent, so deselected in CI via ``pytest -m "not network"``.
+pytestmark = pytest.mark.network
+
 
 def _connors_rsi2(close: pd.Series, length: int = 2) -> pd.Series:
     """Vectorized Wilder RSI at length=2. Causal: rsi[t] depends only on close[<=t]."""

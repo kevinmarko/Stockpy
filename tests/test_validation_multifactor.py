@@ -61,6 +61,11 @@ import yfinance as yf
 from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 
+# Downloads real multi-ticker price history live from Yahoo Finance in its
+# module-scoped fixtures — network-dependent, deselected in CI via
+# ``pytest -m "not network"``.
+pytestmark = pytest.mark.network
+
 # A representative cross-section of liquid, long-listed equities spanning a
 # real large-to-small market-cap spread (avoids downloading the full S&P 500
 # universe, which is too slow/flaky for a unit test).

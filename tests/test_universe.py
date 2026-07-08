@@ -6,6 +6,10 @@ import pytest
 import pandas as pd
 
 import universe_engine
+# This module hits real, unmocked live Wikipedia network calls (the S&P 500
+# constituents scrape); its tests share a module-scoped cache populated by that
+# live fetch — network-dependent, deselected in CI via ``pytest -m "not network"``.
+pytestmark = pytest.mark.network
 from universe_engine import (
     get_sp500_constituents,
     get_delisted_tickers,
