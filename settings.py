@@ -444,6 +444,22 @@ class Settings(BaseSettings):
             "of value."
         ),
     )
+    FORECAST_USE_GARCH_SIGMA: bool = Field(
+        default=True,
+        description=(
+            "Use the GJR-GARCH(1,1) volatility estimate (annualized, converted to "
+            "daily via /sqrt(252)) as the Monte Carlo sigma instead of naive "
+            "historical stdev. False restores the pre-GARCH log-return-std behavior."
+        ),
+    )
+    FORECAST_PROPHET_WEIGHT: float = Field(
+        default=0.25,
+        description=(
+            "Weight given to the Prophet 30-day forecast when blending it into the "
+            "static ensemble at the 30-day horizon: final = base*(1-w) + prophet*w. "
+            "0.0 disables Prophet's influence on the blend."
+        ),
+    )
     # Number of worker threads for DataEngine.fetch_technical_raw() and
     # fetch_fundamentals_raw() (data_engine.py). Both were originally a serial
     # `for symbol in tickers:` loop making one blocking yfinance HTTP call at a

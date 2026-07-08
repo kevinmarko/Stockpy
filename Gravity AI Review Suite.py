@@ -8883,6 +8883,10 @@ class GravityAIAuditor:
         8.  ``settings.FORECAST_SKILL_WINDOW_DAYS`` and ``FORECAST_SKILL_MIN_OBS`` exist.
         9.  ``forecasting/__init__.py`` re-exports ``ForecastTracker``.
         10. ``tests/test_forecast_tracker.py`` exists.
+        11. ``ForecastingEngine._estimate_daily_sigma`` applies the ANNUALIZED→DAILY
+            ``/sqrt(252)`` conversion on the GJR-GARCH volatility (2026-07 GARCH→MC feature).
+        12. ``_blend_with_skill`` is prophet-absent byte-identical, and prophet-present
+            applies the ``base*(1-w) + prophet*w`` overlay with ``FORECAST_PROPHET_WEIGHT``.
         """
         audit: dict = {"step": "step_59_forecast_skill_audit", "checks": [], "status": "PENDING"}
         all_pass = True
@@ -9035,6 +9039,70 @@ class GravityAIAuditor:
                 "passed": test_exists,
             })
             all_pass = all_pass and test_exists
+
+            # 11. GARCH → Monte Carlo sigma: the /sqrt(252) annualized→daily conversion.
+            #     Patch estimate_gjr_garch_volatility to a KNOWN annualized vol and assert
+            #     _estimate_daily_sigma returns annual/sqrt(252) (NOT the raw annual value).
+            from unittest.mock import patch
+            import numpy as _np
+            import pandas as _pd
+            from settings import settings as _s2
+
+            KNOWN_ANNUAL = 0.40
+            expected_daily = KNOWN_ANNUAL / _np.sqrt(252.0)
+            idx = _pd.date_range("2024-01-01", periods=60, freq="D")
+            hist_df = _pd.DataFrame(
+                {
+                    "Open": _np.linspace(100.0, 110.0, 60),
+                    "High": _np.linspace(101.0, 111.0, 60),
+                    "Low": _np.linspace(99.0, 109.0, 60),
+                    "Close": _np.linspace(100.0, 110.0, 60),
+                    "Volume": [10_000.0] * 60,
+                },
+                index=idx,
+            )
+            fe = ForecastingEngine()
+            with patch.object(_s2, "FORECAST_USE_GARCH_SIGMA", True), patch(
+                "technical_options_engine.TechnicalOptionsEngine.estimate_gjr_garch_volatility",
+                return_value=KNOWN_ANNUAL,
+            ):
+                got_daily = fe._estimate_daily_sigma(hist_df, fallback_daily_sigma=0.99)
+            sqrt252_ok = (
+                abs(got_daily - expected_daily) < 1e-9
+                and abs(got_daily - KNOWN_ANNUAL) > 1e-3  # NOT the un-converted annual value
+            )
+            audit["checks"].append({
+                "check": "_estimate_daily_sigma applies /sqrt(252) (annualized GARCH → daily MC sigma)",
+                "passed": sqrt252_ok,
+                "detail": f"annual={KNOWN_ANNUAL}, expected_daily={expected_daily:.6f}, got={got_daily:.6f}",
+            })
+            all_pass = all_pass and sqrt252_ok
+
+            # 12. Prophet ensemble overlay: prophet-absent byte-identical, prophet-present
+            #     applies final = base*(1-w) + prophet*w with w = FORECAST_PROPHET_WEIGHT.
+            w = float(min(max(getattr(_s2, "FORECAST_PROPHET_WEIGHT", 0.25), 0.0), 1.0))
+            base_models = {"arima": 100.0, "monte_carlo": 100.0}  # static blend → base = 100.0
+            base_only = ForecastingEngine._blend_with_skill(
+                dict(base_models), {}, "MC", current_price=100.0
+            )
+            with_prophet = ForecastingEngine._blend_with_skill(
+                {**base_models, "prophet": 200.0}, {}, "MC", current_price=100.0
+            )
+            expected_overlay = base_only * (1.0 - w) + 200.0 * w
+            prophet_absent_ok = abs(base_only - 100.0) < 1e-9  # base unchanged w/o prophet
+            prophet_present_ok = abs(with_prophet - expected_overlay) < 1e-9
+            # If w > 0, the overlay must actually move the blend toward the prophet yhat.
+            prophet_moves_ok = (w == 0.0) or (with_prophet > base_only + 1e-9)
+            overlay_ok = prophet_absent_ok and prophet_present_ok and prophet_moves_ok
+            audit["checks"].append({
+                "check": "_blend_with_skill: prophet-absent byte-identical, prophet-present applies base*(1-w)+prophet*w overlay",
+                "passed": overlay_ok,
+                "detail": (
+                    f"w={w}, base_only={base_only:.4f}, with_prophet={with_prophet:.4f}, "
+                    f"expected_overlay={expected_overlay:.4f}"
+                ),
+            })
+            all_pass = all_pass and overlay_ok
 
             audit["overall_pass"] = all_pass
             audit["status"] = "PASSED" if all_pass else "FAILED"

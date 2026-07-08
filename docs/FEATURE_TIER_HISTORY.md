@@ -9,6 +9,7 @@ PR that added it" record** — read it when you need the full backstory, test su
 or Gravity-audit-step details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
+- Forecasting — GARCH volatility into Monte Carlo + Prophet into the ensemble (2026-07-08)
 - Fundamentals — Finnhub → Yahoo statement-computed engine (2026-07-08)
 - ML Package Architecture (Stage 4 — Triple Barrier + Meta-Labeling)
 - Lookback & Vectorization Enhancements (Bug Fixes)
@@ -35,6 +36,70 @@ Sections in this file (search for the `##` heading):
 where they're load-bearing for every session** (e.g. ADVISORY_ONLY quarantine,
 CONSTRAINT #3/#4/#6, no-fabricated-metrics, dead-letter resilience). This file adds
 the full detail, test surface, and Gravity step numbers behind each of those.
+
+---
+
+## Forecasting — GARCH volatility into Monte Carlo + Prophet into the ensemble (2026-07-08)
+
+**Why.** Two long-standing weaknesses in `forecasting_engine.py`:
+1. The Monte Carlo GBM simulation used a **naive historical log-return stdev** for σ. That
+   backward-looking, thin-tailed estimate makes the MC confidence band (`MC_Lower`/`MC_Upper`,
+   the 5th/95th terminal-price percentiles) roughly constant across volatility regimes — it
+   does not widen when the market is turbulent nor tighten when it is calm, so the band
+   understates tail risk exactly when it matters most. The platform already computes a
+   forward-looking, fat-tailed **GJR-GARCH(1,1)** volatility elsewhere
+   (`technical_options_engine.estimate_gjr_garch_volatility`, Student-t innovations); the MC
+   simulation should consume it.
+2. **Prophet was dead weight.** `run_prophet_forecast` was already being *invoked* at h=30 and
+   its result surfaced into the `Forecast_30_Prophet*` report columns — but the yhat was
+   **discarded from the actual `Forecast_30` blend**, so it influenced nothing the strategy
+   layer consumes. It cost a fit and produced no ensemble value.
+
+**What shipped.**
+- **GARCH → Monte Carlo σ.** New helper `ForecastingEngine._estimate_daily_sigma(history_df,
+  fallback_daily_sigma) -> float`. When `settings.FORECAST_USE_GARCH_SIGMA` is `True` (default)
+  and `history_df` has ≥ 22 rows, it calls `TechnicalOptionsEngine().estimate_gjr_garch_volatility(history_df)`
+  and returns a **DAILY** sigma for the GBM. `generate_forecast` computes `mc_sigma` once and
+  threads it into **every** `run_monte_carlo` call site (the target-days band AND each per-horizon
+  point forecast), so the whole MC surface is regime-responsive.
+- **THE SCALE RULE (documented so nobody "fixes" it).** `estimate_gjr_garch_volatility` returns
+  an **ANNUALIZED** vol; Monte Carlo's GBM needs a **DAILY** σ. `_estimate_daily_sigma` therefore
+  divides by **`sqrt(252)`**. This conversion is *mandatory and cannot be delegated to
+  `run_monte_carlo`*: that function has an auto-normalize guard, but it keys on **`mu` only**
+  (`if abs(mu) > 0.05: mu/=252; sigma/=sqrt(252)`) — it inspects the drift, not σ, so a stealth
+  annualized σ (e.g. 0.40 ≈ 40% annual) would sail through undivided and inflate the band ~16×.
+  Guarded: a non-finite or non-positive daily σ falls back to the historical stdev; a floor of
+  `1e-6` prevents a degenerate zero.
+- **Degradation (never raises).** Flag off → fallback; `history_df is None` or `< 22` rows →
+  fallback; estimator raises → logged at DEBUG + fallback. Pre-GARCH behavior is restored exactly
+  by `FORECAST_USE_GARCH_SIGMA=false`.
+- **Prophet → ensemble overlay.** Prophet still runs **at most once per call, at h=30 only** (it
+  is expensive). Its yhat now enters `model_forecasts["prophet"]` for the h=30 horizon and is
+  folded into `_blend_with_skill`'s **static branch** as a backward-compatible overlay applied
+  *after* the existing base blend is computed: `final = base*(1-w) + prophet*w`, with
+  `w = settings.FORECAST_PROPHET_WEIGHT` (default 0.25, clamped to [0,1]). **Scope is deliberately
+  narrow:** only the h=30 static-blend path changes; the skill-weighted branch, all other
+  horizons, and the `Forecast_30_Prophet*` report columns are untouched. **Prophet-absent behavior
+  is byte-identical** to before — when `prophet_price` is missing/≤ 0 the overlay is skipped and
+  `base` is returned unchanged.
+- **Two new settings** (both `.env`-tunable, in `settings.py`): `FORECAST_USE_GARCH_SIGMA`
+  (bool, default `True`) and `FORECAST_PROPHET_WEIGHT` (float, default `0.25`).
+- **Cost.** One extra GJR-GARCH fit per ticker per cycle (Prophet already ran once); the GARCH
+  fit is a small, bounded arch-library optimization and adds only a few ms per symbol.
+
+**Test surface.**
+- `tests/` (owned by the test agent) cover: the `/sqrt(252)` scale conversion (a df with a
+  known/patched GARCH annualized vol yields `daily ≈ annual/sqrt(252)` at the MC call site, NOT
+  the raw annual value); regime-responsiveness (a turbulent synthetic history yields a wider
+  `MC_Upper - MC_Lower` band than a calm one under real GARCH); the Prophet overlay shift
+  (`PROPHET_AVAILABLE` patched `True` + a `run_prophet_forecast` returning a far-above yhat moves
+  `Forecast_30` toward that yhat vs a baseline with `FORECAST_PROPHET_WEIGHT=0`); and the
+  degradation paths (flag off, `None`/short `history_df`, estimator raising → historical fallback).
+
+**Gravity audit.** `run_forecast_skill_audit` (Step 59) gained two checks: **(11)**
+`_estimate_daily_sigma` applies the `/sqrt(252)` annualized→daily conversion (patched GARCH
+annual → returned daily ≈ annual/sqrt(252)), and **(12)** `_blend_with_skill` is prophet-absent
+byte-identical while prophet-present applies the `base*(1-w)+prophet*w` overlay.
 
 ---
 
