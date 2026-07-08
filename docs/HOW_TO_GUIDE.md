@@ -127,6 +127,8 @@ If you omit `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`, the pipeline still runs full
 | `PAPER_TRADING_START_DATE` | _(none)_ | Set this to today's date (YYYY-MM-DD format) when you start paper trading — the preflight check uses it to verify 90 days of history |
 | `FINNHUB_API_KEY` | _(none)_ | Used **only** by the `news_catalyst` signal (company news / earnings headlines). **Not** a fundamentals source — fundamentals are Yahoo statement-derived (free). Leave unset to run without the news-catalyst signal |
 | `FUNDAMENTALS_SOURCE` | `yahoo` | Fundamentals backend: `yahoo` (statement-derived, default) or `yfinance_info` (raw `.info` fallback) |
+| `FORECAST_USE_GARCH_SIGMA` | `true` | Use the GJR-GARCH(1,1) volatility (annualized, converted to daily via ÷√252) as the Monte Carlo sigma, so the MC confidence band widens in turbulent regimes and tightens in calm ones. `false` restores the naive historical-stdev sigma |
+| `FORECAST_PROPHET_WEIGHT` | `0.25` | Weight `w` given to the Prophet 30-day forecast when blending it into the 30-day ensemble: `final = base*(1-w) + prophet*w`. `0.0` disables Prophet's influence on the blend (Prophet must also be installed to have any effect) |
 
 ---
 

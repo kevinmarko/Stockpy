@@ -546,24 +546,66 @@ class ForecastingEngine:
                 # Degenerate: all weights zero → fall through to static logic
 
         # Static sector-preference fallback (original logic)
+        from settings import settings as _settings
+
         hw_price = model_forecasts.get("holt_winters", 0.0)
         arima_price = model_forecasts.get("arima", 0.0)
         mc_price = model_forecasts.get("monte_carlo", 0.0)
         lstm_price = model_forecasts.get("cnn_lstm", 0.0)
 
+        # Compute the original static blend result into `base` (unchanged weights).
         if preferred_model == "HW" and hw_price > 0:
-            return hw_price
-        if preferred_model == "ARIMA" and arima_price > 0:
-            return arima_price
-
+            base = hw_price
+        elif preferred_model == "ARIMA" and arima_price > 0:
+            base = arima_price
         # General static blend (mirrors original hardcoded weights)
-        if lstm_price > 0.0:
+        elif lstm_price > 0.0:
             if arima_price > 0:
-                return lstm_price * 0.4 + arima_price * 0.2 + mc_price * 0.4
-            return lstm_price * 0.5 + mc_price * 0.5
-        if arima_price > 0 and mc_price > 0:
-            return arima_price * 0.4 + mc_price * 0.6
-        return arima_price if arima_price > 0 else (mc_price if mc_price > 0 else current_price)
+                base = lstm_price * 0.4 + arima_price * 0.2 + mc_price * 0.4
+            else:
+                base = lstm_price * 0.5 + mc_price * 0.5
+        elif arima_price > 0 and mc_price > 0:
+            base = arima_price * 0.4 + mc_price * 0.6
+        else:
+            base = arima_price if arima_price > 0 else (mc_price if mc_price > 0 else current_price)
+
+        # Prophet overlay: fold the Prophet 30-day forecast into the static blend.
+        # When prophet is absent (0/missing), `base` is byte-identical to the
+        # original static return value.
+        prophet_price = model_forecasts.get("prophet", 0.0)
+        if prophet_price > 0:
+            w = float(getattr(_settings, "FORECAST_PROPHET_WEIGHT", 0.25))
+            w = min(max(w, 0.0), 1.0)
+            base = base * (1.0 - w) + prophet_price * w
+        return base
+
+    def _estimate_daily_sigma(self, history_df, fallback_daily_sigma: float) -> float:
+        """Return a DAILY volatility for Monte Carlo, sourced from the GJR-GARCH(1,1)
+        estimator (forward-looking, fat-tailed) when available, else the caller's
+        historical daily stdev.
+
+        CRITICAL UNIT CONVERSION: estimate_gjr_garch_volatility returns ANNUALIZED
+        vol; Monte Carlo needs DAILY. We divide by sqrt(252). See run_monte_carlo's
+        guard (keys on mu only) -- it will NOT auto-correct an annualized sigma.
+
+        Degrades to fallback_daily_sigma (never raises) when the GARCH flag is off,
+        history_df is None/insufficient, or the estimator fails.
+        """
+        from settings import settings as _settings
+        if not _settings.FORECAST_USE_GARCH_SIGMA:
+            return fallback_daily_sigma
+        if history_df is None or len(history_df) < 22:
+            return fallback_daily_sigma
+        try:
+            from technical_options_engine import TechnicalOptionsEngine
+            annual_sigma = float(TechnicalOptionsEngine().estimate_gjr_garch_volatility(history_df))
+            daily = annual_sigma / np.sqrt(252.0)
+            if not np.isfinite(daily) or daily <= 0:
+                return fallback_daily_sigma
+            return max(daily, 1e-6)
+        except Exception as _exc:
+            logger.debug("GJR-GARCH daily sigma estimation failed; using historical stdev: %s", _exc)
+            return fallback_daily_sigma
 
     # =========================================================================
     # ORCHESTRATOR
@@ -617,15 +659,20 @@ class ForecastingEngine:
                 sigma = float(log_returns.std())
                 close_prices = history.values
             else:
-                mu = 0.0002 
-                sigma = 0.015 
+                mu = 0.0002
+                sigma = 0.015
                 close_prices = np.array([])
+
+            # GJR-GARCH(1,1) daily sigma for Monte Carlo (forward-looking, fat-tailed);
+            # falls back to the historical log-return stdev above. Defined once here so
+            # both run_monte_carlo call sites below use it on every code path.
+            mc_sigma = self._estimate_daily_sigma(history_df, sigma)
 
             # 1. Primary Forecasts
             if len(close_prices) > 30:
                 results['ARIMA'] = self.run_arima(close_prices, days_forward=target_days)
 
-            mc_mean, mc_low, mc_high = self.run_monte_carlo(current_price, mu, sigma, target_days)
+            mc_mean, mc_low, mc_high = self.run_monte_carlo(current_price, mu, mc_sigma, target_days)
             results['MC_Target'] = mc_mean
             results['MC_Lower'] = mc_low
             results['MC_Upper'] = mc_high
@@ -642,6 +689,17 @@ class ForecastingEngine:
             lstm_multi: Dict[int, float] = {h: 0.0 for h in horizons}
             if TENSORFLOW_AVAILABLE and history_df is not None and len(history_df) >= 70:
                 lstm_multi = self.run_cnn_lstm_forecast(history_df, horizons=tuple(horizons))
+
+            # Run Facebook Prophet ONCE (30-day only; it is expensive) and stash its
+            # forecast so it can both feed the h=30 blend below AND populate the
+            # Forecast_30_Prophet result columns after the loop without a second run.
+            prophet_yhat_30 = 0.0
+            prophet_30_lower = 0.0
+            prophet_30_upper = 0.0
+            if PROPHET_AVAILABLE and history_series is not None and len(history_series) > 30:
+                prophet_yhat_30, prophet_30_lower, prophet_30_upper = self.run_prophet_forecast(
+                    history_series, days_forward=30
+                )
 
             # Step 2a: update actuals for all horizons BEFORE generating new forecasts.
             # This ensures the skill weights computed below reflect the latest error data.
@@ -662,7 +720,7 @@ class ForecastingEngine:
                     a_res = self.run_arima(close_prices, days_forward=h)
                     h_res = self.run_holt_winters_grid_search(close_prices, days_forward=h)
 
-                m_res, _, _ = self.run_monte_carlo(current_price, mu, sigma, days_forward=h)
+                m_res, _, _ = self.run_monte_carlo(current_price, mu, mc_sigma, days_forward=h)
 
                 # Collect per-model prices for skill tracking and skill-weighted blend.
                 # Only include models that produced a positive price (CONSTRAINT #4).
@@ -675,6 +733,10 @@ class ForecastingEngine:
                     model_forecasts["holt_winters"] = h_res
                 if lstm_res > 0:
                     model_forecasts["cnn_lstm"] = lstm_res
+                # Prophet only participates in the 30-day horizon (it is computed
+                # once for 30 days only above).
+                if h == 30 and prophet_yhat_30 > 0:
+                    model_forecasts["prophet"] = prophet_yhat_30
 
                 # Step 2b: retrieve skill weights for this horizon (empty dict = cold start).
                 skill_weights: Dict[str, float] = {}
@@ -701,13 +763,14 @@ class ForecastingEngine:
 
                 results[f'Forecast_{h}'] = blended
 
-            # Extract Facebook Prophet 30-day baseline forecasts if active
-            if PROPHET_AVAILABLE and history_series is not None and len(history_series) > 30:
-                p_yhat, p_lower, p_upper = self.run_prophet_forecast(history_series, days_forward=30)
-                # Override baseline target Forecast_30 with Prophet forecasts if preferred
-                results['Forecast_30_Prophet'] = p_yhat
-                results['Forecast_30_Prophet_Lower'] = p_lower
-                results['Forecast_30_Prophet_Upper'] = p_upper
+            # Surface the Facebook Prophet 30-day baseline forecasts (already computed
+            # ONCE before the horizon loop and folded into the h=30 blend above).
+            # Only write the result keys when Prophet actually produced output, exactly
+            # as before (keys stay unset when Prophet is unavailable).
+            if prophet_yhat_30 > 0:
+                results['Forecast_30_Prophet'] = prophet_yhat_30
+                results['Forecast_30_Prophet_Lower'] = prophet_30_lower
+                results['Forecast_30_Prophet_Upper'] = prophet_30_upper
 
         except Exception as e:
             logger.error(f"Forecasting Engine Error for {row.get('Symbol', 'Unknown')}: {e}")
