@@ -37,6 +37,7 @@ def _spy_returns_fn(start: str, end: str) -> pd.Series:
 # =============================================================================
 # Date ranges produce data (network)
 # =============================================================================
+@pytest.mark.network
 @pytest.mark.parametrize("name", list(STRESS_SCENARIOS.keys()))
 def test_each_scenario_window_produces_data(name):
     scenario = STRESS_SCENARIOS[name]
@@ -45,6 +46,7 @@ def test_each_scenario_window_produces_data(name):
     assert len(returns) >= 3, f"Scenario {name} window unexpectedly short ({len(returns)} days)"
 
 
+@pytest.mark.network
 def test_runner_executes_end_to_end_on_real_data():
     results = run_stress_tests(_spy_returns_fn)
     # Every canonical scenario must have a result, and none should error out on

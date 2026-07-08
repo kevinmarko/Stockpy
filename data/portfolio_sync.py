@@ -409,10 +409,10 @@ def build_sync_report(
 
             provider = get_provider()
             provider_source = getattr(provider, "quote_source", "unknown")
-            fundamentals_source = (
-                "finnhub" if (provider_source and __import__("os").environ.get("FINNHUB_API_KEY"))
-                else "yfinance"
-            )
+            # Fundamentals now come from the Yahoo statement-computed engine
+            # (source_name "yahoo_computed"), no longer Finnhub. Read the label
+            # off the active provider so the sync-report provenance stays honest.
+            fundamentals_source = getattr(provider, "source_name", "yfinance")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Market-data provider unavailable for sync probe: %s", exc)
             provider = None

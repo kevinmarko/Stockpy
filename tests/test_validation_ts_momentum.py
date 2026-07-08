@@ -5,6 +5,10 @@ import yfinance as yf
 from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 
+# Downloads real SPY history live from Yahoo Finance — network-dependent,
+# deselected in CI via ``pytest -m "not network"``.
+pytestmark = pytest.mark.network
+
 def test_validation_tsmom_spy(tmp_path):
     # 1. Download SPY data from 2000 to 2023
     df = yf.download("SPY", start="2000-01-01", end="2023-12-31", progress=False)

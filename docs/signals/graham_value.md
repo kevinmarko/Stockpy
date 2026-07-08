@@ -62,8 +62,11 @@ else:
     graham_number = 0.0  # imaginary — no real root
 ```
 
-Inputs come from `FundamentalDataDTO.from_raw_dict()` which normalises yfinance / Finnhub
-string fields (currency symbols, `%`, `"N/A"`) before passing them to calculations.
+Inputs (`eps` = `trailingEps`, `bvps` = `bookValue`) come from `FundamentalDataDTO.from_raw_dict()`,
+fed by the **Yahoo statement-derived fundamentals engine** (`data/yahoo_fundamentals.py` →
+`YahooFundamentalsProvider`, the primary source; raw yfinance `.info` is the emergency fallback).
+Finnhub is no longer a fundamentals source. The DTO normalises any residual string fields
+(currency symbols, `%`, `"N/A"`) before passing them to calculations.
 
 ---
 

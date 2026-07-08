@@ -9,6 +9,7 @@ PR that added it" record** — read it when you need the full backstory, test su
 or Gravity-audit-step details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
+- Fundamentals — Finnhub → Yahoo statement-computed engine (2026-07-08)
 - ML Package Architecture (Stage 4 — Triple Barrier + Meta-Labeling)
 - Lookback & Vectorization Enhancements (Bug Fixes)
 - GUI tab build-outs: Reports/Brinson-Fachler, Launcher, Market Data, Observability,
@@ -36,6 +37,76 @@ CONSTRAINT #3/#4/#6, no-fabricated-metrics, dead-letter resilience). This file a
 the full detail, test surface, and Gravity step numbers behind each of those.
 
 ---
+
+## Fundamentals — Finnhub → Yahoo statement-computed engine (2026-07-08)
+
+**Why.** Fundamentals had been sourced from Finnhub's `company_basic_financials`
+endpoint, wired as the primary path in `CompositeProvider` with a raw yfinance `.info`
+fallback. Finnhub is a paid-tier API whose free plan (60 calls/min) was chronically
+rate-limited (429) across a large watchlist sync — an entire 2026-06 mitigation layer
+(sliding-window rate limiter + 6 h positive/negative fundamentals cache + one-shot 429
+backoff) existed only to paper over that flakiness, and coverage gaps still forced
+degraded metrics. The goal: drop the paid/flaky dependency for fundamentals entirely and
+compute the same metric set from Yahoo Finance's FREE financial statements, keeping the
+downstream `.info`-style key contract byte-for-byte so no consumer changes.
+
+**What shipped.**
+- **NEW `data/yahoo_fundamentals.py`** — a pure, I/O-free `compute_fundamentals(...)` that
+  derives **15 equity fundamentals** from statement frames the caller has already fetched
+  via yfinance (`income_stmt` + quarterly, `balance_sheet`, `cashflow` + quarterly,
+  `dividends`, `institutional_holders`) plus `price`/`shares`. It never imports yfinance,
+  never touches the network, never reads a file — so the math core is fully offline-testable
+  and deterministic. Returns a `dict` keyed by yfinance `.info` names (`trailingEps`,
+  `trailingPE`, `bookValue`, `priceToBook`, `dividendYield`, `payoutRatio`, `marketCap`,
+  `beta`, `returnOnEquity`, `revenueGrowth`, `debtToEquity`, `grossMargins`,
+  `operatingMargins`, `currentRatio`, `heldPercentInstitutions`, + `currentPrice`/
+  `shortName`/`sector` straight-through) so `FundamentalDataDTO.from_raw_dict()` is
+  unchanged. **NaN-degrading (CONSTRAINT #4)**: every metric is computed in its own
+  try/except and independently degrades to `float("nan")` on a missing/bad input — a
+  missing statement row never fabricates a `0.0` and never nukes the other 14 metrics.
+  **Version-drift tolerance**: module-level alias tables (`EQUITY`, `NET_INCOME`,
+  `TOTAL_REVENUE`, `TOTAL_DEBT`, …) resolved by `_row_latest` / `_ttm` / `_match_row`
+  case-insensitively, so a yfinance statement-label rename is a one-line data edit here.
+- **Formula notes.** TTM flows (`_ttm`) sum the trailing 4 quarterly columns, falling back
+  to the latest annual column; `trailingPE`/`priceToBook` are NaN when EPS/bookValue ≤ 0
+  (mirrors Yahoo); `revenueGrowth` compares TTM revenue to the prior annual column;
+  `currentRatio` = current assets / current liabilities; `heldPercentInstitutions` sums the
+  top-N institutional `% Out` column (auto-detecting percent-vs-fraction).
+- **Two SCALE-CRITICAL emission rules** (documented so nobody "fixes" them): `dividendYield`
+  is emitted **as a FRACTION** (e.g. `0.0257`, not `2.57`) and is NOT routed through
+  `normalize_yfinance_dividend_yield` — the platform consumes it as-is; `debtToEquity` is
+  emitted **×100** (e.g. `150.0`, not `1.5`) because two downstream consumers divide by 100.
+  `payoutRatio` takes `abs()` of the (negative) "Cash Dividends Paid" cash-flow outflow over
+  TTM net income, so the sign is always positive.
+- **Beta** = `Cov(stock, SPY) / Var(SPY)` over the trailing `BETA_LOOKBACK_DAYS` (new
+  setting, default **504** ≈ 2 years) of daily returns, requiring ≥ 60 overlapping
+  observations; the SPY return series is cached inside the provider to avoid refetching per
+  symbol.
+- **`data/market_data.py` rewire** — NEW `YahooFundamentalsProvider` (`SOURCE="yahoo_computed"`)
+  is now the **PRIMARY** fundamentals source in `CompositeProvider`; raw yfinance `.info`
+  (`YFinanceProvider`) is the **emergency fallback** (used when the primary yields an empty
+  dict). `FinnhubProvider` still exists but is **UNWIRED from fundamentals** (deprecated as a
+  fundamentals source; its rate-limiter/cache machinery is retained but dormant on that path).
+  `CompositeProvider` gained a **`source_name`** property reporting the active fundamentals
+  backend. NEW setting **`FUNDAMENTALS_SOURCE`** (`"yahoo"` default | `"yfinance_info"`).
+- **`FINNHUB_API_KEY` is NO LONGER a fundamentals dependency.** It remains ONLY for
+  `signals/news_catalyst.py` (company news / earnings headlines). `finnhub-python` stays in
+  `requirements.txt` for that signal.
+
+**Test surface.**
+- **NEW `tests/test_yahoo_fundamentals.py`** — 35 fully offline unit tests: `TestScaleRules`
+  (the two scale rules), `TestValuationMath` (bookValue/priceToBook/trailingPE/ROE/marketCap),
+  `TestPayoutSign` (`payoutRatio` `abs()` sign), `TestBeta`, `TestNaNDiscipline` (NaN-not-zero
+  discipline), `TestAliasResolver` (`_row_latest`/`_ttm` label-drift tolerance), `TestContract`
+  (emitted-key set + `.info`-style names).
+- **`tests/test_market_data.py`** composite fundamentals-routing tests rewired to the
+  Yahoo-primary path: NEW `TestYahooFundamentalsProvider`; `TestCompositeProviderCache` now
+  asserts **Yahoo-computed → yfinance `.info` fallback when primary is empty**, and primary
+  used when non-empty.
+
+**Gravity audit.** `run_market_data_provider_audit` (Step 26) gained checks **(p)/(q)/(r)**:
+`source_name == "yahoo_computed"`, the two scale rules (dividendYield fraction, debtToEquity
+×100), and empty-safe degradation.
 
 ## ML Package Architecture (Stage 4 — Triple Barrier + Meta-Labeling)
 

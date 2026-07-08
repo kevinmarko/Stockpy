@@ -2959,6 +2959,103 @@ class GravityAIAuditor:
                 "yfinance_calls": yf_calls["n"],
             }
 
+            # ── (p) Fundamentals source is Yahoo-derived by default ───────────
+            # After the Finnhub→Yahoo migration, a default CompositeProvider must
+            # expose source_name == "yahoo_computed" (the statement-computed
+            # engine), so data/historical_store.py labels cached rows honestly.
+            import os as _os_p
+            with patch.dict(_os_p.environ, {
+                "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": "",
+            }):
+                _os_p.environ.pop("MARKET_DATA_PROVIDER", None)
+                _os_p.environ.pop("FUNDAMENTALS_SOURCE", None)
+                cp_default = CompositeProvider()
+                default_source = cp_default.source_name
+                fund_provider_name = type(cp_default._fundamentals_provider).__name__
+            source_is_yahoo = (
+                default_source == "yahoo_computed"
+                and fund_provider_name == "YahooFundamentalsProvider"
+            )
+            audit["checks"]["fundamentals_source_is_yahoo_computed"] = {
+                "status": "PASSED" if source_is_yahoo else "FAILED",
+                "source_name": default_source,
+                "fundamentals_provider": fund_provider_name,
+            }
+
+            # ── (q) compute_fundamentals honours the two scale-critical rules ──
+            # dividendYield MUST be a FRACTION (not ×100); debtToEquity MUST be
+            # ×100.  Feed the pure engine synthetic statement frames with known
+            # answers (equity=1000, debt=1500 → dte=150.0; 4.00/yr div, price=150
+            # → dividendYield≈0.0267) and assert the scaling.
+            from data.yahoo_fundamentals import compute_fundamentals
+            import pandas as _pd_q
+            import numpy as _np_q
+            _dates_a = _pd_q.to_datetime(["2025-12-31", "2024-12-31"])
+            _dates_q = _pd_q.to_datetime(
+                ["2025-12-31", "2025-09-30", "2025-06-30", "2025-03-31"]
+            )
+            _bs = _pd_q.DataFrame(
+                {_dates_a[0]: [1000.0, 1500.0, 800.0, 400.0],
+                 _dates_a[1]: [900.0, 1400.0, 700.0, 350.0]},
+                index=["Stockholders Equity", "Total Debt",
+                       "Current Assets", "Current Liabilities"],
+            )
+            _is_q = _pd_q.DataFrame(
+                {d: [50.0, 250.0, 30.0] for d in _dates_q},
+                index=["Net Income", "Total Revenue", "Operating Income"],
+            )
+            _is_a = _pd_q.DataFrame(
+                {_dates_a[0]: [200.0, 1000.0], _dates_a[1]: [180.0, 900.0]},
+                index=["Net Income", "Total Revenue"],
+            )
+            _div = _pd_q.Series([1.0, 1.0, 1.0, 1.0], index=_pd_q.to_datetime(
+                ["2025-02-01", "2025-05-01", "2025-08-01", "2025-11-01"]))
+            _res = compute_fundamentals(
+                "TEST", price=150.0, shares_current=100.0, shares_diluted=100.0,
+                income_stmt=_is_a, income_stmt_quarterly=_is_q,
+                balance_sheet=_bs, cashflow=_pd_q.DataFrame(),
+                cashflow_quarterly=_pd_q.DataFrame(), dividends=_div,
+                inst_holders=None, stock_returns=None, market_returns=None,
+                sector="Technology", company_name="Test Co",
+            )
+            _dy = _res.get("dividendYield")
+            _dte = _res.get("debtToEquity")
+            dy_is_fraction = (
+                _dy is not None and _np_q.isfinite(_dy) and 0.0 < _dy < 0.5
+            )
+            dte_times_100 = (
+                _dte is not None and _np_q.isfinite(_dte)
+                and abs(_dte - 150.0) < 1e-6
+            )
+            audit["checks"]["compute_fundamentals_scale_rules"] = {
+                "status": "PASSED" if (dy_is_fraction and dte_times_100) else "FAILED",
+                "dividendYield": _dy,
+                "dividendYield_is_fraction": dy_is_fraction,
+                "debtToEquity": _dte,
+                "debtToEquity_is_x100": dte_times_100,
+            }
+
+            # ── (r) compute_fundamentals never raises on empty inputs ─────────
+            try:
+                _empty = compute_fundamentals(
+                    "EMPTY", price=float("nan"), shares_current=float("nan"),
+                    shares_diluted=float("nan"), income_stmt=_pd_q.DataFrame(),
+                    income_stmt_quarterly=_pd_q.DataFrame(),
+                    balance_sheet=_pd_q.DataFrame(), cashflow=_pd_q.DataFrame(),
+                    cashflow_quarterly=_pd_q.DataFrame(), dividends=None,
+                    inst_holders=None, stock_returns=None, market_returns=None,
+                )
+                empty_ok = (
+                    isinstance(_empty, dict)
+                    and not _np_q.isfinite(_empty.get("trailingPE", float("nan")))
+                )
+            except Exception:  # noqa: BLE001 — a raise here is the failure
+                empty_ok = False
+            audit["checks"]["compute_fundamentals_empty_safe"] = {
+                "status": "PASSED" if empty_ok else "FAILED",
+                "returned_dict_with_nan_metrics": empty_ok,
+            }
+
             passed = all(v.get("status") == "PASSED" for v in audit["checks"].values())
             audit["status"] = "PASSED" if passed else "FAILED"
 

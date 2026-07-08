@@ -36,6 +36,11 @@ from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 from main_orchestrator import compute_xsec_momentum_ranks
 
+# Downloads a real proxy universe (SPY/IWM) live from Yahoo Finance in its
+# module-scoped fixture — network-dependent, deselected in CI via
+# ``pytest -m "not network"``.
+pytestmark = pytest.mark.network
+
 
 # ---------------------------------------------------------------------------
 # Helper: download data and build XSec features for a proxy universe

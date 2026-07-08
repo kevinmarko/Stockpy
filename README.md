@@ -48,7 +48,7 @@ Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never co
 | `ALPACA_API_KEY` | Optional | Broker execution (no-op while `ADVISORY_ONLY=true`) |
 | `ALPACA_SECRET_KEY` | Optional | — |
 | `ALPACA_PAPER` | Optional | `true` (default) = paper trading. Has no effect while `ADVISORY_ONLY=true` |
-| `FINNHUB_API_KEY` | Optional | Better fundamental data; degrades to yfinance when absent |
+| `FINNHUB_API_KEY` | Optional | Company news / earnings headlines for the `news_catalyst` signal only. **Not** a fundamentals source — fundamentals are Yahoo statement-derived (free, `data/yahoo_fundamentals.py`). Absent = news_catalyst signal disabled |
 | `NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app |
 | `WATCHLIST` | Optional | Comma-separated tickers (alternatives: `watchlist.txt` one per line, or Sheet2 column A — see "Ticker universe" below) |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord channel alerts |

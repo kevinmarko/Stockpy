@@ -38,10 +38,17 @@ rather than SELL to avoid disrupting a reliable income stream.
 
 **Normalization:** raw points / 25.0.
 
-`is_dividend_sustainable` is computed in `FundamentalDataDTO` from yfinance / Finnhub
-fundamentals: `payout_ratio < 1.0` (less than 100% of earnings paid out) combined with
-positive trailing EPS. When payout ratio data is unavailable, defaults to `False`
-(conservative: treats unknown sustainability as a potential trap).
+`is_dividend_sustainable` is computed in `FundamentalDataDTO` from **Yahoo statement-derived
+fundamentals** (`data/yahoo_fundamentals.py` → `YahooFundamentalsProvider`, primary; raw
+yfinance `.info` is the fallback — Finnhub is no longer a fundamentals source):
+`payout_ratio < 1.0` (less than 100% of earnings paid out) combined with positive trailing
+EPS. When payout ratio data is unavailable, defaults to `False` (conservative: treats
+unknown sustainability as a potential trap).
+
+**Scale notes** (from the Yahoo engine's frozen contract): `dividendYield` is emitted as a
+**fraction** (e.g. `0.0257`, not `2.57`) and is consumed as-is (not re-normalised);
+`payoutRatio` uses `abs()` of the "Cash Dividends Paid" cash-flow line (a negative outflow)
+over TTM net income, so the sign is always positive.
 
 ---
 

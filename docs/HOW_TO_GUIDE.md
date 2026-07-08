@@ -33,7 +33,7 @@ A practical reference for running, configuring, and interpreting every part of t
 
 InvestYo is an **automated quantitative analysis pipeline**. Every time you run it, it:
 
-1. **Fetches live data** — price history from Yahoo Finance, macroeconomic indicators from FRED (Federal Reserve Economic Data)
+1. **Fetches live data** — price history *and* company fundamentals from Yahoo Finance (fundamentals are computed from Yahoo's free financial statements — no paid data vendor required), macroeconomic indicators from FRED (Federal Reserve Economic Data)
 2. **Computes indicators** — RSI, MACD, Aroon, ATR, GARCH volatility, Graham Number, implied volatility rank, and more
 3. **Runs forecasts** — ARIMA, Monte Carlo simulation, Holt-Winters exponential smoothing, and a CNN-LSTM deep learning model, all multi-horizon
 4. **Detects the macro regime** — classifies the current environment as RISK ON / NEUTRAL / RECESSION / CREDIT EVENT using yield curve, credit spreads, VIX, and a Hidden Markov Model (HMM) second opinion
@@ -125,6 +125,8 @@ If you omit `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`, the pipeline still runs full
 | `OUTPUT_DIR` | `./output` | Where HTML reports, heartbeat, and state snapshots are written |
 | `LOG_LEVEL` | `INFO` | Python logging level |
 | `PAPER_TRADING_START_DATE` | _(none)_ | Set this to today's date (YYYY-MM-DD format) when you start paper trading — the preflight check uses it to verify 90 days of history |
+| `FINNHUB_API_KEY` | _(none)_ | Used **only** by the `news_catalyst` signal (company news / earnings headlines). **Not** a fundamentals source — fundamentals are Yahoo statement-derived (free). Leave unset to run without the news-catalyst signal |
+| `FUNDAMENTALS_SOURCE` | `yahoo` | Fundamentals backend: `yahoo` (statement-derived, default) or `yfinance_info` (raw `.info` fallback) |
 
 ---
 
