@@ -1,0 +1,32 @@
+symbol,sector
+AAPL,Technology
+MSFT,Technology
+NVDA,Technology
+AMZN,Consumer Cyclical
+TSLA,Consumer Cyclical
+HD,Consumer Cyclical
+META,Communication Services
+GOOGL,Communication Services
+NFLX,Communication Services
+JNJ,Healthcare
+UNH,Healthcare
+PFE,Healthcare
+XOM,Energy
+CVX,Energy
+JPM,Financial Services
+BAC,Financial Services
+GS,Financial Services
+HON,Industrials
+UPS,Industrials
+CAT,Industrials
+PLD,Real Estate
+AMT,Real Estate
+SPG,Real Estate
+NEE,Utilities
+DUK,Utilities
+SO,Utilities
+PG,Consumer Defensive
+KO,Consumer Defensive
+WMT,Consumer Defensive
+LIN,Basic Materials
+SHW,Basic Materials

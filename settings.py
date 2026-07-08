@@ -561,6 +561,34 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Per-Sector Forecast Model/Horizon Config (empirical walk-forward backtest) ---
+    # Replaces a hardcoded per-sector forecast-model heuristic in
+    # forecasting_engine.py with one derived from an offline walk-forward
+    # backtest (see validation/sector_forecast_backtest.py). The backtest writes
+    # a committed JSON artifact; ForecastingEngine loads it at init via
+    # SECTOR_FORECAST_CONFIG_PATH, with SECTOR_FORECAST_CONFIGS layered on top as
+    # an optional per-sector override, falling back to the hardcoded heuristic
+    # when both are absent/invalid.
+    SECTOR_FORECAST_CONFIG_PATH: Optional[str] = Field(
+        default="forecasting/sector_configs.json",
+        description=(
+            "Path to the committed per-sector forecast config artifact (model+horizon "
+            "per sector, derived from an offline walk-forward backtest — see "
+            "validation/sector_forecast_backtest.py). Loaded once at ForecastingEngine "
+            "init; the hardcoded default dict is used as fallback when the file is "
+            "missing or invalid. Offline/deterministic at runtime — no network."
+        ),
+    )
+    SECTOR_FORECAST_CONFIGS: dict[str, dict] = Field(
+        default_factory=dict,
+        description=(
+            "Optional per-sector override merged OVER the artifact/hardcoded default. "
+            "JSON dict in .env, e.g. {\"Technology\": {\"days\": 30, \"model\": \"MC\"}}. "
+            "Empty dict (the default) leaves the artifact/hardcoded default unchanged "
+            "(fully backward-compatible)."
+        ),
+    )
+
     # --- Database Backend (db_config.py — dual-backend seam) ---
     # Full SQLAlchemy connection URL. When unset (None), the platform's
     # SQLAlchemy ORM stores (transactions_store, volatility/iv_engine) resolve
@@ -1142,6 +1170,35 @@ class Settings(BaseSettings):
         """
         v = str(value or "").strip().lower()
         return v if v in {"off", "review", "live"} else "off"
+
+    @field_validator("SECTOR_FORECAST_CONFIGS")
+    @classmethod
+    def _validate_sector_forecast_configs(cls, value: dict) -> dict:
+        """Fail-safe: drop any entry that doesn't validate. A malformed override can
+        never corrupt the engine — worst case is the artifact/hardcoded default is
+        used for that sector instead.
+
+        NOTE: ``validation/sector_config_io.py`` (owned by a concurrently-authored
+        agent) supplies the real ``validate_sector_config_entry`` normalizer. This
+        import is deliberately inside the function body (not module top) so a
+        missing/broken validation package can never crash settings.py's own
+        import — the except branch below treats the override as empty in that
+        case. End-to-end integration against the real sector_config_io.py is
+        exercised by a separate cross-cutting test outside this module's test
+        file.
+        """
+        try:
+            from validation.sector_config_io import validate_sector_config_entry
+        except Exception:
+            # validation package unavailable/broken — never let a settings import
+            # crash the whole process; treat the override as empty.
+            return {}
+        cleaned: dict = {}
+        for sector, raw in (value or {}).items():
+            entry = validate_sector_config_entry(raw)
+            if entry is not None:
+                cleaned[sector] = entry
+        return cleaned
 
     @property
     def fred_key_is_leaked(self) -> bool:

@@ -97,6 +97,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "DEFAULT_TICKERS",
     "SIGNAL_WEIGHTS",
     "DISABLED_SIGNAL_MODULES",
+    # Sector->model/horizon forecast config (JSON-encoded; see _JSON_KEYS).
+    # GUI-writable. Empty dict/default path preserves today's hardcoded
+    # per-sector forecast heuristic (backward-compatible).
+    "SECTOR_FORECAST_CONFIG_PATH",
+    "SECTOR_FORECAST_CONFIGS",
     # State API CORS policy — non-secret list of allowed browser origins
     # (JSON-encoded; see _JSON_KEYS). GUI-writable.
     "CORS_ALLOWED_ORIGINS",
@@ -175,6 +180,7 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "DEFAULT_TICKERS",
         "SIGNAL_WEIGHTS",
         "DISABLED_SIGNAL_MODULES",
+        "SECTOR_FORECAST_CONFIGS",  # dict[str, dict] per-sector forecast overrides
         "CORS_ALLOWED_ORIGINS",  # list[str] of allowed browser origins
         "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}
     }
