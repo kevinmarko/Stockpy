@@ -41,6 +41,25 @@ except ImportError:
     logger.debug("tensorflow library not available. Hybrid CNN-LSTM will fall back.")
 
 
+# Hardcoded fallback used when no valid empirical artifact/override is
+# available (see validation/sector_forecast_backtest.py + sector_config_io.py
+# for how this can be superseded by a backtested config). Preserving this
+# exact dict guarantees byte-identical behavior when no artifact is committed.
+_DEFAULT_SECTOR_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "Technology": {"days": 30, "model": "MC"},
+    "Consumer Cyclical": {"days": 30, "model": "MC"},
+    "Communication Services": {"days": 30, "model": "MC"},
+    "Healthcare": {"days": 90, "model": "MC"},
+    "Energy": {"days": 60, "model": "MC"},
+    "Financial Services": {"days": 60, "model": "ARIMA"},
+    "Industrials": {"days": 60, "model": "ARIMA"},
+    "Real Estate": {"days": 90, "model": "HW"},
+    "Utilities": {"days": 90, "model": "ARIMA"},
+    "Consumer Defensive": {"days": 90, "model": "ARIMA"},
+    "Basic Materials": {"days": 60, "model": "ARIMA"}
+}
+
+
 class ForecastingEngine:
     """Quantitative forecasting engine wrapping ARIMA, Monte Carlo,
     Holt-Winters, and CNN-LSTM models.
@@ -70,19 +89,27 @@ class ForecastingEngine:
         self._tracker: Optional[ForecastTracker] = tracker if isinstance(tracker, ForecastTracker) else None
 
         # Configuration: Target Days by Sector
-        self.sector_configs = {
-            "Technology": {"days": 30, "model": "MC"},
-            "Consumer Cyclical": {"days": 30, "model": "MC"},
-            "Communication Services": {"days": 30, "model": "MC"},
-            "Healthcare": {"days": 90, "model": "MC"},
-            "Energy": {"days": 60, "model": "MC"},
-            "Financial Services": {"days": 60, "model": "ARIMA"},
-            "Industrials": {"days": 60, "model": "ARIMA"},
-            "Real Estate": {"days": 90, "model": "HW"},
-            "Utilities": {"days": 90, "model": "ARIMA"},
-            "Consumer Defensive": {"days": 90, "model": "ARIMA"},
-            "Basic Materials": {"days": 60, "model": "ARIMA"}
-        }
+        self.sector_configs = self._load_sector_configs()
+
+    def _load_sector_configs(self) -> Dict[str, Dict[str, Any]]:
+        """Load per-sector forecast config: hardcoded default <- committed
+        artifact <- settings override. Any failure anywhere in this chain
+        (missing settings, missing/corrupt artifact file, import error) collapses
+        to the hardcoded default, so behavior is byte-identical to the pre-backtest
+        heuristic when no valid artifact/override exists. This method must NEVER
+        raise -- ForecastingEngine() must always construct successfully.
+        """
+        try:
+            from settings import settings as _settings
+            from validation.sector_config_io import load_sector_configs
+            return load_sector_configs(
+                path=getattr(_settings, "SECTOR_FORECAST_CONFIG_PATH", None),
+                fallback=_DEFAULT_SECTOR_CONFIGS,
+                overrides=getattr(_settings, "SECTOR_FORECAST_CONFIGS", None),
+            )
+        except Exception as exc:
+            logger.warning("Sector config load failed (%s); using hardcoded defaults.", exc)
+            return dict(_DEFAULT_SECTOR_CONFIGS)
 
     # =========================================================================
     # CORE MODELS
