@@ -169,30 +169,44 @@ class DataEngine(IDataProvider):
 
     def fetch_fundamentals_raw(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         """
-        Fetches yfinance corporate profiling metrics and balance sheets, in
-        parallel across tickers (network I/O bound, same rationale as
-        fetch_technical_raw). The bounded worker count is also the de-facto
+        Fetches equity fundamentals through the shared
+        ``data.market_data.CompositeProvider`` singleton (Yahoo
+        statement-derived engine, primary — see ``data/yahoo_fundamentals.py``)
+        in parallel across tickers, network I/O bound, same rationale as
+        fetch_technical_raw. The bounded worker count is also the de-facto
         rate limit, replacing the old serial sleep(0.1)-every-5-tickers
         throttle (which only made sense when fetches ran one at a time). Each
         ticker is isolated in try/except (dead-letter resilience). Set
         settings.DATA_FETCH_MAX_CONCURRENCY=1 to force the original sequential
         path.
-        """
-        from dto_models import normalize_yfinance_dividend_yield
 
+        This used to call ``yf.Ticker(symbol).info`` directly, bypassing
+        CompositeProvider entirely — the one remaining fundamentals path in
+        the codebase that violated the "all fundamentals fetches go through
+        CompositeProvider" convention (see CLAUDE.md). Routing through the
+        singleton here means the multifactor signal's raw inputs
+        (book_to_market, earnings_yield, quality_factor_score, debt_to_equity
+        — computed downstream in processing_engine.calculate_fundamental_metrics)
+        finally reflect the statement-derived engine instead of stale raw
+        yfinance .info data. The provider's ``dividendYield`` is already
+        correctly scaled (a fraction) by whichever backend is active
+        internally — do NOT re-normalize it here.
+        """
+        from data.market_data import get_provider
+
+        provider = get_provider()
         total = len(tickers)
 
         def _fetch_one(indexed_symbol: tuple[int, str]) -> tuple[str, Optional[Dict[str, Any]]]:
             idx, symbol = indexed_symbol
             try:
-                t = yf.Ticker(symbol)
-                # yfinance returns dividendYield as a PERCENT; normalise to the
-                # fraction the platform expects (mirrors the Finnhub /100 path).
-                ticker_data = {
-                    'info': normalize_yfinance_dividend_yield(dict(t.info or {})),
-                    'dividends': t.dividends if hasattr(t, 'dividends') else pd.Series(dtype='float64'),
-                    'financials': t.financials if hasattr(t, 'financials') else pd.DataFrame()
-                }
+                info = provider.get_fundamentals(symbol) or {}
+                try:
+                    dividends = yf.Ticker(symbol).dividends
+                except Exception as e:
+                    logger.debug(f"No dividend history for {symbol}: {e}")
+                    dividends = pd.Series(dtype='float64')
+                ticker_data = {'info': info, 'dividends': dividends}
                 logger.info(f"Fund data fetched: {idx}/{total} - {symbol}")
                 return symbol, ticker_data
             except Exception as e:
