@@ -9,6 +9,7 @@ PR that added it" record** — read it when you need the full backstory, test su
 or Gravity-audit-step details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
+- Forecasting fit-once + GARCH reuse, 4 settings to GUI, advisory-snapshot telemetry parity (2026-07-09)
 - Forecasting — GARCH volatility into Monte Carlo + Prophet into the ensemble (2026-07-08)
 - Fundamentals — Finnhub → Yahoo statement-computed engine (2026-07-08)
 - ML Package Architecture (Stage 4 — Triple Barrier + Meta-Labeling)
@@ -36,6 +37,73 @@ Sections in this file (search for the `##` heading):
 where they're load-bearing for every session** (e.g. ADVISORY_ONLY quarantine,
 CONSTRAINT #3/#4/#6, no-fabricated-metrics, dead-letter resilience). This file adds
 the full detail, test surface, and Gravity step numbers behind each of those.
+
+---
+
+## Forecasting fit-once + GARCH reuse, 4 settings surfaced to GUI, advisory-snapshot telemetry parity (2026-07-09)
+
+**Why.** A code-review efficiency + UI-connect pass over the 2026-07-08 forecasting/fundamentals
+work, targeting three findings:
+1. **Redundant statsmodels fits in the forecasting hot loop.** `generate_forecast` re-ran a full
+   ARIMA fit and a full Holt-Winters grid search *per horizon* (and again for the target-days
+   forecast), even though both fits are horizon-independent — the horizon only changes the
+   `.forecast(h)` step. That is ~5 ARIMA + ~12-15 HW statsmodels optimizations per ticker per
+   cycle where 1 + 3 suffice.
+2. **GJR-GARCH fit twice per ticker per cycle.** `main_orchestrator.py` already fits GJR-GARCH once
+   (~line 300, populating `dashboard_df['GARCH_Vol']`), then `generate_forecast` → `_estimate_daily_sigma`
+   fit GJR-GARCH a SECOND time on the same DataFrame to source the Monte Carlo σ.
+3. **Four forecasting/data tunables were `.env`-only**, invisible to the GUI operator; and the
+   **advisory** state-snapshot writer blanked telemetry (macro recession indicators, per-signal
+   GARCH/multifactor-Z) that the `main_orchestrator.py` path already surfaced, so switching to the
+   advisory orchestrator silently emptied the GUI Observability / Report-Viewer tabs.
+
+**What shipped.**
+- **Forecasting fit-once refactor (`forecasting_engine.py`).** `run_arima`/`run_holt_winters_grid_search`
+  are split into fit-once + forecast helpers: `run_arima_fit`/`forecast_from_arima_fit` and
+  `run_holt_winters_fit`/`forecast_from_hw_fit`. `generate_forecast` fits ARIMA and Holt-Winters
+  exactly ONCE per ticker (guarded by the same `> 30` row condition as before) and reuses each
+  fitted model across the target-days forecast AND every horizon in `[10,30,60,90]` — collapsing
+  ~5 ARIMA + ~12-15 HW fits/ticker down to **1 + 3**. Output is **byte-identical** to the
+  pre-refactor per-horizon path. The old `run_arima`/`run_holt_winters_grid_search` names are
+  **retained as back-compat shims** (fit-once + forecast-once internally) so external callers are
+  unaffected. CNN-LSTM (direct multi-step, trained once) and Prophet (h=30, run once) were already
+  single-fit and are untouched.
+- **GARCH double-fit elimination (`forecasting_engine.py` + `main_orchestrator.py`).**
+  `generate_forecast` gained `precomputed_garch_annual_vol: Optional[float] = None`;
+  `_estimate_daily_sigma` uses `precomputed_garch_annual_vol / sqrt(252)` (same SCALE RULE — GARCH
+  returns ANNUALIZED, MC needs DAILY) when supplied, skipping the second internal GJR-GARCH fit;
+  else its behavior is unchanged. `main_orchestrator.py` (~line 410) passes the `dashboard_df['GARCH_Vol']`
+  it already computed (~line 300) so that ticker isn't GARCH-fit twice per cycle. `main.py` and
+  `engine.advisory` callers pass nothing (default `None` → unchanged internal fit path).
+- **Four settings surfaced to the GUI (`gui/env_io.py` + `gui/panels/settings_manager.py`).**
+  Added to `ALLOWED_KEYS` (non-secret tunables) and `_SETTINGS_LAYOUT`: `FORECAST_USE_GARCH_SIGMA`
+  (bool — GARCH→MC σ rollback lever), `FORECAST_PROPHET_WEIGHT` (float [0,1] — Prophet overlay
+  weight), `FUNDAMENTALS_SOURCE` (`"yahoo"` | `"yfinance_info"`), `BETA_LOOKBACK_DAYS` (int). All
+  write through the existing allowlist-bounded `env_io` path; no credential is ever added.
+- **Advisory state-snapshot telemetry parity (`reporting/state_snapshot.py`).** `write_state_snapshot`
+  (the advisory `main.py` path) now emits top-level `sahm_rule`/`high_yield_oas`/`yield_curve`/
+  `hmm_risk_on_probability` (from the injected `macro_dto`) plus per-signal `garch_vol`/`hmm_risk_on`
+  and the five multifactor keys (`value_z`/`quality_z`/`lowvol_z`/`size_z`/`multifactor_composite`) —
+  matching what the `main_orchestrator.py` `_write_state_snapshot()` path already surfaced.
+  `garch_vol` reads from `engine.advisory` `Recommendation.key_indicators`; the five multifactor
+  keys emit JSON `null` until a follow-up threads the Z-scores onto `Recommendation.key_indicators`
+  (no fabricated values — CONSTRAINT #4).
+- **Cost.** Net efficiency win: ARIMA/HW fits drop ~4-5× per ticker, and one GJR-GARCH fit per
+  ticker per cycle is eliminated on the orchestrator path. No new dependencies.
+
+**Test surface.**
+- `tests/test_forecasting_engine.py` — fit-once shim-equality (back-compat `run_arima`/
+  `run_holt_winters_grid_search` produce identical output to the split helpers), fit-count
+  assertions (ARIMA/HW fit invoked once per `generate_forecast`), and the `precomputed_garch_annual_vol`
+  reuse path (supplying a precomputed annual vol skips the internal GARCH fit and yields a sane
+  forecast dict).
+- `tests/test_gui_env_io_forecast_keys.py` — the four new keys are in `ALLOWED_KEYS`, are
+  writable/round-trip through `env_io`, and are non-secret.
+- `tests/test_state_snapshot_advisory.py` — the advisory writer emits the macro recession telemetry
+  + per-signal `garch_vol`/multifactor-Z keys (multifactor Z-scores `null` pending the follow-up).
+- `tests/test_forecasting_lookahead.py` — re-run to confirm the fit-once refactor preserves the
+  train-only scaler / no-lookahead invariants.
+- Full run: 72 passed across the four files on the Python 3.11 sandbox (CI on 3.12 authoritative).
 
 ---
 

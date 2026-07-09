@@ -402,7 +402,16 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
         # ML Fallback wrapping: ensures CNN-LSTM failure does not crash execution
         try:
-            forecasts = fe.generate_forecast(row, price, history_series, history_df=history_df)
+            # Reuse the GJR-GARCH annualized vol already fit for this ticker above
+            # (tech_opt_indicators / dashboard_df 'GARCH_Vol' column) so the forecasting
+            # engine does not redundantly refit GARCH. Same DataFrame -> same vol, so the
+            # Monte Carlo sigma is byte-identical; 0.0 (options analysis unavailable)
+            # falls through to the engine's internal fit path.
+            precomputed_garch = float(row.get('GARCH_Vol', 0.0))
+            forecasts = fe.generate_forecast(
+                row, price, history_series, history_df=history_df,
+                precomputed_garch_annual_vol=precomputed_garch,
+            )
             return ticker, forecasts
         except Exception as ml_err:
             telemetry.warning(f"Forecasting Engine failure for {ticker}: {ml_err}. Reverting to baseline default.")

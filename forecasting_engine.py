@@ -171,38 +171,65 @@ class ForecastingEngine:
             return float(forecast[-1])
         return float(forecast)
 
-    def run_arima(self, history: np.ndarray, days_forward: int, order=(1,1,1)) -> float:
-        """Runs ARIMA model. Returns forecast price."""
-        if len(history) < 30: 
-            return 0.0
+    def run_arima_fit(self, history: np.ndarray, order=(1,1,1)):
+        """Fits an ARIMA model ONCE (horizon-independent). Returns the fitted model
+        or None on insufficient history / fit failure.
+
+        Split out of run_arima so a single fit can serve every forecast horizon
+        (the fit does not depend on days_forward). Mirrors run_arima's guards:
+        <30 rows or any exception -> None (the forecast helper then returns 0.0).
+        """
+        if len(history) < 30:
+            return None
         try:
             model = ARIMA(history, order=order, trend='t')
-            model_fit = model.fit()
-            forecast = model_fit.forecast(steps=days_forward)
+            return model.fit()
+        except Exception:
+            return None
+
+    def forecast_from_arima_fit(self, fitted, days_forward: int) -> float:
+        """Forecasts from a pre-fitted ARIMA model. None -> 0.0 (matches run_arima's
+        insufficient-history / fit-failure sentinel)."""
+        if fitted is None:
+            return 0.0
+        try:
+            forecast = fitted.forecast(steps=days_forward)
             return self._get_last_forecast_value(forecast)
         except Exception:
             return 0.0
 
-    def run_holt_winters_grid_search(self, history: np.ndarray, days_forward: int) -> float:
-        """
-        Runs Exponential Smoothing (Holt-Winters) using a grid search over
-        trend and damping combinations to minimize Mean Squared Error (MSE).
-        """
-        if len(history) < 30:
-            return 0.0
+    def run_arima(self, history: np.ndarray, days_forward: int, order=(1,1,1)) -> float:
+        """Runs ARIMA model. Returns forecast price.
 
+        Back-compat shim: fit once + forecast once via run_arima_fit /
+        forecast_from_arima_fit. Output is identical to the pre-split path
+        (fit and forecast shared a single try/except returning 0.0 on failure).
+        """
+        return self.forecast_from_arima_fit(self.run_arima_fit(history, order=order), days_forward)
+
+    def run_holt_winters_fit(self, history: np.ndarray):
+        """Runs the Holt-Winters trend/damped grid search (5-day holdout, horizon-
+        independent) AND the final full-history fit ONCE, returning the fitted model.
+
+        Split out of run_holt_winters_grid_search so a single fit serves every
+        horizon. Returns the fitted model on success; on final-fit failure it
+        retries the ``trend="add"`` fallback fit (verbatim from the original);
+        if that also fails it returns None (the forecast helper then falls back
+        to ``float(history[-1])``). Callers must guard <30-row history themselves
+        (the shim does, exactly as before).
+        """
         trend_opts = ["add"]
         damped_opts = [True, False]
-        
+
         # Validation split: hold out the last 5 days to measure validation MSE
         split_idx = max(int(len(history) * 0.8), len(history) - 5)
         train = history[:split_idx]
         val = history[split_idx:]
-        
+
         best_mse = float('inf')
         best_trend = "add"
         best_damped = False
-        
+
         for trend in trend_opts:
             for damped in damped_opts:
                 if damped and not trend:
@@ -223,18 +250,38 @@ class ForecastingEngine:
         # Fit best configuration on all historical data
         try:
             model = ExponentialSmoothing(history, trend=best_trend, damped_trend=best_damped, seasonal=None)
-            fit_model = model.fit()
-            forecast = fit_model.forecast(days_forward)
-            return self._get_last_forecast_value(forecast)
+            return model.fit()
         except Exception as e:
             logger.debug(f"Holt-Winters grid search fit failed: {e}. Falling back to default fit.")
             try:
                 model = ExponentialSmoothing(history, trend="add", seasonal=None)
-                fit_model = model.fit()
-                forecast = fit_model.forecast(days_forward)
-                return self._get_last_forecast_value(forecast)
+                return model.fit()
             except Exception:
-                return float(history[-1])
+                return None
+
+    def forecast_from_hw_fit(self, fitted, days_forward: int, history: np.ndarray) -> float:
+        """Forecasts from a pre-fitted Holt-Winters model. None -> float(history[-1])
+        (matches run_holt_winters_grid_search's terminal fallback)."""
+        if fitted is None:
+            return float(history[-1])
+        try:
+            forecast = fitted.forecast(days_forward)
+            return self._get_last_forecast_value(forecast)
+        except Exception:
+            return float(history[-1])
+
+    def run_holt_winters_grid_search(self, history: np.ndarray, days_forward: int) -> float:
+        """
+        Runs Exponential Smoothing (Holt-Winters) using a grid search over
+        trend and damping combinations to minimize Mean Squared Error (MSE).
+
+        Back-compat shim: fit once + forecast once via run_holt_winters_fit /
+        forecast_from_hw_fit. The <30-row 0.0 sentinel is preserved here (it is
+        NOT float(history[-1])), keeping output identical to the pre-split path.
+        """
+        if len(history) < 30:
+            return 0.0
+        return self.forecast_from_hw_fit(self.run_holt_winters_fit(history), days_forward, history)
 
     def run_prophet_forecast(self, history_series: pd.Series, days_forward: int) -> Tuple[float, float, float]:
         """
@@ -606,7 +653,8 @@ class ForecastingEngine:
             base = base * (1.0 - w) + prophet_price * w
         return base
 
-    def _estimate_daily_sigma(self, history_df, fallback_daily_sigma: float) -> float:
+    def _estimate_daily_sigma(self, history_df, fallback_daily_sigma: float,
+                              precomputed_garch_annual_vol: Optional[float] = None) -> float:
         """Return a DAILY volatility for Monte Carlo, sourced from the GJR-GARCH(1,1)
         estimator (forward-looking, fat-tailed) when available, else the caller's
         historical daily stdev.
@@ -614,6 +662,12 @@ class ForecastingEngine:
         CRITICAL UNIT CONVERSION: estimate_gjr_garch_volatility returns ANNUALIZED
         vol; Monte Carlo needs DAILY. We divide by sqrt(252). See run_monte_carlo's
         guard (keys on mu only) -- it will NOT auto-correct an annualized sigma.
+
+        precomputed_garch_annual_vol lets a caller (e.g. main_orchestrator, which
+        already fit GJR-GARCH per ticker) supply the SAME annualized vol this method
+        would otherwise refit, avoiding a redundant fit. It is used only when finite
+        and > 0; a 0.0/None/non-finite value transparently falls through to the
+        internal fit path (byte-identical to the no-precompute behavior).
 
         Degrades to fallback_daily_sigma (never raises) when the GARCH flag is off,
         history_df is None/insufficient, or the estimator fails.
@@ -623,6 +677,15 @@ class ForecastingEngine:
             return fallback_daily_sigma
         if history_df is None or len(history_df) < 22:
             return fallback_daily_sigma
+        # Reuse an already-computed annualized GARCH vol when supplied. Same input
+        # DataFrame -> same estimator output, so this is byte-identical to refitting.
+        if (precomputed_garch_annual_vol is not None
+                and np.isfinite(precomputed_garch_annual_vol)
+                and precomputed_garch_annual_vol > 0):
+            daily = float(precomputed_garch_annual_vol) / np.sqrt(252.0)
+            if not np.isfinite(daily) or daily <= 0:
+                return fallback_daily_sigma
+            return max(daily, 1e-6)
         try:
             from technical_options_engine import TechnicalOptionsEngine
             annual_sigma = float(TechnicalOptionsEngine().estimate_gjr_garch_volatility(history_df))
@@ -638,7 +701,7 @@ class ForecastingEngine:
     # ORCHESTRATOR
     # =========================================================================
 
-    def generate_forecast(self, row: pd.Series, current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+    def generate_forecast(self, row: pd.Series, current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None, precomputed_garch_annual_vol: Optional[float] = None) -> Dict[str, Any]:
         """
         Generates forecasts and maps them to SCHEMA KEYS:
         Forecast_10, Forecast_30, Forecast_60, Forecast_90.
@@ -693,11 +756,23 @@ class ForecastingEngine:
             # GJR-GARCH(1,1) daily sigma for Monte Carlo (forward-looking, fat-tailed);
             # falls back to the historical log-return stdev above. Defined once here so
             # both run_monte_carlo call sites below use it on every code path.
-            mc_sigma = self._estimate_daily_sigma(history_df, sigma)
+            # precomputed_garch_annual_vol (when supplied by a caller that already fit
+            # GJR-GARCH on this same DataFrame) avoids a redundant refit inside the engine.
+            mc_sigma = self._estimate_daily_sigma(history_df, sigma, precomputed_garch_annual_vol)
+
+            # Fit ARIMA and Holt-Winters ONCE (both fits are horizon-independent) and
+            # reuse them across the target-days forecast and every horizon below,
+            # instead of refitting per horizon. Guarded by the same >30-row condition
+            # the per-call run_arima / run_holt_winters_grid_search used internally.
+            arima_fit = None
+            hw_fit = None
+            if len(close_prices) > 30:
+                arima_fit = self.run_arima_fit(close_prices)
+                hw_fit = self.run_holt_winters_fit(close_prices)
 
             # 1. Primary Forecasts
             if len(close_prices) > 30:
-                results['ARIMA'] = self.run_arima(close_prices, days_forward=target_days)
+                results['ARIMA'] = self.forecast_from_arima_fit(arima_fit, target_days)
 
             mc_mean, mc_low, mc_high = self.run_monte_carlo(current_price, mu, mc_sigma, target_days)
             results['MC_Target'] = mc_mean
@@ -742,10 +817,10 @@ class ForecastingEngine:
                 h_res = 0.0
                 lstm_res = lstm_multi.get(h, 0.0)
 
-                # Run statistical time-series models
+                # Run statistical time-series models (reusing the single fits above)
                 if len(close_prices) > 30:
-                    a_res = self.run_arima(close_prices, days_forward=h)
-                    h_res = self.run_holt_winters_grid_search(close_prices, days_forward=h)
+                    a_res = self.forecast_from_arima_fit(arima_fit, h)
+                    h_res = self.forecast_from_hw_fit(hw_fit, h, close_prices)
 
                 m_res, _, _ = self.run_monte_carlo(current_price, mu, mc_sigma, days_forward=h)
 

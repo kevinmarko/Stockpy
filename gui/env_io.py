@@ -93,6 +93,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ALPACA_PAPER",
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
+    # Forecasting / fundamentals tunables (non-secret; see forecasting_engine.py
+    # + data/market_data.py). FINNHUB_API_KEY stays in SECRET_KEYS below.
+    "FORECAST_USE_GARCH_SIGMA",   # bool — GJR-GARCH sigma into Monte Carlo (rollback lever)
+    "FORECAST_PROPHET_WEIGHT",    # float [0,1] — Prophet ensemble overlay weight
+    "FUNDAMENTALS_SOURCE",        # "yahoo" | "yfinance_info"
+    "BETA_LOOKBACK_DAYS",         # int — beta computation lookback (days)
     # Universe / signals (JSON-encoded)
     "DEFAULT_TICKERS",
     "SIGNAL_WEIGHTS",

@@ -16,6 +16,7 @@ always render.
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from settings import settings
@@ -25,6 +26,22 @@ if TYPE_CHECKING:
     from dto_models import MacroEconomicDTO
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_float_or_none(val: Any) -> Optional[float]:
+    """Coerce *val* to float, or ``None`` when missing/NaN.
+
+    Mirrors ``main_orchestrator._safe_float_or_none`` so the advisory writer
+    emits a JSON ``null`` (never a fabricated ``0.0``) when a metric simply
+    isn't available for a ticker — CONSTRAINT #4. The GUI reader treats
+    ``null`` identically to a missing key, letting it distinguish "not
+    computed" from a genuine zero.
+    """
+    try:
+        f = float(val)
+        return None if math.isnan(f) else f
+    except (TypeError, ValueError):
+        return None
 
 
 def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO]) -> None:
@@ -44,6 +61,16 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
         holdings = sorted(
             sym.upper() for sym, p in positions.items()
             if float(getattr(p, "quantity", 0.0) or 0.0) > 0
+        )
+
+        # HMM risk-on probability is a single macro-wide value (same for every
+        # signal), carried on the advisory MacroEconomicDTO. Null-safe: None
+        # (JSON null) when the HMM didn't run — never a fabricated 0.0 (which
+        # the GUI would misread as a genuine 0% risk-on probability).
+        hmm_risk_on_val = (
+            _safe_float_or_none(getattr(macro_dto, "hmm_risk_on_probability", None))
+            if macro_dto is not None
+            else None
         )
 
         signals: List[Dict[str, Any]] = []
@@ -81,13 +108,43 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 "buy_range": rec.buy_range or "",
                 "sell_range": rec.sell_range or "",
                 "suggested_exit_pct": float(rec.suggested_exit_pct or 0.0),
+                # GUI telemetry parity with main_orchestrator._write_state_snapshot.
+                # garch_vol IS present in engine.advisory key_indicators — this
+                # fixes the Strategy Matrix "GARCH Vol" column that blanked on the
+                # advisory path. hmm_risk_on is the macro-wide value above.
+                # The multifactor Z-scores are NOT currently in the advisory
+                # key_indicators (see report note): emitted as None (JSON null)
+                # for a consistent schema — never a fabricated 0.0 (CONSTRAINT #4).
+                "garch_vol": _safe_float_or_none(ki.get("garch_vol")),
+                "hmm_risk_on": hmm_risk_on_val,
+                "value_z": _safe_float_or_none(ki.get("value_z")),
+                "quality_z": _safe_float_or_none(ki.get("quality_z")),
+                "lowvol_z": _safe_float_or_none(ki.get("lowvol_z")),
+                "size_z": _safe_float_or_none(ki.get("size_z")),
+                "multifactor_composite": _safe_float_or_none(ki.get("multifactor_composite")),
             })
 
         regime = "UNKNOWN"
         vix = 0.0
+        # Recession + regime telemetry fields, mirroring the key spellings in
+        # main_orchestrator._write_state_snapshot so the GUI Observability /
+        # Report-Viewer tabs read a consistent schema across both writers.
+        # Only emitted when a macro_dto is present (same as vix/regime today);
+        # absent — never fabricated — when the advisory run had no macro data.
+        macro_fields: Dict[str, Any] = {}
         if macro_dto is not None:
             regime = getattr(macro_dto, "market_regime", "UNKNOWN") or "UNKNOWN"
             vix = float(getattr(macro_dto, "vix_value", 0.0) or 0.0)
+            macro_fields = {
+                "yield_curve": float(getattr(macro_dto, "yield_curve", 0.0) or 0.0),
+                "sahm_rule": float(getattr(macro_dto, "sahm_rule_indicator", 0.0) or 0.0),
+                "high_yield_oas": float(getattr(macro_dto, "credit_spread", 0.0) or 0.0),
+                # HMM probability is legitimately None when the HMM didn't run:
+                # emit null, not 0.0, so the GUI can tell "didn't run" from "0%".
+                "hmm_risk_on_probability": _safe_float_or_none(
+                    getattr(macro_dto, "hmm_risk_on_probability", None)
+                ),
+            }
 
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -95,6 +152,7 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
             "holdings": holdings,
             "market_regime": str(regime),
             "vix": vix,
+            **macro_fields,
             "kill_switch_active": (settings.OUTPUT_DIR / "KILL_SWITCH").exists(),
             "macro_regime_gate_enabled": settings.MACRO_REGIME_GATE_ENABLED,
             "signals": signals,
