@@ -122,6 +122,16 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 "lowvol_z": _safe_float_or_none(ki.get("lowvol_z")),
                 "size_z": _safe_float_or_none(ki.get("size_z")),
                 "multifactor_composite": _safe_float_or_none(ki.get("multifactor_composite")),
+                # PR2 Agent A — schema parity with main_orchestrator._write_state_snapshot.
+                # These three metrics (FinBERT news sentiment, realized slippage,
+                # CoVaR tail-dependency proxy) are NOT currently threaded onto
+                # engine.advisory.Recommendation.key_indicators, so they serialize
+                # as None (JSON null) on the advisory path until a future PR
+                # populates them — never a fabricated 0.0 (CONSTRAINT #4). Mirrors
+                # how the multifactor-Z keys above are handled.
+                "news_sentiment": _safe_float_or_none(ki.get("news_sentiment")),
+                "realized_slippage": _safe_float_or_none(ki.get("realized_slippage")),
+                "covar_proxy": _safe_float_or_none(ki.get("covar_proxy")),
             })
 
         regime = "UNKNOWN"

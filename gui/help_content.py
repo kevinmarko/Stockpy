@@ -950,6 +950,22 @@ TAB_HELP: Dict[str, TabHelp] = {
         ("heartbeat", "state snapshot", "macro regime", "vix", "hmm"),
         "#12-the-observability-dashboard",
     ),
+    "analytics": _t(
+        "analytics",
+        "📊 Analytics",
+        "Read-only performance & analytics, distinct from the Observability "
+        "tab's *internal* paper-store view.  Sections: (1) Broker Realized "
+        "Performance — realized P&L reconstructed from your Robinhood order "
+        "history (FIFO round-trips), clearly labelled 'Broker (Robinhood order "
+        "history)' so it is never confused with the internal TransactionsStore "
+        "P&L; (2) Account Value Equity Curve — total account equity over time "
+        "from stored account snapshots; (3) Recent Alerts Feed — a tail of the "
+        "structured alert log.  It also hosts the ML registry, news-sentiment, "
+        "and slippage/CoVaR analytics panels.  Every source is file-backed and "
+        "degrades to an empty-state message rather than a fabricated value.",
+        ("advisory mode", "state snapshot", "kelly target"),
+        "#12-the-observability-dashboard",
+    ),
     "live_inventory": _t(
         "live_inventory",
         "📦 Live Inventory",

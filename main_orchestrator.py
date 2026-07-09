@@ -1121,6 +1121,13 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     "mae": _safe_float_or_none(row.get("MAE")),
                     "edge_ratio": _safe_float_or_none(row.get("Edge Ratio")),
                     "realized_slippage": _safe_float_or_none(row.get("Realized Slippage")),
+                    # PR2 Agent A — three already-computed operator metrics threaded
+                    # into the snapshot for the GUI analytics panels. News_Sentiment
+                    # (FinBERT) is populated ~line 577; CoVaR Proxy + Realized
+                    # Slippage come from processing_engine.calculate_technical_metrics.
+                    # NaN (never fabricated 0.0 — CONSTRAINT #4) when absent.
+                    "news_sentiment": _safe_float_or_none(row.get("News_Sentiment")),
+                    "covar_proxy": _safe_float_or_none(row.get("CoVaR Proxy")),
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

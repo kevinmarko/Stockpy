@@ -255,9 +255,9 @@ class TestTabHelp:
     def test_exactly_14_tabs(self) -> None:
         from gui.help_content import TAB_HELP
 
-        # All 15 gui/app.py Command Center tabs now have a TAB_HELP entry
-        # (14 original + "report_library", the Report Library tab).
-        assert len(TAB_HELP) == 15
+        # All 16 gui/app.py Command Center tabs now have a TAB_HELP entry
+        # (14 original + "report_library" + "analytics", the Analytics tab).
+        assert len(TAB_HELP) == 16
 
     def test_values_are_tab_help(self) -> None:
         from gui.help_content import TAB_HELP, TabHelp
