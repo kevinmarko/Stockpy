@@ -8,7 +8,7 @@
 - [ ] ML pipeline (`ml/`)
 - [ ] data layer (`data/`, `data_engine.py`, `dto_models.py`)
 - [ ] execution (`execution/`)
-- [ ] GUI / reporting (`gui/`, `reporting_engine.py`, `diagnostics_and_visuals.py`)
+- [ ] GUI / reporting (`gui/`, `diagnostics_and_visuals.py`)
 - [ ] observability (`observability/`)
 - [ ] config / schema (`config.py`, `database_setup.py`)
 - [ ] tests

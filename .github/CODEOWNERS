@@ -12,9 +12,7 @@ tests/                      @kevinmarko
 
 gui/                        @kevinmarko
 observability/              @kevinmarko
-reporting_engine.py         @kevinmarko
 diagnostics_and_visuals.py  @kevinmarko
-daily_report_template.html  @kevinmarko
 scripts/                    @kevinmarko
 
 config.py                   @kevinmarko

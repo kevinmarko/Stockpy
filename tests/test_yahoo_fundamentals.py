@@ -15,7 +15,7 @@ in DESCENDING order (newest first)**.
 Classes
 -------
 * ``TestScaleRules``      — the two scale-critical rules + fraction ratios.
-* ``TestValuationMath``   — bookValue/priceToBook/EPS/PE/marketCap/currentRatio/growth.
+* ``TestValuationMath``   — bookValue/priceToBook/EPS/PE/marketCap/currentRatio.
 * ``TestPayoutSign``      — the mandatory ``abs()`` on negative Cash Dividends Paid.
 * ``TestBeta``            — Cov/Var beta with a known slope + <60-obs NaN guard.
 * ``TestNaNDiscipline``   — CONSTRAINT #4: NaN-not-zero, independent degradation.
@@ -216,13 +216,6 @@ class TestValuationMath:
         res = compute_fundamentals(**base_kwargs())
         assert res["currentRatio"] == pytest.approx(2.0, abs=1e-9)
 
-    def test_revenue_growth(self):
-        """(TTM rev 1000 - prior annual 800) / 800 -> 0.25."""
-        # Quarterly revenue sums to 1000 (TTM); prior annual column is 800.
-        res = compute_fundamentals(**base_kwargs())
-        assert res["revenueGrowth"] == pytest.approx((1000.0 - 800.0) / 800.0, abs=1e-9)
-        assert res["revenueGrowth"] == pytest.approx(0.25, abs=1e-9)
-
 
 # --------------------------------------------------------------------------- #
 # 3. payoutRatio sign trap — the mandatory abs().
@@ -300,7 +293,6 @@ class TestNaNDiscipline:
         "payoutRatio",
         "beta",
         "returnOnEquity",
-        "revenueGrowth",
         "debtToEquity",
         "grossMargins",
         "operatingMargins",
@@ -441,3 +433,41 @@ class TestContract:
         assert res["sector"] == "Energy"
         assert res["shortName"] == "Acme"
         assert res["currentPrice"] == pytest.approx(150.0, abs=1e-9)
+
+
+# --------------------------------------------------------------------------- #
+# 8. currentRatio -> FundamentalDataDTO.current_ratio wiring.
+# --------------------------------------------------------------------------- #
+class TestCurrentRatioDTOWiring:
+    def test_current_ratio_carried_into_dto(self):
+        from dto_models import FundamentalDataDTO
+
+        dto = FundamentalDataDTO.from_raw_dict("XYZ", {"currentRatio": 1.8})
+        assert dto.current_ratio == pytest.approx(1.8, abs=1e-9)
+
+    def test_missing_current_ratio_is_nan_not_zero(self):
+        from dto_models import FundamentalDataDTO
+
+        dto = FundamentalDataDTO.from_raw_dict("XYZ", {})
+        assert math.isnan(dto.current_ratio)
+
+    def test_directly_constructed_dto_has_current_ratio(self):
+        """A DTO built via __init__ (not from_raw_dict) must still expose the attr."""
+        from dto_models import FundamentalDataDTO
+
+        dto = FundamentalDataDTO(
+            ticker="XYZ",
+            company_name="X",
+            sector="Tech",
+            pe_ratio=10.0,
+            pb_ratio=1.0,
+            book_value=5.0,
+            eps_trailing=1.0,
+            dividend_yield=0.0,
+            dividend_growth_rate=0.02,
+            payout_ratio=0.0,
+            market_cap=1.0,
+            price=10.0,
+            beta=1.0,
+        )
+        assert math.isnan(dto.current_ratio)

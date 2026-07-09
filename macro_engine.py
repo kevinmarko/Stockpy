@@ -1,12 +1,10 @@
 # ==============================================================================
 # MODULE: SYSTEMIC MACROECONOMIC & QUANTITATIVE RESEARCH ENGINE
 # File: macro_engine.py
-# Description: Implements top-down macro risk assessment ("MACRO FREEZE"),
-#              the Fama-French 3-Factor regression model for Alpha isolation,
-#              and Google Cloud Natural Language sentiment integration.
+# Description: Implements top-down macro risk assessment ("MACRO FREEZE") and
+#              the Fama-French 3-Factor regression model for Alpha isolation.
 # ==============================================================================
 
-import os
 import logging
 import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -352,95 +350,27 @@ class MacroEngine:
         }
 
     def _fallback_sentiment(self, text: str) -> float:
-        """Helper to compute rule-based sentiment density as local fallback."""
+        """Rule-based keyword sentiment-density scorer in [-1.0, 1.0].
+
+        Retained NOT as a live signal (production sentiment is owned by the
+        FinBERT-based ``signals/news_catalyst.py``) but as the load-bearing
+        reference for the BUG-1 regression guard: ``main_orchestrator`` must use
+        ``calculate_sahm_rule`` — never this keyword scorer — for the Sahm-rule
+        recession indicator. ``tests/test_bug_fixes.py`` and the Gravity BUG-1
+        audit assert that separation against this method, so it stays.
+        """
         pos_keywords = {"bullish", "growth", "buy", "upbeat", "expansion", "profit", "sustainable", "undervalued", "gain", "strong", "outperform"}
         neg_keywords = {"bearish", "recession", "sell", "downside", "weak", "risk", "distress", "pessimism", "loss", "underperform", "slippage"}
-        
+
         clean_words = text.lower().split()
         if not clean_words:
             return 0.0
-            
+
         pos_matches = sum(1 for w in clean_words if any(pk in w for pk in pos_keywords))
         neg_matches = sum(1 for w in clean_words if any(nk in w for nk in neg_keywords))
-        
+
         match_total = pos_matches + neg_matches
         if match_total == 0:
             return 0.0
-            
+
         return float((pos_matches - neg_matches) / match_total)
-
-    def analyze_sentiment(self, text: str) -> float:
-        """
-        Integrates Google Cloud Natural Language API to parse a text string and
-        return a quantified sentiment score in range [-1.0 (negative) to 1.0 (positive)].
-        Explicitly initializes the client using GOOGLE_APPLICATION_CREDENTIALS,
-        with a graceful try/except block to bypass if unavailable.
-        """
-        if not text or not isinstance(text, str):
-            return 0.0
-
-        # Verify Google Application Credentials environment variable is set
-        creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-        
-        # Graceful check for a local credentials file if env is not populated
-        if not creds_path:
-            if os.path.exists("credentials.json"):
-                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath("credentials.json")
-                creds_path = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
-
-        # If credentials are not found, gracefully bypass sentiment scoring
-        if not creds_path:
-            logger.warning("GOOGLE_APPLICATION_CREDENTIALS not found. Bypassing Google NLP API.")
-            return self._fallback_sentiment(text)
-
-        try:
-            from google.cloud import language_v1
-            # Initialize client explicitly - it loads from GOOGLE_APPLICATION_CREDENTIALS automatically
-            client = language_v1.LanguageServiceClient()
-            document = language_v1.Document(
-                content=text,
-                type_=language_v1.Document.Type.PLAIN_TEXT
-            )
-            response = client.analyze_sentiment(request={"document": document})
-            sentiment = response.document_sentiment
-            return float(sentiment.score)
-        except Exception as e:
-            logger.warning(f"Google Cloud NL API sentiment analysis failed or rate limited: {e}. Using fallback.")
-            return self._fallback_sentiment(text)
-
-    def fetch_and_compile_macro(self, text_context: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Pulls raw macro data, calculates indicators, evaluates regimes, 
-        measures sentiment, and structures the final output to align with MacroEconomicDTO.
-        """
-        # Fetch FRED indicators
-        macro_raw = self.data_engine.fetch_macro_raw()
-        
-        # Calculate Sahm Rule
-        sahm_val = self.calculate_sahm_rule(fallback_val=0.0)
-        
-        # Evaluate regime and validate schema
-        regime_df = self.run_macro_killswitch(macro_raw, sahm_val)
-        validated_regime = regime_df["market_regime"].iloc[0]
-
-        # Analyze sentiment
-        sentiment_score = 0.0
-        if text_context:
-            sentiment_score = self.analyze_sentiment(text_context)
-
-        # Fallbacks for nominal 10Y and inflation rate
-        inflation = float(macro_raw.get('CPIAUCSL_YoY', 2.0))
-        nominal_10y = float(macro_raw.get('DGS10', 4.0))
-
-        # Structure response dictionary aligning with MacroEconomicDTO init standard
-        return {
-            "yield_curve_10y_2y": float(macro_raw.get('T10Y2Y', 0.5)),
-            "high_yield_oas": float(macro_raw.get('BAMLH0A0HYM2', 3.5)),
-            "inflation_rate": inflation,
-            "nominal_10y": nominal_10y,
-            "sahm_rule_indicator": sahm_val,
-            "vix_value": float(macro_raw.get('VIXCLS', 15.0)),
-            "date": datetime.datetime.now(),
-            "sentiment_score": sentiment_score,
-            "market_regime": validated_regime
-        }

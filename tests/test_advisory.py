@@ -873,6 +873,74 @@ class TestContextExtrasThreading:
                 assert math.isnan(rec_missing.key_indicators[key]), f"{key} should be NaN, got {rec_missing.key_indicators[key]}"
 
 
+class TestCurrentRatioKeyIndicator:
+    """REUSE sweep: evaluate() must surface the liquidity ratio
+    (FundamentalDataDTO.current_ratio, sourced from the provider's
+    ``currentRatio`` fundamentals field) on Recommendation.key_indicators
+    under the snake_case key ``current_ratio`` — mirroring the existing
+    ``dividend_yield`` display entry. NaN (never fabricated) when absent
+    (CONSTRAINT #4)."""
+
+    def test_current_ratio_populates_key_indicators(self):
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        fund_info = {"currentRatio": 1.8, "shortName": "Liquid Corp", "sector": "Technology"}
+        market = _make_market_provider(price=100.0, fundamentals=fund_info, bars=_make_bars(252, 100.0))
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            MockSE.return_value = se_instance
+
+            rec = evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts)
+
+            assert "current_ratio" in rec.key_indicators
+            assert rec.key_indicators["current_ratio"] == pytest.approx(1.8)
+
+    def test_current_ratio_absent_degrades_to_nan(self):
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        # No currentRatio in the fundamentals dict → DTO field is NaN.
+        market = _make_market_provider(price=100.0, fundamentals={"shortName": "No Ratio Inc"},
+                                       bars=_make_bars(252, 100.0))
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            MockSE.return_value = se_instance
+
+            rec = evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts)
+
+            assert "current_ratio" in rec.key_indicators
+            assert math.isnan(rec.key_indicators["current_ratio"]), (
+                f"current_ratio should be NaN when absent, got {rec.key_indicators['current_ratio']}"
+            )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sizing tests
 # ─────────────────────────────────────────────────────────────────────────────

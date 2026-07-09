@@ -14,7 +14,7 @@ fallback paths, run_macro_killswitch's full regime-classification truth
 table + MacroDataSchema conformance, the HistoricalStore Phase-3 routing
 fallback inside compute_hmm_risk_on_probability (never previously exercised
 in isolation), the HMM fit/predict exception path, calculate_fama_french_alpha
-and its offline proxy-factor fallback, and the sentiment helpers.
+and its offline proxy-factor fallback.
 """
 
 import math
@@ -213,7 +213,8 @@ class TestCalculateFamaFrenchAlpha:
 
 
 # ============================================================================
-# Sentiment helpers
+# _fallback_sentiment — retained keyword scorer (BUG-1 regression guard target;
+# analyze_sentiment / fetch_and_compile_macro were removed as orphaned scaffolding)
 # ============================================================================
 
 class TestFallbackSentiment:
@@ -234,52 +235,6 @@ class TestFallbackSentiment:
 
     def test_empty_string_returns_zero(self, engine):
         assert engine._fallback_sentiment("") == 0.0
-
-
-class TestAnalyzeSentiment:
-    def test_empty_text_returns_zero_without_credential_check(self, engine):
-        assert engine.analyze_sentiment("") == 0.0
-
-    def test_non_string_input_returns_zero(self, engine):
-        assert engine.analyze_sentiment(None) == 0.0
-
-    def test_no_credentials_falls_back_to_keyword_sentiment(self, engine, monkeypatch):
-        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-        monkeypatch.setattr("os.path.exists", lambda path: False)
-        text = "strong bullish growth"
-        result = engine.analyze_sentiment(text)
-        assert result == engine._fallback_sentiment(text)
-
-
-# ============================================================================
-# fetch_and_compile_macro — end-to-end structural contract
-# ============================================================================
-
-class TestFetchAndCompileMacro:
-    def test_returns_all_expected_keys(self, engine):
-        result = engine.fetch_and_compile_macro()
-        expected_keys = {
-            "yield_curve_10y_2y", "high_yield_oas", "inflation_rate", "nominal_10y",
-            "sahm_rule_indicator", "vix_value", "date", "sentiment_score", "market_regime",
-        }
-        assert expected_keys.issubset(result.keys())
-        assert result["market_regime"] in {"RISK ON", "NEUTRAL", "RECESSION", "CREDIT EVENT"}
-
-    def test_no_data_engine_fred_attribute_yields_zero_sahm(self, engine):
-        """MockDataEngine has no `.fred` -- sahm_rule_indicator must degrade
-        to the documented 0.0 fallback, not raise."""
-        result = engine.fetch_and_compile_macro()
-        assert result["sahm_rule_indicator"] == 0.0
-
-    def test_text_context_runs_sentiment_analysis(self, engine, monkeypatch):
-        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-        monkeypatch.setattr("os.path.exists", lambda path: False)
-        result = engine.fetch_and_compile_macro(text_context="bullish growth outlook")
-        assert result["sentiment_score"] > 0.0
-
-    def test_no_text_context_yields_neutral_sentiment(self, engine):
-        result = engine.fetch_and_compile_macro(text_context=None)
-        assert result["sentiment_score"] == 0.0
 
 
 # ============================================================================

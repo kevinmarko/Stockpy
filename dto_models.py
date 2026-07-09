@@ -154,6 +154,8 @@ class FundamentalDataDTO(BaseDTO):
         self.held_percent_institutions: float = 0.0
         self.institutional_change: float = 0.0
         self.debt_to_equity: float = 0.0
+        # Missing solvency data must be NaN (CONSTRAINT #4), never a fabricated 0.0.
+        self.current_ratio: float = float("nan")
 
     @staticmethod
     def _calculate_dividend_growth_rate(info: Dict[str, Any], dividends: Optional[Any] = None) -> float:
@@ -210,6 +212,8 @@ class FundamentalDataDTO(BaseDTO):
         dto.held_percent_institutions = info.get("heldPercentInstitutions", 0.0)
         dto.institutional_change = info.get("netPercentInstitutionsSharesOut", 0.0)
         dto.debt_to_equity = info.get("debtToEquity", 0.0)
+        # NaN default (NOT 0.0) — missing solvency data must be NaN (CONSTRAINT #4).
+        dto.current_ratio = info.get("currentRatio", float("nan"))
         # EXPLANATION: Store the raw info dictionary for down-stream access to unstructured metrics.
         dto.raw_info = info
         return dto

@@ -750,7 +750,6 @@ class FinnhubProvider:
         "betaWeekly": "beta",
         "roe5Y": "returnOnEquity",
         "roeTTM": "returnOnEquity",
-        "revenueGrowth3Y": "revenueGrowth",
         "debtToEquityQuarterly": "debtToEquity",
         "grossMarginTTM": "grossMargins",
         "operatingMarginTTM": "operatingMargins",

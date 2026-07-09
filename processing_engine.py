@@ -469,8 +469,10 @@ class ProcessingEngine:
                 # MULTIFACTOR FACTOR INPUTS (signals/multifactor.py)
                 # Reference: Hou-Xue-Zhang (2020) -- only factors with strong
                 # economic priors (value, quality, low-vol, size; momentum is
-                # signals/cross_sectional_momentum.py). NaN (never fabricated)
-                # when the underlying yfinance field is unavailable.
+                # signals/cross_sectional_momentum.py). The quality factor is the
+                # mean of the available profitability metrics among
+                # {returnOnEquity, operatingMargins, grossMargins}. NaN (never
+                # fabricated) when the underlying yfinance field is unavailable.
                 # ==========================================================
                 book_to_market = (
                     1.0 / dto.pb_ratio if dto.pb_ratio and dto.pb_ratio > 0 else float('nan')
@@ -479,10 +481,22 @@ class ProcessingEngine:
                     1.0 / dto.pe_ratio if dto.pe_ratio and dto.pe_ratio > 0 else float('nan')
                 )
 
-                roe = info.get('returnOnEquity')
-                operating_margin = info.get('operatingMargins')
-                if roe is not None and operating_margin is not None:
-                    quality_factor_score = float(roe) + float(operating_margin)
+                # Quality = MEAN of the available profitability metrics among
+                # {returnOnEquity, operatingMargins, grossMargins} (all FRACTIONS,
+                # same units). A mean (not a sum) keeps 1/2/3-metric tickers on one
+                # scale for the downstream cross-sectional z-score in
+                # signals/multifactor.py, so a ticker isn't advantaged merely by
+                # having more metrics present. grossMargins (emitted by
+                # data/yahoo_fundamentals.py) is now consumed here. Missing metrics
+                # are skipped, never treated as 0.0 (CONSTRAINT #4).
+                _quality_inputs = []
+                for _q in (info.get('returnOnEquity'),
+                           info.get('operatingMargins'),
+                           info.get('grossMargins')):
+                    if _q is not None and not math.isnan(float(_q)):
+                        _quality_inputs.append(float(_q))
+                if _quality_inputs:
+                    quality_factor_score = sum(_quality_inputs) / len(_quality_inputs)
                 else:
                     # Fallback proxy: lower leverage = higher quality. debt_to_equity
                     # is already parsed above (None when yfinance omits the field).
@@ -553,8 +567,8 @@ class ProcessingEngine:
 
     def calculate_momentum_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Computes ROC_12M, ROC_6M, ROC_3M, ROC_1M (and skip-1m versions for cross-sectional later).
-        All use .shift(1) (or further) to guarantee no lookahead.
+        Computes ROC_12M and ROC_6M (the trailing-return momentum metrics with
+        real downstream consumers). All use .shift(1) to guarantee no lookahead.
         Also computes realized 60-day volatility and Momentum_Vol_Scaled.
         """
         if df.empty or len(df) < 253:
@@ -565,12 +579,6 @@ class ProcessingEngine:
             _nan = float('nan')
             df['ROC_12M'] = _nan
             df['ROC_6M'] = _nan
-            df['ROC_3M'] = _nan
-            df['ROC_1M'] = _nan
-            df['ROC_12M_skip'] = _nan
-            df['ROC_6M_skip'] = _nan
-            df['ROC_3M_skip'] = _nan
-            df['ROC_1M_skip'] = _nan
             df['Realized_Vol_60D'] = _nan
             df['Momentum_Vol_Scaled'] = _nan
             return df
@@ -581,17 +589,8 @@ class ProcessingEngine:
         # Close[t-1] / Close[t-253] - 1.0 (252 trading days)
         df['ROC_12M'] = df['Close'].shift(1) / df['Close'].shift(253) - 1.0
         df['ROC_6M'] = df['Close'].shift(1) / df['Close'].shift(127) - 1.0
-        df['ROC_3M'] = df['Close'].shift(1) / df['Close'].shift(64) - 1.0
-        df['ROC_1M'] = df['Close'].shift(1) / df['Close'].shift(22) - 1.0
 
-        # 2. Skip-1m versions (skip the last 21 trading days, i.e. 1 month)
-        # Shifted by 22 to guarantee no lookahead of the last month at time t
-        df['ROC_12M_skip'] = df['Close'].shift(22) / df['Close'].shift(253) - 1.0
-        df['ROC_6M_skip'] = df['Close'].shift(22) / df['Close'].shift(127) - 1.0
-        df['ROC_3M_skip'] = df['Close'].shift(22) / df['Close'].shift(64) - 1.0
-        df['ROC_1M_skip'] = df['Close'].shift(22) / df['Close'].shift(43) - 1.0
-
-        # 3. Volatility scaling: 60-day realized vol of daily returns (annualized)
+        # 2. Volatility scaling: 60-day realized vol of daily returns (annualized)
         # Use daily returns shifted by 1 to prevent lookahead
         daily_returns = df['Close'].pct_change().shift(1)
         realized_vol_60d = daily_returns.rolling(window=60).std() * np.sqrt(252)

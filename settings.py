@@ -686,13 +686,31 @@ class Settings(BaseSettings):
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
     # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.
     # Persisted to forecast_errors table in quant_platform.db.
+    FORECAST_SKILL_WEIGHTING_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in activation of inverse-RMSE skill-weighted multi-model forecast "
+            "blending (ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM weighted by "
+            "recent realized accuracy via forecasting.forecast_tracker.ForecastTracker). "
+            "When False (the default) the static sector-preference blend is used "
+            "unchanged — matching the FORECAST_USE_GARCH_SIGMA opt-in convention. "
+            "When True, a persistent ForecastTracker is threaded into every "
+            "ForecastingEngine construction, self-provisioning its forecast_errors "
+            "table in quant_platform.db (no migration required)."
+        ),
+    )
     FORECAST_SKILL_WINDOW_DAYS: int = Field(
-        default=60,
+        default=180,
         description=(
             "Rolling window (calendar days) over which per-model RMSE is computed "
             "for inverse-skill forecast blending. Increase for stability; decrease "
             "for faster adaptation. Cold-start equal weighting applies when fewer "
-            "than FORECAST_SKILL_MIN_OBS completed observations exist."
+            "than FORECAST_SKILL_MIN_OBS completed observations exist. MUST exceed "
+            "the max forecast horizon (90d): a 'completed' row for horizon 90 needs "
+            "forecast_ts ≤ now-85d, while the window only counts forecast_ts ≥ "
+            "now-WINDOW; with WINDOW=60 those two bands are mutually exclusive so "
+            "h=60/h=90 could never warm up. 180 gives every horizon a real "
+            "eligibility band."
         ),
     )
     FORECAST_SKILL_MIN_OBS: int = Field(
