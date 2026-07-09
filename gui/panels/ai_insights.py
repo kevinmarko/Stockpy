@@ -31,6 +31,29 @@ from gui.panels import load_state_snapshot
 from gui.panels.report_viewer import _render_llm_commentary_button
 
 
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_bars_cached(symbol: str, lookback_days: int = 252) -> pd.DataFrame:
+    """Streamlit-layer cache for the chart-bars fetch.
+
+    Streamlit reruns the whole script on every interaction, so the raw
+    ``get_intraday_bars`` call would otherwise re-hit the provider on each
+    rerun.  This ``@st.cache_data`` wrapper keys on ``symbol``/``lookback_days``
+    and complements the provider's own short-TTL ``_BarsCache`` (double-caching
+    is fine and intended).  Dead-letter resilient: returns an empty DataFrame on
+    any failure, never raises (CONSTRAINT #6).
+    """
+    try:
+        from data.market_data import get_provider  # noqa: PLC0415
+
+        bars = get_provider().get_intraday_bars(symbol, lookback_days=lookback_days)
+        if bars is None:
+            return pd.DataFrame()
+        return bars
+    except Exception as exc:  # noqa: BLE001 - dead-letter, soft-fail in render
+        logger.debug("AI Insights: bars fetch failed for %s: %s", symbol, exc)
+        return pd.DataFrame()
+
+
 def _render_gemini_chart_section(symbol: str) -> None:
     """Inner helper — chart render + on-demand Gemini Vision call."""
     if not symbol:
@@ -42,14 +65,11 @@ def _render_gemini_chart_section(symbol: str) -> None:
         return
 
     # Fetch bars from the live market-data provider — same path the rest
-    # of the platform uses.  Soft-fail to caption on any failure.
-    try:
-        from data.market_data import get_provider  # noqa: PLC0415
-
-        provider = get_provider()
-        bars = provider.get_intraday_bars(symbol, lookback_days=252)
-    except Exception as exc:
-        st.caption(f"Could not fetch bars for {symbol}: {exc}")
+    # of the platform uses, via a @st.cache_data loader so reruns don't
+    # refetch.  Soft-fail to caption on any failure (loader never raises).
+    bars = _load_bars_cached(symbol, lookback_days=252)
+    if bars is None or bars.empty:
+        st.caption(f"Could not fetch bars for {symbol}.")
         return
 
     png = render_price_chart_png(symbol, bars)

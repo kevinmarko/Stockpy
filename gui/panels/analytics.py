@@ -38,7 +38,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -85,6 +85,58 @@ def _trade_to_row(trade: Any) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Cached loaders (PR B — GUI panel caching)
+#
+# Streamlit reruns the whole script on every interaction, so these two
+# unconditional network/DB loads previously fired on every render (a cold
+# Robinhood order cache = a full login mid-render; a fresh sqlite connection
+# for the equity curve). Extracted into module-level ``@st.cache_data`` loaders
+# keyed on a TTL upper bound (the codebase convention — see
+# ``gui.panels.load_state_snapshot``). Behaviour-preserving: WHAT is shown is
+# unchanged; only WHEN the underlying data is fetched changes. Each loader keeps
+# its try/except inside and returns an empty sentinel (``{}`` / empty DataFrame)
+# on failure — never raises into the UI (CONSTRAINT #6).
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_realized_performance() -> Optional[Dict[str, Any]]:
+    """Cached wrapper over :func:`data.robinhood_orders.realized_performance`.
+
+    Returns the raw result dict (``{"summary": {...}, "trades": [ClosedTrade,
+    ...], "n_fills": int}``) on success, or ``None`` when the fetch itself
+    FAILED (so the caller can show the distinct "unavailable" message rather
+    than collapsing a broker/auth error into the "no trades yet" empty-state).
+    ``ClosedTrade`` is a frozen dataclass of plain scalar/datetime fields, so
+    the returned dict is trivially picklable by ``st.cache_data``.
+    """
+    try:
+        from data.robinhood_orders import realized_performance
+
+        return realized_performance() or {}
+    except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
+        logger.debug("realized_performance() failed: %s", exc)
+        return None
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_account_equity_history() -> pd.DataFrame:
+    """Cached wrapper over ``HistoricalStore().account_snapshot_history()``.
+
+    Returns the snapshot-history DataFrame, or an empty ``pd.DataFrame`` on any
+    failure. DataFrames are natively cacheable by ``st.cache_data``.
+    """
+    try:
+        from data.historical_store import HistoricalStore
+
+        hist = HistoricalStore().account_snapshot_history()
+        return hist if hist is not None else pd.DataFrame()
+    except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
+        logger.debug("account_snapshot_history() failed: %s", exc)
+        return pd.DataFrame()
+
+
+# ---------------------------------------------------------------------------
 # Section (a) — Broker Realized Performance
 # ---------------------------------------------------------------------------
 
@@ -105,15 +157,11 @@ def _render_broker_realized_performance() -> None:
     )
     st.caption("Source: **Broker (Robinhood order history)** · read-only, analytics-only.")
 
-    try:
-        from data.robinhood_orders import realized_performance
-
-        result = realized_performance()
-    except Exception as exc:  # noqa: BLE001 — belt-and-suspenders; already resilient
-        logger.debug("realized_performance() failed: %s", exc)
+    result = _load_realized_performance()
+    if result is None:
         st.info(
             "Broker realized performance is unavailable right now "
-            f"(Robinhood order history could not be read: {exc})."
+            "(Robinhood order history could not be read)."
         )
         return
 
@@ -205,14 +253,7 @@ def _render_account_equity_curve() -> None:
         "value, not realized trade P&L."
     )
 
-    try:
-        from data.historical_store import HistoricalStore
-
-        hist = HistoricalStore().account_snapshot_history()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("account_snapshot_history() failed: %s", exc)
-        st.info(f"Account snapshot history unavailable ({exc}).")
-        return
+    hist = _load_account_equity_history()
 
     if hist is None or hist.empty or "fetched_at" not in hist.columns:
         st.info(

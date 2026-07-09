@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -834,6 +835,127 @@ def _forecast_rmse_by_model(
     return out
 
 
+_FORECAST_SKILL_HORIZONS = (10, 30, 60, 90)
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _forecast_skill_rows(
+    db_path: str,
+    db_mtime: float,
+    symbols: Tuple[str, ...],
+    window_days: int,
+    min_obs: int,
+) -> Dict[str, Any]:
+    """Batched + cached loader behind the Forecast-Skill table.
+
+    Replaces the previous ``symbols × 4 horizons`` double loop that opened a
+    FRESH ``sqlite3`` connection per cell (≈120 connections/rerun) with:
+
+    * ONE aggregated ``forecast_errors`` SELECT (over ONE connection) yielding
+      the per-``(symbol, horizon, model)`` RMSE map — same NaN/None handling as
+      :func:`_forecast_rmse_by_model` (``mse`` None or ``< 0`` → NaN);
+    * ONE :class:`ForecastTracker` (its methods reuse a single connection after
+      PR A) for ``pending_count`` / ``completed_count`` / ``get_skill_weights``.
+
+    ``db_mtime`` participates in the cache key ONLY — a fresh pipeline cycle
+    (which writes ``forecast_errors``) changes the DB mtime and busts the cache,
+    mirroring ``gui.panels.load_state_snapshot``'s mtime-keying. ``symbols`` is a
+    tuple so the arguments are hashable.
+
+    Returns ``{"rows": [...], "any_history": bool}`` — the SAME ``rows`` list of
+    dicts (identical keys) the inline loop used to build. Dead-letter resilient
+    (CONSTRAINT #6): any catastrophic failure degrades to
+    ``{"rows": [], "any_history": False}``; RMSE / weights degrade to ``—`` /
+    equal weights, never a fabricated ``0.0`` (CONSTRAINT #4).
+    """
+    import math
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        from forecasting.forecast_tracker import ALL_MODEL_NAMES, ForecastTracker
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("ForecastTracker import failed in loader: %s", exc)
+        return {"rows": [], "any_history": False}
+
+    try:
+        since_iso = (
+            datetime.now(timezone.utc) - timedelta(days=window_days)
+        ).isoformat()
+
+        # ── 1. ONE aggregated RMSE query over ONE connection ─────────────────
+        # rmse_by_cell[(symbol_upper, horizon)] -> {model_name: rmse|nan}
+        rmse_by_cell: Dict[Tuple[str, int], Dict[str, float]] = {}
+        upper_syms = [s.upper() for s in symbols]
+        if upper_syms:
+            placeholders = ",".join("?" for _ in upper_syms)
+            try:
+                conn = sqlite3.connect(db_path)
+                try:
+                    cursor = conn.execute(
+                        f"""SELECT symbol, horizon_days, model_name,
+                                   AVG(squared_error) AS mse
+                            FROM forecast_errors
+                            WHERE actual_price IS NOT NULL
+                              AND forecast_ts   >= ?
+                              AND symbol IN ({placeholders})
+                            GROUP BY symbol, horizon_days, model_name""",
+                        (since_iso, *upper_syms),
+                    )
+                    for sym_u, horizon, model_name, mse in cursor.fetchall():
+                        cell = rmse_by_cell.setdefault((sym_u, int(horizon)), {})
+                        if mse is not None and mse >= 0:
+                            cell[model_name] = math.sqrt(mse)
+                        else:
+                            cell[model_name] = float("nan")
+                finally:
+                    conn.close()
+            except Exception as exc:  # noqa: BLE001 — RMSE step degrades to empty
+                logger.debug("batched forecast RMSE query failed: %s", exc)
+                rmse_by_cell = {}
+
+        # ── 2. ONE ForecastTracker for pending/completed/weights ─────────────
+        tracker = ForecastTracker()
+
+        rows: List[Dict[str, Any]] = []
+        any_history = False
+        for sym in symbols:
+            for h in _FORECAST_SKILL_HORIZONS:
+                try:
+                    pending = tracker.pending_count(sym, h)
+                    completed = tracker.completed_count(sym, h, window_days=window_days)
+                    weights = tracker.get_skill_weights(
+                        sym, h, window_days=window_days, min_obs=min_obs
+                    )
+                except Exception as exc:  # noqa: BLE001 — never break the tab
+                    logger.debug("forecast skill row failed for %s h=%d: %s", sym, h, exc)
+                    pending, completed, weights = 0, 0, {}
+
+                rmse_map = rmse_by_cell.get((sym.upper(), h), {})
+
+                if pending or completed:
+                    any_history = True
+
+                models = sorted(set(rmse_map) | set(weights)) or list(ALL_MODEL_NAMES)
+                for model in models:
+                    r = rmse_map.get(model)
+                    w = weights.get(model)
+                    rows.append({
+                        "Symbol": sym,
+                        "Horizon (d)": h,
+                        "Model": model,
+                        "Pending": pending,
+                        "Completed": completed,
+                        "RMSE ($)": (f"{r:.4f}" if r is not None and r == r else "—"),
+                        "Skill weight": (f"{w:.1%}" if w is not None else "—"),
+                    })
+
+        return {"rows": rows, "any_history": any_history}
+    except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
+        logger.debug("forecast skill loader failed: %s", exc)
+        return {"rows": [], "any_history": False}
+
+
 def _render_observability_forecast_skill(snap: Dict[str, Any]) -> None:
     """Per-model forecast-accuracy view over the live ``forecast_errors`` table.
 
@@ -843,8 +965,6 @@ def _render_observability_forecast_skill(snap: Dict[str, Any]) -> None:
     window / min-obs are surfaced so the operator knows whether weighting is
     even engaging.
     """
-    _HORIZONS = (10, 30, 60, 90)
-
     st.markdown("### 🎯 Forecast Skill (per-model accuracy)")
     st.caption(
         "Rolling-window RMSE per forecasting model (ARIMA / Monte Carlo / "
@@ -874,9 +994,11 @@ def _render_observability_forecast_skill(snap: Dict[str, Any]) -> None:
         "in the window — below that, equal (cold-start) weights are used."
     )
 
-    # Construct the tracker (self-provisions its table). All access is guarded.
+    # Construct the tracker (self-provisions its table) once, only to resolve
+    # the DB path + guard the "unavailable" case. The heavy per-cell reads are
+    # done inside the cached ``_forecast_skill_rows`` loader below.
     try:
-        from forecasting.forecast_tracker import ALL_MODEL_NAMES, ForecastTracker
+        from forecasting.forecast_tracker import ForecastTracker
 
         tracker = ForecastTracker()
         db_path = tracker._db_path  # noqa: SLF001 — read-only path reuse
@@ -910,37 +1032,18 @@ def _render_observability_forecast_skill(snap: Dict[str, Any]) -> None:
             )
             return
 
-    rows: List[Dict[str, Any]] = []
-    any_history = False
-    for sym in symbols:
-        for h in _HORIZONS:
-            try:
-                pending = tracker.pending_count(sym, h)
-                completed = tracker.completed_count(sym, h, window_days=window_days)
-                rmse_map = _forecast_rmse_by_model(db_path, sym, h, window_days)
-                weights = tracker.get_skill_weights(
-                    sym, h, window_days=window_days, min_obs=min_obs
-                )
-            except Exception as exc:  # noqa: BLE001 — never break the tab
-                logger.debug("forecast skill row failed for %s h=%d: %s", sym, h, exc)
-                pending, completed, rmse_map, weights = 0, 0, {}, {}
+    # DB mtime is the freshness key: a fresh pipeline cycle writes
+    # forecast_errors → mtime changes → cache miss (mirrors load_state_snapshot).
+    try:
+        db_mtime = os.path.getmtime(db_path)
+    except Exception:  # noqa: BLE001
+        db_mtime = 0.0
 
-            if pending or completed:
-                any_history = True
-
-            models = sorted(set(rmse_map) | set(weights)) or list(ALL_MODEL_NAMES)
-            for model in models:
-                r = rmse_map.get(model)
-                w = weights.get(model)
-                rows.append({
-                    "Symbol": sym,
-                    "Horizon (d)": h,
-                    "Model": model,
-                    "Pending": pending,
-                    "Completed": completed,
-                    "RMSE ($)": (f"{r:.4f}" if r is not None and r == r else "—"),
-                    "Skill weight": (f"{w:.1%}" if w is not None else "—"),
-                })
+    skill = _forecast_skill_rows(
+        db_path, db_mtime, tuple(symbols), window_days, min_obs
+    )
+    rows: List[Dict[str, Any]] = skill.get("rows", [])
+    any_history = bool(skill.get("any_history", False))
 
     if not any_history:
         st.info(
