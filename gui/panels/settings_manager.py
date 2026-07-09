@@ -53,8 +53,18 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
     ("LOG_LEVEL", "text"),
     ("FORECAST_USE_GARCH_SIGMA", "bool"),
     ("FORECAST_PROPHET_WEIGHT", "number"),
+    ("FORECAST_SKILL_WEIGHTING_ENABLED", "bool"),
+    ("FORECAST_SKILL_WINDOW_DAYS", "int"),
     ("FUNDAMENTALS_SOURCE", "text"),
     ("BETA_LOOKBACK_DAYS", "int"),
+    ("SECTOR_FORECAST_CONFIG_PATH", "text"),
+    ("SECTOR_FORECAST_CONFIGS", "json"),
+    # Prompt Registry (non-secret toggles; credentials live in .env only)
+    ("PROMPT_REGISTRY_ENABLED", "bool"),
+    ("PROMPT_REGISTRY_BACKEND", "text"),
+    # Persistent orchestrator daemon + State API CORS policy
+    ("ORCHESTRATOR_DAEMON_ENABLED", "bool"),
+    ("CORS_ALLOWED_ORIGINS", "json"),
     ("DEFAULT_TICKERS", "tickers"),
 ]
 
@@ -100,6 +110,27 @@ def render_settings_manager() -> None:
             elif kind == "bool":
                 truthy = str(cur).strip().lower() in {"1", "true", "yes", "on"}
                 updates[key] = st.checkbox(key, value=truthy)
+            elif kind == "json":
+                # JSON list/dict tunable (env_io JSON-encodes on write, so we
+                # hand write_many a parsed Python object, not a string).
+                obj: Any = cur
+                if isinstance(cur, str) and cur != "":
+                    try:
+                        obj = json.loads(cur)
+                    except Exception:
+                        obj = cur  # fall back to raw string for display
+                try:
+                    default_text = json.dumps(obj, indent=2)
+                except Exception:
+                    default_text = "" if cur is None else str(cur)
+                text = st.text_area(key, value=default_text)
+                try:
+                    updates[key] = json.loads(text)
+                except Exception:
+                    st.warning(
+                        f"'{key}' is not valid JSON — skipping this field "
+                        "(other settings will still be saved)."
+                    )
             elif kind == "tickers":
                 default_list = (
                     cur if isinstance(cur, list) else list(settings.DEFAULT_TICKERS)

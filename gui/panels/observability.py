@@ -317,6 +317,9 @@ def render_observability() -> None:
     _render_observability_equity_curve()
 
     st.divider()
+    _render_observability_forecast_skill(snap)
+
+    st.divider()
     _render_observability_risk_gate_block_log()
 
     st.divider()
@@ -767,6 +770,195 @@ def _render_observability_equity_curve() -> None:
                    "cumulative_pnl", "drawdown_pct"]],
             width="stretch",
         )
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section 4a-6b: Forecast Skill (per-model accuracy)
+#
+# Surfaces ``forecasting.forecast_tracker.ForecastTracker`` — the rolling-window
+# inverse-RMSE tracker that (when ``FORECAST_SKILL_WEIGHTING_ENABLED``) weights
+# ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM by recent realized accuracy.
+# Nothing else in the GUI exposes it, so an operator who flips the flag on is
+# otherwise tuning blind. Read-only: all DB access is wrapped in try/except and
+# a missing table / empty DB renders an info message, never a traceback
+# (CONSTRAINT #6). RMSE / weights degrade to "—" when no data (CONSTRAINT #4 —
+# never a fabricated 0.0).
+# ---------------------------------------------------------------------------
+
+
+def _forecast_rmse_by_model(
+    db_path: str, symbol: str, horizon_days: int, window_days: int
+) -> Dict[str, float]:
+    """Per-model RMSE over completed ``forecast_errors`` rows in the window.
+
+    Opens a short read-only ``sqlite3`` connection (mirroring how
+    ``forecast_tracker.py`` opens connections) and SELECTs the mean
+    ``squared_error`` per model for actualized rows within ``window_days``,
+    returning ``sqrt(mean_sq_err)``. Read-only SELECT only. Returns ``{}`` on
+    any failure (missing table / DB error) so the caller degrades gracefully —
+    ``forecast_tracker`` intentionally exposes no public per-symbol-RMSE method,
+    hence this local helper rather than an API addition.
+    """
+    import math
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    out: Dict[str, float] = {}
+    try:
+        since_iso = (
+            datetime.now(timezone.utc) - timedelta(days=window_days)
+        ).isoformat()
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.execute(
+                """SELECT model_name, AVG(squared_error) AS mse
+                   FROM forecast_errors
+                   WHERE symbol        = ?
+                     AND horizon_days  = ?
+                     AND actual_price  IS NOT NULL
+                     AND forecast_ts   >= ?
+                   GROUP BY model_name""",
+                (symbol.upper(), horizon_days, since_iso),
+            )
+            for model_name, mse in cursor.fetchall():
+                if mse is not None and mse >= 0:
+                    out[model_name] = math.sqrt(mse)
+                else:
+                    out[model_name] = float("nan")
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
+        logger.debug(
+            "forecast RMSE query failed for %s h=%d: %s", symbol, horizon_days, exc
+        )
+    return out
+
+
+def _render_observability_forecast_skill(snap: Dict[str, Any]) -> None:
+    """Per-model forecast-accuracy view over the live ``forecast_errors`` table.
+
+    Shows, per symbol × horizon [10, 30, 60, 90]: ``pending_count`` /
+    ``completed_count`` and, per model, the rolling-window RMSE plus the live
+    inverse-RMSE ``get_skill_weights`` blend weight. The current flag state and
+    window / min-obs are surfaced so the operator knows whether weighting is
+    even engaging.
+    """
+    _HORIZONS = (10, 30, 60, 90)
+
+    st.markdown("### 🎯 Forecast Skill (per-model accuracy)")
+    st.caption(
+        "Rolling-window RMSE per forecasting model (ARIMA / Monte Carlo / "
+        "Holt-Winters / CNN-LSTM) and the live inverse-RMSE blend weights from "
+        "`forecasting.forecast_tracker.ForecastTracker`."
+    )
+
+    enabled = bool(settings.FORECAST_SKILL_WEIGHTING_ENABLED)
+    window_days = int(settings.FORECAST_SKILL_WINDOW_DAYS)
+    min_obs = int(settings.FORECAST_SKILL_MIN_OBS)
+
+    if enabled:
+        st.success(
+            f"🟢 `FORECAST_SKILL_WEIGHTING_ENABLED = True` — inverse-RMSE "
+            f"skill-weighted blend active."
+        )
+    else:
+        st.info(
+            "⚪ `FORECAST_SKILL_WEIGHTING_ENABLED = False` — static blend in use. "
+            "Enable it (Settings tab / `.env`) to weight models by recent "
+            "accuracy. The table below still populates so you can inspect skill "
+            "before flipping the flag."
+        )
+    st.caption(
+        f"Window: **{window_days}d**  ·  Min obs: **{min_obs}** per model.  "
+        "Weighting only engages once `completed_count ≥ min_obs` for every model "
+        "in the window — below that, equal (cold-start) weights are used."
+    )
+
+    # Construct the tracker (self-provisions its table). All access is guarded.
+    try:
+        from forecasting.forecast_tracker import ALL_MODEL_NAMES, ForecastTracker
+
+        tracker = ForecastTracker()
+        db_path = tracker._db_path  # noqa: SLF001 — read-only path reuse
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("ForecastTracker unavailable: %s", exc)
+        st.info(
+            "No forecast-accuracy history yet — enable "
+            "`FORECAST_SKILL_WEIGHTING_ENABLED` and run cycles to accumulate."
+        )
+        return
+
+    # Symbols: prefer the loaded state snapshot; else let the operator type one.
+    symbols: List[str] = []
+    for s in snap.get("signals", []) or []:
+        sym = s.get("symbol")
+        if sym and sym not in symbols:
+            symbols.append(str(sym))
+    symbols = symbols[:30]  # bound the number of DB round-trips
+
+    if not symbols:
+        typed = st.text_input(
+            "No pipeline signals in the last snapshot — enter a symbol to inspect",
+            value="", key="obs_forecast_skill_symbol", placeholder="e.g. AAPL",
+        )
+        if typed.strip():
+            symbols = [typed.strip().upper()]
+        else:
+            st.info(
+                "No forecast-accuracy history yet — enable "
+                "`FORECAST_SKILL_WEIGHTING_ENABLED` and run cycles to accumulate."
+            )
+            return
+
+    rows: List[Dict[str, Any]] = []
+    any_history = False
+    for sym in symbols:
+        for h in _HORIZONS:
+            try:
+                pending = tracker.pending_count(sym, h)
+                completed = tracker.completed_count(sym, h, window_days=window_days)
+                rmse_map = _forecast_rmse_by_model(db_path, sym, h, window_days)
+                weights = tracker.get_skill_weights(
+                    sym, h, window_days=window_days, min_obs=min_obs
+                )
+            except Exception as exc:  # noqa: BLE001 — never break the tab
+                logger.debug("forecast skill row failed for %s h=%d: %s", sym, h, exc)
+                pending, completed, rmse_map, weights = 0, 0, {}, {}
+
+            if pending or completed:
+                any_history = True
+
+            models = sorted(set(rmse_map) | set(weights)) or list(ALL_MODEL_NAMES)
+            for model in models:
+                r = rmse_map.get(model)
+                w = weights.get(model)
+                rows.append({
+                    "Symbol": sym,
+                    "Horizon (d)": h,
+                    "Model": model,
+                    "Pending": pending,
+                    "Completed": completed,
+                    "RMSE ($)": (f"{r:.4f}" if r is not None and r == r else "—"),
+                    "Skill weight": (f"{w:.1%}" if w is not None else "—"),
+                })
+
+    if not any_history:
+        st.info(
+            "No forecast-accuracy history yet — enable "
+            "`FORECAST_SKILL_WEIGHTING_ENABLED` and run cycles to accumulate. "
+            "(Forecasts are recorded on each run and actualized once their "
+            "horizon elapses.)"
+        )
+        return
+
+    df = pd.DataFrame(rows)
+    st.dataframe(df, width="stretch", hide_index=True)
+    st.caption(
+        "RMSE is computed over completed (actualized) rows in the window; "
+        "`—` means no data / cold start. An empty **Skill weight** across the "
+        "board means the tracker returned `{}` (no completed history) → equal "
+        "weights are used. Weights sum to 1.0 within a symbol/horizon once warm."
+    )
 
 
 # ---------------------------------------------------------------------------
