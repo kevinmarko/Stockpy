@@ -51,6 +51,10 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
     ("RISK_GATE_ENFORCE_MARKET_HOURS", "bool"),
     ("MARKET_DATA_PROVIDER", "text"),
     ("LOG_LEVEL", "text"),
+    ("FORECAST_USE_GARCH_SIGMA", "bool"),
+    ("FORECAST_PROPHET_WEIGHT", "number"),
+    ("FUNDAMENTALS_SOURCE", "text"),
+    ("BETA_LOOKBACK_DAYS", "int"),
     ("DEFAULT_TICKERS", "tickers"),
 ]
 

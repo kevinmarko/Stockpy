@@ -395,3 +395,142 @@ class TestGenerateForecast:
         disable skill blending (treated as None)."""
         engine = ForecastingEngine(tracker=object())
         assert engine._tracker is None
+
+
+# ============================================================================
+# Wave-1 fit-once refactor — the crux tests
+#
+# generate_forecast() must fit ARIMA + Holt-Winters ONCE before the horizon
+# loop [10,30,60,90] (plus target_days), NOT once per horizon. The old code
+# refit ARIMA 5x and re-ran the HW grid-search (2 train fits) + final fit 5x
+# (=> 15 ExponentialSmoothing constructions). The refactor collapses those to
+# 1 ARIMA construction and 3 ExponentialSmoothing constructions (2 grid-search
+# train fits on ["add"]x{True,False} + 1 final full-history fit).
+# ============================================================================
+
+
+class _FakeFitResult:
+    """Deterministic stand-in for a fitted statsmodels result: .forecast()
+    returns a constant array so no real optimization runs (keeps the fit-count
+    test fast and independent of statsmodels/BLAS)."""
+
+    def forecast(self, steps):
+        return np.full(int(steps), 105.0)
+
+
+class TestFitOnceRefactor:
+    def test_arima_fit_once_hw_thrice_per_generate_forecast(self, engine, monkeypatch):
+        """PROVES THE SPEEDUP: one generate_forecast() call constructs ARIMA
+        exactly ONCE (not 5x) and ExponentialSmoothing exactly 3x (not 15x)."""
+        counts = {"arima": 0, "hw": 0}
+
+        class FakeArima:
+            def __init__(self, *a, **k):
+                counts["arima"] += 1
+
+            def fit(self):
+                return _FakeFitResult()
+
+        class FakeHW:
+            def __init__(self, *a, **k):
+                counts["hw"] += 1
+
+            def fit(self):
+                return _FakeFitResult()
+
+        monkeypatch.setattr(forecasting_engine, "ARIMA", FakeArima)
+        monkeypatch.setattr(forecasting_engine, "ExponentialSmoothing", FakeHW)
+
+        history = _price_series(120, seed=11)
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        # precomputed_garch_annual_vol short-circuits the GARCH estimator so the
+        # only ARIMA/ES constructions come from the fit-once path we are counting.
+        result = engine.generate_forecast(
+            row,
+            current_price=float(history.iloc[-1]),
+            history_series=history,
+            precomputed_garch_annual_vol=0.30,
+        )
+
+        assert counts["arima"] == 1, "ARIMA must be fit exactly once, not per-horizon"
+        assert counts["hw"] == 3, (
+            "Holt-Winters must construct ExponentialSmoothing exactly 3x "
+            "(2 grid-search train fits + 1 final full-history fit), not per-horizon"
+        )
+        # Sanity: the run still produced all four horizons.
+        for h in (10, 30, 60, 90):
+            assert result[f"Forecast_{h}"] > 0.0
+
+
+class TestBackCompatShims:
+    """run_arima / run_holt_winters_grid_search are now fit-once-then-forecast
+    shims; their output must stay numerically identical to the split
+    (fit) + (forecast) call sequence on the same data."""
+
+    def test_run_arima_shim_matches_split_fit_forecast(self, engine):
+        history = _price_series(80, seed=21).values
+        combined = engine.run_arima(history, days_forward=7)
+        fitted = engine.run_arima_fit(history)
+        split = engine.forecast_from_arima_fit(fitted, 7)
+        assert combined == split
+
+    def test_run_hw_shim_matches_split_fit_forecast(self, engine):
+        history = _price_series(80, seed=22).values
+        combined = engine.run_holt_winters_grid_search(history, days_forward=7)
+        fitted = engine.run_holt_winters_fit(history)
+        split = engine.forecast_from_hw_fit(fitted, 7, history)
+        assert combined == split
+
+
+class TestPrecomputedGarchSigma:
+    """_estimate_daily_sigma's precomputed-annual-vol branch: a finite >0
+    precomputed GARCH annual vol is divided by sqrt(252) and fed to Monte
+    Carlo, WITHOUT refitting GJR-GARCH; None routes to the estimator."""
+
+    def _capture_mc_sigma(self, engine, monkeypatch):
+        captured = {}
+
+        def fake_mc(start_price, mu, sigma, days_forward=None, simulations=1000, **k):
+            captured.setdefault("sigma", sigma)
+            return (start_price, start_price, start_price)
+
+        monkeypatch.setattr(engine, "run_monte_carlo", fake_mc)
+        return captured
+
+    def test_precomputed_vol_folds_in_and_skips_estimator(self, engine, monkeypatch):
+        captured = self._capture_mc_sigma(engine, monkeypatch)
+        from technical_options_engine import TechnicalOptionsEngine
+        spy = mock.MagicMock(return_value=0.99)
+        monkeypatch.setattr(
+            TechnicalOptionsEngine, "estimate_gjr_garch_volatility", spy
+        )
+
+        history = _price_series(60, seed=31)
+        engine.generate_forecast(
+            pd.Series({"sector": "Technology", "Symbol": "AAPL"}),
+            current_price=float(history.iloc[-1]),
+            history_series=history,
+            precomputed_garch_annual_vol=0.40,
+        )
+
+        assert captured["sigma"] == pytest.approx(0.40 / np.sqrt(252.0), rel=1e-6)
+        assert spy.call_count == 0, "estimator must NOT be refit when a precomputed vol is supplied"
+
+    def test_none_precomputed_routes_to_estimator(self, engine, monkeypatch):
+        captured = self._capture_mc_sigma(engine, monkeypatch)
+        from technical_options_engine import TechnicalOptionsEngine
+        spy = mock.MagicMock(return_value=0.50)  # annualized vol
+        monkeypatch.setattr(
+            TechnicalOptionsEngine, "estimate_gjr_garch_volatility", spy
+        )
+
+        history = _price_series(60, seed=32)
+        engine.generate_forecast(
+            pd.Series({"sector": "Technology", "Symbol": "AAPL"}),
+            current_price=float(history.iloc[-1]),
+            history_series=history,
+            precomputed_garch_annual_vol=None,
+        )
+
+        assert spy.call_count >= 1, "estimator must be called when no precomputed vol is supplied"
+        assert captured["sigma"] == pytest.approx(0.50 / np.sqrt(252.0), rel=1e-6)
