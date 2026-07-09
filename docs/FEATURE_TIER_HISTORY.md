@@ -9,6 +9,7 @@ PR that added it" record** — read it when you need the full backstory, test su
 or Gravity-audit-step details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
+- Advisory multifactor-Z threading — close the PR #192 follow-up (2026-07-09)
 - Forecasting fit-once + GARCH reuse, 4 settings to GUI, advisory-snapshot telemetry parity (2026-07-09)
 - Forecasting — GARCH volatility into Monte Carlo + Prophet into the ensemble (2026-07-08)
 - Fundamentals — Finnhub → Yahoo statement-computed engine (2026-07-08)
@@ -37,6 +38,50 @@ Sections in this file (search for the `##` heading):
 where they're load-bearing for every session** (e.g. ADVISORY_ONLY quarantine,
 CONSTRAINT #3/#4/#6, no-fabricated-metrics, dead-letter resilience). This file adds
 the full detail, test surface, and Gravity step numbers behind each of those.
+
+---
+
+## Advisory multifactor-Z threading — close the PR #192 follow-up (2026-07-09)
+
+**Why.** PR #192 (below) unified the advisory-path `state_snapshot.json` writer with the
+orchestrator's, but the five per-signal multifactor keys (`value_z`/`quality_z`/`lowvol_z`/
+`size_z`/`multifactor_composite`) always serialized as JSON `null` on the advisory path — the
+writer read them from `engine.advisory.Recommendation.key_indicators`, but `evaluate()` never put
+them there in the first place. This closes that gap.
+
+**What shipped.**
+- `engine/advisory.py::evaluate()` already receives `context_extras` (the universe-wide dict
+  `main._build_context_extras()` builds once per cycle via `global_registry.run_pre_compute()`,
+  keyed `{"multifactor_scores": {ticker: {"Value_Z":..., "Quality_Z":..., "LowVol_Z":...,
+  "Size_Z":..., "Multifactor_Composite":...}}}`) and already threads it into
+  `StrategyEngine.evaluate_security()` for scoring — it just never copied the values onto the
+  returned `Recommendation`. Added a lookup, `_mf_scores = (context_extras or {}).get
+  ("multifactor_scores", {}).get(symbol, {})`, right before the `key_indicators` dict literal
+  (Step 12), and five new entries in that dict — `value_z`/`quality_z`/`lowvol_z`/`size_z`/
+  `multifactor_composite` — each `_safe_float(_mf_scores.get("Value_Z"), nan)`-style, so an
+  absent `context_extras`, a failed pre-compute, or a symbol missing from this cycle's universe
+  (e.g. microcap-excluded per `signals/multifactor.py`) all degrade to `NaN` — never a fabricated
+  `0.0` (CONSTRAINT #4). Verified `context.multifactor_scores` never stores `None` as a per-ticker
+  value (always a dict, NaN-filled when excluded) — see `signals/multifactor.py`'s `pre_compute()`
+  — so the `.get(symbol, {})` chain never raises.
+- No changes to `reporting/state_snapshot.py` — it already read the correct snake_case keys from
+  `key_indicators`; they were just always absent. No changes to `main._build_context_extras()` —
+  the universe-wide pre-compute was already correct and already threaded through for scoring.
+- **Cost.** Zero — a dict lookup already-computed data was sitting next to; no new fetch, no new
+  fit, no new network call.
+
+**Test surface.**
+- `tests/test_advisory.py::TestContextExtrasThreading` — two new tests:
+  `test_multifactor_scores_populate_key_indicators` (a supplied `context_extras` entry for the
+  symbol round-trips through `key_indicators` under the exact snake_case keys the snapshot writer
+  reads) and `test_multifactor_scores_absent_degrade_to_nan` (both "context_extras omitted" and
+  "context_extras present but no entry for this symbol" degrade every one of the five keys to
+  `NaN`, never `0.0` or a missing key).
+- `tests/test_advisory.py` full file: 31 passed.
+- End-to-end spot check (evaluate() → write_state_snapshot()): a synthetic `context_extras` with
+  `Value_Z=1.23` etc. flows through `Recommendation.key_indicators` into the written
+  `state_snapshot.json`'s per-signal `value_z`/`multifactor_composite` fields with the real values,
+  confirmed by direct inspection of the written JSON.
 
 ---
 
@@ -85,9 +130,10 @@ work, targeting three findings:
   `hmm_risk_on_probability` (from the injected `macro_dto`) plus per-signal `garch_vol`/`hmm_risk_on`
   and the five multifactor keys (`value_z`/`quality_z`/`lowvol_z`/`size_z`/`multifactor_composite`) —
   matching what the `main_orchestrator.py` `_write_state_snapshot()` path already surfaced.
-  `garch_vol` reads from `engine.advisory` `Recommendation.key_indicators`; the five multifactor
-  keys emit JSON `null` until a follow-up threads the Z-scores onto `Recommendation.key_indicators`
-  (no fabricated values — CONSTRAINT #4).
+  `garch_vol` reads from `engine.advisory` `Recommendation.key_indicators`; at ship time the five
+  multifactor keys emitted JSON `null` (no fabricated values — CONSTRAINT #4) because
+  `Recommendation.key_indicators` didn't carry them yet — closed the same day, see "Advisory
+  multifactor-Z threading" above.
 - **Cost.** Net efficiency win: ARIMA/HW fits drop ~4-5× per ticker, and one GJR-GARCH fit per
   ticker per cycle is eliminated on the orchestrator path. No new dependencies.
 
@@ -100,7 +146,9 @@ work, targeting three findings:
 - `tests/test_gui_env_io_forecast_keys.py` — the four new keys are in `ALLOWED_KEYS`, are
   writable/round-trip through `env_io`, and are non-secret.
 - `tests/test_state_snapshot_advisory.py` — the advisory writer emits the macro recession telemetry
-  + per-signal `garch_vol`/multifactor-Z keys (multifactor Z-scores `null` pending the follow-up).
+  + per-signal `garch_vol`/multifactor-Z keys (writer-level contract; at ship time the multifactor
+  values were `null` in practice since `Recommendation.key_indicators` didn't carry them yet — see
+  "Advisory multifactor-Z threading" above for the same-day fix).
 - `tests/test_forecasting_lookahead.py` — re-run to confirm the fit-once refactor preserves the
   train-only scaler / no-lookahead invariants.
 - Full run: 72 passed across the four files on the Python 3.11 sandbox (CI on 3.12 authoritative).
