@@ -34,6 +34,23 @@ from gui.panels.report_viewer import _render_llm_commentary_button
 
 
 # ---------------------------------------------------------------------------
+# Section A — provider/model selector option domains
+# ---------------------------------------------------------------------------
+# Allowed option lists for each capability ``provider_selector_setting`` (the
+# field named on ``gui.ai_control_center.AICapability``). The AICapability
+# metadata does not expose an explicit option list, so these are inferred from
+# the env_io ALLOWED_KEYS domain comments + the metadata docstring (both
+# rationale and alert commentary route flexibly to Claude OR Gemini via
+# gui.ai_control_center._PROVIDER_KEY_MAP; Opal routes to OpenAI OR Gemini).
+# All keys here are non-secret ALLOWED_KEYS — never provider API keys.
+_PROVIDER_SELECTOR_OPTIONS: Dict[str, List[str]] = {
+    "LLM_COMMENTARY_RATIONALE_PROVIDER": ["claude", "gemini", "none"],
+    "LLM_COMMENTARY_ALERT_PROVIDER": ["claude", "gemini", "none"],
+    "OPAL_RESEARCH_PROVIDER": ["openai", "gemini", "none"],
+}
+
+
+# ---------------------------------------------------------------------------
 # Section D — scheduled-run log tail (live fragment)
 # ---------------------------------------------------------------------------
 # Same two-decorated-variant idiom used in gui/panels/launcher.py's
@@ -143,6 +160,47 @@ def render_ai_control_center() -> None:
                     c4.success("Saved — effective next launch.")
                 except Exception as exc:
                     c4.error(f"Write refused: {exc}")
+
+            # Provider selector — only for capabilities that carry a flexible
+            # per-job provider setting (rationale / alert commentary, Opal).
+            # Non-secret ALLOWED_KEYS only; provider API keys stay secret-only.
+            sel_key = cap.provider_selector_setting
+            if sel_key:
+                options = list(_PROVIDER_SELECTOR_OPTIONS.get(sel_key, []))
+                raw_sel = env_io.get_value(sel_key, "").strip()
+                cur_sel = (raw_sel or str(getattr(settings, sel_key, "none") or "none")).strip()
+                if cur_sel not in options:
+                    options = [cur_sel] + options
+                new_sel = c4.selectbox(
+                    f"Provider ({sel_key})",
+                    options=options,
+                    index=options.index(cur_sel),
+                    key=f"acc_provider_{rowinfo['key']}",
+                )
+                if new_sel != cur_sel:
+                    try:
+                        env_io.write_setting(sel_key, new_sel)
+                        c4.success("Provider saved — effective next launch.")
+                    except Exception as exc:
+                        c4.error(f"Provider write refused: {exc}")
+
+            # Opal also exposes a free-form model id (e.g. gpt-4o /
+            # gemini-2.5-flash) via the non-secret OPAL_RESEARCH_MODEL key.
+            if cap.key == "opal_research":
+                raw_model = env_io.get_value("OPAL_RESEARCH_MODEL", "").strip()
+                cur_model = (raw_model or str(getattr(settings, "OPAL_RESEARCH_MODEL", "") or "")).strip()
+                new_model = c4.text_input(
+                    "Model (OPAL_RESEARCH_MODEL)",
+                    value=cur_model,
+                    key=f"acc_model_{rowinfo['key']}",
+                    placeholder="e.g. gpt-4o or gemini-2.5-flash",
+                )
+                if new_model.strip() != cur_model:
+                    try:
+                        env_io.write_setting("OPAL_RESEARCH_MODEL", new_model.strip())
+                        c4.success("Model saved — effective next launch.")
+                    except Exception as exc:
+                        c4.error(f"Model write refused: {exc}")
         elif not rowinfo["built"]:
             c4.caption("🚧 requires build — see `docs/OPAL_BUILD_SPEC.md`")
         else:
