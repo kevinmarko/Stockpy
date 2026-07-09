@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Literal, Optional
@@ -52,6 +53,135 @@ from transactions_store import TransactionsStore
 from settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Lazy module-level engine singletons (PR A / A2 — hot-path performance)
+# ---------------------------------------------------------------------------
+# evaluate() previously RECONSTRUCTED ProcessingEngine, TechnicalOptionsEngine,
+# ForecastingEngine, StrategyEngine, and TransactionsStore on EVERY call — i.e.
+# once (or 2-3× for the store) per symbol, per cycle.  TransactionsStore.__init__
+# alone runs Base.metadata.create_all + inspect + a conditional ALTER TABLE (real
+# DB round-trips), so rebuilding it per symbol was very wasteful.  These getters
+# build each engine ONCE per process and reuse it.
+#
+# Thread-safety (the orchestrator calls evaluate() CONCURRENTLY across symbols):
+#   * ProcessingEngine / TechnicalOptionsEngine / ForecastingEngine /
+#     StrategyEngine store only immutable config on ``self``; their compute
+#     methods (calculate_technical_metrics, estimate_gjr_garch_volatility,
+#     generate_forecast, evaluate_security) never mutate instance state, so one
+#     shared instance is safe for concurrent READ use.  StrategyEngine's only
+#     lazy self-write (the ``transactions_store`` property at strategy_engine.py
+#     ~524) is pre-empted because we always inject a store at construction, so
+#     it never fires.  TechnicalOptionsEngine (technical_options_engine.py ~361)
+#     has no __init__ at all — it is fully stateless.
+#   * TransactionsStore shares one thread-safe SQLAlchemy engine and opens a
+#     FRESH per-call session in every read method (closed_trades_df/
+#     open_trades_df/…), so a shared singleton is safe for concurrent reads.
+#   * ForecastingEngine's optional ForecastTracker is attached only when
+#     settings.FORECAST_SKILL_WEIGHTING_ENABLED is True (default OFF → tracker
+#     None → no shared mutable state); when present it too uses per-call DB
+#     sessions.  The singleton is keyed on that setting read once at first build.
+# Construction is guarded by a lock so concurrent first-callers can't double-build.
+#
+# Test compatibility: tests monkeypatch ``engine.advisory.<ClassName>`` and expect
+# each evaluate() to observe their mock.  Each getter compares the (possibly
+# patched) module global against the ORIGINAL class captured at import; when they
+# differ the class is patched, so we build a FRESH instance from the mock and never
+# cache it — byte-identical to the pre-singleton per-call construction.
+_ENGINE_LOCK = threading.Lock()
+
+_ProcessingEngine_orig = ProcessingEngine
+_TechnicalOptionsEngine_orig = TechnicalOptionsEngine
+_ForecastingEngine_orig = ForecastingEngine
+_StrategyEngine_orig = StrategyEngine
+_TransactionsStore_orig = TransactionsStore
+
+_PROCESSING_ENGINE: Optional[Any] = None
+_TECH_OPTIONS_ENGINE: Optional[Any] = None
+_FORECASTING_ENGINE: Optional[Any] = None
+_STRATEGY_ENGINE: Optional[Any] = None
+_TRANSACTIONS_STORE: Optional[Any] = None
+
+
+def _build_forecasting_engine() -> Any:
+    """Construct a ForecastingEngine with the skill tracker gated on settings.
+
+    Mirrors evaluate()'s pre-singleton construction exactly: a ForecastTracker
+    is attached only when FORECAST_SKILL_WEIGHTING_ENABLED is on (default OFF →
+    tracker=None → byte-identical static blend).
+    """
+    _tracker = ForecastTracker() if settings.FORECAST_SKILL_WEIGHTING_ENABLED else None
+    return ForecastingEngine(tracker=_tracker)
+
+
+def _get_processing_engine() -> Any:
+    """Process-wide ProcessingEngine singleton (fresh/uncached when patched)."""
+    global _PROCESSING_ENGINE
+    if ProcessingEngine is not _ProcessingEngine_orig:
+        return ProcessingEngine()  # patched (test) → fresh, uncached
+    if _PROCESSING_ENGINE is None:
+        with _ENGINE_LOCK:
+            if _PROCESSING_ENGINE is None:
+                _PROCESSING_ENGINE = ProcessingEngine()
+    return _PROCESSING_ENGINE
+
+
+def _get_technical_options_engine() -> Any:
+    """Process-wide TechnicalOptionsEngine singleton (fresh/uncached when patched)."""
+    global _TECH_OPTIONS_ENGINE
+    if TechnicalOptionsEngine is not _TechnicalOptionsEngine_orig:
+        return TechnicalOptionsEngine()
+    if _TECH_OPTIONS_ENGINE is None:
+        with _ENGINE_LOCK:
+            if _TECH_OPTIONS_ENGINE is None:
+                _TECH_OPTIONS_ENGINE = TechnicalOptionsEngine()
+    return _TECH_OPTIONS_ENGINE
+
+
+def _get_forecasting_engine() -> Any:
+    """Process-wide ForecastingEngine singleton (fresh/uncached when patched)."""
+    global _FORECASTING_ENGINE
+    if ForecastingEngine is not _ForecastingEngine_orig:
+        return _build_forecasting_engine()
+    if _FORECASTING_ENGINE is None:
+        with _ENGINE_LOCK:
+            if _FORECASTING_ENGINE is None:
+                _FORECASTING_ENGINE = _build_forecasting_engine()
+    return _FORECASTING_ENGINE
+
+
+def _get_transactions_store() -> Any:
+    """Process-wide TransactionsStore singleton (fresh/uncached when patched)."""
+    global _TRANSACTIONS_STORE
+    if TransactionsStore is not _TransactionsStore_orig:
+        return TransactionsStore()
+    if _TRANSACTIONS_STORE is None:
+        with _ENGINE_LOCK:
+            if _TRANSACTIONS_STORE is None:
+                _TRANSACTIONS_STORE = TransactionsStore()
+    return _TRANSACTIONS_STORE
+
+
+def _get_strategy_engine(store: Any) -> Any:
+    """Return a StrategyEngine bound to ``store``.
+
+    The process-wide singleton is reused ONLY when ``store`` is the module-level
+    TransactionsStore singleton (the normal production path).  A caller-supplied
+    custom store (e.g. an in-memory test store passed via ``transactions_store``)
+    or a patched StrategyEngine class always yields a FRESH instance, so behavior
+    is byte-identical to the pre-singleton per-call construction.
+    """
+    global _STRATEGY_ENGINE
+    if StrategyEngine is not _StrategyEngine_orig:
+        return StrategyEngine(transactions_store=store)  # patched (test) → fresh
+    if store is _TRANSACTIONS_STORE and store is not None:
+        if _STRATEGY_ENGINE is None:
+            with _ENGINE_LOCK:
+                if _STRATEGY_ENGINE is None:
+                    _STRATEGY_ENGINE = StrategyEngine(transactions_store=store)
+        return _STRATEGY_ENGINE
+    return StrategyEngine(transactions_store=store)
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +433,11 @@ def evaluate(
     macro_dto: Optional[MacroEconomicDTO] = None,
     transactions_store: Optional[Any] = None,
     context_extras: Optional[Dict[str, Any]] = None,
+    *,
+    processing_engine: Optional[Any] = None,
+    technical_options_engine: Optional[Any] = None,
+    forecasting_engine: Optional[Any] = None,
+    strategy_engine: Optional[Any] = None,
 ) -> Recommendation:
     """Produce a holding-aware advisory recommendation for ``symbol``.
 
@@ -349,6 +484,14 @@ def evaluate(
         multifactor signals score correctly instead of falling back to 0
         (their neutral value when the context dicts are empty).
         ``None`` (the default) reproduces pre-wiring behavior exactly.
+    processing_engine, technical_options_engine, forecasting_engine, strategy_engine :
+        Optional pre-built engine instances (keyword-only).  When ``None`` (the
+        default) a process-wide lazy singleton is used instead of reconstructing
+        the engine per call — see the ``_get_*`` getters at module top.  A caller
+        such as the orchestrator's ``EngineContext`` may inject its own warm
+        instances here; when provided they are used verbatim.  Backward-compatible
+        and byte-identical to per-call construction because every one of these
+        engines is stateless-config-only for concurrent reads.
 
     Returns
     -------
@@ -439,7 +582,7 @@ def evaluate(
 
     if has_sufficient_history:
         try:
-            pe = ProcessingEngine()
+            pe = processing_engine if processing_engine is not None else _get_processing_engine()
             tech_results = pe.calculate_technical_metrics({symbol: bars_df.copy()})
             tech = tech_results.get(symbol, {})
         except Exception as exc:
@@ -452,7 +595,11 @@ def evaluate(
     garch_vol: Optional[float] = None
     if has_sufficient_history:
         try:
-            toe = TechnicalOptionsEngine()
+            toe = (
+                technical_options_engine
+                if technical_options_engine is not None
+                else _get_technical_options_engine()
+            )
             garch_vol = toe.estimate_gjr_garch_volatility(bars_df.copy())
         except Exception as exc:
             logger.warning("advisory[%s]: GARCH vol failed — %s", symbol, exc)
@@ -465,10 +612,10 @@ def evaluate(
     if has_sufficient_history:
         try:
             # Opt-in inverse-RMSE skill-weighted blending (default OFF → tracker
-            # None → byte-identical static blend). ForecastTracker self-provisions
+            # None → byte-identical static blend) is handled inside the singleton
+            # getter / _build_forecasting_engine(). ForecastTracker self-provisions
             # its forecast_errors table in quant_platform.db (its own default path).
-            _tracker = ForecastTracker() if settings.FORECAST_SKILL_WEIGHTING_ENABLED else None
-            fe = ForecastingEngine(tracker=_tracker)
+            fe = forecasting_engine if forecasting_engine is not None else _get_forecasting_engine()
             fc_row = pd.Series({"sector": fund_dto.sector, "Symbol": symbol})
             fc_results = fe.generate_forecast(
                 row=fc_row,
@@ -510,9 +657,20 @@ def evaluate(
     score: int = 50
     kelly_fraction_raw: float = 0.0
 
+    # Resolve the ONE transactions store used for this call — the caller-supplied
+    # store (tests inject an in-memory DB) or the process-wide singleton. This
+    # same object is threaded into StrategyEngine, _compute_kelly_sizing, and the
+    # verbose-rationale win-rate calc so there is exactly ONE store per process
+    # (not one per symbol, and not 2-3 rebuilds per call as before).
+    resolved_store = (
+        transactions_store if transactions_store is not None else _get_transactions_store()
+    )
+
     try:
-        ts = transactions_store if transactions_store is not None else TransactionsStore()
-        se = StrategyEngine(transactions_store=ts)
+        if strategy_engine is not None:
+            se = strategy_engine
+        else:
+            se = _get_strategy_engine(resolved_store)
         strategy_out = se.evaluate_security(
             bar=bar_dto,
             fundamentals=fund_dto,
@@ -779,7 +937,7 @@ def evaluate(
     if final_action == "BUY":
         suggested_position_pct = _compute_kelly_sizing(
             garch_vol=garch_vol,
-            transactions_store=transactions_store,
+            transactions_store=resolved_store,
             max_pct=CONFIG["max_single_position_pct"],
         )
 
@@ -797,7 +955,7 @@ def evaluate(
         # Win-rate calibration — reuses the transactions_store already bound
         # by _compute_kelly_sizing; pre-computing here so _build_rationale is I/O-free.
         try:
-            _ts_v = transactions_store if transactions_store is not None else TransactionsStore()
+            _ts_v = resolved_store
             _cdf = _ts_v.closed_trades_df()
             _vp, _vb, _vn = estimate_win_rate_and_payoff(_cdf, lookback_trades=100)
             if not (math.isnan(_vp) or math.isnan(_vb)):
@@ -1050,7 +1208,10 @@ def _compute_kelly_sizing(
     """
     try:
         if transactions_store is None:
-            transactions_store = TransactionsStore()
+            # Defensive: evaluate() now always passes the resolved singleton, so
+            # this branch is effectively dead — kept so a direct caller of this
+            # helper still gets the ONE process-wide store, not a fresh build.
+            transactions_store = _get_transactions_store()
 
         closed_df = transactions_store.closed_trades_df()
         p, b, n_trades = estimate_win_rate_and_payoff(closed_df, lookback_trades=100)

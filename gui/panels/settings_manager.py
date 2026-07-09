@@ -47,6 +47,7 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
     ("DASHBOARD_REFRESH_SECONDS", "int"),
     ("MAX_ORDER_RATE_PER_MIN", "int"),
     ("MARKET_DATA_QUOTE_TTL_SECONDS", "int"),
+    ("MARKET_DATA_BARS_TTL_SECONDS", "int"),
     ("DRY_RUN", "bool"),
     ("RISK_GATE_ENFORCE_MARKET_HOURS", "bool"),
     ("MARKET_DATA_PROVIDER", "text"),
