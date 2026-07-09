@@ -966,6 +966,21 @@ TAB_HELP: Dict[str, TabHelp] = {
         ("advisory mode", "state snapshot", "kelly target"),
         "#12-the-observability-dashboard",
     ),
+    "pairs": _t(
+        "pairs",
+        "🔗 Pairs",
+        "Read-only, advisory-only view over the pairs-trading (statistical "
+        "arbitrage) engine. **Scan** takes a symbol list and ranks cointegrated "
+        "candidate pairs by Engle-Granger p-value, keeping only those with a "
+        "5–60 day mean-reversion half-life. **Analyze a pair** shows the current "
+        "spread z-score, Kalman-filtered hedge ratio, rolling ADF p-value, and "
+        "half-life for a chosen Y/X pair, plus a human-readable current signal "
+        "(entry / hold / exit / stop / not-cointegrated) and a z-score chart. "
+        "Entry at |z|>2, exit at the 0-cross or ADF p>0.10, stop at |z|>4 — all "
+        "**informational**. No orders are ever placed from this tab.",
+        ("advisory mode",),
+        "#12-the-observability-dashboard",
+    ),
     "live_inventory": _t(
         "live_inventory",
         "📦 Live Inventory",
