@@ -31,12 +31,14 @@ the coordinator can unit-test them without a Streamlit runtime.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
+from settings import settings
 from gui import help_widgets
 from gui.panels._shared import _active_symbols
 from gui.panels import load_state_snapshot
@@ -136,11 +138,17 @@ def _signal_label(
 # ---------------------------------------------------------------------------
 # Provider / fetch helpers (Streamlit-adjacent but no widgets)
 # ---------------------------------------------------------------------------
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
 def _fetch_close(symbol: str, lookback_days: int = 252) -> pd.Series:
     """Fetch a single symbol's Close series via the market-data provider.
 
     Returns an empty Series (never raises) so one dead symbol can't abort a
     scan — the caller drops empties in :func:`_align_closes`.
+
+    Cached at the Streamlit layer (``@st.cache_data``, keyed on the hashable
+    ``symbol``/``lookback_days`` args) so repeated renders / scan re-runs don't
+    refetch; a named ``pd.Series`` pickles cleanly for the cache.  Complements
+    the provider's own short-TTL ``_BarsCache`` (double-caching is intended).
     """
     from data.market_data import get_provider
 
@@ -233,7 +241,21 @@ def _render_scan_mode(default_universe: List[str]) -> None:
         return
 
     with st.spinner(f"Fetching {len(symbols)} Close series…"):
-        series_by_symbol = {s: _fetch_close(s) for s in symbols}
+        # Parallel fetch — each _fetch_close already swallows per-symbol errors
+        # (dead symbols → empty Series, dropped later in _align_closes), so a
+        # future.result() cannot raise; wrap defensively regardless.
+        max_workers = min(
+            getattr(settings, "DATA_FETCH_MAX_CONCURRENCY", 8), max(1, len(symbols))
+        )
+        series_by_symbol: Dict[str, pd.Series] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_fetch_close, s): s for s in symbols}
+            for fut, sym in futures.items():
+                try:
+                    series_by_symbol[sym] = fut.result()
+                except Exception as exc:  # noqa: BLE001 - dead-letter per symbol
+                    logger.debug("Pairs: scan fetch failed for %s: %s", sym, exc)
+                    series_by_symbol[sym] = pd.Series(dtype=float, name=sym)
     price_df = _align_closes(series_by_symbol)
 
     fetched = [s for s, ser in series_by_symbol.items() if not ser.empty]
