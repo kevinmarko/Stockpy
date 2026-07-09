@@ -9,6 +9,7 @@ PR that added it" record** — read it when you need the full backstory, test su
 or Gravity-audit-step details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
+- Dead-code resolution — reuse grossMargins/currentRatio, delete orphans, activate ForecastTracker (opt-in) (2026-07-09)
 - Advisory multifactor-Z threading — close the PR #192 follow-up (2026-07-09)
 - Forecasting fit-once + GARCH reuse, 4 settings to GUI, advisory-snapshot telemetry parity (2026-07-09)
 - Forecasting — GARCH volatility into Monte Carlo + Prophet into the ensemble (2026-07-08)
@@ -38,6 +39,75 @@ Sections in this file (search for the `##` heading):
 where they're load-bearing for every session** (e.g. ADVISORY_ONLY quarantine,
 CONSTRAINT #3/#4/#6, no-fabricated-metrics, dead-letter resilience). This file adds
 the full detail, test surface, and Gravity step numbers behind each of those.
+
+---
+
+## Dead-code resolution — reuse grossMargins/currentRatio, delete orphans, activate ForecastTracker (opt-in) (2026-07-09)
+
+**Why.** A repo-wide dead-code sweep found three classes of cruft: (a) computed-but-unconsumed
+fundamentals (`grossMargins`, `currentRatio` were emitted by `data/yahoo_fundamentals.py` but never
+reached a factor or the advisory display); (b) genuinely orphaned code with no production caller
+(`revenueGrowth` + its `_prior_annual` helper, six dead momentum ROC intermediates, the legacy
+`reporting_engine.py` + `daily_report_template.html` report path, and two Google-Cloud-NLP macro
+sentiment functions); and (c) fully-built-but-dark machinery (the Tier 2.2 `ForecastTracker`
+inverse-RMSE skill-weighted blend, wired but never activated). Resolve each by reuse, deletion, or
+opt-in activation — no silent behavior change on a fresh checkout.
+
+**What shipped.**
+- **REUSE — `grossMargins` → Quality factor.** `processing_engine.py::calculate_fundamental_metrics`
+  now sets `quality_factor_score = mean(available among {returnOnEquity, operatingMargins,
+  grossMargins})` (all fractions), falling back to `-debt_to_equity` only when none of the three is
+  present. Was `roe + operating_margin` (a two-metric SUM requiring both). **Mean, not sum**, so a
+  ticker with 1, 2, or 3 available metrics stays on one cross-sectional z-score scale; `Quality_Z`
+  is identical to the old sum when every ticker carries the same two metrics. `grossMargins` (already
+  emitted by `data/yahoo_fundamentals.py`, previously unconsumed) now feeds the multifactor `Quality_Z`.
+  NaN discipline preserved (CONSTRAINT #4) — a missing input never fabricates a `0.0`.
+- **REUSE — `currentRatio` → DTO + advisory display.** `dto_models.py::FundamentalDataDTO` gained a
+  `current_ratio` field (`__init__` default `NaN`; `from_raw_dict` reads `info.get("currentRatio", NaN)`);
+  `engine/advisory.py` surfaces it as `key_indicators["current_ratio"]`. `currentRatio` was already
+  emitted by `yahoo_fundamentals` but never carried into the DTO — now the liquidity ratio rides
+  through to the advisory `Recommendation`.
+- **DELETE — `revenueGrowth`.** Removed from `data/yahoo_fundamentals.py` (+ its `_prior_annual`
+  helper), the Finnhub `_METRIC_MAP` entry in `data/market_data.py`, and its tests. No DTO field,
+  schema column, or factor consumed it (the emitted-fundamentals count drops 15 → 14).
+- **DELETE — dead momentum ROC intermediates.** Removed `ROC_3M`, `ROC_1M`, `ROC_6M_skip`,
+  `ROC_3M_skip`, `ROC_1M_skip`, `ROC_12M_skip` from `processing_engine.py::calculate_momentum_metrics`
+  (kept `ROC_12M`/`ROC_6M`, which are the only ones consumed downstream — e.g. the StrategyEngine
+  option-overlay trend filter's `ROC_12M > 0`).
+- **DELETE — `reporting_engine.py` + `daily_report_template.html`.** Superseded by
+  `diagnostics_and_visuals.generate_html_report` (the only report path, called by both `main.py` and
+  `main_orchestrator.py`); the legacy pair was never wired into either entry point. `.github` and
+  `docs/architecture.md` references were scrubbed alongside.
+- **DELETE — macro sentiment `analyze_sentiment` + `fetch_and_compile_macro`; RETAIN
+  `_fallback_sentiment`.** The Google-Cloud-NLP `analyze_sentiment` and the orphaned
+  `fetch_and_compile_macro` had no production caller and no DTO sentiment field — sentiment is owned
+  by `signals/news_catalyst.py` (FinBERT). **Critical nuance:** `_fallback_sentiment` was initially
+  removed but RESTORED and is retained *solely* as the load-bearing reference for the BUG-1 regression
+  guard (`tests/test_bug_fixes.py` + the Gravity BUG-1 audit assert `main_orchestrator` uses
+  `calculate_sahm_rule`, NOT `_fallback_sentiment`, for the Sahm rule) — do not delete it thinking it
+  is dead.
+- **ACTIVATE (opt-in) — `ForecastTracker`.** New `settings.FORECAST_SKILL_WEIGHTING_ENABLED`
+  (default **False**, mirroring the `FORECAST_USE_GARCH_SIGMA` opt-in convention); when `True`, a
+  persistent `forecasting.forecast_tracker.ForecastTracker` (self-provisioning its `forecast_errors`
+  table in `quant_platform.db`) is injected into every `ForecastingEngine` construction —
+  `main_orchestrator.py` (both `EngineContext.build` and the `run_pipeline` fallback) and
+  `engine/advisory.py` — so the multi-model blend weights ARIMA/Monte Carlo/Holt-Winters/CNN-LSTM by
+  inverse recent RMSE instead of fixed fractions. Default-off ⇒ `tracker=None` ⇒ **byte-identical**
+  static blend as today. `FORECAST_SKILL_WINDOW_DAYS` default raised **60 → 180** (it MUST exceed the
+  90-day max horizon: a 'completed' h=90 row needs `forecast_ts ≤ now-85d` while the window only counts
+  `forecast_ts ≥ now-WINDOW`; at 60 those bands are mutually exclusive so h=60/h=90 could never warm
+  up). Both keys added to `gui/env_io.py` `ALLOWED_KEYS` (non-secret, GUI-writable).
+
+**Test surface.**
+- `tests/test_processing_engine.py` — `quality_factor_score` mean-of-3 (1/2/3-metric parity, none-present
+  `-debt_to_equity` fallback, NaN discipline); dead-ROC-intermediate removal.
+- `tests/test_yahoo_fundamentals.py` — `revenueGrowth` + `_prior_annual` removed from the emitted-key
+  contract; the remaining 14 metrics' scale rules and NaN discipline unchanged.
+- `tests/test_advisory.py` — `current_ratio` surfaced onto `Recommendation.key_indicators`.
+- `tests/test_macro_engine.py` — `analyze_sentiment`/`fetch_and_compile_macro` gone; `_fallback_sentiment`
+  retained; Sahm rule still sourced from `calculate_sahm_rule` (BUG-1 guard intact).
+- **NEW `tests/test_forecast_skill_uplift.py`** — opt-in uplift backtest for the skill-weighted blend
+  (slow-marked; the default-off path stays byte-identical and is covered by the existing forecasting tests).
 
 ---
 
@@ -233,25 +303,25 @@ downstream `.info`-style key contract byte-for-byte so no consumer changes.
 
 **What shipped.**
 - **NEW `data/yahoo_fundamentals.py`** — a pure, I/O-free `compute_fundamentals(...)` that
-  derives **15 equity fundamentals** from statement frames the caller has already fetched
+  derives **14 equity fundamentals** from statement frames the caller has already fetched
   via yfinance (`income_stmt` + quarterly, `balance_sheet`, `cashflow` + quarterly,
   `dividends`, `institutional_holders`) plus `price`/`shares`. It never imports yfinance,
   never touches the network, never reads a file — so the math core is fully offline-testable
   and deterministic. Returns a `dict` keyed by yfinance `.info` names (`trailingEps`,
   `trailingPE`, `bookValue`, `priceToBook`, `dividendYield`, `payoutRatio`, `marketCap`,
-  `beta`, `returnOnEquity`, `revenueGrowth`, `debtToEquity`, `grossMargins`,
+  `beta`, `returnOnEquity`, `debtToEquity`, `grossMargins`,
   `operatingMargins`, `currentRatio`, `heldPercentInstitutions`, + `currentPrice`/
   `shortName`/`sector` straight-through) so `FundamentalDataDTO.from_raw_dict()` is
   unchanged. **NaN-degrading (CONSTRAINT #4)**: every metric is computed in its own
   try/except and independently degrades to `float("nan")` on a missing/bad input — a
-  missing statement row never fabricates a `0.0` and never nukes the other 14 metrics.
+  missing statement row never fabricates a `0.0` and never nukes the other 13 metrics.
   **Version-drift tolerance**: module-level alias tables (`EQUITY`, `NET_INCOME`,
   `TOTAL_REVENUE`, `TOTAL_DEBT`, …) resolved by `_row_latest` / `_ttm` / `_match_row`
   case-insensitively, so a yfinance statement-label rename is a one-line data edit here.
 - **Formula notes.** TTM flows (`_ttm`) sum the trailing 4 quarterly columns, falling back
   to the latest annual column; `trailingPE`/`priceToBook` are NaN when EPS/bookValue ≤ 0
-  (mirrors Yahoo); `revenueGrowth` compares TTM revenue to the prior annual column;
-  `currentRatio` = current assets / current liabilities; `heldPercentInstitutions` sums the
+  (mirrors Yahoo); `currentRatio` = current assets / current liabilities;
+  `heldPercentInstitutions` sums the
   top-N institutional `% Out` column (auto-detecting percent-vs-fraction).
 - **Two SCALE-CRITICAL emission rules** (documented so nobody "fixes" them): `dividendYield`
   is emitted **as a FRACTION** (e.g. `0.0257`, not `2.57`) and is NOT routed through

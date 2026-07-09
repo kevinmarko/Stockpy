@@ -52,6 +52,7 @@ from processing_engine import ProcessingEngine
 from macro_engine import MacroEngine
 from technical_options_engine import TechnicalOptionsEngine
 from forecasting_engine import ForecastingEngine
+from forecasting.forecast_tracker import ForecastTracker
 from strategy_engine import StrategyEngine
 from evaluation_engine import EvaluationEngine
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
@@ -193,12 +194,17 @@ class EngineContext:
         cost so a long-lived caller can reuse them across many
         ``run_pipeline()`` calls. ``data_engine`` is threaded into
         ``MacroEngine`` exactly as ``run_pipeline`` would today."""
+        # Opt-in inverse-RMSE skill-weighted forecast blending (default OFF →
+        # tracker is None → byte-identical static blend). Uses ForecastTracker's
+        # own default db_path (quant_platform.db), which self-provisions its
+        # forecast_errors table.
+        _tracker = ForecastTracker() if settings.FORECAST_SKILL_WEIGHTING_ENABLED else None
         return cls(
             macro_engine=MacroEngine(data_engine=data_engine),
             technical_options_engine=TechnicalOptionsEngine(),
             iv_history_store=IVHistoryStore(),
             processing_engine=ProcessingEngine(),
-            forecasting_engine=ForecastingEngine(),
+            forecasting_engine=ForecastingEngine(tracker=_tracker),
             strategy_engine=StrategyEngine(),
             evaluation_engine=EvaluationEngine(),
         )
@@ -384,8 +390,12 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
     # 4. Multi-Horizon Forecasting (with robust ML exception safety)
     telemetry.info("Routing data through Forecasting Engine...")
+    # Opt-in inverse-RMSE skill-weighted blending (default OFF → tracker None →
+    # byte-identical static blend). Only applies to the fallback construction; a
+    # supplied EngineContext already carries its own (flag-gated) tracker.
+    _fallback_tracker = ForecastTracker() if settings.FORECAST_SKILL_WEIGHTING_ENABLED else None
     fe = (engines.forecasting_engine if engines is not None and engines.forecasting_engine is not None
-          else ForecastingEngine())
+          else ForecastingEngine(tracker=_fallback_tracker))
     forecast_cols = ['Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
                      'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
                      'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper']

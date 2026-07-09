@@ -97,6 +97,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # + data/market_data.py). FINNHUB_API_KEY stays in SECRET_KEYS below.
     "FORECAST_USE_GARCH_SIGMA",   # bool — GJR-GARCH sigma into Monte Carlo (rollback lever)
     "FORECAST_PROPHET_WEIGHT",    # float [0,1] — Prophet ensemble overlay weight
+    "FORECAST_SKILL_WEIGHTING_ENABLED",  # bool — opt-in inverse-RMSE skill-weighted blend
+    "FORECAST_SKILL_WINDOW_DAYS", # int — rolling RMSE window (days) for skill weighting
     "FUNDAMENTALS_SOURCE",        # "yahoo" | "yfinance_info"
     "BETA_LOOKBACK_DAYS",         # int — beta computation lookback (days)
     # Universe / signals (JSON-encoded)

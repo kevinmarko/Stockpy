@@ -1,7 +1,7 @@
 """
 data/yahoo_fundamentals.py — Pure Fundamental-Metrics Computation Engine
 ========================================================================
-Compute 15 equity fundamental metrics from free Yahoo Finance
+Compute 14 equity fundamental metrics from free Yahoo Finance
 financial-statement data (income statement, balance sheet, cashflow, dividends,
 institutional holders) that the *caller* has already fetched via ``yfinance``.
 
@@ -64,7 +64,6 @@ FUNDAMENTAL_KEYS: List[str] = [
     "marketCap",
     "beta",
     "returnOnEquity",
-    "revenueGrowth",
     "debtToEquity",
     "grossMargins",
     "operatingMargins",
@@ -259,31 +258,6 @@ def _ttm(
     return _row_latest(df_annual, aliases)
 
 
-def _prior_annual(df: Optional[pd.DataFrame], aliases: List[str]) -> float:
-    """Second-newest annual column value for the matched alias (for growth calcs)."""
-    try:
-        actual = _match_row(df, aliases)
-        if actual is None or df is None:
-            return _NAN
-        row = df.loc[actual]
-        if isinstance(row, pd.DataFrame):
-            row = row.iloc[0]
-        # Order newest→oldest, then take index 1 (the prior period).
-        try:
-            cols = pd.to_datetime(pd.Index(row.index), errors="coerce")
-            if cols.notna().all():
-                order = np.argsort(cols.view("int64"))[::-1]
-                row = row.iloc[order]
-        except Exception:
-            pass
-        row = row.dropna()
-        if row.shape[0] < 2:
-            return _NAN
-        return _to_float(row.iloc[1])
-    except Exception:  # pragma: no cover - defensive
-        return _NAN
-
-
 def _total_debt(balance_sheet: Optional[pd.DataFrame]) -> float:
     """
     Total debt with graceful fallbacks:
@@ -330,7 +304,7 @@ def compute_fundamentals(
     company_name: str = "",
 ) -> Dict[str, float]:
     """
-    Compute 15 fundamental metrics + 3 straight-through fields.
+    Compute 14 fundamental metrics + 3 straight-through fields.
 
     Returns a dict keyed by yfinance ``.info`` names.  Every metric degrades
     independently to ``float("nan")`` on missing/bad input (CONSTRAINT #4);
@@ -478,21 +452,6 @@ def compute_fundamentals(
             out["returnOnEquity"] = _NAN
     except Exception:
         out["returnOnEquity"] = _NAN
-
-    # --- 10. revenueGrowth = (TTM rev - prior-TTM rev) / prior-TTM rev ------ #
-    try:
-        rg = _NAN
-        # Approx prior-TTM as the second annual Total Revenue column (quarterly
-        # 8-quarter history is rarely complete on the free tier).
-        prior_rev = _prior_annual(income_stmt, TOTAL_REVENUE)
-        cur_rev = revenue_ttm
-        if not np.isfinite(cur_rev):
-            cur_rev = _row_latest(income_stmt, TOTAL_REVENUE)
-        if np.isfinite(cur_rev) and np.isfinite(prior_rev) and prior_rev > 0:
-            rg = (cur_rev - prior_rev) / prior_rev
-        out["revenueGrowth"] = rg
-    except Exception:
-        out["revenueGrowth"] = _NAN
 
     # --- 11. debtToEquity = (total_debt / equity) * 100  (×100!) ----------- #
     try:

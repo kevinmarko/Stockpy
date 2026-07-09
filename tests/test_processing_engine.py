@@ -263,16 +263,6 @@ class TestMomentumMetricsLookahead:
 
         assert verify_no_lookahead(calc, df, t=350)
 
-    def test_roc_12m_skip_no_lookahead(self, engine):
-        df = _ohlcv(400, seed=8)
-
-        def calc(data, t):
-            sub = data.iloc[: t + 1].copy()
-            out = engine.calculate_momentum_metrics(sub)
-            return out["ROC_12M_skip"].iloc[-1]
-
-        assert verify_no_lookahead(calc, df, t=350)
-
     def test_realized_vol_60d_no_lookahead(self, engine):
         df = _ohlcv(400, seed=9)
 
@@ -353,10 +343,23 @@ class TestCalculateFundamentalMetrics:
         result = engine.calculate_fundamental_metrics({"AAPL": dto}, realized_vol_60d_map={})
         assert math.isnan(result["AAPL"]["low_vol_score"])
 
-    def test_quality_factor_score_uses_roe_and_margin_when_present(self, engine):
+    def test_quality_factor_score_uses_mean_of_available_metrics(self, engine):
+        """Quality = MEAN of available profitability metrics among
+        {returnOnEquity, operatingMargins, grossMargins}. Here only roe (0.20)
+        and operating margin (0.10) are present -> mean = 0.15 (not the old sum
+        0.30). A mean keeps 1/2/3-metric tickers on one z-score scale."""
         dto = _fund_dto(extra_info={"returnOnEquity": 0.20, "operatingMargins": 0.10})
         result = engine.calculate_fundamental_metrics({"AAPL": dto})
-        assert math.isclose(result["AAPL"]["quality_factor_score"], 0.30, rel_tol=1e-6)
+        assert math.isclose(result["AAPL"]["quality_factor_score"], 0.15, rel_tol=1e-6)
+
+    def test_quality_factor_score_consumes_gross_margins_alone(self, engine):
+        """REUSE proof: grossMargins (emitted by data/yahoo_fundamentals.py) is
+        now folded into the quality factor. With ONLY grossMargins present (no
+        returnOnEquity, no operatingMargins), the score equals grossMargins
+        itself -- a non-NaN value -- instead of the old NaN/leverage fallback."""
+        dto = _fund_dto(extra_info={"grossMargins": 0.42})
+        result = engine.calculate_fundamental_metrics({"AAPL": dto})
+        assert math.isclose(result["AAPL"]["quality_factor_score"], 0.42, rel_tol=1e-6)
 
     def test_quality_factor_score_falls_back_to_negative_debt_to_equity(self, engine):
         """When ROE/margin are absent, quality proxy = -debt_to_equity."""

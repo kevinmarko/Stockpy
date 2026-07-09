@@ -361,30 +361,6 @@ def test_macro_engine_fama_french_regression():
     assert math.isclose(results["beta_value"], beta_hml, abs_tol=1e-5)
     assert results["r_squared"] > 0.99  # Should fit almost perfectly
 
-def test_macro_engine_sentiment_analysis():
-    """
-    Verifies Google Cloud Natural Language API integration and keyword-based fallback.
-    """
-    from macro_engine import MacroEngine
-    from data_engine import MockDataEngine
-    
-    mock_de = MockDataEngine()
-    engine = MacroEngine(mock_de)
-    
-    # Test fallback positive text
-    pos_text = "The outlook is bullish with strong growth prospects and sustainable profits."
-    pos_score = engine.analyze_sentiment(pos_text)
-    assert pos_score > 0.0
-    
-    # Test fallback negative text
-    neg_text = "The portfolio is facing downside risk, weak returns, and severe recession slippage."
-    neg_score = engine.analyze_sentiment(neg_text)
-    assert neg_score < 0.0
-    
-    # Test neutral / empty text
-    empty_score = engine.analyze_sentiment("")
-    assert empty_score == 0.0
-
 
 # =============================================================================
 # 6. TECHNICAL & OPTIONS ENGINE FUNCTIONAL TESTS

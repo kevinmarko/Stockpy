@@ -45,6 +45,7 @@ from sizing.vol_target import volatility_target_weight
 # evaluate() wrapped in try/except per CONSTRAINT #6.
 from processing_engine import ProcessingEngine
 from forecasting_engine import ForecastingEngine
+from forecasting.forecast_tracker import ForecastTracker
 from technical_options_engine import TechnicalOptionsEngine
 from strategy_engine import StrategyEngine
 from transactions_store import TransactionsStore
@@ -463,7 +464,11 @@ def evaluate(
     forecast_price: Optional[float] = None
     if has_sufficient_history:
         try:
-            fe = ForecastingEngine()
+            # Opt-in inverse-RMSE skill-weighted blending (default OFF → tracker
+            # None → byte-identical static blend). ForecastTracker self-provisions
+            # its forecast_errors table in quant_platform.db (its own default path).
+            _tracker = ForecastTracker() if settings.FORECAST_SKILL_WEIGHTING_ENABLED else None
+            fe = ForecastingEngine(tracker=_tracker)
             fc_row = pd.Series({"sector": fund_dto.sector, "Symbol": symbol})
             fc_results = fe.generate_forecast(
                 row=fc_row,
@@ -895,6 +900,10 @@ def evaluate(
         "forecast_30d_pct": forecast_30d_pct,
         "unrealized_pl_pct": unrealized_pl_pct,
         "dividend_yield": dividend_yield,
+        # REUSE: surface the liquidity ratio (Agent 2 added dto.current_ratio to
+        # FundamentalDataDTO). getattr-guarded so it never raises if the DTO field
+        # isn't present yet; NaN when absent (CONSTRAINT #4).
+        "current_ratio": _safe_float(getattr(fund_dto, "current_ratio", float("nan")), nan),
         "kelly_raw": kelly_fraction_raw,
         # GUI Strategy Matrix decomposition scalars (additive) — sourced from
         # StrategyEngine.evaluate_security()'s Score_Components/meta-label/
