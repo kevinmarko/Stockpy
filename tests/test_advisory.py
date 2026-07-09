@@ -782,6 +782,96 @@ class TestContextExtrasThreading:
             _, kwargs = se_instance.evaluate_security.call_args
             assert kwargs.get("context_extras") is None
 
+    def test_multifactor_scores_populate_key_indicators(self):
+        """When context_extras carries this symbol's multifactor Z-scores
+        (signals/multifactor.py's pre_compute output), evaluate() must surface
+        them on the returned Recommendation.key_indicators under snake_case
+        keys (value_z/quality_z/lowvol_z/size_z/multifactor_composite) --
+        the schema reporting/state_snapshot.py's advisory writer reads."""
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+
+        context_extras = {
+            "multifactor_scores": {
+                "TEST": {
+                    "Value_Z": 1.23, "Quality_Z": -0.5, "LowVol_Z": 0.75,
+                    "Size_Z": -1.1, "Multifactor_Composite": 0.09,
+                    "excluded_microcap": False,
+                }
+            }
+        }
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            MockSE.return_value = se_instance
+
+            rec = evaluate(
+                "TEST", None, market, _make_account_snapshot(),
+                transactions_store=ts,
+                context_extras=context_extras,
+            )
+
+            ki = rec.key_indicators
+            assert ki["value_z"] == pytest.approx(1.23)
+            assert ki["quality_z"] == pytest.approx(-0.5)
+            assert ki["lowvol_z"] == pytest.approx(0.75)
+            assert ki["size_z"] == pytest.approx(-1.1)
+            assert ki["multifactor_composite"] == pytest.approx(0.09)
+
+    def test_multifactor_scores_absent_degrade_to_nan(self):
+        """No fabricated exposure (CONSTRAINT #4): when context_extras is
+        omitted, or has no entry for this symbol, the multifactor
+        key_indicators keys must be NaN, never 0.0 or missing."""
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            MockSE.return_value = se_instance
+
+            # Case 1: context_extras entirely omitted.
+            rec_none = evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts)
+            for key in ("value_z", "quality_z", "lowvol_z", "size_z", "multifactor_composite"):
+                assert math.isnan(rec_none.key_indicators[key]), f"{key} should be NaN, got {rec_none.key_indicators[key]}"
+
+            # Case 2: context_extras present but has no entry for this symbol
+            # (e.g. microcap-excluded from the universe DataFrame entirely).
+            rec_missing = evaluate(
+                "TEST", None, market, _make_account_snapshot(),
+                transactions_store=ts,
+                context_extras={"multifactor_scores": {"OTHER": {"Value_Z": 5.0}}},
+            )
+            for key in ("value_z", "quality_z", "lowvol_z", "size_z", "multifactor_composite"):
+                assert math.isnan(rec_missing.key_indicators[key]), f"{key} should be NaN, got {rec_missing.key_indicators[key]}"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sizing tests

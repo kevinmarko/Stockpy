@@ -873,6 +873,14 @@ def evaluate(
     if forecast_price is not None and current_price > 0:
         forecast_30d_pct = (forecast_price - current_price) / current_price
 
+    # Fama-French multifactor Z-scores for this symbol, pre-computed universe-wide
+    # by main._build_context_extras()/signals.multifactor.py's pre_compute() hook
+    # and threaded straight through as context_extras (see Step 8 above). Empty
+    # dict (never fabricated) when context_extras is None, pre-compute failed, or
+    # this symbol was microcap-excluded — the .get(...) chain below then yields
+    # NaN for every key, exactly like every other unavailable indicator here.
+    _mf_scores: Dict[str, Any] = (context_extras or {}).get("multifactor_scores", {}).get(symbol, {})
+
     key_indicators: Dict[str, float] = {
         "score": float(score),
         "rsi": _safe_float(tech.get("RSI"), nan),
@@ -898,6 +906,13 @@ def evaluate(
         "regime_multiplier": _safe_float(strategy_out.get("Regime_Multiplier"), 1.0),
         "kelly_target_pre_regime": _safe_float(strategy_out.get("Kelly_Target_Pre_Regime"), nan),
         "kelly_target_post_regime": _safe_float(strategy_out.get("Kelly_Target_Post_Regime"), nan),
+        # Fama-French factor Z-scores (signals/multifactor.py) — see _mf_scores
+        # above. NaN (never fabricated) when unavailable for this symbol/cycle.
+        "value_z": _safe_float(_mf_scores.get("Value_Z"), nan),
+        "quality_z": _safe_float(_mf_scores.get("Quality_Z"), nan),
+        "lowvol_z": _safe_float(_mf_scores.get("LowVol_Z"), nan),
+        "size_z": _safe_float(_mf_scores.get("Size_Z"), nan),
+        "multifactor_composite": _safe_float(_mf_scores.get("Multifactor_Composite"), nan),
     }
 
     # A2 — bar-derived technicals are meaningless on a synthetic flat bar; report
