@@ -39,6 +39,7 @@ Database table: ``forecast_errors``
 import logging
 import math
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
@@ -96,23 +97,80 @@ class ForecastTracker:
 
     def __init__(self, db_path: str = "quant_platform.db") -> None:
         self._db_path = db_path
+        # ONE reused sqlite connection (opened lazily on first data-method use)
+        # replaces the previous per-call open+PRAGMA. A per-ticker×per-horizon
+        # caller used to open ~12 short-lived connections per ticker per cycle;
+        # now they all share this one, cutting connection/PRAGMA overhead.
+        #
+        # Thread-safety (option a): the tracker is used inside
+        # ``ForecastingEngine.generate_forecast`` which runs inside the
+        # forecasting ThreadPoolExecutor, and a single tracker/engine instance
+        # can be shared across those worker threads. A single sqlite connection
+        # is NOT safe across threads by default, so the connection is opened
+        # with ``check_same_thread=False`` and EVERY query is serialized by
+        # ``self._lock``. sqlite serializes writes internally anyway, so the
+        # lock adds no meaningful contention while guaranteeing correctness.
+        self._lock = threading.Lock()
+        self._conn: Optional[sqlite3.Connection] = None
         self._ensure_table()
 
     # -------------------------------------------------------------------------
     # Private helpers
     # -------------------------------------------------------------------------
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
+    def _new_connection(self) -> sqlite3.Connection:
+        """Open a fresh sqlite connection with the standard PRAGMAs.
+
+        ``check_same_thread=False`` because the cached connection may be used
+        from more than one ThreadPoolExecutor worker; correctness is provided
+        by ``self._lock`` guarding every query.
+        """
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")  # concurrent read-write safe
+        conn.execute("PRAGMA busy_timeout=5000")  # wait out cross-process locks
         return conn
 
-    def _ensure_table(self) -> None:
-        """Create the forecast_errors table and index if they don't exist."""
+    def _get_conn(self) -> sqlite3.Connection:
+        """Return the cached connection, opening it lazily on first use.
+
+        Callers MUST hold ``self._lock``. Opening lazily (rather than in
+        ``__init__``) preserves the dead-letter contract: a ``_db_path`` that
+        points at an unwritable location still raises here — inside a method's
+        try/except — instead of at construction time.
+        """
+        if self._conn is None:
+            self._conn = self._new_connection()
+        return self._conn
+
+    def _safe_rollback(self) -> None:
+        """Best-effort rollback of the shared connection after a failed write.
+
+        With a per-call connection the old ``with self._connect()`` context
+        manager rolled back on error before discarding the connection; the
+        shared connection is long-lived, so a failed write must be rolled back
+        explicitly to avoid leaving a dangling transaction. Never raises.
+        """
         try:
-            with self._connect() as conn:
+            if self._conn is not None:
+                self._conn.rollback()
+        except Exception:
+            pass
+
+    def _ensure_table(self) -> None:
+        """Create the forecast_errors table and index if they don't exist.
+
+        Uses a short-lived connection (closed immediately) rather than the
+        cached one so construction never leaves a live connection pinned to a
+        (possibly soon-to-be-swapped) ``_db_path`` — the cached connection is
+        opened lazily by the first real data-method call.
+        """
+        try:
+            conn = self._new_connection()
+            try:
                 conn.execute(self._TABLE_DDL)
                 conn.execute(self._INDEX_DDL)
                 conn.commit()
+            finally:
+                conn.close()
         except Exception as exc:  # pragma: no cover
             logger.warning("ForecastTracker._ensure_table failed: %s", exc)
 
@@ -152,7 +210,8 @@ class ForecastTracker:
             ]
             if not rows:
                 return
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 conn.executemany(
                     """INSERT INTO forecast_errors
                        (symbol, model_name, horizon_days, forecast_ts,
@@ -162,6 +221,7 @@ class ForecastTracker:
                 )
                 conn.commit()
         except Exception as exc:
+            self._safe_rollback()
             logger.warning("ForecastTracker.record_forecasts(%s, h=%d) failed: %s", symbol, horizon_days, exc)
 
     def update_actuals(
@@ -206,7 +266,8 @@ class ForecastTracker:
             cutoff_dt = as_of - timedelta(days=max(0, horizon_days - tolerance_days))
             cutoff_iso = cutoff_dt.isoformat()
 
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 cursor = conn.execute(
                     """UPDATE forecast_errors
                        SET actual_price  = ?,
@@ -223,6 +284,7 @@ class ForecastTracker:
                 conn.commit()
                 return cursor.rowcount
         except Exception as exc:
+            self._safe_rollback()
             logger.warning(
                 "ForecastTracker.update_actuals(%s, h=%d) failed: %s", symbol, horizon_days, exc
             )
@@ -270,7 +332,8 @@ class ForecastTracker:
         """
         try:
             since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 cursor = conn.execute(
                     """SELECT model_name,
                               COUNT(*)           AS n,
@@ -325,7 +388,8 @@ class ForecastTracker:
         Returns 0 on any DB error.
         """
         try:
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 cursor = conn.execute(
                     """SELECT COUNT(*) FROM forecast_errors
                        WHERE symbol       = ?
@@ -347,7 +411,8 @@ class ForecastTracker:
         """
         try:
             since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 cursor = conn.execute(
                     """SELECT COUNT(*) FROM forecast_errors
                        WHERE symbol       = ?

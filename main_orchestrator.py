@@ -293,58 +293,88 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     iv_store = (engines.iv_history_store
                 if engines is not None and engines.iv_history_store is not None
                 else IVHistoryStore())
-    for ticker in tickers:
+    # Parallelized per-ticker options/IV analysis. Each worker is read-only
+    # per-ticker (yfinance/GARCH/IV fetch); the ONLY shared mutation is
+    # iv_store.record_iv(...), which is thread-unsafe, so workers RETURN the IV
+    # record they would write and the main thread performs all record_iv() calls
+    # sequentially AFTER the pool joins. This is byte-identical to the serial
+    # loop: calculate_true_ivr() reads iv_store with a STRICT `date < as_of_date`
+    # filter and adds current_iv manually, so recording at as_of_date never
+    # affects this cycle's true_ivr; tickers are unique (deduped at merge) so
+    # there is no same-ticker/cross-ticker interaction, and record ordering is
+    # irrelevant to the upsert-keyed final DB state.
+    def _options_one(ticker):
         df_hist = tech_raw.get(ticker)
-        if df_hist is not None and not df_hist.empty:
-            # Dead-letter resilience (CONSTRAINT #6): a single ticker's options
-            # analysis (GARCH vol, IV fetch, Black-Scholes strategy matrix) must
-            # never abort the whole pipeline run. One bad/degenerate input here
-            # (e.g. a zero-volatility read) previously crashed the entire
-            # main_orchestrator.py process uncaught.
-            try:
-                indicators = toe.calculate_indicators(df_hist)
-                vol = toe.estimate_gjr_garch_volatility(df_hist)
-                realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
+        if df_hist is None or df_hist.empty:
+            return ticker, None, None
+        # Dead-letter resilience (CONSTRAINT #6): a single ticker's options
+        # analysis (GARCH vol, IV fetch, Black-Scholes strategy matrix) must
+        # never abort the whole pipeline run. One bad/degenerate input here
+        # (e.g. a zero-volatility read) previously crashed the entire
+        # main_orchestrator.py process uncaught.
+        try:
+            indicators = toe.calculate_indicators(df_hist)
+            vol = toe.estimate_gjr_garch_volatility(df_hist)
+            realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
 
-                # Fetch options chain / compute true 30d ATM IV
-                as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
-                price_val = float(df_hist['Close'].iloc[-1])
+            # Fetch options chain / compute true 30d ATM IV
+            as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
+            price_val = float(df_hist['Close'].iloc[-1])
 
-                current_iv = float('nan')
-                if data_engine is not None:
-                    current_iv = get_30d_atm_iv(data_engine, ticker, as_of_date, spot_price=price_val)
-                    if not np.isnan(current_iv):
-                        iv_store.record_iv(ticker, as_of_date, current_iv)
+            current_iv = float('nan')
+            iv_record = None
+            if data_engine is not None:
+                current_iv = get_30d_atm_iv(data_engine, ticker, as_of_date, spot_price=price_val)
+                if not np.isnan(current_iv):
+                    # Deferred: recorded on the main thread after the pool joins.
+                    iv_record = (ticker, as_of_date, current_iv)
 
-                true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
-                vrp = get_vrp(ticker, current_iv, vol)
+            true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
+            vrp = get_vrp(ticker, current_iv, vol)
 
-                # Call strategy matrix with true_ivr, vrp, and macro_dto
-                opt_strategy = toe.generate_option_strategy_matrix(
-                    true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
-                    aroon_osc=indicators["Aroon_Oscillator"],
-                    coppock_val=indicators["Coppock_Curve"],
-                    stock_price=price_val,
-                    current_iv=current_iv if not np.isnan(current_iv) else vol,
-                    vrp=vrp,
-                    macro_dto=macro_dto
-                )
-                tech_opt_indicators[ticker] = {
-                    "Aroon_Oscillator": indicators["Aroon_Oscillator"],
-                    "Coppock_Curve": indicators["Coppock_Curve"],
-                    "Chandelier_Long": indicators["Chandelier_Long"],
-                    "Chandelier_Short": indicators["Chandelier_Short"],
-                    "GARCH_Vol": vol,
-                    "Realized_Vol_Rank": realized_vol_rank,
-                    "True_IVR": true_ivr,
-                    "VRP": vrp,
-                    "Option_Strategy_Matrix": opt_strategy
-                }
-            except Exception as opt_exc:
-                telemetry.warning(
-                    f"Technical Options Analysis failed for {ticker}: {opt_exc}. "
-                    f"Skipping options metrics for this ticker this cycle."
-                )
+            # Call strategy matrix with true_ivr, vrp, and macro_dto
+            opt_strategy = toe.generate_option_strategy_matrix(
+                true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
+                aroon_osc=indicators["Aroon_Oscillator"],
+                coppock_val=indicators["Coppock_Curve"],
+                stock_price=price_val,
+                current_iv=current_iv if not np.isnan(current_iv) else vol,
+                vrp=vrp,
+                macro_dto=macro_dto
+            )
+            result = {
+                "Aroon_Oscillator": indicators["Aroon_Oscillator"],
+                "Coppock_Curve": indicators["Coppock_Curve"],
+                "Chandelier_Long": indicators["Chandelier_Long"],
+                "Chandelier_Short": indicators["Chandelier_Short"],
+                "GARCH_Vol": vol,
+                "Realized_Vol_Rank": realized_vol_rank,
+                "True_IVR": true_ivr,
+                "VRP": vrp,
+                "Option_Strategy_Matrix": opt_strategy
+            }
+            return ticker, result, iv_record
+        except Exception as opt_exc:
+            telemetry.warning(
+                f"Technical Options Analysis failed for {ticker}: {opt_exc}. "
+                f"Skipping options metrics for this ticker this cycle."
+            )
+            return ticker, None, None
+
+    _opt_workers = min(int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)), max(1, len(tickers)))
+    if _opt_workers <= 1 or len(tickers) <= 1:
+        _opt_results = [_options_one(t) for t in tickers]
+    else:
+        with ThreadPoolExecutor(max_workers=_opt_workers) as _opt_pool:
+            _opt_results = list(_opt_pool.map(_options_one, tickers))
+
+    # Sequential shared-store writes on the main thread only (record_iv is
+    # thread-unsafe); collect indicators from the returned dicts.
+    for _tk, _res, _iv_rec in _opt_results:
+        if _iv_rec is not None:
+            iv_store.record_iv(_iv_rec[0], _iv_rec[1], _iv_rec[2])
+        if _res is not None:
+            tech_opt_indicators[_tk] = _res
 
     # 3. Core Processing
     telemetry.info("Routing data through Computational Core (Processing)...")
@@ -1256,8 +1286,10 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
     # Integrate Robinhood Holdings
     rh_client = RobinhoodClient()
     rh_positions = {}
-    if rh_client.login():
-        rh_positions = rh_client.fetch_positions()
+    # Off-thread the blocking Robinhood network calls so the _heartbeat task
+    # keeps ticking during login/position fetch (behavior-preserving).
+    if await asyncio.to_thread(rh_client.login):
+        rh_positions = await asyncio.to_thread(rh_client.fetch_positions)
         # Merge unique tickers
         for tk in rh_positions.keys():
             if tk not in tickers:
@@ -1294,7 +1326,10 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
 
     # 2. Run Pipeline
     try:
-        final_df, macro_dto, shared_context = run_pipeline(
+        # Off-thread the synchronous heavy pipeline so the _heartbeat asyncio
+        # task keeps ticking while it runs (behavior-preserving).
+        final_df, macro_dto, shared_context = await asyncio.to_thread(
+            run_pipeline,
             tickers, macro_raw, fund_raw, tech_raw,
             data_engine=de, robinhood_positions=rh_positions,
             engines=engines,
@@ -1340,11 +1375,11 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
             final_df['Advisory_Conviction'] = 0.0
             final_df['Advisory_Position_Pct'] = 0.0
 
-            advisory_results = {}
-            for _idx, _row in final_df.iterrows():
-                _ticker = str(_row.get('Symbol', '')).upper()
-                if not _ticker:
-                    continue
+            # Parallelized advisory overlay. Each per-ticker evaluation is
+            # independent and try/except-guarded; results are collected into an
+            # order-independent dict, so this is byte-identical to the serial
+            # loop (parallelization changes only execution order, not values).
+            def _eval_one(_ticker, _row):
                 try:
                     _position = (
                         _rh_snapshot.positions.get(_ticker)
@@ -1358,7 +1393,7 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
                         macro_dto=macro_dto,
                         context_extras=_context_extras,
                     )
-                    advisory_results[_ticker] = {
+                    return _ticker, {
                         'Advisory_Action': _rec.action,
                         'Advisory_Conviction': round(_rec.conviction, 4),
                         'Advisory_Rationale': _rec.rationale,
@@ -1367,6 +1402,26 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
                     }
                 except Exception as _adv_exc:
                     telemetry.warning("Advisory failed for %s: %s", _ticker, _adv_exc)
+                    return _ticker, None
+
+            _adv_rows = []
+            for _idx, _row in final_df.iterrows():
+                _ticker = str(_row.get('Symbol', '')).upper()
+                if not _ticker:
+                    continue
+                _adv_rows.append((_ticker, _row))
+
+            _adv_workers = min(
+                int(getattr(settings, 'ADVISORY_MAX_CONCURRENCY', 8)),
+                max(1, len(final_df)),
+            )
+            if _adv_workers <= 1 or len(_adv_rows) <= 1:
+                _adv_pairs = [_eval_one(_t, _r) for _t, _r in _adv_rows]
+            else:
+                with ThreadPoolExecutor(max_workers=_adv_workers) as _adv_pool:
+                    _adv_pairs = list(_adv_pool.map(lambda _tr: _eval_one(*_tr), _adv_rows))
+
+            advisory_results = {_t: _res for _t, _res in _adv_pairs if _res is not None}
 
             # Vectorized mapping to avoid iterrows mutation (Constraint #3)
             for _col in ('Advisory_Action', 'Advisory_Conviction',

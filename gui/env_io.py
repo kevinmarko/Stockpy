@@ -93,6 +93,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ALPACA_PAPER",
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
+    "MARKET_DATA_BARS_TTL_SECONDS",
     # Forecasting / fundamentals tunables (non-secret; see forecasting_engine.py
     # + data/market_data.py). FINNHUB_API_KEY stays in SECRET_KEYS below.
     "FORECAST_USE_GARCH_SIGMA",   # bool — GJR-GARCH sigma into Monte Carlo (rollback lever)

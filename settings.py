@@ -146,6 +146,15 @@ class Settings(BaseSettings):
         default=30,
         description="In-process quote cache TTL in seconds (never persisted to disk).",
     )
+    MARKET_DATA_BARS_TTL_SECONDS: int = Field(
+        default=300,
+        description=(
+            "In-process OHLCV intraday-bars cache TTL in seconds (never persisted "
+            "to disk). Bars are daily-resolution, so a few-minutes TTL collapses "
+            "the repeated per-symbol history fetches (universe pre-fetch + advisory "
+            "refetch + GUI panels) into a single network pull within the window."
+        ),
+    )
     # TTL (seconds) for the in-process fundamentals cache in FinnhubProvider
     # and CompositeProvider.  Fundamentals are quarterly/slow-moving, so a
     # multi-hour TTL is safe and prevents the free Finnhub tier (60 calls/min)

@@ -58,6 +58,7 @@ import json
 import logging
 import math
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -234,26 +235,76 @@ class HistoricalStore:
 
     def __init__(self, db_path: str = "quant_platform.db") -> None:
         self._db_path = db_path
+        # ONE reused sqlite connection (opened lazily on first data-method use)
+        # replaces the previous per-call open+PRAGMA across get_bars /
+        # get_fundamentals / get_macro / save_account_snapshot / etc. The
+        # pipeline calls these per-ticker, possibly from concurrent worker
+        # threads, so the cached connection is opened ``check_same_thread=False``
+        # and EVERY DB access is serialized by ``self._lock`` (option a — sqlite
+        # serializes writes internally, so the lock adds negligible contention
+        # while guaranteeing thread-safety on the shared handle).
+        self._lock = threading.Lock()
+        self._conn: Optional[sqlite3.Connection] = None
         self._ensure_tables()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Private helpers
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
+    def _new_connection(self) -> sqlite3.Connection:
+        """Open a fresh sqlite connection with the standard PRAGMAs.
+
+        ``check_same_thread=False`` because the cached connection may be reused
+        from more than one worker thread; correctness is provided by
+        ``self._lock`` guarding every query.
+        """
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
-        # Make concurrent writers (e.g. the parallelized advisory loop in main.py)
-        # WAIT up to 5 s for the write lock instead of immediately raising
-        # SQLITE_BUSY. WAL already permits 1 writer + N readers; the busy timeout
-        # serializes the rare concurrent-write case gracefully rather than
-        # dead-lettering a symbol's fundamentals on lock contention.
+        # Make concurrent writers (e.g. the parallelized advisory loop in main.py
+        # and other processes such as the GUI/daemon) WAIT up to 5 s for the
+        # write lock instead of immediately raising SQLITE_BUSY. WAL already
+        # permits 1 writer + N readers; the busy timeout serializes the rare
+        # concurrent-write case gracefully rather than dead-lettering a symbol's
+        # fundamentals on lock contention.
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
+    def _get_conn(self) -> sqlite3.Connection:
+        """Return the cached connection, opening it lazily on first use.
+
+        Callers MUST hold ``self._lock``. Opening lazily (not in ``__init__``)
+        preserves the dead-letter contract exercised by the test-suite's
+        ``patch("sqlite3.connect", side_effect=OperationalError)`` cases: the
+        connect still happens inside a data method's try/except, so a connect
+        failure degrades to the documented empty sentinel instead of a valid
+        cached handle silently masking the injected error.
+        """
+        if self._conn is None:
+            self._conn = self._new_connection()
+        return self._conn
+
+    def _safe_rollback(self) -> None:
+        """Best-effort rollback of the shared connection after a failed write.
+
+        The old per-call ``with self._connect()`` context manager rolled back
+        on error before discarding the connection; the shared connection is
+        long-lived, so a failed write must be rolled back explicitly to avoid a
+        dangling transaction on the reused handle. Never raises.
+        """
+        try:
+            if self._conn is not None:
+                self._conn.rollback()
+        except Exception:
+            pass
+
     def _ensure_tables(self) -> None:
         try:
-            with self._connect() as conn:
+            # Short-lived connection (closed immediately): construction must not
+            # pin a live cached connection to ``_db_path`` — the cached handle is
+            # opened lazily by the first real data-method call so error-injection
+            # tests that swap ``sqlite3.connect`` after construction still fire.
+            conn = self._new_connection()
+            try:
                 conn.execute(_PRICE_BARS_DDL)
                 conn.execute(_PRICE_BARS_INDEX_DDL)
                 conn.execute(_ACCOUNT_SNAPSHOTS_DDL)
@@ -265,6 +316,8 @@ class HistoricalStore:
                 conn.execute(_MACRO_HISTORY_INDEX_DDL)
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
+            finally:
+                conn.close()
         except Exception as exc:
             logger.warning("HistoricalStore._ensure_tables failed: %s", exc)
 
@@ -305,7 +358,8 @@ class HistoricalStore:
         Never raises — returns ``None`` on any DB error.
         """
         try:
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 row = conn.execute(
                     "SELECT MAX(date) FROM price_bars WHERE symbol = ?",
                     (symbol.upper(),),
@@ -368,51 +422,60 @@ class HistoricalStore:
         (never raises — CONSTRAINT #6).  The transaction is rolled back on
         any failure so a partial write never corrupts state.
         """
-        conn = None
         try:
-            conn = self._connect()
-            conn.execute("BEGIN IMMEDIATE")
+            with self._lock:
+                conn = self._get_conn()
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
 
-            cursor = conn.execute(
-                """
-                INSERT INTO account_snapshots
-                    (fetched_at, buying_power, total_equity, total_dividends, source)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    snapshot.fetched_at.isoformat(),
-                    snapshot.buying_power,
-                    snapshot.total_equity,
-                    snapshot.total_dividends,
-                    "robinhood",
-                ),
-            )
-            snapshot_id: int = cursor.lastrowid  # type: ignore[assignment]
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO account_snapshots
+                            (fetched_at, buying_power, total_equity, total_dividends, source)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            snapshot.fetched_at.isoformat(),
+                            snapshot.buying_power,
+                            snapshot.total_equity,
+                            snapshot.total_dividends,
+                            "robinhood",
+                        ),
+                    )
+                    snapshot_id: int = cursor.lastrowid  # type: ignore[assignment]
 
-            position_rows = [
-                (
-                    snapshot_id,
-                    sym,
-                    pos.quantity,
-                    pos.average_cost,
-                    pos.current_price,
-                    pos.market_value,
-                    pos.unrealized_pl,
-                    pos.dividends_received,
-                    pos.name,
-                )
-                for sym, pos in snapshot.positions.items()
-            ]
-            conn.executemany(
-                """
-                INSERT INTO account_positions
-                    (snapshot_id, symbol, qty, avg_cost, current_price,
-                     market_value, unrealized_pl, dividends_received, name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                position_rows,
-            )
-            conn.execute("COMMIT")
+                    position_rows = [
+                        (
+                            snapshot_id,
+                            sym,
+                            pos.quantity,
+                            pos.average_cost,
+                            pos.current_price,
+                            pos.market_value,
+                            pos.unrealized_pl,
+                            pos.dividends_received,
+                            pos.name,
+                        )
+                        for sym, pos in snapshot.positions.items()
+                    ]
+                    conn.executemany(
+                        """
+                        INSERT INTO account_positions
+                            (snapshot_id, symbol, qty, avg_cost, current_price,
+                             market_value, unrealized_pl, dividends_received, name)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        position_rows,
+                    )
+                    conn.execute("COMMIT")
+                except Exception:
+                    # Roll back the failed transaction on the shared (long-lived)
+                    # connection so it isn't left dangling for the next caller.
+                    try:
+                        conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    raise
             logger.info(
                 "HistoricalStore: saved account snapshot %d (%d positions).",
                 snapshot_id, len(position_rows),
@@ -420,19 +483,8 @@ class HistoricalStore:
             return snapshot_id
 
         except Exception as exc:
-            if conn is not None:
-                try:
-                    conn.execute("ROLLBACK")
-                except Exception:
-                    pass
             logger.warning("HistoricalStore.save_account_snapshot failed: %s", exc)
             return -1
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
 
     def latest_account_snapshot(self) -> Optional["AccountSnapshot"]:
         """Return the most-recently stored ``AccountSnapshot``, or ``None``.
@@ -441,7 +493,8 @@ class HistoricalStore:
         dict) from the DB.  Returns ``None`` on empty DB or any error.
         """
         try:
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 snap_row = conn.execute(
                     """
                     SELECT snapshot_id, fetched_at, buying_power, total_equity, total_dividends
@@ -517,7 +570,8 @@ class HistoricalStore:
         """
         try:
             since_str = since.isoformat() if since is not None else None
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 if since_str is not None:
                     rows = conn.execute(
                         """
@@ -659,7 +713,8 @@ class HistoricalStore:
         """
         try:
             since_str = since.strftime("%Y-%m-%d") if since is not None else None
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 if since_str is not None:
                     rows = conn.execute(
                         """
@@ -835,7 +890,8 @@ class HistoricalStore:
         ``_read_fundamentals_row_with_report_date`` when the report date is
         needed directly instead of re-parsing ``raw_json``.
         """
-        with self._connect() as conn:
+        with self._lock:
+            conn = self._get_conn()
             row = conn.execute(
                 """
                 SELECT as_of, pe_ratio, pb_ratio, roe, dividend_yield,
@@ -869,7 +925,8 @@ class HistoricalStore:
         of *symbol*, or ``None`` if absent/unavailable. Never raises
         (CONSTRAINT #6) — used by ``validation/pit_fundamentals.py``."""
         try:
-            with self._connect() as conn:
+            with self._lock:
+                conn = self._get_conn()
                 row = conn.execute(
                     """
                     SELECT report_date
@@ -906,33 +963,38 @@ class HistoricalStore:
                 return None
             return v
 
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO fundamentals_history
-                    (symbol, as_of, pe_ratio, pb_ratio, roe, dividend_yield,
-                     market_cap, eps, operating_margin, debt_to_equity,
-                     raw_json, report_date, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    symbol,
-                    today_str,
-                    _db_val(typed.get("pe_ratio", float("nan"))),
-                    _db_val(typed.get("pb_ratio", float("nan"))),
-                    _db_val(typed.get("roe", float("nan"))),
-                    _db_val(typed.get("dividend_yield", float("nan"))),
-                    _db_val(typed.get("market_cap", float("nan"))),
-                    _db_val(typed.get("eps", float("nan"))),
-                    _db_val(typed.get("operating_margin", float("nan"))),
-                    _db_val(typed.get("debt_to_equity", float("nan"))),
-                    raw_json_str,
-                    report_date_str,
-                    source,
-                    now_ts,
-                ),
-            )
-            conn.commit()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO fundamentals_history
+                        (symbol, as_of, pe_ratio, pb_ratio, roe, dividend_yield,
+                         market_cap, eps, operating_margin, debt_to_equity,
+                         raw_json, report_date, source, fetched_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        symbol,
+                        today_str,
+                        _db_val(typed.get("pe_ratio", float("nan"))),
+                        _db_val(typed.get("pb_ratio", float("nan"))),
+                        _db_val(typed.get("roe", float("nan"))),
+                        _db_val(typed.get("dividend_yield", float("nan"))),
+                        _db_val(typed.get("market_cap", float("nan"))),
+                        _db_val(typed.get("eps", float("nan"))),
+                        _db_val(typed.get("operating_margin", float("nan"))),
+                        _db_val(typed.get("debt_to_equity", float("nan"))),
+                        raw_json_str,
+                        report_date_str,
+                        source,
+                        now_ts,
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                self._safe_rollback()
+                raise
         logger.debug(
             "HistoricalStore: upserted fundamentals for %s (as_of=%s, report_date=%s).",
             symbol, today_str, report_date_str,
@@ -965,7 +1027,8 @@ class HistoricalStore:
 
     def _read_macro_series(self, series_id: str) -> pd.DataFrame:
         """Return all (date, value) rows for *series_id* as a DataFrame."""
-        with self._connect() as conn:
+        with self._lock:
+            conn = self._get_conn()
             rows = conn.execute(
                 """
                 SELECT date, value
@@ -981,7 +1044,8 @@ class HistoricalStore:
 
     def _latest_macro_fetched_at(self, series_id: str) -> Optional[str]:
         """Return the MAX(fetched_at) ISO string for *series_id*, or None."""
-        with self._connect() as conn:
+        with self._lock:
+            conn = self._get_conn()
             row = conn.execute(
                 "SELECT MAX(fetched_at) FROM macro_history WHERE series_id = ?",
                 (series_id,),
@@ -1006,16 +1070,21 @@ class HistoricalStore:
 
         if not rows:
             return
-        with self._connect() as conn:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO macro_history
-                    (series_id, date, value, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
-            conn.commit()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO macro_history
+                        (series_id, date, value, source, fetched_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                conn.commit()
+            except Exception:
+                self._safe_rollback()
+                raise
         logger.debug(
             "HistoricalStore: upserted %d macro rows (series: %s).",
             len(rows), list(macro_df.columns),
@@ -1129,16 +1198,21 @@ class HistoricalStore:
             ))
         if not rows:
             return
-        with self._connect() as conn:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO price_bars
-                    (symbol, date, open, high, low, close, adj_close, volume, source, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
-            conn.commit()
+        with self._lock:
+            conn = self._get_conn()
+            try:
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO price_bars
+                        (symbol, date, open, high, low, close, adj_close, volume, source, fetched_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                conn.commit()
+            except Exception:
+                self._safe_rollback()
+                raise
         logger.debug("HistoricalStore: upserted %d bars for %s.", len(rows), symbol)
 
     def _read_from_db(self, symbol: str, lookback_days: int) -> pd.DataFrame:
@@ -1146,7 +1220,8 @@ class HistoricalStore:
         cutoff = (
             pd.Timestamp.now(tz=None) - pd.Timedelta(days=lookback_days)
         ).strftime("%Y-%m-%d")
-        with self._connect() as conn:
+        with self._lock:
+            conn = self._get_conn()
             rows = conn.execute(
                 f"""
                 SELECT date, {_SELECT_COLS}

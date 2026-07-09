@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -997,6 +998,57 @@ class _QuoteCache:
         self._store.clear()
 
 
+class _BarsCache:
+    """Thread-safe in-process TTL cache for intraday/daily bar DataFrames.
+
+    Mirrors ``_QuoteCache`` (monotonic-clock TTL, in-process only, never
+    persisted) but keyed by ``(symbol, lookback_days)`` and guarded by a lock,
+    because bars are fetched per-ticker from the concurrent data-fetch worker
+    pool. Daily-resolution bars change at most once per trading day, so a short
+    TTL (default 300 s) safely de-duplicates the back-to-back fetches a single
+    refresh cycle makes (e.g. HistoricalStore top-up + a forecasting refetch)
+    without ever serving cross-day-stale data within a cycle.
+
+    Stored frames are always returned as ``.copy()`` so a caller mutating its
+    result can never corrupt the cached frame.
+    """
+
+    def __init__(self, ttl_seconds: int = 300) -> None:
+        self._ttl = max(1, int(ttl_seconds))
+        self._store: Dict[tuple[str, int], tuple[pd.DataFrame, float]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, symbol: str, lookback_days: int) -> Optional[pd.DataFrame]:
+        """Return a COPY of the cached bars, or None if absent / expired."""
+        key = (symbol, int(lookback_days))
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            df, cached_at = entry
+            if time.monotonic() - cached_at > self._ttl:
+                del self._store[key]
+                return None
+            return df.copy()
+
+    def put(self, symbol: str, lookback_days: int, df: pd.DataFrame) -> None:
+        """Store a COPY of the bars with the current monotonic timestamp."""
+        key = (symbol, int(lookback_days))
+        with self._lock:
+            self._store[key] = (df.copy(), time.monotonic())
+
+    def invalidate(self, symbol: str) -> None:
+        """Remove all cached lookback windows for a single symbol."""
+        with self._lock:
+            for key in [k for k in self._store if k[0] == symbol]:
+                del self._store[key]
+
+    def clear(self) -> None:
+        """Wipe all cached bars (e.g. on session restart)."""
+        with self._lock:
+            self._store.clear()
+
+
 # ---------------------------------------------------------------------------
 # Composite provider — the main entrypoint for the rest of the app
 # ---------------------------------------------------------------------------
@@ -1030,6 +1082,16 @@ class CompositeProvider(MarketDataProvider):
             os.environ.get("MARKET_DATA_QUOTE_TTL_SECONDS", "30")
         )
         self._cache = _QuoteCache(ttl_seconds=ttl)
+        # Short-TTL cache for get_intraday_bars — bars are daily-resolution, so
+        # a small default (300 s) safely de-duplicates the back-to-back fetches
+        # a single refresh cycle issues per symbol. getattr keeps this working
+        # whether or not settings.py has been given the field yet.
+        try:
+            from settings import settings as _settings
+            _bars_ttl = int(getattr(_settings, "MARKET_DATA_BARS_TTL_SECONDS", 300))
+        except Exception:
+            _bars_ttl = int(os.environ.get("MARKET_DATA_BARS_TTL_SECONDS", "300"))
+        self._bars_cache = _BarsCache(ttl_seconds=_bars_ttl)
         # Composite-level fundamentals cache wraps Finnhub-then-yfinance so
         # neither backend is re-hammered within the TTL window, regardless of
         # which source produced the final dict.  Defense in depth: the
@@ -1115,11 +1177,30 @@ class CompositeProvider(MarketDataProvider):
         The shape is identical to ``DataEngine.fetch_technical_raw()`` so all
         downstream processing_engine / forecasting_engine code runs unchanged.
 
+        The result is cached in-process for ``MARKET_DATA_BARS_TTL_SECONDS``
+        (default 300 s) keyed by ``(symbol, lookback_days)`` so repeated
+        requests within a single refresh cycle don't re-hit the network; the
+        cache returns a defensive copy and never persists to disk.
+
         Raises ``MarketDataError`` on provider failure.
         """
-        return self._quote_provider.get_intraday_bars(
-            symbol=symbol.upper(), lookback_days=lookback_days
+        sym = symbol.upper()
+
+        # Lazy-init for instances constructed via ``__new__`` (test fixtures).
+        if not hasattr(self, "_bars_cache"):
+            self._bars_cache = _BarsCache(
+                ttl_seconds=int(os.environ.get("MARKET_DATA_BARS_TTL_SECONDS", "300"))
+            )
+
+        cached = self._bars_cache.get(sym, lookback_days)
+        if cached is not None:
+            return cached
+
+        bars = self._quote_provider.get_intraday_bars(
+            symbol=sym, lookback_days=lookback_days
         )
+        self._bars_cache.put(sym, lookback_days, bars)
+        return bars
 
     def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
         """Return fundamental metrics shaped as a yfinance .info dict.
@@ -1196,6 +1277,16 @@ class CompositeProvider(MarketDataProvider):
     def clear_quote_cache(self) -> None:
         """Wipe the entire in-process quote cache (e.g. on session restart)."""
         self._cache.clear()
+
+    def invalidate_bars(self, symbol: str) -> None:
+        """Evict a symbol's cached bars (all lookback windows) from the TTL cache."""
+        if hasattr(self, "_bars_cache"):
+            self._bars_cache.invalidate(symbol.upper())
+
+    def clear_bars_cache(self) -> None:
+        """Wipe the entire in-process bars cache (e.g. on session restart)."""
+        if hasattr(self, "_bars_cache"):
+            self._bars_cache.clear()
 
     def clear_fundamentals_cache(self) -> None:
         """Wipe the in-process fundamentals cache (e.g. on session restart)."""
