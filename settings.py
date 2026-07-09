@@ -469,6 +469,34 @@ class Settings(BaseSettings):
             "0.0 disables Prophet's influence on the blend."
         ),
     )
+    FORECAST_MODEL_PERSISTENCE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: persist the trained CNN-LSTM (.keras + both MinMaxScalers) and "
+            "Prophet model to disk per ticker (forecasting/model_persistence.py) "
+            "instead of retraining from scratch every cycle. Split train from "
+            "inference the same way regime/hmm_regime.py's HMMRegimeDetector does: "
+            "a fresh model is fit only when no cached artifact exists for the "
+            "ticker or it is older than FORECAST_MODEL_RETRAIN_DAYS; otherwise the "
+            "cached model is loaded and only inference (predict) runs. "
+            "Behavior-preserving BETWEEN retrains (same fitted weights -> same "
+            "forecast for repeated calls); only changes WHEN a fit happens. "
+            "When False (the default) every call retrains from scratch, matching "
+            "pre-persistence behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA "
+            "opt-in convention. Requires TensorFlow/Prophet to be installed; a "
+            "missing library or a corrupt/unreadable cached artifact degrades to a "
+            "fresh fit (never raises)."
+        ),
+    )
+    FORECAST_MODEL_RETRAIN_DAYS: int = Field(
+        default=7,
+        description=(
+            "Days a persisted CNN-LSTM/Prophet model artifact remains valid before "
+            "the next generate_forecast() call for that ticker triggers a fresh fit "
+            "(mirrors regime/hmm_regime.py's HMMRegimeDetector(retrain_freq_days=7) "
+            "convention). Only consulted when FORECAST_MODEL_PERSISTENCE_ENABLED=True."
+        ),
+    )
     # Number of worker threads for DataEngine.fetch_technical_raw() and
     # fetch_fundamentals_raw() (data_engine.py). Both were originally a serial
     # `for symbol in tickers:` loop making one blocking yfinance HTTP call at a
