@@ -279,6 +279,7 @@ tab_labels = [
     "🧮 Options",
     "🛰️ Market Data",
     "📊 Observability",
+    "📊 Analytics",
     "📡 Live Inventory",
     "❓ Help",
     "📝 Prompts",
@@ -307,16 +308,18 @@ with tabs[7]:
 with tabs[8]:
     safe_panel(panels.render_observability)
 with tabs[9]:
-    safe_panel(panels.render_live_inventory)
+    safe_panel(panels.render_analytics)
 with tabs[10]:
-    safe_panel(panels.render_help)
+    safe_panel(panels.render_live_inventory)
 with tabs[11]:
-    safe_panel(panels.render_prompt_registry)
+    safe_panel(panels.render_help)
 with tabs[12]:
-    safe_panel(panels.render_ai_insights)
+    safe_panel(panels.render_prompt_registry)
 with tabs[13]:
-    safe_panel(panels.render_ai_control_center)
+    safe_panel(panels.render_ai_insights)
 with tabs[14]:
+    safe_panel(panels.render_ai_control_center)
+with tabs[15]:
     safe_panel(panels.render_reports_library)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")
