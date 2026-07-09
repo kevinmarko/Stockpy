@@ -19,6 +19,11 @@ venv/
 .vscode/
 *.code-workspace
 
+# Machine-specific build output — scripts/build_macos_app.command bakes the
+# absolute repo path into this bundle at build time, so it is never portable
+# and never committed. Each developer builds their own.
+/InvestYo.app
+
 # Debug output files / DB
 *.csv
 # Curated, version-controlled data fixtures (exceptions to the blanket *.csv rule).

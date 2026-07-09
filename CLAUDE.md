@@ -49,6 +49,10 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
                                       # background refresh loop tied to the window's lifecycle —
                                       # replaces separately running launch.command + launch_gui.command
 python3 app_shell.py [--interval N]  # what launch_app.command runs under the hood
+./scripts/build_macos_app.command    # ONE-TIME: builds InvestYo.app (real macOS app bundle, custom
+                                      # icon, no Terminal flash) that runs launch_app.command — drag
+                                      # the result into /Applications or the Dock; not committed to git
+                                      # (bakes in an absolute path — see .gitignore)
 
 ./setup.sh                       # creates .venv (Python 3.12), installs requirements.txt
 source .venv/bin/activate
