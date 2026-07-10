@@ -76,6 +76,7 @@ pydantic_core==2.46.4
 Pygments==2.20.0
 pyparsing==3.3.2
 pytest==9.1.0
+pytest-cov>=6.0  # coverage plugin (pytest 9.x compatible); enables --cov flags in CI
 python-dateutil==2.9.0.post0
 pytz==2026.2
 regex==2026.5.9

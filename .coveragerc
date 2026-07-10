@@ -1,0 +1,19 @@
+[run]
+source = .
+branch = True
+omit =
+    tests/*
+    .venv/*
+    */__pycache__/*
+    gravity/*
+    scripts/*
+    setup.py
+    conftest.py
+    */conftest.py
+
+[report]
+show_missing = True
+skip_covered = True
+
+[json]
+output = coverage.json

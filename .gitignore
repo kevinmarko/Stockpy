@@ -74,3 +74,9 @@ pip install*.md
 
 # Generated report output
 /output/
+
+# Coverage.py artifacts
+.coverage
+.coverage.*
+coverage.json
+htmlcov/

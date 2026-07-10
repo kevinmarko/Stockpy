@@ -35,4 +35,15 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run offline test suite
-        run: python -m pytest -m "not network" -v --tb=short
+        run: |
+          python -m pytest -m "not network" -v --tb=short \
+            --cov --cov-report=term-missing --cov-report=json
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f coverage.json ]; then
+            python -c "import json; d=json.load(open('coverage.json')); print(f'Total coverage: {d[\"totals\"][\"percent_covered\"]:.1f}%')" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "coverage.json not found; skipping coverage summary" >> "$GITHUB_STEP_SUMMARY"
+          fi
