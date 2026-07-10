@@ -52,6 +52,10 @@ venv/
 # monthly retraining job; never committed (the tracked ml/registry.yaml records
 # the metrics/provenance instead). ml/models/.gitkeep + *.py stay tracked.
 ml/models/*.pkl
+# Persisted CNN-LSTM/Prophet forecaster artifacts (forecasting/model_persistence.py,
+# opt-in via FORECAST_MODEL_PERSISTENCE_ENABLED) — regenerated on the retrain
+# cadence, never committed.
+ml/models/forecast_cache/
 # ML PIT feature-store cache artifacts (regenerated on demand; never committed)
 ml/data/cache/
 

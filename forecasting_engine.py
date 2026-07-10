@@ -283,33 +283,75 @@ class ForecastingEngine:
             return 0.0
         return self.forecast_from_hw_fit(self.run_holt_winters_fit(history), days_forward, history)
 
-    def run_prophet_forecast(self, history_series: pd.Series, days_forward: int) -> Tuple[float, float, float]:
+    def run_prophet_forecast(self, history_series: pd.Series, days_forward: int, ticker: Optional[str] = None) -> Tuple[float, float, float]:
         """
         Deploys a Facebook Prophet implementation to generate 30-day baseline price predictions,
         extracting the yhat, yhat_lower, and yhat_upper confidence intervals.
+
+        Model persistence (2026-07, opt-in via ``settings.FORECAST_MODEL_PERSISTENCE_ENABLED``):
+        when a ``ticker`` is supplied and a fresh (within ``FORECAST_MODEL_RETRAIN_DAYS``)
+        persisted model exists, skip ``model.fit()`` entirely and just call ``.predict()``
+        on the loaded model -- Prophet's Stan MAP fit is expensive and was previously run
+        from scratch on every call. Any load/save failure degrades to the original
+        fit-every-call path (never raises -- CONSTRAINT #6).
         """
         if not PROPHET_AVAILABLE:
             last_price = float(history_series.iloc[-1])
             return last_price, last_price, last_price
 
         try:
-            # Prepare data conforming to Prophet format
-            df_prophet = pd.DataFrame({
-                'ds': history_series.index,
-                'y': history_series.values
-            })
-            # Ensure ds is timezone-naive
-            df_prophet['ds'] = pd.to_datetime(df_prophet['ds']).dt.tz_localize(None)
+            persistence_enabled = False
+            artifact = None
+            if ticker:
+                try:
+                    from settings import settings as _settings
+                    persistence_enabled = bool(getattr(_settings, "FORECAST_MODEL_PERSISTENCE_ENABLED", False))
+                except Exception:  # noqa: BLE001
+                    persistence_enabled = False
 
-            # Silence Prophet logger
-            logging.getLogger('prophet').setLevel(logging.ERROR)
+            if persistence_enabled:
+                from forecasting.model_persistence import artifact_path, is_fresh, touch
+                artifact = artifact_path("prophet", ticker, ".pkl")
+                if is_fresh(artifact, _settings.FORECAST_MODEL_RETRAIN_DAYS):
+                    try:
+                        import pickle
+                        with open(artifact, "rb") as f:
+                            model = pickle.load(f)
+                    except Exception as exc:  # noqa: BLE001 - corrupt/unreadable cache -> refit
+                        logger.debug("Prophet cache load failed for %s: %s. Refitting.", ticker, exc)
+                        model = None
+                else:
+                    model = None
+            else:
+                model = None
 
-            model = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=False)
-            model.fit(df_prophet)
+            if model is None:
+                # Silence Prophet logger
+                logging.getLogger('prophet').setLevel(logging.ERROR)
+
+                # Prepare data conforming to Prophet format
+                df_prophet = pd.DataFrame({
+                    'ds': history_series.index,
+                    'y': history_series.values
+                })
+                # Ensure ds is timezone-naive
+                df_prophet['ds'] = pd.to_datetime(df_prophet['ds']).dt.tz_localize(None)
+
+                model = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=False)
+                model.fit(df_prophet)
+
+                if persistence_enabled and artifact is not None:
+                    try:
+                        import pickle
+                        with open(artifact, "wb") as f:
+                            pickle.dump(model, f)
+                        touch(artifact)
+                    except Exception as exc:  # noqa: BLE001 - persistence is best-effort
+                        logger.debug("Prophet cache save failed for %s: %s", ticker, exc)
 
             future = model.make_future_dataframe(periods=days_forward)
             forecast = model.predict(future)
-            
+
             latest = forecast.iloc[-1]
             return float(latest['yhat']), float(latest['yhat_lower']), float(latest['yhat_upper'])
         except Exception as e:
@@ -458,6 +500,7 @@ class ForecastingEngine:
         history_df: pd.DataFrame,
         horizons: Tuple[int, ...] = (10, 30, 60, 90),
         days_forward: Optional[int] = None,
+        ticker: Optional[str] = None,
     ) -> Union[float, Dict[int, float]]:
         """Hybrid CNN-LSTM multi-horizon price forecaster.
 
@@ -475,6 +518,15 @@ class ForecastingEngine:
         is specified. When TensorFlow is absent the engine degrades gracefully
         to zeros (never fabricated values).
 
+        Model persistence (2026-07, opt-in via ``settings.FORECAST_MODEL_PERSISTENCE_ENABLED``):
+        when a ``ticker`` is supplied on the direct multi-step path (``days_forward is
+        None``) and a fresh (within ``FORECAST_MODEL_RETRAIN_DAYS``) persisted
+        model+scalers exist, skip the 50-epoch fit entirely and just run inference
+        on the loaded model -- the single-horizon path (``days_forward`` set) is
+        intentionally left out of scope for persistence. Any load/inference failure
+        (corrupt artifact, horizon-count mismatch, insufficient rows) degrades to a
+        fresh fit (never raises -- CONSTRAINT #6).
+
         Future direction (Stage 4): move to a single cross-ticker model.
         Per-ticker retraining is acceptable for ~4 tickers but will not scale to
         a large universe — tracked as a deliberate design decision, not a defect.
@@ -490,6 +542,56 @@ class ForecastingEngine:
             return zero_result
         if history_df is None or len(history_df) < 70:
             return zero_result
+
+        persistence_enabled = False
+        keras_path = scaler_x_path = scaler_y_path = None
+        retrain_days = 7
+        if ticker and days_forward is None:
+            try:
+                from settings import settings as _settings
+                persistence_enabled = bool(getattr(_settings, "FORECAST_MODEL_PERSISTENCE_ENABLED", False))
+                retrain_days = int(getattr(_settings, "FORECAST_MODEL_RETRAIN_DAYS", 7))
+            except Exception:  # noqa: BLE001
+                persistence_enabled = False
+
+        if persistence_enabled:
+            from forecasting.model_persistence import artifact_path, is_fresh, touch
+            keras_path = artifact_path("cnn_lstm", ticker, ".keras")
+            scaler_x_path = artifact_path("cnn_lstm", ticker, "_scaler_x.pkl")
+            scaler_y_path = artifact_path("cnn_lstm", ticker, "_scaler_y.pkl")
+
+            if (is_fresh(keras_path, retrain_days) and is_fresh(scaler_x_path, retrain_days)
+                    and is_fresh(scaler_y_path, retrain_days)):
+                try:
+                    import pickle
+                    cached_model = tf.keras.models.load_model(keras_path)
+                    with open(scaler_x_path, "rb") as f:
+                        cached_scaler_X = pickle.load(f)
+                    with open(scaler_y_path, "rb") as f:
+                        cached_scaler_y = pickle.load(f)
+
+                    df_features = self.build_lstm_features(history_df)
+                    feature_cols = self.LSTM_FEATURE_COLS
+                    lookback = self.LSTM_LOOKBACK
+                    if len(df_features) < lookback:
+                        raise ValueError("insufficient rows for cached-model inference")
+                    if cached_model.output_shape[-1] != len(horizons):
+                        raise ValueError("cached model horizon count mismatch")
+
+                    scaled_X_all = cached_scaler_X.transform(df_features[feature_cols].values)
+                    last_window = scaled_X_all[-lookback:][np.newaxis, ...]
+                    pred_scaled = cached_model.predict(last_window, verbose=0)[0]
+
+                    out: Dict[int, float] = {}
+                    for i, h in enumerate(horizons):
+                        inv = cached_scaler_y.inverse_transform([[float(pred_scaled[i])]])[0][0]
+                        out[h] = float(inv)
+                    return out
+                except Exception as exc:  # noqa: BLE001 - corrupt/stale cache -> refit below
+                    logger.debug(
+                        "CNN-LSTM cache load/inference failed for %s: %s. Refitting.",
+                        ticker, exc,
+                    )
 
         try:
             from tensorflow.keras.callbacks import EarlyStopping
@@ -555,6 +657,19 @@ class ForecastingEngine:
             for i, h in enumerate(horizons):
                 inv = scaler_y.inverse_transform([[float(pred_scaled[i])]])[0][0]
                 out[h] = float(inv)
+
+            if persistence_enabled and keras_path is not None:
+                try:
+                    import pickle
+                    from forecasting.model_persistence import touch
+                    model.save(keras_path)
+                    with open(scaler_x_path, "wb") as f:
+                        pickle.dump(scaler_X, f)
+                    with open(scaler_y_path, "wb") as f:
+                        pickle.dump(scaler_y, f)
+                    touch(keras_path)
+                except Exception as exc:  # noqa: BLE001 - persistence is best-effort
+                    logger.debug("CNN-LSTM cache save failed for %s: %s", ticker, exc)
 
             if days_forward is not None:
                 return out.get(int(days_forward), 0.0)
@@ -785,12 +900,18 @@ class ForecastingEngine:
             # Symbol and timestamp for skill tracker integration (Tier 2.2)
             symbol = str(row.get('Symbol', row.get('Ticker', 'UNKNOWN'))).upper()
             now_utc = datetime.now(timezone.utc)
+            # Ticker for model-persistence keying (2026-07) -- None for an
+            # unlabeled/synthetic row so ad-hoc/test calls never touch the
+            # on-disk artifact cache under a shared "UNKNOWN" key.
+            persist_ticker = symbol if symbol and symbol != 'UNKNOWN' else None
 
             # Train the CNN-LSTM ONCE (direct multi-step) and reuse its per-horizon
             # outputs below, instead of retraining a fresh model per horizon.
             lstm_multi: Dict[int, float] = {h: 0.0 for h in horizons}
             if TENSORFLOW_AVAILABLE and history_df is not None and len(history_df) >= 70:
-                lstm_multi = self.run_cnn_lstm_forecast(history_df, horizons=tuple(horizons))
+                lstm_multi = self.run_cnn_lstm_forecast(
+                    history_df, horizons=tuple(horizons), ticker=persist_ticker
+                )
 
             # Run Facebook Prophet ONCE (30-day only; it is expensive) and stash its
             # forecast so it can both feed the h=30 blend below AND populate the
@@ -800,7 +921,7 @@ class ForecastingEngine:
             prophet_30_upper = 0.0
             if PROPHET_AVAILABLE and history_series is not None and len(history_series) > 30:
                 prophet_yhat_30, prophet_30_lower, prophet_30_upper = self.run_prophet_forecast(
-                    history_series, days_forward=30
+                    history_series, days_forward=30, ticker=persist_ticker
                 )
 
             # Step 2a: update actuals for all horizons BEFORE generating new forecasts.
