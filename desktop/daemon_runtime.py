@@ -73,12 +73,15 @@ class RunRecord:
     # taken at the moment this record is written (i.e. cycle completion; see
     # _run_one_cycle below). None when unavailable (no progress.json yet, or
     # the read itself failed) -- CONSTRAINT #4, never a fabricated snapshot.
-    # NOTE: main_orchestrator._main_body() constructs its own ProgressReporter
-    # internally with run_id=None (it has no notion of the daemon's run_id), so
-    # this dict's own "run_id" key will be null even though it is stamped onto
-    # a specific daemon RunRecord -- correlate by wall-clock/finished_at, not
-    # by matching run_id fields, until a future change threads the daemon's
-    # run_id into _main_body(run_id=...) -> ProgressReporter(run_id=...).
+    # This dict's "run_id" key is overwritten with THIS RunRecord's own run_id
+    # by _run_one_cycle before the record is built -- main_orchestrator's
+    # internally-constructed ProgressReporter has no notion of the daemon's
+    # run_id, so progress.json on disk always carries "run_id": null; without
+    # the override, RunRecord.progress["run_id"] would silently disagree with
+    # RunRecord.run_id even though both describe the same cycle. Safe to
+    # overwrite: the daemon is single-flight (one cycle at a time, lock-
+    # enforced by trigger_run()), so the progress.json read here is always
+    # this cycle's own terminal snapshot, never a stale one from a prior run.
     progress: Optional[dict] = None
 
 
@@ -283,7 +286,9 @@ class OrchestratorDaemon:
             _state = read_progress()
             if _state is not None:
                 progress_snapshot = {
-                    "run_id": _state.run_id,
+                    # Overwritten with the daemon's own run_id -- see the
+                    # RunRecord.progress field comment above for why.
+                    "run_id": run_id,
                     "state": _state.state,
                     "stage": _state.stage,
                     "stage_index": _state.stage_index,
