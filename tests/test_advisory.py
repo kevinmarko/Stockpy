@@ -1358,3 +1358,119 @@ class TestTacticalRangesAndExitSizing:
         rec_hold = self._run(position=None, forecast_30=100.0, raw_signal="HOLD", score=50)
         assert rec_hold.action == "HOLD"
         assert rec_hold.suggested_exit_pct == 0.0
+
+
+# ============================================================================
+# PR D — precomputed_garch / precomputed_forecast (settings.ADVISORY_REUSE_PIPELINE_COMPUTE)
+# ============================================================================
+#
+# advisory.evaluate() gained two OUTPUT-CHANGING opt-in kwargs so
+# main_orchestrator.py's advisory overlay can reuse run_pipeline's
+# already-fit GARCH vol / 30-day forecast for the same ticker instead of a
+# second independent fit. These tests lock in the dead-letter contract: a
+# real positive precomputed value skips the corresponding fit entirely; a
+# missing/zero/negative value transparently falls through to the original
+# fresh-fit path. StrategyEngine.evaluate_security() is NEVER skipped by
+# these kwargs — scoring is always freshly computed.
+
+class TestPrecomputedGarchAndForecast:
+    def _run(self, *, precomputed_garch=None, precomputed_forecast=None,
+              garch_fit_value=0.22, forecast_fit_value=105.0):
+        """Call evaluate() with heavy engines mocked; return
+        (Recommendation, toe_mock, fe_mock, se_mock) so callers can assert on
+        call counts / call kwargs."""
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+        snapshot = _make_account_snapshot()
+
+        with patch("engine.advisory.ProcessingEngine") as MockPE, \
+             patch("engine.advisory.ForecastingEngine") as MockFE, \
+             patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             patch("engine.advisory.StrategyEngine") as MockSE:
+
+            pe_instance = MagicMock()
+            pe_instance.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockPE.return_value = pe_instance
+
+            fe_instance = MagicMock()
+            fe_instance.generate_forecast.return_value = {
+                "Forecast_30": forecast_fit_value, "MC_Target": forecast_fit_value,
+            }
+            MockFE.return_value = fe_instance
+
+            toe_instance = MagicMock()
+            toe_instance.estimate_gjr_garch_volatility.return_value = garch_fit_value
+            MockTOE.return_value = toe_instance
+
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.0,
+            }
+            MockSE.return_value = se_instance
+
+            rec = evaluate(
+                symbol="TEST",
+                position=None,
+                market=market,
+                snapshot=snapshot,
+                transactions_store=ts,
+                precomputed_garch=precomputed_garch,
+                precomputed_forecast=precomputed_forecast,
+            )
+        return rec, toe_instance, fe_instance, se_instance
+
+    def test_default_none_still_runs_fresh_fits(self):
+        """Byte-identical to pre-PR-D behavior: no precomputed values ->
+        both engines are still invoked exactly as before."""
+        rec, toe, fe, se = self._run()
+        assert toe.estimate_gjr_garch_volatility.called
+        assert fe.generate_forecast.called
+        assert se.evaluate_security.called  # scoring is never skipped
+
+    def test_valid_precomputed_garch_skips_fresh_fit(self):
+        rec, toe, fe, se = self._run(precomputed_garch=0.31)
+        assert not toe.estimate_gjr_garch_volatility.called
+        assert rec.key_indicators["garch_vol"] == pytest.approx(0.31)
+        # StrategyEngine received the precomputed value, not the fresh-fit stub.
+        _, kwargs = se.evaluate_security.call_args
+        assert kwargs["garch_vol"] == pytest.approx(0.31)
+
+    def test_valid_precomputed_forecast_skips_fresh_fit(self):
+        rec, toe, fe, se = self._run(precomputed_forecast=112.5)
+        assert not fe.generate_forecast.called
+        assert rec.forecast == pytest.approx(112.5)
+        _, kwargs = se.evaluate_security.call_args
+        assert kwargs["forecast_price"] == pytest.approx(112.5)
+
+    def test_both_precomputed_skips_both_fresh_fits_but_not_strategy(self):
+        rec, toe, fe, se = self._run(precomputed_garch=0.4, precomputed_forecast=120.0)
+        assert not toe.estimate_gjr_garch_volatility.called
+        assert not fe.generate_forecast.called
+        assert se.evaluate_security.called  # scoring is always fresh
+        assert rec.key_indicators["garch_vol"] == pytest.approx(0.4)
+        assert rec.forecast == pytest.approx(120.0)
+
+    def test_zero_precomputed_garch_falls_through_to_fresh_fit(self):
+        """A zero/failed upstream value is never trusted -- must never
+        silently substitute a bad value for a real fit (CONSTRAINT #6)."""
+        rec, toe, fe, se = self._run(precomputed_garch=0.0)
+        assert toe.estimate_gjr_garch_volatility.called
+        assert rec.key_indicators["garch_vol"] == pytest.approx(0.22)  # the fresh-fit stub value
+
+    def test_negative_precomputed_forecast_falls_through_to_fresh_fit(self):
+        rec, toe, fe, se = self._run(precomputed_forecast=-5.0)
+        assert fe.generate_forecast.called
+        assert rec.forecast == pytest.approx(105.0)  # the fresh-fit stub value
+
+    def test_none_precomputed_values_are_the_default(self):
+        """Sanity check on the public signature: both new kwargs default to
+        None so every pre-PR-D caller (main.py, ad-hoc/test calls) is
+        unaffected without passing anything."""
+        import inspect
+        from engine.advisory import evaluate as _evaluate
+        sig = inspect.signature(_evaluate)
+        assert sig.parameters["precomputed_garch"].default is None
+        assert sig.parameters["precomputed_forecast"].default is None

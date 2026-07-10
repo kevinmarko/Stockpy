@@ -438,6 +438,8 @@ def evaluate(
     technical_options_engine: Optional[Any] = None,
     forecasting_engine: Optional[Any] = None,
     strategy_engine: Optional[Any] = None,
+    precomputed_garch: Optional[float] = None,
+    precomputed_forecast: Optional[float] = None,
 ) -> Recommendation:
     """Produce a holding-aware advisory recommendation for ``symbol``.
 
@@ -492,6 +494,18 @@ def evaluate(
         instances here; when provided they are used verbatim.  Backward-compatible
         and byte-identical to per-call construction because every one of these
         engines is stateless-config-only for concurrent reads.
+    precomputed_garch, precomputed_forecast : float or None (keyword-only)
+        OUTPUT-CHANGING opt-in (see ``settings.ADVISORY_REUSE_PIPELINE_COMPUTE``).
+        When a caller (``main_orchestrator.py``, after ``run_pipeline()`` has
+        already GARCH-fit and forecast-fit this same ticker once this cycle)
+        supplies a real positive value, Step 5 (GJR-GARCH) / Step 6 (the full
+        ARIMA/Holt-Winters/CNN-LSTM/Prophet forecast ensemble) is SKIPPED
+        entirely and the supplied value is used verbatim instead — eliminating
+        the single largest redundant per-cycle CPU cost. A missing, ``None``,
+        zero, or non-positive value transparently falls through to the
+        original independent fit (CONSTRAINT #6: this can only ever remove a
+        redundant fit, never silently substitute a bad one). ``None`` (the
+        default for every caller today) reproduces pre-dedup behavior exactly.
 
     Returns
     -------
@@ -591,9 +605,15 @@ def evaluate(
 
     # ──────────────────────────────────────────────────────────────────────────
     # Step 5 — GJR-GARCH volatility (TechnicalOptionsEngine)
+    # OUTPUT-CHANGING opt-in: reuse the orchestrator's already-fit GARCH vol for
+    # this ticker (settings.ADVISORY_REUSE_PIPELINE_COMPUTE) instead of a second
+    # independent fit. Only trusted when it's a real positive number; otherwise
+    # falls straight through to the original fresh-fit path (dead-letter safe).
     # ──────────────────────────────────────────────────────────────────────────
     garch_vol: Optional[float] = None
-    if has_sufficient_history:
+    if precomputed_garch is not None and precomputed_garch > 0:
+        garch_vol = float(precomputed_garch)
+    elif has_sufficient_history:
         try:
             toe = (
                 technical_options_engine
@@ -607,9 +627,17 @@ def evaluate(
 
     # ──────────────────────────────────────────────────────────────────────────
     # Step 6 — Multi-horizon forecast (ForecastingEngine)
+    # OUTPUT-CHANGING opt-in: reuse the orchestrator's already-computed 30-day
+    # forecast for this ticker (settings.ADVISORY_REUSE_PIPELINE_COMPUTE)
+    # instead of re-running the full ARIMA/Holt-Winters/CNN-LSTM/Prophet
+    # ensemble a second time this cycle — the single most expensive stage in
+    # the pipeline. Only trusted when it's a real positive number; otherwise
+    # falls straight through to the original fresh-fit path (dead-letter safe).
     # ──────────────────────────────────────────────────────────────────────────
     forecast_price: Optional[float] = None
-    if has_sufficient_history:
+    if precomputed_forecast is not None and precomputed_forecast > 0:
+        forecast_price = float(precomputed_forecast)
+    elif has_sufficient_history:
         try:
             # Opt-in inverse-RMSE skill-weighted blending (default OFF → tracker
             # None → byte-identical static blend) is handled inside the singleton

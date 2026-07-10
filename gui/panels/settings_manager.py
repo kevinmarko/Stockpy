@@ -58,6 +58,7 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
     ("FORECAST_SKILL_WINDOW_DAYS", "int"),
     ("FORECAST_MODEL_PERSISTENCE_ENABLED", "bool"),
     ("FORECAST_MODEL_RETRAIN_DAYS", "int"),
+    ("ADVISORY_REUSE_PIPELINE_COMPUTE", "bool"),
     ("FUNDAMENTALS_SOURCE", "text"),
     ("BETA_LOOKBACK_DAYS", "int"),
     ("SECTOR_FORECAST_CONFIG_PATH", "text"),

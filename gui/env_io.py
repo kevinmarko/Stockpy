@@ -102,6 +102,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FORECAST_SKILL_WINDOW_DAYS", # int — rolling RMSE window (days) for skill weighting
     "FORECAST_MODEL_PERSISTENCE_ENABLED",  # bool — opt-in CNN-LSTM/Prophet artifact persistence
     "FORECAST_MODEL_RETRAIN_DAYS",         # int — persisted-model staleness window (days)
+    "ADVISORY_REUSE_PIPELINE_COMPUTE",     # bool — OUTPUT-CHANGING: reuse pipeline GARCH/forecast in advisory overlay
     "FUNDAMENTALS_SOURCE",        # "yahoo" | "yfinance_info"
     "BETA_LOOKBACK_DAYS",         # int — beta computation lookback (days)
     # Universe / signals (JSON-encoded)
