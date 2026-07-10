@@ -3,7 +3,7 @@ import sys
 import subprocess
 import sqlite3
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
 
 # Initialize the FastMCP server for the Investyo Platform
@@ -283,6 +283,282 @@ def read_platform_logs(lines: int = 50) -> str:
         return "No execution logs found in the database or local directory."
         
     return "\n".join(logs_summary)
+
+@mcp.tool()
+def execute_paper_trade(
+    symbol: str,
+    side: str,
+    price: float,
+    shares: float,
+    strategy: Optional[str] = None,
+    notes: Optional[str] = None,
+    conviction: Optional[float] = None
+) -> str:
+    """
+    Submits a simulated paper trade (records a new open trade) or closes an open trade in the TransactionsStore.
+    
+    Args:
+        symbol: The stock ticker (e.g. AAPL).
+        side: The trade direction: 'buy'/'long' to open a long position, 'sell'/'short' to open a short position, or 'close' to close the position.
+        price: Execution price for entry or exit.
+        shares: Number of shares.
+        strategy: Optional strategy identifier (e.g. 'RSI2').
+        notes: Optional custom notes.
+        conviction: Optional signal conviction level [0, 1].
+    """
+    from transactions_store import TransactionsStore
+    from datetime import datetime
+    
+    store = TransactionsStore()
+    symbol_upper = symbol.upper().strip()
+    side_lower = side.lower().strip()
+    
+    if side_lower in ["buy", "long", "sell", "short"]:
+        db_side = "long" if side_lower in ["buy", "long"] else "short"
+        try:
+            trade_id = store.record_trade(
+                symbol=symbol_upper,
+                side=db_side,
+                entry_ts=datetime.now(),
+                entry_price=price,
+                shares=shares,
+                strategy=strategy,
+                notes=notes,
+                conviction=conviction
+            )
+            return f"Paper trade recorded successfully. Opened {db_side} position for {symbol_upper}: {shares} shares at ${price:.2f}. Trade ID: {trade_id}."
+        except Exception as e:
+            return f"Failed to record paper trade: {str(e)}"
+            
+    elif side_lower == "close":
+        try:
+            df = store.open_trades_df()
+            if df.empty or symbol_upper not in df['symbol'].values:
+                return f"No open paper trades found for symbol: {symbol_upper} to close."
+            
+            symbol_trades = df[df['symbol'] == symbol_upper]
+            trade_id = int(symbol_trades.iloc[-1]['trade_id'])
+            
+            store.close_trade(trade_id=trade_id, exit_ts=datetime.now(), exit_price=price)
+            return f"Closed paper trade ID {trade_id} for {symbol_upper} at ${price:.2f} successfully."
+        except Exception as e:
+            return f"Failed to close paper trade: {str(e)}"
+    else:
+        return f"Invalid side: '{side}'. Must be one of: buy, long, sell, short, close."
+
+@mcp.tool()
+def update_watch_rules(
+    action: str,
+    symbol: str,
+    alert_on: Optional[str] = None,
+    threshold: Optional[float] = None,
+    priority: Optional[str] = None,
+    label: Optional[str] = None
+) -> str:
+    """
+    Safely adds, updates, or removes watch rules in watch_rules.yaml.
+    
+    Args:
+        action: 'add', 'update', or 'remove'.
+        symbol: The ticker symbol (e.g. TSLA, or '*' for wildcard).
+        alert_on: Rule trigger type (e.g. 'conviction_above', 'conviction_below', 'action_change').
+        threshold: Trigger threshold (float between 0.0 and 1.0, required for conviction triggers).
+        priority: Notification priority ('min', 'low', 'default', 'high', 'urgent', 'max').
+        label: Custom human-readable label for notifications.
+    """
+    import yaml
+    
+    yaml_path = "watch_rules.yaml"
+    if not os.path.exists(yaml_path):
+        return f"Error: {yaml_path} not found."
+        
+    try:
+        with open(yaml_path, "r") as f:
+            data = yaml.safe_load(f) or {"rules": []}
+    except Exception as e:
+        return f"Failed to read watch_rules.yaml: {str(e)}"
+        
+    rules = data.get("rules", [])
+    symbol_upper = symbol.upper().strip()
+    action_lower = action.lower().strip()
+    
+    if action_lower == "remove":
+        new_rules = [r for r in rules if str(r.get("symbol")).upper().strip() != symbol_upper]
+        if len(new_rules) == len(rules):
+            return f"No watch rules found for symbol: {symbol_upper}."
+        data["rules"] = new_rules
+        try:
+            with open(yaml_path, "w") as f:
+                yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+            return f"Successfully removed all watch rules for {symbol_upper}."
+        except Exception as e:
+            return f"Failed to write watch_rules.yaml: {str(e)}"
+            
+    elif action_lower in ["add", "update"]:
+        if not alert_on:
+            return "Error: 'alert_on' is required to add or update a rule."
+        
+        new_rule = {"symbol": symbol_upper if symbol_upper != "*" else "*", "alert_on": alert_on}
+        if threshold is not None:
+            new_rule["threshold"] = float(threshold)
+        if priority:
+            new_rule["priority"] = priority
+        if label:
+            new_rule["label"] = label
+            
+        if action_lower == "update":
+            rules = [r for r in rules if str(r.get("symbol")).upper().strip() != symbol_upper]
+            
+        rules.append(new_rule)
+        data["rules"] = rules
+        
+        try:
+            with open(yaml_path, "w") as f:
+                yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+            return f"Successfully {action_lower}ed watch rule for {symbol_upper}."
+        except Exception as e:
+            return f"Failed to write watch_rules.yaml: {str(e)}"
+    else:
+        return f"Invalid action: '{action}'. Must be one of: add, update, remove."
+
+@mcp.tool()
+def update_universe_tickers(action: str, symbol: str) -> str:
+    """
+    Adds or removes a stock symbol from the active trading universe configured in the .env file.
+    
+    Args:
+        action: 'add' or 'remove'.
+        symbol: The ticker symbol to modify (e.g. TSLA).
+    """
+    import json
+    env_path = ".env"
+    symbol_upper = symbol.upper().strip()
+    action_lower = action.lower().strip()
+    
+    env_vars = {}
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        env_vars[k.strip()] = v.strip()
+        except Exception as e:
+            return f"Failed to read .env file: {str(e)}"
+            
+    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
+    if "DEFAULT_TICKERS" in env_vars:
+        try:
+            val = env_vars["DEFAULT_TICKERS"]
+            current_tickers = json.loads(val)
+            if not isinstance(current_tickers, list):
+                current_tickers = [current_tickers]
+        except Exception:
+            current_tickers = [t.strip() for t in env_vars["DEFAULT_TICKERS"].split(",") if t.strip()]
+            
+    current_tickers = [t.upper() for t in current_tickers]
+    
+    if action_lower == "add":
+        if symbol_upper in current_tickers:
+            return f"{symbol_upper} is already in the trading universe."
+        current_tickers.append(symbol_upper)
+    elif action_lower == "remove":
+        if symbol_upper not in current_tickers:
+            return f"{symbol_upper} is not in the trading universe."
+        current_tickers.remove(symbol_upper)
+    else:
+        return f"Invalid action: '{action}'. Must be one of: add, remove."
+        
+    env_vars["DEFAULT_TICKERS"] = json.dumps(current_tickers)
+    
+    try:
+        with open(env_path, "w") as f:
+            for k, v in env_vars.items():
+                f.write(f"{k}={v}\n")
+        return f"Successfully {action_lower}ed {symbol_upper} from the active universe. Current tickers: {current_tickers}"
+    except Exception as e:
+        return f"Failed to write to .env file: {str(e)}"
+
+@mcp.tool()
+def plot_equity_curve(symbol: str, period: str = "1y") -> str:
+    """
+    Runs a Backtrader simulation on the given stock symbol and generates a PNG plot
+    of its equity curve over time, saving it to the artifacts directory.
+    
+    Args:
+        symbol: The stock symbol to simulate (e.g. AAPL).
+        period: The lookback period (default: 1y).
+    """
+    import io
+    import contextlib
+    import yfinance as yf
+    import backtrader as bt
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from simulation_engine import InstitutionalStrategy
+    
+    try:
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period)
+        if df.empty:
+            return f"Error: No data found for {symbol}."
+            
+        df.columns = [col.lower() for col in df.columns]
+        
+        cerebro = bt.Cerebro()
+        cerebro.addstrategy(InstitutionalStrategy)
+        
+        data = bt.feeds.PandasData(dataname=df)
+        cerebro.adddata(data)
+        
+        cerebro.broker.setcash(100000.0)
+        cerebro.broker.setcommission(commission=0.001)
+        cerebro.broker.set_slippage_perc(perc=0.0005)
+        
+        cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
+        
+        f = io.StringIO()
+        with contextlib.redirect_stdout(f):
+            results = cerebro.run()
+            
+        strat = results[0]
+        time_return = strat.analyzers.timereturn.get_analysis()
+        
+        import numpy as np
+        dates = sorted(time_return.keys())
+        returns = [time_return[d] for d in dates]
+        equity = 100000.0 * np.cumprod(1.0 + np.array(returns))
+        
+        if len(equity) == 0:
+            return f"Error: Simulation did not produce any equity results. This may happen if the lookback period ('{period}') is too short to compute indicators (e.g. 50-day SMA requires at least 50 bars)."
+        
+        plt.figure(figsize=(10, 5))
+        plt.plot(dates, equity, label="Strategy Equity", color="blue", linewidth=2)
+        plt.title(f"Equity Curve - {symbol.upper()} ({period})")
+        plt.xlabel("Date")
+        plt.ylabel("Portfolio Value ($)")
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.legend()
+        plt.tight_layout()
+        
+        artifact_dir = "/Users/kevinlee/.gemini/antigravity/brain/d401d6a1-6d28-4b48-a196-95e42415c9ed"
+        os.makedirs(artifact_dir, exist_ok=True)
+        img_name = f"equity_curve_{symbol.lower()}.png"
+        img_path = os.path.join(artifact_dir, img_name)
+        plt.savefig(img_path)
+        plt.close()
+        
+        markdown_response = (
+            f"### Equity Curve for {symbol.upper()} ({period})\n"
+            f"Successfully simulated InstitutionalStrategy. Final Portfolio Value: ${equity[-1]:,.2f}\n\n"
+            f"![Equity Curve for {symbol.upper()}](file://{img_path})\n"
+        )
+        return markdown_response
+        
+    except Exception as e:
+        return f"Plot generation failed: {str(e)}"
 
 @mcp.tool()
 def trigger_forecasting(symbol: str) -> str:
