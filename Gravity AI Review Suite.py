@@ -2937,6 +2937,10 @@ class GravityAIAuditor:
 
             # ── (o) CompositeProvider-level fundamentals cache dedup ──────────
             # Verifies yfinance fallback is not re-hammered within TTL either.
+            # The primary source (YahooFundamentalsProvider) must be forced to
+            # return {} here -- otherwise a live network call to Yahoo simply
+            # succeeds for a real ticker like "AAPL" and the fallback path
+            # (the thing under test) is never exercised at all.
             import os as _os_o
             from data.market_data import CompositeProvider
             with patch.dict(_os_o.environ, {
@@ -2949,7 +2953,10 @@ class GravityAIAuditor:
                     yf_calls["n"] += 1
                     return {"trailingPE": 28.5}
 
-                with patch.object(YFinanceProvider, "get_fundamentals", _fake_yf):
+                with (
+                    patch.object(cp._fundamentals_provider, "get_fundamentals", return_value={}),
+                    patch.object(YFinanceProvider, "get_fundamentals", _fake_yf),
+                ):
                     cp.get_fundamentals("AAPL")
                     cp.get_fundamentals("AAPL")
                     cp.get_fundamentals("AAPL")
@@ -6387,20 +6394,25 @@ class GravityAIAuditor:
             all_pass = all_pass and not mixed_crashed
 
             # Check 4: exc_info=True in the pipeline crash handler
+            # ``_main_body`` is a thin progress-instrumentation wrapper (added
+            # by the progress-indicator-core work) around ``_main_body_impl``,
+            # which now holds the actual pipeline-crash ``critical()`` call --
+            # both must be scanned, not just the outer wrapper.
             import ast, inspect
             import main_orchestrator
-            src = inspect.getsource(main_orchestrator._main_body)
-            tree = ast.parse(src)
             exc_info_found = False
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(getattr(node, "func", None), ast.Attribute)
-                    and node.func.attr == "critical"
-                ):
-                    for kw in node.keywords:
-                        if kw.arg == "exc_info" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
-                            exc_info_found = True
+            for _fn in (main_orchestrator._main_body, main_orchestrator._main_body_impl):
+                src = inspect.getsource(_fn)
+                tree = ast.parse(src)
+                for node in ast.walk(tree):
+                    if (
+                        isinstance(node, ast.Call)
+                        and isinstance(getattr(node, "func", None), ast.Attribute)
+                        and node.func.attr == "critical"
+                    ):
+                        for kw in node.keywords:
+                            if kw.arg == "exc_info" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                                exc_info_found = True
             audit["checks"].append({
                 "check": "pipeline crash handler logs exc_info=True for diagnosable tracebacks",
                 "passed": exc_info_found,
@@ -7148,11 +7160,21 @@ class GravityAIAuditor:
             all_pass = all_pass and c5
 
             # Check 6: main.py advisory wiring
+            # ``_write_state_snapshot``/``rotate_snapshot``/``snapshot_diff=``
+            # no longer live inline in main.py -- they were extracted into
+            # reporting/html_publisher.py (write_html_report, imported by
+            # main.py as ``_write_html_report``) and reporting/state_snapshot.py
+            # (write_state_snapshot, which itself calls rotate_snapshot). Check
+            # main.py wires the extracted function, and that the extracted
+            # modules actually carry the rotate/diff plumbing.
             main_src = Path("main.py").read_text(encoding="utf-8")
+            html_publisher_src = Path("reporting/html_publisher.py").read_text(encoding="utf-8")
+            state_snapshot_src = Path("reporting/state_snapshot.py").read_text(encoding="utf-8")
             c6 = (
-                'def _write_state_snapshot' in main_src
-                and 'rotate_snapshot' in main_src
-                and 'snapshot_diff=' in main_src
+                'write_html_report' in main_src
+                and 'write_state_snapshot' in html_publisher_src
+                and 'rotate_snapshot' in state_snapshot_src
+                and 'snapshot_diff=' in html_publisher_src
             )
             audit["checks"].append({
                 "check": "main.py _write_state_snapshot + rotate_snapshot + snapshot_diff= wired",
@@ -7650,11 +7672,18 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c5
 
-            # Check 6: main.py references kill-switch pause log strings
+            # Check 6: main.py wires the kill-switch pause gate
+            # The pause sentinel log line and "kill_switch_gate" stage name
+            # were extracted out of main.py into pipeline/steps.py's
+            # KillSwitchGateStep -- main.py now just imports and wires that
+            # step, so check the extraction target for the literal strings
+            # and main.py for the import/wiring.
             main_src = Path("main.py").read_text(encoding="utf-8")
+            steps_src = Path("pipeline/steps.py").read_text(encoding="utf-8")
             c6 = (
-                "Advisory paused by kill-switch sentinel" in main_src
-                and "kill_switch_gate" in main_src
+                "KillSwitchGateStep" in main_src
+                and "Advisory paused by kill-switch sentinel" in steps_src
+                and "kill_switch_gate" in steps_src
             )
             audit["checks"].append({
                 "check": "main.py references advisory pause log and kill_switch_gate stage",
@@ -9976,10 +10005,16 @@ class GravityAIAuditor:
                 ok2 = False
             all_pass = _chk("STRATEGY_REGISTRY contains rsi2 and tsmom", ok2) and all_pass
 
-            # 3. Each entry is (callable, positive float)
+            # 3. Each entry is (callable, positive float, universe list)
+            # STRATEGY_REGISTRY was expanded from a 2-tuple to a 3-tuple
+            # (adapter_fn, turnover, universe: List[str]) to support the
+            # multi-ticker multifactor_lowvol_size adapter.
             try:
-                ok3 = all(callable(fn) and isinstance(t, float) and t > 0
-                          for fn, t in _rv.STRATEGY_REGISTRY.values())
+                ok3 = all(
+                    callable(fn) and isinstance(t, float) and t > 0
+                    and isinstance(universe, list) and len(universe) > 0
+                    for fn, t, universe in _rv.STRATEGY_REGISTRY.values()
+                )
             except Exception:
                 ok3 = False
             all_pass = _chk("Registry entries are (callable, positive_turnover)", ok3) and all_pass
@@ -10100,9 +10135,11 @@ class GravityAIAuditor:
            (auto-skip behaviour confirmed via ``run_checks``).
         7. ``validation_reports`` is skipped under ``ADVISORY_ONLY=True``.
         8. ``no_unexpected_risk_blocks`` is skipped under ``ADVISORY_ONLY=True``.
-        9. Total ``ALL_CHECKS`` count is 19 (15 from Stage 2 + 1 from Stage 3 +
+        9. Total ``ALL_CHECKS`` count is 22 (15 from Stage 2 + 1 from Stage 3 +
            check_robinhood_execution_mode + check_env_no_duplicate_keys +
-           check_calibration_drift added since).
+           check_calibration_drift + check_robinhood_kill_switch_clear +
+           check_robinhood_queue_fresh + check_robinhood_mfa_configured +
+           check_macro_regime_gate_enabled added since).
         10. ``tests/test_preflight.py`` contains ``TestStateSnapshotFresh``
             and ``TestAdvisoryAutoSkip`` class definitions.
         """
@@ -10263,12 +10300,14 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: total ALL_CHECKS count is 19 (16 from Stage 2 + alpaca_key_rotation_recent
-            # from Stage 3 + check_robinhood_execution_mode + check_env_no_duplicate_keys +
-            # check_calibration_drift added since)
-            c9 = len(preflight_check.ALL_CHECKS) == 19
+            # Check 9: total ALL_CHECKS count is 22 (19 from prior tiers +
+            # check_robinhood_kill_switch_clear + check_robinhood_queue_fresh +
+            # check_robinhood_mfa_configured + check_macro_regime_gate_enabled
+            # added since, minus the double-counted check_robinhood_execution_mode
+            # already folded into the prior 19)
+            c9 = len(preflight_check.ALL_CHECKS) == 22
             audit["checks"].append({
-                "check": f"ALL_CHECKS has 19 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "check": f"ALL_CHECKS has 22 entries (got {len(preflight_check.ALL_CHECKS)})",
                 "passed": c9,
             })
             all_pass = all_pass and c9
