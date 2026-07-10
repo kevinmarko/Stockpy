@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from data.market_data import MarketDataProvider
     from dto_models import MacroEconomicDTO
     from engine.advisory import Recommendation
+    from reporting.progress import ProgressReporter
 
 
 @dataclass
@@ -61,3 +62,12 @@ class RunContext:
     # should_skip(ctx) before invoking it (see pipeline/base.py).
     stopped: bool = False
     stop_reason: Optional[str] = None
+
+    # ── Progress instrumentation (reporting/progress.py) ─────────────────────
+    # Set by PipelineRunner.run() from its own `progress` argument (never
+    # constructed here) so AdvisoryEvalStep -- the only step with a per-symbol
+    # loop -- can call ctx.progress.advance_symbol() without PipelineStep.run()
+    # needing a second parameter. None (the default) is a complete no-op;
+    # every read of this field elsewhere is guarded by `if ctx.progress is
+    # not None`.
+    progress: Optional["ProgressReporter"] = None

@@ -111,6 +111,103 @@ class TestTriggerRunHappyPath:
             d.shutdown(timeout=2.0)
 
 
+class TestProgressSnapshotStamping:
+    """RunRecord.progress -- the plain-dict snapshot of output/progress.json
+    taken at cycle completion (see _run_one_cycle). Covers the run_id
+    correlation fix: main_orchestrator's internally-constructed
+    ProgressReporter has no notion of the daemon's run_id, so progress.json
+    on disk always carries "run_id": null -- _run_one_cycle must overwrite
+    that with the daemon's own run_id so RunRecord.progress["run_id"] always
+    agrees with RunRecord.run_id (the two describe the same cycle)."""
+
+    def test_progress_run_id_overwritten_with_daemon_run_id(self, monkeypatch):
+        from datetime import datetime, timezone
+        from reporting.progress import ProgressState
+
+        _fast_ok_main_body(monkeypatch)
+
+        # Simulate the real on-disk contract: progress.json's own "run_id" is
+        # always None (main_orchestrator never threads one into its internal
+        # ProgressReporter) -- this is what read_progress() actually returns
+        # in production, not a test artifact.
+        fake_state = ProgressState(
+            run_id=None,
+            state="succeeded",
+            stage="execution",
+            stage_index=5,
+            stage_total=6,
+            symbols_done=10,
+            symbols_total=10,
+            percent=100.0,
+            message="succeeded",
+            started_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        monkeypatch.setattr(daemon_runtime, "read_progress", lambda: fake_state)
+
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            result = d.trigger_run(reason="manual")
+            completed = _poll_until(lambda: not d.is_running, timeout=3.0)
+            assert completed, "run never completed within timeout"
+
+            record = d.status()["last_run"]
+            assert record.progress is not None
+            # The fix: RunRecord.progress["run_id"] must agree with the
+            # daemon's real run_id, not the (always-null) value on disk.
+            assert record.progress["run_id"] == result.run_id == record.run_id
+            # Every other field passes through from ProgressState unchanged.
+            assert record.progress["percent"] == 100.0
+            assert record.progress["stage"] == "execution"
+            assert record.progress["symbols_done"] == 10
+            assert record.progress["symbols_total"] == 10
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_progress_none_when_unavailable(self, monkeypatch):
+        """No progress.json yet (or the read failed) -- read_progress()
+        returns None -- RunRecord.progress must be None, never a fabricated
+        snapshot (CONSTRAINT #4)."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(daemon_runtime, "read_progress", lambda: None)
+
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            d.trigger_run(reason="manual")
+            completed = _poll_until(lambda: not d.is_running, timeout=3.0)
+            assert completed, "run never completed within timeout"
+
+            record = d.status()["last_run"]
+            assert record.progress is None
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_progress_read_failure_degrades_to_none_not_raise(self, monkeypatch):
+        """A read_progress() exception must never abort the run or leave the
+        record un-built (CONSTRAINT #6) -- the run still completes and
+        RunRecord.progress degrades to None."""
+        def _boom():
+            raise OSError("disk full")
+
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(daemon_runtime, "read_progress", _boom)
+
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            d.trigger_run(reason="manual")
+            completed = _poll_until(lambda: not d.is_running, timeout=3.0)
+            assert completed, "run never completed within timeout"
+
+            record = d.status()["last_run"]
+            assert record.state == RunState.SUCCEEDED  # unaffected by the read failure
+            assert record.progress is None
+        finally:
+            d.shutdown(timeout=2.0)
+
+
 class TestSingleFlight:
     def test_second_trigger_while_running_returns_already_running_same_id(self, monkeypatch):
         release_event = threading.Event()

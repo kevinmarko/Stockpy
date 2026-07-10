@@ -130,6 +130,7 @@ from reporting.sheets_client import (
 )
 from reporting.sheet_publisher import write_recommendations as _write_to_sheet
 from reporting.html_publisher import write_html_report as _write_html_report
+from reporting.progress import ProgressReporter
 
 logger = logging.getLogger("InvestYo.main")
 
@@ -600,7 +601,25 @@ def run_once(force_account: bool = False) -> RunResult:
         PrecomputeStep(),
         AdvisoryEvalStep(),
     ]
-    PipelineRunner(steps).run(ctx)
+    # Progress instrumentation (reporting/progress.py): one ProgressReporter per
+    # cycle, stages = the step names in the SAME order as `steps` above (so
+    # PipelineRunner.run()'s start_stage(step.name, ...) calls always match a
+    # real stage in the list). AdvisoryEvalStep is the only step with a
+    # per-symbol loop (see pipeline/steps.py); every other step's stage slice
+    # just holds at its starting boundary -- see PipelineRunner.run()'s own
+    # docstring for the full contract. finish() is guaranteed via try/finally
+    # so a raised exception from an unguarded step (UniverseStep/MacroStep/
+    # PrecomputeStep -- see pipeline/runner.py's module docstring) still marks
+    # the cycle "failed" before propagating unchanged (CONSTRAINT #6: progress
+    # reporting must never swallow an error or change pipeline behavior).
+    progress = ProgressReporter([s.name for s in steps])
+    try:
+        PipelineRunner(steps).run(ctx, progress=progress)
+    except Exception:
+        progress.finish("failed")
+        raise
+    else:
+        progress.finish("succeeded")
 
     finished_at = datetime.now(timezone.utc)
     result = RunResult(

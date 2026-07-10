@@ -47,6 +47,7 @@ from typing import Any, Optional
 import main_orchestrator
 from settings import settings
 from data_engine import DataEngine, MockDataEngine
+from reporting.progress import read_progress
 
 logger = logging.getLogger("OrchestratorDaemon")
 
@@ -67,6 +68,21 @@ class RunRecord:
     duration_seconds: Optional[float]
     error: Optional[str]            # str(exception) on FAILED, else None
     reason: str                     # "manual" | "interval"
+    # Progress instrumentation (reporting/progress.py) -- a plain-dict snapshot
+    # of the pipeline's live 0-100% progress telemetry (output/progress.json)
+    # taken at the moment this record is written (i.e. cycle completion; see
+    # _run_one_cycle below). None when unavailable (no progress.json yet, or
+    # the read itself failed) -- CONSTRAINT #4, never a fabricated snapshot.
+    # This dict's "run_id" key is overwritten with THIS RunRecord's own run_id
+    # by _run_one_cycle before the record is built -- main_orchestrator's
+    # internally-constructed ProgressReporter has no notion of the daemon's
+    # run_id, so progress.json on disk always carries "run_id": null; without
+    # the override, RunRecord.progress["run_id"] would silently disagree with
+    # RunRecord.run_id even though both describe the same cycle. Safe to
+    # overwrite: the daemon is single-flight (one cycle at a time, lock-
+    # enforced by trigger_run()), so the progress.json read here is always
+    # this cycle's own terminal snapshot, never a stale one from a prior run.
+    progress: Optional[dict] = None
 
 
 class TriggerOutcome(str, Enum):
@@ -255,6 +271,42 @@ class OrchestratorDaemon:
 
         finished_at = datetime.now(timezone.utc)
         duration_seconds = (finished_at - started_at).total_seconds()
+
+        # Snapshot the pipeline's final progress state (reporting/progress.py)
+        # at cycle-completion time. read_progress() never raises (dead-letter
+        # by its own contract), but the dataclass-to-dict conversion + ISO
+        # serialization below is wrapped defensively anyway so a snapshotting
+        # bug can NEVER affect whether this run is recorded as
+        # SUCCEEDED/FAILED (CONSTRAINT #6) -- a periodic mid-run stamp was
+        # explicitly called out as a "bonus, not required" by the progress
+        # instrumentation task; this end-of-cycle snapshot satisfies the
+        # baseline requirement.
+        progress_snapshot: Optional[dict] = None
+        try:
+            _state = read_progress()
+            if _state is not None:
+                progress_snapshot = {
+                    # Overwritten with the daemon's own run_id -- see the
+                    # RunRecord.progress field comment above for why.
+                    "run_id": run_id,
+                    "state": _state.state,
+                    "stage": _state.stage,
+                    "stage_index": _state.stage_index,
+                    "stage_total": _state.stage_total,
+                    "symbols_done": _state.symbols_done,
+                    "symbols_total": _state.symbols_total,
+                    "percent": _state.percent,
+                    "message": _state.message,
+                    "started_at": _state.started_at.isoformat(),
+                    "updated_at": _state.updated_at.isoformat(),
+                }
+        except Exception as _progress_exc:  # pragma: no cover - defensive only
+            logger.debug(
+                "Run %s: could not snapshot progress.json (%s); "
+                "RunRecord.progress will be None.", run_id, _progress_exc,
+            )
+            progress_snapshot = None
+
         record = RunRecord(
             run_id=run_id,
             state=state,
@@ -263,6 +315,7 @@ class OrchestratorDaemon:
             duration_seconds=duration_seconds,
             error=error,
             reason=reason,
+            progress=progress_snapshot,
         )
 
         with self._lock:

@@ -29,6 +29,7 @@ from gui.panels._shared import (  # noqa: E402
 )
 from gui.panels import load_state_snapshot
 from gui.panels.launcher import _render_report_provenance_banner
+from gui.progress_ui import busy
 
 
 def default_brinson_fachler_frame() -> pd.DataFrame:
@@ -971,15 +972,17 @@ def _render_brinson_fachler_section() -> None:
         with c_paste:
             if st.button("📥 Parse pasted data", key="bf_paste_btn"):
                 try:
-                    parsed = parse_pasted_sector_matrix(pasted)
-                    st.session_state["bf_editor_df"] = parsed
+                    with busy("Parsing pasted sector matrix…"):
+                        parsed = parse_pasted_sector_matrix(pasted)
+                        st.session_state["bf_editor_df"] = parsed
                     st.success(f"Parsed {len(parsed)} sector row(s) — editor refreshed.")
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001 - user-facing parse error
                     st.error(f"Could not parse pasted data: {exc}")
         with c_reset:
             if st.button("♻️ Reset to GICS 11 default", key="bf_reset_btn"):
-                st.session_state["bf_editor_df"] = default_brinson_fachler_frame()
+                with busy("Resetting to GICS 11 default…"):
+                    st.session_state["bf_editor_df"] = default_brinson_fachler_frame()
                 st.rerun()
 
     # ── 3. Validation chips ───────────────────────────────────────────────────
@@ -994,7 +997,8 @@ def _render_brinson_fachler_section() -> None:
     if st.button("▶️ Compute Brinson-Fachler attribution",
                  type="primary", key="bf_compute_btn"):
         try:
-            result = compute_brinson_fachler(edited)
+            with busy("Computing Brinson-Fachler attribution…"):
+                result = compute_brinson_fachler(edited)
             st.session_state["bf_result"] = result
         except Exception as exc:  # noqa: BLE001 - surface engine error inline
             logger.exception("Brinson-Fachler attribution failed")
@@ -1239,62 +1243,63 @@ def _render_trade_quality_section(signals: list) -> None:
 
     if st.button("📐 Compute edge ratio by strategy", key="edge_by_strategy_btn"):
         try:
-            from transactions_store import TransactionsStore
-            from evaluation_engine import EvaluationEngine
-            from data.historical_store import HistoricalStore
+            with busy("Computing edge ratio by strategy…"):
+                from transactions_store import TransactionsStore
+                from evaluation_engine import EvaluationEngine
+                from data.historical_store import HistoricalStore
 
-            store = TransactionsStore()
-            closed = store.closed_trades_df()
-            if closed.empty:
-                st.session_state["edge_by_strategy_result"] = pd.DataFrame()
-            else:
-                ee_local = EvaluationEngine()
-                hstore = HistoricalStore()
-                per_trade_rows = []
-                bars_cache: Dict[str, pd.DataFrame] = {}
-                for _, trade in closed.iterrows():
-                    sym = str(trade.get("symbol", "")).upper()
-                    if not sym:
-                        continue
-                    if sym not in bars_cache:
-                        try:
-                            bars_cache[sym] = hstore.get_bars(sym, lookback_days=756)
-                        except Exception:
-                            bars_cache[sym] = pd.DataFrame()
-                    bars = bars_cache[sym]
-                    if bars.empty:
-                        continue
-                    entry_price = trade.get("entry_price")
-                    entry_ts = trade.get("entry_ts")
-                    exit_ts = trade.get("exit_ts")
-                    if pd.isna(entry_price) or pd.isna(entry_ts) or pd.isna(exit_ts):
-                        continue
-                    edge = ee_local.calculate_edge_ratio(bars, float(entry_price), entry_ts, exit_ts)
-                    per_trade_rows.append({
-                        "strategy": trade.get("strategy") or "(untagged)",
-                        "symbol": sym,
-                        "MFE": edge["MFE"],
-                        "MAE": edge["MAE"],
-                        "Edge Ratio": edge["Edge Ratio"],
-                    })
-                per_trade_df = pd.DataFrame(per_trade_rows)
-                if per_trade_df.empty:
+                store = TransactionsStore()
+                closed = store.closed_trades_df()
+                if closed.empty:
                     st.session_state["edge_by_strategy_result"] = pd.DataFrame()
                 else:
-                    summary = (
-                        per_trade_df.dropna(subset=["Edge Ratio"])
-                        .groupby("strategy")
-                        .agg(
-                            n_trades=("Edge Ratio", "count"),
-                            mean_edge_ratio=("Edge Ratio", "mean"),
-                            median_edge_ratio=("Edge Ratio", "median"),
-                            mean_mfe=("MFE", "mean"),
-                            mean_mae=("MAE", "mean"),
+                    ee_local = EvaluationEngine()
+                    hstore = HistoricalStore()
+                    per_trade_rows = []
+                    bars_cache: Dict[str, pd.DataFrame] = {}
+                    for _, trade in closed.iterrows():
+                        sym = str(trade.get("symbol", "")).upper()
+                        if not sym:
+                            continue
+                        if sym not in bars_cache:
+                            try:
+                                bars_cache[sym] = hstore.get_bars(sym, lookback_days=756)
+                            except Exception:
+                                bars_cache[sym] = pd.DataFrame()
+                        bars = bars_cache[sym]
+                        if bars.empty:
+                            continue
+                        entry_price = trade.get("entry_price")
+                        entry_ts = trade.get("entry_ts")
+                        exit_ts = trade.get("exit_ts")
+                        if pd.isna(entry_price) or pd.isna(entry_ts) or pd.isna(exit_ts):
+                            continue
+                        edge = ee_local.calculate_edge_ratio(bars, float(entry_price), entry_ts, exit_ts)
+                        per_trade_rows.append({
+                            "strategy": trade.get("strategy") or "(untagged)",
+                            "symbol": sym,
+                            "MFE": edge["MFE"],
+                            "MAE": edge["MAE"],
+                            "Edge Ratio": edge["Edge Ratio"],
+                        })
+                    per_trade_df = pd.DataFrame(per_trade_rows)
+                    if per_trade_df.empty:
+                        st.session_state["edge_by_strategy_result"] = pd.DataFrame()
+                    else:
+                        summary = (
+                            per_trade_df.dropna(subset=["Edge Ratio"])
+                            .groupby("strategy")
+                            .agg(
+                                n_trades=("Edge Ratio", "count"),
+                                mean_edge_ratio=("Edge Ratio", "mean"),
+                                median_edge_ratio=("Edge Ratio", "median"),
+                                mean_mfe=("MFE", "mean"),
+                                mean_mae=("MAE", "mean"),
+                            )
+                            .reset_index()
+                            .sort_values("mean_edge_ratio", ascending=False)
                         )
-                        .reset_index()
-                        .sort_values("mean_edge_ratio", ascending=False)
-                    )
-                    st.session_state["edge_by_strategy_result"] = summary
+                        st.session_state["edge_by_strategy_result"] = summary
         except Exception as exc:  # noqa: BLE001 — surface, never crash the tab
             st.error(f"Edge-ratio-by-strategy computation failed: {exc}")
             st.session_state["edge_by_strategy_result"] = pd.DataFrame()

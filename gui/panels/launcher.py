@@ -193,12 +193,52 @@ def render_launcher() -> None:
 
 
 def _render_live_status_body(handle: Optional[orchestrator_runner.RunHandle]) -> None:
-    """Render the running-state metric, heartbeat age, and pipeline stages.
+    """Render the real progress bar, running-state metric, heartbeat age, and
+    pipeline stages.
 
-    Heartbeat age and stage status are re-polled here (not passed in) so that
-    each fragment tick reflects the latest on-disk state.
+    Heartbeat age, progress, and stage status are all re-polled here (not
+    passed in) so that each fragment tick reflects the latest on-disk state.
+
+    Progress bar
+    ------------
+    :func:`orchestrator_runner.compute_run_progress` resolves the best
+    available telemetry for ``handle`` — a real 0-100% reading from
+    ``output/progress.json`` (or the daemon's equivalent) when fresh, else a
+    coarse stage-count estimate, else nothing at all. Three renderings:
+
+    *   ``RunProgress(indeterminate=False)`` — a real percentage:
+        ``st.progress`` with the precise label (e.g. "58% - Forecasting
+        (12/48 symbols)").
+    *   ``RunProgress(indeterminate=True)`` — a coarse stage-count estimate:
+        ``st.progress`` with an explicit "(estimating...)" suffix so the
+        operator never mistakes it for a precise reading (CONSTRAINT #4 — no
+        fabricated metrics).
+    *   ``None`` while a run is active — nothing has been observed yet (e.g.
+        no log written) — a lightweight "Working..." caption instead of a
+        misleading empty/zero bar.
+    *   ``None`` while no run is active — nothing rendered at all; the stage
+        badges below already cover the idle state.
+
+    The stage badges below are KEPT (not replaced) — they still give a
+    coarse at-a-glance per-phase view even once a precise percentage is
+    available.
     """
     running = handle is not None and handle.is_running()
+
+    # ── Real (or best-effort) progress bar ──────────────────────────────────
+    run_progress = orchestrator_runner.compute_run_progress(handle)
+    if run_progress is not None:
+        bar_value = max(0.0, min(1.0, run_progress.percent / 100.0))
+        bar_text = run_progress.label
+        if run_progress.indeterminate:
+            bar_text += " (estimating...)"
+        st.progress(bar_value, text=bar_text)
+    elif running:
+        # A run is active but we have observed nothing yet (no log line, no
+        # progress.json) — never fabricate a 0% bar; show a plain "working"
+        # indicator instead.
+        st.caption("⏳ Working... (no progress telemetry yet)")
+
     hb_age = orchestrator_runner.heartbeat_age_seconds()
     cols = st.columns(2)
     with cols[0]:

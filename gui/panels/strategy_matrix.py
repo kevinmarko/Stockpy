@@ -31,6 +31,7 @@ from gui.panels._shared import (  # noqa: E402
 # load_state_snapshot) — same pattern as gui/panels/paper_monitor.py and
 # gui/panels/observability.py.
 from gui.panels import load_state_snapshot
+from gui.progress_ui import busy
 
 
 def _render_strategy_mode_toggle() -> None:
@@ -108,7 +109,8 @@ def _render_strategy_mode_toggle() -> None:
             )
             if st.button(confirm_label, type="primary", key="apply_mode"):
                 try:
-                    new_state = set_active_mode(chosen_mode)
+                    with busy(f"Applying {chosen_mode.label}…"):
+                        new_state = set_active_mode(chosen_mode)
                     st.success(
                         f"Mode written to `.env` → {new_state.mode.label}. "
                         "Takes effect on the next orchestrator / advisory launch."
@@ -556,8 +558,9 @@ def render_strategy_matrix() -> None:
 
     if saved:
         try:
-            env_io.write_setting("DISABLED_SIGNAL_MODULES", new_disabled)
-            env_io.write_setting("SIGNAL_WEIGHTS", new_weights)
+            with busy("Saving module config…"):
+                env_io.write_setting("DISABLED_SIGNAL_MODULES", new_disabled)
+                env_io.write_setting("SIGNAL_WEIGHTS", new_weights)
             st.success(
                 f"Saved. Disabled: {new_disabled or 'none'}. Re-launch to apply."
             )
