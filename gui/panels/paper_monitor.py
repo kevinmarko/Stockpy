@@ -28,6 +28,7 @@ from gui.panels._shared import (  # noqa: E402
     logger,
 )
 from gui.panels import load_state_snapshot
+from gui.progress_ui import busy
 
 
 def render_paper_monitor() -> None:
@@ -49,10 +50,11 @@ def render_paper_monitor() -> None:
     snapshot_obj = st.session_state.get("rh_snapshot")
     if fetch:
         try:
-            from data.robinhood_portfolio import fetch_account_snapshot
+            with busy("Fetching Robinhood snapshot…"):
+                from data.robinhood_portfolio import fetch_account_snapshot
 
-            snapshot_obj = fetch_account_snapshot()
-            st.session_state["rh_snapshot"] = snapshot_obj
+                snapshot_obj = fetch_account_snapshot()
+                st.session_state["rh_snapshot"] = snapshot_obj
         except Exception as exc:
             st.error(f"Robinhood fetch failed: {exc}")
             snapshot_obj = None

@@ -28,6 +28,7 @@ from gui.panels._shared import (  # noqa: E402
     logger,
 )
 from gui.panels import load_state_snapshot
+from gui.progress_ui import busy
 
 
 def render_market_data() -> None:
@@ -104,14 +105,16 @@ def render_market_data() -> None:
         if st.button("♻️ Reset provider singleton",
                      help="Drops the cached provider so the next fetch re-evaluates env vars."):
             try:
-                reset_provider()
+                with busy("Resetting provider singleton…"):
+                    reset_provider()
                 st.success("Provider singleton reset — re-selected on next quote.")
             except Exception as exc:
                 st.error(f"Reset failed: {exc}")
     with bcol2:
         if st.button("🩺 Reset connection health",
                      help="Clear the success/failure ledger (badge returns to Healthy)."):
-            st.session_state[tracker_key] = FetchHealthTracker()
+            with busy("Resetting connection health…"):
+                st.session_state[tracker_key] = FetchHealthTracker()
             st.rerun()
 
     snap = load_state_snapshot()
