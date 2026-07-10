@@ -4450,6 +4450,8 @@ class GravityAIAuditor:
         self.step_72_bias_drift_weight_validation_audit()
         # Validation Lab — GUI tab + runner wiring + report-contract audit
         self.step_73_validation_lab_audit()
+        # Progress indicator — reporting/progress.py + GUI wiring audit
+        self.step_74_progress_indicator_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -11418,6 +11420,178 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_73_validation_lab_audit"] = audit
+
+    def step_74_progress_indicator_audit(self) -> None:
+        """Step 74 — Progress-indicator feature audit.
+
+        The pipeline-progress feature is a small, cross-cutting surface built by
+        multiple concurrent agents: ``reporting/progress.py`` (the
+        ``ProgressReporter`` + ``read_progress``/``clear_progress`` writer,
+        atomically persisting ``output/progress.json``), orchestrator
+        instrumentation (``main_orchestrator.py``/``main.py``/``pipeline/*`` +
+        the daemon's ``RunRecord.progress`` field), ``gui/orchestrator_runner.py``'s
+        ``compute_run_progress``, and ``gui/progress_ui.py``'s ``busy`` context
+        manager. This audit only owns the pieces of that surface that live in
+        ``settings.py`` / ``gui/env_io.py`` — ``PROGRESS_POLL_SECONDS`` — and
+        exercises the rest of the contract defensively.
+
+        Because this step may run before every sibling agent's branch has
+        merged, EVERY check below is independently try/except-guarded so a
+        missing sibling module (``reporting.progress``, ``gui.orchestrator_runner``
+        additions, ``gui.progress_ui``) degrades to a soft/noted check rather
+        than crashing the whole step or failing the audit outright. Only the two
+        checks this file's owner is directly responsible for (the
+        ``PROGRESS_POLL_SECONDS`` allowlist entry and the ``settings`` field)
+        gate ``overall_pass`` — everything else is recorded for visibility.
+
+        Checks:
+          1.  ``reporting.progress.ProgressReporter`` + ``read_progress`` importable
+              and callable (soft — module may not be merged into this worktree yet).
+          2.  ``read_progress()`` against a nonexistent tmp directory returns
+              ``None``, never a fabricated progress dict (CONSTRAINT #4) (soft).
+          3.  ``compute_percent(0,0,0,0)==0.0`` and ``compute_percent(6,6,0,0)==100.0``
+              — clamped, no div-by-zero (soft).
+          4.  ``gui.orchestrator_runner.compute_run_progress`` importable
+              (Agent 3's function) (soft).
+          5.  ``gui.progress_ui.busy`` importable (Agent 4's helper) (soft).
+          6.  ``"PROGRESS_POLL_SECONDS"`` is in ``gui.env_io.ALLOWED_KEYS`` and
+              NOT in ``gui.env_io.SECRET_KEYS`` (hard).
+          7.  ``settings.PROGRESS_POLL_SECONDS`` exists and is an ``int`` (hard).
+        """
+        audit = {
+            "step": "step_74_progress_indicator_audit",
+            "description": "Progress indicator — reporting/progress.py + GUI wiring audit",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail="", soft=False):
+            audit["checks"].append(
+                {"name": name, "passed": passed, "detail": str(detail), "soft": soft}
+            )
+            return passed
+
+        try:
+            import sys
+            from pathlib import Path
+
+            _repo = Path(__file__).resolve().parent
+            if str(_repo) not in sys.path:
+                sys.path.insert(0, str(_repo))
+
+            hard_pass = True
+
+            # 1. reporting.progress.ProgressReporter + read_progress importable & callable.
+            _progress_mod = None
+            try:
+                import reporting.progress as _progress_mod  # type: ignore
+                ok1 = (
+                    hasattr(_progress_mod, "ProgressReporter")
+                    and hasattr(_progress_mod, "read_progress")
+                    and callable(_progress_mod.read_progress)
+                )
+                detail1 = "module present" if ok1 else "module present but missing expected attrs"
+            except Exception as exc:
+                ok1, detail1 = False, f"reporting.progress not importable (not yet merged?): {exc}"
+            _chk(
+                "reporting.progress.ProgressReporter + read_progress importable & callable",
+                ok1, detail1, soft=True,
+            )
+
+            # 2 & 3 depend on the module actually being importable.
+            if _progress_mod is not None:
+                try:
+                    import tempfile
+                    with tempfile.TemporaryDirectory() as _td:
+                        _nonexistent = Path(_td) / "does_not_exist_subdir"
+                        _result = _progress_mod.read_progress(output_dir=_nonexistent)
+                        ok2 = _result is None
+                        detail2 = "returned None" if ok2 else f"got {type(_result).__name__} (fabricated?)"
+                except Exception as exc:
+                    ok2, detail2 = False, str(exc)
+                _chk(
+                    "read_progress(nonexistent dir) returns None, never fabricated (CONSTRAINT #4)",
+                    ok2, detail2, soft=True,
+                )
+
+                try:
+                    if hasattr(_progress_mod, "compute_percent"):
+                        _cp = _progress_mod.compute_percent
+                        ok3 = (_cp(0, 0, 0, 0) == 0.0) and (_cp(6, 6, 0, 0) == 100.0)
+                        detail3 = ""
+                    else:
+                        ok3, detail3 = False, "compute_percent not defined on reporting.progress"
+                except Exception as exc:
+                    ok3, detail3 = False, str(exc)
+                _chk(
+                    "compute_percent(0,0,0,0)==0.0 and compute_percent(6,6,0,0)==100.0 (clamped, no div-by-zero)",
+                    ok3, detail3, soft=True,
+                )
+            else:
+                _chk(
+                    "read_progress(nonexistent dir) returns None, never fabricated (CONSTRAINT #4)",
+                    False, "skipped — reporting.progress not present", soft=True,
+                )
+                _chk(
+                    "compute_percent(0,0,0,0)==0.0 and compute_percent(6,6,0,0)==100.0 (clamped, no div-by-zero)",
+                    False, "skipped — reporting.progress not present", soft=True,
+                )
+
+            # 4. gui.orchestrator_runner.compute_run_progress (Agent 3's fn) — soft-guard.
+            try:
+                import gui.orchestrator_runner as _orr  # type: ignore
+                ok4 = hasattr(_orr, "compute_run_progress") and callable(_orr.compute_run_progress)
+                detail4 = "" if ok4 else "compute_run_progress not yet defined (Agent 3 branch not merged?)"
+            except Exception as exc:
+                ok4, detail4 = False, str(exc)
+            _chk("gui.orchestrator_runner.compute_run_progress importable", ok4, detail4, soft=True)
+
+            # 5. gui.progress_ui.busy (Agent 4's helper) — soft-guard.
+            try:
+                import gui.progress_ui as _pui  # type: ignore
+                ok5 = hasattr(_pui, "busy") and callable(_pui.busy)
+                detail5 = "" if ok5 else "busy not yet defined"
+            except Exception as exc:
+                ok5, detail5 = False, f"gui.progress_ui not importable (not yet merged?): {exc}"
+            _chk("gui.progress_ui.busy importable", ok5, detail5, soft=True)
+
+            # 6. PROGRESS_POLL_SECONDS allowlisted, not a secret — this file's owner (hard).
+            try:
+                import gui.env_io as _env_io
+                ok6 = (
+                    "PROGRESS_POLL_SECONDS" in _env_io.ALLOWED_KEYS
+                    and "PROGRESS_POLL_SECONDS" not in _env_io.SECRET_KEYS
+                )
+                detail6 = ""
+            except Exception as exc:
+                ok6, detail6 = False, str(exc)
+            hard_pass = _chk(
+                "PROGRESS_POLL_SECONDS in gui.env_io.ALLOWED_KEYS and not in SECRET_KEYS",
+                ok6, detail6,
+            ) and hard_pass
+
+            # 7. settings.PROGRESS_POLL_SECONDS exists and is an int — this file's owner (hard).
+            try:
+                from settings import settings as _settings
+                ok7 = hasattr(_settings, "PROGRESS_POLL_SECONDS") and isinstance(
+                    _settings.PROGRESS_POLL_SECONDS, int
+                )
+                detail7 = ""
+            except Exception as exc:
+                ok7, detail7 = False, str(exc)
+            hard_pass = _chk(
+                "settings.PROGRESS_POLL_SECONDS exists and is an int", ok7, detail7
+            ) and hard_pass
+
+            audit["overall_pass"] = hard_pass
+            audit["status"] = "PASSED" if hard_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_74_progress_indicator_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

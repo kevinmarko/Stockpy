@@ -359,6 +359,9 @@ class Settings(BaseSettings):
     DASHBOARD_REFRESH_SECONDS: int = Field(
         default=1800, description="Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min."
     )
+    PROGRESS_POLL_SECONDS: int = Field(
+        default=5, description="Poll interval (seconds) for the Launcher pipeline-progress indicator."
+    )
     # ISO date string (YYYY-MM-DD) recording when paper trading began.
     # Used by scripts/preflight_check.py to verify >= 90 days of paper history.
     PAPER_TRADING_START_DATE: Optional[str] = Field(

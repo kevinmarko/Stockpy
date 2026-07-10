@@ -154,6 +154,7 @@ _KELLY_FRACTION = settings.KELLY_FRACTION
 _CONV_DELTA = settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD
 _RH_QUEUE_STALE_MIN = int(_RH_QUEUE_STALE_SECONDS // 60)
 _RH_MAX_NOTIONAL = settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
+_PROGRESS_POLL_SECONDS = settings.PROGRESS_POLL_SECONDS
 
 GLOSSARY: Dict[str, GlossaryEntry] = {
     # ── Action signals ────────────────────────────────────────────────────────
@@ -1164,6 +1165,12 @@ SECTION_HELP: Dict[str, str] = {
         "Exports the per-symbol rows from the last `state_snapshot.json` run — "
         "action, score, Kelly target, buy/sell ranges, macro status — as a flat "
         "CSV for offline post-trade analysis. Respects the regime filter above."
+    ),
+    "pipeline_progress": (
+        "Percentage of pipeline stages completed for the current run.  "
+        f"Refreshes every {_PROGRESS_POLL_SECONDS} seconds while a run is "
+        "active.  Advisory-only — no orders are placed; this only reflects "
+        "analysis progress."
     ),
 }
 
