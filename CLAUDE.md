@@ -29,6 +29,7 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
 | `docs/RUNBOOK.md` | Operational runbook — pre-market checklist, incident playbooks, advisory pause procedure |
 | `docs/GO_LIVE_CHECKLIST.md` | Pre-live checklist (all automatable items covered by `preflight_check.py`) |
 | `docs/FEATURE_TIER_HISTORY.md` | Detailed dated changelog for every Tier/Task/Scope feature shipped since 2026-06 (ML Stage 4, GUI tab build-outs, Tier 1-9 advisory/LLM features, AI Control Center, Prompt Registry) — full backstory, test surface, and Gravity step numbers per subsystem |
+| `docs/test_coverage_analysis.md` | Test-coverage audit — suite inventory, module-level gap table, and prioritized roadmap for improving test coverage |
 
 ## Commands
 
