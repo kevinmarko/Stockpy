@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 # --- import module under test ---
@@ -639,12 +640,22 @@ class TestMacroEngineReuse:
             assert engine_1 is not engine_2
             assert MockME.call_count == 2
 
-    def test_build_macro_dto_reuses_engine_across_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_build_macro_dto_reuses_engine_across_calls(
+        self, monkeypatch: pytest.MonkeyPatch, disable_historical_store
+    ) -> None:
         """_build_macro_dto() (called once per run_once() cycle) must route
         through _get_macro_engine() so two consecutive cycles within the same
         process reuse one MacroEngine instance instead of constructing a new
         one (and therefore a fresh, never-fitted HMMRegimeDetector) every
-        cycle."""
+        cycle.
+
+        Uses disable_historical_store since HISTORICAL_STORE_ENABLED defaults
+        True and this test doesn't exercise the SPY-history routing itself
+        (see TestBuildMacroDtoHistoricalStoreRouting below) -- without the
+        fixture, _build_macro_dto's new HistoricalStore-first SPY fetch would
+        construct a real on-disk HistoricalStore and hit the real
+        get_provider() network path instead of exercising the mocked
+        fake_de.fetch_technical_raw fallback this test actually verifies."""
         monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
 
         with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
@@ -665,6 +676,118 @@ class TestMacroEngineReuse:
             # called twice (simulating two --interval cycles).
             MockME.assert_called_once()
             assert fake_me.compute_hmm_risk_on_probability.call_count == 2
+
+
+class TestBuildMacroDtoHistoricalStoreRouting:
+    """_build_macro_dto()'s SPY-history fetch for the HMM detector must route
+    through HistoricalStore.get_bars() when enabled and available, falling
+    back to the original DataEngine.fetch_technical_raw(["SPY"]) call on any
+    HistoricalStore failure or when HISTORICAL_STORE_ENABLED is False."""
+
+    def setup_method(self) -> None:
+        m._reset_macro_engine_cache()
+
+    def teardown_method(self) -> None:
+        m._reset_macro_engine_cache()
+
+    def test_spy_history_routes_through_historical_store_when_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
+        synthetic_spy_df = pd.DataFrame(
+            {
+                "Open": [100.0, 101.0],
+                "High": [102.0, 103.0],
+                "Low": [99.0, 100.0],
+                "Close": [101.0, 102.0],
+                "Volume": [1000, 1100],
+            }
+        )
+
+        with patch("data_engine.DataEngine") as MockDE, \
+             patch("macro_engine.MacroEngine") as MockME, \
+             patch("data.historical_store.HistoricalStore") as MockHS, \
+             patch("main.get_provider") as mock_get_provider:
+            fake_de = MagicMock()
+            fake_de.fetch_macro_raw.return_value = {}
+            MockDE.return_value = fake_de
+
+            fake_me = MagicMock()
+            fake_me.data_engine = fake_de
+            fake_me.compute_hmm_risk_on_probability.return_value = None
+            MockME.return_value = fake_me
+
+            fake_market = MagicMock()
+            mock_get_provider.return_value = fake_market
+
+            fake_store_instance = MagicMock()
+            fake_store_instance.get_bars.return_value = synthetic_spy_df
+            MockHS.return_value = fake_store_instance
+
+            m._build_macro_dto()
+
+            fake_store_instance.get_bars.assert_called_once_with(
+                "SPY", lookback_days=504, provider=fake_market
+            )
+            fake_de.fetch_technical_raw.assert_not_called()
+            fake_me.compute_hmm_risk_on_probability.assert_called_once()
+            call_args = fake_me.compute_hmm_risk_on_probability.call_args
+            passed_df = call_args[0][0] if call_args[0] else call_args.kwargs.get("spy_price_df")
+            assert passed_df is synthetic_spy_df
+
+    def test_spy_history_falls_back_when_historical_store_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
+        fallback_spy_df = pd.DataFrame({"Close": [50.0, 51.0]})
+
+        with patch("data_engine.DataEngine") as MockDE, \
+             patch("macro_engine.MacroEngine") as MockME, \
+             patch("data.historical_store.HistoricalStore") as MockHS:
+            fake_de = MagicMock()
+            fake_de.fetch_macro_raw.return_value = {}
+            fake_de.fetch_technical_raw.return_value = {"SPY": fallback_spy_df}
+            MockDE.return_value = fake_de
+
+            fake_me = MagicMock()
+            fake_me.data_engine = fake_de
+            fake_me.compute_hmm_risk_on_probability.return_value = None
+            MockME.return_value = fake_me
+
+            MockHS.side_effect = RuntimeError("simulated HistoricalStore construction failure")
+
+            m._build_macro_dto()
+
+            fake_de.fetch_technical_raw.assert_called_once_with(["SPY"])
+            fake_me.compute_hmm_risk_on_probability.assert_called_once()
+            call_args = fake_me.compute_hmm_risk_on_probability.call_args
+            passed_df = call_args[0][0] if call_args[0] else call_args.kwargs.get("spy_price_df")
+            assert passed_df is fallback_spy_df
+
+    def test_spy_history_uses_direct_fetch_when_historical_store_disabled(
+        self, monkeypatch: pytest.MonkeyPatch, disable_historical_store
+    ) -> None:
+        monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
+        fallback_spy_df = pd.DataFrame({"Close": [60.0, 61.0]})
+
+        with patch("data_engine.DataEngine") as MockDE, \
+             patch("macro_engine.MacroEngine") as MockME, \
+             patch("data.historical_store.HistoricalStore") as MockHS:
+            fake_de = MagicMock()
+            fake_de.fetch_macro_raw.return_value = {}
+            fake_de.fetch_technical_raw.return_value = {"SPY": fallback_spy_df}
+            MockDE.return_value = fake_de
+
+            fake_me = MagicMock()
+            fake_me.data_engine = fake_de
+            fake_me.compute_hmm_risk_on_probability.return_value = None
+            MockME.return_value = fake_me
+
+            m._build_macro_dto()
+
+            MockHS.assert_not_called()
+            fake_de.fetch_technical_raw.assert_called_once_with(["SPY"])
+            fake_me.compute_hmm_risk_on_probability.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
