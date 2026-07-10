@@ -9483,6 +9483,11 @@ class GravityAIAuditor:
         9.  macro_engine.py source references HistoricalStore.
         10. tests/test_historical_store.py contains TestFundamentalsHistory
             and TestMacroHistory classes.
+        11. data_engine.py source references HistoricalStore (via the new
+            fetch_technical_raw_cached() method, 2026-07).
+        12. main_orchestrator.py's fetch_all_data_async uses
+            fetch_technical_raw_cached, not the bare fetch_technical_raw,
+            for its tech-data task (2026-07).
         """
         import math
         import os
@@ -9655,6 +9660,28 @@ class GravityAIAuditor:
                 f"classes found: {class_names}",
             )
             all_pass = all_pass and classes_ok
+
+            # ── 11. data_engine.py references HistoricalStore ────────────────
+            de_src = open("data_engine.py", encoding="utf-8").read()
+            de_ok = "HistoricalStore" in de_src and "fetch_technical_raw_cached" in de_src
+            _chk(
+                "data_engine.py references HistoricalStore (fetch_technical_raw_cached)",
+                de_ok,
+            )
+            all_pass = all_pass and de_ok
+
+            # ── 12. main_orchestrator.py's tech-data task uses the cached path ─
+            mo_src = open("main_orchestrator.py", encoding="utf-8").read()
+            mo_cached_ok = "de.fetch_technical_raw_cached" in mo_src
+            mo_bare_absent_ok = "asyncio.to_thread(de.fetch_technical_raw," not in mo_src
+            mo_ok = mo_cached_ok and mo_bare_absent_ok
+            _chk(
+                "main_orchestrator.py's fetch_all_data_async uses fetch_technical_raw_cached, "
+                "not fetch_technical_raw, for its tech-data task",
+                mo_ok,
+                f"cached_call_present={mo_cached_ok}, bare_call_absent={mo_bare_absent_ok}",
+            )
+            all_pass = all_pass and mo_ok
 
             audit["overall_pass"] = all_pass
             audit["status"] = "PASSED" if all_pass else "FAILED"

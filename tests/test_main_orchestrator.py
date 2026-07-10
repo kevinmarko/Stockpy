@@ -21,7 +21,9 @@ Coverage (new surfaces):
   TestSafeFloatOrNone           : _safe_float_or_none float/NaN/None/str coercion.
   TestComputeXsecMomentumRanksEdges: empty dict -> empty Series; missing Close
                                   skipped; p_old<=0 excluded; custom skip/lookback.
-  TestFetchAllDataAsync         : fetch_all_data_async returns 3 dicts + injects SPY.
+  TestFetchAllDataAsync         : fetch_all_data_async returns 3 dicts + injects SPY;
+                                  its tech-data task calls DataEngine.fetch_technical_raw_cached()
+                                  (HistoricalStore-routed), not fetch_technical_raw() (2026-07).
   TestHeartbeat                 : _heartbeat writes a parseable ISO timestamp;
                                   write failure is swallowed (dead-letter, no raise).
   TestExecuteBrokerOrders       : ADVISORY_ONLY=True no-op (no broker reference);
@@ -196,6 +198,38 @@ class TestFetchAllDataAsync:
         for tk in ("AAPL", "SPY"):
             assert tk in tech_raw
             assert not tech_raw[tk].empty
+
+    def test_tech_task_calls_fetch_technical_raw_cached_not_fetch_technical_raw(
+        self, monkeypatch
+    ):
+        """2026-07: fetch_all_data_async's tech-data task must call
+        DataEngine.fetch_technical_raw_cached() (HistoricalStore-routed
+        incremental fetch), NOT the bare fetch_technical_raw() -- closing the
+        gap where the full async pipeline refetched ~2 years of OHLCV for
+        every ticker every cycle regardless of HistoricalStore's
+        incremental-top-up capability. Spies replace both methods entirely
+        (no real fetch logic runs) so this isolates purely which method
+        fetch_all_data_async invokes."""
+        de = MockDataEngine()
+        sentinel = {"SPY": pd.DataFrame({"Close": [1.0]})}
+        calls = {"cached": 0, "raw": 0}
+
+        def _cached_spy(tickers):
+            calls["cached"] += 1
+            return sentinel
+
+        def _raw_spy(tickers):
+            calls["raw"] += 1
+            return sentinel
+
+        monkeypatch.setattr(de, "fetch_technical_raw_cached", _cached_spy)
+        monkeypatch.setattr(de, "fetch_technical_raw", _raw_spy)
+
+        _macro, _fund, tech_raw = asyncio.run(fetch_all_data_async(de, ["AAPL"]))
+
+        assert calls["cached"] == 1
+        assert calls["raw"] == 0
+        assert tech_raw is sentinel
 
 
 # ===========================================================================

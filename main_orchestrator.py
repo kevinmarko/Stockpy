@@ -181,7 +181,11 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
     
     macro_task = asyncio.to_thread(de.fetch_macro_raw)
     fund_task = asyncio.to_thread(de.fetch_fundamentals_raw, tickers)
-    tech_task = asyncio.to_thread(de.fetch_technical_raw, list(set(tickers + ["SPY"])))
+    # Routes through HistoricalStore's incremental top-up (2026-07) instead of
+    # a full 2-year yfinance re-pull every cycle for the whole universe --
+    # main.py's _fetch_bars_for_universe() already used HistoricalStore; this
+    # closed the one remaining tech-bars call site that bypassed it.
+    tech_task = asyncio.to_thread(de.fetch_technical_raw_cached, list(set(tickers + ["SPY"])))
     
     macro_raw, fund_raw, tech_raw = await asyncio.gather(macro_task, fund_task, tech_task)
     telemetry.info("Data fetching completed successfully.")

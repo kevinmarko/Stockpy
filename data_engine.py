@@ -167,6 +167,64 @@ class DataEngine(IDataProvider):
                 pairs = list(pool.map(_fetch_one, tickers))
         return {symbol: df for symbol, df in pairs if df is not None}
 
+    def fetch_technical_raw_cached(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
+        """
+        Like ``fetch_technical_raw()``, but routes each ticker through
+        ``data.historical_store.HistoricalStore.get_bars()`` when
+        ``settings.HISTORICAL_STORE_ENABLED`` is True, so a symbol whose bars
+        are already persisted only needs its delta ``(last_date, today]``
+        fetched instead of a full 2-year yfinance re-pull every cycle. This
+        closes the one remaining tech-bars call site
+        (``main_orchestrator.py::fetch_all_data_async``) that bypassed
+        ``HistoricalStore`` entirely, unlike ``main.py``'s
+        ``_fetch_bars_for_universe()`` which already routes through it.
+
+        Falls back to the EXACT ``fetch_technical_raw()`` behavior (same
+        ``ThreadPoolExecutor``/``DATA_FETCH_MAX_CONCURRENCY`` concurrency
+        pattern, identical ``{symbol: DataFrame}`` shape with
+        Open/High/Low/Close/Volume columns and a tz-naive ``DatetimeIndex``)
+        on any ``HistoricalStore``/provider construction or import failure,
+        or entirely when ``settings.HISTORICAL_STORE_ENABLED`` is False --
+        byte-identical output either way. Never modifies
+        ``fetch_technical_raw()`` itself.
+        """
+        if not getattr(settings, "HISTORICAL_STORE_ENABLED", True):
+            return self.fetch_technical_raw(tickers)
+
+        try:
+            from data.historical_store import HistoricalStore
+            from data.market_data import get_provider
+
+            _store = HistoricalStore()
+            _provider = get_provider()
+        except Exception as e:
+            logger.warning(
+                f"fetch_technical_raw_cached: HistoricalStore/provider unavailable "
+                f"({e}); falling back to direct fetch_technical_raw()."
+            )
+            return self.fetch_technical_raw(tickers)
+
+        lookback_days = int(getattr(settings, "BARS_BACKFILL_DAYS", 504))
+
+        def _fetch_one(symbol: str) -> tuple[str, Optional[pd.DataFrame]]:
+            try:
+                df = _store.get_bars(symbol, lookback_days=lookback_days, provider=_provider)
+                if df is not None and not df.empty:
+                    logger.info(f"Retrieved cached/incremental technical time series for {symbol}")
+                    return symbol, df
+                logger.warning(f"No technical series found for {symbol} via HistoricalStore")
+            except Exception as e:
+                logger.error(f"Failed to fetch cached technical series for {symbol}: {e}")
+            return symbol, None
+
+        workers = max(1, int(getattr(settings, "DATA_FETCH_MAX_CONCURRENCY", 8)))
+        if workers == 1 or len(tickers) <= 1:
+            pairs = [_fetch_one(symbol) for symbol in tickers]
+        else:
+            with ThreadPoolExecutor(max_workers=min(workers, len(tickers))) as pool:
+                pairs = list(pool.map(_fetch_one, tickers))
+        return {symbol: df for symbol, df in pairs if df is not None}
+
     def fetch_fundamentals_raw(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Fetches equity fundamentals through the shared
@@ -297,6 +355,21 @@ class MockDataEngine(IDataProvider):
             }, index=dates)
             results[ticker] = df
         return results
+
+    def fetch_technical_raw_cached(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
+        """
+        Deterministic-test alias for ``fetch_technical_raw()``. MockDataEngine
+        has no real per-ticker network fetch to cache against a DB -- its
+        bars are synthesized fresh from ``datetime.now()`` on every call, so
+        there is nothing to incrementally "top up" and no HistoricalStore
+        involvement makes sense here. Exists purely so callers that
+        unconditionally call ``fetch_technical_raw_cached()``
+        (``main_orchestrator.py``'s ``fetch_all_data_async``, which falls
+        back to a fresh ``MockDataEngine()`` when ``credentials.json`` is
+        absent or live data comes back empty) work identically whether
+        ``de`` is a real ``DataEngine`` or this test/offline-fallback fixture.
+        """
+        return self.fetch_technical_raw(tickers)
 
     def fetch_fundamentals_raw(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         results = {}

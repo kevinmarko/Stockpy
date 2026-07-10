@@ -16,12 +16,20 @@ Verifies:
     crash
   - settings.DATA_FETCH_MAX_CONCURRENCY=1 forces the sequential path (used
     by callers that want fully deterministic ordering/timing)
+
+Also covers TestFetchTechnicalRawCached (2026-07): DataEngine's new,
+additive fetch_technical_raw_cached() method, which routes each ticker
+through data.historical_store.HistoricalStore.get_bars() (incremental
+top-up) when settings.HISTORICAL_STORE_ENABLED is True, falling back to the
+EXACT fetch_technical_raw() behavior on any HistoricalStore/provider
+construction failure or when the flag is off. All HistoricalStore/provider
+calls are monkeypatched -- no real on-disk DB is touched.
 """
 import pandas as pd
 import pytest
 from unittest.mock import MagicMock, patch
 
-from data_engine import DataEngine
+from data_engine import DataEngine, MockDataEngine
 
 
 def _make_history_df(rows=3):
@@ -195,3 +203,163 @@ class TestFetchFundamentalsRawConcurrency:
             parallel = self._engine().fetch_fundamentals_raw(tickers)
 
         assert set(sequential.keys()) == set(parallel.keys()) == set(tickers)
+
+
+class TestFetchTechnicalRawCached:
+    """DataEngine.fetch_technical_raw_cached() -- HistoricalStore-routed bars
+    fetch for main_orchestrator.py's fetch_all_data_async(). All
+    HistoricalStore/provider access is monkeypatched; nothing here touches a
+    real on-disk quant_platform.db.
+    """
+
+    def _engine(self):
+        return DataEngine(fred_api_key=None)
+
+    def _ticker_factory(self, symbol):
+        m = MagicMock()
+        m.history.return_value = _make_history_df()
+        return m
+
+    def test_flag_disabled_falls_back_to_direct_fetch(self, monkeypatch):
+        """HISTORICAL_STORE_ENABLED=False must reproduce fetch_technical_raw()
+        byte-for-byte -- HistoricalStore is never even imported."""
+        monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", False)
+        monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 4)
+
+        with patch("yfinance.Ticker", side_effect=self._ticker_factory):
+            engine = self._engine()
+            direct = engine.fetch_technical_raw(["AAPL", "MSFT"])
+            cached = engine.fetch_technical_raw_cached(["AAPL", "MSFT"])
+
+        assert set(cached.keys()) == set(direct.keys()) == {"AAPL", "MSFT"}
+        for sym in direct:
+            pd.testing.assert_frame_equal(cached[sym], direct[sym])
+
+    def test_historical_store_construction_failure_falls_back(self, monkeypatch):
+        """HISTORICAL_STORE_ENABLED=True but HistoricalStore() raising on
+        construction must degrade to the exact fetch_technical_raw() path
+        (CONSTRAINT #6 -- dead-letter, never crash)."""
+        monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
+        monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 4)
+
+        with patch("yfinance.Ticker", side_effect=self._ticker_factory), \
+                patch("data.historical_store.HistoricalStore", side_effect=RuntimeError("db down")):
+            engine = self._engine()
+            direct = engine.fetch_technical_raw(["AAPL"])
+            cached = engine.fetch_technical_raw_cached(["AAPL"])
+
+        assert set(cached.keys()) == set(direct.keys()) == {"AAPL"}
+        pd.testing.assert_frame_equal(cached["AAPL"], direct["AAPL"])
+
+    def test_get_provider_failure_falls_back(self, monkeypatch):
+        """A working HistoricalStore but a broken get_provider() singleton
+        must ALSO degrade to the direct fetch -- both are needed."""
+        monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
+
+        with patch("yfinance.Ticker", side_effect=self._ticker_factory), \
+                patch("data.historical_store.HistoricalStore", return_value=MagicMock()), \
+                patch("data.market_data.get_provider", side_effect=RuntimeError("provider init failed")):
+            result = self._engine().fetch_technical_raw_cached(["AAPL"])
+
+        assert "AAPL" in result
+
+    def test_uses_historical_store_get_bars_per_ticker(self, monkeypatch):
+        """Happy path: each ticker is routed through
+        HistoricalStore.get_bars(symbol, lookback_days=BARS_BACKFILL_DAYS,
+        provider=<singleton>), and its return value is what flows through."""
+        monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
+        monkeypatch.setattr("data_engine.settings.BARS_BACKFILL_DAYS", 504)
+        monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 4)
+
+        fake_store_instance = MagicMock()
+        fake_store_instance.get_bars.side_effect = (
+            lambda symbol, lookback_days=None, provider=None: _make_history_df()
+        )
+        fake_provider = MagicMock()
+
+        with patch("data.historical_store.HistoricalStore", return_value=fake_store_instance), \
+                patch("data.market_data.get_provider", return_value=fake_provider):
+            result = self._engine().fetch_technical_raw_cached(["AAPL", "MSFT"])
+
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+        assert fake_store_instance.get_bars.call_count == 2
+        for call in fake_store_instance.get_bars.call_args_list:
+            args, kwargs = call
+            assert args[0] in {"AAPL", "MSFT"}
+            assert kwargs["lookback_days"] == 504
+            assert kwargs["provider"] is fake_provider
+
+    def test_one_bad_ticker_does_not_abort_batch(self, monkeypatch):
+        monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
+        monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 4)
+
+        def _get_bars(symbol, lookback_days=None, provider=None):
+            if symbol == "BADCO":
+                raise RuntimeError("db exploded")
+            return _make_history_df()
+
+        fake_store_instance = MagicMock()
+        fake_store_instance.get_bars.side_effect = _get_bars
+
+        with patch("data.historical_store.HistoricalStore", return_value=fake_store_instance), \
+                patch("data.market_data.get_provider", return_value=MagicMock()):
+            result = self._engine().fetch_technical_raw_cached(["AAPL", "BADCO", "MSFT"])
+
+        assert "BADCO" not in result
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+
+    def test_empty_bars_from_store_are_omitted_not_fabricated(self, monkeypatch):
+        monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
+        fake_store_instance = MagicMock()
+        fake_store_instance.get_bars.return_value = pd.DataFrame()
+
+        with patch("data.historical_store.HistoricalStore", return_value=fake_store_instance), \
+                patch("data.market_data.get_provider", return_value=MagicMock()):
+            result = self._engine().fetch_technical_raw_cached(["EMPTY"])
+
+        assert result == {}
+
+    def test_sequential_path_worker_1_matches_parallel_result(self, monkeypatch):
+        monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
+
+        fake_store_instance = MagicMock()
+        fake_store_instance.get_bars.side_effect = (
+            lambda symbol, lookback_days=None, provider=None: _make_history_df()
+        )
+        tickers = ["AAPL", "MSFT", "GOOG"]
+
+        with patch("data.historical_store.HistoricalStore", return_value=fake_store_instance), \
+                patch("data.market_data.get_provider", return_value=MagicMock()):
+            monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 1)
+            sequential = self._engine().fetch_technical_raw_cached(tickers)
+            monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 4)
+            parallel = self._engine().fetch_technical_raw_cached(tickers)
+
+        assert set(sequential.keys()) == set(parallel.keys()) == set(tickers)
+
+
+class TestMockDataEngineFetchTechnicalRawCachedAlias:
+    """MockDataEngine.fetch_technical_raw_cached() must be a plain,
+    behavior-identical alias for its own fetch_technical_raw() -- required so
+    main_orchestrator.py's MockDataEngine offline-fallback branch (and
+    existing tests that construct MockDataEngine directly) keep working
+    unchanged now that fetch_all_data_async() calls the "_cached" method
+    unconditionally."""
+
+    def test_returns_identical_output_to_fetch_technical_raw(self):
+        # NOTE: fetch_technical_raw() builds its DatetimeIndex from
+        # datetime.now() on every call, so two independent calls a few
+        # microseconds apart can have sub-second-different index values --
+        # normalize() strips time-of-day before comparing so this assertion
+        # isn't flaky on wall-clock timing.
+        engine = MockDataEngine()
+        tickers = ["AAPL", "MSFT"]
+        direct = engine.fetch_technical_raw(tickers)
+        cached = engine.fetch_technical_raw_cached(tickers)
+
+        assert set(cached.keys()) == set(direct.keys()) == set(tickers)
+        for sym in tickers:
+            d, c = direct[sym], cached[sym]
+            assert list(c.columns) == list(d.columns)
+            assert c.index.normalize().equals(d.index.normalize())
+            assert (c.values == d.values).all()
