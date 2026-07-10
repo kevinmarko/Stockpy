@@ -28,6 +28,7 @@ from gui.panels._shared import (  # noqa: E402
     logger,
 )
 from gui.panels import load_state_snapshot
+from gui.progress_ui import busy
 
 
 def render_live_inventory() -> None:
@@ -87,10 +88,11 @@ def render_live_inventory() -> None:
 
     if fetch_rh:
         try:
-            from data.robinhood_portfolio import fetch_account_snapshot
+            with busy("Fetching Robinhood snapshot…"):
+                from data.robinhood_portfolio import fetch_account_snapshot
 
-            snapshot_obj = fetch_account_snapshot()
-            st.session_state["rh_snapshot"] = snapshot_obj
+                snapshot_obj = fetch_account_snapshot()
+                st.session_state["rh_snapshot"] = snapshot_obj
         except Exception as exc:  # noqa: BLE001 - never crash the panel
             st.error(f"Robinhood snapshot failed: {exc}")
 

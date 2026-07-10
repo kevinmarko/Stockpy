@@ -27,6 +27,7 @@ from gui.panels._shared import (  # noqa: E402
     load_block_log,
     logger,
 )
+from gui.progress_ui import busy
 
 
 # Render hints: (key, widget_kind). Unlisted allowlist keys default to text.
@@ -151,7 +152,8 @@ def render_settings_manager() -> None:
 
     if submitted:
         try:
-            written = env_io.write_many(updates)
+            with busy("Saving settings to .env…"):
+                written = env_io.write_many(updates)
             st.success(f"Saved {len(written)} setting(s) to .env. Re-launch to apply.")
         except env_io.SecretWriteError as exc:
             st.error(f"Refused to write a secret: {exc}")
