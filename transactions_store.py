@@ -120,3 +120,38 @@ class TransactionsStore:
             return df
         finally:
             session.close()
+
+
+class _OfflineTransactionsStore:
+    """Read-only stand-in used when the configured DB backend is unreachable.
+
+    ``TransactionsStore()`` construction does an eager connection (``Base
+    .metadata.create_all``), so a network/DNS outage on a remote backend
+    (e.g. a Postgres/Supabase ``DATABASE_URL``) raises before a single query
+    is ever made. Sizing callers (``sizing/kelly.py``, ``StrategyEngine``)
+    already treat "zero closed trades" as a normal cold-start condition and
+    fall back to volatility-target sizing (CONSTRAINT #6) — this stub reuses
+    that exact path instead of letting the connectivity error propagate out
+    of ``evaluate()``/``evaluate_security()`` and dead-letter the entire
+    per-symbol advisory evaluation over what is, for the advisory pipeline,
+    an optional position-sizing refinement.
+
+    Write methods intentionally still raise: fabricating a successful trade
+    record against a DB that is actually unreachable would violate
+    CONSTRAINT #4 (no fabricated data). Only the read path degrades.
+    """
+
+    def record_trade(self, *args, **kwargs) -> int:
+        raise RuntimeError("TransactionsStore is unavailable (DB unreachable); cannot record a trade.")
+
+    def close_trade(self, *args, **kwargs) -> None:
+        raise RuntimeError("TransactionsStore is unavailable (DB unreachable); cannot close a trade.")
+
+    def open_trades_df(self) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    def closed_trades_df(self) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    def get_trade_history(self, symbol: str) -> pd.DataFrame:
+        return pd.DataFrame()

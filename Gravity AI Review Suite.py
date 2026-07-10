@@ -4452,6 +4452,8 @@ class GravityAIAuditor:
         self.step_73_validation_lab_audit()
         # Progress indicator — reporting/progress.py + GUI wiring audit
         self.step_74_progress_indicator_audit()
+        # DB backend resilience — Postgres/Supabase outage must not dead-letter every symbol
+        self.step_75_db_backend_resilience_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -11592,6 +11594,167 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_74_progress_indicator_audit"] = audit
+
+    def step_75_db_backend_resilience_audit(self) -> None:
+        """Step 75 — DB backend resilience audit (Postgres/Supabase outage isolation).
+
+        Incident: with ``DATABASE_URL`` pointed at a remote Postgres/Supabase
+        backend, a DNS/connectivity failure at ``TransactionsStore()`` construction
+        (``Base.metadata.create_all`` does an eager connection) propagated straight
+        out of ``engine.advisory._get_transactions_store()`` and
+        ``StrategyEngine.transactions_store`` — dead-lettering EVERY symbol's
+        advisory evaluation for the cycle (0 OK / N errors) over what is, for the
+        advisory pipeline, an optional position-sizing refinement. Every sizing
+        call site already treats "zero closed trades" as a normal cold-start
+        condition and falls back to volatility-target sizing (CONSTRAINT #6) —
+        the fix reuses that exact path via ``transactions_store
+        ._OfflineTransactionsStore``, a read-only stub substituted (and cached,
+        so a process doesn't retry-storm a down host once per ticker) whenever
+        construction fails, instead of letting the connectivity error propagate.
+
+        This audit is fully offline (constructs no real Postgres connection);
+        it proves the degrade-not-raise contract by patching
+        ``transactions_store.TransactionsStore`` to always raise.
+
+        Checks:
+          1. ``transactions_store._OfflineTransactionsStore`` exists.
+          2. Its ``closed_trades_df()``/``open_trades_df()``/``get_trade_history()``
+             return empty DataFrames (not raise) — the "zero closed trades"
+             cold-start shape every fallback path already understands.
+          3. Its ``record_trade()``/``close_trade()`` RAISE rather than fabricate
+             a successful write (CONSTRAINT #4 — a trade that was never actually
+             persisted must not be silently reported as recorded).
+          4. ``engine.advisory._get_transactions_store()`` degrades to the offline
+             stub (does not raise) when construction fails, and caches it so a
+             second call does not re-invoke the broken constructor.
+          5. ``StrategyEngine.transactions_store`` (the lazy-construction property)
+             degrades identically for a caller that injects no store.
+          6. End-to-end: ``StrategyEngine._calculate_kelly_sizing(...)`` returns a
+             finite, non-NaN weight tagged ``"vol_target_fallback"`` (not a raised
+             exception) when the DB backend is unreachable, for BOTH the
+             per-strategy and the aggregate sizing paths.
+        """
+        audit = {
+            "step": "step_75_db_backend_resilience_audit",
+            "description": "DB backend resilience — a Postgres/Supabase outage must degrade sizing, not dead-letter every symbol",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": passed, "detail": str(detail)})
+            return passed
+
+        try:
+            import sys
+            from pathlib import Path
+            from unittest import mock
+
+            _repo = Path(__file__).resolve().parent
+            if str(_repo) not in sys.path:
+                sys.path.insert(0, str(_repo))
+
+            all_pass = True
+
+            # 1. _OfflineTransactionsStore exists.
+            try:
+                import transactions_store as _ts
+                ok1 = hasattr(_ts, "_OfflineTransactionsStore")
+            except Exception as exc:
+                ok1 = False
+            all_pass = _chk("transactions_store._OfflineTransactionsStore exists", ok1) and all_pass
+
+            # 2. Read methods return empty frames, not raise.
+            try:
+                import pandas as pd
+                stub = _ts._OfflineTransactionsStore()
+                dfs = [stub.closed_trades_df(), stub.open_trades_df(), stub.get_trade_history("AAPL")]
+                ok2 = all(isinstance(d, pd.DataFrame) and d.empty for d in dfs)
+            except Exception as exc:
+                ok2 = False
+            all_pass = _chk("offline stub read methods return empty DataFrames", ok2) and all_pass
+
+            # 3. Write methods raise (never fabricate a successful trade record).
+            try:
+                stub = _ts._OfflineTransactionsStore()
+                wrote_ok = False
+                try:
+                    stub.record_trade(symbol="AAPL", side="long", entry_ts=None, entry_price=1.0, shares=1.0)
+                    wrote_ok = True  # should not reach here
+                except Exception:
+                    pass
+                ok3 = not wrote_ok
+            except Exception:
+                ok3 = False
+            all_pass = _chk("offline stub write methods raise rather than fabricate success", ok3) and all_pass
+
+            # 4. engine.advisory._get_transactions_store() degrades and caches.
+            try:
+                import engine.advisory as _adv
+
+                def _boom(*a, **k):
+                    raise ConnectionError("could not translate host name to address")
+
+                with mock.patch.object(_adv, "TransactionsStore", _boom), \
+                     mock.patch.object(_adv, "_TransactionsStore_orig", _boom), \
+                     mock.patch.object(_adv, "_TRANSACTIONS_STORE", None):
+                    store1 = _adv._get_transactions_store()
+                    store2 = _adv._get_transactions_store()
+                    ok4 = isinstance(store1, _ts._OfflineTransactionsStore) and store2 is store1
+            except Exception as exc:
+                ok4 = False
+            all_pass = _chk(
+                "engine.advisory._get_transactions_store() degrades to offline stub and caches it", ok4
+            ) and all_pass
+
+            # 5. StrategyEngine.transactions_store property degrades identically.
+            try:
+                import strategy_engine as _se
+
+                def _boom2(*a, **k):
+                    raise ConnectionError("could not translate host name to address")
+
+                with mock.patch("transactions_store.TransactionsStore", _boom2):
+                    se = _se.StrategyEngine()
+                    ok5 = isinstance(se.transactions_store, _ts._OfflineTransactionsStore)
+            except Exception:
+                ok5 = False
+            all_pass = _chk(
+                "StrategyEngine.transactions_store property degrades to offline stub", ok5
+            ) and all_pass
+
+            # 6. End-to-end sizing call returns a finite vol-target fallback weight
+            #    (not a raised exception) on both the per-strategy and aggregate paths.
+            try:
+                import math
+
+                def _boom3(*a, **k):
+                    raise ConnectionError("could not translate host name to address")
+
+                with mock.patch("transactions_store.TransactionsStore", _boom3):
+                    se2 = _se.StrategyEngine()
+                    w1, tag1 = se2._calculate_kelly_sizing(realized_vol=0.30, strategy_id="rsi2_mean_reversion")
+                    w2, tag2 = se2._calculate_kelly_sizing(realized_vol=0.30)
+                    ok6 = (
+                        isinstance(w1, float) and not math.isnan(w1) and tag1 == "vol_target_fallback"
+                        and isinstance(w2, float) and not math.isnan(w2) and tag2 == "vol_target_fallback"
+                    )
+            except Exception as exc:
+                ok6 = False
+            all_pass = _chk(
+                "_calculate_kelly_sizing() degrades to a finite vol_target_fallback weight on DB outage "
+                "(per-strategy AND aggregate paths)", ok6
+            ) and all_pass
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_75_db_backend_resilience_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

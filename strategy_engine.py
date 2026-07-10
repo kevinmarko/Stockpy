@@ -518,10 +518,27 @@ class StrategyEngine:
     # =============================================================================
     @property
     def transactions_store(self):
-        """Lazily constructs a real TransactionsStore if none was injected."""
+        """Lazily constructs a real TransactionsStore if none was injected.
+
+        A DB connectivity failure (e.g. an unreachable Postgres/Supabase
+        ``DATABASE_URL`` host) degrades to ``_OfflineTransactionsStore`` — a
+        read-only stub reporting zero closed trades — instead of raising out
+        of this property. Every sizing call site already treats zero closed
+        trades as a normal cold-start condition and falls back to
+        volatility-target sizing (CONSTRAINT #6), so this keeps a DB outage
+        from aborting the entire evaluate_security() call for a symbol.
+        """
         if self._transactions_store is None:
-            from transactions_store import TransactionsStore
-            self._transactions_store = TransactionsStore()
+            from transactions_store import TransactionsStore, _OfflineTransactionsStore
+            try:
+                self._transactions_store = TransactionsStore()
+            except Exception as exc:
+                logger.error(
+                    "TransactionsStore unavailable (%s: %s); Kelly sizing will "
+                    "use the vol-target fallback for this instance.",
+                    type(exc).__name__, exc,
+                )
+                self._transactions_store = _OfflineTransactionsStore()
         return self._transactions_store
 
     def _calculate_kelly_sizing(

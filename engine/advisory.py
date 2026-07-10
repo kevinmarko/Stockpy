@@ -49,7 +49,7 @@ from forecasting_engine import ForecastingEngine
 from forecasting.forecast_tracker import ForecastTracker
 from technical_options_engine import TechnicalOptionsEngine
 from strategy_engine import StrategyEngine
-from transactions_store import TransactionsStore
+from transactions_store import TransactionsStore, _OfflineTransactionsStore
 from settings import settings
 
 logger = logging.getLogger(__name__)
@@ -152,14 +152,30 @@ def _get_forecasting_engine() -> Any:
 
 
 def _get_transactions_store() -> Any:
-    """Process-wide TransactionsStore singleton (fresh/uncached when patched)."""
+    """Process-wide TransactionsStore singleton (fresh/uncached when patched).
+
+    A DB connectivity failure at construction time (e.g. the configured
+    Postgres/Supabase ``DATABASE_URL`` host is unreachable) degrades to
+    ``_OfflineTransactionsStore`` — a read-only stub reporting zero closed
+    trades — rather than raising and dead-lettering every symbol's advisory
+    evaluation for the cycle (CONSTRAINT #6). Logged ONCE and cached so an
+    outage doesn't retry the failing host once per ticker in the universe.
+    """
     global _TRANSACTIONS_STORE
     if TransactionsStore is not _TransactionsStore_orig:
         return TransactionsStore()
     if _TRANSACTIONS_STORE is None:
         with _ENGINE_LOCK:
             if _TRANSACTIONS_STORE is None:
-                _TRANSACTIONS_STORE = TransactionsStore()
+                try:
+                    _TRANSACTIONS_STORE = TransactionsStore()
+                except Exception as exc:
+                    logger.error(
+                        "TransactionsStore unavailable (%s: %s); advisory sizing "
+                        "will use the vol-target fallback for the rest of this "
+                        "process.", type(exc).__name__, exc,
+                    )
+                    _TRANSACTIONS_STORE = _OfflineTransactionsStore()
     return _TRANSACTIONS_STORE
 
 

@@ -3,7 +3,7 @@ import os
 import tempfile
 import pandas as pd
 from datetime import datetime, timedelta
-from transactions_store import TransactionsStore, Trade
+from transactions_store import TransactionsStore, Trade, _OfflineTransactionsStore
 
 def test_transactions_store_crud():
     # Use an in-memory SQLite database for testing CRUD
@@ -51,3 +51,74 @@ def test_transactions_store_crud():
     assert closed_df.iloc[0]["symbol"] == "AAPL"
     assert closed_df.iloc[0]["exit_price"] == 190.2
     assert closed_df.iloc[0]["exit_ts"] is not None
+
+
+# ---------------------------------------------------------------------------
+# _OfflineTransactionsStore -- the read-only stub used when the configured
+# DB backend (e.g. a Postgres/Supabase DATABASE_URL) is unreachable.
+# ---------------------------------------------------------------------------
+
+def test_offline_store_read_methods_return_empty_frames():
+    store = _OfflineTransactionsStore()
+    for df in (store.open_trades_df(), store.closed_trades_df(), store.get_trade_history("AAPL")):
+        assert isinstance(df, pd.DataFrame)
+        assert df.empty
+
+
+def test_offline_store_closed_trades_df_is_compatible_with_kelly_sizing():
+    """The empty frame must satisfy sizing.kelly's "no history" contract,
+    not raise, so a DB outage degrades to the vol-target fallback rather
+    than propagating out of evaluate_security()."""
+    from sizing.kelly import estimate_win_rate_and_payoff
+
+    store = _OfflineTransactionsStore()
+    p, b, n_trades = estimate_win_rate_and_payoff(store.closed_trades_df())
+    assert n_trades == 0
+    assert p != p and b != b  # NaN != NaN
+
+
+def test_offline_store_write_methods_raise_rather_than_fabricate_success():
+    """CONSTRAINT #4: a trade that was never actually persisted must not be
+    silently reported as recorded/closed."""
+    store = _OfflineTransactionsStore()
+    with pytest.raises(RuntimeError):
+        store.record_trade(symbol="AAPL", side="long", entry_ts=datetime.now(), entry_price=1.0, shares=1.0)
+    with pytest.raises(RuntimeError):
+        store.close_trade(1, exit_ts=datetime.now(), exit_price=1.0)
+
+
+def test_get_transactions_store_degrades_on_construction_failure(monkeypatch):
+    """engine.advisory._get_transactions_store() must not propagate a DB
+    connectivity failure -- it should log once and cache an offline stub so
+    every symbol in the universe doesn't retry-storm the failing host."""
+    import engine.advisory as advisory
+
+    monkeypatch.setattr(advisory, "_TRANSACTIONS_STORE", None)
+
+    def _boom(*args, **kwargs):
+        raise ConnectionError("could not translate host name to address")
+
+    monkeypatch.setattr(advisory, "TransactionsStore", _boom)
+    monkeypatch.setattr(advisory, "_TransactionsStore_orig", _boom)
+
+    store = advisory._get_transactions_store()
+    assert isinstance(store, _OfflineTransactionsStore)
+    # Second call must reuse the cached stub, not call the broken constructor again.
+    assert advisory._get_transactions_store() is store
+
+
+def test_strategy_engine_transactions_store_property_degrades_on_construction_failure(monkeypatch):
+    """StrategyEngine.transactions_store must not propagate a DB connectivity
+    failure out of the lazy-construction property."""
+    import strategy_engine as se_module
+    from strategy_engine import StrategyEngine
+
+    def _boom(*args, **kwargs):
+        raise ConnectionError("could not translate host name to address")
+
+    monkeypatch.setattr("transactions_store.TransactionsStore", _boom)
+
+    engine = StrategyEngine()
+    store = engine.transactions_store
+    assert isinstance(store, _OfflineTransactionsStore)
+    assert engine.transactions_store is store  # cached, not reconstructed
