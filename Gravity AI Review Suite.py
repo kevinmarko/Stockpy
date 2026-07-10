@@ -9272,6 +9272,22 @@ class GravityAIAuditor:
             )
             _chk("main_py_references_historical_store", main_ok)
 
+            # ── Check 7b: _build_macro_dto's SPY fetch specifically references
+            #              HistoricalStore (not just somewhere else in main.py).
+            #              This whole-file Check 7 above trivially passes via
+            #              _fetch_bars_for_universe alone and would NOT have
+            #              caught the original bug where _build_macro_dto's own
+            #              SPY-history fetch bypassed the store every cycle.
+            _fn_start = main_src.find("def _build_macro_dto")
+            _fn_end = main_src.find("\ndef ", _fn_start + 1) if _fn_start != -1 else -1
+            _fn_src = main_src[_fn_start:_fn_end] if _fn_start != -1 and _fn_end != -1 else ""
+            spy_fetch_ok = _fn_start != -1 and "HistoricalStore" in _fn_src and "get_bars" in _fn_src
+            _chk(
+                "build_macro_dto_spy_fetch_references_historical_store",
+                spy_fetch_ok,
+                f"found _build_macro_dto={_fn_start != -1}, len(fn_src)={len(_fn_src)}",
+            )
+
             # ── Check 8: test file exists ────────────────────────────────────
             tests_ok = os.path.exists("tests/test_historical_store.py")
             _chk("test_file_exists", tests_ok)
