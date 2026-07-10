@@ -145,4 +145,5 @@ pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'
 fastapi>=0.110.0
 uvicorn>=0.29.0
 mcp
+tabulate
 
