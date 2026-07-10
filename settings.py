@@ -1075,8 +1075,8 @@ class Settings(BaseSettings):
     # A separate opt-in master switch from LLM_COMMENTARY_ENABLED so an
     # operator can run on-demand AI audits (uses both Claude + Gemini) without
     # having to also enable per-symbol rationale commentary.  Default False:
-    # the existing Python-only Gravity steps in gravity/__init__.py continue
-    # to run unchanged.  When True AND both API keys are set, the CLI
+    # the existing Python-only Gravity steps in `Gravity AI Review Suite.py`
+    # continue to run unchanged.  When True AND both API keys are set, the CLI
     # `python -m engine.gravity_ai_runner [STEP]` calls Claude as the primary
     # auditor and Gemini as the cross-checker; both responses are validated
     # against `llm.schemas.GravityAuditStepResult` and disagreement on

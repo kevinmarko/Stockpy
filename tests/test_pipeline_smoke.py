@@ -521,7 +521,6 @@ class TestNoOrderFunctions:
         "tests",
         ".venv",
         "__pycache__",
-        "gravity",  # gravity/ package contains inline mock broker stubs in audit step methods
     })
 
     # Specific file stems (name without extension) excluded by filename.
