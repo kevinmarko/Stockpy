@@ -50,7 +50,31 @@ def get_database_schema() -> str:
         return f"Database connection error: {str(e)}"
 
 # ==========================================
-# [2] TOOLS (Actionable Functions)
+# [2] PROMPTS (Context Templates)
+# ==========================================
+
+@mcp.prompt("investyo_registry")
+def investyo_registry_prompt(prompt_id: str) -> str:
+    """
+    Fetches an official AI instruction prompt from the InvestYo Prompt Registry.
+    Valid prompt_ids include: 'master_preprompt', 'gravity_system', etc.
+    """
+    from prompt_registry import get_registry
+    registry = get_registry()
+    body = registry.get(prompt_id)
+    return f"Here is the official prompt from the registry for '{prompt_id}':\n\n{body}"
+
+@mcp.tool()
+def list_registry_prompts() -> str:
+    """
+    Lists all available prompts in the InvestYo prompt registry baseline.
+    """
+    from prompt_registry.cache import list_baseline_ids
+    ids = list_baseline_ids()
+    return "Available Prompt IDs in the registry:\n" + "\n".join(f"- {pid}" for pid in ids)
+
+# ==========================================
+# [3] TOOLS (Actionable Functions)
 # ==========================================
 
 @mcp.tool()
@@ -116,8 +140,76 @@ def run_platform_tests() -> str:
     except FileNotFoundError:
         return "Error: pytest is not installed or not found in PATH."
 
+@mcp.tool()
+def query_investyo_db(sql_query: str) -> str:
+    """
+    Executes a SELECT query against the quant_platform.db.
+    Will reject any query that is not a SELECT statement for safety.
+    """
+    if not sql_query.strip().upper().startswith("SELECT"):
+        return "Error: Only SELECT queries are permitted via this tool."
+    
+    db_path = "quant_platform.db"
+    if not os.path.exists(db_path):
+        return "Error: quant_platform.db not found."
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(sql_query)
+        rows = cursor.fetchall()
+        columns = [description[0] for description in cursor.description] if cursor.description else []
+        conn.close()
+        
+        if not rows:
+            return "Query executed successfully, but returned 0 rows."
+        
+        result_lines = [", ".join(columns)]
+        for row in rows:
+            result_lines.append(", ".join(str(val) for val in row))
+        
+        return "Query Results:\n" + "\n".join(result_lines)
+    except Exception as e:
+        return f"Database query failed: {str(e)}"
+
+@mcp.tool()
+def trigger_forecasting(symbol: str) -> str:
+    """
+    Triggers the forecasting_engine.py for a specific symbol.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "forecasting_engine.py", "--symbol", symbol],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return f"Forecasting successful for {symbol}:\n{result.stdout}"
+    except subprocess.CalledProcessError as e:
+        return f"Forecasting failed. Exit code {e.returncode}:\n{e.stderr}"
+    except FileNotFoundError:
+        return "Error: forecasting_engine.py not found."
+
+@mcp.tool()
+def trigger_macro_engine() -> str:
+    """
+    Triggers the macro_engine.py to run the macro-economic analysis pipeline.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "macro_engine.py"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return f"Macro engine run successful:\n{result.stdout}"
+    except subprocess.CalledProcessError as e:
+        return f"Macro engine run failed:\n{e.stderr}"
+    except FileNotFoundError:
+        return "Error: macro_engine.py not found."
+
 # ==========================================
-# [3] SERVER EXECUTION
+# [4] SERVER EXECUTION
 # ==========================================
 
 if __name__ == "__main__":
