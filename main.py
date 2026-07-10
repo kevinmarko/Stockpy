@@ -328,12 +328,39 @@ def _build_macro_dto() -> MacroEconomicDTO:
         de = me.data_engine
         macro_raw = de.fetch_macro_raw()
 
+        # SPY history for the HMM regime detector now routes through
+        # HistoricalStore.get_bars() (mirroring _fetch_bars_for_universe's
+        # DB-first pattern a few lines below) instead of always calling
+        # DataEngine.fetch_technical_raw(["SPY"]) directly -- closing a gap
+        # where this was the one bars fetch in this file that bypassed the
+        # DB even though every other symbol's bars already went through it.
+        # de.fetch_macro_raw() two lines above (the current-snapshot FRED
+        # read feeding the kill switch) is deliberately left untouched --
+        # that path must always see the freshest reading, never a cached one.
         spy_df: Optional[pd.DataFrame] = None
-        try:
-            spy_raw = de.fetch_technical_raw(["SPY"])
-            spy_df = spy_raw.get("SPY")
-        except Exception as spy_exc:
-            logger.debug("SPY history for HMM unavailable: %s", spy_exc)
+        spy_from_store = False
+        if settings.HISTORICAL_STORE_ENABLED:
+            try:
+                from data.historical_store import HistoricalStore
+                _spy_store = HistoricalStore()
+                market = get_provider()
+                _spy_candidate = _spy_store.get_bars("SPY", lookback_days=504, provider=market)
+                if _spy_candidate is not None and not _spy_candidate.empty:
+                    spy_df = _spy_candidate
+                    spy_from_store = True
+            except Exception as store_exc:
+                logger.debug(
+                    "HistoricalStore SPY fetch for HMM unavailable (%s); "
+                    "falling back to direct DataEngine fetch.",
+                    store_exc,
+                )
+
+        if not spy_from_store:
+            try:
+                spy_raw = de.fetch_technical_raw(["SPY"])
+                spy_df = spy_raw.get("SPY")
+            except Exception as spy_exc:
+                logger.debug("SPY history for HMM unavailable: %s", spy_exc)
 
         hmm_prob = me.compute_hmm_risk_on_probability(spy_df)
 
