@@ -73,7 +73,7 @@ class AdvancedResearchEngine:
     # EXPLANATION: Calculate the real yield valuation drag on assets when real yields exceed 2%.
     # Dynamically converts percentage formats (e.g. 2.15) to ratios (e.g. 0.0215) to prevent negative drag factors.
     def calculate_real_yield_drag(self, fair_value: float) -> float:
-        """
+        r"""
         [Topic 22] Real Yield Valuation Drag.
         When Real Yields are restrictive (> 2.0%), high-yielders experience valuation pressure.
         Formula: $V_{adjusted} = V_{fair} \cdot (1 - \text{RealYield})$
@@ -86,7 +86,7 @@ class AdvancedResearchEngine:
 
     # EXPLANATION: Compute the premium spread of dividend yield over the risk-free rate.
     def calculate_dividend_premium_spread(self, div_yield: float) -> float:
-        """
+        r"""
         [Topic 23] Dividend Premium Spread (DPS).
         Spread of yield over risk-free rate: $DPS = \text{DivYield} - \text{RiskFreeRate}$
         If this spread is negative, the asset's yield is not compensated relative to risk-free debt.
@@ -124,7 +124,7 @@ class AdvancedResearchEngine:
 
     # EXPLANATION: Estimate the payback period based on compounded dividend growth, handling scale mismatches.
     def calculate_dividend_payback_horizon(self, price: float, annual_div: float, dgr_5y: float) -> float:
-        """
+        r"""
         [Topic 25] Dividend Payback Horizon (DPH).
         Calculates how many years of dividend payouts are needed to fully recover the cost of shares.
         Incorporates the 5-Year Dividend Growth Rate ($g$) compounding.
