@@ -497,6 +497,34 @@ class Settings(BaseSettings):
             "convention). Only consulted when FORECAST_MODEL_PERSISTENCE_ENABLED=True."
         ),
     )
+    ADVISORY_REUSE_PIPELINE_COMPUTE: bool = Field(
+        default=False,
+        description=(
+            "Opt-in, OUTPUT-CHANGING: main_orchestrator.py's advisory overlay "
+            "(engine.advisory.evaluate(), run AFTER run_pipeline() has already "
+            "GARCH-fit and forecast-fit every ticker once) reuses run_pipeline's "
+            "already-computed dashboard_df['GARCH_Vol'] / dashboard_df['Forecast_30'] "
+            "for that ticker instead of independently refitting GJR-GARCH and the "
+            "full ARIMA/Holt-Winters/CNN-LSTM/Prophet forecast ensemble a SECOND "
+            "time -- eliminating the single largest redundant CPU cost per cycle. "
+            "advisory.evaluate() only trusts a precomputed value when it is a real "
+            "positive number; a missing/zero/failed upstream value falls through to "
+            "the original independent fit (dead-letter safe -- CONSTRAINT #6), so "
+            "this can only ever REMOVE a redundant fit, never silently drop one that "
+            "already ran. StrategyEngine.evaluate_security() is deliberately NOT "
+            "reused here (run_pipeline's own call omits context_extras, unlike "
+            "advisory.evaluate()'s -- reusing it would silently zero out the "
+            "cross-sectional-momentum/multifactor signal contributions), so scoring "
+            "itself is always freshly computed with correct context. Because a fresh "
+            "independent fit and a reused one are not guaranteed bit-identical "
+            "(CNN-LSTM's random weight init, GARCH's numerical optimizer), turning "
+            "this on can move Advisory_* column values slightly -- hence default "
+            "False and its own opt-in flag, unlike the byte-identical PR A hot-path "
+            "changes. When False (the default), every advisory-overlay call passes "
+            "precomputed_garch=None/precomputed_forecast=None, reproducing the exact "
+            "pre-dedup behavior."
+        ),
+    )
     # Number of worker threads for DataEngine.fetch_technical_raw() and
     # fetch_fundamentals_raw() (data_engine.py). Both were originally a serial
     # `for symbol in tickers:` loop making one blocking yfinance HTTP call at a

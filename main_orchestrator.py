@@ -1379,12 +1379,28 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
             # independent and try/except-guarded; results are collected into an
             # order-independent dict, so this is byte-identical to the serial
             # loop (parallelization changes only execution order, not values).
+            _reuse_pipeline_compute = bool(
+                getattr(settings, 'ADVISORY_REUSE_PIPELINE_COMPUTE', False)
+            )
+
             def _eval_one(_ticker, _row):
                 try:
                     _position = (
                         _rh_snapshot.positions.get(_ticker)
                         if _rh_snapshot is not None else None
                     )
+                    # OUTPUT-CHANGING opt-in (default off): reuse run_pipeline's
+                    # already-fit GARCH vol / 30-day forecast for this ticker
+                    # instead of a second independent fit inside advisory.evaluate().
+                    # advisory.evaluate() only trusts a real positive value and
+                    # falls through to its own fresh fit otherwise, so passing
+                    # None here (the flag-off default) reproduces pre-dedup
+                    # behavior exactly.
+                    _precomputed_garch = None
+                    _precomputed_forecast = None
+                    if _reuse_pipeline_compute:
+                        _precomputed_garch = _row.get('GARCH_Vol')
+                        _precomputed_forecast = _row.get('Forecast_30')
                     _rec = _advisory_evaluate(
                         symbol=_ticker,
                         position=_position,
@@ -1392,6 +1408,8 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
                         snapshot=_rh_snapshot,
                         macro_dto=macro_dto,
                         context_extras=_context_extras,
+                        precomputed_garch=_precomputed_garch,
+                        precomputed_forecast=_precomputed_forecast,
                     )
                     return _ticker, {
                         'Advisory_Action': _rec.action,
