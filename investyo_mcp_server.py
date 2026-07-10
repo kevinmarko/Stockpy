@@ -561,6 +561,299 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
         return f"Plot generation failed: {str(e)}"
 
 @mcp.tool()
+def get_portfolio_summary() -> str:
+    """
+    Summarizes the active paper trading portfolio: calculates current holdings,
+    realized and unrealized P&L, win rate, and total portfolio performance metrics.
+    """
+    from transactions_store import TransactionsStore
+    import yfinance as yf
+    import pandas as pd
+    
+    try:
+        store = TransactionsStore()
+        open_df = store.open_trades_df()
+        closed_df = store.closed_trades_df()
+        
+        summary = ["# Paper Portfolio Summary\n"]
+        
+        # 1. Open Positions (Holdings)
+        unrealized_pl = 0.0
+        holdings_value = 0.0
+        
+        if not open_df.empty:
+            summary.append("## Current Holdings")
+            holdings_rows = []
+            unique_symbols = open_df['symbol'].unique().tolist()
+            current_prices = {}
+            if unique_symbols:
+                tickers = yf.Tickers(" ".join(unique_symbols))
+                for sym in unique_symbols:
+                    try:
+                        current_prices[sym] = tickers.tickers[sym].history(period="1d")['Close'].iloc[-1]
+                    except Exception:
+                        current_prices[sym] = None
+            
+            for _, row in open_df.iterrows():
+                symbol = row['symbol']
+                side = row['side']
+                entry_price = row['entry_price']
+                shares = row['shares']
+                curr_price = current_prices.get(symbol)
+                
+                if curr_price is not None:
+                    value = curr_price * shares
+                    if side == "long":
+                        pl = (curr_price - entry_price) * shares
+                    else:
+                        pl = (entry_price - curr_price) * shares
+                else:
+                    curr_price = 0.0
+                    value = 0.0
+                    pl = 0.0
+                    
+                unrealized_pl += pl
+                holdings_value += value
+                
+                holdings_rows.append({
+                    "Trade ID": row['trade_id'],
+                    "Symbol": symbol,
+                    "Side": side.upper(),
+                    "Shares": shares,
+                    "Avg Cost": f"${entry_price:.2f}",
+                    "Current Price": f"${curr_price:.2f}" if curr_price > 0 else "N/A",
+                    "Value": f"${value:,.2f}" if value > 0 else "N/A",
+                    "Unrealized P&L": f"${pl:+,.2f}"
+                })
+            
+            summary.append(pd.DataFrame(holdings_rows).to_markdown(index=False) + "\n")
+        else:
+            summary.append("No open positions.\n")
+            
+        # 2. Closed Positions (History Summary)
+        realized_pl = 0.0
+        win_count = 0
+        total_closed = len(closed_df)
+        
+        if not closed_df.empty:
+            for _, row in closed_df.iterrows():
+                side = row['side']
+                entry_price = row['entry_price']
+                exit_price = row['exit_price']
+                shares = row['shares']
+                
+                if side == "long":
+                    pl = (exit_price - entry_price) * shares
+                else:
+                    pl = (entry_price - exit_price) * shares
+                    
+                realized_pl += pl
+                if pl > 0:
+                    win_count += 1
+                    
+            win_rate = (win_count / total_closed) * 100 if total_closed > 0 else 0.0
+            
+            summary.append("## Closed Trades Analytics")
+            summary.append(f"- **Total Closed Trades**: {total_closed}")
+            summary.append(f"- **Win Rate**: {win_rate:.1f}%")
+            summary.append(f"- **Realized P&L**: ${realized_pl:+,.2f}\n")
+        else:
+            summary.append("## Closed Trades Analytics\nNo closed trades recorded yet.\n")
+            
+        # 3. Overall Performance
+        total_pl = realized_pl + unrealized_pl
+        summary.append("## Account Metrics")
+        summary.append(f"- **Net Profit/Loss**: ${total_pl:+,.2f}")
+        summary.append(f"- **Total Unrealized P&L**: ${unrealized_pl:+,.2f}")
+        summary.append(f"- **Total Open Holdings Value**: ${holdings_value:,.2f}")
+        
+        return "\n".join(summary)
+    except Exception as e:
+        return f"Failed to retrieve portfolio summary: {str(e)}"
+
+@mcp.tool()
+def plot_portfolio_equity(period: str = "1y") -> str:
+    """
+    Runs the InstitutionalStrategy on all active universe tickers, merges their equity curves
+    into a unified portfolio equity curve (equally weighted), overlays the SPY benchmark,
+    and saves the PNG plot to artifacts.
+    """
+    import os
+    import json
+    import yfinance as yf
+    import backtrader as bt
+    import numpy as np
+    import pandas as pd
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from simulation_engine import InstitutionalStrategy
+    
+    env_path = ".env"
+    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r") as f:
+                for line in f:
+                    if line.strip() and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() == "DEFAULT_TICKERS":
+                            current_tickers = json.loads(v.strip())
+        except Exception:
+            pass
+            
+    try:
+        portfolio_curves = []
+        
+        for symbol in current_tickers:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period)
+            if df.empty:
+                continue
+            df.columns = [col.lower() for col in df.columns]
+            
+            cerebro = bt.Cerebro()
+            cerebro.addstrategy(InstitutionalStrategy)
+            data = bt.feeds.PandasData(dataname=df)
+            cerebro.adddata(data)
+            cerebro.broker.setcash(100000.0)
+            cerebro.broker.setcommission(commission=0.001)
+            cerebro.broker.set_slippage_perc(perc=0.0005)
+            cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='timereturn')
+            
+            import io
+            import contextlib
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
+                results = cerebro.run()
+                
+            strat = results[0]
+            time_return = strat.analyzers.timereturn.get_analysis()
+            
+            dates = sorted(time_return.keys())
+            returns = [time_return[d] for d in dates]
+            series = pd.Series(returns, index=pd.to_datetime(dates))
+            portfolio_curves.append(series)
+            
+        if not portfolio_curves:
+            return "Error: No tickers could be simulated."
+            
+        combined_returns = pd.concat(portfolio_curves, axis=1).mean(axis=1)
+        portfolio_equity = 100000.0 * np.cumprod(1.0 + combined_returns.values)
+        portfolio_series = pd.Series(portfolio_equity, index=combined_returns.index)
+        
+        spy = yf.Ticker("SPY")
+        spy_df = spy.history(period=period)
+        spy_returns = spy_df['Close'].pct_change().dropna()
+        spy_aligned = spy_returns.reindex(portfolio_series.index).fillna(0.0)
+        spy_equity = 100000.0 * np.cumprod(1.0 + spy_aligned.values)
+        spy_series = pd.Series(spy_equity, index=portfolio_series.index)
+        
+        plt.figure(figsize=(12, 6))
+        plt.plot(portfolio_series.index, portfolio_series.values, label="InvestYo Portfolio Strategy", color="blue", linewidth=2)
+        plt.plot(spy_series.index, spy_series.values, label="SP500 (SPY)", color="orange", linestyle="--", linewidth=1.5)
+        plt.title(f"Portfolio Strategy vs. SPY Benchmark ({period})")
+        plt.xlabel("Date")
+        plt.ylabel("Portfolio Value ($)")
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.legend()
+        plt.tight_layout()
+        
+        artifact_dir = "/Users/kevinlee/.gemini/antigravity/brain/d401d6a1-6d28-4b48-a196-95e42415c9ed"
+        os.makedirs(artifact_dir, exist_ok=True)
+        img_path = os.path.join(artifact_dir, "portfolio_equity_vs_spy.png")
+        plt.savefig(img_path)
+        plt.close()
+        
+        port_ret = (portfolio_series.iloc[-1] / 100000.0 - 1.0) * 100
+        spy_ret = (spy_series.iloc[-1] / 100000.0 - 1.0) * 100
+        
+        markdown_response = (
+            f"### Portfolio Strategy Performance vs SPY Benchmark ({period})\n"
+            f"- **Unified Strategy Return**: {port_ret:+.2f}%\n"
+            f"- **SPY Benchmark Return**: {spy_ret:+.2f}%\n\n"
+            f"![Portfolio vs SPY](file://{img_path})\n"
+        )
+        return markdown_response
+        
+    except Exception as e:
+        return f"Portfolio plot generation failed: {str(e)}"
+
+@mcp.tool()
+def get_universe_status() -> str:
+    """
+    Returns a status dashboard of the current trading universe, active watch rules,
+    macro economic environment status, and database stats.
+    """
+    import os
+    import json
+    import sqlite3
+    import yaml
+    
+    status = ["# InvestYo Universe Status Dashboard\n"]
+    
+    env_path = ".env"
+    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r") as f:
+                for line in f:
+                    if line.strip() and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() == "DEFAULT_TICKERS":
+                            current_tickers = json.loads(v.strip())
+        except Exception:
+            pass
+            
+    status.append("## Active Trading Universe")
+    status.append(", ".join(f"`{t}`" for t in current_tickers) + "\n")
+    
+    yaml_path = "watch_rules.yaml"
+    if os.path.exists(yaml_path):
+        try:
+            with open(yaml_path, "r") as f:
+                data = yaml.safe_load(f)
+            rules = data.get("rules", []) if data else []
+            if rules:
+                status.append("## Active Watch Rules")
+                status.append("Symbol | Alert Trigger | Threshold | Priority | Label")
+                status.append("---|---|---|---|---")
+                for r in rules:
+                    threshold = f"{r.get('threshold'):.2f}" if r.get('threshold') is not None else "N/A"
+                    status.append(f"`{r.get('symbol')}` | {r.get('alert_on')} | {threshold} | {r.get('priority', 'default')} | {r.get('label', 'N/A')}")
+                status.append("")
+            else:
+                status.append("## Active Watch Rules\nNo watch rules configured.\n")
+        except Exception as e:
+            status.append(f"## Active Watch Rules\nFailed to parse rules: {str(e)}\n")
+            
+    db_path = "quant_platform.db"
+    if os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM DailySignals")
+            signals_count = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM Transactions")
+            transactions_count = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM ExecutionLogs")
+            logs_count = cursor.fetchone()[0]
+            
+            conn.close()
+            
+            status.append("## Database Metrics")
+            status.append(f"- **Daily Signals Table Rows**: {signals_count}")
+            status.append(f"- **Transactions Table Rows**: {transactions_count}")
+            status.append(f"- **Execution Logs Table Rows**: {logs_count}")
+        except Exception as e:
+            status.append(f"## Database Metrics\nError querying DB stats: {str(e)}")
+            
+    return "\n".join(status)
+
+@mcp.tool()
 def trigger_forecasting(symbol: str) -> str:
     """
     Triggers the forecasting_engine.py for a specific symbol.
