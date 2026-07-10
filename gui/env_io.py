@@ -81,6 +81,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "META_LABEL_MIN_CONFIDENCE",
     # Observability / runtime
     "DASHBOARD_REFRESH_SECONDS",
+    # Poll interval (seconds) for the Launcher tab's live pipeline-progress bar
+    # (see reporting/progress.py + gui/orchestrator_runner.py::compute_run_progress).
+    # Non-secret; scalar (not JSON-encoded).
+    "PROGRESS_POLL_SECONDS",
     "LOG_LEVEL",
     "DRY_RUN",
     # Persistent orchestrator daemon cutover flag. Non-secret (no credential
