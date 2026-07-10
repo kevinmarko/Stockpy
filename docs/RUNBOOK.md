@@ -49,7 +49,7 @@ Then double-click `launch_app.command` again.
 and how to recreate `.venv` with Python 3.12.
 
 **Still prefer a browser-tab control panel?** Double-click **`launch_gui.command`** (or run
-`streamlit run gui/app.py`) to open the **Command Center** — a 14-tab GUI that launches
+`streamlit run gui/app.py`) to open the **Command Center** — an 18-tab GUI that launches
 the pipeline, shows live stage status, edits non-secret `.env` tunables (secrets stay
 masked/read-only), toggles signal modules and the pause gate (kill switch), and surfaces
 the Gravity audit. The GUI is read-only / file-backed: it launches `main_orchestrator.py`
@@ -68,7 +68,14 @@ The **Launcher tab** exposes two distinct entry points:
 A pre-launch readiness check warns about missing required env vars (e.g. `FRED_API_KEY`)
 *before* the subprocess starts. The tab tails BOTH the active run log AND the platform-wide
 structured telemetry stream (`logs/investyo.log`) so one window covers diagnostics across
-both entry points.
+both entry points. The Launcher tab also shows a live **0–100% pipeline-progress bar**
+(backed by `reporting/progress.py`, which writes `output/progress.json` as each stage and
+symbol completes; the bar polls at `settings.PROGRESS_POLL_SECONDS`, default 5 s).
+
+The **🔬 Validation Lab tab** (tab 18) runs and views strategy-validation reports on demand:
+pick strategies + a date range and click **Run** to launch a `scripts.refresh_validations`
+subprocess, then review the per-strategy deployable ✅/❌ verdicts and the generated
+`reports/validation_*.html`. On-demand only (no scheduling).
 
 The **daily HTML report** leads with a **"Δ Since Last Run" band**: new BUYs, action
 flips, conviction moves (`|Δ| ≥ SNAPSHOT_CONVICTION_DELTA_THRESHOLD`, default 0.20),
@@ -473,6 +480,41 @@ Both GARCH tests must PASS with no `arch` warning.
 > 2. If unexpected: check for API key rotation requirement.
 > 3. Reconnect is automatic on the next orchestrator run. Run reconciliation manually
 >    after reconnect.
+
+---
+
+### 3.11 Database Backend Outage
+
+**Symptom**: The remote DB backend (e.g. a Supabase Postgres project configured via
+`DATABASE_URL`) is unreachable — DNS failure, network partition, or an IPv6-only
+`db.<project>.supabase.co` host on an IPv4-only network. Logs show a single
+`TransactionsStore` construction failure (e.g. `psycopg2.OperationalError: could not
+translate host name … to address`) rather than a per-symbol error storm.
+
+**What happens automatically**: This does NOT dead-letter every symbol. When
+`TransactionsStore()` construction fails, both lazy call sites
+(`engine.advisory._get_transactions_store()` and `StrategyEngine.transactions_store`)
+catch the failure, log **once**, and substitute `transactions_store._OfflineTransactionsStore`
+— a read-only stub whose `closed_trades_df()` / `open_trades_df()` return empty DataFrames.
+Kelly sizing therefore sees "zero closed trades" and **degrades to the vol-target fallback**
+(`sizing/vol_target.volatility_target_weight`). Advisory evaluation continues for every
+symbol; only the trade-history-based Kelly refinement is lost until the DB is reachable
+again. `record_trade()` / `close_trade()` still raise (a trade that was never persisted is
+never fabricated as recorded — CONSTRAINT #4). The stub is cached so a DB outage does not
+retry-storm the failing host once per ticker.
+
+**Operator action**: None required for the pipeline to keep producing recommendations —
+sizing is simply less refined. To restore full Kelly sizing:
+
+1. Confirm the DB is the problem: check the single construction-failure log line.
+2. For Supabase, if the direct-connect host is IPv6-only on an IPv4 network, switch
+   `DATABASE_URL` to the Session/Transaction **pooler** host
+   (`aws-0-<region>.pooler.supabase.com`, username `postgres.<project-ref>`).
+3. Re-run the pipeline; the next `TransactionsStore()` construction succeeds and Kelly
+   sizing resumes from real trade history.
+
+Covered by `tests/test_transactions_store.py` and Gravity
+`step_75_db_backend_resilience_audit`.
 
 ---
 

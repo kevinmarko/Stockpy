@@ -199,10 +199,10 @@ flowchart TD
 | # | Invariant |
 |---|-----------|
 | 1 | **DTO boundary** — all data crossing into calculation code must be coerced into `dto_models.py` types. No raw-dict lookups in signal or strategy code. |
-| 2 | **Single sizing SSOT** — Kelly Target is computed **only** in `StrategyEngine._calculate_kelly_sizing()` → `sizing/kelly.py` / `sizing/vol_target.py`. No score-derived win-probability formulas anywhere else. |
+| 2 | **Single sizing SSOT** — Kelly Target is computed **only** in `StrategyEngine._calculate_kelly_sizing()` → `sizing/kelly.py` / `sizing/vol_target.py`. No score-derived win-probability formulas anywhere else. On a remote-backend outage where `TransactionsStore()` construction fails, the Kelly path falls back through `transactions_store._OfflineTransactionsStore` (empty closed-trades → `volatility_target_weight`) rather than raising. |
 | 3 | **Source-of-truth separation** — Robinhood is the source of truth for account state (qty, cost basis, dividends, equity). Market data providers (Alpaca / yfinance) are the source of truth for prices, bars, and fundamentals — fundamentals are Yahoo statement-derived (`data/yahoo_fundamentals.py`), with raw yfinance `.info` as the fallback; Finnhub feeds the news_catalyst signal only. These roles never cross. |
 | 4 | **No fabricated data** — missing fields are `NaN`, never `0.0`. Held symbols without live quotes get `EQUITY_ONLY` coverage; their equity view uses `qty × avg_cost`, not a fabricated current price. |
-| 5 | **Dead-letter resilience** — every per-symbol calculation is wrapped in try/except. One symbol's failure never aborts the run; it is captured in the dead-letter queue (`output/dead_letter.json`). |
+| 5 | **Dead-letter resilience** — every per-symbol calculation is wrapped in try/except. One symbol's failure never aborts the run; it is captured in the dead-letter queue (`output/dead_letter.json`). On a **DB-backend outage**, Kelly position-sizing specifically **degrades** to a read-only `transactions_store._OfflineTransactionsStore` (empty trade history → vol-target fallback, per CONSTRAINT #6) instead of dead-lettering every symbol's advisory evaluation over an optional sizing refinement. |
 | 6 | **Broker quarantine** — `ADVISORY_ONLY=true` (the project default) causes `main_orchestrator._execute_broker_orders` to return immediately before any broker import. The OrderManager / BrokerBase path (shown in red above) is never reached. |
 | 7 | **No lookahead bias** — every indicator (RSI, MACD, ATR, Aroon, Coppock, Chandelier) is computed on a causal slice of historical data. The `tests/lookahead_check.py` perturbation harness enforces this in CI. |
 
@@ -231,4 +231,12 @@ Claude Code owns the entire repo — single-agent workflow, no domain split.
 
 ---
 
-*Last updated: 2026-07-08. Reflects the Yahoo statement-derived fundamentals engine (`data/yahoo_fundamentals.py`, replacing Finnhub as the fundamentals source; Finnhub is now news_catalyst-only), the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default.*
+## Cross-cutting & extracted modules
+
+* **`reporting/progress.py`** — file-backed 0–100% pipeline-progress contract. `ProgressReporter(stages, …)` is instantiated once per cycle by the orchestrator (`start_stage` / `advance_symbol` / `finish`), atomically writing `output/progress.json`; module-level `read_progress()` is the dead-letter-safe read side (missing/malformed → `None`, never a fabricated partial). Consumed by the GUI Launcher tab's live `st.progress` bar via `gui/orchestrator_runner.py::compute_run_progress`, polling at `settings.PROGRESS_POLL_SECONDS` (default 5 s).
+* **`reporting/html_publisher.py`** — the HTML publish layer extracted out of `main.py`, so the advisory orchestrator's report-writing path is a standalone, independently-testable module rather than an inline `main.py` helper.
+* **`pipeline/steps.py`** — `run_once()` recast as a command/mediator pipeline of discrete steps (including `KillSwitchGateStep`, the advisory pause gate) instead of one monolithic function body.
+
+---
+
+*Last updated: 2026-07-10. Reflects the Yahoo statement-derived fundamentals engine (`data/yahoo_fundamentals.py`, replacing Finnhub as the fundamentals source; Finnhub is now news_catalyst-only), the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default. Also reconciles the Kelly-sizing DB-outage degrade path (`_OfflineTransactionsStore` → vol-target fallback), `reporting/progress.py` live pipeline-progress telemetry, and the `reporting/html_publisher.py` + `pipeline/steps.py` reporting/pipeline extractions.*

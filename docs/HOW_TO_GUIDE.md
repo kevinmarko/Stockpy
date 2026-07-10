@@ -197,7 +197,7 @@ python3 app_shell.py [--interval N]
 
 `app_shell.py` opens `gui/app.py` in a native window (via `pywebview`) and supervises the
 background refresh loop tied to that window's lifecycle. Everything described below for
-the browser-tab Command Center — the fourteen tabs, the Launcher, Settings, Strategy
+the browser-tab Command Center — the eighteen tabs, the Launcher, Settings, Strategy
 Matrix, and so on — is the same GUI, just hosted in a native window instead of your
 browser.
 
@@ -247,9 +247,9 @@ The **Command Center** is a graphical front-end over the same pipeline, ideal if
 streamlit run gui/app.py
 ```
 
-Either way it's the same GUI, with fourteen tabs:
+Either way it's the same GUI, with eighteen tabs:
 
-1. **🚀 Launcher** — **two** launch buttons: **▶️ Launch Pipeline** runs `main_orchestrator.py` (async, broker, full HTML report); **🔄 Refresh Data (Advisory)** runs `main.py` (synchronous advisory loop, broker-free — the canonical `.env`-loading entry point). Live stage indicators (Data Acquisition → Processing → Forecasting → Execution) for the orchestrator path, a heartbeat freshness gauge, and **two log expanders** — the active run log (`output/gui_run.log` or `output/gui_advisory.log`) plus the platform-wide structured telemetry stream from `alerting.setup_logging()` (`logs/investyo.log`). A **pre-launch env-readiness check** flags missing required variables (e.g. `FRED_API_KEY`) *before* you click, so a degraded run is diagnosed up front rather than after the fact. Optional **Dry run**, **Refresh Robinhood account**, and **Auto-refresh while running** (5 s ticker) toggles. Also surfaces the Robinhood execution-bridge mode banner (see [Robinhood Execution Bridge](#robinhood-execution-bridge)).
+1. **🚀 Launcher** — **two** launch buttons: **▶️ Launch Pipeline** runs `main_orchestrator.py` (async, broker, full HTML report); **🔄 Refresh Data (Advisory)** runs `main.py` (synchronous advisory loop, broker-free — the canonical `.env`-loading entry point). Live stage indicators (Data Acquisition → Processing → Forecasting → Execution) for the orchestrator path, a **live 0–100% pipeline-progress bar** (see below), a heartbeat freshness gauge, and **two log expanders** — the active run log (`output/gui_run.log` or `output/gui_advisory.log`) plus the platform-wide structured telemetry stream from `alerting.setup_logging()` (`logs/investyo.log`). A **pre-launch env-readiness check** flags missing required variables (e.g. `FRED_API_KEY`) *before* you click, so a degraded run is diagnosed up front rather than after the fact. Optional **Dry run**, **Refresh Robinhood account**, and **Auto-refresh while running** (5 s ticker) toggles. Also surfaces the Robinhood execution-bridge mode banner (see [Robinhood Execution Bridge](#robinhood-execution-bridge)).
 2. **📈 Reports** — portfolio heat, edge/MFE/MAE on the latest signals, one-click download of the generated HTML report / signals CSV, and a full **Brinson-Fachler Attribution Analysis** section. Edit the GICS-11 sector matrix directly (`st.data_editor`) or **bulk-paste TSV/CSV** from a spreadsheet, then click *Compute attribution* to see allocation / selection / interaction effects (top-line metrics + per-sector breakdown + bar chart, with CSV downloads for the editor input and the breakdown).
 3. **⚙️ Settings** — edit **non-secret** tunables (`RISK_FREE_RATE`, `KELLY_FRACTION`, `DEFAULT_TICKERS`, thresholds, …) and save them to `.env`. **Secrets (API keys, passwords, TOTP) are shown masked and are read-only here** — edit those directly in `.env`. Changes take effect on the **next** launch.
 4. **🧩 Strategy Matrix** — enable/disable individual signal modules (writes `DISABLED_SIGNAL_MODULES`), adjust their weights (writes `SIGNAL_WEIGHTS`), and manually activate/deactivate the **Macro Kill Switch**.
@@ -263,8 +263,16 @@ Either way it's the same GUI, with fourteen tabs:
 12. **📝 Prompts** — the Remote-Updatable Prompt Registry: view/publish versioned prompt text, verify signatures, and roll back; see [§16 Remote Prompt Updates (Prompt Registry)](#16-remote-prompt-updates-prompt-registry).
 13. **🪄 AI Insights** — Opal research brief, Claude analyst note, Gemini chart-pattern read, and an aggregate Claude-vs-Gemini disagreement view, all operator-triggered per symbol; see [AI Insights & AI Control Center](#ai-insights--ai-control-center).
 14. **🎛️ AI Control Center** — one place to toggle every AI capability (Claude commentary, Gemini alerts/vision, Gravity AI runner, Opal research), run each on demand, and start/stop a recurring pipeline run; see [AI Insights & AI Control Center](#ai-insights--ai-control-center).
+15. **📊 Analytics** — read-only backend analytics that previously reached no GUI: broker realized performance (win rate / profit factor / realized P&L reconstructed from Robinhood order history), the account-value equity curve, a recent-alerts feed, the ML model registry, per-symbol news sentiment, and realized slippage + CoVaR.
+16. **🔗 Pairs** — an **advisory-only** view over the pairs-trading engine: *Scan* ranks cointegrated candidate pairs (p-value + half-life), *Analyze* shows the live Kalman hedge ratio, spread z-score, rolling-ADF p-value, and the current entry/exit/stop label. Displayed, never traded.
+17. **📁 Report Library** — an inline-viewable browser over every generated report; see [Report Library](#17-report-library).
+18. **🔬 Validation Lab** — run the strategy-validation harness on demand per strategy and view the pass/fail results (PBO / DSR / Sharpe / MaxDD against the deployability gates); see [Validation Lab](#18-validation-lab).
 
 The Command Center is **read-only and file-backed**: it never talks to the broker directly — it launches the orchestrator and reads the files the orchestrator writes, so it stays usable even when the broker API is down. One-time setup: `chmod +x launch_gui.command`.
+
+#### Live pipeline-progress bar (Launcher tab)
+
+While a run is in flight the Launcher tab shows a **live 0–100% progress bar** with the current stage name and percent complete (e.g. *"Forecasting — 62%"*). It is fully file-backed, just like the rest of the Command Center: the orchestrator's `reporting/progress.py` reporter writes `output/progress.json` (atomic write-then-rename) as it advances through stages and per-symbol work, and the Launcher polls that file every `settings.PROGRESS_POLL_SECONDS` (default **5 s**). Before the orchestrator's first stage is reached — or when no run is active — the bar is indeterminate or hidden rather than showing a fabricated percentage. Nothing extra is needed to enable it; a missing or malformed `progress.json` simply degrades to no bar.
 
 ---
 
@@ -478,6 +486,8 @@ weight = VOL_TARGET / realized_vol
 Where `VOL_TARGET` = 0.10 (10%). A stock with 20% annualized vol gets a 50% weight; a stock with 40% vol gets a 25% weight.
 
 **Both paths are clamped** to `MAX_POSITION_WEIGHT` = 1.0 (100% max single name). In practice the Kelly cap (20%) and the HMM regime multiplier keep actual targets much lower.
+
+**On a database-backend outage** (e.g. an unreachable Postgres/Supabase host), sizing does **not** fail. The platform substitutes a read-only offline transactions store that reports zero closed trades — the same cold-start shape as an empty `trades` table — so `_calculate_kelly_sizing()` transparently degrades to the volatility-target fallback for the cycle instead of dead-lettering the symbol. Advisory recommendations keep flowing; only the Kelly refinement is temporarily unavailable until the backend recovers.
 
 ### HMM regime multiplier
 
@@ -1150,7 +1160,7 @@ This creates `reports/main_pipeline_validation_summary.json`. The preflight chec
 
 ---
 
-*Last updated: 2026-06-26. Reflects: Tier 5.3 kill-switch pause gate wired into `main.run_once()` and `main_orchestrator._main_body()`, macro-triggered advisory gating (RECESSION hard gate, VIX/Sahm soft gate, sector veto) added to §15. Prior: Tier 5.1 `ADVISORY_ONLY=true` default (broker quarantine), advisory-mode preflight auto-skip (§13), Strategy Matrix mode toggle suppressed under advisory mode, new Advisory-Only Mode section, Sheet2 column-A universe fallback, `load_dotenv()` placement fix.*
+*Last updated: 2026-07-10. Reflects: Tier 5.3 kill-switch pause gate wired into `main.run_once()` and `main_orchestrator._main_body()`, macro-triggered advisory gating (RECESSION hard gate, VIX/Sahm soft gate, sector veto) added to §15. Prior: Tier 5.1 `ADVISORY_ONLY=true` default (broker quarantine), advisory-mode preflight auto-skip (§13), Strategy Matrix mode toggle suppressed under advisory mode, new Advisory-Only Mode section, Sheet2 column-A universe fallback, `load_dotenv()` placement fix.*
 
 ## Safety tab (formerly Gravity Audit) — what to check when an order is blocked
 

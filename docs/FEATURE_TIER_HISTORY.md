@@ -9,6 +9,10 @@ PR that added it" record** — read it when you need the full backstory, test su
 or Gravity-audit-step details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
+- Gravity split-brain consolidation — delete dead `gravity/__init__.py`, migrate its steps into the single launcher as step_76–86 (2026-07-10)
+- Gravity 6-check repair — 6 stale audit assertions fixed after recent refactors (2026-07-10)
+- Kelly DB-outage degrade — `_OfflineTransactionsStore` vol-target fallback instead of dead-lettering (2026-07-10)
+- Progress-indicator series — `reporting/progress.py` file-backed contract + live GUI Launcher progress bar (2026-07-10)
 - Validation Lab — on-demand strategy-validation GUI tab + runner expansion (2026-07-10)
 - Dead-code resolution — reuse grossMargins/currentRatio, delete orphans, activate ForecastTracker (opt-in) (2026-07-09)
 - Advisory multifactor-Z threading — close the PR #192 follow-up (2026-07-09)
@@ -40,6 +44,119 @@ Sections in this file (search for the `##` heading):
 where they're load-bearing for every session** (e.g. ADVISORY_ONLY quarantine,
 CONSTRAINT #3/#4/#6, no-fabricated-metrics, dead-letter resilience). This file adds
 the full detail, test surface, and Gravity step numbers behind each of those.
+
+---
+
+## Gravity split-brain consolidation — delete the dead `gravity/__init__.py`, migrate its steps into the single launcher (PR #209, commit 2f461a70, 2026-07-10)
+
+**Why.** Two parallel Gravity implementations had drifted apart: the canonical
+`Gravity AI Review Suite.py` launcher (the one actually invoked by the GUI Gravity tab and
+CI) and an **unimported** `gravity/__init__.py` package carrying 11 unique audit steps that no
+runner ever executed — a "split-brain" where the package looked authoritative but was dead
+code, so its checks silently protected nothing.
+
+**What shipped.**
+- **Deleted `gravity/__init__.py`** — no importer anywhere (confirmed by grep/AST sweep). It is
+  gone; do not reference it as live.
+- **Migrated its 11 unique steps into `Gravity AI Review Suite.py`** as `step_76`–`step_86`:
+  help-content + help-explainers/anchor-contract (`step_76_help_content_audit`,
+  `step_77_help_explainers_audit`), advisory agent (`step_78_advisory_agent_audit`), trade
+  signals (`step_79_trade_signals_audit`), Robinhood orders (`step_80_robinhood_orders_audit`),
+  Robinhood execution bridge (`step_81_robinhood_execution_bridge_audit`), LLM commentary
+  (`step_82_llm_commentary_audit`), AI Gravity runner (`step_83_gravity_ai_runner_audit`), AI
+  Insights (`step_84_ai_insights_audit`), Opal research (`step_85_opal_research_audit`), AI
+  Control Center (`step_86_ai_control_center_audit`).
+- **Renumbered internal step references** to resolve a pre-existing collision: the
+  progress-indicator audit (PR #206) and the DB-backend-resilience audit (commit `92d37004`)
+  had both shipped as `step_74` on the same day. Post-consolidation, progress-indicator keeps
+  `step_74_progress_indicator_audit` and DB-backend-resilience moved to
+  `step_75_db_backend_resilience_audit`. The help-anchor/explainers check is now
+  `step_77_help_explainers_audit`.
+
+---
+
+## Gravity 6-check repair — fix 6 stale audit assertions broken by recent refactors (commit 087c49aa, 2026-07-10)
+
+**Why.** A Gravity run reported **6 failures out of 74 steps**. Each was a stale check
+assertion, **not** a production bug — the audited code had legitimately moved during prior
+refactors and the check wasn't updated to follow it.
+
+**What shipped.** Repaired six checks:
+- **`step_26`** (fundamentals-cache dedup) — the test never forced the primary
+  `YahooFundamentalsProvider` to fail, so with live network access it never actually exercised
+  the yfinance fallback path it was meant to audit.
+- **`step_45`** (`_main_body` crash-handler scan) — the `exc_info=True` scan only looked at
+  `_main_body`, but the progress-indicator-core work (PR #206) split it into a thin wrapper +
+  `_main_body_impl`, where the crash-logging call now lives.
+- **`step_51`** — checked `main.py`'s raw text for state-snapshot wiring that had since been
+  extracted into `reporting/state_snapshot.py` + `reporting/html_publisher.py`.
+- **`step_55`** — kill-switch string assertions moved into `pipeline/steps.py`.
+- **`step_65`** — `STRATEGY_REGISTRY` entries are now 3-tuples (`adapter_fn`, `turnover`,
+  `universe`), not the 2-tuples the check still expected.
+- **`step_66`** — `ALL_CHECKS` count updated to **22**.
+
+---
+
+## Kelly sizing degrades instead of dead-lettering on DB backend outage (commit 92d37004, 2026-07-10)
+
+**Why.** `TransactionsStore()` construction does an eager connection
+(`Base.metadata.create_all`), so a remote-backend connectivity failure (DNS/network — e.g. an
+unreachable Supabase host) raised straight out of `engine.advisory._get_transactions_store()`
+and `StrategyEngine.transactions_store`, **dead-lettering EVERY symbol's advisory evaluation
+for the cycle** over what is, for the advisory pipeline, an optional position-sizing refinement.
+
+**What shipped.**
+- **NEW `transactions_store._OfflineTransactionsStore`** — a read-only stub whose
+  `closed_trades_df()`/`open_trades_df()`/`get_trade_history()` return empty DataFrames (the
+  same "zero closed trades" cold-start shape `sizing/kelly.py` already falls back from to
+  `volatility_target_weight`).
+- Both lazy-construction call sites now **catch a construction failure, log ONCE, and
+  substitute the stub** — so Kelly sizing degrades to the vol-target fallback instead of
+  aborting the cycle. The stub is **cached** on the singleton/property so a DB outage doesn't
+  retry-storm the failing host once per ticker in the universe.
+- **`record_trade()`/`close_trade()` still RAISE** on the stub — a trade that was never
+  persisted must not be fabricated as recorded (CONSTRAINT #4).
+
+**Test / audit surface.** `tests/test_transactions_store.py`; Gravity
+`step_74_db_backend_resilience_audit` (renumbered to `step_75_db_backend_resilience_audit` by
+PR #209 — see above).
+
+---
+
+## Progress-indicator series — file-backed pipeline progress + live GUI progress bar (PR #206, commit c42ae589, 2026-07-10)
+
+**Why.** A pipeline cycle gave the operator no in-flight feedback — the Launcher tab showed
+only coarse stage markers scraped from the log, and one-shot GUI buttons looked unresponsive
+while working. There was no cross-cutting, dead-letter-safe progress contract shared by the
+orchestrator, the desktop daemon, and the GUI. **(Distinct from the OLDER Market-Data
+`BatchQuoteFetcher` streaming bar documented further below — this is the NEW pipeline-level
+progress bar.)**
+
+**What shipped.**
+- **NEW `reporting/progress.py`** — `ProgressReporter(stages, *, run_id=None, output_dir=None)`
+  is instantiated once per cycle by the orchestrator with the ordered stage names for the run:
+  `start_stage(name, *, symbols_total=0)`, thread-safe `advance_symbol(message="")` (safe from
+  the parallelized per-ticker worker pools), `set_message(msg)`, `finish(state="succeeded"|
+  "failed"|"cancelled")`. Every call **atomically** writes `output/progress.json`
+  (write-then-rename, mirroring `execution/kill_switch.py`'s `activate()` idiom) with
+  `{run_id, state, stage, stage_index, stage_total, symbols_done, symbols_total, percent,
+  message, started_at, updated_at}`.
+- **Read side** — module-level `read_progress(output_dir=None) -> Optional[ProgressState]`:
+  a missing/unreadable/malformed `progress.json` degrades to `None`, never a fabricated/partial
+  dict (CONSTRAINT #6). `clear_progress(output_dir=None)` removes the sentinel at the start of a
+  fresh run.
+- **Consumers** — `desktop/daemon_runtime.py`'s `RunRecord` gained a `progress` field mirroring
+  the same shape (surfaced through `api/control_api.py`'s `GET /status` +
+  `gui/daemon_client.py`); `gui/orchestrator_runner.py::compute_run_progress(handle) ->
+  Optional[RunProgress]` normalizes BOTH a subprocess run's `progress.json` and a daemon run's
+  `RunRecord.progress` into one `RunProgress` (`percent`, `label`, `indeterminate`) for the
+  Launcher tab's live `st.progress` bar, polling at `settings.PROGRESS_POLL_SECONDS` (**new
+  setting**, default 5 s, GUI-writable non-secret allowlist key).
+- **NEW `gui/progress_ui.py::busy(label)`** — a lightweight busy-indicator context manager
+  independent of `ProgressReporter`, applied across previously-silent one-shot GUI buttons
+  (e.g. "Sync Now") so every long-running click gives immediate visual feedback.
+
+**Gravity audit.** `step_74_progress_indicator_audit`.
 
 ---
 
