@@ -89,7 +89,7 @@ symbol ─► Opal (OpenAI, grounded on real Finnhub news+earnings+macro)
 | `gui/ai_insights_panel.py` + `gui/panels/__init__.py` | `format_research_brief_markdown` + `_render_opal_research_section` (top of AI Insights tab) |
 | `CLAUDE.md` | new Scope-4 section (text in §7 below) |
 | `GEMINI.md` | three-provider update (text in §7 below) |
-| `gravity/__init__.py` | `step_77_opal_research_audit()` (~10 checks) + run-sequence wire |
+| `Gravity AI Review Suite.py` | `step_84_opal_research_audit()` (~10 checks) + run-sequence wire (originally added to the now-deleted `gravity/__init__.py` package, migrated into the launcher 2026-07-10) |
 | `ai_verification_prompts.py` | `STEP_8_PROMPT` + `ALL_PROMPTS` |
 | `engine/gravity_ai_runner.py` | `_STEP_FILE_MAP[8]` |
 
@@ -207,8 +207,8 @@ render_ai_insights (front-of-pipeline); session-state mirror.
 STEP 9 — Docs. CLAUDE.md new Scope-4 section + llm/ bullet update (text in §7). GEMINI.md
 three-provider update + Opal bullet (text in §7).
 
-STEP 10 — Gravity. gravity/__init__.py step_77_opal_research_audit() (~10 checks) + wire into run
-sequence. ai_verification_prompts.py STEP_8_PROMPT + ALL_PROMPTS. engine/gravity_ai_runner.py
+STEP 10 — Gravity. Gravity AI Review Suite.py step_84_opal_research_audit() (~10 checks) + wire into
+run sequence. ai_verification_prompts.py STEP_8_PROMPT + ALL_PROMPTS. engine/gravity_ai_runner.py
 _STEP_FILE_MAP[8] = ("llm/research.py","llm/providers.py","engine/advisory.py").
 
 STEP 11 — Tests (mock SDK, no network): test_openai_provider.py (happy/schema-miss/exception/

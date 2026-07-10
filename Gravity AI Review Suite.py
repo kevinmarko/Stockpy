@@ -4461,6 +4461,28 @@ class GravityAIAuditor:
         self.step_74_progress_indicator_audit()
         # DB backend resilience — Postgres/Supabase outage must not dead-letter every symbol
         self.step_75_db_backend_resilience_audit()
+        # Phase 4b reconciliation — steps migrated in from gravity/__init__.py
+        # GUI Help Explainers — glossary/onboarding smoke check + full 10-check suite
+        self.step_76_help_content_audit()
+        self.step_77_help_explainers_audit()
+        # Tier 6 — Autonomous Advisory Agent
+        self.step_78_advisory_agent_audit()
+        # Tier 6 — Trade-signal abilities
+        self.step_79_trade_signals_audit()
+        # Tier 7 — Robinhood realized-P&L engine
+        self.step_80_robinhood_orders_audit()
+        # Tier 8 — Robinhood execution bridge
+        self.step_81_robinhood_execution_bridge_audit()
+        # Tier 9 — Claude + Gemini commentary integration
+        self.step_82_llm_commentary_audit()
+        # Tier 9 Scope 2 — AI Gravity audit runner
+        self.step_83_gravity_ai_runner_audit()
+        # Tier 9 Scope 3 — AI Insights tab
+        self.step_84_ai_insights_audit()
+        # Tier 9 Scope 4 — Opal Research Agent
+        self.step_85_opal_research_audit()
+        # AI Control Center tab
+        self.step_86_ai_control_center_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -11795,6 +11817,2280 @@ class GravityAIAuditor:
 
         self.report["step_75_db_backend_resilience_audit"] = audit
 
+    # =========================================================================
+    # Phase 4b reconciliation (2026-07-10): steps 76-86 migrated in from the
+    # abandoned gravity/__init__.py package extraction, which had continued to
+    # accumulate real audit coverage for Tier 6-9 features after the extraction
+    # while never actually being imported by anything.
+    # =========================================================================
+    def step_76_help_content_audit(self) -> None:
+        """Step 76 — GUI Help Explainers content store smoke check (Prompts 1–5).
+
+        Verifies that the three help-content modules are importable and expose
+        the expected public API surfaces.  This is the lightweight predecessor
+        to ``step_77_help_explainers_audit`` which runs the full 10-check suite.
+        """
+        audit: Dict[str, Any] = {"checks": [], "overall_pass": True}
+        all_pass = True
+        try:
+            # C1 — gui.help_content importable
+            from gui.help_content import GLOSSARY, TAB_HELP, METRIC_HELP, metric_help
+            c1 = bool(GLOSSARY) and bool(TAB_HELP) and callable(metric_help)
+            audit["checks"].append({"check": "help_content_importable", "pass": c1})
+            all_pass = all_pass and c1
+
+            # C2 — gui.help_widgets importable
+            from gui.help_widgets import explain, metric_with_help, why_callout
+            c2 = callable(explain) and callable(metric_with_help) and callable(why_callout)
+            audit["checks"].append({"check": "help_widgets_importable", "pass": c2})
+            all_pass = all_pass and c2
+
+            # C3 — gui.onboarding importable
+            from gui.onboarding import should_show_tour, mark_onboarded
+            c3 = callable(should_show_tour) and callable(mark_onboarded)
+            audit["checks"].append({"check": "onboarding_importable", "pass": c3})
+            all_pass = all_pass and c3
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_76_help_content_audit"] = audit
+
+    def step_77_help_explainers_audit(self) -> None:
+        """Step 77 — GUI Help Explainers consolidated audit (10 checks, plan §7).
+
+        Checks (from docs/GUI_HELP_EXPLAINERS_PLAN.md §7)
+        ---------------------------------------------------
+        1.  ``gui.help_content`` exports: GLOSSARY, TAB_HELP, SECTION_HELP,
+            METRIC_HELP, metric_help.
+        2.  All 10 tab IDs present in TAB_HELP.
+        3.  Every guide_anchor in GLOSSARY + TAB_HELP resolves to a real heading
+            slug in docs/HOW_TO_GUIDE.md (anchor-contract invariant).
+        4.  ``metric_help("__nonexistent__")`` returns exactly ``""`` (never raises,
+            no fabricated fallback — CONSTRAINT #6 / #4).
+        5.  Nine required glossary terms present: kelly target, pbo, dsr, sahm rule,
+            iv rank (or ivr), hmm, advisory mode, conviction, calibration.
+        6.  No duplicate keys in GLOSSARY.
+        7.  ``gui.help_widgets.explain`` is callable.
+        8.  ``gui.onboarding.mark_onboarded`` / ``should_show_tour`` round-trip:
+            True → mark → False, marker file created, ``.tmp`` sibling gone.
+        9.  ``gui/panels.py`` contains ≥ 10 ``help_widgets.explain(`` calls and
+            each of the 10 tab IDs appears in at least one such call.
+        10. ``tests/test_help_content.py`` exists.
+        """
+        import re
+        import tempfile
+        audit: Dict[str, Any] = {"checks": [], "overall_pass": True}
+        all_pass = True
+
+        try:
+            from pathlib import Path
+
+            # ----------------------------------------------------------------
+            # C1 — help_content exports
+            # ----------------------------------------------------------------
+            from gui.help_content import (
+                GLOSSARY, TAB_HELP, SECTION_HELP, METRIC_HELP, metric_help,
+            )
+            c1 = (
+                isinstance(GLOSSARY, dict)
+                and isinstance(TAB_HELP, dict)
+                and isinstance(SECTION_HELP, dict)
+                and isinstance(METRIC_HELP, dict)
+                and callable(metric_help)
+            )
+            audit["checks"].append({"check": "help_content_exports", "pass": bool(c1)})
+            all_pass = all_pass and c1
+
+            # ----------------------------------------------------------------
+            # C2 — all 10 tab IDs in TAB_HELP
+            # ----------------------------------------------------------------
+            expected_tabs = {
+                "launcher", "reports", "settings", "strategy_matrix",
+                "paper_monitor", "gravity", "options", "market_data",
+                "observability", "live_inventory",
+            }
+            missing_tabs = expected_tabs - set(TAB_HELP.keys())
+            c2 = len(missing_tabs) == 0
+            audit["checks"].append({
+                "check": "all_10_tab_ids_in_tab_help",
+                "pass": bool(c2),
+                "missing": sorted(missing_tabs),
+            })
+            all_pass = all_pass and c2
+
+            # ----------------------------------------------------------------
+            # C3 — anchor-contract: every guide_anchor resolves to a real slug
+            # ----------------------------------------------------------------
+            guide_path = Path("docs/HOW_TO_GUIDE.md")
+            valid_slugs: set = set()
+            if guide_path.exists():
+                for line in guide_path.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("## ") or line.startswith("### "):
+                        heading = line.lstrip("#").strip()
+                        slug = heading.lower()
+                        slug = re.sub(r"[^\w\s-]", "", slug)
+                        slug = "#" + slug.replace(" ", "-")
+                        valid_slugs.add(slug)
+
+            bad_anchors = []
+            for k, entry in GLOSSARY.items():
+                if entry.guide_anchor and entry.guide_anchor not in valid_slugs:
+                    bad_anchors.append(f"GLOSSARY[{k!r}]={entry.guide_anchor!r}")
+            for k, tab in TAB_HELP.items():
+                if tab.guide_anchor and tab.guide_anchor not in valid_slugs:
+                    bad_anchors.append(f"TAB_HELP[{k!r}]={tab.guide_anchor!r}")
+            c3 = len(bad_anchors) == 0
+            audit["checks"].append({
+                "check": "guide_anchors_resolve",
+                "pass": bool(c3),
+                "bad_anchors": bad_anchors[:5],
+            })
+            all_pass = all_pass and c3
+
+            # ----------------------------------------------------------------
+            # C4 — metric_help missing key → "" (CONSTRAINT #4 / #6)
+            # ----------------------------------------------------------------
+            result_missing = metric_help("__nonexistent_gravity_probe__")
+            c4 = result_missing == ""
+            audit["checks"].append({
+                "check": "metric_help_missing_returns_empty",
+                "pass": bool(c4),
+                "got": repr(result_missing),
+            })
+            all_pass = all_pass and c4
+
+            # ----------------------------------------------------------------
+            # C5 — required glossary terms present
+            # ----------------------------------------------------------------
+            required_terms = {
+                "kelly target", "pbo", "dsr", "sahm rule",
+                "iv rank",  # plan says "ivr"; actual GLOSSARY key is "iv rank"
+                "hmm", "advisory mode", "conviction", "calibration",
+            }
+            glossary_keys = set(GLOSSARY.keys())
+            # Accept "ivr" as well in case the key changes
+            if "ivr" in glossary_keys and "iv rank" not in required_terms:
+                pass  # ivr is an acceptable substitute
+            missing_terms = required_terms - glossary_keys
+            # ivr is an acceptable alias for iv rank
+            if "iv rank" in missing_terms and "ivr" in glossary_keys:
+                missing_terms.discard("iv rank")
+            c5 = len(missing_terms) == 0
+            audit["checks"].append({
+                "check": "required_glossary_terms_present",
+                "pass": bool(c5),
+                "missing": sorted(missing_terms),
+            })
+            all_pass = all_pass and c5
+
+            # ----------------------------------------------------------------
+            # C6 — no duplicate GLOSSARY keys
+            # ----------------------------------------------------------------
+            keys_list = list(GLOSSARY.keys())
+            c6 = len(keys_list) == len(set(keys_list))
+            audit["checks"].append({"check": "no_duplicate_glossary_keys", "pass": bool(c6)})
+            all_pass = all_pass and c6
+
+            # ----------------------------------------------------------------
+            # C7 — gui.help_widgets.explain is callable
+            # ----------------------------------------------------------------
+            from gui.help_widgets import explain
+            c7 = callable(explain)
+            audit["checks"].append({"check": "explain_callable", "pass": bool(c7)})
+            all_pass = all_pass and c7
+
+            # ----------------------------------------------------------------
+            # C8 — mark_onboarded / should_show_tour round-trip
+            # ----------------------------------------------------------------
+            from gui.onboarding import should_show_tour, mark_onboarded
+            with tempfile.TemporaryDirectory() as td:
+                marker = Path(td) / ".gui_onboarded"
+                tmp_sibling = marker.with_suffix(".tmp")
+                before = should_show_tour({}, marker)
+                mark_onboarded(marker)
+                after = should_show_tour({}, marker)
+                marker_exists = marker.exists()
+                tmp_gone = not tmp_sibling.exists()
+            c8 = (
+                isinstance(before, bool) and before is True
+                and isinstance(after, bool) and after is False
+                and marker_exists
+                and tmp_gone
+            )
+            audit["checks"].append({
+                "check": "onboarding_roundtrip",
+                "pass": bool(c8),
+                "before": before,
+                "after": after,
+                "marker_exists": marker_exists,
+                "tmp_gone": tmp_gone,
+            })
+            all_pass = all_pass and c8
+
+            # ----------------------------------------------------------------
+            # C9 — panels has ≥10 explain() calls, all 10 tab IDs covered.
+            # Post the gui/panels package refactor (2026-06-29) each tab's
+            # ``render_*`` function — and its ``help_widgets.explain(...)``
+            # call — lives in its own per-tab module under gui/panels/, not
+            # in the (now ~110-line re-export stub) __init__.py. Concatenate
+            # every module in the package so this check's original intent
+            # (does the *panels package* wire up help text everywhere it
+            # should) still holds.
+            # ----------------------------------------------------------------
+            panels_dir = Path("gui/panels")
+            panels_src = "\n".join(
+                p.read_text(encoding="utf-8")
+                for p in sorted(panels_dir.glob("*.py"))
+                if p.exists()
+            ) if panels_dir.exists() else ""
+            total_calls = panels_src.count("help_widgets.explain(")
+            tab_ids_in_panels = [
+                t for t in expected_tabs
+                if f'help_widgets.explain("{t}"' in panels_src
+                or f"help_widgets.explain('{t}'" in panels_src
+            ]
+            missing_tab_calls = sorted(expected_tabs - set(tab_ids_in_panels))
+            c9 = total_calls >= 10 and len(missing_tab_calls) == 0
+            audit["checks"].append({
+                "check": "panels_explain_calls_gte10",
+                "pass": bool(c9),
+                "total_calls": total_calls,
+                "missing_tab_calls": missing_tab_calls,
+            })
+            all_pass = all_pass and c9
+
+            # ----------------------------------------------------------------
+            # C10 — tests/test_help_content.py exists
+            # ----------------------------------------------------------------
+            c10 = Path("tests/test_help_content.py").exists()
+            audit["checks"].append({"check": "test_help_content_exists", "pass": bool(c10)})
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_77_help_explainers_audit"] = audit
+
+    def step_78_advisory_agent_audit(self) -> None:
+        """Step 78 — Autonomous Advisory Agent (engine/advisory_agent.py) audit.
+
+        Background
+        ----------
+        The Robinhood agent trader option 2: a self-pacing loop that wraps
+        ``main.run_once()`` with:
+          * adaptive cadence (RTH-aware + VIX/regime-adaptive + error back-off)
+          * actionable-backlog reminders that re-ping high-conviction signals
+            the operator has NOT yet logged a decision for, on 1h/4h/24h tiers
+          * persistent state at ``output/agent_state.json``
+
+        ADVISORY-ONLY invariant: the module contains NO order-submission code
+        and never imports any broker.  All side effects route through the
+        existing ``alerting.notify()`` ntfy channel and ``main.run_once()``.
+
+        Checks
+        ------
+        1.  ``engine.advisory_agent`` module is importable.
+        2.  ``CONFIG`` dict carries every required threshold (no magic numbers
+            in the logic functions).
+        3.  ``AgentState`` / ``BacklogEntry`` / ``BacklogReminder`` are
+            dataclasses with the expected fields.
+        4.  ``compute_next_run_delay`` returns the RTH-normal delay during
+            midday RTH with low VIX and clean error history.
+        5.  ``compute_next_run_delay`` tightens cadence inside RTH when
+            VIX ≥ ``vol_spike_vix_threshold``.
+        6.  ``compute_next_run_delay`` returns the off-hours delay on a
+            weekend.
+        7.  Error back-off short-circuits the RTH path.
+        8.  ``update_backlog`` adds a high-conviction BUY signal.
+        9.  ``update_backlog`` drops a backlog item once a matching "acted"
+            decision-log entry exists.
+        10. ``compute_backlog_reminders`` does not fire until tier 1 (1 h) has
+            elapsed, and ``apply_reminder_dispatch`` advances the counter.
+        11. ``load_agent_state`` / ``save_agent_state`` round-trip.
+        12. ``load_agent_state`` returns a fresh state on corrupt JSON
+            (CONSTRAINT #6 — never raises).
+        13. ``engine/advisory_agent.py`` source contains NO order-submission
+            keywords (``submit_order``, ``place_order``, etc.) — ADVISORY ONLY.
+        14. ``main.py`` registers the ``--agent`` flag and defines
+            ``_run_agent_loop``.
+        15. ``tests/test_advisory_agent.py`` exists.
+        """
+        audit: dict = {
+            "step": "step_78_advisory_agent_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            from datetime import datetime, timedelta, timezone
+            from pathlib import Path
+            from zoneinfo import ZoneInfo
+            import importlib
+            import inspect
+
+            # ── 1: importable ─────────────────────────────────────────────
+            mod = importlib.import_module("engine.advisory_agent")
+            audit["checks"].append({"check": "engine.advisory_agent importable", "passed": True})
+
+            # ── 2: CONFIG has every required key ──────────────────────────
+            required_cfg = {
+                "rth_normal_delay_s", "rth_high_vol_delay_s",
+                "rth_open_close_delay_s", "rth_open_close_window_minutes",
+                "extended_hours_delay_s", "off_hours_delay_s",
+                "error_backoff_base_s", "error_backoff_max_s",
+                "vol_spike_vix_threshold", "high_vol_regimes", "min_delay_s",
+                "backlog_conviction_threshold", "backlog_tier_hours",
+                "backlog_tier_priorities", "backlog_max_reminders",
+                "backlog_expiry_hours",
+                "decision_log_match_window_hours",
+            }
+            cfg_ok = required_cfg.issubset(set(mod.CONFIG.keys()))
+            all_pass = all_pass and cfg_ok
+            audit["checks"].append({
+                "check": "CONFIG dict contains all required thresholds",
+                "passed": bool(cfg_ok),
+                "detail": f"missing={sorted(required_cfg - set(mod.CONFIG.keys()))}",
+            })
+
+            # ── 3: dataclasses with expected fields ──────────────────────
+            dc_ok = (
+                hasattr(mod.AgentState, "__dataclass_fields__")
+                and {"cycle_count", "backlog", "consecutive_error_cycles"}.issubset(
+                    mod.AgentState.__dataclass_fields__)
+                and hasattr(mod.BacklogEntry, "__dataclass_fields__")
+                and {"symbol", "action", "conviction", "first_seen_iso",
+                     "last_pinged_iso", "reminders_sent"}.issubset(
+                    mod.BacklogEntry.__dataclass_fields__)
+                and hasattr(mod.BacklogReminder, "__dataclass_fields__")
+            )
+            all_pass = all_pass and dc_ok
+            audit["checks"].append({
+                "check": "AgentState / BacklogEntry / BacklogReminder dataclass fields",
+                "passed": bool(dc_ok),
+            })
+
+            # ── helpers for cadence tests ───────────────────────────────
+            _ET = ZoneInfo("America/New_York")
+            def _et(y, m, d, h, mi=0):
+                return datetime(y, m, d, h, mi, tzinfo=_ET).astimezone(timezone.utc)
+
+            state = mod.AgentState()
+
+            # ── 4: RTH normal delay (midday Monday, low VIX) ─────────────
+            d_normal = mod.compute_next_run_delay(
+                _et(2025, 6, 30, 12, 0),
+                state=state, vix=15.0, market_regime="RISK ON",
+            )
+            c4 = (d_normal == mod.CONFIG["rth_normal_delay_s"])
+            all_pass = all_pass and c4
+            audit["checks"].append({
+                "check": "RTH-normal cadence applies midday with low VIX",
+                "passed": bool(c4), "detail": f"delay={d_normal}",
+            })
+
+            # ── 5: high-VIX tightens cadence in RTH ──────────────────────
+            d_high = mod.compute_next_run_delay(
+                _et(2025, 6, 30, 12, 0),
+                state=state, vix=35.0, market_regime="RISK ON",
+            )
+            c5 = (d_high == mod.CONFIG["rth_high_vol_delay_s"])
+            all_pass = all_pass and c5
+            audit["checks"].append({
+                "check": "High-VIX (>=vol_spike_vix_threshold) tightens RTH cadence",
+                "passed": bool(c5), "detail": f"delay={d_high}",
+            })
+
+            # ── 6: off-hours delay on a weekend ──────────────────────────
+            d_weekend = mod.compute_next_run_delay(
+                _et(2025, 6, 28, 12, 0),  # Saturday
+                state=state, vix=15.0, market_regime="RISK ON",
+            )
+            c6 = (d_weekend == mod.CONFIG["off_hours_delay_s"])
+            all_pass = all_pass and c6
+            audit["checks"].append({
+                "check": "Off-hours cadence applies on weekend",
+                "passed": bool(c6), "detail": f"delay={d_weekend}",
+            })
+
+            # ── 7: error back-off short-circuits ─────────────────────────
+            err_state = mod.AgentState(consecutive_error_cycles=2)
+            d_err = mod.compute_next_run_delay(
+                _et(2025, 6, 30, 12, 0),
+                state=err_state, vix=15.0, market_regime="RISK ON",
+            )
+            c7 = (d_err != mod.CONFIG["rth_normal_delay_s"] and d_err >= mod.CONFIG["min_delay_s"])
+            all_pass = all_pass and c7
+            audit["checks"].append({
+                "check": "Error back-off short-circuits the RTH path",
+                "passed": bool(c7), "detail": f"delay={d_err}",
+            })
+
+            # ── 8: high-conviction BUY enters backlog ────────────────────
+            from dataclasses import dataclass as _dc
+            @_dc
+            class _R:
+                symbol: str; action: str; conviction: float
+            now = datetime(2025, 6, 30, 14, 0, tzinfo=timezone.utc)
+            st2 = mod.AgentState()
+            mod.update_backlog(st2, [_R("AAPL", "BUY", 0.90)], [], now)
+            c8 = ("AAPL:BUY" in st2.backlog)
+            all_pass = all_pass and c8
+            audit["checks"].append({
+                "check": "update_backlog inserts high-conviction BUY",
+                "passed": bool(c8),
+            })
+
+            # ── 9: acted decision drops backlog entry ────────────────────
+            @_dc
+            class _DE:
+                symbol: str; action_taken: str; timestamp: str
+            entry = _DE(
+                symbol="AAPL", action_taken="acted",
+                timestamp=(now + timedelta(hours=1)).isoformat(),
+            )
+            mod.update_backlog(st2, [_R("AAPL", "BUY", 0.90)], [entry], now + timedelta(hours=2))
+            c9 = ("AAPL:BUY" not in st2.backlog)
+            all_pass = all_pass and c9
+            audit["checks"].append({
+                "check": "update_backlog clears entry after matching 'acted' decision",
+                "passed": bool(c9),
+            })
+
+            # ── 10: tier-1 reminder fires after 1 h ──────────────────────
+            st3 = mod.AgentState(backlog={
+                "AAPL:BUY": mod.BacklogEntry(
+                    symbol="AAPL", action="BUY", conviction=0.90,
+                    first_seen_iso=now.isoformat(),
+                    last_pinged_iso="", reminders_sent=0,
+                )
+            })
+            no_reminders = mod.compute_backlog_reminders(st3, now + timedelta(minutes=30))
+            yes_reminders = mod.compute_backlog_reminders(st3, now + timedelta(hours=1, minutes=1))
+            c10a = (no_reminders == [] and len(yes_reminders) == 1 and yes_reminders[0].tier == 1)
+            mod.apply_reminder_dispatch(st3, yes_reminders, now + timedelta(hours=1, minutes=1))
+            c10b = (st3.backlog["AAPL:BUY"].reminders_sent == 1)
+            c10 = c10a and c10b
+            all_pass = all_pass and c10
+            audit["checks"].append({
+                "check": "Tier-1 reminder fires after 1 h; counter advances on dispatch",
+                "passed": bool(c10),
+            })
+
+            # ── 11: state round-trip ─────────────────────────────────────
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                p = Path(tmpdir) / "agent_state.json"
+                mod.save_agent_state(st3, p)
+                loaded = mod.load_agent_state(p)
+                c11 = (loaded.backlog["AAPL:BUY"].symbol == "AAPL"
+                       and loaded.backlog["AAPL:BUY"].reminders_sent == 1)
+                all_pass = all_pass and c11
+                audit["checks"].append({
+                    "check": "AgentState save/load round-trip",
+                    "passed": bool(c11),
+                })
+
+                # ── 12: corrupt JSON degrades to fresh state ─────────────
+                p2 = Path(tmpdir) / "corrupt.json"
+                p2.write_text("not json {", encoding="utf-8")
+                fresh = mod.load_agent_state(p2)
+                c12 = (fresh.cycle_count == 0 and fresh.backlog == {})
+                all_pass = all_pass and c12
+                audit["checks"].append({
+                    "check": "load_agent_state degrades to fresh state on corrupt JSON",
+                    "passed": bool(c12),
+                })
+
+            # ── 13: ADVISORY-ONLY — no order-submission keywords in source
+            src = Path("engine/advisory_agent.py").read_text(encoding="utf-8")
+            forbidden = ["submit_order", "place_order", "place_equity_order",
+                         "place_option_order", "buy_order", "sell_order"]
+            present = [kw for kw in forbidden if kw in src]
+            c13 = (present == [])
+            all_pass = all_pass and c13
+            audit["checks"].append({
+                "check": "ADVISORY-ONLY — engine/advisory_agent.py contains no order-submission keywords",
+                "passed": bool(c13),
+                "detail": f"forbidden_kws_found={present}",
+            })
+
+            # ── 14: main.py wires --agent flag and _run_agent_loop ───────
+            main_src = Path("main.py").read_text(encoding="utf-8")
+            c14 = ("'--agent'" in main_src or '"--agent"' in main_src) and ("_run_agent_loop" in main_src)
+            all_pass = all_pass and c14
+            audit["checks"].append({
+                "check": "main.py declares --agent flag and _run_agent_loop helper",
+                "passed": bool(c14),
+            })
+
+            # ── 15: test file exists ─────────────────────────────────────
+            c15 = Path("tests/test_advisory_agent.py").exists()
+            all_pass = all_pass and c15
+            audit["checks"].append({
+                "check": "tests/test_advisory_agent.py exists",
+                "passed": bool(c15),
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_78_advisory_agent_audit"] = audit
+
+    def step_79_trade_signals_audit(self) -> None:
+        """Step 79 — Trade-signal abilities (engine/trade_signals.py) audit.
+
+        Background
+        ----------
+        Two advisory trading abilities layered on the autonomous agent, both
+        derived purely from the per-cycle ``RunResult`` (recommendations +
+        account snapshot):
+          * Ability A — CONVICTION MOMENTUM: cross-cycle conviction trajectory;
+            "building" (early entry heads-up below the 0.85 backlog siren) and
+            "fading" (early exit warning) edge-triggered alerts.
+          * Ability B — STOP / TARGET PROXIMITY: ATR-scaled stop below cost and
+            forecast/ATR take-profit target for HELD positions.
+
+        ADVISORY-ONLY invariant: no order code, no broker import; every output
+        is a ``TradeAlert`` pushed through ``alerting.notify()``.
+
+        Checks
+        ------
+        1.  ``engine.trade_signals`` importable.
+        2.  ``CONFIG`` carries every momentum + price-trigger threshold.
+        3.  ``update_conviction_history`` appends, trims to lookback, prunes the
+            universe, and does not mutate its input.
+        4.  ``detect_conviction_momentum`` flags a steady "building" climb once
+            and debounces the repeat.
+        5.  "building" is suppressed at/above the backlog ceiling (0.85).
+        6.  ``detect_conviction_momentum`` flags a "fading" decline (HIGH) on a
+            non-BUY name.
+        7.  ``detect_price_triggers`` fires an ATR-scaled stop alert (HIGH) when
+            price approaches the stop.
+        8.  ``detect_price_triggers`` fires a forecast-based target alert when
+            price reaches the take-profit zone, and debounces the repeat.
+        9.  Dust positions (< min_position_value_usd) are ignored — no
+            fabricated alert (CONSTRAINT #4).
+        10. ADVISORY-ONLY — no order-submission keywords in the source; main.py
+            wires both detectors; tests/test_trade_signals.py exists.
+        """
+        audit: dict = {
+            "step": "step_79_trade_signals_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import importlib
+            from dataclasses import dataclass as _dc, field as _field
+            from pathlib import Path
+            from typing import Dict as _Dict, Optional as _Opt
+
+            mod = importlib.import_module("engine.trade_signals")
+            audit["checks"].append({"check": "engine.trade_signals importable", "passed": True})
+
+            # ── 2: CONFIG keys ───────────────────────────────────────────
+            required_cfg = {
+                "momentum_lookback_cycles", "momentum_min_cycles",
+                "momentum_rising_delta", "momentum_building_floor",
+                "momentum_building_ceiling", "momentum_falling_delta",
+                "stop_atr_multiple", "stop_fallback_pct", "stop_proximity_pct",
+                "target_atr_multiple", "target_proximity_pct",
+                "min_position_value_usd",
+            }
+            cfg_ok = required_cfg.issubset(set(mod.CONFIG.keys()))
+            all_pass = all_pass and cfg_ok
+            audit["checks"].append({
+                "check": "CONFIG dict contains all required thresholds",
+                "passed": bool(cfg_ok),
+                "detail": f"missing={sorted(required_cfg - set(mod.CONFIG.keys()))}",
+            })
+
+            # ── duck-typed fixtures ──────────────────────────────────────
+            @_dc
+            class _R:
+                symbol: str; action: str; conviction: float
+                forecast: _Opt[float] = None
+                key_indicators: dict = _field(default_factory=dict)
+
+            @_dc
+            class _P:
+                symbol: str; quantity: float; average_cost: float
+                current_price: float; market_value: float
+                unrealized_pl_pct: float = 0.0
+
+            @_dc
+            class _S:
+                positions: dict
+
+            def _hist(series, sym="AAPL", act="BUY"):
+                h = {}
+                for c in series:
+                    h = mod.update_conviction_history(h, [_R(sym, act, c)])
+                return h
+
+            # ── 3: history append + trim + prune + immutability ──────────
+            lookback = int(mod.CONFIG["momentum_lookback_cycles"])
+            long_hist = _hist([0.1 * i for i in range(lookback + 5)])
+            original = {"OLD": [0.5]}
+            pruned = mod.update_conviction_history(original, [_R("NEW", "BUY", 0.7)])
+            c3 = (
+                len(long_hist["AAPL"]) == lookback
+                and "OLD" not in pruned and pruned["NEW"] == [0.7]
+                and original == {"OLD": [0.5]}  # input not mutated
+            )
+            all_pass = all_pass and c3
+            audit["checks"].append({
+                "check": "update_conviction_history appends/trims/prunes; input immutable",
+                "passed": bool(c3),
+            })
+
+            # ── 4: building fires once + debounce ────────────────────────
+            hb = _hist([0.55, 0.63, 0.72, 0.80])
+            a1, flag1 = mod.detect_conviction_momentum(hb, [_R("AAPL", "BUY", 0.80)], {})
+            a2, _ = mod.detect_conviction_momentum(hb, [_R("AAPL", "BUY", 0.80)], flag1)
+            c4 = (len(a1) == 1 and a1[0].kind == "momentum_building" and a2 == [])
+            all_pass = all_pass and c4
+            audit["checks"].append({
+                "check": "detect_conviction_momentum flags 'building' once and debounces",
+                "passed": bool(c4),
+            })
+
+            # ── 5: building suppressed at/above ceiling ──────────────────
+            hc = _hist([0.70, 0.80, 0.88])
+            a5, _ = mod.detect_conviction_momentum(hc, [_R("AAPL", "BUY", 0.88)], {})
+            c5 = (a5 == [])
+            all_pass = all_pass and c5
+            audit["checks"].append({
+                "check": "'building' suppressed at/above backlog ceiling (0.85)",
+                "passed": bool(c5),
+            })
+
+            # ── 6: fading fires HIGH on non-BUY ──────────────────────────
+            hf = _hist([0.80, 0.65, 0.50], act="SELL")
+            a6, _ = mod.detect_conviction_momentum(hf, [_R("AAPL", "SELL", 0.50)], {})
+            c6 = (len(a6) == 1 and a6[0].kind == "momentum_fading" and a6[0].priority == "high")
+            all_pass = all_pass and c6
+            audit["checks"].append({
+                "check": "detect_conviction_momentum flags 'fading' (HIGH) on non-BUY name",
+                "passed": bool(c6),
+            })
+
+            # ── 7: ATR stop approach (HIGH) ──────────────────────────────
+            rec = _R("NVDA", "HOLD", 0.5, forecast=130.0, key_indicators={"atr": 3.0})
+            snap_stop = _S({"NVDA": _P("NVDA", 10, 100.0, 92.5, 925.0, -7.5)})
+            a7, _ = mod.detect_price_triggers(snap_stop, [rec], {})
+            c7 = (len(a7) == 1 and a7[0].kind == "approaching_stop"
+                  and a7[0].priority == "high"
+                  and abs(a7[0].detail["stop_level"] - 92.5) < 1e-6)
+            all_pass = all_pass and c7
+            audit["checks"].append({
+                "check": "detect_price_triggers fires ATR-scaled stop alert (HIGH)",
+                "passed": bool(c7),
+            })
+
+            # ── 8: forecast target approach + debounce ───────────────────
+            snap_tgt = _S({"NVDA": _P("NVDA", 10, 100.0, 129.0, 1290.0, 29.0)})
+            a8, flag8 = mod.detect_price_triggers(snap_tgt, [rec], {})
+            a8b, _ = mod.detect_price_triggers(snap_tgt, [rec], flag8)
+            c8 = (len(a8) == 1 and a8[0].kind == "approaching_target"
+                  and abs(a8[0].detail["target_level"] - 130.0) < 1e-6 and a8b == [])
+            all_pass = all_pass and c8
+            audit["checks"].append({
+                "check": "detect_price_triggers fires forecast target alert and debounces",
+                "passed": bool(c8),
+            })
+
+            # ── 9: dust position ignored (no fabrication) ────────────────
+            dust = _S({"NVDA": _P("NVDA", 0.5, 100.0, 92.0, 46.0, -8.0)})
+            a9, flag9 = mod.detect_price_triggers(dust, [rec], {})
+            c9 = (a9 == [] and flag9 == {})
+            all_pass = all_pass and c9
+            audit["checks"].append({
+                "check": "dust position (< min_position_value_usd) yields no alert (CONSTRAINT #4)",
+                "passed": bool(c9),
+            })
+
+            # ── 10: ADVISORY-ONLY source + wiring + test file ────────────
+            src = Path("engine/trade_signals.py").read_text(encoding="utf-8").lower()
+            forbidden = ["submit_order", "place_order", "place_equity_order",
+                         "place_option_order", "buy_order", "sell_order"]
+            present = [kw for kw in forbidden if kw in src]
+            main_src = Path("main.py").read_text(encoding="utf-8")
+            wired = ("detect_conviction_momentum" in main_src
+                     and "detect_price_triggers" in main_src)
+            test_exists = Path("tests/test_trade_signals.py").exists()
+            c10 = (present == [] and wired and test_exists)
+            all_pass = all_pass and c10
+            audit["checks"].append({
+                "check": "ADVISORY-ONLY source; main.py wires both detectors; test file exists",
+                "passed": bool(c10),
+                "detail": f"forbidden={present} wired={wired} test={test_exists}",
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_79_trade_signals_audit"] = audit
+
+    def step_80_robinhood_orders_audit(self) -> None:
+        """Step 80 — Robinhood realized-P&L engine (data/robinhood_orders.py) audit.
+
+        Background
+        ----------
+        Read-only realized-P&L engine: fetches FILLED equity orders and
+        reconstructs closed round-trip trades via FIFO lot-matching, feeding the
+        calibration tracker / fractional-Kelly population.  ADVISORY ONLY — no
+        order-submission, modification, or cancellation code; the fetch path is
+        strictly read (``get_all_stock_orders``).
+
+        Checks
+        ------
+        1.  ``data.robinhood_orders`` importable; public surface present.
+        2.  ``reconstruct_closed_trades`` is pure FIFO — splits a sell across
+            two buy lots into the correct closed trades.
+        3.  Realized P&L and return % are computed correctly for a round-trip.
+        4.  An excess/short sell drops the unmatched quantity (CONSTRAINT #4 —
+            never fabricated as a zero-cost entry).
+        5.  Output is sorted by ``exit_ts`` ascending.
+        6.  ``realized_pnl_summary([])`` is NaN-shaped (no fabricated zeros).
+        7.  Win rate + profit factor computed correctly; profit factor is NaN
+            with no losing trades.
+        8.  ``parse_orders`` keeps only ``state == "filled"`` and resolves
+            symbols via the injected resolver.
+        9.  ``fetch_filled_orders`` is dead-letter resilient — an injected
+            fetcher that raises yields ``[]`` (never raises).
+        10. ADVISORY-ONLY — no order-submission keywords in the source; the
+            test file exists.
+        """
+        audit: dict = {
+            "step": "step_80_robinhood_orders_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import importlib
+            import math
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            mod = importlib.import_module("data.robinhood_orders")
+            surface_ok = all(hasattr(mod, n) for n in (
+                "OrderFill", "ClosedTrade", "reconstruct_closed_trades",
+                "realized_pnl_summary", "parse_orders", "fetch_filled_orders",
+                "realized_performance",
+            ))
+            all_pass = all_pass and surface_ok
+            audit["checks"].append({
+                "check": "data.robinhood_orders importable with full public surface",
+                "passed": bool(surface_ok),
+            })
+
+            def _fill(sym, side, qty, price, day):
+                return mod.OrderFill(
+                    symbol=sym, side=side, quantity=qty, price=price,
+                    timestamp=datetime(2026, 1, day, 15, 0, tzinfo=timezone.utc),
+                    order_id=f"{sym}-{side}-{day}",
+                )
+
+            # ── 2: FIFO split across two lots ─────────────────────────────
+            trades = mod.reconstruct_closed_trades([
+                _fill("AAPL", "buy", 10, 100.0, 1),
+                _fill("AAPL", "buy", 10, 110.0, 2),
+                _fill("AAPL", "sell", 15, 120.0, 10),
+            ])
+            c2 = (len(trades) == 2
+                  and trades[0].quantity == 10 and trades[0].entry_price == 100.0
+                  and trades[1].quantity == 5 and trades[1].entry_price == 110.0)
+            all_pass = all_pass and c2
+            audit["checks"].append({
+                "check": "reconstruct_closed_trades splits a sell across two FIFO lots",
+                "passed": bool(c2),
+            })
+
+            # ── 3: realized P&L + return% correct ────────────────────────
+            c3 = (abs(sum(t.realized_pnl for t in trades) - 250.0) < 1e-6
+                  and abs(trades[0].return_pct - 20.0) < 1e-6)
+            all_pass = all_pass and c3
+            audit["checks"].append({
+                "check": "realized P&L and return% computed correctly",
+                "passed": bool(c3),
+            })
+
+            # ── 4: excess sell dropped (no fabrication) ──────────────────
+            ex = mod.reconstruct_closed_trades([
+                _fill("S", "buy", 5, 10.0, 1),
+                _fill("S", "sell", 8, 12.0, 2),
+            ])
+            c4 = (len(ex) == 1 and ex[0].quantity == 5)
+            all_pass = all_pass and c4
+            audit["checks"].append({
+                "check": "excess/short sell drops unmatched qty (CONSTRAINT #4)",
+                "passed": bool(c4),
+            })
+
+            # ── 5: sorted by exit_ts ─────────────────────────────────────
+            srt = mod.reconstruct_closed_trades([
+                _fill("AAA", "buy", 1, 10.0, 1), _fill("BBB", "buy", 1, 10.0, 1),
+                _fill("BBB", "sell", 1, 11.0, 3), _fill("AAA", "sell", 1, 11.0, 2),
+            ])
+            c5 = ([t.symbol for t in srt] == ["AAA", "BBB"])
+            all_pass = all_pass and c5
+            audit["checks"].append({
+                "check": "closed trades sorted by exit_ts ascending",
+                "passed": bool(c5),
+            })
+
+            # ── 6: empty summary NaN-shaped ──────────────────────────────
+            es = mod.realized_pnl_summary([])
+            c6 = (es["n_trades"] == 0
+                  and math.isnan(es["win_rate"]) and math.isnan(es["profit_factor"]))
+            all_pass = all_pass and c6
+            audit["checks"].append({
+                "check": "empty summary is NaN-shaped (no fabricated zeros)",
+                "passed": bool(c6),
+            })
+
+            # ── 7: win rate + profit factor ──────────────────────────────
+            mix = mod.reconstruct_closed_trades([
+                _fill("A", "buy", 1, 100.0, 1), _fill("A", "sell", 1, 120.0, 2),
+                _fill("B", "buy", 1, 100.0, 1), _fill("B", "sell", 1, 90.0, 2),
+                _fill("C", "buy", 1, 100.0, 1), _fill("C", "sell", 1, 110.0, 2),
+            ])
+            sm = mod.realized_pnl_summary(mix)
+            nl = mod.realized_pnl_summary(mod.reconstruct_closed_trades([
+                _fill("A", "buy", 1, 100.0, 1), _fill("A", "sell", 1, 110.0, 2),
+            ]))
+            c7 = (abs(sm["win_rate"] - 2 / 3) < 1e-9
+                  and abs(sm["profit_factor"] - 3.0) < 1e-9
+                  and math.isnan(nl["profit_factor"]))
+            all_pass = all_pass and c7
+            audit["checks"].append({
+                "check": "win rate + profit factor correct; NaN PF with no losses",
+                "passed": bool(c7),
+            })
+
+            # ── 8: parse_orders filled-only + resolver ───────────────────
+            raw = [
+                {"state": "filled", "side": "buy", "cumulative_quantity": "10",
+                 "average_price": "100", "last_transaction_at": "2026-01-01T15:00:00Z",
+                 "instrument": "https://x/inst/uuid1/", "id": "a"},
+                {"state": "cancelled", "side": "buy", "cumulative_quantity": "5",
+                 "average_price": "90", "last_transaction_at": "2026-01-01T15:00:00Z",
+                 "instrument": "https://x/inst/uuid1/", "id": "b"},
+            ]
+            parsed = mod.parse_orders(raw, lambda u: "AAPL" if "uuid1" in u else None)
+            c8 = (len(parsed) == 1 and parsed[0].symbol == "AAPL" and parsed[0].side == "buy")
+            all_pass = all_pass and c8
+            audit["checks"].append({
+                "check": "parse_orders keeps filled-only and resolves symbols",
+                "passed": bool(c8),
+            })
+
+            # ── 9: fetch dead-letter resilience ──────────────────────────
+            def _boom():
+                raise RuntimeError("network down")
+            # Point the cache at a guaranteed-missing path so no stale cache hides the failure.
+            import tempfile
+            with tempfile.TemporaryDirectory() as td:
+                old = mod._CACHE_PATH
+                try:
+                    mod._CACHE_PATH = Path(td) / "missing.json"
+                    got = mod.fetch_filled_orders(force=True, orders_fetcher=_boom,
+                                                  symbol_resolver=lambda u: "AAPL")
+                finally:
+                    mod._CACHE_PATH = old
+            c9 = (got == [])
+            all_pass = all_pass and c9
+            audit["checks"].append({
+                "check": "fetch_filled_orders returns [] on fetcher failure (CONSTRAINT #6)",
+                "passed": bool(c9),
+            })
+
+            # ── 10: ADVISORY-ONLY source + test file ─────────────────────
+            src = Path("data/robinhood_orders.py").read_text(encoding="utf-8").lower()
+            forbidden = ["submit_order", "place_order", "place_equity_order",
+                         "place_option_order", "buy_order", "sell_order",
+                         "order_buy", "order_sell", "cancel_order"]
+            present = [kw for kw in forbidden if kw in src]
+            test_exists = Path("tests/test_robinhood_orders.py").exists()
+            c10 = (present == [] and test_exists)
+            all_pass = all_pass and c10
+            audit["checks"].append({
+                "check": "ADVISORY-ONLY source (no order keywords); test file exists",
+                "passed": bool(c10),
+                "detail": f"forbidden={present} test={test_exists}",
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_80_robinhood_orders_audit"] = audit
+
+    def step_81_robinhood_execution_bridge_audit(self) -> None:
+        """Step 81 — Robinhood execution bridge (execution/queue_builder.py) audit.
+
+        Background
+        ----------
+        Tier 8 seam between the headless advisory pipeline and the Robinhood
+        Trading MCP. The pipeline cannot call MCP tools, so `queue_builder`
+        emits a GATED, DRY-RUN `output/execution_queue.json`; a Claude Code agent
+        is the only actor that calls the MCP. The bridge never contacts a broker.
+
+        Safety invariant: `allow_place` is structurally False unless
+        mode==live AND the risk gate passed AND the kill switch is clear AND a
+        per-order notional cap is configured.
+
+        Checks
+        ------
+        1.  `execution.queue_builder` importable with full surface.
+        2.  mode==`off` → `emit_execution_queue` returns None and writes nothing.
+        3.  mode==`review` → queue built, every intent `allow_place=False`.
+        4.  mode==`live` + cap + clear kill switch + RTH → a gated intent is
+            `allow_place=True`.
+        5.  Kill switch active → all `allow_place=False` and `kill_switch_active`.
+        6.  mode==`live` + cap UNSET → `allow_place=False` (notional_cap_unset).
+        7.  HOLD / below-conviction / not-held-SELL recommendations are dropped;
+            a held SELL carries the held qty.
+        8.  `settings.ROBINHOOD_EXECUTION_MODE` defaults to `off` and coerces
+            unknown values to `off` (fail-safe).
+        9.  preflight `check_robinhood_execution_mode`: live without a cap FAILS;
+            the check is NOT in `_ADVISORY_AUTO_SKIP`.
+        10. ADVISORY-ONLY: no order-submission function names in the bridge
+            source; `.claude` skill + `/rh-execute` command exist; `main.py`
+            wires `emit_execution_queue`.
+        """
+        audit: dict = {
+            "step": "step_81_robinhood_execution_bridge_audit",
+            "checks": [],
+            "status": "PENDING",
+        }
+        all_pass = True
+
+        try:
+            import importlib
+            import tempfile
+            from dataclasses import dataclass as _dc, field as _field
+            from datetime import datetime, timezone
+            from pathlib import Path
+            from typing import Dict as _Dict
+
+            mod = importlib.import_module("execution.queue_builder")
+            surface_ok = all(hasattr(mod, n) for n in (
+                "build_execution_queue", "emit_execution_queue", "gate_intent",
+                "CONFIG", "VALID_MODES",
+            ))
+            all_pass = all_pass and surface_ok
+            audit["checks"].append({
+                "check": "execution.queue_builder importable with full surface",
+                "passed": bool(surface_ok),
+            })
+
+            # ── duck-typed advisory shapes ───────────────────────────────
+            @_dc
+            class _R:
+                symbol: str; action: str; conviction: float
+                suggested_position_pct: float = 0.0
+                strategy: str = "x"; rationale: str = "r"
+
+            @_dc
+            class _P:
+                symbol: str; quantity: float; average_cost: float
+                current_price: float; market_value: float; unrealized_pl: float = 0.0
+
+            @_dc
+            class _S:
+                positions: dict; total_equity: float; buying_power: float
+
+            @_dc
+            class _RR:
+                snapshot: object; recommendations: list
+
+            snap = _S({"NVDA": _P("NVDA", 10, 100.0, 120.0, 1200.0, 200.0)}, 10000.0, 3000.0)
+            recs = [
+                _R("AAPL", "BUY", 0.90, suggested_position_pct=0.05),
+                _R("NVDA", "SELL", 0.90),
+                _R("MSFT", "BUY", 0.50, suggested_position_pct=0.05),  # low conv → drop
+                _R("TSLA", "SELL", 0.99),                              # not held → drop
+                _R("IBM", "HOLD", 0.99),                               # HOLD → drop
+            ]
+            rr = _RR(snap, recs)
+            rth = datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc)  # Tue ~1pm ET
+
+            # ── 2: off → emit returns None, nothing written ──────────────
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td)
+                ret = mod.emit_execution_queue(rr, mode="off", output_dir=out, now=rth)
+                c2 = (ret is None and not (out / "execution_queue.json").exists())
+            all_pass = all_pass and c2
+            audit["checks"].append({
+                "check": "mode=off emits nothing (returns None, no file)",
+                "passed": bool(c2),
+            })
+
+            # ── 3: review → built, all allow_place False ─────────────────
+            pr = mod.build_execution_queue(rr, mode="review", now=rth)
+            c3 = (pr["n_intents"] == 2 and all(not i["allow_place"] for i in pr["intents"]))
+            all_pass = all_pass and c3
+            audit["checks"].append({
+                "check": "mode=review builds queue with allow_place=False on every intent",
+                "passed": bool(c3),
+            })
+
+            # ── monkeypatch the notional cap (settings singleton already loaded)
+            _orig_max = mod._max_notional
+            mod._max_notional = lambda: 5000.0
+            try:
+                # ── 4: live + cap + clear KS + RTH → a placeable intent ──
+                pl = mod.build_execution_queue(rr, mode="live", now=rth)
+                c4 = (pl["n_placeable"] >= 1
+                      and any(i["allow_place"] for i in pl["intents"]))
+                all_pass = all_pass and c4
+                audit["checks"].append({
+                    "check": "mode=live + cap + clear kill switch + RTH → allow_place True",
+                    "passed": bool(c4),
+                })
+
+                # ── 5: kill switch active → all False ────────────────────
+                with tempfile.TemporaryDirectory() as td:
+                    from execution.kill_switch import GlobalKillSwitch
+                    ks = GlobalKillSwitch(sentinel_file=Path(td) / "KILL_SWITCH")
+                    ks.activate("audit")
+                    # Patch the builder's kill-switch construction to use our sentinel.
+                    import execution.queue_builder as _qb
+                    _orig_ks = _qb.GlobalKillSwitch
+                    _qb.GlobalKillSwitch = lambda: ks
+                    try:
+                        pk = mod.build_execution_queue(rr, mode="live", now=rth)
+                    finally:
+                        _qb.GlobalKillSwitch = _orig_ks
+                        ks.deactivate()
+                    c5 = (pk["kill_switch_active"] is True
+                          and all(not i["allow_place"] for i in pk["intents"]))
+                all_pass = all_pass and c5
+                audit["checks"].append({
+                    "check": "kill switch active → all allow_place False",
+                    "passed": bool(c5),
+                })
+            finally:
+                mod._max_notional = _orig_max
+
+            # ── 6: live + cap unset → allow_place False (cap guard) ───────
+            mod._max_notional = lambda: 0.0
+            try:
+                pc = mod.build_execution_queue(rr, mode="live", now=rth)
+                c6 = all(
+                    (not i["allow_place"]) and ("notional_cap_unset" in i["gate_reasons"])
+                    for i in pc["intents"]
+                )
+            finally:
+                mod._max_notional = _orig_max
+            all_pass = all_pass and c6
+            audit["checks"].append({
+                "check": "mode=live with no notional cap → allow_place False (cap guard)",
+                "passed": bool(c6),
+            })
+
+            # ── 7: drop rules + held SELL qty ────────────────────────────
+            syms = {i["symbol"]: i for i in pr["intents"]}
+            c7 = (
+                set(syms) == {"AAPL", "NVDA"}
+                and syms["AAPL"]["qty"] is None and syms["AAPL"]["target_notional"] == 500.0
+                and syms["NVDA"]["qty"] == 10.0
+            )
+            all_pass = all_pass and c7
+            audit["checks"].append({
+                "check": "HOLD/low-conviction/not-held-SELL dropped; held SELL carries held qty",
+                "passed": bool(c7),
+            })
+
+            # ── 8: settings default off + fail-safe coercion ─────────────
+            from settings import Settings
+            import os as _os
+            c8a = (Settings().ROBINHOOD_EXECUTION_MODE == "off")
+            _os.environ["ROBINHOOD_EXECUTION_MODE"] = "garbage"
+            try:
+                c8b = (Settings().ROBINHOOD_EXECUTION_MODE == "off")
+            finally:
+                _os.environ.pop("ROBINHOOD_EXECUTION_MODE", None)
+            c8 = c8a and c8b
+            all_pass = all_pass and c8
+            audit["checks"].append({
+                "check": "settings ROBINHOOD_EXECUTION_MODE defaults off; unknown coerces to off",
+                "passed": bool(c8),
+            })
+
+            # ── 9: preflight check — live w/o cap FAILS; not auto-skipped ─
+            import scripts.preflight_check as _pf
+            _os.environ["ROBINHOOD_EXECUTION_MODE"] = "live"
+            _os.environ["ROBINHOOD_MAX_NOTIONAL_PER_ORDER"] = "0"
+            try:
+                import settings as _S
+                importlib.reload(_S)
+                importlib.reload(_pf)
+                res = _pf.check_robinhood_execution_mode()
+                c9 = (res.passed is False
+                      and "robinhood_execution_mode" not in _pf._ADVISORY_AUTO_SKIP)
+            finally:
+                _os.environ.pop("ROBINHOOD_EXECUTION_MODE", None)
+                _os.environ.pop("ROBINHOOD_MAX_NOTIONAL_PER_ORDER", None)
+                importlib.reload(_S)
+                importlib.reload(_pf)
+            all_pass = all_pass and c9
+            audit["checks"].append({
+                "check": "preflight: live without cap FAILS; check not in _ADVISORY_AUTO_SKIP",
+                "passed": bool(c9),
+            })
+
+            # ── 10: ADVISORY-ONLY source + wiring + agent surface ────────
+            src = Path("execution/queue_builder.py").read_text(encoding="utf-8").lower()
+            forbidden = ["submit_order", "place_order", "place_equity_order",
+                         "place_option_order", "buy_order", "sell_order"]
+            present = [kw for kw in forbidden if f"def {kw}" in src]
+            main_src = Path("main.py").read_text(encoding="utf-8")
+            wired = "emit_execution_queue" in main_src
+            skill_ok = Path(".claude/skills/robinhood-execution/SKILL.md").exists()
+            cmd_ok = Path(".claude/commands/rh-execute.md").exists()
+            c10 = (present == [] and wired and skill_ok and cmd_ok)
+            all_pass = all_pass and c10
+            audit["checks"].append({
+                "check": "no order-submission defs in bridge; main.py wires emit; agent skill+command exist",
+                "passed": bool(c10),
+                "detail": f"forbidden={present} wired={wired} skill={skill_ok} cmd={cmd_ok}",
+            })
+
+            # ── 11: operator docs + in-app help reflect the bridge ───────
+            # Pin the HOW_TO_GUIDE sections (the anchor targets for the help
+            # glossary) and the help_content glossary terms so docs cannot
+            # silently drift from the code.  Pure source-grep — no imports.
+            guide = Path("docs/HOW_TO_GUIDE.md").read_text(encoding="utf-8")
+            help_src = Path("gui/help_content.py").read_text(encoding="utf-8")
+            guide_ok = all(h in guide for h in (
+                "## Autonomous Advisory Agent",
+                "## Trade-Signal Alerts",
+                "## Robinhood Execution Bridge",
+            ))
+            help_terms_ok = all(t in help_src for t in (
+                '"robinhood execution bridge"', '"execution mode"',
+                '"conviction momentum"', '"autonomous advisory agent"',
+            ))
+            help_anchors_ok = all(a in help_src for a in (
+                "#autonomous-advisory-agent", "#trade-signal-alerts",
+                "#robinhood-execution-bridge",
+            ))
+            c11 = guide_ok and help_terms_ok and help_anchors_ok
+            all_pass = all_pass and c11
+            audit["checks"].append({
+                "check": "HOW_TO_GUIDE sections + help_content glossary/anchors cover the bridge & agent",
+                "passed": bool(c11),
+                "detail": f"guide={guide_ok} terms={help_terms_ok} anchors={help_anchors_ok}",
+            })
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_81_robinhood_execution_bridge_audit"] = audit
+
+    def step_82_llm_commentary_audit(self) -> None:
+        """Step 82 — Tier 9 Claude + Gemini commentary integration audit (2026-06-30).
+
+        Eight checks (from /root/.claude/plans/let-s-plan-out-this-zippy-liskov.md §8):
+
+        1.  ``engine/advisory.py`` top-of-file imports contain neither
+            ``import anthropic`` nor ``import google`` (SDK reach is lazy only).
+        2.  ``settings.LLM_COMMENTARY_ENABLED`` default is ``False``
+            (CONSTRAINT: operator opt-in).
+        3.  ``gui/env_io.SECRET_KEYS`` contains BOTH ``ANTHROPIC_API_KEY``
+            and ``GEMINI_API_KEY``; neither is in ``ALLOWED_KEYS``
+            (CONSTRAINT #3).
+        4.  ``llm.commentary`` source contains ``try:`` + ``return None`` —
+            soft-fail contract (CONSTRAINT #6).
+        5.  Both dispatch sites (``watch_engine.dispatch_watch_alerts`` and
+            ``engine.trade_signals.dispatch_trade_alerts``) preserve the
+            template ``msg`` base before any LLM augmentation
+            (append-never-replace).
+        6.  ``Recommendation.llm_rationale`` exists with default ``None``
+            (so LLM output never replaces deterministic ``rationale``).
+        7.  No call site assigns LLM output to a numeric pipeline scalar
+            (``score``, ``conviction``, ``suggested_position_pct``,
+            ``forecast``, ``key_indicators``) — source-grep
+            ``llm/commentary.py`` for assignment patterns to those names
+            (CONSTRAINT #4).
+        8.  ``tests/test_llm_providers.py`` AND
+            ``tests/test_advisory_llm_enrichment.py`` exist.
+        """
+        from pathlib import Path as _Path
+        import re as _re
+
+        audit: dict = {
+            "step": "step_82_llm_commentary_audit",
+            "description": "Tier 9 Claude + Gemini commentary integration audit",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parent
+
+        try:
+            # ── Check 1: advisory.py has no top-level anthropic/google import ─
+            advisory_src = (repo_root / "engine" / "advisory.py").read_text(encoding="utf-8")
+            top_level_lines = [
+                ln for ln in advisory_src.splitlines()
+                if (not ln.startswith(" ") and not ln.startswith("\t"))
+            ]
+            top_joined = "\n".join(top_level_lines)
+            c1 = (
+                "import anthropic" not in top_joined
+                and "from anthropic" not in top_joined
+                and "import google" not in top_joined
+                and "from google" not in top_joined
+            )
+            audit["checks"].append({
+                "check": "engine/advisory.py has NO top-level anthropic/google imports (lazy only)",
+                "passed": bool(c1),
+            })
+            all_pass = all_pass and c1
+
+            # ── Check 2: settings.LLM_COMMENTARY_ENABLED default is False ────
+            from settings import Settings as _Settings
+            _fresh = _Settings()
+            c2 = getattr(_fresh, "LLM_COMMENTARY_ENABLED", True) is False
+            audit["checks"].append({
+                "check": "settings.LLM_COMMENTARY_ENABLED default is False (opt-in)",
+                "passed": bool(c2),
+                "detail": f"default={getattr(_fresh, 'LLM_COMMENTARY_ENABLED', '<missing>')}",
+            })
+            all_pass = all_pass and c2
+
+            # ── Check 3: SECRET_KEYS / ALLOWED_KEYS classification ───────────
+            from gui.env_io import ALLOWED_KEYS as _AK, SECRET_KEYS as _SK
+            c3a = "ANTHROPIC_API_KEY" in _SK and "GEMINI_API_KEY" in _SK
+            c3b = "ANTHROPIC_API_KEY" not in _AK and "GEMINI_API_KEY" not in _AK
+            c3 = c3a and c3b
+            audit["checks"].append({
+                "check": "ANTHROPIC_API_KEY + GEMINI_API_KEY are SECRET_KEYS only (CONSTRAINT #3)",
+                "passed": bool(c3),
+            })
+            all_pass = all_pass and c3
+
+            # ── Check 4: llm/commentary.py contains try: + return None ───────
+            commentary_src = (repo_root / "llm" / "commentary.py").read_text(encoding="utf-8")
+            c4 = "try:" in commentary_src and "return None" in commentary_src
+            audit["checks"].append({
+                "check": "llm/commentary.py implements soft-fail (try: + return None) per CONSTRAINT #6",
+                "passed": bool(c4),
+            })
+            all_pass = all_pass and c4
+
+            # ── Check 5: dispatch sites preserve template msg as base ────────
+            watch_src = (repo_root / "watch_engine.py").read_text(encoding="utf-8")
+            trade_src = (repo_root / "engine" / "trade_signals.py").read_text(encoding="utf-8")
+            c5_watch = (
+                "msg = alert.message" in watch_src
+                and 'msg = f"{msg}\\n\\n📝' in watch_src
+            )
+            c5_trade = (
+                "msg = a.message" in trade_src
+                and 'msg = f"{msg}\\n\\n📝' in trade_src
+            )
+            c5 = c5_watch and c5_trade
+            audit["checks"].append({
+                "check": "Both dispatch sites APPEND (never replace) LLM body to template msg",
+                "passed": bool(c5),
+                "detail": f"watch_engine_ok={c5_watch} trade_signals_ok={c5_trade}",
+            })
+            all_pass = all_pass and c5
+
+            # ── Check 6: Recommendation.llm_rationale exists, default None ──
+            from engine.advisory import Recommendation as _Rec
+            from dataclasses import fields as _fields
+            llm_field = next((f for f in _fields(_Rec) if f.name == "llm_rationale"), None)
+            c6 = llm_field is not None and llm_field.default is None
+            audit["checks"].append({
+                "check": "Recommendation.llm_rationale field exists with default None",
+                "passed": bool(c6),
+            })
+            all_pass = all_pass and c6
+
+            # ── Check 7: llm/commentary.py never assigns to numeric fields ──
+            # Source-grep for assignment patterns that would route LLM output
+            # into a deterministic numeric scalar.  CONSTRAINT #4 forbids it.
+            forbidden = [
+                r"\bscore\s*=\s*result\.",
+                r"\bconviction\s*=\s*result\.",
+                r"\bsuggested_position_pct\s*=\s*result\.",
+                r"\bforecast\s*=\s*result\.",
+                r"\bkey_indicators\s*=\s*result\.",
+                r"\bscore\s*=\s*out\.",
+                r"\bconviction\s*=\s*out\.",
+            ]
+            forbidden_hit = next(
+                (p for p in forbidden if _re.search(p, commentary_src)),
+                None,
+            )
+            c7 = forbidden_hit is None
+            audit["checks"].append({
+                "check": "llm/commentary.py never assigns LLM output to numeric pipeline scalar",
+                "passed": bool(c7),
+                "detail": f"forbidden_pattern_matched={forbidden_hit}",
+            })
+            all_pass = all_pass and c7
+
+            # ── Check 8: required test files exist ──────────────────────────
+            t1 = (repo_root / "tests" / "test_llm_providers.py").exists()
+            t2 = (repo_root / "tests" / "test_advisory_llm_enrichment.py").exists()
+            t3 = (repo_root / "tests" / "test_llm_commentary.py").exists()
+            t4 = (repo_root / "tests" / "test_alert_dispatch_llm.py").exists()
+            t5 = (repo_root / "tests" / "test_gui_env_io_secret_llm_keys.py").exists()
+            c8 = t1 and t2 and t3 and t4 and t5
+            audit["checks"].append({
+                "check": "All five Tier-9 test files exist",
+                "passed": bool(c8),
+                "detail": f"providers={t1} enrichment={t2} commentary={t3} alerts={t4} secrets={t5}",
+            })
+            all_pass = all_pass and c8
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_82_llm_commentary_audit"] = audit
+
+    def step_83_gravity_ai_runner_audit(self) -> None:
+        """Step 83 — Tier 9 Scope 2 AI Gravity audit runner (2026-06-30).
+
+        9 checks pinning the contract for ``engine/gravity_ai_runner.py``:
+
+        1.  Module importable; ``run_step``, ``run_all``, ``write_report``,
+            ``RunReport``, ``StepRunResult`` all exist.
+        2.  ``settings.GRAVITY_AI_RUNNER_ENABLED`` default is ``False``
+            (opt-in, master switch independent of LLM_COMMENTARY_ENABLED).
+        3.  ``engine/gravity_ai_runner.py`` top-of-file imports contain no
+            ``anthropic`` / ``google`` reach (lazy only).
+        4.  ``llm.schemas.GravityAuditStepResult`` exists with the four
+            required fields (``status``, ``score``, ``findings``,
+            ``missing_elements``) and rejects an out-of-bounds ``score``.
+        5.  ``_STEP_FILE_MAP`` covers all 7 steps from
+            ``ai_verification_prompts.ALL_PROMPTS``.
+        6.  ``run_all()`` with the master switch off (default) returns a
+            ``RunReport`` whose every step has ``claude_verdict=None`` AND
+            ``gemini_verdict=None`` (no provider instantiation).
+        7.  ``run_step()`` with injected providers — one PASSED, one FAILED —
+            correctly flags ``disagreement=True``.
+        8.  ``run_step()`` with a raising provider does NOT propagate the
+            exception (CONSTRAINT #6 — soft-fail to None on that side only).
+        9.  Module source has no order-submission verbs (advisory-only
+            invariant, mirrors step_70 source guard).
+        """
+        from pathlib import Path as _Path
+
+        audit: dict = {
+            "step": "step_83_gravity_ai_runner_audit",
+            "description": "Tier 9 Scope 2 — AI Gravity audit runner",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parent
+
+        try:
+            # ── Check 1: module surface ─────────────────────────────────────
+            from engine import gravity_ai_runner as _runner
+            c1 = all(
+                hasattr(_runner, n)
+                for n in ("run_step", "run_all", "write_report", "RunReport", "StepRunResult",
+                          "_STEP_FILE_MAP")
+            )
+            audit["checks"].append({
+                "check": "engine.gravity_ai_runner exposes the required public surface",
+                "passed": bool(c1),
+            })
+            all_pass = all_pass and c1
+
+            # ── Check 2: settings.GRAVITY_AI_RUNNER_ENABLED defaults False ──
+            from settings import Settings as _Settings
+            _fresh = _Settings()
+            c2 = getattr(_fresh, "GRAVITY_AI_RUNNER_ENABLED", True) is False
+            audit["checks"].append({
+                "check": "settings.GRAVITY_AI_RUNNER_ENABLED default is False (opt-in)",
+                "passed": bool(c2),
+                "detail": f"default={getattr(_fresh, 'GRAVITY_AI_RUNNER_ENABLED', '<missing>')}",
+            })
+            all_pass = all_pass and c2
+
+            # ── Check 3: no top-level anthropic/google reach ────────────────
+            runner_src = (repo_root / "engine" / "gravity_ai_runner.py").read_text(encoding="utf-8")
+            top_level_lines = [
+                ln for ln in runner_src.splitlines()
+                if (not ln.startswith(" ") and not ln.startswith("\t"))
+            ]
+            top_joined = "\n".join(top_level_lines)
+            c3 = (
+                "import anthropic" not in top_joined
+                and "from anthropic" not in top_joined
+                and "import google" not in top_joined
+                and "from google" not in top_joined
+            )
+            audit["checks"].append({
+                "check": "engine/gravity_ai_runner.py top-level has no SDK reach (lazy only)",
+                "passed": bool(c3),
+            })
+            all_pass = all_pass and c3
+
+            # ── Check 4: GravityAuditStepResult schema fields ────────────────
+            from llm.schemas import GravityAuditStepResult
+            required = {"status", "score", "findings", "missing_elements"}
+            present = set(GravityAuditStepResult.model_fields.keys())
+            c4a = required.issubset(present)
+            # Out-of-bounds score must be rejected.
+            try:
+                GravityAuditStepResult(status="PASSED", score=999)
+                c4b = False
+            except Exception:
+                c4b = True
+            c4 = c4a and c4b
+            audit["checks"].append({
+                "check": "llm.schemas.GravityAuditStepResult has required fields + enforces score bounds",
+                "passed": bool(c4),
+                "detail": f"fields={sorted(present)} bounds_enforced={c4b}",
+            })
+            all_pass = all_pass and c4
+
+            # ── Check 5: _STEP_FILE_MAP covers every prompt step (dynamic) ──
+            from ai_verification_prompts import ALL_PROMPTS
+            expected = sorted(int(p.step_number) for p in ALL_PROMPTS)
+            actual = sorted(_runner._STEP_FILE_MAP.keys())
+            c5 = expected == actual
+            audit["checks"].append({
+                "check": "engine.gravity_ai_runner._STEP_FILE_MAP covers every prompt step",
+                "passed": bool(c5),
+                "detail": f"expected={expected} actual={actual}",
+            })
+            all_pass = all_pass and c5
+
+            # ── Check 6: run_all() disabled by default → no provider call ───
+            report = _runner.run_all()
+            c6 = (
+                isinstance(report, _runner.RunReport)
+                and report.enabled is False
+                and all(s.claude_verdict is None and s.gemini_verdict is None for s in report.steps)
+            )
+            audit["checks"].append({
+                "check": "run_all() with master switch off returns all-None verdicts",
+                "passed": bool(c6),
+                "detail": f"enabled={report.enabled} steps={len(report.steps)}",
+            })
+            all_pass = all_pass and c6
+
+            # ── Check 7: disagreement flag triggers on status mismatch ──────
+            from llm.schemas import GravityAuditStepResult as _GR
+
+            class _FakeProv:
+                name = "fake"
+
+                def __init__(self, status):
+                    self._status = status
+
+                def call_structured(self, system, user, schema_model):
+                    return _GR(status=self._status, score=80, findings=[], missing_elements=[])
+
+            res = _runner.run_step(
+                1,
+                claude=_FakeProv("PASSED"),
+                gemini=_FakeProv("FAILED"),
+                target_code="# stub",
+            )
+            c7 = (
+                res.claude_verdict is not None
+                and res.gemini_verdict is not None
+                and res.disagreement is True
+            )
+            audit["checks"].append({
+                "check": "run_step() flags disagreement when Claude PASSED ≠ Gemini FAILED",
+                "passed": bool(c7),
+            })
+            all_pass = all_pass and c7
+
+            # ── Check 8: provider that raises must soft-fail to None ────────
+            class _Raises:
+                name = "raises"
+
+                def call_structured(self, system, user, schema_model):
+                    raise RuntimeError("synthetic")
+
+            res2 = _runner.run_step(
+                2,
+                claude=_Raises(),
+                gemini=_FakeProv("PASSED"),
+                target_code="# stub",
+            )
+            c8 = (
+                res2.claude_verdict is None
+                and res2.gemini_verdict is not None
+                and res2.disagreement is False
+            )
+            audit["checks"].append({
+                "check": "Provider exception → that side None, other side survives (CONSTRAINT #6)",
+                "passed": bool(c8),
+            })
+            all_pass = all_pass and c8
+
+            # ── Check 9: no order-submission verbs in runner source ─────────
+            forbidden = ("submit_order", "place_order", "buy_order", "sell_order",
+                         "place_equity_order", "place_option_order")
+            forbidden_hit = next((p for p in forbidden if p in runner_src), None)
+            c9 = forbidden_hit is None
+            audit["checks"].append({
+                "check": "engine/gravity_ai_runner.py contains no order-submission verbs (advisory-only)",
+                "passed": bool(c9),
+                "detail": f"forbidden_hit={forbidden_hit}",
+            })
+            all_pass = all_pass and c9
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_83_gravity_ai_runner_audit"] = audit
+
+    def step_84_ai_insights_audit(self) -> None:
+        """Step 84 — Tier 9 Scope 3 AI Insights tab audit (2026-06-30).
+
+        9 checks pinning the contract for the multimodal Gemini Vision path
+        and the new AI Insights tab:
+
+        1.  Module surface — ``llm.chart_insight.generate_chart_pattern_read``
+            + ``render_price_chart_png`` importable; ``ChartPatternRead``
+            schema importable from ``llm.schemas``.
+        2.  ``GeminiProvider.call_structured_with_image`` method exists
+            (multimodal extension).
+        3.  Schema bounds — ``ChartPatternRead`` rejects out-of-domain
+            ``trend_direction``, caps ``support_levels`` at 3 entries.
+        4.  No top-level SDK reach in ``llm/chart_insight.py`` — anthropic /
+            google imports are lazy.
+        5.  No order-submission verbs in ``llm/chart_insight.py`` or
+            ``gui/ai_insights_panel.py`` (advisory-only invariant).
+        6.  Opt-in: ``generate_chart_pattern_read`` returns ``None`` when
+            ``LLM_COMMENTARY_ENABLED`` is False (default).
+        7.  No fabricated direction:
+            :func:`gui.ai_insights_panel.derive_disagreement_overview`
+            NEVER flags ``disagreement=True`` when one side is missing
+            (CONSTRAINT #4).
+        8.  Tab registration: ``gui/app.py`` references
+            ``panels.render_ai_insights`` AND a ``🪄 AI Insights`` label.
+        9.  Test files exist (``tests/test_chart_insight.py``,
+            ``tests/test_ai_insights_panel.py``,
+            ``tests/test_gemini_multimodal.py``).
+        """
+        from pathlib import Path as _Path
+
+        audit: dict = {
+            "step": "step_84_ai_insights_audit",
+            "description": "Tier 9 Scope 3 — AI Insights tab + Gemini Vision",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parent
+
+        try:
+            # ── 1. module surface ───────────────────────────────────────────
+            from llm import chart_insight as _ci
+            from llm.schemas import ChartPatternRead as _CPR
+            c1 = (
+                callable(getattr(_ci, "generate_chart_pattern_read", None))
+                and callable(getattr(_ci, "render_price_chart_png", None))
+                and _CPR is not None
+            )
+            audit["checks"].append({
+                "check": "llm.chart_insight + ChartPatternRead public surface present",
+                "passed": bool(c1),
+            })
+            all_pass = all_pass and c1
+
+            # ── 2. multimodal Gemini method exists ─────────────────────────
+            from llm.providers import GeminiProvider as _GP
+            c2 = callable(getattr(_GP, "call_structured_with_image", None))
+            audit["checks"].append({
+                "check": "GeminiProvider.call_structured_with_image is callable",
+                "passed": bool(c2),
+            })
+            all_pass = all_pass and c2
+
+            # ── 3. schema bounds ────────────────────────────────────────────
+            from llm.schemas import ChartPatternRead
+            try:
+                ChartPatternRead(pattern_name="x", trend_direction="sideways", narrative="y")  # type: ignore[arg-type]
+                c3a = False
+            except Exception:
+                c3a = True
+            try:
+                ChartPatternRead(
+                    pattern_name="p", trend_direction="bullish", narrative="n",
+                    support_levels=["a", "b", "c", "d"],
+                )
+                c3b = False
+            except Exception:
+                c3b = True
+            c3 = c3a and c3b
+            audit["checks"].append({
+                "check": "ChartPatternRead rejects bad trend AND caps support_levels at 3",
+                "passed": bool(c3),
+                "detail": f"bad_trend_rejected={c3a} too_many_levels_rejected={c3b}",
+            })
+            all_pass = all_pass and c3
+
+            # ── 4. no top-level anthropic / google in llm/chart_insight.py ─
+            chart_src = (repo_root / "llm" / "chart_insight.py").read_text(encoding="utf-8")
+            top_level = "\n".join(
+                ln for ln in chart_src.splitlines()
+                if (not ln.startswith(" ") and not ln.startswith("\t"))
+            )
+            c4 = all(
+                tok not in top_level for tok in (
+                    "import anthropic", "from anthropic", "import google", "from google"
+                )
+            )
+            audit["checks"].append({
+                "check": "llm/chart_insight.py has no top-level SDK reach (lazy only)",
+                "passed": bool(c4),
+            })
+            all_pass = all_pass and c4
+
+            # ── 5. no order-submission verbs in either Scope 3 file ────────
+            panel_src = (repo_root / "gui" / "ai_insights_panel.py").read_text(encoding="utf-8")
+            forbidden = ("submit_order", "place_order", "buy_order", "sell_order",
+                         "place_equity_order", "place_option_order")
+            c5_chart = not any(p in chart_src for p in forbidden)
+            c5_panel = not any(p in panel_src for p in forbidden)
+            c5 = c5_chart and c5_panel
+            audit["checks"].append({
+                "check": "Scope 3 surface has no order-submission verbs (advisory-only)",
+                "passed": bool(c5),
+                "detail": f"chart_insight_ok={c5_chart} ai_insights_panel_ok={c5_panel}",
+            })
+            all_pass = all_pass and c5
+
+            # ── 6. opt-in: default disabled → None ─────────────────────────
+            from llm.chart_insight import generate_chart_pattern_read
+            import pandas as _pd
+            import numpy as _np
+            _np.random.seed(7)
+            _idx = _pd.date_range("2025-01-01", periods=60)
+            _df = _pd.DataFrame({"Close": _np.linspace(100, 110, 60)}, index=_idx)
+            _result = generate_chart_pattern_read("TEST", _df)
+            c6 = _result is None
+            audit["checks"].append({
+                "check": "generate_chart_pattern_read returns None when master switch off",
+                "passed": bool(c6),
+            })
+            all_pass = all_pass and c6
+
+            # ── 7. no fabricated direction in disagreement view ────────────
+            from gui.ai_insights_panel import derive_disagreement_overview
+            rows = derive_disagreement_overview(
+                [{"symbol": "AAPL", "action": "BUY"}],
+                claude_map={"AAPL": {"trend_direction": "bullish"}},
+                gemini_map={},  # missing
+            )
+            c7 = (
+                len(rows) == 1
+                and rows[0].disagreement is False
+                and rows[0].gemini_verdict is None
+            )
+            audit["checks"].append({
+                "check": "derive_disagreement_overview never flags disagreement against a missing side (CONSTRAINT #4)",
+                "passed": bool(c7),
+            })
+            all_pass = all_pass and c7
+
+            # ── 8. tab registration in gui/app.py ──────────────────────────
+            app_src = (repo_root / "gui" / "app.py").read_text(encoding="utf-8")
+            c8 = (
+                "panels.render_ai_insights" in app_src
+                and "🪄 AI Insights" in app_src
+            )
+            audit["checks"].append({
+                "check": "gui/app.py registers the AI Insights tab + wires render_ai_insights",
+                "passed": bool(c8),
+            })
+            all_pass = all_pass and c8
+
+            # ── 9. test files exist ────────────────────────────────────────
+            t1 = (repo_root / "tests" / "test_chart_insight.py").exists()
+            t2 = (repo_root / "tests" / "test_ai_insights_panel.py").exists()
+            t3 = (repo_root / "tests" / "test_gemini_multimodal.py").exists()
+            c9 = t1 and t2 and t3
+            audit["checks"].append({
+                "check": "All three Scope 3 test files exist",
+                "passed": bool(c9),
+                "detail": f"chart_insight={t1} ai_insights_panel={t2} gemini_multimodal={t3}",
+            })
+            all_pass = all_pass and c9
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_84_ai_insights_audit"] = audit
+
+    def step_85_opal_research_audit(self) -> None:
+        """Step 85 — Opal Research Agent audit (Tier 9 Scope 4, 2026-07-03).
+
+        10 checks pinning the OpenAI/GPT front-of-pipeline research agent:
+
+        1.  Module surface: ``llm.research.generate_research_brief``,
+            ``ResearchBrief``, ``OpenAIProvider`` importable.
+        2.  ``OpenAIProvider.call_structured`` is callable.
+        3.  ``ResearchBrief`` rejects >4 catalysts AND a bad
+            ``data_confidence`` value.
+        4.  ``ResearchBrief`` exposes NO numeric field — TYPE-BASED check
+            (stronger than a field-name scan): every ``model_fields``
+            annotation resolves to ``str``, ``list[str]``, or
+            ``Literal[...]``; nothing resolves to ``int``/``float``/
+            ``Decimal`` or a container of those (CONSTRAINT #4). The
+            checker function is self-tested against a dummy model with a
+            numeric field to prove it actually rejects what it claims to.
+        5.  No top-level ``openai`` import in ``llm/research.py`` OR
+            ``engine/advisory.py`` (lazy only).
+        6.  No order-submission verbs in ``llm/research.py``
+            (advisory-only).
+        7.  Opt-in: ``generate_research_brief("X")`` returns ``None`` when
+            ``OPAL_RESEARCH_ENABLED=False``.
+        8.  Threading: ``_format_rationale_user_prompt`` references
+            ``research_brief`` (source grep).
+        9.  ``OPENAI_API_KEY`` is in ``gui.env_io.SECRET_KEYS`` and NOT in
+            ``ALLOWED_KEYS``.
+        10. All five Opal test files exist.
+        """
+        from pathlib import Path as _Path
+
+        audit: dict = {
+            "step": "step_85_opal_research_audit",
+            "description": "Tier 9 Scope 4 — Opal research agent (OpenAI/GPT)",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parent
+
+        try:
+            # ── 1. module surface ───────────────────────────────────────────
+            from llm.research import generate_research_brief
+            from llm.schemas import ResearchBrief
+            from llm.providers import OpenAIProvider
+            c1 = (
+                callable(generate_research_brief)
+                and ResearchBrief is not None
+                and OpenAIProvider is not None
+            )
+            audit["checks"].append({
+                "check": "llm.research.generate_research_brief + ResearchBrief + OpenAIProvider importable",
+                "passed": bool(c1),
+            })
+            all_pass = all_pass and c1
+
+            # ── 2. OpenAIProvider.call_structured callable ──────────────────
+            c2 = callable(getattr(OpenAIProvider, "call_structured", None))
+            audit["checks"].append({
+                "check": "OpenAIProvider.call_structured is callable",
+                "passed": bool(c2),
+            })
+            all_pass = all_pass and c2
+
+            # ── 3. ResearchBrief rejects bad catalysts/data_confidence ──────
+            try:
+                ResearchBrief(
+                    thesis_context="x",
+                    catalysts=["a", "b", "c", "d", "e"],  # 5 > max_length=4
+                    risk_factors=["r"],
+                    sources_note="s",
+                )
+                c3a = False
+            except Exception:
+                c3a = True
+            try:
+                ResearchBrief(
+                    thesis_context="x",
+                    catalysts=["a"],
+                    risk_factors=["r"],
+                    data_confidence="extreme",  # type: ignore[arg-type]
+                    sources_note="s",
+                )
+                c3b = False
+            except Exception:
+                c3b = True
+            c3 = c3a and c3b
+            audit["checks"].append({
+                "check": "ResearchBrief rejects >4 catalysts AND a bad data_confidence value",
+                "passed": bool(c3),
+                "detail": f"too_many_catalysts_rejected={c3a} bad_confidence_rejected={c3b}",
+            })
+            all_pass = all_pass and c3
+
+            # ── 4. NO numeric field — type-based check ──────────────────────
+            import typing as _typing
+            from decimal import Decimal as _Decimal
+
+            def _unwrap_annotated(ann: object) -> object:
+                # Annotated[X, ...] (per-item StringConstraints) → X.
+                if hasattr(ann, "__metadata__"):
+                    return _typing.get_args(ann)[0]
+                return ann
+
+            def _is_qualitative_annotation(ann: object) -> bool:
+                ann = _unwrap_annotated(ann)
+                if ann is str:
+                    return True
+                origin = _typing.get_origin(ann)
+                if origin is _typing.Literal:
+                    return True
+                if origin in (list, List):
+                    args = _typing.get_args(ann)
+                    return len(args) == 1 and _unwrap_annotated(args[0]) is str
+                return False
+
+            numeric_fields = [
+                name for name, field in ResearchBrief.model_fields.items()
+                if not _is_qualitative_annotation(field.annotation)
+            ]
+            c4a = len(numeric_fields) == 0
+
+            # Self-test: the checker must actually REJECT a numeric field,
+            # not just happen to pass on ResearchBrief's current shape.
+            from pydantic import BaseModel as _BaseModel
+
+            class _DummyNumericModel(_BaseModel):
+                price_target: float = 0.0
+
+            c4b = not _is_qualitative_annotation(
+                _DummyNumericModel.model_fields["price_target"].annotation
+            )
+            c4 = c4a and c4b
+            audit["checks"].append({
+                "check": "ResearchBrief exposes NO numeric field (type-based check, CONSTRAINT #4)",
+                "passed": bool(c4),
+                "detail": f"numeric_fields_found={numeric_fields} checker_rejects_float={c4b}",
+            })
+            all_pass = all_pass and c4
+
+            # ── 5. no top-level openai import (lazy only) ───────────────────
+            research_src = (repo_root / "llm" / "research.py").read_text(encoding="utf-8")
+            advisory_src = (repo_root / "engine" / "advisory.py").read_text(encoding="utf-8")
+
+            def _no_top_level_openai(src: str) -> bool:
+                top_level = "\n".join(
+                    ln for ln in src.splitlines()
+                    if (not ln.startswith(" ") and not ln.startswith("\t"))
+                )
+                return all(
+                    tok not in top_level for tok in ("import openai", "from openai")
+                )
+
+            c5 = _no_top_level_openai(research_src) and _no_top_level_openai(advisory_src)
+            audit["checks"].append({
+                "check": "No top-level `openai` import in llm/research.py OR engine/advisory.py (lazy only)",
+                "passed": bool(c5),
+            })
+            all_pass = all_pass and c5
+
+            # ── 6. no order-submission verbs in llm/research.py ─────────────
+            forbidden = ("submit_order", "place_order", "buy_order", "sell_order",
+                         "place_equity_order", "place_option_order")
+            c6 = not any(p in research_src for p in forbidden)
+            audit["checks"].append({
+                "check": "No order-submission verbs in llm/research.py (advisory-only)",
+                "passed": bool(c6),
+            })
+            all_pass = all_pass and c6
+
+            # ── 7. opt-in default-off ────────────────────────────────────────
+            from settings import settings as _settings
+            _prior_enabled = getattr(_settings, "OPAL_RESEARCH_ENABLED", False)
+            try:
+                _settings.OPAL_RESEARCH_ENABLED = False
+                c7 = generate_research_brief("X") is None
+            finally:
+                _settings.OPAL_RESEARCH_ENABLED = _prior_enabled
+            audit["checks"].append({
+                "check": "generate_research_brief returns None when OPAL_RESEARCH_ENABLED=False",
+                "passed": bool(c7),
+            })
+            all_pass = all_pass and c7
+
+            # ── 8. threading — source grep ───────────────────────────────────
+            commentary_src = (repo_root / "llm" / "commentary.py").read_text(encoding="utf-8")
+            c8 = "research_brief" in commentary_src
+            audit["checks"].append({
+                "check": "llm/commentary.py's _format_rationale_user_prompt references research_brief",
+                "passed": bool(c8),
+            })
+            all_pass = all_pass and c8
+
+            # ── 9. OPENAI_API_KEY secret-only ────────────────────────────────
+            from gui.env_io import SECRET_KEYS as _SK, ALLOWED_KEYS as _AK
+            c9 = "OPENAI_API_KEY" in _SK and "OPENAI_API_KEY" not in _AK
+            audit["checks"].append({
+                "check": "OPENAI_API_KEY is gui.env_io.SECRET_KEYS-only (CONSTRAINT #3)",
+                "passed": bool(c9),
+            })
+            all_pass = all_pass and c9
+
+            # ── 10. all five Opal test files exist ──────────────────────────
+            t1 = (repo_root / "tests" / "test_openai_provider.py").exists()
+            t2 = (repo_root / "tests" / "test_research_brief.py").exists()
+            t3 = (repo_root / "tests" / "test_opal_pipeline_integration.py").exists()
+            t4 = (repo_root / "tests" / "test_gui_env_io_openai_key.py").exists()
+            t5 = (repo_root / "tests" / "test_opal_research_panel.py").exists()
+            c10 = t1 and t2 and t3 and t4 and t5
+            audit["checks"].append({
+                "check": "All five Opal test files exist",
+                "passed": bool(c10),
+                "detail": (
+                    f"openai_provider={t1} research_brief={t2} pipeline_integration={t3} "
+                    f"env_io_key={t4} research_panel={t5}"
+                ),
+            })
+            all_pass = all_pass and c10
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_85_opal_research_audit"] = audit
+
+    def step_86_ai_control_center_audit(self) -> None:
+        """Step 86 — AI Control Center tab audit (2026-07-01, extended 2026-07-02, 2026-07-03).
+
+        11 checks pinning the single operator-facing surface for every AI
+        option (analyst rationale + alert commentary — both flexibly routed
+        to Claude OR Gemini, Gemini chart vision, Gravity AI runner, Opal
+        research) — all operator-triggered, nothing autonomous:
+
+        1.  ``gui.ai_control_center`` importable; ``CAPABILITIES`` covers the
+            five expected keys.
+        2.  ``GRAVITY_AI_RUNNER_ENABLED`` + the three ``OPAL_RESEARCH_*``
+            toggles are in ``gui.env_io.ALLOWED_KEYS``.
+        3.  ``OPENAI_API_KEY`` is in ``SECRET_KEYS`` AND NOT in ``ALLOWED_KEYS``
+            (CONSTRAINT #3).
+        4.  ``capability_status`` truth table — ready / disabled / missing_key
+            / not_built all reachable (not_built exercised via a synthetic
+            capability pointing at a nonexistent module, since Opal itself
+            shipped in Tier 9 Scope 4 and can no longer produce that state).
+        5.  Scheduling launcher exists — ``orchestrator_runner``
+            ``launch_scheduled_advisory`` AND ``stop_run`` are callable.
+        6.  Operator-triggered only — ``launch_scheduled_advisory`` spawns via
+            ``subprocess`` and has NO autonomous scheduler (no ``threading.Timer``
+            / ``cron`` / ``schedule.every`` in the launcher source).
+        7.  Tab registration: ``gui/app.py`` references
+            ``panels.render_ai_control_center`` AND a ``🎛️ AI Control Center``
+            label.
+        8.  ``validate_toggle_write`` rejects a secret key (``OPENAI_API_KEY``
+            → ``SecretWriteError``) and a non-allowlisted key
+            (``DisallowedKeyError``).
+        9.  Opal auto-activated: ``opal_built()`` is ``True`` (Tier 9 Scope 4
+            shipped ``llm/research.py``) AND the real ``opal_research``
+            capability resolves ``disabled`` by default — never
+            ``not_built`` — confirming the Control Center needed NO change
+            for this transition.
+        10. Test files exist (``tests/test_ai_control_center.py``,
+            ``tests/test_gui_env_io_control_center_keys.py``).
+        11. Flexible per-job routing — the ``claude_commentary`` row resolves
+            ``ready`` off ``GEMINI_API_KEY`` when
+            ``LLM_COMMENTARY_RATIONALE_PROVIDER=gemini``, and the
+            ``gemini_alerts`` row resolves ``ready`` off ``ANTHROPIC_API_KEY``
+            when ``LLM_COMMENTARY_ALERT_PROVIDER=claude`` — either provider
+            serves either job.
+        """
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+
+        audit: dict = {
+            "step": "step_86_ai_control_center_audit",
+            "description": "AI Control Center — one operator surface for every AI option",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+        repo_root = _Path(__file__).resolve().parent
+
+        try:
+            # ── 1. module surface + CAPABILITIES completeness ──────────────
+            from gui.ai_control_center import (
+                AICapability,
+                CAPABILITIES,
+                capability_status,
+                control_center_overview,
+                validate_toggle_write,
+                opal_built,
+            )
+            cap_keys = {c.key for c in CAPABILITIES}
+            expected = {
+                "claude_commentary", "gemini_alerts", "gemini_vision",
+                "gravity_ai_runner", "opal_research",
+            }
+            c1 = expected.issubset(cap_keys) and callable(capability_status) \
+                and callable(control_center_overview)
+            audit["checks"].append({
+                "check": "gui.ai_control_center importable + CAPABILITIES covers 5 options",
+                "passed": bool(c1),
+                "detail": f"keys={sorted(cap_keys)}",
+            })
+            all_pass = all_pass and c1
+
+            # ── 2. new toggles in ALLOWED_KEYS ─────────────────────────────
+            from gui.env_io import ALLOWED_KEYS, SECRET_KEYS
+            need_allowed = (
+                "GRAVITY_AI_RUNNER_ENABLED", "OPAL_RESEARCH_ENABLED",
+                "OPAL_RESEARCH_PROVIDER", "OPAL_RESEARCH_MODEL",
+            )
+            c2 = all(k in ALLOWED_KEYS for k in need_allowed)
+            audit["checks"].append({
+                "check": "GRAVITY_AI_RUNNER_ENABLED + OPAL_RESEARCH_* in ALLOWED_KEYS",
+                "passed": bool(c2),
+            })
+            all_pass = all_pass and c2
+
+            # ── 3. OPENAI_API_KEY secret-only (CONSTRAINT #3) ──────────────
+            c3 = "OPENAI_API_KEY" in SECRET_KEYS and "OPENAI_API_KEY" not in ALLOWED_KEYS
+            audit["checks"].append({
+                "check": "OPENAI_API_KEY is SECRET_KEYS-only (never GUI-writable)",
+                "passed": bool(c3),
+            })
+            all_pass = all_pass and c3
+
+            # ── 4. capability_status truth table ───────────────────────────
+            claude_cap = next(c for c in CAPABILITIES if c.key == "claude_commentary")
+            ready = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                    ANTHROPIC_API_KEY="sk-x"),
+                claude_cap,
+            )["status"]
+            disabled = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=False,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                    ANTHROPIC_API_KEY="sk-x"),
+                claude_cap,
+            )["status"]
+            missing = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                    ANTHROPIC_API_KEY=""),
+                claude_cap,
+            )["status"]
+            # Synthetic capability pointing at a module that will never
+            # exist — tests the not_built RANKING invariant independent of
+            # whether any real shipped capability is unbuilt (Opal itself
+            # shipped in Tier 9 Scope 4 — see check 9 below — so it can no
+            # longer be used to exercise this path).
+            _fake_unbuilt_cap = AICapability(
+                key="fake_unbuilt",
+                label="Fake unbuilt capability",
+                enable_settings=("FAKE_ENABLED",),
+                provider_key_settings=("FAKE_API_KEY",),
+                module="llm.does_not_exist_module_xyz",
+                trigger="on_demand",
+                toggle_key="FAKE_ENABLED",
+                help="Gravity-only capability for the not_built ranking check.",
+            )
+            notbuilt = capability_status(
+                _NS(FAKE_ENABLED=True, FAKE_API_KEY="sk-x"),
+                _fake_unbuilt_cap,
+            )["status"]
+            c4 = (ready == "ready" and disabled == "disabled"
+                  and missing == "missing_key" and notbuilt == "not_built")
+            audit["checks"].append({
+                "check": "capability_status truth table (ready/disabled/missing_key/not_built)",
+                "passed": bool(c4),
+                "detail": f"ready={ready} disabled={disabled} missing={missing} notbuilt={notbuilt}",
+            })
+            all_pass = all_pass and c4
+
+            # ── 5. scheduling launcher exists ──────────────────────────────
+            from gui import orchestrator_runner as _orr
+            c5 = callable(getattr(_orr, "launch_scheduled_advisory", None)) \
+                and callable(getattr(_orr, "stop_run", None))
+            audit["checks"].append({
+                "check": "orchestrator_runner.launch_scheduled_advisory + stop_run callable",
+                "passed": bool(c5),
+            })
+            all_pass = all_pass and c5
+
+            # ── 6. operator-triggered only (no autonomous scheduler) ───────
+            orr_src = (repo_root / "gui" / "orchestrator_runner.py").read_text(encoding="utf-8")
+            c6 = (
+                "subprocess" in orr_src
+                and "threading.Timer" not in orr_src
+                and "schedule.every" not in orr_src
+                and "crontab" not in orr_src
+            )
+            audit["checks"].append({
+                "check": "scheduling launcher spawns via subprocess, no autonomous scheduler",
+                "passed": bool(c6),
+            })
+            all_pass = all_pass and c6
+
+            # ── 7. tab registration in gui/app.py ──────────────────────────
+            app_src = (repo_root / "gui" / "app.py").read_text(encoding="utf-8")
+            c7 = (
+                "panels.render_ai_control_center" in app_src
+                and "AI Control Center" in app_src
+            )
+            audit["checks"].append({
+                "check": "gui/app.py registers the AI Control Center tab + wires the panel",
+                "passed": bool(c7),
+            })
+            all_pass = all_pass and c7
+
+            # ── 8. toggle-write guard rejects secret + disallowed keys ─────
+            from gui.env_io import SecretWriteError, DisallowedKeyError
+            try:
+                validate_toggle_write("OPENAI_API_KEY")
+                c8a = False
+            except SecretWriteError:
+                c8a = True
+            except Exception:
+                c8a = False
+            try:
+                validate_toggle_write("SOME_RANDOM_KEY_NOT_ALLOWED")
+                c8b = False
+            except DisallowedKeyError:
+                c8b = True
+            except Exception:
+                c8b = False
+            c8 = c8a and c8b
+            audit["checks"].append({
+                "check": "validate_toggle_write rejects secret + non-allowlisted keys (CONSTRAINT #3)",
+                "passed": bool(c8),
+                "detail": f"secret_rejected={c8a} disallowed_rejected={c8b}",
+            })
+            all_pass = all_pass and c8
+
+            # ── 9. Opal auto-activated now that llm.research shipped ───────
+            # Tier 9 Scope 4 landed: opal_built() must now report True (the
+            # module genuinely exists), and the real opal_research
+            # capability must resolve "disabled" by default (never
+            # "not_built") — confirming the auto-activation promised when
+            # the AI Control Center was built: no Control Center change was
+            # needed for this transition.
+            opal_cap_now = next(c for c in CAPABILITIES if c.key == "opal_research")
+            opal_default_status = capability_status(
+                _NS(OPAL_RESEARCH_ENABLED=False, OPAL_RESEARCH_PROVIDER="openai"),
+                opal_cap_now,
+            )["status"]
+            c9 = (opal_built() is True) and (opal_default_status == "disabled")
+            audit["checks"].append({
+                "check": "Opal auto-activated (built=True) now that llm/research.py has shipped",
+                "passed": bool(c9),
+                "detail": f"opal_built={opal_built()} default_status={opal_default_status}",
+            })
+            all_pass = all_pass and c9
+
+            # ── 10. test files exist ───────────────────────────────────────
+            t1 = (repo_root / "tests" / "test_ai_control_center.py").exists()
+            t2 = (repo_root / "tests" / "test_gui_env_io_control_center_keys.py").exists()
+            c10 = t1 and t2
+            audit["checks"].append({
+                "check": "Control Center test files exist",
+                "passed": bool(c10),
+                "detail": f"ai_control_center={t1} env_io_keys={t2}",
+            })
+            all_pass = all_pass and c10
+
+            # ── 11. flexible per-job routing: either provider serves either
+            #        job — the "claude_commentary" row resolves to
+            #        GEMINI_API_KEY (not ANTHROPIC_API_KEY) when the operator
+            #        routes rationale to Gemini, and vice versa for alerts.
+            gemini_alerts_cap = next(c for c in CAPABILITIES if c.key == "gemini_alerts")
+            flex_rationale_to_gemini = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_RATIONALE_PROVIDER="gemini",
+                    ANTHROPIC_API_KEY="",
+                    GEMINI_API_KEY="sk-gem-x"),
+                claude_cap,
+            )
+            flex_alerts_to_claude = capability_status(
+                _NS(LLM_COMMENTARY_ENABLED=True,
+                    LLM_COMMENTARY_ALERT_PROVIDER="claude",
+                    GEMINI_API_KEY="",
+                    ANTHROPIC_API_KEY="sk-ant-x"),
+                gemini_alerts_cap,
+            )
+            c11 = (
+                flex_rationale_to_gemini["status"] == "ready"
+                and flex_rationale_to_gemini["active_provider"] == "gemini"
+                and flex_alerts_to_claude["status"] == "ready"
+                and flex_alerts_to_claude["active_provider"] == "claude"
+            )
+            audit["checks"].append({
+                "check": "Flexible per-job routing: Gemini can serve rationale AND Claude can serve alerts",
+                "passed": bool(c11),
+                "detail": (
+                    f"rationale->gemini={flex_rationale_to_gemini['status']} "
+                    f"alerts->claude={flex_alerts_to_claude['status']}"
+                ),
+            })
+            all_pass = all_pass and c11
+
+            audit["overall_pass"] = bool(all_pass)
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_86_ai_control_center_audit"] = audit
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
 # =============================================================================
