@@ -192,7 +192,14 @@ if not settings.ORCHESTRATOR_DAEMON_TOKEN:
 
 
 def _serialize_run(record: Optional[RunRecord]) -> Optional[Dict[str, Any]]:
-    """Serialize a RunRecord into a JSON-safe dict, or None passthrough."""
+    """Serialize a RunRecord into a JSON-safe dict, or None passthrough.
+
+    ``progress`` (reporting/progress.py telemetry, added alongside the other
+    RunRecord fields -- see desktop/daemon_runtime.py::RunRecord) is already a
+    plain, JSON-safe dict (or None) as constructed by
+    ``OrchestratorDaemon._run_one_cycle`` -- no further serialization needed,
+    it is passed through verbatim.
+    """
     if record is None:
         return None
     return {
@@ -203,6 +210,7 @@ def _serialize_run(record: Optional[RunRecord]) -> Optional[Dict[str, Any]]:
         "duration_seconds": record.duration_seconds,
         "error": record.error,
         "reason": record.reason,
+        "progress": record.progress,
     }
 
 

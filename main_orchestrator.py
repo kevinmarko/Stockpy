@@ -63,10 +63,14 @@ from signals.base import SignalContext
 from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
 from execution.kill_switch import GlobalKillSwitch
 from diagnostics_and_visuals import (
-    telemetry, 
-    generate_plotly_volatility_bands, 
+    telemetry,
+    generate_plotly_volatility_bands,
     generate_html_report
 )
+# Progress instrumentation (reporting/progress.py) -- file-backed 0-100%
+# telemetry for the GUI. Import is cheap (stdlib + settings only), no
+# circular-import risk. See _PROGRESS_STAGES below for the stage contract.
+from reporting.progress import ProgressReporter
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -88,6 +92,30 @@ class PipelineFatalError(RuntimeError):
     Subclasses ``RuntimeError`` (not ``SystemExit``) precisely so ordinary
     ``try/except Exception`` boundaries in a daemon catch it.
     """
+
+
+# =============================================================================
+# PROGRESS INSTRUMENTATION (reporting/progress.py)
+# =============================================================================
+# The six macro-stages a single _main_body_impl() cycle passes through, in the
+# SAME order as the existing telemetry.info(...) banners further down this
+# file -- do NOT reword those banner strings; the legacy log-scraping stage
+# detector in gui/orchestrator_runner.py::compute_stage_status still keys off
+# their literal text, and this instrumentation is deliberately additive, not
+# a replacement for it.
+#
+# "macro_options" combines the "Routing data through Macro Engine..." and
+# "Routing data through Technical Options Engine..." banners into one slice:
+# the Macro Engine step itself has no per-ticker loop, so the whole slice's
+# advance_symbol() ticks come from the options/IV ThreadPoolExecutor loop
+# that immediately follows.
+#
+# "execution" combines the advisory-overlay evaluation loop (the last
+# per-symbol ThreadPoolExecutor loop in the cycle) with report generation,
+# JSON payload export, and broker order submission -- none of which iterate
+# per-ticker, so this slice's ticks likewise come entirely from one loop
+# (_eval_one).
+_PROGRESS_STAGES = ["data", "macro_options", "processing", "forecasting", "strategy", "execution"]
 
 
 # =============================================================================
@@ -214,6 +242,7 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                   data_engine: Optional[Any] = None,
                   robinhood_positions: Optional[dict] = None,
                   engines: Optional[EngineContext] = None,
+                  progress: Optional[ProgressReporter] = None,
 ) -> tuple:
     """
     Synchronous execution of the quantitative engines:
@@ -252,9 +281,25 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
           ``global_registry.run_pre_compute()``.  Pass these to
           ``engine.advisory.evaluate(context_extras=...)`` so the advisory
           path scores cross-sectional / multifactor signals correctly.
+
+    progress : reporting.progress.ProgressReporter, optional
+        Live 0-100% progress telemetry for the GUI (see reporting/progress.py
+        and _PROGRESS_STAGES above). None (the default) is a complete no-op --
+        every call below is guarded by ``if progress is not None`` -- so
+        existing callers/tests that don't pass it see byte-identical
+        behavior. When supplied, this function advances it through
+        "macro_options" -> "processing" -> "forecasting" -> "strategy", with
+        per-ticker advance_symbol() ticks inside the options and forecasting
+        ThreadPoolExecutor loops.
     """
     # 1. Macro Economic Regime Analysis
     telemetry.info("Routing data through Macro Engine...")
+    if progress is not None:
+        # Combined "macro_options" stage: the Macro Engine step itself has no
+        # per-ticker loop, so symbols_total is sized for the options/IV loop
+        # that follows immediately below (the actual source of ticks in this
+        # slice of the bar).
+        progress.start_stage("macro_options", symbols_total=len(tickers))
     me = (engines.macro_engine if engines is not None and engines.macro_engine is not None
           else MacroEngine(data_engine=data_engine))
     # BUG-FIX: was `me._fallback_sentiment("")` which always returns 0.0 (NLP
@@ -304,8 +349,15 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     # there is no same-ticker/cross-ticker interaction, and record ordering is
     # irrelevant to the upsert-keyed final DB state.
     def _options_one(ticker):
+        # advance_symbol() is called on EVERY exit path (early-skip, happy,
+        # exception) so exactly one tick happens per ticker regardless of
+        # outcome -- symbols_total was sized to len(tickers) above. Safe to
+        # call from a worker thread: ProgressReporter.advance_symbol() is
+        # lock-guarded (reporting/progress.py).
         df_hist = tech_raw.get(ticker)
         if df_hist is None or df_hist.empty:
+            if progress is not None:
+                progress.advance_symbol(f"Options: {ticker} (no data)")
             return ticker, None, None
         # Dead-letter resilience (CONSTRAINT #6): a single ticker's options
         # analysis (GARCH vol, IV fetch, Black-Scholes strategy matrix) must
@@ -353,12 +405,16 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                 "VRP": vrp,
                 "Option_Strategy_Matrix": opt_strategy
             }
+            if progress is not None:
+                progress.advance_symbol(f"Options: {ticker}")
             return ticker, result, iv_record
         except Exception as opt_exc:
             telemetry.warning(
                 f"Technical Options Analysis failed for {ticker}: {opt_exc}. "
                 f"Skipping options metrics for this ticker this cycle."
             )
+            if progress is not None:
+                progress.advance_symbol(f"Options: {ticker} (failed)")
             return ticker, None, None
 
     _opt_workers = min(int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)), max(1, len(tickers)))
@@ -378,6 +434,12 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
     # 3. Core Processing
     telemetry.info("Routing data through Computational Core (Processing)...")
+    if progress is not None:
+        # Processing is fully vectorized (no per-ticker loop -- see the
+        # "no iterrows()" convention in CLAUDE.md), so this stage has no
+        # advance_symbol() ticks; the bar simply holds at this stage's
+        # starting boundary until "forecasting" begins.
+        progress.start_stage("processing")
     pe = (engines.processing_engine if engines is not None and engines.processing_engine is not None
           else ProcessingEngine())
     regime_metrics = pe.process_macro_regime(macro_dto)
@@ -420,6 +482,11 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
     # 4. Multi-Horizon Forecasting (with robust ML exception safety)
     telemetry.info("Routing data through Forecasting Engine...")
+    if progress is not None:
+        # symbols_total = len(dashboard_df) == len(rows) built just below --
+        # the forecasting loop iterates dashboard_df rows, not the raw
+        # tickers list (they're normally equal, but rows is the true count).
+        progress.start_stage("forecasting", symbols_total=len(dashboard_df))
     # Opt-in inverse-RMSE skill-weighted blending (default OFF → tracker None →
     # byte-identical static blend). Only applies to the fallback construction; a
     # supplied EngineContext already carries its own (flag-gated) tracker.
@@ -430,11 +497,16 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                      'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
                      'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper']
     def _forecast_one(row) -> tuple[str, dict | None]:
-        # Captures fe and tech_raw from the enclosing scope (read-only). The engine
+        # Captures fe, tech_raw, and progress from the enclosing scope
+        # (read-only, except for progress's own internal lock). The engine
         # is stateless across tickers, so this is safe to run concurrently.
+        # advance_symbol() is called on EVERY exit path (price-skip, happy,
+        # exception) so exactly one tick happens per row.
         ticker = row['Symbol']
         price = row['Price']
         if not price or price == 0:
+            if progress is not None:
+                progress.advance_symbol(f"Forecasting: {ticker} (no price)")
             return ticker, None
 
         history_df = tech_raw.get(ticker)
@@ -452,6 +524,8 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                 row, price, history_series, history_df=history_df,
                 precomputed_garch_annual_vol=precomputed_garch,
             )
+            if progress is not None:
+                progress.advance_symbol(f"Forecasting: {ticker}")
             return ticker, forecasts
         except Exception as ml_err:
             telemetry.warning(f"Forecasting Engine failure for {ticker}: {ml_err}. Reverting to baseline default.")
@@ -471,6 +545,8 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
             mc_10, _, _ = fe.run_monte_carlo(price, mu, sigma, 10)
             mc_60, _, _ = fe.run_monte_carlo(price, mu, sigma, 60)
             mc_90, _, _ = fe.run_monte_carlo(price, mu, sigma, 90)
+            if progress is not None:
+                progress.advance_symbol(f"Forecasting: {ticker} (fallback)")
             return ticker, {
                 'Target_Days': 30,
                 'ARIMA': price,
@@ -622,6 +698,15 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 
     # 6. Strategy & Sizing Evaluations
     telemetry.info("Routing data through Strategy and Evaluation Engines...")
+    if progress is not None:
+        # The strategy loop below is a serial `for idx, row in
+        # dashboard_df.iterrows()` (not a ThreadPoolExecutor), so it is
+        # deliberately out of scope for per-ticker advance_symbol() ticks
+        # here (only the options/forecasting/advisory-overlay ThreadPoolExecutor
+        # loops get per-symbol ticks per the progress-instrumentation scope);
+        # the bar holds at this stage's starting boundary until "execution"
+        # begins in _main_body_impl.
+        progress.start_stage("strategy", symbols_total=len(dashboard_df))
     se = (engines.strategy_engine if engines is not None and engines.strategy_engine is not None
           else StrategyEngine())
     ee = (engines.evaluation_engine if engines is not None and engines.evaluation_engine is not None
@@ -1246,6 +1331,45 @@ def _validate_dashboard(final_df, *, strict: bool) -> bool:
 async def _main_body(effective_dry_run: bool, strict: bool = False,
                       *, engines: Optional[EngineContext] = None,
                       data_engine: Optional[Any] = None) -> None:
+    """Thin progress-instrumentation wrapper around ``_main_body_impl``.
+
+    Constructs ONE ``ProgressReporter`` per cycle (reporting/progress.py),
+    covering the whole pipeline lifecycle described by ``_PROGRESS_STAGES``,
+    threads it into ``_main_body_impl`` (which threads it further into
+    ``run_pipeline(progress=...)`` and the advisory-overlay loop), and
+    guarantees a terminal ``finish()`` call regardless of outcome:
+
+    * normal completion — including the kill-switch early-return, which is a
+      skipped cycle, not a failure — calls ``finish("succeeded")``;
+    * any exception (notably ``PipelineFatalError``) calls
+      ``finish("failed")`` and then RE-RAISES the exact same exception
+      unchanged, so the existing ``main()``/daemon fatal-error handling is
+      completely unaffected by this instrumentation (CONSTRAINT #6: progress
+      reporting must never change pipeline behavior or swallow an error).
+
+    Kept as a thin wrapper (rather than wrapping the whole ~300-line original
+    body in a try/finally in place) purely to avoid re-indenting that body.
+    ``_main_body_impl`` below is the exact original ``_main_body`` logic,
+    now accepting one additional keyword-only ``progress`` parameter that
+    every existing test / call site (which never passes it) does not see.
+    """
+    _progress = ProgressReporter(_PROGRESS_STAGES)
+    try:
+        await _main_body_impl(
+            effective_dry_run, strict, engines=engines, data_engine=data_engine,
+            progress=_progress,
+        )
+    except Exception:
+        _progress.finish("failed")
+        raise
+    else:
+        _progress.finish("succeeded")
+
+
+async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
+                           *, engines: Optional[EngineContext] = None,
+                           data_engine: Optional[Any] = None,
+                           progress: Optional[ProgressReporter] = None) -> None:
     """Core pipeline logic — separated from main() so the heartbeat try/finally is clean.
 
     Parameters
@@ -1264,6 +1388,12 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
         it is the daemon's job to have validated FRED configuration and
         constructed a real DataEngine once at startup. None (the default)
         reproduces today's exact per-call construction behavior.
+    progress : reporting.progress.ProgressReporter, optional
+        Live 0-100% progress telemetry for the GUI. Supplied by the
+        ``_main_body`` wrapper above on every real invocation; ``None`` is
+        also accepted directly (e.g. by tests that call ``_main_body_impl``
+        in isolation) and is a complete no-op — every use below is guarded
+        by ``if progress is not None``.
     """
     # Surface a CRITICAL alert if the previously leaked FRED key is still in use.
     settings.warn_if_fred_key_leaked(telemetry)
@@ -1296,6 +1426,11 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
                 tickers.append(tk)
 
     # 1. Asynchronous concurrent data fetching
+    if progress is not None:
+        # fetch_all_data_async() is 3 bulk asyncio.to_thread() calls (macro /
+        # fundamentals / technical), not a per-ticker loop, so this stage has
+        # no advance_symbol() ticks -- symbols_total is informational only.
+        progress.start_stage("data", symbols_total=len(tickers))
     try:
         macro_raw, fund_raw, tech_raw = await fetch_all_data_async(de, tickers)
     except Exception as fetch_err:
@@ -1332,7 +1467,7 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
             run_pipeline,
             tickers, macro_raw, fund_raw, tech_raw,
             data_engine=de, robinhood_positions=rh_positions,
-            engines=engines,
+            engines=engines, progress=progress,
         )
     except Exception as pipe_err:
         # exc_info=True logs the full traceback so future crashes are diagnosable
@@ -1384,6 +1519,11 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
             )
 
             def _eval_one(_ticker, _row):
+                # advance_symbol() is called on BOTH exit paths (happy,
+                # exception) so exactly one tick happens per ticker. This is
+                # the "execution" stage's per-symbol loop (see _PROGRESS_STAGES
+                # docstring above) -- start_stage("execution", ...) is called
+                # just below, right after _adv_rows is built.
                 try:
                     _position = (
                         _rh_snapshot.positions.get(_ticker)
@@ -1411,6 +1551,8 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
                         precomputed_garch=_precomputed_garch,
                         precomputed_forecast=_precomputed_forecast,
                     )
+                    if progress is not None:
+                        progress.advance_symbol(f"Advisory: {_ticker}")
                     return _ticker, {
                         'Advisory_Action': _rec.action,
                         'Advisory_Conviction': round(_rec.conviction, 4),
@@ -1420,6 +1562,8 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
                     }
                 except Exception as _adv_exc:
                     telemetry.warning("Advisory failed for %s: %s", _ticker, _adv_exc)
+                    if progress is not None:
+                        progress.advance_symbol(f"Advisory: {_ticker} (failed)")
                     return _ticker, None
 
             _adv_rows = []
@@ -1428,6 +1572,13 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
                 if not _ticker:
                     continue
                 _adv_rows.append((_ticker, _row))
+
+            if progress is not None:
+                # Advisory-overlay evaluation is folded into the "execution"
+                # stage (the last stage in _PROGRESS_STAGES): it is the final
+                # per-symbol loop before report generation / JSON payload /
+                # broker order submission, none of which iterate per-ticker.
+                progress.start_stage("execution", symbols_total=len(_adv_rows))
 
             _adv_workers = min(
                 int(getattr(settings, 'ADVISORY_MAX_CONCURRENCY', 8)),

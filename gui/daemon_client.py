@@ -226,6 +226,14 @@ def get_run_status(run_id: str, timeout: float = 2.0) -> Optional[dict]:
     run with ``"state": "running"`` and ``"finished_at": null`` — that's just
     a dict key with a JSON null value, no special handling needed). Returns
     None on a 404 (unknown run_id) or ANY other failure. Never raises.
+
+    The dict's ``"progress"`` key (reporting/progress.py telemetry, added to
+    ``RunRecord``/``_serialize_run`` alongside the other fields — see
+    desktop/daemon_runtime.py and api/control_api.py) requires NO handling
+    here: ``_get_json`` does a raw ``json.loads()`` with no field
+    allowlisting, so it flows through automatically as either a nested dict
+    (``{"state": "running", "stage": "forecasting", "percent": 58.3, ...}``)
+    or ``None`` when the API served it as JSON ``null``.
     """
     return _get_json(f"/run/{run_id}/status", timeout)
 
@@ -235,5 +243,8 @@ def get_latest_run(timeout: float = 2.0) -> Optional[dict]:
 
     Returns the parsed run-record dict on 200, or None on a 404 (nothing
     triggered yet) or ANY other failure. Never raises.
+
+    See :func:`get_run_status` for the ``"progress"`` key note — it applies
+    here identically.
     """
     return _get_json("/run/latest", timeout)

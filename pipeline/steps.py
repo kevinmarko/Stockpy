@@ -178,6 +178,13 @@ class AdvisoryEvalStep(PipelineStep):
 
             Never raises — mirrors the original per-symbol try/except so a single
             bad ticker is dead-lettered, not propagated (CONSTRAINT #6).
+
+            Progress instrumentation: advance_symbol() is called on BOTH exit
+            paths (ok, err) so exactly one tick happens per symbol regardless
+            of outcome. Safe to call from a worker thread -- ProgressReporter.
+            advance_symbol() is lock-guarded (reporting/progress.py). This is
+            a no-op when ctx.progress is None (PipelineRunner.run() stamps
+            ctx.progress from its own `progress` argument; see runner.py).
             """
             try:
                 position = ctx.snapshot.positions.get(symbol)
@@ -189,8 +196,12 @@ class AdvisoryEvalStep(PipelineStep):
                     macro_dto=ctx.macro_dto,
                     context_extras=ctx.context_extras,
                 )
+                if ctx.progress is not None:
+                    ctx.progress.advance_symbol(f"Advisory: {symbol}")
                 return ("ok", rec)
             except Exception as exc:
+                if ctx.progress is not None:
+                    ctx.progress.advance_symbol(f"Advisory: {symbol} (failed)")
                 return ("err", {
                     "symbol": symbol,
                     "stage": "advisory_evaluate",
