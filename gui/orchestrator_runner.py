@@ -102,6 +102,12 @@ SCHEDULED_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_scheduled.log"
 # concurrent orchestrator/advisory refresh log.
 PYTEST_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_pytest.log"
 
+# Log written by ``launch_validation_run`` — the 🔬 Validation Lab tab's
+# "Run validation" button (spawns ``python -m scripts.refresh_validations``).
+# Distinct file so the long-running validation-harness tail never collides with
+# a concurrent orchestrator/advisory/pytest refresh log.
+VALIDATION_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_validation.log"
+
 # Log written by ``launch_verify`` — the Maintenance tab's "Run make verify"
 # button (env-var check → pytest → one live run_once + summary).  Distinct file
 # so the operator can tail the full readiness gate independently of a refresh.
@@ -637,6 +643,90 @@ def launch_pytest() -> RunHandle:
         refresh_account=False,
         log_path=PYTEST_LOG_PATH,
         mode="pytest",
+        _popen=popen,
+    )
+
+
+def launch_validation_run(strategies: List[str], start: str, end: str) -> RunHandle:
+    """Spawn ``scripts.refresh_validations`` as a non-blocking subprocess.
+
+    This backs the 🔬 **Validation Lab** tab's "Run validation" button.  Running
+    a strategy through the full validation harness (walk-forward stability + CPCV
+    path metrics + HTML report render) is long-running, so — like every other
+    launcher in this module — it is spawned via a detached
+    :class:`subprocess.Popen` rather than run inline, keeping the Streamlit UI
+    responsive while the operator tails the streamed log.
+
+    The child runs
+    ``[sys.executable, "-m", "scripts.refresh_validations", "--strategies",
+    ",".join(strategies), "--start", start, "--end", end]`` from the repo root,
+    inheriting the current environment (so ``.env`` — notably ``FRED_API_KEY``
+    and any market-data provider keys — is available).  stdout+stderr are
+    redirected to :data:`VALIDATION_LOG_PATH`, truncated at launch so the UI
+    tails only the current run.  It writes ``reports/*_validation_summary.json``
+    and ``reports/validation_*.html`` which the Validation Lab results section
+    reads back.  Using ``sys.executable`` guarantees the ``.venv`` interpreter is
+    used rather than a stray system Python.
+
+    Parameters
+    ----------
+    strategies:
+        Non-empty list of strategy-id strings to validate (keys of
+        ``scripts.refresh_validations.STRATEGY_REGISTRY``).
+    start, end:
+        Backtest window bounds as ``YYYY-MM-DD`` strings.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="validation"``, ``log_path=VALIDATION_LOG_PATH``) for
+        polling status, tailing the log via :func:`read_log_tail`, and stopping
+        via :func:`stop_run`.
+
+    Raises
+    ------
+    ValueError
+        If ``strategies`` is empty — the caller (the Validation Lab panel)
+        already disables the button in that case, but this is a defensive guard
+        so a subprocess is never spawned with no work to do.
+    """
+    if not strategies:
+        raise ValueError("launch_validation_run requires at least one strategy")
+
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [
+        sys.executable, "-m", "scripts.refresh_validations",
+        "--strategies", ",".join(strategies),
+        "--start", start,
+        "--end", end,
+    ]
+
+    log_file = open(VALIDATION_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo validation run @ {time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(strategies={','.join(strategies)}, start={start}, end={end})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched validation run pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=False,
+        log_path=VALIDATION_LOG_PATH,
+        mode="validation",
         _popen=popen,
     )
 

@@ -4448,6 +4448,8 @@ class GravityAIAuditor:
         self.step_71_multiple_testing_correction_audit()
         # Task B3/B4 — Calibration drift detector + signal-weight/regime-config validation
         self.step_72_bias_drift_weight_validation_audit()
+        # Validation Lab — GUI tab + runner wiring + report-contract audit
+        self.step_73_validation_lab_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -11302,6 +11304,120 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_72_bias_drift_weight_validation_audit"] = audit
+
+    def step_73_validation_lab_audit(self) -> None:
+        """Step 73 — Validation Lab GUI-tab wiring + report-contract audit.
+
+        The Validation Lab (GUI tab index 17, label ``🔬 Validation Lab``) makes
+        generating strategy-validation reports a first-class, on-demand GUI action
+        so the preflight ``validation_reports`` check has real
+        ``reports/*_validation_summary.json`` files to gate on.  This step verifies
+        the wiring contract WITHOUT clobbering the real ``reports/`` directory and
+        WITHOUT a network SPY download — it asserts import/structure only, so it is
+        fast and deterministic.  A genuine ``run_validations(...)`` execution (which
+        needs a live yfinance fetch) is intentionally NOT exercised here; that path
+        is covered by ``step_65_refresh_validations_audit`` and
+        ``tests/test_refresh_validations.py``.
+
+        Honesty guardrail (documented, not re-tested here): a strategy that fails a
+        deployability gate correctly reports ``deployable=False`` — thresholds are
+        never loosened to force a green check.
+
+        Checks:
+          1.  ``scripts.refresh_validations.STRATEGY_REGISTRY`` importable, a
+              non-empty dict, and every key is a ``str`` (resilient to the exact
+              expanded strategy-ids being unknown to this audit).
+          2.  ``scripts/refresh_validations.py`` source exposes the ``--json`` flag.
+          3.  ``render_validation_lab`` importable from ``gui.panels`` and callable.
+          4.  ``🔬 Validation Lab`` appears in ``gui/app.py``'s ``tab_labels``.
+          5.  ``gui.orchestrator_runner.launch_validation_run`` exists and is callable.
+          6.  ``gui.orchestrator_runner.VALIDATION_LOG_PATH`` is defined.
+        """
+        audit = {
+            "step": "step_73_validation_lab_audit",
+            "description": "Validation Lab — GUI tab + runner wiring + report contract",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": passed, "detail": str(detail)})
+            return passed
+
+        try:
+            import sys
+            from pathlib import Path
+
+            _repo = Path(__file__).resolve().parent
+            if str(_repo) not in sys.path:
+                sys.path.insert(0, str(_repo))
+
+            all_pass = True
+
+            # 1. STRATEGY_REGISTRY importable, non-empty, all keys str.
+            try:
+                import scripts.refresh_validations as _rv
+                reg = _rv.STRATEGY_REGISTRY
+                ok1 = (
+                    isinstance(reg, dict)
+                    and len(reg) > 0
+                    and all(isinstance(k, str) for k in reg)
+                )
+                detail1 = f"{len(reg)} strategies" if isinstance(reg, dict) else ""
+            except Exception as exc:
+                ok1, detail1 = False, str(exc)
+            all_pass = _chk(
+                "STRATEGY_REGISTRY importable, non-empty, all keys str", ok1, detail1
+            ) and all_pass
+
+            # 2. --json flag present in the runner CLI.
+            try:
+                rv_src = (_repo / "scripts" / "refresh_validations.py").read_text(encoding="utf-8")
+                ok2 = "--json" in rv_src
+            except Exception as exc:
+                ok2, rv_src = False, ""
+            all_pass = _chk("scripts/refresh_validations.py exposes --json flag", ok2) and all_pass
+
+            # 3. render_validation_lab importable + callable.
+            try:
+                from gui.panels import render_validation_lab
+                ok3 = callable(render_validation_lab)
+            except Exception as exc:
+                ok3 = False
+            all_pass = _chk("gui.panels.render_validation_lab importable and callable", ok3) and all_pass
+
+            # 4. "🔬 Validation Lab" registered as a tab in gui/app.py.
+            try:
+                app_src = (_repo / "gui" / "app.py").read_text(encoding="utf-8")
+                ok4 = "🔬 Validation Lab" in app_src
+            except Exception:
+                ok4 = False
+            all_pass = _chk("gui/app.py tab_labels contains '🔬 Validation Lab'", ok4) and all_pass
+
+            # 5. launch_validation_run exists and is callable.
+            try:
+                import gui.orchestrator_runner as _orr
+                ok5 = hasattr(_orr, "launch_validation_run") and callable(_orr.launch_validation_run)
+            except Exception:
+                ok5 = False
+            all_pass = _chk("gui.orchestrator_runner.launch_validation_run exists and callable", ok5) and all_pass
+
+            # 6. VALIDATION_LOG_PATH defined.
+            try:
+                ok6 = hasattr(_orr, "VALIDATION_LOG_PATH")
+            except Exception:
+                ok6 = False
+            all_pass = _chk("gui.orchestrator_runner.VALIDATION_LOG_PATH defined", ok6) and all_pass
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_73_validation_lab_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

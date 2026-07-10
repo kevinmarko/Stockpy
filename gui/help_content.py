@@ -865,6 +865,21 @@ TAB_HELP: Dict[str, TabHelp] = {
         ("advisory mode", "dead letter", "walk-forward validation", "pbo", "dsr"),
         "#17-report-library",
     ),
+    "validation_lab": _t(
+        "validation_lab",
+        "🔬 Validation Lab",
+        "Run the strategy-validation harness on demand and read the results "
+        "back, all from inside the app.  Pick one or more registered strategies "
+        "and a backtest window, then launch the run — it executes as a "
+        "background subprocess (the GUI stays responsive) and writes per-strategy "
+        "validation reports to `reports/`.  The results section shows each "
+        "strategy's deployable ✅/❌ verdict against the PBO / DSR / net-Sharpe / "
+        "Max-Drawdown gates (thresholds imported from `validation.thresholds`), "
+        "plus the rendered walk-forward / CPCV HTML report.  Read-only and "
+        "file-backed — this tab never calls the broker.",
+        ("walk-forward validation", "cpcv", "pbo", "dsr", "max drawdown"),
+        "#18-validation-lab",
+    ),
     "settings": _t(
         "settings",
         "⚙️ Settings",

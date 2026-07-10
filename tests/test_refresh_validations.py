@@ -40,6 +40,17 @@ def _synthetic_spy(n: int = 500) -> pd.Series:
     return pd.Series(prices, index=idx)
 
 
+def _synthetic_closes(tickers: List[str], n: int = 500) -> pd.DataFrame:
+    """Deterministic multi-ticker close-price DataFrame (business days, ~$200)."""
+    rng = np.random.default_rng(seed=7)
+    idx = pd.bdate_range(end="2024-12-31", periods=n)
+    data = {}
+    for t in tickers:
+        rets = rng.normal(loc=0.0004, scale=0.01, size=n)
+        data[t] = 200.0 * np.cumprod(1 + rets)
+    return pd.DataFrame(data, index=idx)
+
+
 def _noop_harness_run(
     start_date: str,
     end_date: str,
@@ -110,23 +121,41 @@ class TestRegistryStructure:
 
         assert "timeseries_momentum" in STRATEGY_REGISTRY
 
-    def test_each_entry_is_adapter_turnover_pair(self) -> None:
+    def test_each_entry_is_adapter_turnover_universe_triple(self) -> None:
         from scripts.refresh_validations import STRATEGY_REGISTRY
 
         for name, entry in STRATEGY_REGISTRY.items():
-            fn, turnover = entry
+            fn, turnover, universe = entry
             assert callable(fn), f"{name}: adapter must be callable"
             assert isinstance(turnover, float) and turnover > 0, (
                 f"{name}: turnover must be positive float"
+            )
+            assert isinstance(universe, list) and len(universe) > 0, (
+                f"{name}: universe must be a non-empty list of tickers"
+            )
+            assert all(isinstance(t, str) for t in universe), (
+                f"{name}: universe tickers must be strings"
             )
 
     def test_turnover_reasonable_range(self) -> None:
         from scripts.refresh_validations import STRATEGY_REGISTRY
 
-        for name, (_, turnover) in STRATEGY_REGISTRY.items():
+        for name, (_, turnover, _universe) in STRATEGY_REGISTRY.items():
             assert 0 < turnover <= 0.10, (
                 f"{name}: turnover {turnover} outside (0, 0.10] — sanity check"
             )
+
+    def test_new_strategies_registered(self) -> None:
+        from scripts.refresh_validations import STRATEGY_REGISTRY
+
+        for name in ("macd_trend", "coppock_momentum", "multifactor_lowvol_size"):
+            assert name in STRATEGY_REGISTRY, f"{name} missing from STRATEGY_REGISTRY"
+
+    def test_multifactor_universe_is_multi_ticker(self) -> None:
+        from scripts.refresh_validations import STRATEGY_REGISTRY
+
+        _, _, universe = STRATEGY_REGISTRY["multifactor_lowvol_size"]
+        assert len(universe) > 1, "cross-sectional strategy needs a multi-ticker universe"
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +271,172 @@ class TestBuildTsmomAdapter:
 
 
 # ---------------------------------------------------------------------------
+# TestBuildMacdAdapter
+# ---------------------------------------------------------------------------
+
+class TestBuildMacdAdapter:
+    def test_returns_three_items(self) -> None:
+        from scripts.refresh_validations import _build_macd_adapter
+
+        result = _build_macd_adapter(_synthetic_spy())
+        assert len(result) == 3
+
+    def test_X_has_expected_columns(self) -> None:
+        from scripts.refresh_validations import _build_macd_adapter
+
+        X, y, _ = _build_macd_adapter(_synthetic_spy())
+        assert "MACD_Hist" in X.columns
+        assert "SMA_200" in X.columns
+
+    def test_three_precomputed_variants(self) -> None:
+        from scripts.refresh_validations import _build_macd_adapter
+
+        _, _, pre = _build_macd_adapter(_synthetic_spy())
+        assert set(pre.keys()) == {"MACD_LongOnly", "MACD_LongShort", "MACD_TrendFilter"}
+
+    def test_precomputed_series_share_index_with_X(self) -> None:
+        from scripts.refresh_validations import _build_macd_adapter
+
+        X, y, pre = _build_macd_adapter(_synthetic_spy())
+        for k, v in pre.items():
+            assert v.index.equals(X.index), f"{k} index mismatch"
+
+    def test_no_lookahead_perturbing_future_does_not_change_past_signal(self) -> None:
+        """Perturbing close AFTER date t must not change MACD_Hist AT date t —
+        every EMA in the adapter is causal (adjust=False) and the position is
+        .shift(1)-ed before multiplying by the realized return."""
+        from scripts.refresh_validations import _build_macd_adapter
+
+        spy = _synthetic_spy(n=400)
+        cutoff = spy.index[300]
+
+        X_orig, _, _ = _build_macd_adapter(spy)
+        hist_at_cutoff_orig = X_orig.loc[cutoff, "MACD_Hist"]
+
+        perturbed = spy.copy()
+        perturbed.loc[perturbed.index > cutoff] *= 5.0  # violent future shock
+        X_pert, _, _ = _build_macd_adapter(perturbed)
+        hist_at_cutoff_pert = X_pert.loc[cutoff, "MACD_Hist"]
+
+        assert hist_at_cutoff_orig == pytest.approx(hist_at_cutoff_pert)
+
+
+# ---------------------------------------------------------------------------
+# TestBuildCoppockAdapter
+# ---------------------------------------------------------------------------
+
+class TestBuildCoppockAdapter:
+    def test_returns_three_items(self) -> None:
+        from scripts.refresh_validations import _build_coppock_adapter
+
+        result = _build_coppock_adapter(_synthetic_spy(n=700))
+        assert len(result) == 3
+
+    def test_X_has_coppock_column(self) -> None:
+        from scripts.refresh_validations import _build_coppock_adapter
+
+        X, y, _ = _build_coppock_adapter(_synthetic_spy(n=700))
+        assert "Coppock" in X.columns
+
+    def test_two_precomputed_variants(self) -> None:
+        from scripts.refresh_validations import _build_coppock_adapter
+
+        _, _, pre = _build_coppock_adapter(_synthetic_spy(n=700))
+        assert set(pre.keys()) == {"Coppock_Long", "Coppock_Rising"}
+
+    def test_insufficient_history_returns_empty(self) -> None:
+        """Fewer bars than the ~210-day WMA warmup -> clean empty result,
+        never a fabricated value (CONSTRAINT #4)."""
+        from scripts.refresh_validations import _build_coppock_adapter
+
+        X, y, pre = _build_coppock_adapter(_synthetic_spy(n=50))
+        assert X.empty
+        assert y.empty
+        assert pre == {}
+
+    def test_no_lookahead_perturbing_future_does_not_change_past_signal(self) -> None:
+        from scripts.refresh_validations import _build_coppock_adapter
+
+        spy = _synthetic_spy(n=700)
+        cutoff = spy.index[600]
+
+        X_orig, _, _ = _build_coppock_adapter(spy)
+        val_orig = X_orig.loc[cutoff, "Coppock"]
+
+        perturbed = spy.copy()
+        perturbed.loc[perturbed.index > cutoff] *= 5.0
+        X_pert, _, _ = _build_coppock_adapter(perturbed)
+        val_pert = X_pert.loc[cutoff, "Coppock"]
+
+        assert val_orig == pytest.approx(val_pert)
+
+
+# ---------------------------------------------------------------------------
+# TestBuildLowVolSizeAdapter
+# ---------------------------------------------------------------------------
+
+class TestBuildLowVolSizeAdapter:
+    _TICKERS = ["AAA", "BBB", "CCC", "DDD"]
+
+    def test_returns_three_items(self) -> None:
+        from scripts.refresh_validations import _build_lowvol_size_adapter
+
+        closes = _synthetic_closes(self._TICKERS)
+        shares = {t: 1e9 for t in self._TICKERS}
+        result = _build_lowvol_size_adapter(closes, shares)
+        assert len(result) == 3
+
+    def test_X_has_expected_columns(self) -> None:
+        from scripts.refresh_validations import _build_lowvol_size_adapter
+
+        closes = _synthetic_closes(self._TICKERS)
+        shares = {t: 1e9 for t in self._TICKERS}
+        X, y, _ = _build_lowvol_size_adapter(closes, shares)
+        assert "LowVol_Composite" in X.columns
+        assert "Size_Composite" in X.columns
+
+    def test_precomputed_portfolio_returns_key(self) -> None:
+        from scripts.refresh_validations import _build_lowvol_size_adapter
+
+        closes = _synthetic_closes(self._TICKERS)
+        shares = {t: 1e9 for t in self._TICKERS}
+        _, _, pre = _build_lowvol_size_adapter(closes, shares)
+        assert "Multifactor_LowVol_Size" in pre
+        assert pre["Multifactor_LowVol_Size"].notna().any()
+
+    def test_missing_shares_degrades_to_nan_not_fabricated(self) -> None:
+        """A ticker with no shares snapshot gets NaN Size (never a fabricated
+        0.0) and the composite falls back to the Low-Vol tilt only
+        (CONSTRAINT #4)."""
+        from scripts.refresh_validations import _build_lowvol_size_adapter
+
+        closes = _synthetic_closes(self._TICKERS)
+        shares: Dict[str, float] = {}  # no shares snapshot for anyone
+        X, y, pre = _build_lowvol_size_adapter(closes, shares)
+        assert not X.empty
+        assert pre["Multifactor_LowVol_Size"].notna().any()
+
+    def test_no_lookahead_shift1_on_weights(self) -> None:
+        """Perturbing returns strictly AFTER date t must not change the
+        portfolio return series' value AT date t (weights are .shift(1)-ed)."""
+        from scripts.refresh_validations import _build_lowvol_size_adapter
+
+        closes = _synthetic_closes(self._TICKERS, n=300)
+        shares = {t: 1e9 for t in self._TICKERS}
+        cutoff = closes.index[200]
+
+        _, _, pre_orig = _build_lowvol_size_adapter(closes, shares)
+        val_orig = pre_orig["Multifactor_LowVol_Size"].loc[cutoff]
+
+        perturbed = closes.copy()
+        perturbed.loc[perturbed.index > cutoff] *= 5.0
+        _, _, pre_pert = _build_lowvol_size_adapter(perturbed, shares)
+        val_pert = pre_pert["Multifactor_LowVol_Size"].loc[cutoff]
+
+        assert val_orig == pytest.approx(val_pert)
+
+
+# ---------------------------------------------------------------------------
 # TestMakeStrategyFn
 # ---------------------------------------------------------------------------
 
@@ -325,10 +520,26 @@ class TestRunValidations:
         mock_cls.return_value = instance
         return patch("validation.harness.StrategyValidationHarness", mock_cls)
 
-    def _patch_spy(self, spy: pd.Series):
+    def _patch_closes(self):
+        """Patch ``_download_closes`` to synthesize prices for whatever ticker
+        union the caller requests (the union varies per test/registry
+        selection), so this must be a ``side_effect`` callable, not a fixed
+        ``return_value``."""
+        def _fake_download(tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
+            return _synthetic_closes(tickers)
+
         return patch(
-            "scripts.refresh_validations._download_spy",
-            return_value=spy,
+            "scripts.refresh_validations._download_closes",
+            side_effect=_fake_download,
+        )
+
+    def _patch_shares(self):
+        def _fake_shares(tickers: List[str]) -> Dict[str, float]:
+            return {t: 1_000_000_000.0 for t in tickers}
+
+        return patch(
+            "scripts.refresh_validations._download_shares",
+            side_effect=_fake_shares,
         )
 
     def _patch_cost(self):
@@ -340,8 +551,7 @@ class TestRunValidations:
     def test_returns_dict_for_each_strategy(self, tmp_path: Path) -> None:
         from scripts.refresh_validations import run_validations
 
-        spy = _synthetic_spy()
-        with self._patch_spy(spy), self._patch_harness(), self._patch_cost():
+        with self._patch_closes(), self._patch_shares(), self._patch_harness(), self._patch_cost():
             results = run_validations(output_dir=tmp_path)
 
         assert isinstance(results, dict)
@@ -351,8 +561,7 @@ class TestRunValidations:
     def test_unknown_strategy_is_dead_lettered(self, tmp_path: Path) -> None:
         from scripts.refresh_validations import run_validations
 
-        spy = _synthetic_spy()
-        with self._patch_spy(spy), self._patch_harness(), self._patch_cost():
+        with self._patch_closes(), self._patch_shares(), self._patch_harness(), self._patch_cost():
             results = run_validations(
                 strategies=["totally_unknown_strategy"], output_dir=tmp_path
             )
@@ -360,11 +569,11 @@ class TestRunValidations:
         assert r["deployable"] is False
         assert "error" in r
 
-    def test_spy_download_failure_marks_all_as_failed(self, tmp_path: Path) -> None:
+    def test_price_download_failure_marks_all_as_failed(self, tmp_path: Path) -> None:
         from scripts.refresh_validations import run_validations
 
         with patch(
-            "scripts.refresh_validations._download_spy",
+            "scripts.refresh_validations._download_closes",
             side_effect=RuntimeError("network down"),
         ), self._patch_cost():
             results = run_validations(
@@ -375,15 +584,15 @@ class TestRunValidations:
         assert "error" in results["rsi2_mean_reversion"]
 
     def test_adapter_exception_dead_lettered(self, tmp_path: Path) -> None:
-        from scripts.refresh_validations import run_validations, STRATEGY_REGISTRY
+        from scripts.refresh_validations import run_validations
 
-        spy = _synthetic_spy()
         broken_adapter = MagicMock(side_effect=ValueError("adapter exploded"))
         patched_registry = {
-            "rsi2_mean_reversion": (broken_adapter, 0.02),
+            "rsi2_mean_reversion": (broken_adapter, 0.02, ["SPY"]),
         }
         with (
-            self._patch_spy(spy),
+            self._patch_closes(),
+            self._patch_shares(),
             self._patch_cost(),
             patch("scripts.refresh_validations.STRATEGY_REGISTRY", patched_registry),
         ):
@@ -398,13 +607,27 @@ class TestRunValidations:
     def test_single_strategy_filter(self, tmp_path: Path) -> None:
         from scripts.refresh_validations import run_validations
 
-        spy = _synthetic_spy()
-        with self._patch_spy(spy), self._patch_harness(), self._patch_cost():
+        with self._patch_closes(), self._patch_shares(), self._patch_harness(), self._patch_cost():
             results = run_validations(
                 strategies=["rsi2_mean_reversion"], output_dir=tmp_path
             )
 
         assert list(results.keys()) == ["rsi2_mean_reversion"]
+
+    def test_multifactor_strategy_runs_with_multi_ticker_universe(
+        self, tmp_path: Path
+    ) -> None:
+        """The cross-sectional adapter needs multiple tickers + a shares
+        snapshot; verify run_validations wires both through without error."""
+        from scripts.refresh_validations import run_validations
+
+        with self._patch_closes(), self._patch_shares(), self._patch_harness(), self._patch_cost():
+            results = run_validations(
+                strategies=["multifactor_lowvol_size"], output_dir=tmp_path
+            )
+
+        assert "multifactor_lowvol_size" in results
+        assert "error" not in results["multifactor_lowvol_size"]
 
 
 # ---------------------------------------------------------------------------

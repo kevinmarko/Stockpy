@@ -1929,6 +1929,49 @@ full-orchestrator run to bring it up to date.
 
 ---
 
+## 18. Validation Lab
+
+The **🔬 Validation Lab** tab lets you run the strategy-validation harness on
+demand and read the results back without leaving the Command Center. Previously
+the only way to produce a validation report was to run
+`python -m scripts.refresh_validations` from a terminal; the Report Library tab
+could only *display* whatever summaries already existed on disk. This tab closes
+that loop — configure a run, launch it, watch it, and read the verdict. It is
+read-only and file-backed: it launches the harness as a background subprocess
+and never calls the broker or submits any order.
+
+### Running a validation
+
+1. **Choose strategies.** Pick one or more registered strategies from the
+   multiselect (the list comes straight from the runner's strategy registry).
+2. **Choose a window.** Set the backtest start and end dates. The default window
+   starts at 2010-01-01 and ends today.
+3. **Run it.** Press **▶️ Run validation**. The harness runs as a background
+   subprocess so the app stays responsive; the button is disabled while a run is
+   already in flight or when no strategy is selected.
+
+### Watching the run
+
+The **Run status** section shows whether the current run is still going (🟢
+Running) or has finished (✅ exit 0 / ❌ non-zero), and tails the live log. Use
+the **🔄 Refresh** button to poll for the latest status and log lines — Streamlit
+does not auto-refresh, so this is how you advance the view while a run is
+in progress.
+
+### Reading the results
+
+The **Results** section reads the `reports/*_validation_summary.json` files the
+run wrote and shows a per-strategy table with a **deployable ✅/❌** verdict plus
+the four standard gate values — **PBO**, **DSR**, **Sharpe**, and **Max
+Drawdown**. The pass/fail thresholds are imported from `validation.thresholds`
+(PBO below its cap, DSR and net Sharpe above their floors, Max Drawdown below its
+limit), so what you see here can never drift from the harness's own deployability
+gate. The rendered walk-forward / CPCV HTML report can be viewed inline or
+downloaded. A strategy only counts toward the preflight `validation_reports`
+check once it is deployable **and** its report is less than 30 days old.
+
+---
+
 ## 21. Running the Read-Only State API Securely
 
 The platform ships a small, **standalone read-only API** (`api/state_api.py`)
