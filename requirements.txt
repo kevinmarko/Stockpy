@@ -144,3 +144,6 @@ pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'
 # Read-only web-API scaffold (api/state_api.py) — future web/mobile frontend foundation
 fastapi>=0.110.0
 uvicorn>=0.29.0
+mcp
+tabulate
+
