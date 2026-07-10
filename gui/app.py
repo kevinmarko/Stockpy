@@ -10,26 +10,32 @@ Launch
 
 or double-click ``launch_gui.command`` on macOS.
 
-Tabs
-----
+Tabs (18, in ``tab_labels`` order)
+----------------------------------
 1.  Launcher & Orchestration  — run main_orchestrator.py + live stage status
-2.  Report Viewer             — evaluation/research analytics + report export
+2.  Reports                   — evaluation/research analytics + report export
 3.  Settings Manager          — edit non-secret .env tunables (secrets masked)
 4.  Strategy Matrix           — enable/disable signal modules, weights, kill switch
 5.  Paper-Trading Monitor     — Robinhood account truth vs. pipeline projection
-6.  Gravity Audit Logs        — run the Gravity AI Review Suite, view pass/fail
+6.  Gravity Audit             — run the Gravity AI Review Suite, view pass/fail
 7.  Options Matrix            — Black-Scholes greeks + IVR proxy per symbol
 8.  Market Data               — active provider, quote freshness, cache controls
 9.  Observability             — compact macro/regime/P&L summary
-10. Live Inventory            — synchronized portfolio + watchlist coverage map
+10. Analytics                 — broker realized P&L, equity curve, alerts, ML registry
+11. Pairs                     — cointegration scan + Kalman hedge (advisory-only)
+12. Live Inventory            — synchronized portfolio + watchlist coverage map
                                 with on-demand "Sync Now" (Task 1.4)
-11. Prompts                   — Prompt Registry: resolved version/source per ID,
+13. Help                      — glossary + tab-by-tab How-To Guide
+14. Prompts                   — Prompt Registry: resolved version/source per ID,
                                 🔄 Sync, diff viewer, ↩ Rollback/pin (Stage 7)
-12. AI Insights                — Claude analyst note + Gemini chart-pattern vision +
+15. AI Insights               — Claude analyst note + Gemini chart-pattern vision +
                                 aggregate Claude-vs-Gemini disagreement view (Tier 9 Scope 3)
-13. AI Control Center          — one operator surface for every AI option: master-switch
+16. AI Control Center         — one operator surface for every AI option: master-switch
                                 toggles, on-demand per-symbol actions, Gravity AI audit,
                                 and Start/Stop of an --interval/--agent scheduled run
+17. Report Library            — inline-viewable browser over all generated reports
+18. Validation Lab            — run the validation harness per strategy + view
+                                deployable verdict / PBO / DSR / Sharpe / MaxDD
 
 Design
 ------
@@ -287,6 +293,7 @@ tab_labels = [
     "🪄 AI Insights",
     "🎛️ AI Control Center",
     "📁 Report Library",
+    "🔬 Validation Lab",
 ]
 tabs = st.tabs(tab_labels)
 
@@ -324,5 +331,7 @@ with tabs[15]:
     safe_panel(panels.render_ai_control_center)
 with tabs[16]:
     safe_panel(panels.render_reports_library)
+with tabs[17]:
+    safe_panel(panels.render_validation_lab)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")

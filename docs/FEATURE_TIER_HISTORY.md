@@ -9,6 +9,7 @@ PR that added it" record** — read it when you need the full backstory, test su
 or Gravity-audit-step details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
+- Validation Lab — on-demand strategy-validation GUI tab + runner expansion (2026-07-10)
 - Dead-code resolution — reuse grossMargins/currentRatio, delete orphans, activate ForecastTracker (opt-in) (2026-07-09)
 - Advisory multifactor-Z threading — close the PR #192 follow-up (2026-07-09)
 - Forecasting fit-once + GARCH reuse, 4 settings to GUI, advisory-snapshot telemetry parity (2026-07-09)

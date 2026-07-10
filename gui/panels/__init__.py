@@ -109,3 +109,4 @@ from .ai_insights import (_render_gemini_chart_section, _render_opal_research_se
 from .ai_control_center import (render_ai_control_center)
 from .prompt_registry import (_pr_source_badge, _pr_resolve_source, _pr_cached_versions, _pr_body_for_version, _pr_all_known_ids, render_prompt_registry, utcnow_str)
 from .reports_library import render_reports_library
+from .validation_lab import render_validation_lab
