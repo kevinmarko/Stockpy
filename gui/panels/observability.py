@@ -1063,6 +1063,56 @@ def _render_observability_forecast_skill(snap: Dict[str, Any]) -> None:
         "weights are used. Weights sum to 1.0 within a symbol/horizon once warm."
     )
 
+    # ── Forecast Reliability (calibration) sub-section ──────────────────────
+    # Distinct from the RMSE table above (per-symbol/per-horizon accuracy) --
+    # this bins realized percent error per (model, horizon) group across ALL
+    # symbols to show systematic over-/under-prediction bias, using the same
+    # ForecastTracker instance the RMSE table already reads from.
+    st.markdown("#### 📐 Forecast Reliability (calibration)")
+    st.caption(
+        "Bins realized percent error `(actual - forecast) / actual` by model "
+        "and horizon across all symbols. A model whose bins cluster near 0% "
+        "is well-calibrated; a persistent positive/negative bias means it "
+        "systematically under-/over-predicts."
+    )
+    try:
+        from forecasting.forecast_tracker import ForecastTracker
+
+        tracker = ForecastTracker()
+        horizons_available = sorted({int(h) for h in {10, 30, 60, 90}})
+        rel_horizon = st.selectbox(
+            "Horizon (days)", options=["All"] + horizons_available,
+            key="obs_reliability_horizon",
+        )
+        rel_model = st.text_input(
+            "Model filter (optional, exact match)", value="",
+            key="obs_reliability_model",
+        )
+
+        curve = tracker.get_forecast_reliability_curve(
+            horizon_days=None if rel_horizon == "All" else int(rel_horizon),
+        )
+        if rel_model.strip():
+            curve = curve[curve["model_name"] == rel_model.strip()]
+
+        if curve is None or curve.empty:
+            st.info(
+                "No completed forecast history yet for the selected filter — "
+                "the reliability curve populates as forecasts are recorded "
+                "and actualized over time."
+            )
+        else:
+            chart_df = curve.set_index("bin_center")[["mean_pct_error"]].dropna()
+            if not chart_df.empty:
+                st.bar_chart(chart_df)
+            st.dataframe(
+                curve[["model_name", "horizon_days", "bin_center", "mean_pct_error", "count"]],
+                width="stretch", hide_index=True,
+            )
+    except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
+        logger.debug("forecast reliability curve failed: %s", exc)
+        st.caption(f"(forecast reliability unavailable: {exc})")
+
 
 # ---------------------------------------------------------------------------
 # Observability — Section 4a-7: Risk Gate Block Log

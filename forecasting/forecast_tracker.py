@@ -43,6 +43,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
+import pandas as pd
+
 logger = logging.getLogger(__name__)
 
 # Canonical model name constants used throughout the codebase.
@@ -426,3 +428,109 @@ class ForecastTracker:
         except Exception as exc:
             logger.warning("ForecastTracker.completed_count(%s) failed: %s", symbol, exc)
             return 0
+
+    def get_forecast_reliability_curve(
+        self,
+        symbol: Optional[str] = None,
+        horizon_days: Optional[int] = None,
+        n_bins: int = 10,
+        min_per_bin: int = 3,
+    ) -> "pd.DataFrame":
+        """Reliability/calibration curve for forecast accuracy.
+
+        Bins COMPLETED forecast_errors rows (``actual_price IS NOT NULL``) by
+        the realized percent error ``(actual_price - forecast_price) /
+        actual_price`` into ``n_bins`` fixed-width buckets spanning a stable
+        ``[-0.5, 0.5]`` range, grouped by ``(model_name, horizon_days)`` --
+        producing a per-model/per-horizon calibration diagnostic showing
+        systematic over-/under-prediction bias.
+
+        Distinct from ``evaluation_engine.py``'s ``calibration_curve()``
+        (conviction-vs-win-rate from closed trades, not forecast accuracy --
+        a different data source and a different question entirely).
+
+        Args:
+            symbol: Optional ticker filter (case-insensitive). ``None`` means
+                all symbols.
+            horizon_days: Optional horizon filter. ``None`` means all horizons.
+            n_bins: Number of equal-width buckets spanning [-0.5, 0.5].
+            min_per_bin: Bins with fewer than this many rows get
+                ``mean_pct_error=NaN`` (insufficient sample, never fabricated
+                -- CONSTRAINT #4).
+
+        Returns:
+            DataFrame with columns ``model_name``, ``horizon_days``,
+            ``bin_low``, ``bin_high``, ``bin_center``, ``mean_pct_error``,
+            ``count``. Empty DataFrame with the correct schema (zero rows)
+            when no completed rows match the filter, or on any DB error
+            (dead-letter resilient -- CONSTRAINT #6, never raises).
+        """
+        columns = ["model_name", "horizon_days", "bin_low", "bin_high", "bin_center", "mean_pct_error", "count"]
+        empty_df = pd.DataFrame(columns=columns)
+
+        try:
+            query = """
+                SELECT model_name, horizon_days, forecast_price, actual_price
+                FROM forecast_errors
+                WHERE actual_price IS NOT NULL
+            """
+            params: list = []
+            if symbol is not None:
+                query += " AND symbol = ?"
+                params.append(symbol.upper())
+            if horizon_days is not None:
+                query += " AND horizon_days = ?"
+                params.append(horizon_days)
+
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(query, params).fetchall()
+
+            if not rows:
+                return empty_df
+
+            df = pd.DataFrame(rows, columns=["model_name", "horizon_days", "forecast_price", "actual_price"])
+            df = df[df["actual_price"] != 0]
+            if df.empty:
+                return empty_df
+
+            df["pct_error"] = (df["actual_price"] - df["forecast_price"]) / df["actual_price"]
+
+            bins = [-0.5 + i * (1.0 / n_bins) for i in range(n_bins + 1)]
+            df["_bin"] = pd.cut(df["pct_error"], bins=bins, include_lowest=True)
+
+            records = []
+            for (model_name, h_days), group in df.groupby(["model_name", "horizon_days"]):
+                for interval in sorted(group["_bin"].dropna().unique()):
+                    bucket = group[group["_bin"] == interval]
+                    count = len(bucket)
+                    bin_low = float(interval.left)
+                    bin_high = float(interval.right)
+                    bin_center = (bin_low + bin_high) / 2.0
+                    mean_pct_error = (
+                        float(bucket["pct_error"].mean()) if count >= min_per_bin else float("nan")
+                    )
+                    records.append({
+                        "model_name": model_name,
+                        "horizon_days": int(h_days),
+                        "bin_low": bin_low,
+                        "bin_high": bin_high,
+                        "bin_center": bin_center,
+                        "mean_pct_error": mean_pct_error,
+                        "count": count,
+                    })
+
+            if not records:
+                return empty_df
+
+            result = pd.DataFrame(records)
+            result["count"] = result["count"].astype(int)
+            result["horizon_days"] = result["horizon_days"].astype(int)
+            return result
+
+        except Exception as exc:
+            logger.warning(
+                "ForecastTracker.get_forecast_reliability_curve(symbol=%s, horizon=%s) failed: %s",
+                symbol, horizon_days, exc,
+            )
+            return empty_df
