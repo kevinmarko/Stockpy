@@ -152,7 +152,7 @@ class PrecomputeStep(PipelineStep):
     def run(self, ctx: RunContext) -> None:
         ctx.market = ctx.get_provider_fn()
         ctx.bars_dict = ctx.fetch_bars_fn(ctx.symbols, ctx.market)
-        ctx.context_extras = ctx.build_context_extras_fn(ctx.symbols, ctx.bars_dict, ctx.macro_dto)
+        ctx.context_extras = ctx.build_context_extras_fn(ctx.symbols, ctx.bars_dict, ctx.macro_dto, ctx.market)
 
 
 class AdvisoryEvalStep(PipelineStep):

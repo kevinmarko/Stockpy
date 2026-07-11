@@ -370,8 +370,8 @@ class TestPrecomputeStep:
             fetch_bars_calls.append((symbols, market))
             return bars_sentinel
 
-        def _build_extras(symbols: List[str], bars: Dict[str, Any], macro_dto: Any) -> Dict[str, Any]:
-            build_extras_calls.append((symbols, bars, macro_dto))
+        def _build_extras(symbols: List[str], bars: Dict[str, Any], macro_dto: Any, market: Any) -> Dict[str, Any]:
+            build_extras_calls.append((symbols, bars, macro_dto, market))
             return extras_sentinel
 
         macro_sentinel = object()
@@ -395,9 +395,10 @@ class TestPrecomputeStep:
         assert called_market is market_sentinel
 
         assert len(build_extras_calls) == 1
-        called_symbols2, called_bars, called_macro = build_extras_calls[0]
+        called_symbols2, called_bars, called_macro, called_market2 = build_extras_calls[0]
         assert called_symbols2 == ["AAPL", "MSFT"]
         assert called_bars is bars_sentinel
+        assert called_market2 is market_sentinel
         assert called_macro is macro_sentinel
 
 

@@ -43,7 +43,7 @@ class RunContext:
     build_macro_dto_fn: Callable[[], "MacroEconomicDTO"]
     get_provider_fn: Callable[[], "MarketDataProvider"]
     fetch_bars_fn: Callable[[List[str], "MarketDataProvider"], Dict[str, Any]]
-    build_context_extras_fn: Callable[[List[str], Dict[str, Any], "MacroEconomicDTO"], Dict[str, Any]]
+    build_context_extras_fn: Callable[[List[str], Dict[str, Any], "MacroEconomicDTO", "MarketDataProvider"], Dict[str, Any]]
     advisory_evaluate_fn: Callable[..., "Recommendation"]
 
     # ── Mutable pipeline state, filled in by steps in order ─────────────────

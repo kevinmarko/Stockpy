@@ -10,9 +10,10 @@ Pipeline stages (per cycle)
   B. Universe build     — held symbols ∪ WATCHLIST env var ∪ watchlist.txt
   C. Macro context      — FRED data + HMM second opinion (degrades to neutral
                           defaults when FRED_API_KEY is not configured)
-  D. Context pre-compute— 12-1m cross-sectional momentum ranks + multifactor
-                          composites built once for the full universe before
-                          the per-symbol loop so advisory signals see real
+  D. Context pre-compute— 12-1m cross-sectional momentum ranks + Fama-French
+                          multifactor (value/quality/low-vol/size) raw inputs,
+                          built once for the full universe before the
+                          per-symbol loop so advisory signals see real
                           cross-sectional data rather than the 0-score fallback
   E. Per-symbol evaluate— market data + advisory engine; dead-letter error
                           capture per symbol; never aborts the run
@@ -38,6 +39,14 @@ NOTE — Double-fetch for pre-compute
   pre-compute requires the full universe before the per-symbol loop, so bars
   must be fetched upfront.  Future optimisation: extend MarketDataProvider with
   a bars cache or pass bars through to advisory via context_extras.
+
+  _fetch_fundamentals_for_universe() has the same shape (fetched once upfront
+  for the multifactor pre-compute pass, then evaluate() fetches fundamentals
+  again per symbol in its own Step 3) but with a much smaller real cost: when
+  HISTORICAL_STORE_ENABLED (the default), the pre-compute pass's fetch writes
+  each symbol's row to HistoricalStore's fundamentals_history table, and
+  evaluate()'s Step 3 re-read lands inside that row's FUNDAMENTALS_REFRESH_DAYS
+  freshness window (default 1 day) — a DB cache hit, not a second network call.
 """
 
 # ---------------------------------------------------------------------------
@@ -436,10 +445,79 @@ def _fetch_bars_for_universe(
     return bars
 
 
+def _fetch_fundamentals_for_universe(
+    symbols: List[str],
+    market: MarketDataProvider,
+) -> Dict[str, FundamentalDataDTO]:
+    """Fetch fundamentals for the full universe and build FundamentalDataDTOs.
+
+    Feeds the multifactor raw-input pre-compute in ``_build_context_extras``
+    (value/quality/low-vol/size come from each DTO's ``raw_info`` via
+    ``ProcessingEngine.calculate_fundamental_metrics()``). Same
+    HistoricalStore-first-then-direct-provider routing as
+    ``engine.advisory.evaluate()``'s own Step 3, generalized across the whole
+    universe up front instead of one symbol at a time mid-loop.
+
+    Returns a dict symbol → FundamentalDataDTO. Failures are dead-lettered per
+    symbol so one bad ticker never aborts the pre-compute pass.
+    """
+    _store = None
+    if settings.HISTORICAL_STORE_ENABLED:
+        try:
+            from data.historical_store import HistoricalStore
+            _store = HistoricalStore()
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore unavailable for fundamentals pre-fetch; using direct provider. %s", exc
+            )
+
+    fund_dtos: Dict[str, FundamentalDataDTO] = {}
+    for sym in symbols:
+        try:
+            raw: Dict[str, Any] = {}
+            if _store is not None:
+                raw = _store.get_fundamentals_raw(
+                    sym, max_age_days=settings.FUNDAMENTALS_REFRESH_DAYS, provider=market
+                ) or {}
+            if not raw:
+                raw = market.get_fundamentals(sym) or {}
+            if raw:
+                fund_dtos[sym] = FundamentalDataDTO.from_raw_dict(sym, raw)
+        except Exception as exc:
+            logger.debug("Fundamentals pre-fetch skipped for %s: %s", sym, exc)
+    logger.info("Pre-fetched fundamentals for %d / %d symbols.", len(fund_dtos), len(symbols))
+    return fund_dtos
+
+
+def _build_realized_vol_60d_map(bars_dict: Dict[str, pd.DataFrame], processing_engine: Any) -> Dict[str, float]:
+    """Per-ticker 60-day annualized realized vol, sourced from
+    ``ProcessingEngine.calculate_momentum_metrics()`` (the SAME formula
+    ``main_orchestrator.py``'s technical pipeline uses) so the multifactor
+    low-volatility factor input is computed identically in both entry points.
+
+    Feeds ``calculate_fundamental_metrics()``'s ``low_vol_score``. Missing or
+    insufficient-history (< 253 rows) tickers are simply absent from the
+    returned map — NaN downstream, never fabricated (CONSTRAINT #4).
+    """
+    realized_vol_60d_map: Dict[str, float] = {}
+    for sym, df in bars_dict.items():
+        try:
+            momentum_df = processing_engine.calculate_momentum_metrics(df.copy())
+            if momentum_df.empty:
+                continue
+            vol = momentum_df["Realized_Vol_60D"].iloc[-1]
+            if pd.notna(vol):
+                realized_vol_60d_map[sym] = float(vol)
+        except Exception as exc:
+            logger.debug("Realized_Vol_60D skipped for %s: %s", sym, exc)
+    return realized_vol_60d_map
+
+
 def _build_context_extras(
     symbols: List[str],
     bars_dict: Dict[str, pd.DataFrame],
     macro_dto: MacroEconomicDTO,
+    market: MarketDataProvider,
 ) -> Dict[str, Any]:
     """Build universe-wide pre-computed signal context for injection into advisory.
 
@@ -473,11 +551,32 @@ def _build_context_extras(
         else:
             xsec_rank_series = pd.Series(dtype=float)
 
+        # ── Step 1b: fundamentals-derived multifactor raw inputs ─────────────
+        # Mirrors main_orchestrator.py's calculate_fundamental_metrics() call so
+        # signals/multifactor.py's Value/Quality/Low-Vol/Size composite gets real
+        # inputs in this (main.py) advisory path too, instead of silently scoring
+        # 0 for every symbol every cycle. Any failure here degrades to an empty
+        # dict (below) rather than aborting the whole pre-compute pass.
+        fund_metrics: Dict[str, Dict[str, Any]] = {}
+        try:
+            from processing_engine import ProcessingEngine
+
+            _pe = ProcessingEngine()
+            realized_vol_60d_map = _build_realized_vol_60d_map(bars_dict, _pe)
+            fund_dtos = _fetch_fundamentals_for_universe(symbols, market)
+            fund_metrics = _pe.calculate_fundamental_metrics(fund_dtos, realized_vol_60d_map)
+        except Exception as exc:
+            logger.warning(
+                "Multifactor raw-input pre-compute failed (%s); "
+                "MultifactorSignal will score 0 for this cycle.", exc,
+            )
+
         # ── Step 2: build a minimal universe DataFrame for pre_compute ────────
         rows = []
         for sym in symbols:
             df = bars_dict.get(sym)
             price = float(df["Close"].iloc[-1]) if df is not None and not df.empty else 0.0
+            fm = fund_metrics.get(sym, {})
             rows.append({
                 "Symbol": sym,
                 "Price": price,
@@ -487,6 +586,12 @@ def _build_context_extras(
                     if sym in xsec_rank_series.index
                     else float("nan")
                 ),
+                "Market Cap": fm.get("Market Cap", float("nan")),
+                "book_to_market": fm.get("book_to_market", float("nan")),
+                "earnings_yield": fm.get("earnings_yield", float("nan")),
+                "quality_factor_score": fm.get("quality_factor_score", float("nan")),
+                "low_vol_score": fm.get("low_vol_score", float("nan")),
+                "log_market_cap": fm.get("log_market_cap", float("nan")),
             })
         universe_df = pd.DataFrame(rows)
 
