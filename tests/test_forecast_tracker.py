@@ -399,3 +399,119 @@ class TestModuleSurface:
     def test_forecast_tracker_importable_from_package(self):
         from forecasting import ForecastTracker as FT  # noqa: F401
         assert FT is ForecastTracker
+
+
+class TestGetForecastReliabilityCurve:
+    """Tests for get_forecast_reliability_curve() -- distinct from
+    evaluation_engine.py's calibration_curve() (conviction-vs-win-rate from
+    closed trades, not forecast accuracy)."""
+
+    def _insert_completed_row(
+        self, tracker, symbol="AAPL", horizon=30, model="arima",
+        forecast_price=100.0, actual_price=100.0,
+    ):
+        """Record a forecast far enough in the past, then actualize it --
+        exercises the real record_forecasts()/update_actuals() API rather
+        than raw SQL, matching this file's existing test conventions."""
+        forecast_ts = datetime.now(timezone.utc) - timedelta(days=horizon + 1)
+        tracker.record_forecasts(symbol, horizon, {model: forecast_price}, forecast_ts)
+        tracker.update_actuals(symbol, horizon, actual_price, datetime.now(timezone.utc))
+
+    def test_hand_computable_curve(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        # 3 rows with a known +10% realized error (actual > forecast) --
+        # (actual - forecast) / actual = (110 - 100) / 110 ~= 0.0909
+        for _ in range(3):
+            self._insert_completed_row(tracker, forecast_price=100.0, actual_price=110.0)
+
+        curve = tracker.get_forecast_reliability_curve(symbol="AAPL", horizon_days=30, min_per_bin=3)
+
+        assert not curve.empty
+        row = curve.iloc[0]
+        assert row["model_name"] == "arima"
+        assert row["horizon_days"] == 30
+        assert row["count"] == 3
+        expected_pct_error = (110.0 - 100.0) / 110.0
+        assert row["mean_pct_error"] == pytest.approx(expected_pct_error, abs=1e-6)
+        assert row["bin_low"] <= expected_pct_error <= row["bin_high"]
+
+    def test_filter_by_symbol(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        for _ in range(3):
+            self._insert_completed_row(tracker, symbol="AAPL")
+        for _ in range(3):
+            self._insert_completed_row(tracker, symbol="MSFT")
+
+        curve = tracker.get_forecast_reliability_curve(symbol="AAPL", min_per_bin=3)
+        assert not curve.empty
+        # Only AAPL rows contributed -- 3, not 6.
+        assert curve["count"].sum() == 3
+
+    def test_filter_by_horizon_days(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        for _ in range(3):
+            self._insert_completed_row(tracker, horizon=30)
+        for _ in range(3):
+            self._insert_completed_row(tracker, horizon=60)
+
+        curve = tracker.get_forecast_reliability_curve(horizon_days=30, min_per_bin=3)
+        assert not curve.empty
+        assert (curve["horizon_days"] == 30).all()
+        assert curve["count"].sum() == 3
+
+    def test_empty_tracker_returns_correct_schema(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        curve = tracker.get_forecast_reliability_curve()
+        assert curve.empty
+        expected_cols = {"model_name", "horizon_days", "bin_low", "bin_high", "bin_center", "mean_pct_error", "count"}
+        assert expected_cols.issubset(set(curve.columns))
+
+    def test_pending_only_rows_return_empty(self, tmp_path):
+        """A forecast recorded but never actualized (actual_price IS NULL)
+        must not appear in the curve."""
+        tracker = _make_tracker(tmp_path)
+        tracker.record_forecasts("AAPL", 30, {"arima": 100.0}, datetime.now(timezone.utc))
+        curve = tracker.get_forecast_reliability_curve()
+        assert curve.empty
+
+    def test_db_error_returns_empty_never_raises(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+
+        def _broken_conn(*a, **kw):
+            raise RuntimeError("simulated DB failure")
+
+        tracker._get_conn = _broken_conn
+        curve = tracker.get_forecast_reliability_curve()
+        assert curve.empty
+
+    def test_sparse_bin_gets_nan_others_unaffected(self, tmp_path):
+        """A bin with fewer than min_per_bin rows gets NaN mean_pct_error
+        (never fabricated -- CONSTRAINT #4), while a well-populated bin in
+        the same result still gets a real value."""
+        tracker = _make_tracker(tmp_path)
+        # Sparse bin: 1 row with a large positive error (~+40%).
+        self._insert_completed_row(tracker, forecast_price=60.0, actual_price=100.0)
+        # Well-populated bin: 3 rows with ~0% error.
+        for _ in range(3):
+            self._insert_completed_row(tracker, forecast_price=100.0, actual_price=100.0)
+
+        curve = tracker.get_forecast_reliability_curve(min_per_bin=3)
+        assert not curve.empty
+
+        sparse_row = curve[curve["count"] == 1]
+        assert not sparse_row.empty
+        assert math.isnan(sparse_row.iloc[0]["mean_pct_error"])
+
+        populated_row = curve[curve["count"] == 3]
+        assert not populated_row.empty
+        assert not math.isnan(populated_row.iloc[0]["mean_pct_error"])
+
+    def test_count_and_horizon_days_are_int(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        for _ in range(3):
+            self._insert_completed_row(tracker, horizon=30)
+
+        curve = tracker.get_forecast_reliability_curve(min_per_bin=3)
+        assert not curve.empty
+        assert curve["count"].dtype.kind in "iu"
+        assert curve["horizon_days"].dtype.kind in "iu"

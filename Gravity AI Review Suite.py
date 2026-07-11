@@ -4489,6 +4489,8 @@ class GravityAIAuditor:
         self.step_88_equity_curve_risk_stats_audit()
         # Rolling beta vs SPY — lookahead-safety audit
         self.step_89_rolling_beta_lookahead_audit()
+        # Forecast reliability curve — ForecastTracker.get_forecast_reliability_curve audit
+        self.step_90_forecast_reliability_curve_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -14560,6 +14562,145 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_89_rolling_beta_lookahead_audit"] = audit
+
+    def step_90_forecast_reliability_curve_audit(self) -> None:
+        """Step 90 — Forecast reliability/calibration curve audit.
+
+        ``ForecastTracker.get_forecast_reliability_curve()`` bins realized
+        percent error per (model_name, horizon_days) group from the
+        ``forecast_errors`` table -- a genuinely distinct concept from
+        ``evaluation_engine.py``'s ``calibration_curve()`` (conviction vs.
+        win-rate from closed trades). This audits that the method is
+        importable, degrades to the correct empty schema on no data, never
+        fabricates a value for a sparse bin, and never raises on a DB error.
+
+        Checks
+        ------
+        1. forecasting/forecast_tracker.py references get_forecast_reliability_curve.
+        2. Method importable/callable on ForecastTracker.
+        3. Empty tracker (no rows) returns the correct empty-schema DataFrame.
+        4. A sparse bin (fewer than min_per_bin rows) yields NaN
+           mean_pct_error, never a fabricated value (CONSTRAINT #4).
+        5. A simulated DB error returns the empty schema, never raises
+           (CONSTRAINT #6).
+        """
+        audit: dict = {
+            "step": "step_90_forecast_reliability_curve_audit",
+            "description": "Forecast reliability/calibration curve (ForecastTracker)",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": bool(passed), "detail": str(detail)})
+            return passed
+
+        try:
+            overall = True
+
+            try:
+                with open("forecasting/forecast_tracker.py", "r", encoding="utf-8") as fh:
+                    src = fh.read()
+                ok1 = "def get_forecast_reliability_curve" in src
+                detail1 = ""
+            except Exception as exc:
+                ok1, detail1 = False, str(exc)
+            overall = _chk(
+                "forecasting/forecast_tracker.py defines get_forecast_reliability_curve",
+                ok1, detail1,
+            ) and overall
+
+            try:
+                from forecasting.forecast_tracker import ForecastTracker
+                ok2 = callable(getattr(ForecastTracker, "get_forecast_reliability_curve", None))
+                detail2 = ""
+            except Exception as exc:
+                ok2, detail2 = False, str(exc)
+            overall = _chk(
+                "ForecastTracker.get_forecast_reliability_curve importable and callable",
+                ok2, detail2,
+            ) and overall
+
+            if ok2:
+                import tempfile as _tempfile90
+                from datetime import datetime as _dt90, timedelta as _td90, timezone as _tz90
+
+                try:
+                    with _tempfile90.TemporaryDirectory() as td:
+                        tracker = ForecastTracker(db_path=f"{td}/gravity_step90.db")
+                        empty_curve = tracker.get_forecast_reliability_curve()
+                        ok3 = (
+                            hasattr(empty_curve, "empty")
+                            and empty_curve.empty
+                            and "mean_pct_error" in empty_curve.columns
+                        )
+                        detail3 = str(list(empty_curve.columns)) if hasattr(empty_curve, "columns") else str(empty_curve)
+                except Exception as exc:
+                    ok3, detail3 = False, str(exc)
+                overall = _chk(
+                    "empty tracker returns correct empty-schema DataFrame", ok3, detail3
+                ) and overall
+
+                try:
+                    import math as _math90
+                    with _tempfile90.TemporaryDirectory() as td2:
+                        tracker2 = ForecastTracker(db_path=f"{td2}/gravity_step90_sparse.db")
+                        now = _dt90.now(_tz90.utc)
+                        # One single completed row -- below any reasonable min_per_bin default.
+                        tracker2.record_forecasts(
+                            "GRVTEST", 30, {"arima": 100.0}, now - _td90(days=31)
+                        )
+                        tracker2.update_actuals("GRVTEST", 30, 101.0, now)
+                        sparse_curve = tracker2.get_forecast_reliability_curve(
+                            symbol="GRVTEST", horizon_days=30, min_per_bin=3
+                        )
+                        if sparse_curve is not None and not sparse_curve.empty:
+                            ok4 = bool(sparse_curve["mean_pct_error"].apply(_math90.isnan).all())
+                        else:
+                            # No rows at all also satisfies "never fabricated" trivially.
+                            ok4 = True
+                        detail4 = str(sparse_curve.to_dict("records")) if sparse_curve is not None else "None"
+                except Exception as exc:
+                    ok4, detail4 = False, str(exc)
+                overall = _chk(
+                    "sparse bin (< min_per_bin rows) yields NaN, never fabricated (CONSTRAINT #4)",
+                    ok4, detail4,
+                ) and overall
+
+                try:
+                    with _tempfile90.TemporaryDirectory() as td3:
+                        tracker3 = ForecastTracker(db_path=f"{td3}/gravity_step90_err.db")
+
+                        def _broken_conn90(*a, **kw):
+                            raise RuntimeError("simulated DB failure")
+
+                        tracker3._get_conn = _broken_conn90  # type: ignore[assignment]
+                        err_curve = tracker3.get_forecast_reliability_curve()
+                        ok5 = hasattr(err_curve, "empty") and err_curve.empty
+                        detail5 = str(err_curve)
+                except Exception as exc:
+                    ok5, detail5 = False, str(exc)
+                overall = _chk(
+                    "simulated DB error returns empty schema, never raises (CONSTRAINT #6)",
+                    ok5, detail5,
+                ) and overall
+            else:
+                _chk("empty tracker returns correct empty-schema DataFrame",
+                     False, "skipped — import failed")
+                _chk("sparse bin (< min_per_bin rows) yields NaN, never fabricated (CONSTRAINT #4)",
+                     False, "skipped — import failed")
+                _chk("simulated DB error returns empty schema, never raises (CONSTRAINT #6)",
+                     False, "skipped — import failed")
+
+            audit["overall_pass"] = overall
+            audit["status"] = "PASSED" if overall else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_90_forecast_reliability_curve_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
