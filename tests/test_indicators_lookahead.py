@@ -88,7 +88,7 @@ def test_chandelier_exit_lookahead(synthetic_ohlcv_data):
 def test_rs_momentum_slope_lookahead(synthetic_ohlcv_data, synthetic_spy_data):
     """Verifies that Relative Strength Momentum Slope has no lookahead bias."""
     research_engine = AdvancedResearchEngine(risk_free_rate=0.04)
-    
+
     def rs_slope_calc(df, t):
         # Extract slices up to t
         asset_closes = df['Close'].iloc[:t+1]
@@ -96,3 +96,33 @@ def test_rs_momentum_slope_lookahead(synthetic_ohlcv_data, synthetic_spy_data):
         return research_engine.calculate_relative_strength_momentum_slope(asset_closes, spy_closes)
 
     assert verify_no_lookahead(rs_slope_calc, synthetic_ohlcv_data, t=50)
+
+
+def test_rolling_beta_lookahead_ticker_perturbation(synthetic_ohlcv_data, synthetic_spy_data):
+    """Verifies calculate_rolling_beta has no lookahead bias when the TICKER
+    series is perturbed after the cutoff (SPY held fixed via closure)."""
+    from processing_engine import calculate_rolling_beta
+
+    def beta_calc(df, t):
+        price_slice = df.iloc[:t + 1]
+        spy_slice = synthetic_spy_data.iloc[:t + 1]
+        beta_series = calculate_rolling_beta(price_slice, spy_slice, window=20)
+        return beta_series.iloc[-1] if not beta_series.empty else np.nan
+
+    assert verify_no_lookahead(beta_calc, synthetic_ohlcv_data, t=50)
+
+
+def test_rolling_beta_lookahead_spy_perturbation(synthetic_ohlcv_data, synthetic_spy_data):
+    """Verifies calculate_rolling_beta has no lookahead bias when the SPY
+    series itself is perturbed after the cutoff (ticker held fixed via
+    closure) -- the mirror case of the ticker-perturbation test above,
+    since beta depends on BOTH series and either one could leak the future."""
+    from processing_engine import calculate_rolling_beta
+
+    def beta_calc_spy_perturbed(spy_df, t):
+        price_slice = synthetic_ohlcv_data.iloc[:t + 1]
+        spy_slice = spy_df.iloc[:t + 1]
+        beta_series = calculate_rolling_beta(price_slice, spy_slice, window=20)
+        return beta_series.iloc[-1] if not beta_series.empty else np.nan
+
+    assert verify_no_lookahead(beta_calc_spy_perturbed, synthetic_spy_data, t=50)
