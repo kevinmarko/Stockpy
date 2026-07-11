@@ -413,6 +413,77 @@ def _render_recent_alerts() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section (d) — Rolling Beta vs SPY
+# ---------------------------------------------------------------------------
+
+
+def _render_rolling_beta_chart(snap: Dict[str, Any]) -> None:
+    """On-demand rolling-beta chart: a symbol's time-varying beta vs SPY,
+    computed from HistoricalStore-cached bars (DB-first, matching the
+    platform's established bars-fetch convention).
+
+    Distinct from the existing static point-in-time ``Beta`` column
+    (config.COLUMN_SCHEMA) -- this shows how beta DRIFTS over time rather
+    than a single snapshot. Not persisted as its own DB table; computed
+    on-demand from whatever bars are already cached.
+    """
+    from gui.panels._shared import _active_symbols
+
+    st.markdown("### 📉 Rolling Beta vs SPY")
+    st.caption(
+        "Time-varying beta (rolling covariance/variance vs SPY), distinct "
+        "from the single point-in-time `Beta` column elsewhere in the "
+        "platform. Computed on demand from cached price history."
+    )
+
+    universe = _active_symbols(snap)
+    if not universe:
+        st.info("No symbols available (no holdings, watchlist, or recent signals).")
+        return
+
+    c1, c2 = st.columns([3, 1])
+    symbol = c1.selectbox("Symbol", options=universe, key="analytics_rolling_beta_symbol")
+    window = c2.number_input(
+        "Window (days)", min_value=10, max_value=252, value=60, step=10,
+        key="analytics_rolling_beta_window",
+    )
+
+    if not st.button("Compute Rolling Beta", key="analytics_rolling_beta_button"):
+        return
+
+    try:
+        from data.historical_store import HistoricalStore
+        from processing_engine import calculate_rolling_beta
+
+        store = HistoricalStore()
+        price_df = store.get_bars(symbol, lookback_days=max(504, int(window) * 3))
+        spy_df = store.get_bars("SPY", lookback_days=max(504, int(window) * 3))
+
+        if price_df is None or price_df.empty or spy_df is None or spy_df.empty:
+            st.info(f"Insufficient cached bars for {symbol} or SPY yet.")
+            return
+
+        beta_series = calculate_rolling_beta(price_df, spy_df, window=int(window))
+        beta_series = beta_series.dropna()
+
+        if beta_series.empty:
+            st.info(
+                f"Not enough overlapping history to compute a {window}-day "
+                f"rolling beta for {symbol} yet."
+            )
+            return
+
+        st.line_chart(beta_series)
+        st.caption(
+            f"Latest {window}-day rolling beta for {symbol}: "
+            f"{beta_series.iloc[-1]:.2f} (as of {beta_series.index[-1].date()})."
+        )
+    except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
+        logger.debug("rolling beta chart failed for %s: %s", symbol, exc)
+        st.caption(f"(rolling beta unavailable: {exc})")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -421,10 +492,10 @@ def render_analytics() -> None:
     """Render the 📊 Analytics tab.
 
     Sections (a) Broker Realized Performance, (b) Account Value Equity Curve,
-    (c) Recent Alerts Feed — then delegates to the sibling
-    ``gui.panels.analytics_signals`` panels (ML registry / news sentiment /
-    slippage & CoVaR). The sibling delegation is guarded so this tab still
-    renders its three own sections even if that module is absent.
+    (c) Recent Alerts Feed, (d) Rolling Beta vs SPY — then delegates to the
+    sibling ``gui.panels.analytics_signals`` panels (ML registry / news
+    sentiment / slippage & CoVaR). The sibling delegation is guarded so this
+    tab still renders its own sections even if that module is absent.
     """
     help_widgets.explain("analytics")
     st.subheader("📊 Analytics")
@@ -441,6 +512,8 @@ def render_analytics() -> None:
     _render_account_equity_curve()
     st.divider()
     _render_recent_alerts()
+    st.divider()
+    _render_rolling_beta_chart(snap)
 
     # ── Sibling signals-analytics panels (Agent C's module) ──────────────────
     try:

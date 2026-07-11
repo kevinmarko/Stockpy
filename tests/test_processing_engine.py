@@ -436,3 +436,85 @@ class TestCompileDashboard:
         fund = {"FUND_ONLY": {"Price_Fund": 75.0}}
         df = engine.compile_dashboard(tech, fund, {"Regime": "NEUTRAL"})
         assert set(df["Symbol"]) == {"TECH_ONLY", "FUND_ONLY"}
+
+
+class TestCalculateRollingBeta:
+    """Tests for the module-level calculate_rolling_beta() -- rolling
+    Cov(returns, spy_returns)/Var(spy_returns), distinct from the existing
+    static point-in-time Beta column."""
+
+    def _mk_price_df(self, closes):
+        dates = pd.date_range("2026-01-01", periods=len(closes))
+        return pd.DataFrame({"Close": closes}, index=dates)
+
+    def test_known_beta_hand_computed(self):
+        """A ticker whose daily returns are a known linear function of SPY's
+        (return = 2 * spy_return) should yield a rolling beta of ~2.0 once
+        the window fills."""
+        from processing_engine import calculate_rolling_beta
+
+        n = 80
+        rng = np.random.RandomState(7)
+        spy_rets = rng.normal(0.0005, 0.01, n)
+        spy_closes = 400.0 * np.cumprod(1.0 + np.concatenate([[0.0], spy_rets]))
+        ticker_rets = 2.0 * spy_rets
+        ticker_closes = 100.0 * np.cumprod(1.0 + np.concatenate([[0.0], ticker_rets]))
+
+        price_df = self._mk_price_df(ticker_closes)
+        spy_df = self._mk_price_df(spy_closes)
+
+        beta = calculate_rolling_beta(price_df, spy_df, window=30)
+        assert not beta.empty
+        # Last value should be very close to 2.0 (exact linear relationship).
+        assert beta.iloc[-1] == pytest.approx(2.0, abs=1e-6)
+
+    def test_insufficient_history_returns_nan_series(self):
+        from processing_engine import calculate_rolling_beta
+
+        price_df = self._mk_price_df([100.0 + i for i in range(10)])
+        spy_df = self._mk_price_df([400.0 + i for i in range(10)])
+
+        beta = calculate_rolling_beta(price_df, spy_df, window=60)
+        # Fewer rows than the window -- every value NaN, never fabricated.
+        assert beta.isna().all()
+
+    def test_misaligned_index_restricts_to_overlap(self):
+        from processing_engine import calculate_rolling_beta
+
+        dates_a = pd.date_range("2026-01-01", periods=80)
+        dates_b = pd.date_range("2026-02-01", periods=80)  # only partial overlap
+        price_df = pd.DataFrame({"Close": 100.0 + np.arange(80)}, index=dates_a)
+        spy_df = pd.DataFrame({"Close": 400.0 + np.arange(80)}, index=dates_b)
+
+        beta = calculate_rolling_beta(price_df, spy_df, window=20)
+        overlap_len = len(dates_a.intersection(dates_b))
+        assert len(beta) == overlap_len
+
+    def test_empty_or_missing_close_returns_empty_series(self):
+        from processing_engine import calculate_rolling_beta
+
+        empty_df = pd.DataFrame()
+        valid_df = self._mk_price_df([100.0 + i for i in range(80)])
+
+        assert calculate_rolling_beta(empty_df, valid_df).empty
+        assert calculate_rolling_beta(valid_df, empty_df).empty
+
+        no_close_df = pd.DataFrame({"Open": [1.0, 2.0]}, index=pd.date_range("2026-01-01", periods=2))
+        assert calculate_rolling_beta(no_close_df, valid_df).empty
+        assert calculate_rolling_beta(valid_df, no_close_df).empty
+
+    def test_zero_variance_spy_window_yields_nan_not_crash(self):
+        """A window where SPY is perfectly flat (Var=0) must degrade to NaN
+        for that window via pandas' natural division behavior, not crash."""
+        from processing_engine import calculate_rolling_beta
+
+        n = 80
+        price_df = self._mk_price_df(100.0 + np.random.RandomState(1).normal(0, 1, n).cumsum())
+        spy_df = self._mk_price_df([400.0] * n)  # perfectly flat
+
+        beta = calculate_rolling_beta(price_df, spy_df, window=20)
+        assert not beta.empty
+        # All defined-window values should be NaN or inf (0/0 or x/0), never
+        # a fabricated finite number that pretends to be a real beta.
+        tail = beta.iloc[20:]
+        assert tail.apply(lambda v: pd.isna(v) or np.isinf(v)).all()

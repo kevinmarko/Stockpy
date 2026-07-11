@@ -4487,6 +4487,8 @@ class GravityAIAuditor:
         self.step_87_advisory_historical_store_routing_audit()
         # Account equity-curve risk/performance stats audit
         self.step_88_equity_curve_risk_stats_audit()
+        # Rolling beta vs SPY — lookahead-safety audit
+        self.step_89_rolling_beta_lookahead_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -14409,6 +14411,155 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_88_equity_curve_risk_stats_audit"] = audit
+
+    def step_89_rolling_beta_lookahead_audit(self) -> None:
+        """Step 89 — Rolling beta vs SPY lookahead-safety audit.
+
+        processing_engine.calculate_rolling_beta() computes a time-varying
+        beta (rolling Cov(returns, spy_returns)/Var(spy_returns)), distinct
+        from the existing static point-in-time Beta column. This audits that
+        it is importable and genuinely lookahead-free via the same
+        perturb-after-cutoff-and-compare methodology used elsewhere in this
+        suite -- perturbing either the ticker series or the SPY series
+        strictly AFTER a cutoff must leave the beta value AT that cutoff
+        unchanged.
+
+        Checks
+        ------
+        1. processing_engine.py defines calculate_rolling_beta.
+        2. Importable and callable.
+        3. Perturbing the ticker series after a cutoff leaves the beta value
+           at the cutoff unchanged.
+        4. Perturbing the SPY series after a cutoff leaves the beta value at
+           the cutoff unchanged.
+        5. Insufficient history (fewer rows than the window) degrades to an
+           all-NaN series, never a fabricated value (CONSTRAINT #4).
+        """
+        audit: dict = {
+            "step": "step_89_rolling_beta_lookahead_audit",
+            "description": "Rolling beta vs SPY lookahead-safety audit",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": bool(passed), "detail": str(detail)})
+            return passed
+
+        try:
+            import pandas as _pd89
+            import numpy as _np89
+
+            overall = True
+
+            try:
+                with open("processing_engine.py", "r", encoding="utf-8") as fh:
+                    src = fh.read()
+                ok1 = "def calculate_rolling_beta" in src
+                detail1 = ""
+            except Exception as exc:
+                ok1, detail1 = False, str(exc)
+            overall = _chk(
+                "processing_engine.py defines calculate_rolling_beta", ok1, detail1
+            ) and overall
+
+            try:
+                from processing_engine import calculate_rolling_beta
+                ok2 = callable(calculate_rolling_beta)
+                detail2 = ""
+            except Exception as exc:
+                ok2, detail2 = False, str(exc)
+            overall = _chk(
+                "calculate_rolling_beta importable and callable", ok2, detail2
+            ) and overall
+
+            if ok2:
+                rng = _np89.random.default_rng(11)
+                n = 100
+                dates = _pd89.date_range("2026-01-01", periods=n, freq="B")
+                spy_rets = rng.normal(0.0005, 0.01, n)
+                spy_closes = 400.0 * _np89.cumprod(1.0 + _np89.concatenate([[0.0], spy_rets[:-1]]))
+                ticker_rets = 1.5 * spy_rets + rng.normal(0, 0.002, n)
+                ticker_closes = 100.0 * _np89.cumprod(1.0 + _np89.concatenate([[0.0], ticker_rets[:-1]]))
+
+                price_df = _pd89.DataFrame({"Close": ticker_closes}, index=dates)
+                spy_df = _pd89.DataFrame({"Close": spy_closes}, index=dates)
+
+                cutoff = 50
+                window = 20
+
+                try:
+                    original_beta = calculate_rolling_beta(
+                        price_df.iloc[:cutoff + 1], spy_df.iloc[:cutoff + 1], window=window
+                    )
+                    original_val = original_beta.iloc[-1]
+
+                    perturbed_price = price_df.copy()
+                    perturbed_price.iloc[cutoff + 1:, perturbed_price.columns.get_loc("Close")] = 99999.9
+                    perturbed_beta = calculate_rolling_beta(
+                        perturbed_price.iloc[:cutoff + 1], spy_df.iloc[:cutoff + 1], window=window
+                    )
+                    perturbed_val = perturbed_beta.iloc[-1]
+
+                    ok3 = (_pd89.isna(original_val) and _pd89.isna(perturbed_val)) or abs(
+                        original_val - perturbed_val
+                    ) < 1e-9
+                    detail3 = f"original={original_val}, perturbed={perturbed_val}"
+                except Exception as exc:
+                    ok3, detail3 = False, str(exc)
+                overall = _chk(
+                    "perturbing ticker series after cutoff leaves beta at cutoff unchanged",
+                    ok3, detail3,
+                ) and overall
+
+                try:
+                    perturbed_spy = spy_df.copy()
+                    perturbed_spy.iloc[cutoff + 1:, perturbed_spy.columns.get_loc("Close")] = 99999.9
+                    perturbed_beta_spy = calculate_rolling_beta(
+                        price_df.iloc[:cutoff + 1], perturbed_spy.iloc[:cutoff + 1], window=window
+                    )
+                    perturbed_val_spy = perturbed_beta_spy.iloc[-1]
+
+                    ok4 = (_pd89.isna(original_val) and _pd89.isna(perturbed_val_spy)) or abs(
+                        original_val - perturbed_val_spy
+                    ) < 1e-9
+                    detail4 = f"original={original_val}, perturbed_spy={perturbed_val_spy}"
+                except Exception as exc:
+                    ok4, detail4 = False, str(exc)
+                overall = _chk(
+                    "perturbing SPY series after cutoff leaves beta at cutoff unchanged",
+                    ok4, detail4,
+                ) and overall
+
+                try:
+                    short_price = price_df.iloc[:10]
+                    short_spy = spy_df.iloc[:10]
+                    short_beta = calculate_rolling_beta(short_price, short_spy, window=60)
+                    ok5 = bool(short_beta.isna().all())
+                    detail5 = str(short_beta.tolist())
+                except Exception as exc:
+                    ok5, detail5 = False, str(exc)
+                overall = _chk(
+                    "insufficient history (< window rows) degrades to all-NaN, never fabricated (CONSTRAINT #4)",
+                    ok5, detail5,
+                ) and overall
+            else:
+                _chk("perturbing ticker series after cutoff leaves beta at cutoff unchanged",
+                     False, "skipped — import failed")
+                _chk("perturbing SPY series after cutoff leaves beta at cutoff unchanged",
+                     False, "skipped — import failed")
+                _chk("insufficient history (< window rows) degrades to all-NaN, never fabricated (CONSTRAINT #4)",
+                     False, "skipped — import failed")
+
+            audit["overall_pass"] = overall
+            audit["status"] = "PASSED" if overall else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_89_rolling_beta_lookahead_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

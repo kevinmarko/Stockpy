@@ -608,3 +608,62 @@ class ProcessingEngine:
         )
 
         return df
+
+
+def calculate_rolling_beta(
+    price_df: pd.DataFrame,
+    spy_df: pd.DataFrame,
+    window: int = 60,
+) -> pd.Series:
+    """Rolling window beta of a ticker vs SPY: Cov(returns, spy_returns) / Var(spy_returns).
+
+    Distinct from the existing STATIC single-window beta (data/yahoo_fundamentals.py,
+    surfaced as config.COLUMN_SCHEMA's ``Beta`` column) -- this exposes how beta
+    DRIFTS over time rather than a single point-in-time snapshot.
+
+    Args:
+        price_df: Must have a 'Close' column and a DatetimeIndex (same shape
+            contract as DataEngine.fetch_technical_raw() / HistoricalStore.get_bars()).
+        spy_df: Same shape, SPY's own OHLCV history, aligned to price_df by
+            date (inner join -- dates missing from either side are dropped,
+            never fabricated/forward-filled -- CONSTRAINT #4).
+        window: Rolling window size in trading days (default 60).
+
+    Returns:
+        pd.Series indexed like the aligned data. Each value uses ONLY data up
+        to and including that date (``.rolling(window)`` at row i sees only
+        rows [i-window+1, i], so this is lookahead-free by construction --
+        verified by tests/test_indicators_lookahead.py's perturbation test).
+        The first `window` rows are NaN (insufficient history), never a
+        fabricated 0.0 or forward-filled value. Returns an empty Series if
+        either input is empty/missing 'Close', or if the aligned overlap has
+        fewer than `window` rows (CONSTRAINT #6 -- never raises).
+    """
+    try:
+        if (
+            price_df is None or price_df.empty or "Close" not in price_df.columns
+            or spy_df is None or spy_df.empty or "Close" not in spy_df.columns
+        ):
+            return pd.Series(dtype=float)
+
+        aligned = pd.concat(
+            [price_df["Close"].rename("ticker"), spy_df["Close"].rename("spy")],
+            axis=1,
+            join="inner",
+        ).sort_index()
+
+        if len(aligned) < window:
+            return pd.Series(dtype=float, index=aligned.index)
+
+        returns = aligned["ticker"].pct_change()
+        spy_returns = aligned["spy"].pct_change()
+
+        rolling_cov = returns.rolling(window).cov(spy_returns)
+        rolling_var = spy_returns.rolling(window).var()
+        beta = rolling_cov / rolling_var
+        beta.name = "Rolling_Beta"
+        return beta
+
+    except Exception as exc:
+        logging.warning("calculate_rolling_beta failed: %s", exc)
+        return pd.Series(dtype=float)
