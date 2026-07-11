@@ -45,8 +45,10 @@ from data.robinhood_portfolio import (  # noqa: E402
     _fetch_live_snapshot,
     _read_cache,
     _write_cache,
+    account_snapshot_to_robinhood_positions,
     fetch_account_snapshot,
 )
+from dto_models import RobinhoodPositionDTO  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -824,3 +826,91 @@ class TestDBIntegration:
         assert result is not None, "Expected JSON fallback to succeed"
         assert result.buying_power == pytest.approx(fresh.buying_power)
         assert result.total_equity == pytest.approx(fresh.total_equity)
+
+
+# ---------------------------------------------------------------------------
+# account_snapshot_to_robinhood_positions — RobinhoodPositionDTO adapter
+# ---------------------------------------------------------------------------
+
+class TestAccountSnapshotToRobinhoodPositions:
+    """Pure field-mapping adapter: AccountSnapshot.positions -> RobinhoodPositionDTO.
+
+    Verifies quantity->shares and dividends_received->total_dividends are not
+    swapped, empty/None inputs degrade to {} without raising, and dict keys
+    match the input ticker symbols exactly.
+    """
+
+    def _make_multi_snapshot(self) -> AccountSnapshot:
+        aapl = _make_position(
+            symbol="AAPL", quantity=10.0, average_cost=150.0,
+            current_price=180.0, dividends_received=5.0,
+        )
+        msft = _make_position(
+            symbol="MSFT", quantity=5.0, average_cost=300.0,
+            current_price=420.0, dividends_received=12.5,
+        )
+        tsla = _make_position(
+            symbol="TSLA", quantity=2.0, average_cost=200.0,
+            current_price=250.0, dividends_received=0.0,
+        )
+        return AccountSnapshot(
+            positions={"AAPL": aapl, "MSFT": msft, "TSLA": tsla},
+            buying_power=1000.0,
+            total_equity=5000.0,
+            total_dividends=17.5,
+            fetched_at=datetime.now(timezone.utc),
+        )
+
+    def test_multi_position_field_mapping(self) -> None:
+        snap = self._make_multi_snapshot()
+        result = account_snapshot_to_robinhood_positions(snap)
+
+        assert set(result.keys()) == {"AAPL", "MSFT", "TSLA"}
+
+        aapl_dto = result["AAPL"]
+        assert isinstance(aapl_dto, RobinhoodPositionDTO)
+        assert aapl_dto.ticker == "AAPL"
+        assert aapl_dto.shares == pytest.approx(10.0)
+        assert aapl_dto.average_cost == pytest.approx(150.0)
+        assert aapl_dto.total_dividends == pytest.approx(5.0)
+
+        msft_dto = result["MSFT"]
+        assert msft_dto.shares == pytest.approx(5.0)
+        assert msft_dto.average_cost == pytest.approx(300.0)
+        assert msft_dto.total_dividends == pytest.approx(12.5)
+
+        tsla_dto = result["TSLA"]
+        assert tsla_dto.shares == pytest.approx(2.0)
+        assert tsla_dto.total_dividends == pytest.approx(0.0)
+
+    def test_quantity_and_dividends_not_swapped(self) -> None:
+        """Distinct quantity/dividends values catch an accidental field swap."""
+        pos = _make_position(
+            symbol="JNJ", quantity=42.0, average_cost=100.0,
+            current_price=110.0, dividends_received=7.0,
+        )
+        snap = AccountSnapshot(
+            positions={"JNJ": pos}, buying_power=0.0, total_equity=0.0,
+            total_dividends=7.0, fetched_at=datetime.now(timezone.utc),
+        )
+        dto = account_snapshot_to_robinhood_positions(snap)["JNJ"]
+        assert dto.shares == pytest.approx(42.0)
+        assert dto.total_dividends == pytest.approx(7.0)
+        assert dto.shares != dto.total_dividends
+
+    def test_empty_positions_returns_empty_dict(self) -> None:
+        snap = AccountSnapshot(
+            positions={}, buying_power=0.0, total_equity=0.0,
+            total_dividends=0.0, fetched_at=datetime.now(timezone.utc),
+        )
+        assert account_snapshot_to_robinhood_positions(snap) == {}
+
+    def test_none_snapshot_returns_empty_dict(self) -> None:
+        assert account_snapshot_to_robinhood_positions(None) == {}
+
+    def test_keys_match_ticker_symbols_exactly(self) -> None:
+        snap = self._make_multi_snapshot()
+        result = account_snapshot_to_robinhood_positions(snap)
+        for symbol, dto in result.items():
+            assert symbol == dto.ticker
+            assert symbol == symbol.upper()

@@ -396,11 +396,7 @@ class TestMainOrchestratorProgressFatalPath:
         monkeypatch.setattr(mo.os.path, "exists", lambda p: False)
         monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path)
 
-        class _NoLoginClient:
-            def login(self):
-                return False
-
-        monkeypatch.setattr(mo, "RobinhoodClient", lambda *a, **k: _NoLoginClient())
+        monkeypatch.setattr(mo, "fetch_account_snapshot", lambda: None)
 
         async def _boom(*_a, **_k):
             raise RuntimeError("simulated network collapse")

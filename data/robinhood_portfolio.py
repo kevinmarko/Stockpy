@@ -42,6 +42,8 @@ from typing import Optional
 import pyotp
 import robin_stocks.robinhood as r
 
+from dto_models import RobinhoodPositionDTO
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -491,6 +493,36 @@ def fetch_account_snapshot(
             return cached
         # No cache and no live data — propagate so the caller can handle it.
         raise
+
+
+def account_snapshot_to_robinhood_positions(
+    snapshot: Optional[AccountSnapshot],
+) -> dict[str, RobinhoodPositionDTO]:
+    """Convert an AccountSnapshot's positions into the RobinhoodPositionDTO shape
+    that main_orchestrator.py's run_pipeline(robinhood_positions=...) parameter
+    expects (dto_models.RobinhoodPositionDTO: ticker, shares, average_cost,
+    total_dividends).
+
+    This is a pure field-mapping adapter -- no network calls, no fabrication:
+    quantity -> shares, average_cost -> average_cost (both already USD/per-share
+    in PortfolioPosition), dividends_received -> total_dividends. Returns an
+    empty dict for an empty/None snapshot (never raises -- CONSTRAINT #6).
+    """
+    try:
+        if snapshot is None or not snapshot.positions:
+            return {}
+        return {
+            symbol: RobinhoodPositionDTO(
+                ticker=symbol,
+                shares=pos.quantity,
+                average_cost=pos.average_cost,
+                total_dividends=pos.dividends_received,
+            )
+            for symbol, pos in snapshot.positions.items()
+        }
+    except Exception as exc:
+        logger.warning("account_snapshot_to_robinhood_positions failed: %s", exc)
+        return {}
 
 
 def logout() -> None:

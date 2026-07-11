@@ -27,11 +27,6 @@ import pytest
 import main_orchestrator as mo
 
 
-class _NoLoginClient:
-    def login(self):
-        return False
-
-
 class _FakeDataEngine:
     """A trivial stand-in for a pre-built, warm data provider."""
 
@@ -54,7 +49,7 @@ def _inactive_kill_switch():
 class TestDataEngineInjection:
     def test_injected_data_engine_bypasses_credentials_check(self, monkeypatch) -> None:
         fake_de = _FakeDataEngine()
-        monkeypatch.setattr(mo, "RobinhoodClient", lambda *a, **k: _NoLoginClient())
+        monkeypatch.setattr(mo, "fetch_account_snapshot", lambda: None)
         monkeypatch.setattr(mo, "fetch_all_data_async", _ok_fetch_factory())
         monkeypatch.setattr(mo, "GlobalKillSwitch", lambda *a, **k: _inactive_kill_switch())
         monkeypatch.setattr(mo.settings, "DEFAULT_TICKERS", ["AAPL"], raising=False)
@@ -92,7 +87,7 @@ class TestDataEngineInjection:
     def test_no_injection_preserves_credentials_check(self, monkeypatch) -> None:
         # Force the credentials-absent branch; MockDataEngine + ["AAPL"] path.
         monkeypatch.setattr(mo.os.path, "exists", lambda p: False)
-        monkeypatch.setattr(mo, "RobinhoodClient", lambda *a, **k: _NoLoginClient())
+        monkeypatch.setattr(mo, "fetch_account_snapshot", lambda: None)
         monkeypatch.setattr(mo, "fetch_all_data_async", _ok_fetch_factory())
         monkeypatch.setattr(mo, "GlobalKillSwitch", lambda *a, **k: _inactive_kill_switch())
 
@@ -117,7 +112,7 @@ class TestEngineContextThreading:
     def test_engines_arg_passed_through_to_run_pipeline(self, monkeypatch) -> None:
         ctx = mo.EngineContext()  # empty context is enough to prove identity threading
         monkeypatch.setattr(mo.os.path, "exists", lambda p: False)
-        monkeypatch.setattr(mo, "RobinhoodClient", lambda *a, **k: _NoLoginClient())
+        monkeypatch.setattr(mo, "fetch_account_snapshot", lambda: None)
         monkeypatch.setattr(mo, "fetch_all_data_async", _ok_fetch_factory())
         monkeypatch.setattr(mo, "GlobalKillSwitch", lambda *a, **k: _inactive_kill_switch())
 
