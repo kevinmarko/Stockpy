@@ -35,11 +35,9 @@ class TestMainBodyFatalPaths:
         # the concurrent fetch blow up -> the data-fetch except clause fires.
         monkeypatch.setattr(mo.os.path, "exists", lambda p: False)
 
-        class _NoLoginClient:
-            def login(self):
-                return False
-
-        monkeypatch.setattr(mo, "RobinhoodClient", lambda *a, **k: _NoLoginClient())
+        # No cached/live Robinhood account snapshot available -- the adapter
+        # degrades a None snapshot to {} positions (dead-letter, CONSTRAINT #6).
+        monkeypatch.setattr(mo, "fetch_account_snapshot", lambda: None)
 
         async def _boom(*_a, **_k):
             raise RuntimeError("simulated network collapse")
@@ -52,11 +50,9 @@ class TestMainBodyFatalPaths:
     def test_pipeline_crash_raises_pipeline_fatal(self, monkeypatch) -> None:
         monkeypatch.setattr(mo.os.path, "exists", lambda p: False)
 
-        class _NoLoginClient:
-            def login(self):
-                return False
-
-        monkeypatch.setattr(mo, "RobinhoodClient", lambda *a, **k: _NoLoginClient())
+        # No cached/live Robinhood account snapshot available -- the adapter
+        # degrades a None snapshot to {} positions (dead-letter, CONSTRAINT #6).
+        monkeypatch.setattr(mo, "fetch_account_snapshot", lambda: None)
 
         # Fetch succeeds with non-empty data so we skip the empty-fallback and
         # reach run_pipeline...

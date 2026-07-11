@@ -4491,6 +4491,8 @@ class GravityAIAuditor:
         self.step_89_rolling_beta_lookahead_audit()
         # Forecast reliability curve — ForecastTracker.get_forecast_reliability_curve audit
         self.step_90_forecast_reliability_curve_audit()
+        # Robinhood account-snapshot cache adapter + orchestrator call-site wiring audit
+        self.step_91_robinhood_account_cache_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -14701,6 +14703,190 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_90_forecast_reliability_curve_audit"] = audit
+
+    def step_91_robinhood_account_cache_audit(self) -> None:
+        """Step 91 — Robinhood account-snapshot cache adapter audit.
+
+        ``main_orchestrator.py`` previously fetched Robinhood positions via a
+        fresh, uncached ``RobinhoodClient().login()`` + ``.fetch_positions()``
+        call every cycle -- unlike ``main.py``, which already routes through
+        ``data.robinhood_portfolio.fetch_account_snapshot()``'s three-tier
+        DB->JSON->live cache. This closes that gap: the orchestrator now
+        calls ``fetch_account_snapshot()`` and converts the result via the
+        new ``account_snapshot_to_robinhood_positions()`` adapter. This audits
+        the adapter's field-mapping correctness, its dead-letter behavior on
+        an empty/None snapshot, and that the orchestrator call site was
+        actually swapped (old import removed, new function referenced).
+
+        Checks
+        ------
+        1. data/robinhood_portfolio.py defines account_snapshot_to_robinhood_positions.
+        2. The function is importable and callable.
+        3. Functional: a synthetic AccountSnapshot with positions maps
+           correctly to RobinhoodPositionDTO (shares==quantity,
+           total_dividends==dividends_received).
+        4. An empty/None snapshot returns {} -- never fabricated, never raises
+           (CONSTRAINT #6).
+        5. main_orchestrator.py no longer references RobinhoodClient (dead
+           import removed) AND references account_snapshot_to_robinhood_positions
+           (new call site wired in).
+        """
+        audit: dict = {
+            "step": "step_91_robinhood_account_cache_audit",
+            "description": "Robinhood account-snapshot cache adapter + orchestrator wiring",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": bool(passed), "detail": str(detail)})
+            return passed
+
+        try:
+            overall = True
+
+            try:
+                with open("data/robinhood_portfolio.py", "r", encoding="utf-8") as fh:
+                    rh_src = fh.read()
+                ok1 = "def account_snapshot_to_robinhood_positions" in rh_src
+                detail1 = ""
+            except Exception as exc:
+                ok1, detail1 = False, str(exc)
+            overall = _chk(
+                "data/robinhood_portfolio.py defines account_snapshot_to_robinhood_positions",
+                ok1, detail1,
+            ) and overall
+
+            try:
+                from data.robinhood_portfolio import account_snapshot_to_robinhood_positions
+                ok2 = callable(account_snapshot_to_robinhood_positions)
+                detail2 = ""
+            except Exception as exc:
+                ok2, detail2 = False, str(exc)
+            overall = _chk(
+                "account_snapshot_to_robinhood_positions importable and callable",
+                ok2, detail2,
+            ) and overall
+
+            if ok2:
+                try:
+                    from datetime import datetime as _dt91, timezone as _tz91
+                    from data.robinhood_portfolio import AccountSnapshot, PortfolioPosition
+
+                    pos_aapl = PortfolioPosition(
+                        symbol="AAPL",
+                        quantity=10.0,
+                        average_cost=150.0,
+                        current_price=180.0,
+                        market_value=1800.0,
+                        unrealized_pl=300.0,
+                        unrealized_pl_pct=20.0,
+                        dividends_received=12.5,
+                        name="Apple Inc.",
+                    )
+                    pos_msft = PortfolioPosition(
+                        symbol="MSFT",
+                        quantity=5.0,
+                        average_cost=300.0,
+                        current_price=320.0,
+                        market_value=1600.0,
+                        unrealized_pl=100.0,
+                        unrealized_pl_pct=6.67,
+                        dividends_received=0.0,
+                        name="Microsoft Corp.",
+                    )
+                    snap = AccountSnapshot(
+                        positions={"AAPL": pos_aapl, "MSFT": pos_msft},
+                        buying_power=500.0,
+                        total_equity=3400.0,
+                        total_dividends=12.5,
+                        fetched_at=_dt91.now(_tz91.utc),
+                    )
+                    dto_map = account_snapshot_to_robinhood_positions(snap)
+                    ok3 = (
+                        isinstance(dto_map, dict)
+                        and "AAPL" in dto_map
+                        and getattr(dto_map["AAPL"], "shares", None) == 10.0
+                        and getattr(dto_map["AAPL"], "average_cost", None) == 150.0
+                        and getattr(dto_map["AAPL"], "total_dividends", None) == 12.5
+                        and "MSFT" in dto_map
+                        and getattr(dto_map["MSFT"], "shares", None) == 5.0
+                    )
+                    detail3 = str({k: getattr(v, "__dict__", v) for k, v in dto_map.items()}) if isinstance(dto_map, dict) else str(dto_map)
+                except Exception as exc:
+                    ok3, detail3 = False, str(exc)
+                overall = _chk(
+                    "synthetic snapshot maps to correct RobinhoodPositionDTO fields "
+                    "(shares==quantity, total_dividends==dividends_received)",
+                    ok3, detail3,
+                ) and overall
+
+                try:
+                    empty_map_none = account_snapshot_to_robinhood_positions(None)
+                    empty_map_empty = account_snapshot_to_robinhood_positions(
+                        AccountSnapshot(
+                            positions={},
+                            buying_power=0.0,
+                            total_equity=0.0,
+                            total_dividends=0.0,
+                            fetched_at=_dt91.now(_tz91.utc),
+                        )
+                    )
+                    ok4 = empty_map_none == {} and empty_map_empty == {}
+                    detail4 = f"None->{empty_map_none!r}, empty->{empty_map_empty!r}"
+                except Exception as exc:
+                    ok4, detail4 = False, str(exc)
+                overall = _chk(
+                    "empty/None snapshot returns {} -- never fabricated, never raises (CONSTRAINT #6)",
+                    ok4, detail4,
+                ) and overall
+            else:
+                _chk(
+                    "synthetic snapshot maps to correct RobinhoodPositionDTO fields "
+                    "(shares==quantity, total_dividends==dividends_received)",
+                    False, "skipped — import failed",
+                )
+                _chk(
+                    "empty/None snapshot returns {} -- never fabricated, never raises (CONSTRAINT #6)",
+                    False, "skipped — import failed",
+                )
+
+            try:
+                with open("main_orchestrator.py", "r", encoding="utf-8") as fh:
+                    orch_src = fh.read()
+                # Ignore comment-only mentions of the old class name (e.g. a
+                # "replaces the old RobinhoodClient() call" explanatory note) --
+                # what actually matters is that the import/instantiation is gone.
+                _code_only = "\n".join(
+                    ln for ln in orch_src.splitlines() if not ln.strip().startswith("#")
+                )
+                no_rh_import = "from data.robinhood_client import RobinhoodClient" not in orch_src
+                no_rh_usage = "RobinhoodClient" not in _code_only
+                no_rh_client = no_rh_import and no_rh_usage
+                has_new_call = "account_snapshot_to_robinhood_positions" in orch_src
+                ok5 = no_rh_client and has_new_call
+                detail5 = (
+                    f"RobinhoodClient import present: {not no_rh_import}; "
+                    f"RobinhoodClient live usage present: {not no_rh_usage}; "
+                    f"account_snapshot_to_robinhood_positions referenced: {has_new_call}"
+                )
+            except Exception as exc:
+                ok5, detail5 = False, str(exc)
+            overall = _chk(
+                "main_orchestrator.py has dropped RobinhoodClient and wired in "
+                "account_snapshot_to_robinhood_positions",
+                ok5, detail5,
+            ) and overall
+
+            audit["overall_pass"] = overall
+            audit["status"] = "PASSED" if overall else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_91_robinhood_account_cache_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

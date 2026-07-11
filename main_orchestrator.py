@@ -55,8 +55,8 @@ from forecasting_engine import ForecastingEngine
 from forecasting.forecast_tracker import ForecastTracker
 from strategy_engine import StrategyEngine
 from evaluation_engine import EvaluationEngine
-from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
-from data.robinhood_client import RobinhoodClient
+from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO, RobinhoodPositionDTO
+from data.robinhood_portfolio import fetch_account_snapshot, account_snapshot_to_robinhood_positions
 from allocators.dual_momentum import DualMomentumAllocator
 from signals import global_registry
 from signals.base import SignalContext
@@ -1417,17 +1417,25 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
             de = MockDataEngine()
             tickers = ["AAPL"]  # Use mock ticker
 
-    # Integrate Robinhood Holdings
-    rh_client = RobinhoodClient()
-    rh_positions = {}
-    # Off-thread the blocking Robinhood network calls so the _heartbeat task
-    # keeps ticking during login/position fetch (behavior-preserving).
-    if await asyncio.to_thread(rh_client.login):
-        rh_positions = await asyncio.to_thread(rh_client.fetch_positions)
+    # Integrate Robinhood Holdings — now via the same three-tier DB->JSON->live
+    # cache main.py uses (data/robinhood_portfolio.py::fetch_account_snapshot()),
+    # instead of a fresh, uncached RobinhoodClient() fetch every cycle.
+    rh_positions: dict[str, RobinhoodPositionDTO] = {}
+    try:
+        # Off-thread the blocking Robinhood network/cache call so the
+        # _heartbeat task keeps ticking (behavior-preserving, matches the
+        # prior pattern).
+        snapshot = await asyncio.to_thread(fetch_account_snapshot)
+        rh_positions = account_snapshot_to_robinhood_positions(snapshot)
         # Merge unique tickers
         for tk in rh_positions.keys():
             if tk not in tickers:
                 tickers.append(tk)
+    except Exception as rh_exc:
+        telemetry.warning(
+            f"Robinhood account snapshot unavailable: {rh_exc}; "
+            "proceeding without holdings-aware overlay."
+        )
 
     # 1. Asynchronous concurrent data fetching
     if progress is not None:

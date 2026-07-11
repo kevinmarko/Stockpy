@@ -467,3 +467,117 @@ class TestWriteStateSnapshot:
         assert data["signals"] == []
         assert data["holdings"] == []
         assert data["tickers"] == []
+
+
+# ===========================================================================
+# 9. Robinhood account-cache integration (replaces the old uncached
+#    RobinhoodClient().login()/.fetch_positions() call every cycle with
+#    data.robinhood_portfolio.fetch_account_snapshot()'s three-tier
+#    DB -> JSON -> live cache, mirrored via account_snapshot_to_robinhood_positions).
+# ===========================================================================
+
+def _ok_fetch_factory(tickers=("AAPL",)):
+    async def _ok_fetch(de, tks):
+        _ = de, tks
+        df = pd.DataFrame({"Close": [1.0, 2.0, 3.0]})
+        return {}, {}, {t: df for t in tickers}
+    return _ok_fetch
+
+
+def _inactive_kill_switch():
+    return type("K", (), {"is_active": lambda self: False})()
+
+
+def _fake_run_pipeline_factory(captured):
+    def _fake_run_pipeline(tickers, macro_raw, fund_raw, tech_raw, **kwargs):
+        captured["tickers"] = list(tickers)
+        captured["robinhood_positions"] = kwargs.get("robinhood_positions")
+        return pd.DataFrame(), mock.MagicMock(), mock.MagicMock(
+            xsec_percentile_ranks={}, multifactor_scores={},
+        )
+    return _fake_run_pipeline
+
+
+class TestRobinhoodAccountCacheIntegration:
+    """main_orchestrator._main_body_impl's Robinhood holdings integration now
+    goes through data.robinhood_portfolio.fetch_account_snapshot() (the same
+    three-tier DB->JSON->live cache main.py uses) instead of a fresh,
+    uncached RobinhoodClient().login()/.fetch_positions() call every cycle.
+    """
+
+    def _common_patches(self, monkeypatch, tmp_path):
+        # Force the credentials-absent branch (MockDataEngine path) so we
+        # never touch FRED / a real DataEngine.
+        monkeypatch.setattr(mo.os.path, "exists", lambda p: False)
+        monkeypatch.setattr(mo, "fetch_all_data_async", _ok_fetch_factory())
+        monkeypatch.setattr(mo, "GlobalKillSwitch", lambda *a, **k: _inactive_kill_switch())
+        monkeypatch.setattr(mo.settings, "OUTPUT_DIR", tmp_path, raising=False)
+
+    def test_successful_snapshot_populates_positions_and_merges_tickers(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        from data.robinhood_portfolio import AccountSnapshot, PortfolioPosition
+
+        self._common_patches(monkeypatch, tmp_path)
+
+        snapshot = AccountSnapshot(
+            positions={
+                "MSFT": PortfolioPosition(
+                    symbol="MSFT", quantity=10.0, average_cost=250.0,
+                    current_price=300.0, market_value=3000.0,
+                    unrealized_pl=500.0, unrealized_pl_pct=20.0,
+                    dividends_received=15.0, name="Microsoft Corp",
+                ),
+            },
+            buying_power=1000.0, total_equity=4000.0, total_dividends=15.0,
+            fetched_at=datetime.now(),
+        )
+
+        monkeypatch.setattr(mo, "fetch_account_snapshot", lambda: snapshot)
+
+        captured: dict = {}
+        monkeypatch.setattr(mo, "run_pipeline", _fake_run_pipeline_factory(captured))
+
+        asyncio.run(mo._main_body_impl(effective_dry_run=True, strict=False))
+
+        rh_positions = captured["robinhood_positions"]
+        assert set(rh_positions.keys()) == {"MSFT"}
+        dto = rh_positions["MSFT"]
+        assert dto.ticker == "MSFT"
+        assert dto.shares == 10.0
+        assert dto.average_cost == 250.0
+        assert dto.total_dividends == 15.0
+        # MSFT wasn't in the base ["AAPL"] universe -> must be merged in.
+        assert "MSFT" in captured["tickers"]
+
+    def test_snapshot_failure_degrades_to_empty_positions_no_crash(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The dead-letter regression test: fetch_account_snapshot() CAN raise
+        (live fetch fails AND no cache exists at all, per its own docstring).
+        This must never crash _main_body_impl -- rh_positions degrades to {}
+        and the pipeline continues exactly as the old failed-.login() path did.
+        """
+        self._common_patches(monkeypatch, tmp_path)
+
+        def _boom():
+            raise RuntimeError("no Robinhood cache and live fetch failed")
+
+        monkeypatch.setattr(mo, "fetch_account_snapshot", _boom)
+
+        captured: dict = {}
+        monkeypatch.setattr(mo, "run_pipeline", _fake_run_pipeline_factory(captured))
+
+        # Must not raise.
+        asyncio.run(mo._main_body_impl(effective_dry_run=True, strict=False))
+
+        assert captured["robinhood_positions"] == {}
+        assert captured["tickers"] == ["AAPL"]
+
+    def test_no_robinhood_client_import_remains(self) -> None:
+        """Regression guard: the old uncached data.robinhood_client.RobinhoodClient
+        call site is gone -- main_orchestrator now depends only on
+        data.robinhood_portfolio's cached fetch_account_snapshot()."""
+        assert not hasattr(mo, "RobinhoodClient")
+        assert hasattr(mo, "fetch_account_snapshot")
+        assert hasattr(mo, "account_snapshot_to_robinhood_positions")

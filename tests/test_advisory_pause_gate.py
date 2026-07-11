@@ -368,11 +368,10 @@ class TestOrchestratorKillSwitchGate:
             mock.patch("main_orchestrator.fetch_all_data_async",
                        new_callable=mock.AsyncMock,
                        return_value=({}, {}, {})),
-            mock.patch("main_orchestrator.RobinhoodClient") as _rh_cls,
+            mock.patch("main_orchestrator.fetch_account_snapshot", return_value=None),
             mock.patch("main_orchestrator.DataEngine"),
             mock.patch("main_orchestrator.settings") as _s,
         ):
-            _rh_cls.return_value.login.return_value = False
             _s.DEFAULT_TICKERS = ["AAPL"]
             _s.OUTPUT_DIR = tmp_path
             _s.ADVISORY_ONLY = True

@@ -142,7 +142,11 @@ def orchestrator_run(tmp_path_factory):
 
     with (
         mock.patch("os.path.exists", side_effect=_fake_credentials_check),
-        mock.patch("main_orchestrator.RobinhoodClient") as _rh_cls,
+        # main_orchestrator.py's account-fetch integration point (module-top
+        # `from data.robinhood_portfolio import fetch_account_snapshot` --
+        # patching the original module's attribute below does NOT affect
+        # this already-bound local name, so it needs its own patch target).
+        mock.patch("main_orchestrator.fetch_account_snapshot", return_value=None),
         mock.patch(
             "main_orchestrator.GlobalKillSwitch",
             side_effect=lambda: GlobalKillSwitch(sentinel_file=sentinel),
@@ -155,6 +159,10 @@ def orchestrator_run(tmp_path_factory):
         # the same fake_market_provider stub meant only for the advisory loop.
         mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False),
         mock.patch("data.market_data.get_provider", return_value=fake_market_provider),
+        # Separate lazy `from data.robinhood_portfolio import fetch_account_snapshot`
+        # inside the advisory-overlay code path (main_orchestrator.py, Step 3b) --
+        # this one IS a fresh import at call time, so patching the original
+        # module's attribute correctly covers it.
         mock.patch(
             "data.robinhood_portfolio.fetch_account_snapshot",
             side_effect=Exception("no robinhood configured in test sandbox"),
@@ -170,8 +178,6 @@ def orchestrator_run(tmp_path_factory):
             IVHistoryStore, "__init__", make_memory_db_init(IVHistoryStore.__init__)
         ),
     ):
-        _rh_cls.return_value.login.return_value = False
-
         import io
         import contextlib
 
