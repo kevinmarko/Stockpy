@@ -285,6 +285,27 @@ def _render_account_equity_curve() -> None:
             f"${latest_bp:,.0f}" if isinstance(latest_bp, (int, float)) and not _is_nan(latest_bp) else "—",
         )
 
+        try:
+            from evaluation_engine import calculate_equity_curve_metrics
+
+            metrics = calculate_equity_curve_metrics(df)
+        except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
+            logger.debug("calculate_equity_curve_metrics failed: %s", exc)
+            metrics = {}
+
+        d1, d2, d3, d4 = st.columns(4)
+        sharpe = metrics.get("sharpe_ratio", float("nan"))
+        calmar = metrics.get("calmar_ratio", float("nan"))
+        max_dd = metrics.get("max_drawdown", float("nan"))
+        dd_dur = metrics.get("max_drawdown_duration_days", float("nan"))
+        d1.metric("Sharpe Ratio", f"{sharpe:.2f}" if not _is_nan(sharpe) else "—")
+        d2.metric("Calmar Ratio", f"{calmar:.2f}" if not _is_nan(calmar) else "—")
+        d3.metric("Max Drawdown", f"{max_dd:.1%}" if not _is_nan(max_dd) else "—")
+        d4.metric(
+            "Max DD Duration",
+            f"{dd_dur:.0f}d" if not _is_nan(dd_dur) else "—",
+        )
+
         overlay_bp = st.checkbox(
             "Overlay buying power", value=False, key="analytics_equity_overlay_bp",
             help="Add the buying-power series to the equity chart.",

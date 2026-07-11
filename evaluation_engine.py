@@ -708,6 +708,141 @@ def calibration_curve(
 
 
 # =============================================================================
+# MODULE-LEVEL: Account Equity Curve Risk/Performance Stats
+# =============================================================================
+
+# Minimum distinct daily snapshots before Sharpe/Calmar/CAGR are meaningful
+# (mirrors sizing/kelly.py's MIN_TRADES_REQUIRED module-top-constant convention
+# instead of an inline magic number).
+MIN_SNAPSHOTS_FOR_STATS = 20
+
+_EQUITY_METRIC_KEYS = (
+    "sharpe_ratio", "calmar_ratio", "max_drawdown",
+    "max_drawdown_duration_days", "cagr", "n_snapshots",
+)
+
+
+def _empty_equity_metrics(n_snapshots: int = 0) -> Dict[str, float]:
+    d: Dict[str, float] = {k: float("nan") for k in _EQUITY_METRIC_KEYS}
+    d["n_snapshots"] = n_snapshots
+    return d
+
+
+def calculate_equity_curve_metrics(
+    equity_df: pd.DataFrame, risk_free_rate: float = 0.0
+) -> Dict[str, float]:
+    """Rolling risk/performance statistics derived from an account equity curve.
+
+    Args:
+        equity_df: Must contain ``fetched_at`` (parseable to datetime) and
+            ``total_equity`` columns — the exact shape returned by
+            ``data.historical_store.HistoricalStore.account_snapshot_history()``.
+            Extra columns are ignored. Multiple same-day snapshots are
+            deduped to the LAST one per calendar day before computing daily
+            returns (vectorized, no ``.iterrows()``).
+        risk_free_rate: Annualized risk-free rate used in the Sharpe
+            calculation (default 0.0).
+
+    Returns:
+        Dict with keys ``sharpe_ratio``, ``calmar_ratio``, ``max_drawdown``,
+        ``max_drawdown_duration_days``, ``cagr``, ``n_snapshots``. Every
+        value is ``NaN`` (never a fabricated ``0.0`` — CONSTRAINT #4) when
+        ``equity_df`` is empty/malformed, has fewer than
+        ``MIN_SNAPSHOTS_FOR_STATS`` distinct daily snapshots, or (for
+        ``sharpe_ratio``/``calmar_ratio`` specifically) ``total_equity`` has
+        zero variance — a flat curve makes those ratios undefined, not zero.
+        ``max_drawdown``/``cagr`` are real zeros on a flat curve (the curve
+        genuinely never dipped / genuinely had 0% growth), not undefined.
+    """
+    try:
+        if (
+            equity_df is None
+            or equity_df.empty
+            or "fetched_at" not in equity_df.columns
+            or "total_equity" not in equity_df.columns
+        ):
+            return _empty_equity_metrics(0)
+
+        df = equity_df.copy()
+        df["fetched_at"] = pd.to_datetime(df["fetched_at"], errors="coerce")
+        df = df.dropna(subset=["fetched_at", "total_equity"])
+        if df.empty:
+            return _empty_equity_metrics(0)
+
+        # Dedupe multiple same-day snapshots to the LAST one per day
+        # (vectorized — no row-by-row loop).
+        df = df.sort_values("fetched_at")
+        df["_day"] = df["fetched_at"].dt.normalize()
+        df = df.drop_duplicates(subset="_day", keep="last").sort_values("fetched_at")
+        df = df.reset_index(drop=True)
+
+        n_snapshots = len(df)
+        if n_snapshots < MIN_SNAPSHOTS_FOR_STATS:
+            return _empty_equity_metrics(n_snapshots)
+
+        equity = df["total_equity"].astype(float)
+
+        # ── Sharpe ratio ─────────────────────────────────────────────────
+        returns = equity.pct_change().dropna()
+        if len(returns) < 2 or pd.isna(returns.std(ddof=1)) or returns.std(ddof=1) == 0:
+            sharpe_ratio = float("nan")
+        else:
+            sharpe_ratio = float(
+                (returns.mean() - risk_free_rate / 252.0) / returns.std(ddof=1) * math.sqrt(252)
+            )
+
+        # ── Max drawdown (negative fraction, matching processing_engine.py's
+        #    rolling_max / drawdown convention) ─────────────────────────────
+        rolling_max = equity.cummax()
+        drawdown = (equity - rolling_max) / rolling_max
+        max_drawdown = float(drawdown.min())
+
+        # ── Max drawdown duration (calendar days), vectorized run-length
+        #    encoding on the underwater mask — no Python for-loop over rows.
+        underwater = drawdown < 0
+        if underwater.any():
+            grp = (underwater != underwater.shift()).cumsum()
+            run_id = grp[underwater]
+            run_spans = df.loc[underwater.values, "fetched_at"].groupby(run_id.values).agg(["min", "max"])
+            run_lengths_days = (run_spans["max"] - run_spans["min"]).dt.total_seconds() / 86400.0
+            max_drawdown_duration_days = float(run_lengths_days.max())
+        else:
+            max_drawdown_duration_days = 0.0
+
+        # ── CAGR ─────────────────────────────────────────────────────────
+        start_val = float(equity.iloc[0])
+        end_val = float(equity.iloc[-1])
+        days_elapsed = (df["fetched_at"].iloc[-1] - df["fetched_at"].iloc[0]).total_seconds() / 86400.0
+        if days_elapsed <= 0 or start_val <= 0 or pd.isna(start_val) or pd.isna(end_val):
+            cagr = float("nan")
+        else:
+            cagr = float((end_val / start_val) ** (365.25 / days_elapsed) - 1.0)
+
+        # ── Calmar ratio ─────────────────────────────────────────────────
+        if pd.isna(cagr) or max_drawdown == 0.0 or pd.isna(max_drawdown):
+            calmar_ratio = float("nan")
+        else:
+            calmar_ratio = float(cagr / abs(max_drawdown))
+
+        return {
+            "sharpe_ratio": sharpe_ratio,
+            "calmar_ratio": calmar_ratio,
+            "max_drawdown": max_drawdown,
+            "max_drawdown_duration_days": max_drawdown_duration_days,
+            "cagr": cagr,
+            "n_snapshots": n_snapshots,
+        }
+
+    except Exception as exc:
+        telemetry.warning(f"calculate_equity_curve_metrics failed: {exc}")
+        try:
+            fallback_n = int(len(equity_df)) if equity_df is not None else 0
+        except Exception:
+            fallback_n = 0
+        return _empty_equity_metrics(fallback_n)
+
+
+# =============================================================================
 # MODULE-LEVEL: Recommendation Tracking Report (4.1 — model vs. operator)
 # =============================================================================
 

@@ -4485,6 +4485,8 @@ class GravityAIAuditor:
         self.step_86_ai_control_center_audit()
         # HistoricalStore-routed advisory bars/fundamentals + get_fundamentals_raw audit
         self.step_87_advisory_historical_store_routing_audit()
+        # Account equity-curve risk/performance stats audit
+        self.step_88_equity_curve_risk_stats_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -14285,6 +14287,128 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_87_advisory_historical_store_routing_audit"] = audit
+
+    def step_88_equity_curve_risk_stats_audit(self) -> None:
+        """Step 88 — Account equity-curve risk/performance stats audit.
+
+        Verifies evaluation_engine.calculate_equity_curve_metrics():
+          1. importable.
+          2. empty/None equity_df -> all-NaN dict (never a fabricated 0.0),
+             n_snapshots == 0 (CONSTRAINT #4 -- mirrors the MFE/MAE
+             'no history -> NaN' precedent in run_dto_audit()).
+          3. fewer than MIN_SNAPSHOTS_FOR_STATS distinct daily rows ->
+             all-NaN dict, n_snapshots reflects the actual count supplied.
+          4. a synthetic, well-formed equity curve (>= MIN_SNAPSHOTS_FOR_STATS
+             days, a known drawdown) yields numerically sane values:
+             max_drawdown in [-1, 0], sharpe_ratio finite, cagr finite,
+             n_snapshots == number of distinct days supplied.
+        """
+        audit = {
+            "step": "step_88_equity_curve_risk_stats_audit",
+            "description": "Account equity-curve risk/performance stats (Sharpe/Calmar/MaxDD/DD-duration/CAGR)",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": bool(passed), "detail": str(detail)})
+            return passed
+
+        try:
+            import math as _math88
+            import pandas as _pd88
+            import numpy as _np88
+            from datetime import datetime as _dt88, timedelta as _td88, timezone as _tz88
+
+            overall = True
+
+            try:
+                from evaluation_engine import (
+                    calculate_equity_curve_metrics,
+                    MIN_SNAPSHOTS_FOR_STATS,
+                )
+                ok1 = callable(calculate_equity_curve_metrics)
+                detail1 = ""
+            except Exception as exc:
+                ok1, detail1 = False, str(exc)
+            overall = _chk("calculate_equity_curve_metrics importable", ok1, detail1) and overall
+
+            if ok1:
+                try:
+                    empty_res = calculate_equity_curve_metrics(_pd88.DataFrame())
+                    ok2 = (
+                        _math88.isnan(empty_res.get("sharpe_ratio", 0.0))
+                        and _math88.isnan(empty_res.get("calmar_ratio", 0.0))
+                        and _math88.isnan(empty_res.get("max_drawdown", 0.0))
+                        and _math88.isnan(empty_res.get("cagr", 0.0))
+                        and empty_res.get("n_snapshots") == 0
+                    )
+                    detail2 = str(empty_res)
+                except Exception as exc:
+                    ok2, detail2 = False, str(exc)
+                overall = _chk(
+                    "empty equity_df -> all-NaN dict, never fabricated 0.0 (CONSTRAINT #4)",
+                    ok2, detail2,
+                ) and overall
+
+                try:
+                    short_n = max(1, MIN_SNAPSHOTS_FOR_STATS - 5)
+                    start = _dt88(2026, 1, 1, tzinfo=_tz88.utc)
+                    short_df = _pd88.DataFrame({
+                        "fetched_at": [start + _td88(days=i) for i in range(short_n)],
+                        "total_equity": [10000.0 + i * 10 for i in range(short_n)],
+                    })
+                    short_res = calculate_equity_curve_metrics(short_df)
+                    ok3 = (
+                        _math88.isnan(short_res.get("sharpe_ratio", 0.0))
+                        and short_res.get("n_snapshots") == short_n
+                    )
+                    detail3 = str(short_res)
+                except Exception as exc:
+                    ok3, detail3 = False, str(exc)
+                overall = _chk(
+                    "fewer than MIN_SNAPSHOTS_FOR_STATS rows -> all-NaN dict, n_snapshots == actual count",
+                    ok3, detail3,
+                ) and overall
+
+                try:
+                    n = MIN_SNAPSHOTS_FOR_STATS + 10
+                    start = _dt88(2026, 1, 1, tzinfo=_tz88.utc)
+                    rng = _np88.random.default_rng(42)
+                    daily_rets = rng.normal(0.0005, 0.01, size=n - 1)
+                    equity_path = 10000.0 * _np88.cumprod(1.0 + _np88.concatenate([[0.0], daily_rets]))
+                    well_df = _pd88.DataFrame({
+                        "fetched_at": [start + _td88(days=i) for i in range(n)],
+                        "total_equity": equity_path,
+                    })
+                    well_res = calculate_equity_curve_metrics(well_df)
+                    ok4 = (
+                        well_res.get("n_snapshots") == n
+                        and -1.0 <= well_res.get("max_drawdown", 1.0) <= 0.0
+                        and _math88.isfinite(well_res.get("sharpe_ratio", float("nan")))
+                        and _math88.isfinite(well_res.get("cagr", float("nan")))
+                    )
+                    detail4 = str(well_res)
+                except Exception as exc:
+                    ok4, detail4 = False, str(exc)
+                overall = _chk(
+                    "well-formed synthetic equity curve yields numerically sane, non-fabricated stats",
+                    ok4, detail4,
+                ) and overall
+            else:
+                _chk("empty equity_df -> all-NaN dict", False, "skipped — import failed")
+                _chk("insufficient-rows -> all-NaN dict", False, "skipped — import failed")
+                _chk("well-formed curve -> sane stats", False, "skipped — import failed")
+
+            audit["overall_pass"] = overall
+            audit["status"] = "PASSED" if overall else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_88_equity_curve_risk_stats_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
