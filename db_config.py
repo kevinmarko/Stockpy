@@ -102,3 +102,13 @@ def session_scope(session_factory):
         raise
     finally:
         session.close()
+
+
+def get_dbapi_connection(raw_conn):
+    """Retrieve the raw DBAPI connection from SQLAlchemy connection fairy/proxy
+    without triggering SADeprecationWarning for accessing connection directly.
+    """
+    dbapi_conn = getattr(raw_conn, "driver_connection", None)
+    if dbapi_conn is None:
+        dbapi_conn = getattr(raw_conn, "connection", raw_conn)
+    return dbapi_conn

@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 # Ensure the parent directory is in the path to import config
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import config
-from db_config import resolve_database_url, create_db_engine, session_scope
+from db_config import resolve_database_url, create_db_engine, session_scope, get_dbapi_connection
 
 # Configure logging
 logging.basicConfig(
@@ -65,7 +65,7 @@ def initialize_database(db_file: str = DB_FILE):
         with session_scope(Session) as session:
             # Retrieve the raw DBAPI connection for raw sqlite compatibility in setup/migration
             raw_conn = session.connection().connection
-            dbapi_conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+            dbapi_conn = get_dbapi_connection(raw_conn)
             cursor = dbapi_conn.cursor()
 
             # 1. Create ExecutionLogs Table

@@ -259,8 +259,9 @@ class HistoricalStore:
     def _new_connection(self) -> tuple[Any, sqlite3.Connection]:
         """Open a fresh sqlite connection via the SQLAlchemy engine, returning both the proxy and raw connection."""
         self._check_mock_connection()
+        from db_config import get_dbapi_connection
         raw_conn = self.engine.raw_connection()
-        dbapi_conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+        dbapi_conn = get_dbapi_connection(raw_conn)
         return raw_conn, dbapi_conn
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -419,11 +420,11 @@ class HistoricalStore:
         """
         try:
             self._check_mock_connection()
-            from db_config import session_scope
+            from db_config import session_scope, get_dbapi_connection
             with self._lock:
                 with session_scope(self.Session) as session:
                     raw_conn = session.connection().connection
-                    conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+                    conn = get_dbapi_connection(raw_conn)
                     
                     cursor = conn.execute(
                         """
@@ -1073,11 +1074,11 @@ class HistoricalStore:
                 return None
             return v
 
-        from db_config import session_scope
+        from db_config import session_scope, get_dbapi_connection
         with self._lock:
             with session_scope(self.Session) as session:
                 raw_conn = session.connection().connection
-                conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+                conn = get_dbapi_connection(raw_conn)
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO fundamentals_history
@@ -1178,11 +1179,11 @@ class HistoricalStore:
 
         if not rows:
             return
-        from db_config import session_scope
+        from db_config import session_scope, get_dbapi_connection
         with self._lock:
             with session_scope(self.Session) as session:
                 raw_conn = session.connection().connection
-                conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+                conn = get_dbapi_connection(raw_conn)
                 conn.executemany(
                     """
                     INSERT OR REPLACE INTO macro_history
@@ -1302,11 +1303,11 @@ class HistoricalStore:
                 source,
                 now_ts,
             ))
-        from db_config import session_scope
+        from db_config import session_scope, get_dbapi_connection
         with self._lock:
             with session_scope(self.Session) as session:
                 raw_conn = session.connection().connection
-                conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+                conn = get_dbapi_connection(raw_conn)
                 conn.executemany(
                     """
                     INSERT OR REPLACE INTO price_bars
