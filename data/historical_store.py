@@ -698,6 +698,128 @@ class HistoricalStore:
 
         return typed
 
+    def get_fundamentals_raw(
+        self,
+        symbol: str,
+        max_age_days: int = 1,
+        *,
+        provider=None,
+    ) -> Dict[str, Any]:
+        """Return the FULL raw fundamentals dict for *symbol*, refreshing when stale.
+
+        Unlike ``get_fundamentals()`` (which returns only the eight typed
+        columns), this returns the ORIGINAL raw provider dict — full shape,
+        suitable for ``FundamentalDataDTO.from_raw_dict()``, which reads many
+        more fields (``sector``, ``company_name``, ``book_value``,
+        ``payout_ratio``, ``dividend_growth_rate``, ``current_ratio``, etc.)
+        than the eight typed columns carry.
+
+        Cache policy
+        ------------
+        1. Read the newest ``fundamentals_history`` row for *symbol* via the
+           SAME ``_read_fundamentals_row()`` helper ``get_fundamentals()``
+           uses (it already reads ``raw_json`` internally, just doesn't
+           expose it).
+        2. If the row's ``as_of`` date is within *max_age_days* of today,
+           parse ``raw_json`` and return it directly — **no provider call**.
+           A missing/unparsable/non-dict ``raw_json`` on an otherwise-fresh
+           row falls through to a live fetch (never fabricated — CONSTRAINT #4).
+        3. Otherwise resolve the provider (injectable for tests; defaults to
+           ``data.market_data.get_provider()``) and call
+           ``provider.get_fundamentals(symbol)``.  Persist via the SAME
+           ``_upsert_fundamentals()`` write path ``get_fundamentals()`` uses
+           — so the typed columns AND raw_json stay consistent between the
+           two methods — and return the fresh raw dict verbatim.
+        4. Total failure (DB error + provider error) → ``{}`` (CONSTRAINT #6).
+
+        Parameters
+        ----------
+        symbol:
+            Ticker (case-insensitive).
+        max_age_days:
+            Rows older than this many days trigger a live refetch.  Default 1.
+        provider:
+            Injectable market-data provider.  ``None`` uses the module singleton.
+
+        Returns
+        -------
+        Dict[str, Any]
+            The raw provider dict (yfinance ``.info``-shaped).  ``{}`` on
+            total failure.
+        """
+        symbol = symbol.upper()
+
+        # ── Step 1: try DB cache ─────────────────────────────────────────────
+        try:
+            cached = self._read_fundamentals_row(symbol)
+            if cached is not None:
+                as_of_str, _typed, raw_json_str = cached
+                as_of = datetime.strptime(as_of_str, "%Y-%m-%d").date()
+                today_date = datetime.now(timezone.utc).date()
+                age_days = (today_date - as_of).days
+                if age_days < max_age_days:
+                    if raw_json_str:
+                        try:
+                            parsed = json.loads(raw_json_str)
+                            if isinstance(parsed, dict):
+                                logger.debug(
+                                    "HistoricalStore.get_fundamentals_raw(%s): "
+                                    "cache hit (age %d d).", symbol, age_days,
+                                )
+                                return parsed
+                            logger.warning(
+                                "HistoricalStore.get_fundamentals_raw(%s): "
+                                "raw_json did not decode to a dict; falling "
+                                "through to live fetch.", symbol,
+                            )
+                        except (TypeError, ValueError) as exc:
+                            logger.warning(
+                                "HistoricalStore.get_fundamentals_raw(%s): "
+                                "raw_json parse failed: %s; falling through "
+                                "to live fetch.", symbol, exc,
+                            )
+                    else:
+                        logger.debug(
+                            "HistoricalStore.get_fundamentals_raw(%s): fresh "
+                            "row has no raw_json; falling through to live "
+                            "fetch.", symbol,
+                        )
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_fundamentals_raw(%s): DB read failed: %s; "
+                "falling through to live fetch.", symbol, exc,
+            )
+
+        # ── Step 2: live fetch ───────────────────────────────────────────────
+        _provider = self._resolve_provider(provider)
+        if _provider is None:
+            logger.warning(
+                "HistoricalStore.get_fundamentals_raw(%s): no provider; returning {}.",
+                symbol,
+            )
+            return {}
+
+        try:
+            raw: Dict[str, Any] = _provider.get_fundamentals(symbol) or {}
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_fundamentals_raw(%s): provider fetch failed: %s; "
+                "returning {}.", symbol, exc,
+            )
+            return {}
+
+        # ── Step 3: upsert into DB (same write path get_fundamentals() uses) ──
+        try:
+            typed = _raw_to_typed_fundamentals(raw)
+            self._upsert_fundamentals(symbol, typed, raw, source=_source_name(_provider))
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_fundamentals_raw(%s): DB write failed: %s "
+                "(result still returned to caller).", symbol, exc,
+            )
+
+        return raw
+
     def get_fundamentals_history(
         self,
         symbol: str,

@@ -4483,6 +4483,8 @@ class GravityAIAuditor:
         self.step_85_opal_research_audit()
         # AI Control Center tab
         self.step_86_ai_control_center_audit()
+        # HistoricalStore-routed advisory bars/fundamentals + get_fundamentals_raw audit
+        self.step_87_advisory_historical_store_routing_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -14107,6 +14109,156 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_86_ai_control_center_audit"] = audit
+
+    def step_87_advisory_historical_store_routing_audit(self) -> None:
+        """Step 87 — HistoricalStore-routed advisory bars/fundamentals audit.
+
+        engine/advisory.py::evaluate() previously bypassed HistoricalStore for
+        its per-symbol Step 1 (bars) and Step 3 (fundamentals) fetches -- the
+        platform's highest-frequency data-fetch site, called once per symbol
+        every run_once() cycle, even though main.py's own bars pre-compute
+        pass had already DB-cached the same bars moments earlier in the same
+        cycle. This step verifies the closure of that gap plus the new
+        HistoricalStore.get_fundamentals_raw() method it required (returning
+        the FULL raw provider dict from cached raw_json, distinct from the
+        pre-existing get_fundamentals()'s narrow 8-typed-column shape which
+        would silently drop fields FundamentalDataDTO.from_raw_dict() needs).
+
+        Checks
+        ------
+        1. data/historical_store.py source references get_fundamentals_raw.
+        2. engine/advisory.py source references HistoricalStore and
+           _get_historical_store (routing wiring present).
+        3. HistoricalStore.get_fundamentals_raw is importable and callable.
+        4. A fresh cache hit (synthetic fundamentals_history row with
+           raw_json) returns the raw dict WITHOUT any provider call --
+           the entire point of the method (avoids the redundant network
+           fetch that the narrower get_fundamentals() cannot).
+        5. Total failure (DB error + provider error) returns {} -- never
+           fabricated (CONSTRAINT #4).
+        """
+        audit: dict = {
+            "step": "step_87_advisory_historical_store_routing_audit",
+            "description": "HistoricalStore-routed advisory bars/fundamentals + get_fundamentals_raw",
+            "checks": [],
+            "overall_pass": False,
+        }
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"name": name, "passed": bool(passed), "detail": str(detail)})
+            return passed
+
+        try:
+            overall = True
+
+            try:
+                with open("data/historical_store.py", "r", encoding="utf-8") as fh:
+                    hist_src = fh.read()
+                ok1 = "def get_fundamentals_raw" in hist_src
+                detail1 = ""
+            except Exception as exc:
+                ok1, detail1 = False, str(exc)
+            overall = _chk(
+                "data/historical_store.py defines get_fundamentals_raw", ok1, detail1
+            ) and overall
+
+            try:
+                with open("engine/advisory.py", "r", encoding="utf-8") as fh:
+                    adv_src = fh.read()
+                ok2 = "HistoricalStore" in adv_src and "_get_historical_store" in adv_src
+                detail2 = ""
+            except Exception as exc:
+                ok2, detail2 = False, str(exc)
+            overall = _chk(
+                "engine/advisory.py references HistoricalStore routing", ok2, detail2
+            ) and overall
+
+            try:
+                from data.historical_store import HistoricalStore
+                ok3 = callable(getattr(HistoricalStore, "get_fundamentals_raw", None))
+                detail3 = ""
+            except Exception as exc:
+                ok3, detail3 = False, str(exc)
+            overall = _chk(
+                "HistoricalStore.get_fundamentals_raw importable and callable", ok3, detail3
+            ) and overall
+
+            if ok3:
+                try:
+                    import tempfile as _tempfile87
+
+                    class _NeverCalledProvider:
+                        def get_fundamentals(self, symbol):
+                            raise AssertionError(
+                                "provider.get_fundamentals should NOT be called on a fresh cache hit"
+                            )
+
+                    with _tempfile87.TemporaryDirectory() as td:
+                        db_path = f"{td}/gravity_step87.db"
+                        store = HistoricalStore(db_path=db_path)
+                        raw_payload = {
+                            "sector": "Technology",
+                            "shortName": "Gravity Test Co",
+                            "trailingPE": 20.0,
+                        }
+                        store._upsert_fundamentals(
+                            "GRVTEST", {"pe_ratio": 20.0}, raw_payload, source="test"
+                        )
+                        result = store.get_fundamentals_raw(
+                            "GRVTEST", max_age_days=1, provider=_NeverCalledProvider()
+                        )
+                        ok4 = (
+                            isinstance(result, dict)
+                            and result.get("sector") == "Technology"
+                            and result.get("shortName") == "Gravity Test Co"
+                        )
+                        detail4 = str(result)
+                except Exception as exc:
+                    ok4, detail4 = False, str(exc)
+                overall = _chk(
+                    "fresh cache hit returns full raw dict without a provider call",
+                    ok4, detail4,
+                ) and overall
+
+                try:
+                    with _tempfile87.TemporaryDirectory() as td2:
+                        broken_store = HistoricalStore(db_path=f"{td2}/gravity_step87_fail.db")
+
+                        class _FailingProvider:
+                            def get_fundamentals(self, symbol):
+                                raise RuntimeError("simulated provider failure")
+
+                        def _broken_conn(*a, **kw):
+                            raise RuntimeError("simulated DB failure")
+
+                        broken_store._get_conn = _broken_conn  # type: ignore[assignment]
+                        result_fail = broken_store.get_fundamentals_raw(
+                            "GRVFAIL", max_age_days=1, provider=_FailingProvider()
+                        )
+                        ok5 = result_fail == {}
+                        detail5 = str(result_fail)
+                except Exception as exc:
+                    ok5, detail5 = False, str(exc)
+                overall = _chk(
+                    "total failure (DB + provider) returns {} -- never fabricated (CONSTRAINT #4)",
+                    ok5, detail5,
+                ) and overall
+            else:
+                _chk("fresh cache hit returns full raw dict without a provider call",
+                     False, "skipped — import failed")
+                _chk("total failure (DB + provider) returns {} -- never fabricated (CONSTRAINT #4)",
+                     False, "skipped — import failed")
+
+            audit["overall_pass"] = overall
+            audit["status"] = "PASSED" if overall else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_87_advisory_historical_store_routing_audit"] = audit
+
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
 # =============================================================================

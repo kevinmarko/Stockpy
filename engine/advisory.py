@@ -50,6 +50,7 @@ from forecasting.forecast_tracker import ForecastTracker
 from technical_options_engine import TechnicalOptionsEngine
 from strategy_engine import StrategyEngine
 from transactions_store import TransactionsStore, _OfflineTransactionsStore
+from data.historical_store import HistoricalStore
 from settings import settings
 
 logger = logging.getLogger(__name__)
@@ -96,12 +97,14 @@ _TechnicalOptionsEngine_orig = TechnicalOptionsEngine
 _ForecastingEngine_orig = ForecastingEngine
 _StrategyEngine_orig = StrategyEngine
 _TransactionsStore_orig = TransactionsStore
+_HistoricalStore_orig = HistoricalStore
 
 _PROCESSING_ENGINE: Optional[Any] = None
 _TECH_OPTIONS_ENGINE: Optional[Any] = None
 _FORECASTING_ENGINE: Optional[Any] = None
 _STRATEGY_ENGINE: Optional[Any] = None
 _TRANSACTIONS_STORE: Optional[Any] = None
+_HISTORICAL_STORE: Optional[Any] = None
 
 
 def _build_forecasting_engine() -> Any:
@@ -177,6 +180,25 @@ def _get_transactions_store() -> Any:
                     )
                     _TRANSACTIONS_STORE = _OfflineTransactionsStore()
     return _TRANSACTIONS_STORE
+
+
+def _get_historical_store() -> Any:
+    """Process-wide HistoricalStore singleton (fresh/uncached when patched).
+
+    Mirrors the other engine getters' construction/patchability pattern.
+    Used by Steps 1 (bars) and 3 (fundamentals) below to route through
+    ``data/historical_store.py`` when ``settings.HISTORICAL_STORE_ENABLED``,
+    which already routes through its own HistoricalStore instance against
+    the SAME on-disk ``quant_platform.db``.
+    """
+    global _HISTORICAL_STORE
+    if HistoricalStore is not _HistoricalStore_orig:
+        return HistoricalStore()  # patched (test) → fresh, uncached
+    if _HISTORICAL_STORE is None:
+        with _ENGINE_LOCK:
+            if _HISTORICAL_STORE is None:
+                _HISTORICAL_STORE = HistoricalStore()
+    return _HISTORICAL_STORE
 
 
 def _get_strategy_engine(store: Any) -> Any:
@@ -456,6 +478,7 @@ def evaluate(
     strategy_engine: Optional[Any] = None,
     precomputed_garch: Optional[float] = None,
     precomputed_forecast: Optional[float] = None,
+    historical_store: Optional[Any] = None,
 ) -> Recommendation:
     """Produce a holding-aware advisory recommendation for ``symbol``.
 
@@ -522,6 +545,18 @@ def evaluate(
         original independent fit (CONSTRAINT #6: this can only ever remove a
         redundant fit, never silently substitute a bad one). ``None`` (the
         default for every caller today) reproduces pre-dedup behavior exactly.
+    historical_store : HistoricalStore or None (keyword-only)
+        Optional pre-built ``data.historical_store.HistoricalStore`` instance,
+        analogous to the other engine injection params.  When ``None`` (the
+        default) a process-wide lazy singleton is used instead — see
+        ``_get_historical_store()`` at module top.  Steps 1 (bars) and 3
+        (fundamentals) route through it when ``settings.HISTORICAL_STORE_ENABLED``,
+        falling back to the direct ``MarketDataProvider`` call on any
+        ``HistoricalStore`` failure (CONSTRAINT #6) or when the flag is
+        disabled.  Closes the gap where this per-symbol loop — the platform's
+        highest-frequency data-fetch site — bypassed the DB even though
+        ``main.py``'s bars pre-compute pass had already DB-cached bars for the
+        same symbols moments earlier in the same cycle.
 
     Returns
     -------
@@ -531,6 +566,24 @@ def evaluate(
     symbol = symbol.upper().strip()
     partial_flags: list[str] = []   # reasons why data_quality might be PARTIAL
     is_stale: bool = False
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Resolve the HistoricalStore ONCE up front (bars/fundamentals reuse).
+    # Steps 1 and 3 route through it when enabled, with a per-call fallback to
+    # the direct provider call on ANY failure (CONSTRAINT #6). Resolving once
+    # (rather than per-step) avoids constructing two singletons/instances per
+    # evaluate() call.
+    # ──────────────────────────────────────────────────────────────────────────
+    _hs: Optional[Any] = None
+    if settings.HISTORICAL_STORE_ENABLED:
+        try:
+            _hs = historical_store if historical_store is not None else _get_historical_store()
+        except Exception as exc:
+            logger.warning(
+                "advisory[%s]: HistoricalStore construction failed — %s; "
+                "Steps 1/3 will call the market provider directly.", symbol, exc,
+            )
+            _hs = None
 
     # ──────────────────────────────────────────────────────────────────────────
     # Step 1 — Fetch live quote and OHLCV bars
@@ -547,7 +600,30 @@ def evaluate(
         partial_flags.append("quote_unavailable")
 
     try:
-        bars_df = market.get_intraday_bars(symbol, lookback_days=252)
+        if _hs is not None:
+            try:
+                bars_df = _hs.get_bars(symbol, lookback_days=252, provider=market)
+                if bars_df is None or bars_df.empty:
+                    # HistoricalStore is itself dead-letter safe (CONSTRAINT #6):
+                    # a provider-level fetch failure inside it degrades to an
+                    # empty DataFrame rather than raising, which would
+                    # otherwise be indistinguishable here from "genuinely no
+                    # bars available". Re-derive directly from the provider
+                    # (unguarded) so a REAL failure still raises and is
+                    # correctly flagged "bars_unavailable" below — preserving
+                    # the pre-HistoricalStore-wiring data_quality semantics
+                    # (PARTIAL only on an actual fetch exception, never on
+                    # legitimately-empty data).
+                    bars_df = market.get_intraday_bars(symbol, lookback_days=252)
+            except Exception as exc:
+                logger.warning(
+                    "advisory[%s]: HistoricalStore bars fetch failed — %s; "
+                    "falling back to direct provider.", symbol, exc,
+                )
+                bars_df = market.get_intraday_bars(symbol, lookback_days=252)
+        else:
+            bars_df = market.get_intraday_bars(symbol, lookback_days=252)
+
         if bars_df is not None and not bars_df.empty and current_price == 0.0:
             # Fall back to the last bar's close when the quote endpoint failed.
             current_price = float(bars_df["Close"].iloc[-1])
@@ -593,7 +669,29 @@ def evaluate(
     raw_fund_info: Dict[str, Any] = {}
 
     try:
-        raw_fund_info = market.get_fundamentals(symbol) or {}
+        if _hs is not None:
+            try:
+                raw_fund_info = _hs.get_fundamentals_raw(
+                    symbol,
+                    max_age_days=settings.FUNDAMENTALS_REFRESH_DAYS,
+                    provider=market,
+                ) or {}
+                if not raw_fund_info:
+                    # Same rationale as Step 1: HistoricalStore's own
+                    # dead-letter handling swallows a provider-level failure
+                    # into {} — indistinguishable here from "genuinely no
+                    # fundamentals for this symbol". Re-derive directly
+                    # (unguarded) so a REAL failure still raises and is
+                    # correctly flagged "fundamentals_unavailable" below.
+                    raw_fund_info = market.get_fundamentals(symbol) or {}
+            except Exception as exc:
+                logger.warning(
+                    "advisory[%s]: HistoricalStore fundamentals fetch failed — %s; "
+                    "falling back to direct provider.", symbol, exc,
+                )
+                raw_fund_info = market.get_fundamentals(symbol) or {}
+        else:
+            raw_fund_info = market.get_fundamentals(symbol) or {}
         fund_dto = FundamentalDataDTO.from_raw_dict(symbol, raw_fund_info)
     except Exception as exc:
         logger.warning("advisory[%s]: fundamentals fetch failed — %s; using defaults.", symbol, exc)

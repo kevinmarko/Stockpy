@@ -646,6 +646,136 @@ class TestFundamentalsHistory:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase A2 — TestGetFundamentalsRaw
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGetFundamentalsRaw:
+    """Tests for get_fundamentals_raw() — the full-raw-dict counterpart to
+    get_fundamentals()'s narrow 8-typed-column shape, needed by
+    engine/advisory.py so FundamentalDataDTO.from_raw_dict() doesn't silently
+    lose fields (sector, company_name, book_value, payout_ratio, etc.) that
+    the typed columns don't carry."""
+
+    def test_fresh_cache_hit_returns_raw_dict_no_provider_call(self, tmp_path):
+        """A fresh row (written moments ago) must return the FULL raw dict
+        parsed from raw_json, WITHOUT calling the provider again."""
+        db = str(tmp_path / "fund.db")
+        store = HistoricalStore(db_path=db)
+        raw = _make_raw_fundamentals()
+        raw["sector"] = "Technology"
+        raw["shortName"] = "Test Co"
+        provider = _make_mock_provider(raw=raw)
+
+        # First call writes the row (cache miss).
+        first = store.get_fundamentals_raw("AAPL", provider=provider)
+        assert first.get("sector") == "Technology"
+        assert first.get("shortName") == "Test Co"
+        assert provider.get_fundamentals.call_count == 1
+
+        # Second call within max_age_days — must be a pure cache hit.
+        second = store.get_fundamentals_raw("AAPL", max_age_days=1, provider=provider)
+        assert second.get("sector") == "Technology"
+        assert second.get("shortName") == "Test Co"
+        # Provider must NOT have been called again.
+        assert provider.get_fundamentals.call_count == 1
+
+    def test_stale_or_missing_row_calls_provider_and_persists(self, tmp_path):
+        """A missing row falls straight through to a live fetch, and persists
+        (both typed columns AND raw_json) via the same upsert path
+        get_fundamentals() uses."""
+        db = str(tmp_path / "fund.db")
+        store = HistoricalStore(db_path=db)
+        provider = _make_mock_provider()
+
+        result = store.get_fundamentals_raw("MSFT", provider=provider)
+
+        assert isinstance(result, dict)
+        assert "trailingPE" in result
+        provider.get_fundamentals.assert_called_once_with("MSFT")
+
+    def test_stale_row_refetches(self, tmp_path):
+        """A row older than max_age_days triggers a live refetch."""
+        import sqlite3 as _sqlite3
+
+        db = str(tmp_path / "fund.db")
+        store = HistoricalStore(db_path=db)
+        provider = _make_mock_provider(raw={"trailingPE": 30.0, "sector": "Energy"})
+
+        five_days_ago = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+        with _sqlite3.connect(db) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO fundamentals_history
+                    (symbol, as_of, pe_ratio, raw_json, source, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("XOM", five_days_ago, 20.0, '{"sector": "Old Sector"}',
+                 "yfinance", datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+
+        result = store.get_fundamentals_raw("XOM", max_age_days=1, provider=provider)
+
+        provider.get_fundamentals.assert_called_once()
+        assert result.get("sector") == "Energy"
+
+    def test_total_failure_returns_empty_dict(self, tmp_path):
+        """DB error + provider error → {} (never fabricated — CONSTRAINT #4)."""
+        db = str(tmp_path / "fund.db")
+        store = HistoricalStore(db_path=db)
+        provider = _make_raising_fund_provider()
+
+        def _broken_conn(*a, **kw):
+            raise RuntimeError("simulated DB failure")
+
+        store._get_conn = _broken_conn  # type: ignore[assignment]
+
+        result = store.get_fundamentals_raw("FAIL", provider=provider)
+        assert result == {}
+
+    def test_missing_raw_json_falls_through_to_live_fetch(self, tmp_path):
+        """A fresh row whose raw_json is NULL (e.g. written by an older code
+        path) must fall through to a live fetch rather than returning {}."""
+        import sqlite3 as _sqlite3
+
+        db = str(tmp_path / "fund.db")
+        store = HistoricalStore(db_path=db)
+        provider = _make_mock_provider(raw={"trailingPE": 22.0, "sector": "Healthcare"})
+
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with _sqlite3.connect(db) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO fundamentals_history
+                    (symbol, as_of, pe_ratio, raw_json, source, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("NVDA", today_str, 40.0, None, "yfinance", datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+
+        result = store.get_fundamentals_raw("NVDA", max_age_days=1, provider=provider)
+
+        provider.get_fundamentals.assert_called_once()
+        assert result.get("sector") == "Healthcare"
+
+    def test_round_trip_consistency_with_get_fundamentals(self, tmp_path):
+        """After the SAME upsert, get_fundamentals()'s typed columns and
+        get_fundamentals_raw()'s raw dict must agree on overlapping fields."""
+        db = str(tmp_path / "fund.db")
+        store = HistoricalStore(db_path=db)
+        provider = _make_mock_provider(raw={"trailingPE": 18.5, "sector": "Financials"})
+
+        raw_result = store.get_fundamentals_raw("JPM", provider=provider)
+        typed_result = store.get_fundamentals("JPM", provider=provider)
+
+        assert raw_result.get("trailingPE") == pytest.approx(18.5)
+        assert typed_result.get("pe_ratio") == pytest.approx(18.5)
+        # Only ONE provider call total across both methods (second is a cache hit).
+        assert provider.get_fundamentals.call_count == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Helpers — macro (Phase 3)
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -196,6 +196,41 @@ def _patch_heavy_engines(
     return patches
 
 
+# ── HistoricalStore passthrough (module-wide autouse) ────────────────────────
+#
+# settings.HISTORICAL_STORE_ENABLED defaults True, and evaluate() now resolves
+# a HistoricalStore singleton in Steps 1/3 when the flag is on. Every test in
+# this file predates that routing and constructs its `market` mock expecting
+# Step 1/3 to call `market.get_intraday_bars`/`market.get_fundamentals`
+# directly — without this fixture, those tests would instead exercise a REAL,
+# on-disk HistoricalStore() (writing to the actual quant_platform.db), which
+# is exactly the "HISTORICAL_STORE_ENABLED trap" this codebase's
+# `tests/conftest.py::disable_historical_store` fixture exists to prevent.
+# This passthrough stub keeps every existing test's behavior byte-identical
+# (it forwards straight to the same mocked `market` provider) while still
+# exercising the real Step 1/3 routing code path end-to-end. Tests that want
+# to verify the ACTUAL HistoricalStore routing/fallback behavior (see
+# TestHistoricalStoreRouting below) inject a real mock via
+# `historical_store=` directly instead of relying on this fixture.
+
+class _PassthroughHistoricalStore:
+    """Forwards straight to the injected provider — reproduces pre-routing
+    test behavior exactly without touching a real on-disk DB."""
+
+    def get_bars(self, symbol, lookback_days=252, *, provider=None):
+        return provider.get_intraday_bars(symbol, lookback_days=lookback_days)
+
+    def get_fundamentals_raw(self, symbol, max_age_days=1, *, provider=None):
+        return provider.get_fundamentals(symbol)
+
+
+@pytest.fixture(autouse=True)
+def _auto_passthrough_historical_store():
+    with patch("engine.advisory.HistoricalStore", side_effect=_PassthroughHistoricalStore):
+        with patch("engine.advisory._HISTORICAL_STORE", None):
+            yield
+
+
 # ── Tests ───────────────────────────────────────────────────────────────────
 
 class TestRecommendationDataclass:
@@ -1474,3 +1509,109 @@ class TestPrecomputedGarchAndForecast:
         sig = inspect.signature(_evaluate)
         assert sig.parameters["precomputed_garch"].default is None
         assert sig.parameters["precomputed_forecast"].default is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HistoricalStore routing (Steps 1 & 3) tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestHistoricalStoreRouting:
+    """evaluate()'s Step 1 (bars) and Step 3 (fundamentals) must route through
+    an injected/singleton HistoricalStore when settings.HISTORICAL_STORE_ENABLED,
+    falling back to the direct MarketDataProvider call on any HistoricalStore
+    failure or when the flag is disabled. These tests pass an explicit
+    ``historical_store=`` mock directly into evaluate(), which takes
+    precedence over both the module-wide autouse passthrough fixture and the
+    process-wide singleton -- letting them verify the real routing/fallback
+    logic in isolation."""
+
+    def _run(self, historical_store=None, **evaluate_kwargs):
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(
+            price=100.0, bars=_make_bars(252, 100.0), fundamentals={"sector": "Technology"}
+        )
+
+        with mock.patch("engine.advisory.StrategyEngine") as MockSE:
+            MockSE.return_value.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            rec = evaluate(
+                "TEST", None, market, _make_account_snapshot(),
+                transactions_store=ts, historical_store=historical_store,
+                **evaluate_kwargs,
+            )
+        return rec, market
+
+    def test_bars_routed_through_historical_store_when_available(self):
+        fake_hs = MagicMock()
+        fake_hs.get_bars.return_value = _make_bars(252, 100.0)
+        fake_hs.get_fundamentals_raw.return_value = {"sector": "Technology"}
+
+        rec, market = self._run(historical_store=fake_hs)
+
+        fake_hs.get_bars.assert_called_once_with("TEST", lookback_days=252, provider=market)
+        market.get_intraday_bars.assert_not_called()
+
+    def test_fundamentals_routed_through_historical_store_when_available(self):
+        fake_hs = MagicMock()
+        fake_hs.get_bars.return_value = _make_bars(252, 100.0)
+        fake_hs.get_fundamentals_raw.return_value = {"sector": "Technology"}
+
+        rec, market = self._run(historical_store=fake_hs)
+
+        fake_hs.get_fundamentals_raw.assert_called_once()
+        args, kwargs = fake_hs.get_fundamentals_raw.call_args
+        assert args[0] == "TEST"
+        assert kwargs["provider"] is market
+        market.get_fundamentals.assert_not_called()
+
+    def test_falls_back_to_direct_provider_on_historical_store_bars_failure(self):
+        fake_hs = MagicMock()
+        fake_hs.get_bars.side_effect = RuntimeError("simulated HistoricalStore failure")
+        fake_hs.get_fundamentals_raw.return_value = {"sector": "Technology"}
+
+        rec, market = self._run(historical_store=fake_hs)
+
+        market.get_intraday_bars.assert_called_once_with("TEST", lookback_days=252)
+        assert rec.data_quality != "PARTIAL" or "bars_unavailable" not in (rec.rationale or "")
+
+    def test_falls_back_to_direct_provider_on_historical_store_fundamentals_failure(self):
+        fake_hs = MagicMock()
+        fake_hs.get_bars.return_value = _make_bars(252, 100.0)
+        fake_hs.get_fundamentals_raw.side_effect = RuntimeError("simulated HistoricalStore failure")
+
+        rec, market = self._run(historical_store=fake_hs)
+
+        market.get_fundamentals.assert_called_once_with("TEST")
+
+    def test_disabled_flag_skips_historical_store_entirely(self):
+        import unittest.mock as mock
+        fake_hs = MagicMock()
+
+        with mock.patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
+            # Even though we pass a historical_store, evaluate() must never
+            # touch it when the flag is off -- it must be resolved to None
+            # up front and Steps 1/3 must call the provider directly.
+            rec, market = self._run(historical_store=fake_hs)
+
+        fake_hs.get_bars.assert_not_called()
+        fake_hs.get_fundamentals_raw.assert_not_called()
+        market.get_intraday_bars.assert_called_once_with("TEST", lookback_days=252)
+        market.get_fundamentals.assert_called_once_with("TEST")
+
+    def test_explicit_historical_store_kwarg_overrides_singleton(self):
+        """An explicitly-injected historical_store must be used verbatim,
+        never replaced by the process-wide singleton or the autouse
+        passthrough fixture."""
+        import unittest.mock as mock
+        fake_hs = MagicMock()
+        fake_hs.get_bars.return_value = _make_bars(252, 100.0)
+        fake_hs.get_fundamentals_raw.return_value = {"sector": "Technology"}
+
+        with mock.patch("engine.advisory._get_historical_store") as mock_getter:
+            self._run(historical_store=fake_hs)
+            mock_getter.assert_not_called()
