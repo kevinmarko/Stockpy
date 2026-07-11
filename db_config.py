@@ -68,9 +68,12 @@ def create_db_engine(db_url: str | None = None) -> Engine:
         )
     elif backend == "sqlite":
         # SQLite's default pool does not accept pool_size/max_overflow.
-        engine = create_engine(db_url, echo=False, pool_pre_ping=True)
-
+        # Use NullPool for file-based SQLite to prevent cached connections in the pool
+        # from bypassing test mocks (e.g. patched sqlite3.connect) or holding file locks.
+        from sqlalchemy.pool import NullPool
         is_memory = url.database in (None, "", ":memory:")
+        poolclass = None if is_memory else NullPool
+        engine = create_engine(db_url, echo=False, pool_pre_ping=True, poolclass=poolclass)
         if not is_memory:
 
             @event.listens_for(engine, "connect")

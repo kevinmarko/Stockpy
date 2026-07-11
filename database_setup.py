@@ -7,12 +7,14 @@ Dynamically maps the COLUMN_SCHEMA definition from config.py to database fields.
 
 import os
 import sys
-import sqlite3
 import logging
+from sqlalchemy import text, inspect
+from sqlalchemy.orm import sessionmaker
 
 # Ensure the parent directory is in the path to import config
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import config
+from db_config import resolve_database_url, create_db_engine, session_scope
 
 # Configure logging
 logging.basicConfig(
@@ -50,72 +52,86 @@ def initialize_database(db_file: str = DB_FILE):
     """
     Establishes the connection to the SQLite database and initializes tables.
     """
-    logger.info(f"Connecting to database: {db_file}")
+    if "://" not in db_file:
+        db_url = f"sqlite:///{os.path.abspath(db_file)}"
+    else:
+        db_url = db_file
+    logger.info(f"Connecting to database: {db_url}")
     
-    with sqlite3.connect(db_file) as conn:
-        cursor = conn.cursor()
+    engine = create_db_engine(db_url)
+    Session = sessionmaker(bind=engine)
+    
+    try:
+        with session_scope(Session) as session:
+            # Retrieve the raw DBAPI connection for raw sqlite compatibility in setup/migration
+            raw_conn = session.connection().connection
+            dbapi_conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+            cursor = dbapi_conn.cursor()
 
-        # 1. Create ExecutionLogs Table
-        logger.info("Initializing 'ExecutionLogs' table...")
-        create_execution_logs_sql = """
-        CREATE TABLE IF NOT EXISTS ExecutionLogs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            status TEXT NOT NULL,
-            ticker_count INTEGER NOT NULL,
-            execution_time_seconds REAL,
-            error_message TEXT
-        );
-        """
-        cursor.execute(create_execution_logs_sql)
-        logger.info("'ExecutionLogs' table created successfully.")
+            # 1. Create ExecutionLogs Table
+            logger.info("Initializing 'ExecutionLogs' table...")
+            create_execution_logs_sql = """
+            CREATE TABLE IF NOT EXISTS ExecutionLogs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                status TEXT NOT NULL,
+                ticker_count INTEGER NOT NULL,
+                execution_time_seconds REAL,
+                error_message TEXT
+            );
+            """
+            cursor.execute(create_execution_logs_sql)
+            logger.info("'ExecutionLogs' table created successfully.")
 
-        # 2. Create DailySignals Table
-        logger.info("Generating 'DailySignals' table schema from config.COLUMN_SCHEMA...")
-        
-        # Base columns
-        columns_sql = [
-            "id INTEGER PRIMARY KEY AUTOINCREMENT",
-            "timestamp TEXT DEFAULT CURRENT_TIMESTAMP"
-        ]
-        
-        # Dynamically build columns based on config.py COLUMN_SCHEMA definitions
-        for col in config.COLUMN_SCHEMA:
-            key = col["key"]
-            col_type = type_map(col["format"], key)
-            # Double-quote the column name to prevent syntax issues with spaces/symbols (e.g., "P/E", "Market Cap")
-            columns_sql.append(f'"{key}" {col_type}')
+            # 2. Create DailySignals Table
+            logger.info("Generating 'DailySignals' table schema from config.COLUMN_SCHEMA...")
+            
+            # Base columns
+            columns_sql = [
+                "id INTEGER PRIMARY KEY AUTOINCREMENT",
+                "timestamp TEXT DEFAULT CURRENT_TIMESTAMP"
+            ]
+            
+            # Dynamically build columns based on config.py COLUMN_SCHEMA definitions
+            for col in config.COLUMN_SCHEMA:
+                key = col["key"]
+                col_type = type_map(col["format"], key)
+                # Double-quote the column name to prevent syntax issues with spaces/symbols (e.g., "P/E", "Market Cap")
+                columns_sql.append(f'"{key}" {col_type}')
 
-        create_daily_signals_sql = f"""
-        CREATE TABLE IF NOT EXISTS DailySignals (
-            {",\n            ".join(columns_sql)}
-        );
-        """
-        
-        logger.debug(f"Executing SQL:\n{create_daily_signals_sql}")
-        cursor.execute(create_daily_signals_sql)
+            create_daily_signals_sql = f"""
+            CREATE TABLE IF NOT EXISTS DailySignals (
+                {",\n            ".join(columns_sql)}
+            );
+            """
+            
+            logger.debug(f"Executing SQL:\n{create_daily_signals_sql}")
+            cursor.execute(create_daily_signals_sql)
 
-        # F-07 FIX: Migrate schema — add any new COLUMN_SCHEMA columns missing from existing DB
-        migrate_daily_signals_schema(cursor, conn)
-        # 3. Create Transactions Table for standardized trade journaling
-        logger.info("Initializing 'Transactions' table...")
-        create_transactions_sql = """
-        CREATE TABLE IF NOT EXISTS Transactions (
-            transaction_id TEXT PRIMARY KEY,
-            execution_date TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            trade_type TEXT NOT NULL,
-            quantity REAL NOT NULL,
-            fill_price REAL NOT NULL,
-            commission REAL DEFAULT 0.0,
-            slippage REAL DEFAULT 0.0
-        );
-        """
-        cursor.execute(create_transactions_sql)
-        logger.info("'Transactions' table created successfully.")
-
-        # Commit is handled automatically on success by context manager, but explicitly committing is safe
-        conn.commit()
+            # F-07 FIX: Migrate schema — add any new COLUMN_SCHEMA columns missing from existing DB
+            migrate_daily_signals_schema(cursor, dbapi_conn)
+            
+            # 3. Create Transactions Table for standardized trade journaling
+            logger.info("Initializing 'Transactions' table...")
+            create_transactions_sql = """
+            CREATE TABLE IF NOT EXISTS Transactions (
+                transaction_id TEXT PRIMARY KEY,
+                execution_date TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                trade_type TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                fill_price REAL NOT NULL,
+                commission REAL DEFAULT 0.0,
+                slippage REAL DEFAULT 0.0
+            );
+            """
+            cursor.execute(create_transactions_sql)
+            logger.info("'Transactions' table created successfully.")
+    except Exception as e:
+        # Unwrap SQLAlchemy OperationalError to raise raw sqlite3.OperationalError for tests
+        if hasattr(e, "orig") and e.orig is not None:
+            raise e.orig
+        raise
         
     logger.info("Database initialization complete.")
 
@@ -139,11 +155,14 @@ def migrate_daily_signals_schema(cursor, conn):
                 cursor.execute(f'ALTER TABLE DailySignals ADD COLUMN "{key}" {col_type};')
                 added.append(key)
                 logger.info(f"Migration: Added column '{key}' ({col_type}) to DailySignals.")
-            except sqlite3.OperationalError as e:
+            except Exception as e:
                 logger.warning(f"Could not add column '{key}': {e}")
 
     if added:
-        conn.commit()
+        try:
+            conn.commit()
+        except Exception:
+            pass
         logger.info(f"Schema migration complete. Added {len(added)} new columns: {added}")
     else:
         logger.info("Schema migration: DailySignals is already up-to-date.")

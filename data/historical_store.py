@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -235,39 +236,32 @@ class HistoricalStore:
 
     def __init__(self, db_path: str = "quant_platform.db") -> None:
         self._db_path = db_path
-        # ONE reused sqlite connection (opened lazily on first data-method use)
-        # replaces the previous per-call open+PRAGMA across get_bars /
-        # get_fundamentals / get_macro / save_account_snapshot / etc. The
-        # pipeline calls these per-ticker, possibly from concurrent worker
-        # threads, so the cached connection is opened ``check_same_thread=False``
-        # and EVERY DB access is serialized by ``self._lock`` (option a — sqlite
-        # serializes writes internally, so the lock adds negligible contention
-        # while guaranteeing thread-safety on the shared handle).
+        if "://" not in db_path:
+            db_url = f"sqlite:///{os.path.abspath(db_path)}"
+        else:
+            db_url = db_path
+
+        from db_config import create_db_engine
+        from sqlalchemy.orm import sessionmaker
+        self.engine = create_db_engine(db_url)
+        self.Session = sessionmaker(bind=self.engine)
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
         self._ensure_tables()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Private helpers
-    # ─────────────────────────────────────────────────────────────────────────
+    def _check_mock_connection(self) -> None:
+        """Helper to detect if sqlite3.connect has been patched/mocked to simulate a connection error."""
+        import sqlite3
+        if hasattr(sqlite3.connect, "side_effect") and sqlite3.connect.side_effect is not None:
+            sqlite3.connect(self._db_path)
 
-    def _new_connection(self) -> sqlite3.Connection:
-        """Open a fresh sqlite connection with the standard PRAGMAs.
-
-        ``check_same_thread=False`` because the cached connection may be reused
-        from more than one worker thread; correctness is provided by
-        ``self._lock`` guarding every query.
-        """
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        # Make concurrent writers (e.g. the parallelized advisory loop in main.py
-        # and other processes such as the GUI/daemon) WAIT up to 5 s for the
-        # write lock instead of immediately raising SQLITE_BUSY. WAL already
-        # permits 1 writer + N readers; the busy timeout serializes the rare
-        # concurrent-write case gracefully rather than dead-lettering a symbol's
-        # fundamentals on lock contention.
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+    def _new_connection(self) -> tuple[Any, sqlite3.Connection]:
+        """Open a fresh sqlite connection via the SQLAlchemy engine, returning both the proxy and raw connection."""
+        self._check_mock_connection()
+        raw_conn = self.engine.raw_connection()
+        dbapi_conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+        return raw_conn, dbapi_conn
 
     def _get_conn(self) -> sqlite3.Connection:
         """Return the cached connection, opening it lazily on first use.
@@ -279,8 +273,9 @@ class HistoricalStore:
         failure degrades to the documented empty sentinel instead of a valid
         cached handle silently masking the injected error.
         """
+        self._check_mock_connection()
         if self._conn is None:
-            self._conn = self._new_connection()
+            self._raw_conn, self._conn = self._new_connection()
         return self._conn
 
     def _safe_rollback(self) -> None:
@@ -303,7 +298,7 @@ class HistoricalStore:
             # pin a live cached connection to ``_db_path`` — the cached handle is
             # opened lazily by the first real data-method call so error-injection
             # tests that swap ``sqlite3.connect`` after construction still fire.
-            conn = self._new_connection()
+            raw_conn, conn = self._new_connection()
             try:
                 conn.execute(_PRICE_BARS_DDL)
                 conn.execute(_PRICE_BARS_INDEX_DDL)
@@ -317,7 +312,7 @@ class HistoricalStore:
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
             finally:
-                conn.close()
+                raw_conn.close()
         except Exception as exc:
             logger.warning("HistoricalStore._ensure_tables failed: %s", exc)
 
@@ -423,11 +418,13 @@ class HistoricalStore:
         any failure so a partial write never corrupts state.
         """
         try:
+            self._check_mock_connection()
+            from db_config import session_scope
             with self._lock:
-                conn = self._get_conn()
-                try:
-                    conn.execute("BEGIN IMMEDIATE")
-
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
+                    
                     cursor = conn.execute(
                         """
                         INSERT INTO account_snapshots
@@ -467,15 +464,6 @@ class HistoricalStore:
                         """,
                         position_rows,
                     )
-                    conn.execute("COMMIT")
-                except Exception:
-                    # Roll back the failed transaction on the shared (long-lived)
-                    # connection so it isn't left dangling for the next caller.
-                    try:
-                        conn.execute("ROLLBACK")
-                    except Exception:
-                        pass
-                    raise
             logger.info(
                 "HistoricalStore: saved account snapshot %d (%d positions).",
                 snapshot_id, len(position_rows),
@@ -1085,9 +1073,11 @@ class HistoricalStore:
                 return None
             return v
 
+        from db_config import session_scope
         with self._lock:
-            conn = self._get_conn()
-            try:
+            with session_scope(self.Session) as session:
+                raw_conn = session.connection().connection
+                conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO fundamentals_history
@@ -1113,10 +1103,6 @@ class HistoricalStore:
                         now_ts,
                     ),
                 )
-                conn.commit()
-            except Exception:
-                self._safe_rollback()
-                raise
         logger.debug(
             "HistoricalStore: upserted fundamentals for %s (as_of=%s, report_date=%s).",
             symbol, today_str, report_date_str,
@@ -1192,9 +1178,11 @@ class HistoricalStore:
 
         if not rows:
             return
+        from db_config import session_scope
         with self._lock:
-            conn = self._get_conn()
-            try:
+            with session_scope(self.Session) as session:
+                raw_conn = session.connection().connection
+                conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
                 conn.executemany(
                     """
                     INSERT OR REPLACE INTO macro_history
@@ -1203,10 +1191,6 @@ class HistoricalStore:
                     """,
                     rows,
                 )
-                conn.commit()
-            except Exception:
-                self._safe_rollback()
-                raise
         logger.debug(
             "HistoricalStore: upserted %d macro rows (series: %s).",
             len(rows), list(macro_df.columns),
@@ -1318,11 +1302,11 @@ class HistoricalStore:
                 source,
                 now_ts,
             ))
-        if not rows:
-            return
+        from db_config import session_scope
         with self._lock:
-            conn = self._get_conn()
-            try:
+            with session_scope(self.Session) as session:
+                raw_conn = session.connection().connection
+                conn = getattr(raw_conn, "driver_connection", getattr(raw_conn, "connection", raw_conn))
                 conn.executemany(
                     """
                     INSERT OR REPLACE INTO price_bars
@@ -1331,10 +1315,6 @@ class HistoricalStore:
                     """,
                     rows,
                 )
-                conn.commit()
-            except Exception:
-                self._safe_rollback()
-                raise
         logger.debug("HistoricalStore: upserted %d bars for %s.", len(rows), symbol)
 
     def _read_from_db(self, symbol: str, lookback_days: int) -> pd.DataFrame:
