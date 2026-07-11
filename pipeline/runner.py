@@ -66,3 +66,29 @@ class PipelineRunner:
             if progress is not None:
                 progress.start_stage(step.name, symbols_total=len(ctx.symbols))
             step.run(ctx)
+
+
+class AsyncPipelineRunner:
+    """Runs an ordered list of async/sync steps against one RunContext."""
+
+    def __init__(self, steps: List[Any]) -> None:
+        self._steps = steps
+
+    async def run(self, ctx: "RunContext", progress: Optional["ProgressReporter"] = None) -> None:
+        import asyncio
+        ctx.progress = progress
+        for step in self._steps:
+            if step.should_skip(ctx):
+                logger.debug(
+                    "Pipeline step '%s' skipped (stopped=%s, reason=%s).",
+                    step.name, ctx.stopped, ctx.stop_reason,
+                )
+                continue
+            if progress is not None:
+                progress.start_stage(step.name, symbols_total=len(ctx.symbols))
+            
+            if asyncio.iscoroutinefunction(step.run):
+                await step.run(ctx)
+            else:
+                await asyncio.to_thread(step.run, ctx)
+

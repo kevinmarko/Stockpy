@@ -56,6 +56,14 @@ class RunContext:
     recommendations: List["Recommendation"] = field(default_factory=list)
     errors: List[dict] = field(default_factory=list)
 
+    # ── Production-specific state (main_orchestrator.py) ─────────────────────
+    engine_context: Optional[Any] = None
+    tech_raw: Dict[str, Any] = field(default_factory=dict)
+    fund_raw: Dict[str, Any] = field(default_factory=dict)
+    macro_raw: Dict[str, Any] = field(default_factory=dict)
+    dashboard_df: Optional[Any] = None
+    dashboard_schema_validated: bool = False
+
     # ── Early-exit signaling ─────────────────────────────────────────────────
     # A step sets stopped=True (with an optional stop_reason) to short-circuit
     # every remaining step. PipelineRunner checks this via each step's
