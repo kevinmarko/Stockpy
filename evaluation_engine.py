@@ -458,7 +458,23 @@ class EvaluationEngine:
                 df[col] = np.nan
         
         store = TransactionsStore()
-        
+
+        # Batch pre-fetch technical history for ALL symbols ONCE, up front, instead
+        # of a per-row fetch_technical_raw([symbol]) call inside the loop below.
+        # fetch_technical_raw is a batch API (list in, internally parallel); calling
+        # it one symbol at a time defeats that parallelism (a latent N+1 fetch). The
+        # dict-provider fast path is already fully pre-fetched, so mirror it here by
+        # materializing one result dict for the live-provider path too.
+        prefetched_tech: dict = {}
+        if data_provider is not None and hasattr(data_provider, 'fetch_technical_raw'):
+            try:
+                symbols = df['Symbol'].dropna().unique().tolist()
+                if symbols:
+                    prefetched_tech = data_provider.fetch_technical_raw(symbols) or {}
+            except Exception as e:
+                logger.warning(f"Batch technical pre-fetch failed: {e}")
+                prefetched_tech = {}
+
         # 1. Evaluate MAE / MFE / Edge Ratio / Slippage against real trade history
         eval_results = {}
         for idx, row in df.iterrows():
@@ -492,8 +508,9 @@ class EvaluationEngine:
                 if data_provider is not None:
                     try:
                         if hasattr(data_provider, 'fetch_technical_raw'):
-                            raw_tech = data_provider.fetch_technical_raw([symbol])
-                            history_df = raw_tech.get(symbol) if raw_tech else None
+                            # Index into the single batch pre-fetch above instead of
+                            # re-fetching this symbol on its own (latent N+1).
+                            history_df = prefetched_tech.get(symbol)
                         elif isinstance(data_provider, dict):
                             history_df = data_provider.get(symbol)
                         else:

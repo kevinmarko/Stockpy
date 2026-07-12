@@ -155,6 +155,9 @@ SECRET_KEYS: tuple[str, ...] = (
     "RH_USERNAME",
     "RH_PASSWORD",
     "RH_MFA_SECRET",
+    # Postgres/Supabase DSN — may embed user:pass@host; never logged, never
+    # returned in cleartext by the GUI (CONSTRAINT #3).
+    "DATABASE_URL",
     "ALERT_WEBHOOK_URL",
     # Bearer token for the read-only State API (api/state_api.py). Treated like a
     # webhook/token secret — masked, never GUI-writable (CONSTRAINT #3).
@@ -181,6 +184,7 @@ SECRET_KEYS: tuple[str, ...] = (
     "PROMPT_REGISTRY_TOKEN",         # bearer read-token
     "PROMPT_REGISTRY_PUBLISH_TOKEN", # higher-privilege publish credential
     "PROMPT_REGISTRY_SIGNING_KEY",   # HMAC-SHA256 verification key
+    "PROMPT_REGISTRY_CREDENTIALS",   # Firestore service-account JSON blob
     # Tier 9 — Claude + Gemini commentary credentials.  CONSTRAINT #3 — these
     # are NEVER GUI-writable; hand-edit .env to set / rotate them.
     "ANTHROPIC_API_KEY",

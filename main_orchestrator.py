@@ -71,6 +71,7 @@ from diagnostics_and_visuals import (
 # telemetry for the GUI. Import is cheap (stdlib + settings only), no
 # circular-import risk. See _PROGRESS_STAGES below for the stage contract.
 from reporting.progress import ProgressReporter
+from reporting.state_snapshot import _safe_float_or_none
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -437,24 +438,6 @@ async def _execute_broker_orders(
         telemetry.error(
             "_execute_broker_orders crashed (non-fatal): %s", exc, exc_info=True
         )
-
-
-def _safe_float_or_none(val) -> Optional[float]:
-    """Coerce *val* to float, or ``None`` when missing/NaN.
-
-    Used for optional analytics fields (cross-sectional momentum,
-    multifactor z-scores) written into ``state_snapshot.json`` — CONSTRAINT
-    #4 forbids fabricating a ``0.0`` default when a signal module simply
-    didn't produce a value for this ticker (e.g. microcap-excluded from
-    multifactor scoring, or insufficient history for the XSec rank).
-    ``json.dumps`` serialises ``None`` as JSON ``null``, which the GUI reader
-    treats identically to a missing key.
-    """
-    try:
-        f = float(val)
-        return None if pd.isna(f) else f
-    except (TypeError, ValueError):
-        return None
 
 
 def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: list) -> None:

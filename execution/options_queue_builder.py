@@ -494,7 +494,8 @@ def build_options_execution_queue(
     try:
         kill_switch_active = GlobalKillSwitch().is_active()
     except Exception as exc:
-        logger.debug("options_queue_builder: kill-switch check failed (%s); assuming inactive", exc)
+        kill_switch_active = True
+        logger.warning("options_queue_builder: kill-switch check failed (%s); assuming ACTIVE for safety", exc)
 
     max_notional = _max_notional()
     gate = PreTradeRiskGate()

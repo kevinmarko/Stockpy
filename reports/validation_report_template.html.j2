@@ -435,6 +435,48 @@
                 <span class="split-value">{{ "%.2f"|format(avg_trade_pct * 100) }}%</span>
             </div>
         </section>
+
+        {% if family_multiple_testing and family_multiple_testing.family_dsr %}
+        <!-- FAMILY-WISE MULTIPLE-TESTING CORRECTION (read-only; does NOT affect the
+             deployability gate). Own DSR deflates for a single strategy's trial
+             count; family DSR additionally deflates for the number of strategies
+             validated together, and BH marks Benjamini-Hochberg significance. -->
+        <section class="section-box">
+            <h2>Family-Wise Multiple-Testing Correction</h2>
+            <div class="card-footer" style="margin-bottom: 1.5rem;">
+                Corrects the Deflated Sharpe Ratio for selection across the
+                {{ family_multiple_testing.strategy_ids|length }} strategy(ies) validated
+                together. The family-corrected DSR is always &le; each strategy's own DSR.
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Strategy</th><th>SR (observed)</th><th>Own DSR</th><th>Family DSR</th><th>BH Significant</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for entry in family_multiple_testing.family_dsr %}
+                    {% set bh = family_multiple_testing.bh_rejected %}
+                    {% set rejected = bh[loop.index0] if bh is not none and loop.index0 < bh|length else none %}
+                    <tr>
+                        <td>{{ entry.strategy_id }}</td>
+                        <td>{{ "%.2f"|format(entry.sharpe_observed) }}</td>
+                        <td class="{% if entry.dsr_single_strategy > 0.95 %}success{% else %}danger{% endif %}">{{ "%.2f"|format(entry.dsr_single_strategy * 100) }}%</td>
+                        <td class="{% if entry.dsr_family_corrected > 0.95 %}success{% else %}danger{% endif %}">{{ "%.2f"|format(entry.dsr_family_corrected * 100) }}%</td>
+                        {% if rejected is none %}
+                        <td>—</td>
+                        {% else %}
+                        <td class="{% if rejected %}success{% else %}danger{% endif %}">{{ "YES" if rejected else "NO" }}</td>
+                        {% endif %}
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% if family_multiple_testing.summary_text %}
+            <div class="card-footer" style="margin-top: 1.5rem; white-space: pre-wrap; font-family: monospace;">{{ family_multiple_testing.summary_text }}</div>
+            {% endif %}
+        </section>
+        {% endif %}
     </div>
 </body>
 </html>
