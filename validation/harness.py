@@ -143,6 +143,51 @@ class ValidationReport:
         max_dd_pass = (not np.isnan(self.max_dd)) and (self.max_dd < MAX_DRAWDOWN_MAX)
         return bool(pbo_pass and dsr_pass and sharpe_pass and max_dd_pass and self.stress_gate_passed)
 
+    @property
+    def family_bh_significant(self) -> Optional[bool]:
+        """Whether this strategy survives family-wise (Benjamini-Hochberg FDR)
+        multiple-testing correction across every strategy summary on disk.
+
+        ADVISORY ONLY — returns ``None`` until the family sweep has populated
+        ``family_multiple_testing`` (i.e. it is unknown at the first JSON write,
+        before ``compute_family_multiple_testing_report`` runs). Looks this
+        strategy up by name in the parallel ``strategy_ids`` / ``bh_rejected``
+        lists; ``None`` if the name isn't present or the lists are malformed.
+        """
+        fmt = self.family_multiple_testing
+        if not fmt:
+            return None
+        ids = fmt.get("strategy_ids") or []
+        rejected = fmt.get("bh_rejected") or []
+        try:
+            i = ids.index(self.name)
+        except ValueError:
+            return None
+        if i >= len(rejected):
+            return None
+        return bool(rejected[i])
+
+    @property
+    def family_deployable(self) -> Optional[bool]:
+        """ADVISORY verdict — deliberately SEPARATE from the hard ``deployable``
+        gate and never a substitute for it.
+
+        ``deployable AND family_bh_significant`` — i.e. the strategy passes all
+        the single-strategy gates AND survives family-wise multiple-testing
+        correction. Strictly more conservative than ``deployable``.
+
+        Returns ``None`` when the family sweep hasn't run yet (verdict unknown),
+        NOT ``False`` — an unknown family verdict must never read as a rejection.
+        The family correction depends on which sibling ``*_validation_summary.json``
+        files happen to be on disk (run-order / batch dependent), so it is
+        surfaced as advisory context only and MUST NOT be wired into the hard
+        deploy decision.
+        """
+        sig = self.family_bh_significant
+        if sig is None:
+            return None
+        return bool(self.deployable and sig)
+
     def to_summary_dict(self) -> dict:
         """Return a JSON-serialisable summary suitable for the preflight check and dashboard."""
         from datetime import datetime, timezone
@@ -167,6 +212,11 @@ class ValidationReport:
         return {
             "strategy_id": self.name,
             "deployable": self.deployable,
+            # ADVISORY family-wise verdict (see family_deployable /
+            # family_bh_significant). Separate from the hard `deployable` gate;
+            # None until the family multiple-testing sweep has run.
+            "family_deployable": self.family_deployable,
+            "family_bh_significant": self.family_bh_significant,
             "pbo": float(self.pbo),
             "dsr": float(self.dsr),
             "sharpe": float(self.sharpe) if not np.isnan(self.sharpe) else None,
