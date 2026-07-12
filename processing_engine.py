@@ -123,7 +123,10 @@ class ProcessingEngine:
             spy_df = spy_df.sort_index()
             spy_return = (spy_df['Close'].iloc[-1] - spy_df['Close'].iloc[0]) / spy_df['Close'].iloc[0]
         else:
-            spy_return = 0.0
+            # No SPY benchmark history available -> relative strength is undefined.
+            # NaN (never a fabricated 0.0) so rs_vs_spy below becomes NaN rather than
+            # misreporting the stock's raw return as relative outperformance.
+            spy_return = float('nan')
 
         # Calculate realized slippage (Topic 28)
         # EXPLANATION: The research engine returns a float directly for the slippage metric now.
@@ -181,7 +184,10 @@ class ProcessingEngine:
                 downside_returns = df.loc[df['Pct_Change'] < 0, 'Pct_Change']
                 downside_std = downside_returns.std()
                 
-                sortino = 0.0
+                # NaN (never a fabricated 0.0) when downside deviation is zero or
+                # undefined -- an honest "insufficient/zero downside" reading.
+                # signals/sortino_drawdown.py treats NaN as "abstain".
+                sortino = float('nan')
                 if downside_std > 0:
                     sortino = (avg_return * 252) / (downside_std * np.sqrt(252))
 
@@ -227,8 +233,10 @@ class ProcessingEngine:
                 # Compute time-series momentum metrics
                 df = self.calculate_momentum_metrics(df)
 
-                pct_change = df['Close'].pct_change()
-                hv = pct_change.std() * np.sqrt(252) if not pct_change.isna().all() else 0.0
+                # Reuse the already-computed df['Pct_Change'] (== df['Close'].pct_change()
+                # from the RISK METRICS block above) instead of recomputing it.
+                # NaN (never a fabricated 0% vol) when no valid returns exist.
+                hv = df['Pct_Change'].std() * np.sqrt(252) if not df['Pct_Change'].isna().all() else float('nan')
                 
                 # Extract Latest
                 last_row = df.iloc[-1]

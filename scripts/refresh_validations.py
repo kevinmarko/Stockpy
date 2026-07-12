@@ -73,6 +73,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from validation.thresholds import (
+    PBO_MAX,
+    DSR_MIN,
+    NET_SHARPE_MIN,
+    MAX_DRAWDOWN_MAX,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -636,13 +643,15 @@ def run_validations(
             summary = report.to_summary_dict()
             results[name] = summary
             logger.info(
-                "  %-32s deployable=%-5s  Sharpe=%s  PBO=%s  DSR=%s",
+                "  %-32s deployable=%-5s  Sharpe=%s  PBO=%s  DSR=%s  MaxDD=%s",
                 name,
                 summary.get("deployable"),
                 f"{summary.get('sharpe', float('nan')):.3f}"
                 if summary.get("sharpe") is not None else "  —  ",
                 f"{summary.get('pbo', float('nan')):.3f}",
                 f"{summary.get('dsr', float('nan')):.3f}",
+                f"{summary.get('max_drawdown'):.3f}"
+                if summary.get("max_drawdown") is not None else "  —  ",
             )
 
         except Exception as exc:  # CONSTRAINT #6 — per-strategy dead-letter
@@ -663,15 +672,58 @@ def run_validations(
 # CLI helpers
 # =============================================================================
 
+def _fail_reason(s: dict) -> str:
+    """Re-derive which deployability gate(s) a FAIL strategy missed.
+
+    Mirrors ``ValidationReport.deployable`` (validation/harness.py) exactly,
+    reading the shared thresholds from ``validation.thresholds`` — so an
+    all-green Sharpe/PBO/DSR row that still fails on Max Drawdown or the
+    options-selling stress gate shows a concrete reason instead of nothing.
+    Returns a compact ``, ``-joined string (empty if nothing tripped).
+    """
+    reasons: List[str] = []
+
+    md = s.get("max_drawdown")
+    if md is None:
+        reasons.append("MaxDD n/a")
+    elif float(md) >= MAX_DRAWDOWN_MAX:
+        reasons.append(f"MaxDD {float(md) * 100:.0f}%>{MAX_DRAWDOWN_MAX * 100:.0f}%")
+
+    pbo = s.get("pbo")
+    if pbo is not None and not math.isnan(float(pbo)) and float(pbo) >= PBO_MAX:
+        reasons.append(f"PBO {float(pbo):.2f}>{PBO_MAX:.2f}")
+
+    dsr = s.get("dsr")
+    if dsr is not None and not math.isnan(float(dsr)) and float(dsr) <= DSR_MIN:
+        reasons.append(f"DSR {float(dsr):.2f}<{DSR_MIN:.2f}")
+
+    sharpe = s.get("sharpe")
+    if sharpe is None:
+        reasons.append("Sharpe n/a")
+    elif float(sharpe) <= NET_SHARPE_MIN:
+        reasons.append(f"Sharpe {float(sharpe):.2f}<{NET_SHARPE_MIN:.2f}")
+
+    # stress_gate_passed is True for non-options strategies (gate N/A), so an
+    # explicit False here always denotes a real options-selling stress failure.
+    if s.get("stress_gate_passed") is False:
+        reasons.append("stress")
+
+    return ", ".join(reasons)
+
+
 def _print_summary_table(results: Dict[str, dict]) -> None:
     """Print a compact ASCII pass/fail table to stdout."""
-    hdr = f"  {'Strategy':<32} {'Status':<10} {'Sharpe':>7} {'PBO':>7} {'DSR':>7}"
+    hdr = (
+        f"  {'Strategy':<32} {'Status':<10} {'Sharpe':>7} {'PBO':>7} "
+        f"{'DSR':>7} {'MaxDD':>8}  {'Reason'}"
+    )
     print()
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
 
     any_fail = False
     for name, s in results.items():
+        reason = ""
         if "error" in s:
             status = "ERROR"
             any_fail = True
@@ -680,17 +732,25 @@ def _print_summary_table(results: Dict[str, dict]) -> None:
         else:
             status = "❌ FAIL"
             any_fail = True
+            reason = _fail_reason(s)
 
         def _fmt(v: Any) -> str:
             if v is None or (isinstance(v, float) and math.isnan(v)):
                 return "   —  "
             return f"{float(v):.3f}"
 
+        def _fmt_pct(v: Any) -> str:
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                return "   —  "
+            return f"{float(v) * 100:.1f}%"
+
         print(
             f"  {name:<32} {status:<10} "
             f"{_fmt(s.get('sharpe')):>7} "
             f"{_fmt(s.get('pbo')):>7} "
-            f"{_fmt(s.get('dsr')):>7}"
+            f"{_fmt(s.get('dsr')):>7} "
+            f"{_fmt_pct(s.get('max_drawdown')):>8}  "
+            f"{reason}"
         )
 
     print()

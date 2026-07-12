@@ -24,6 +24,7 @@ from validation.stress_scenarios import (
     run_stress_tests,
     passes_stress_gate,
     format_stress_summary,
+    compute_max_drawdown,
 )
 from validation.thresholds import (
     PBO_MAX,
@@ -527,11 +528,9 @@ class StrategyValidationHarness:
         downside_std = downside_returns.std()
         sortino = (full_returns.mean() / downside_std * np.sqrt(252)) if downside_std > 0 else np.nan
         
-        # Max Drawdown
-        cum_returns = (1.0 + full_returns).cumprod()
-        running_max = cum_returns.cummax()
-        drawdowns = (cum_returns - running_max) / running_max
-        max_dd = abs(drawdowns.min()) if not drawdowns.empty else 0.0
+        # Max Drawdown — reuse the shared computation (returns NaN, not a
+        # fabricated 0.0, on empty input; the Calmar guard below tolerates NaN).
+        max_dd = compute_max_drawdown(full_returns)
         
         # Calmar
         calmar = (full_returns.mean() * 252 / max_dd) if max_dd > 0 else np.nan
@@ -754,6 +753,7 @@ class StrategyValidationHarness:
                 }
                 for r in (report.stress_test_results or {}).values()
             ],
+            family_multiple_testing=report.family_multiple_testing,
         )
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
