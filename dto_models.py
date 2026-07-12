@@ -7,6 +7,7 @@
 
 from typing import Optional, Dict, Any
 from datetime import datetime
+from functools import cached_property
 import math
 import logging
 
@@ -333,7 +334,7 @@ class MacroEconomicDTO(BaseDTO):
     def real_yield(self) -> float:
         return self.nominal_10y - self.inflation
 
-    @property
+    @cached_property
     def market_regime(self) -> str:
         """
         Implements top-down regime classification.
@@ -349,6 +350,15 @@ class MacroEconomicDTO(BaseDTO):
         every other case -- the HMM can only ever pull RISK ON back to
         NEUTRAL, never independently declare RECESSION/CREDIT EVENT, and
         never upgrade a worse rules-based regime.
+
+        Cached (functools.cached_property, not plain @property): this DTO's
+        inputs (yield_curve/credit_spread/sahm_rule_indicator/hmm_risk_on_probability)
+        are set once in __init__ and never mutated afterward by any real caller
+        (only test MagicMocks reassign attributes post-construction), so the
+        classification is invariant per instance. A single shared MacroEconomicDTO
+        is read multiple times per symbol across a 30+-symbol advisory cycle;
+        without caching, the disagreement WARNING above re-logs on every access
+        (100+ near-duplicate log lines per run for no functional reason).
         """
         rules_regime = self._rules_based_regime
 
