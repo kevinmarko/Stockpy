@@ -552,6 +552,15 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     # NaN (never fabricated 0.0 — CONSTRAINT #4) when absent.
                     "news_sentiment": _safe_float_or_none(row.get("News_Sentiment")),
                     "covar_proxy": _safe_float_or_none(row.get("CoVaR Proxy")),
+                    # GICS sector — already carried in dashboard_df via
+                    # config.COLUMN_SCHEMA (header "Sector", internal key
+                    # "sector"; populated by processing_engine from the
+                    # FundamentalDataDTO). Threaded here so the downstream
+                    # sector-allocation view is fed identically from both the
+                    # orchestrator and advisory (reporting/state_snapshot.py)
+                    # writers. "" (never fabricated — CONSTRAINT #4) when the
+                    # column is absent/blank for this ticker.
+                    "sector": str(row.get("sector", row.get("Sector", "")) or ""),
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

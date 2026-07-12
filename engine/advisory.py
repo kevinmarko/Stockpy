@@ -411,6 +411,10 @@ class Recommendation:
         (nothing to exit — never fabricated).  ``exit_fraction_strong_sell``
         (full exit) when Case A's loss+bearish-forecast escalation fired,
         otherwise ``exit_fraction_normal_sell`` (a trim) for a base-signal SELL.
+    sector : str
+        GICS sector string sourced from the symbol's ``FundamentalDataDTO``;
+        ``""`` when fundamentals were unavailable or the DTO carries no sector
+        (never fabricated — CONSTRAINT #4).
     """
 
     symbol: str
@@ -457,6 +461,14 @@ class Recommendation:
     sell_range: str = ""
     # Suggested fraction of the held quantity to exit on a SELL action.
     suggested_exit_pct: float = 0.0
+    # GICS sector string from the symbol's FundamentalDataDTO (source of truth
+    # for fundamentals — CONSTRAINT #4). ``""`` when fundamentals were
+    # unavailable this cycle or the DTO carries no sector — never fabricated.
+    # Threaded through to the persisted state snapshot so a downstream
+    # sector-allocation view can group holdings without a fresh fetch. Trailing
+    # default keeps existing positional ``Recommendation(...)`` constructions
+    # unaffected.
+    sector: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -1274,6 +1286,12 @@ def evaluate(
         buy_range=str(strategy_out.get("buyRange") or ""),
         sell_range=str(strategy_out.get("sellRange") or ""),
         suggested_exit_pct=round(suggested_exit_pct, 4),
+        # GICS sector from the fundamentals DTO (source of truth). "" when the
+        # fundamentals stage failed or the DTO carries no sector — never
+        # fabricated (CONSTRAINT #4). Populated inside the existing try/except
+        # dead-letter structure: on any fundamentals failure fund_dto is the
+        # neutral _default_fund_dto() (sector="Unknown"), so this read is safe.
+        sector=(fund_dto.sector or ""),
     )
 
 
