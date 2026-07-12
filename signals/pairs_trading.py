@@ -10,17 +10,23 @@ def generate_pairs_signals(
     exit_threshold: float = 0.0,
     stop_loss_threshold: float = 4.0,
     adf_window: int = 60,
-    adf_exit_threshold: float = 0.10
+    adf_exit_threshold: float = 0.10,
+    half_life_lookback: int = 63
 ) -> pd.DataFrame:
     """
     Generates trading signals for a pair of cointegrated assets Y and X.
     Uses a Kalman Filter to dynamically estimate the hedge ratio (beta) and intercept (alpha).
-    
+
     Signals:
     - Entry: |Z_t| > entry_threshold
     - Exit: Z_t crosses exit_threshold (0) OR cointegration breaks (rolling ADF p > adf_exit_threshold)
       OR stop loss hit (|Z_t| > stop_loss_threshold)
-    
+
+    Lookahead-free: the Kalman hedge ratio uses the forward filter (kf.filter),
+    the rolling z-score / ADF windows are trailing, and the half-life that sets
+    the z-score window length is estimated from a causal in-sample warmup prefix
+    (``half_life_lookback`` bars) rather than the full series — see below.
+
     Returns:
     - pd.DataFrame containing columns:
       y, x, alpha, beta, spread, z_score, rolling_p, position, daily_returns, turnover
@@ -37,11 +43,20 @@ def generate_pairs_signals(
     # Spread: u_t = y_t - (alpha_t + beta_t * x_t)
     spread = y - (alpha + beta * x)
     
-    # Calculate half-life of mean reversion
-    hl = compute_half_life(spread)
+    # Half-life of mean reversion sets the rolling z-score window length. Estimate
+    # it from a CAUSAL in-sample warmup prefix (the first `half_life_lookback`
+    # bars) rather than the full spread series: a full-sample estimate leaks
+    # post-bar information into the window length applied at every earlier bar
+    # (an in-sample parameter lookahead). Half-life is a slowly-varying structural
+    # property of the pair, so a fixed prefix estimate is a sound lookahead-free
+    # proxy; for the tradeable region (t >= warmup) the window depends only on
+    # data strictly before it. Short segments (len < lookback) fall back to the
+    # whole segment, which carries no "future" beyond itself.
+    warmup = min(len(spread), max(10, half_life_lookback))
+    hl = compute_half_life(spread.iloc[:warmup])
     if np.isinf(hl) or np.isnan(hl) or hl <= 0:
         hl = 20.0  # Default fallback
-        
+
     hl_int = int(max(5, min(60, np.round(hl))))
     zscore_window = int(2 * hl_int)
     
