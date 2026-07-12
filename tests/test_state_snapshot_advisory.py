@@ -39,7 +39,7 @@ def _position(qty: float, price: float) -> SimpleNamespace:
     return SimpleNamespace(quantity=qty, current_price=price)
 
 
-def _recommendation(symbol: str, **extra_ki) -> SimpleNamespace:
+def _recommendation(symbol: str, *, sector: str = "", **extra_ki) -> SimpleNamespace:
     key_indicators = {"score": 1.2, "garch_vol": 0.28}
     key_indicators.update(extra_ki)
     return SimpleNamespace(
@@ -53,6 +53,7 @@ def _recommendation(symbol: str, **extra_ki) -> SimpleNamespace:
         buy_range="Buy: $10 - $11",
         sell_range="Sell: $12 - $13",
         suggested_exit_pct=0.5,
+        sector=sector,
     )
 
 
@@ -77,8 +78,8 @@ def written_snapshot(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
 
-    rec_held = _recommendation("AAPL", garch_vol=0.28, value_z=1.5)
-    rec_unheld = _recommendation("MSFT")  # no multifactor keys at all
+    rec_held = _recommendation("AAPL", sector="Technology", garch_vol=0.28, value_z=1.5)
+    rec_unheld = _recommendation("MSFT")  # no multifactor keys, no sector
 
     result = SimpleNamespace(
         snapshot=SimpleNamespace(positions={"AAPL": _position(10.0, 150.0)}),
@@ -129,3 +130,17 @@ class TestPerSignalTelemetry:
         for key in ("value_z", "quality_z", "lowvol_z", "size_z", "multifactor_composite"):
             assert sig[key] is None, f"{key} must serialize as null when unavailable"
             assert sig[key] != 0.0
+
+    def test_sector_present_and_round_trips(self, written_snapshot):
+        """Sector string from Recommendation.sector is threaded into each
+        per-signal record (feeds the downstream sector-allocation view)."""
+        sig = _signal(written_snapshot, "AAPL")
+        assert "sector" in sig
+        assert sig["sector"] == "Technology"
+
+    def test_sector_defaults_to_empty_string_when_absent(self, written_snapshot):
+        """CONSTRAINT #4: a Recommendation with no sector emits "" (never
+        fabricated), and the key is always present for a consistent schema."""
+        sig = _signal(written_snapshot, "MSFT")
+        assert "sector" in sig
+        assert sig["sector"] == ""

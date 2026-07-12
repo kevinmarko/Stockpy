@@ -1,0 +1,17 @@
+{
+  "strategy_id": "timeseries_momentum",
+  "deployable": true,
+  "family_deployable": true,
+  "family_bh_significant": true,
+  "pbo": 0.18,
+  "dsr": 0.972,
+  "sharpe": 1.14,
+  "max_drawdown": 0.176,
+  "is_options_selling": false,
+  "stress_gate_passed": true,
+  "start_date": "2005-01-01",
+  "end_date": "2024-12-31",
+  "report_date": "2026-07-11",
+  "n_trials": 24,
+  "family_multiple_testing": null
+}

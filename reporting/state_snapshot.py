@@ -108,6 +108,12 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 "buy_range": rec.buy_range or "",
                 "sell_range": rec.sell_range or "",
                 "suggested_exit_pct": float(rec.suggested_exit_pct or 0.0),
+                # GICS sector from engine.advisory.Recommendation.sector (source
+                # of truth: the symbol's FundamentalDataDTO). getattr-guarded so
+                # an older Recommendation without the field degrades to "" rather
+                # than raising; null → "" (never fabricated — CONSTRAINT #4).
+                # Feeds a downstream sector-allocation view.
+                "sector": getattr(rec, "sector", "") or "",
                 # GUI telemetry parity with main_orchestrator._write_state_snapshot.
                 # garch_vol IS present in engine.advisory key_indicators — this
                 # fixes the Strategy Matrix "GARCH Vol" column that blanked on the

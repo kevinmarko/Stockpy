@@ -80,3 +80,14 @@ pip install*.md
 .coverage.*
 coverage.json
 htmlcov/
+
+# Pilots feature — follow store (local, per-operator runtime state; atomic
+# write-then-rename JSON produced by pilots/follows_store.py). Note output/ is
+# already blanket-ignored above; this line documents the artifact explicitly.
+output/follows.json
+
+# React PWA (webapp/) build + dependency artifacts — Vite/npm regenerate these;
+# never committed.
+webapp/node_modules/
+webapp/dist/
+webapp/.vite/

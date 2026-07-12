@@ -270,6 +270,42 @@ class TestRecommendationDataclass:
             )
             assert rec.action == action
 
+    def test_sector_defaults_to_empty_string(self):
+        """The additive ``sector`` field defaults to "" so existing positional
+        Recommendation(...) constructions stay valid (CONSTRAINT #4 — never a
+        fabricated sector)."""
+        from engine.advisory import Recommendation
+
+        rec = Recommendation(
+            symbol="AAPL",
+            action="HOLD",
+            strategy="test",
+            conviction=0.5,
+            rationale="r",
+            suggested_position_pct=0.0,
+            forecast=None,
+            key_indicators={},
+            data_quality="OK",
+        )
+        assert rec.sector == ""
+
+    def test_sector_accepts_explicit_value(self):
+        from engine.advisory import Recommendation
+
+        rec = Recommendation(
+            symbol="AAPL",
+            action="HOLD",
+            strategy="test",
+            conviction=0.5,
+            rationale="r",
+            suggested_position_pct=0.0,
+            forecast=None,
+            key_indicators={},
+            data_quality="OK",
+            sector="Technology",
+        )
+        assert rec.sector == "Technology"
+
 
 class TestConfigCompleteness:
     """All required CONFIG keys exist."""
@@ -459,6 +495,9 @@ class TestAcceptanceCriteria:
             )
 
         assert rec.action == "HOLD", f"Expected HOLD, got {rec.action}"
+        # Sector is threaded from the fundamentals DTO onto the Recommendation
+        # (feeds the downstream sector-allocation view).
+        assert rec.sector == "Utilities", f"Expected sector 'Utilities', got {rec.sector!r}"
         rationale_lower = rec.rationale.lower()
         assert "dividend" in rationale_lower or "divid" in rationale_lower, (
             "Rationale should mention dividends"

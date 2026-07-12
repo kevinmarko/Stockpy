@@ -117,6 +117,20 @@ class Settings(BaseSettings):
             "(desktop/orchestrator_daemon.py). Bound to 127.0.0.1 only."
         ),
     )
+    FOLLOW_API_TOKEN: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bearer token guarding the follow WRITE-path on the Pilots API "
+            "(api/pilots_api.py — PUT /follows, POST /pilots/{id}/follow). "
+            "SECRET — never GUI-writable, never logged. Like "
+            "ORCHESTRATOR_DAEMON_TOKEN and unlike STATE_API_TOKEN, this is "
+            "FAIL-CLOSED: when unset, the follow endpoints are disabled "
+            "entirely (403) rather than open — persisting a follow that "
+            "produces a gated order queue is a materially different risk than "
+            "reading already-persisted Pilot state. Read endpoints on the same "
+            "API use the fail-open STATE_API_TOKEN instead."
+        ),
+    )
 
     # --- Market-data layer (data/market_data.py) ---
     # Explicit provider override.  When absent the platform auto-selects:
@@ -824,6 +838,24 @@ class Settings(BaseSettings):
         description=(
             "Signal module names to exclude from SignalAggregator.aggregate(). "
             "JSON array in .env, e.g. [\"rsi2_mean_reversion\"]. Empty = all active."
+        ),
+    )
+
+    # --- Pilots (pilots/ package, api/pilots_api.py) ---
+    # Stockpy's own signal-module weight-blends packaged as copyable "Pilots".
+    # A Pilot's holdings are derived purely from the persisted
+    # output/state_snapshot.json signals[] (re-blending each module's raw score
+    # under the Pilot's custom weight vector — no engine imports on the read
+    # path). PILOTS_TOP_N caps the number of names any single Pilot advertises /
+    # mirrors, so both the Pilot-detail holdings list and the gated follow queue
+    # stay bounded.
+    PILOTS_TOP_N: int = Field(
+        default=20,
+        description=(
+            "Maximum number of top-scoring holdings a single Pilot surfaces "
+            "(pilots/scoring.py::pilot_holdings) and mirrors into the gated "
+            "follow queue (pilots/mirror.py). Positive scores only, normalized "
+            "to target weights before the top-N cut."
         ),
     )
 
