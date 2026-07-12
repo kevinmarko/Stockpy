@@ -5152,17 +5152,26 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and bug2b
 
-            # Verify main_orchestrator.py passes sahm_rule_indicator to MacroEconomicDTO
+            # Verify main_orchestrator.py (or, since the Phase 1-3 pipeline-steps
+            # refactor, pipeline/production_steps.py where run_pipeline's macro
+            # wiring now lives) passes sahm_rule_indicator to MacroEconomicDTO.
             import ast, pathlib
             orch_src = pathlib.Path("main_orchestrator.py").read_text()
-            tree = ast.parse(orch_src)
+            _sahm_scan_paths = [pathlib.Path("main_orchestrator.py")]
+            _prod_steps_path = pathlib.Path("pipeline/production_steps.py")
+            if _prod_steps_path.exists():
+                _sahm_scan_paths.append(_prod_steps_path)
+            combined_src = "\n".join(p.read_text() for p in _sahm_scan_paths)
+
             sahm_wired = False
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    for kw in getattr(node, "keywords", []):
-                        if kw.arg == "sahm_rule_indicator":
-                            sahm_wired = True
-                            break
+            for _p in _sahm_scan_paths:
+                tree = ast.parse(_p.read_text())
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        for kw in getattr(node, "keywords", []):
+                            if kw.arg == "sahm_rule_indicator":
+                                sahm_wired = True
+                                break
             audit["checks"].append({
                 "check": "BUG-2: main_orchestrator.py passes sahm_rule_indicator= to MacroEconomicDTO",
                 "passed": sahm_wired,
@@ -5171,18 +5180,17 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and sahm_wired
 
-            # Verify main_orchestrator.py calls calculate_sahm_rule (not _fallback_sentiment)
-            uses_sahm = "calculate_sahm_rule()" in orch_src
-            uses_fallback_as_sahm = "_fallback_sentiment" in orch_src and "sahm_val" in orch_src
+            # Verify calculate_sahm_rule (not _fallback_sentiment) is what feeds sahm_val
+            uses_sahm = "calculate_sahm_rule()" in combined_src
             # The fix: calculate_sahm_rule() should appear; _fallback_sentiment used as sahm_val is the bug
-            orch_src_lines = orch_src.splitlines()
+            combined_src_lines = combined_src.splitlines()
             fallback_sahm_proxy = any(
                 "_fallback_sentiment" in line and "sahm_val" in line
-                for line in orch_src_lines
+                for line in combined_src_lines
             )
             bug1_fixed = uses_sahm and not fallback_sahm_proxy
             audit["checks"].append({
-                "check": "BUG-1 (AST): main_orchestrator.py uses calculate_sahm_rule(), not _fallback_sentiment for sahm_val",
+                "check": "BUG-1 (AST): calculate_sahm_rule(), not _fallback_sentiment, feeds sahm_val",
                 "passed": bug1_fixed,
                 "detail": f"calculate_sahm_rule present={uses_sahm}, _fallback_sentiment used as sahm_val={fallback_sahm_proxy}",
             })
@@ -6428,13 +6436,24 @@ class GravityAIAuditor:
             # Check 4: exc_info=True in the pipeline crash handler
             # ``_main_body`` is a thin progress-instrumentation wrapper (added
             # by the progress-indicator-core work) around ``_main_body_impl``,
-            # which now holds the actual pipeline-crash ``critical()`` call --
-            # both must be scanned, not just the outer wrapper.
+            # which is itself now a thin wrapper (Phase 1-3 pipeline-steps
+            # refactor) delegating the actual run to ``pipeline.production_steps``
+            # step classes -- the real pipeline-crash ``critical()`` call now
+            # lives in ``RunPipelineStep.run``. All three sources must be
+            # scanned, not just the two orchestrator-level wrappers.
             import ast, inspect
             import main_orchestrator
+            _crash_handler_srcs = [
+                inspect.getsource(main_orchestrator._main_body),
+                inspect.getsource(main_orchestrator._main_body_impl),
+            ]
+            try:
+                import pipeline.production_steps as _prod_steps_mod
+                _crash_handler_srcs.append(inspect.getsource(_prod_steps_mod.RunPipelineStep))
+            except Exception:
+                pass
             exc_info_found = False
-            for _fn in (main_orchestrator._main_body, main_orchestrator._main_body_impl):
-                src = inspect.getsource(_fn)
+            for src in _crash_handler_srcs:
                 tree = ast.parse(src)
                 for node in ast.walk(tree):
                     if (
@@ -6451,8 +6470,16 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and exc_info_found
 
-            # Check 5: zero-replacement guard present in run_pipeline
+            # Check 5: zero-replacement guard present in run_pipeline.
+            # ``run_pipeline`` itself is now a thin dispatcher onto
+            # ``pipeline.production_steps`` step classes (Phase 1-3 refactor);
+            # the zero_mask guard lives in ``StrategyEvalStep`` now, so scan
+            # the whole module in addition to the dispatcher's own source.
             rp_src = inspect.getsource(main_orchestrator.run_pipeline)
+            try:
+                rp_src += "\n" + inspect.getsource(_prod_steps_mod)
+            except NameError:
+                pass
             zero_guard_present = "zero_mask" in rp_src or "<= 0.0" in rp_src
             audit["checks"].append({
                 "check": "run_pipeline replaces zero position_sizes with $10k default (zero_mask guard)",
@@ -6642,9 +6669,18 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: dead-letter write and try/except present in run_pipeline
+            # Check 9: dead-letter write and try/except present in run_pipeline.
+            # ``run_pipeline`` is now a thin dispatcher onto
+            # ``pipeline.production_steps`` step classes (Phase 1-3 refactor);
+            # the dead_letter_entries accumulator + JSON write now live in
+            # ``StrategyEvalStep``, so scan the whole module too.
             import main_orchestrator
             rp_src = inspect.getsource(main_orchestrator.run_pipeline)
+            try:
+                import pipeline.production_steps as _prod_steps_mod46
+                rp_src += "\n" + inspect.getsource(_prod_steps_mod46)
+            except Exception:
+                pass
             c9a = "dead_letter_entries" in rp_src
             c9b = "dead_letter.json" in rp_src
             c9 = c9a and c9b
@@ -7178,12 +7214,19 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c4
 
-            # Check 5: main_orchestrator wiring (AST scan)
+            # Check 5: main_orchestrator wiring (AST scan).
+            # ``compute_diff_from_history`` moved out of main_orchestrator.py
+            # into ``pipeline.production_steps.StateSnapshotStep`` (Phase 1-3
+            # pipeline-steps refactor) -- scan that module too.
             orch_src = Path("main_orchestrator.py").read_text(encoding="utf-8")
+            prod_steps_path51 = Path("pipeline/production_steps.py")
+            combined_src51 = orch_src
+            if prod_steps_path51.exists():
+                combined_src51 += "\n" + prod_steps_path51.read_text(encoding="utf-8")
             c5 = (
-                'rotate_snapshot' in orch_src
-                and '"holdings"' in orch_src
-                and 'compute_diff_from_history' in orch_src
+                'rotate_snapshot' in combined_src51
+                and '"holdings"' in combined_src51
+                and 'compute_diff_from_history' in combined_src51
             )
             audit["checks"].append({
                 "check": "main_orchestrator wires rotate_snapshot + holdings + compute_diff_from_history",
