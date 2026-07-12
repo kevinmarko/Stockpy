@@ -307,6 +307,28 @@ async def _heartbeat(output_dir, interval: int = 60) -> None:
         await asyncio.sleep(interval)
 
 
+def _kelly_target_qty(kelly_weight: float, equity: float, price: float) -> float:
+    """Convert a Kelly Target *portfolio weight* into a share quantity.
+
+    ``Kelly Target`` is a fraction of account equity (0..MAX_POSITION_WEIGHT),
+    NOT a share count — so a new long must be sized as
+    ``shares = weight * equity / price``. Previously the BUY path submitted a
+    hardcoded ``qty=1.0`` regardless of conviction, which both ignored the
+    sizing entirely and neutered ``PreTradeRiskGate.max_position_size_check``
+    (a 1-share notional trivially clears any position cap).
+
+    Returns ``0.0`` — a signal to SKIP, never a fabricated 1-share default
+    (CONSTRAINT #4) — when the order cannot be sized (non-positive weight,
+    equity, or price). The caller must treat ``0.0`` as "do not submit".
+    Fractional shares are preserved (rounded to 6 dp) so small accounts /
+    high-priced names aren't silently floored to zero; this mirrors the SELL
+    path, which already submits fractional quantities.
+    """
+    if kelly_weight <= 0.0 or equity <= 0.0 or price <= 0.0:
+        return 0.0
+    return round((kelly_weight * equity) / price, 6)
+
+
 async def _execute_broker_orders(
     final_df: "pd.DataFrame",
     dry_run: bool,
@@ -391,19 +413,38 @@ async def _execute_broker_orders(
 
             try:
                 if "BUY" in signal and kelly > 0 and symbol not in open_symbols:
+                    # Size the new long from the Kelly Target weight against live
+                    # account equity — NOT a hardcoded 1 share. An unsizable order
+                    # (no account equity available, missing/zero price, or a
+                    # quantity that rounds to 0) is SKIPPED rather than submitted
+                    # at an arbitrary size (CONSTRAINT #4).
+                    equity = float(account.equity) if account is not None else 0.0
+                    price = float(prices.get(symbol, 0.0) or 0.0)
+                    buy_qty = _kelly_target_qty(kelly, equity, price)
+                    if buy_qty <= 0.0:
+                        telemetry.warning(
+                            "Skipping BUY %s — cannot size order "
+                            "(kelly=%.4f, equity=%.2f, price=%.2f). Kelly Target is a "
+                            "portfolio weight and needs both equity and price to convert "
+                            "to shares.",
+                            symbol, kelly, equity, price,
+                        )
+                        continue
                     intent = OrderIntent(
                         strategy_id="main_pipeline",
                         symbol=symbol,
                         side=OrderSide.BUY,
-                        qty=1.0,
+                        qty=buy_qty,
                         order_type=OrderType.MARKET,
                     )
                     result = await om.submit_order_with_idempotency(
                         intent, timestamp=now, risk_context=risk_ctx
                     )
                     telemetry.info(
-                        "Order submitted: BUY %s -> status=%s broker_id=%s",
-                        symbol, result.status.value, result.broker_order_id,
+                        "Order submitted: BUY %s x %.6f (kelly=%.4f, equity=%.2f, "
+                        "price=%.2f) -> status=%s broker_id=%s",
+                        symbol, buy_qty, kelly, equity, price,
+                        result.status.value, result.broker_order_id,
                     )
 
                 elif signal in ("SELL", "TRIM") and symbol in open_symbols:
