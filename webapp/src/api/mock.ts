@@ -1,0 +1,598 @@
+/**
+ * mock.ts — realistic offline fixtures for every endpoint in api/pilots_api.py.
+ *
+ * Lets the whole PWA run with VITE_USE_MOCK=true and no backend. Data mirrors
+ * the Pilot catalog in the plan (Phase 1) and is deliberately HONEST:
+ *  - `momentum-burst` is NOT deployable (fails a validation gate) and renders so.
+ *  - `value-quality` has curve:null ("no backtest series yet"), never a fake line.
+ */
+
+import { ApiError } from "./types";
+import type {
+  Follow,
+  FollowResult,
+  Headline,
+  Holding,
+  PerfRange,
+  PerformanceResponse,
+  PilotDetail,
+  PilotSummary,
+  PilotTrade,
+  Portfolio,
+  SectorSlice,
+} from "./types";
+
+const SECTORS = [
+  "Technology",
+  "Financials",
+  "Healthcare",
+  "Consumer Disc.",
+  "Energy",
+  "Industrials",
+  "Communication",
+  "Utilities",
+];
+
+const NAMES: Record<string, string> = {
+  AAPL: "Apple",
+  MSFT: "Microsoft",
+  NVDA: "NVIDIA",
+  GOOGL: "Alphabet",
+  AMZN: "Amazon",
+  META: "Meta Platforms",
+  JPM: "JPMorgan Chase",
+  V: "Visa",
+  UNH: "UnitedHealth",
+  XOM: "Exxon Mobil",
+  CAT: "Caterpillar",
+  HD: "Home Depot",
+  COST: "Costco",
+  PG: "Procter & Gamble",
+  DUK: "Duke Energy",
+  T: "AT&T",
+  MRK: "Merck",
+  CVX: "Chevron",
+  LMT: "Lockheed Martin",
+  ADBE: "Adobe",
+};
+
+const SECTOR_OF: Record<string, string> = {
+  AAPL: "Technology",
+  MSFT: "Technology",
+  NVDA: "Technology",
+  ADBE: "Technology",
+  GOOGL: "Communication",
+  META: "Communication",
+  T: "Communication",
+  AMZN: "Consumer Disc.",
+  HD: "Consumer Disc.",
+  COST: "Consumer Disc.",
+  JPM: "Financials",
+  V: "Financials",
+  UNH: "Healthcare",
+  MRK: "Healthcare",
+  XOM: "Energy",
+  CVX: "Energy",
+  CAT: "Industrials",
+  LMT: "Industrials",
+  PG: "Consumer Disc.",
+  DUK: "Utilities",
+};
+
+function h(
+  sharpe: number | null,
+  dsr: number | null,
+  pbo: number | null,
+  dd: number | null,
+  deployable: boolean,
+  stress = true
+): Headline {
+  return {
+    sharpe,
+    dsr,
+    pbo,
+    max_drawdown: dd,
+    deployable,
+    stress_gate_passed: stress,
+  };
+}
+
+function holdings(
+  symbols: [string, number, number][] // [symbol, weight(raw), score]
+): Holding[] {
+  const total = symbols.reduce((s, [, w]) => s + w, 0);
+  return symbols.map(([symbol, w, score]) => ({
+    symbol,
+    name: NAMES[symbol] ?? symbol,
+    sector: SECTOR_OF[symbol] ?? "Other",
+    weight: +(w / total).toFixed(4),
+    score,
+    price: +(50 + Math.random() * 400).toFixed(2),
+  }));
+}
+
+function sectorAlloc(hs: Holding[]): SectorSlice[] {
+  const m = new Map<string, number>();
+  for (const x of hs) m.set(x.sector, (m.get(x.sector) ?? 0) + x.weight);
+  return [...m.entries()]
+    .map(([sector, weight]) => ({ sector, weight: +weight.toFixed(4) }))
+    .sort((a, b) => b.weight - a.weight);
+}
+
+function trades(hs: Holding[]): PilotTrade[] {
+  const sides = ["ENTER", "REWEIGHT", "EXIT"] as const;
+  const out: PilotTrade[] = [];
+  const now = Date.now();
+  for (let i = 0; i < Math.min(6, hs.length); i++) {
+    const holding = hs[i];
+    const side = sides[i % 3];
+    out.push({
+      date: new Date(now - i * 86400000 * 2).toISOString().slice(0, 10),
+      symbol: holding.symbol,
+      side,
+      weight_delta:
+        side === "EXIT"
+          ? -holding.weight
+          : +(holding.weight * (side === "ENTER" ? 1 : 0.4)).toFixed(4),
+      sector: holding.sector,
+    });
+  }
+  return out;
+}
+
+// ---- Pilot catalog (mirrors pilots/catalog.py) ----
+interface MockPilot {
+  summary: PilotSummary;
+  holdings: Holding[];
+  hasCurve: boolean;
+  curveDrift: number; // per-year drift for synthetic mock curve
+  curveVol: number;
+}
+
+const RAW: Array<{
+  id: string;
+  name: string;
+  category: PilotSummary["category"];
+  description: string;
+  headline: Headline;
+  long_only: boolean;
+  aum: number;
+  followers: number;
+  hasCurve: boolean;
+  drift: number;
+  vol: number;
+  syms: [string, number, number][];
+}> = [
+  {
+    id: "trend-following",
+    name: "Trend Follower",
+    category: "Trend",
+    description:
+      "Rides sustained multi-month price trends across large caps. Time-series momentum (Moskowitz/Ooi/Pedersen) — buys strength, cuts weakness.",
+    headline: h(1.12, 0.972, 0.31, 0.19, true),
+    long_only: false,
+    aum: 184200,
+    followers: 62,
+    hasCurve: true,
+    drift: 0.14,
+    vol: 0.13,
+    syms: [
+      ["NVDA", 30, 0.82],
+      ["MSFT", 24, 0.61],
+      ["AAPL", 20, 0.48],
+      ["CAT", 14, 0.4],
+      ["LMT", 12, 0.33],
+    ],
+  },
+  {
+    id: "rsi2-dip",
+    name: "Dip Buyer",
+    category: "Mean Reversion",
+    description:
+      "Connors-style RSI(2) mean reversion, long-only above the 200-day line. Buys short-term oversold dips in uptrending names; regime-gated off in stress.",
+    headline: h(0.83, 0.961, 0.38, 0.14, true),
+    long_only: true,
+    aum: 97400,
+    followers: 41,
+    hasCurve: true,
+    drift: 0.09,
+    vol: 0.1,
+    syms: [
+      ["COST", 26, 0.7],
+      ["HD", 22, 0.55],
+      ["V", 20, 0.5],
+      ["PG", 18, 0.42],
+      ["UNH", 14, 0.36],
+    ],
+  },
+  {
+    id: "multifactor",
+    name: "Factor Blend",
+    category: "Factor",
+    description:
+      "Fama-French-style multifactor tilt — Value, Quality, Low-Vol and Size, cross-sectionally z-scored. Diversified, low-turnover core sleeve.",
+    headline: h(0.94, 0.958, 0.34, 0.16, true),
+    long_only: true,
+    aum: 251900,
+    followers: 88,
+    hasCurve: true,
+    drift: 0.11,
+    vol: 0.11,
+    syms: [
+      ["JPM", 18, 0.44],
+      ["MRK", 16, 0.41],
+      ["XOM", 15, 0.39],
+      ["DUK", 14, 0.35],
+      ["V", 13, 0.33],
+      ["CVX", 12, 0.31],
+      ["UNH", 12, 0.3],
+    ],
+  },
+  {
+    id: "macd-trend",
+    name: "MACD Momentum",
+    category: "Momentum",
+    description:
+      "MACD + Aroon trend confirmation with a chop filter to suppress false crossovers. Medium-horizon momentum with a volatility-aware corridor.",
+    headline: h(1.01, 0.965, 0.29, 0.21, true),
+    long_only: false,
+    aum: 132600,
+    followers: 54,
+    hasCurve: true,
+    drift: 0.12,
+    vol: 0.14,
+    syms: [
+      ["NVDA", 28, 0.78],
+      ["META", 22, 0.6],
+      ["AMZN", 20, 0.52],
+      ["ADBE", 16, 0.44],
+      ["GOOGL", 14, 0.4],
+    ],
+  },
+  {
+    id: "cross-sectional-momentum",
+    name: "Relative Strength",
+    category: "Momentum",
+    description:
+      "Jegadeesh-Titman cross-sectional momentum (12-1m). Ranks the universe and holds the top decile of relative strength, rebalanced monthly.",
+    headline: h(1.05, 0.969, 0.33, 0.23, true),
+    long_only: false,
+    aum: 118300,
+    followers: 47,
+    hasCurve: true,
+    drift: 0.13,
+    vol: 0.15,
+    syms: [
+      ["NVDA", 26, 0.8],
+      ["MSFT", 20, 0.58],
+      ["META", 18, 0.5],
+      ["AAPL", 16, 0.44],
+      ["COST", 12, 0.36],
+      ["V", 8, 0.3],
+    ],
+  },
+  {
+    id: "balanced-blend",
+    name: "Balanced Blend",
+    category: "Blend",
+    description:
+      "The full Stockpy signal ensemble at production weights — momentum, trend, factor and mean-reversion combined. The all-weather default Pilot.",
+    headline: h(1.18, 0.978, 0.26, 0.15, true),
+    long_only: false,
+    aum: 402700,
+    followers: 133,
+    hasCurve: true,
+    drift: 0.15,
+    vol: 0.1,
+    syms: [
+      ["MSFT", 16, 0.6],
+      ["NVDA", 15, 0.72],
+      ["V", 13, 0.42],
+      ["UNH", 12, 0.4],
+      ["COST", 12, 0.44],
+      ["JPM", 11, 0.38],
+      ["HD", 11, 0.36],
+      ["MRK", 10, 0.34],
+    ],
+  },
+  {
+    id: "value-quality",
+    name: "Value + Quality",
+    category: "Factor",
+    description:
+      "Concentrated Value and Quality tilt (cheap, profitable, well-capitalized). Backtest series pending point-in-time fundamentals — metrics shown honestly.",
+    headline: h(null, null, null, null, false, false),
+    long_only: true,
+    aum: 38100,
+    followers: 19,
+    hasCurve: false, // curve:null — no fabricated line
+    drift: 0,
+    vol: 0,
+    syms: [
+      ["JPM", 22, 0.5],
+      ["CVX", 20, 0.46],
+      ["MRK", 18, 0.44],
+      ["PG", 16, 0.4],
+      ["XOM", 14, 0.38],
+      ["DUK", 10, 0.32],
+    ],
+  },
+  {
+    id: "momentum-burst",
+    name: "Momentum Burst",
+    category: "Momentum",
+    description:
+      "High-turnover short-horizon momentum. Fails the overfitting gate (PBO high, DSR below threshold) — shown as NOT deployable. Educational example of an honest fail.",
+    headline: h(0.41, 0.72, 0.63, 0.34, false, true),
+    long_only: false,
+    aum: 12400,
+    followers: 8,
+    hasCurve: true,
+    drift: 0.05,
+    vol: 0.26,
+    syms: [
+      ["NVDA", 34, 0.7],
+      ["META", 26, 0.55],
+      ["AMZN", 22, 0.48],
+      ["ADBE", 18, 0.4],
+    ],
+  },
+];
+
+const CATALOG: MockPilot[] = RAW.map((r) => {
+  const hs = holdings(r.syms);
+  const summary: PilotSummary = {
+    id: r.id,
+    name: r.name,
+    category: r.category,
+    description: r.description,
+    headline: r.headline,
+    holdings_count: hs.length,
+    aum_proxy: r.aum,
+    followers_proxy: r.followers,
+    long_only: r.long_only,
+  };
+  return {
+    summary,
+    holdings: hs,
+    hasCurve: r.hasCurve,
+    curveDrift: r.drift,
+    curveVol: r.vol,
+  };
+});
+
+function findPilot(id: string): MockPilot | undefined {
+  return CATALOG.find((p) => p.summary.id === id);
+}
+
+const RANGE_DAYS: Record<PerfRange, number> = {
+  "1W": 7,
+  "1M": 30,
+  "3M": 91,
+  "6M": 182,
+  "1Y": 365,
+  "2Y": 730,
+};
+
+// Deterministic pseudo-random for reproducible mock curves.
+function seeded(seed: number): () => number {
+  let s = seed % 2147483647;
+  if (s <= 0) s += 2147483646;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+
+function synthCurve(
+  id: string,
+  range: PerfRange,
+  drift: number,
+  vol: number,
+  base = 100
+) {
+  const days = RANGE_DAYS[range];
+  const step = days > 200 ? Math.ceil(days / 120) : 1;
+  const rng = seeded(
+    [...id].reduce((a, c) => a + c.charCodeAt(0), 0) + days
+  );
+  const dailyDrift = drift / 252;
+  const dailyVol = vol / Math.sqrt(252);
+  let v = base;
+  const out: { date: string; value: number }[] = [];
+  const now = Date.now();
+  for (let i = days; i >= 0; i -= step) {
+    const shock = (rng() - 0.5) * 2 * dailyVol * step;
+    v = v * (1 + dailyDrift * step + shock);
+    out.push({
+      date: new Date(now - i * 86400000).toISOString().slice(0, 10),
+      value: +v.toFixed(2),
+    });
+  }
+  return out;
+}
+
+// ---- Portfolio fixture ----
+const PORTFOLIO: Portfolio = {
+  total_equity: 48213.55,
+  buying_power: 6120.4,
+  total_unrealized_pl: 3182.19,
+  total_dividends: 412.66,
+  position_count: 6,
+  source: "cache",
+  fetched_at: new Date(Date.now() - 3600_000).toISOString(),
+  positions: [
+    pos("AAPL", 40, 168.2, 214.9),
+    pos("MSFT", 18, 372.5, 431.2),
+    pos("NVDA", 22, 88.4, 132.6),
+    pos("V", 30, 241.1, 279.8),
+    pos("COST", 6, 712.0, 889.4),
+    pos("DUK", 55, 96.3, 91.2),
+  ],
+};
+
+function pos(symbol: string, qty: number, avg: number, price: number) {
+  const mv = qty * price;
+  const pl = (price - avg) * qty;
+  return {
+    symbol,
+    name: NAMES[symbol] ?? symbol,
+    qty,
+    avg_cost: avg,
+    current_price: price,
+    market_value: +mv.toFixed(2),
+    unrealized_pl: +pl.toFixed(2),
+    unrealized_pl_pct: +((price / avg - 1) * 100).toFixed(2),
+  };
+}
+
+// ---- Local follows store (persisted to localStorage so the mock feels live) ----
+const FOLLOWS_KEY = "stockpy.mock.follows";
+
+function readFollows(): Follow[] {
+  try {
+    const raw = localStorage.getItem(FOLLOWS_KEY);
+    return raw ? (JSON.parse(raw) as Follow[]) : [];
+  } catch {
+    return [];
+  }
+}
+function writeFollows(fs: Follow[]) {
+  try {
+    localStorage.setItem(FOLLOWS_KEY, JSON.stringify(fs));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+const MOCK_MODE = "review" as const; // paper-first: nothing is ever placed
+const NOTIONAL_CAP = 2500;
+const MIN_AMOUNT = 100;
+
+async function delay<T>(v: T, ms = 260): Promise<T> {
+  return new Promise((res) => setTimeout(() => res(v), ms));
+}
+
+// ================= public mock API (shape-identical to client.ts) =================
+export const mockApi = {
+  async health() {
+    return delay({ status: "ok", mock: true }, 60);
+  },
+
+  async listPilots(): Promise<PilotSummary[]> {
+    return delay(CATALOG.map((p) => p.summary));
+  },
+
+  async getPilot(id: string): Promise<PilotDetail> {
+    const p = findPilot(id);
+    if (!p) throw notFound(id);
+    const detail: PilotDetail = {
+      ...p.summary,
+      holdings: p.holdings,
+      sector_allocation: sectorAlloc(p.holdings),
+      recent_trades: trades(p.holdings),
+      as_of: new Date(Date.now() - 5400_000).toISOString(),
+    };
+    return delay(detail);
+  },
+
+  async getPerformance(
+    id: string,
+    range: PerfRange
+  ): Promise<PerformanceResponse> {
+    const p = findPilot(id);
+    if (!p) throw notFound(id);
+    if (!p.hasCurve) {
+      return delay({
+        range,
+        metrics: p.summary.headline,
+        curve: null,
+        benchmark: null,
+        reason:
+          "No backtest series yet — this Pilot's validation report has no persisted return curve.",
+      });
+    }
+    return delay({
+      range,
+      metrics: p.summary.headline,
+      curve: synthCurve(id, range, p.curveDrift, p.curveVol),
+      benchmark: synthCurve("SPY-benchmark", range, 0.09, 0.09),
+    });
+  },
+
+  async getHoldings(id: string): Promise<Holding[]> {
+    const p = findPilot(id);
+    if (!p) throw notFound(id);
+    return delay(p.holdings);
+  },
+
+  async getTrades(id: string, limit = 20): Promise<PilotTrade[]> {
+    const p = findPilot(id);
+    if (!p) throw notFound(id);
+    return delay(trades(p.holdings).slice(0, limit));
+  },
+
+  async getPortfolio(): Promise<Portfolio> {
+    return delay(PORTFOLIO);
+  },
+
+  async getEquityCurve(range: PerfRange) {
+    return delay({
+      range,
+      curve: synthCurve("account-equity", range, 0.1, 0.08, 44000),
+    });
+  },
+
+  async getFollows(): Promise<Follow[]> {
+    return delay(readFollows(), 80);
+  },
+
+  async follow(id: string, amount: number): Promise<FollowResult> {
+    const p = findPilot(id);
+    if (!p) throw notFound(id);
+    const now = new Date().toISOString();
+    const existing = readFollows();
+    const prior = existing.find((f) => f.pilot_id === id);
+    const follow: Follow = {
+      pilot_id: id,
+      amount,
+      created_at: prior?.created_at ?? now,
+      updated_at: now,
+      status: amount <= 0 ? "cancelled" : "queued",
+    };
+    const next = existing.filter((f) => f.pilot_id !== id);
+    if (amount > 0) next.push(follow);
+    writeFollows(next);
+
+    const planned = p.holdings.map((hd) => ({
+      symbol: hd.symbol,
+      side: "BUY" as const,
+      target_notional: +Math.min(amount * hd.weight, NOTIONAL_CAP).toFixed(2),
+      weight: hd.weight,
+      conviction: +(0.55 + hd.score * 0.35).toFixed(2),
+      allow_place: false, // mock is review-mode; nothing is ever placeable
+    }));
+
+    return delay({
+      follow,
+      planned_intents: amount > 0 ? planned : [],
+      mode: MOCK_MODE,
+      queue_written: amount > 0,
+      notional_cap: NOTIONAL_CAP,
+      min_amount: MIN_AMOUNT,
+      notice:
+        "This creates a gated, paper-first order queue that you must confirm. No order is placed automatically.",
+    });
+  },
+};
+
+function notFound(id: string) {
+  return new ApiError(`Pilot '${id}' not found (run the pipeline first).`, 404);
+}
+
+export const MOCK_META = {
+  mode: MOCK_MODE,
+  notionalCap: NOTIONAL_CAP,
+  minAmount: MIN_AMOUNT,
+  sectors: SECTORS,
+};
