@@ -91,6 +91,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # material); the command token that actually guards the daemon's
     # POST /run is ORCHESTRATOR_DAEMON_TOKEN, which stays in SECRET_KEYS.
     "ORCHESTRATOR_DAEMON_ENABLED",
+    # Hosts api/pilots_api.py inside the orchestrator daemon process on
+    # PILOTS_API_PORT. Non-secret; the follow write-path's command token
+    # (FOLLOW_API_TOKEN) stays in SECRET_KEYS.
+    "PILOTS_API_ENABLED",
+    "PILOTS_API_PORT",
     # Execution mode toggle — paper sandbox vs. live endpoint. Writeable from
     # the Strategy Matrix tab's global Simulation/Paper/Live selector. Never a
     # secret: the broker keys themselves are SECRET_KEYS.

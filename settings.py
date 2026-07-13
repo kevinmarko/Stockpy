@@ -131,6 +131,30 @@ class Settings(BaseSettings):
             "API use the fail-open STATE_API_TOKEN instead."
         ),
     )
+    PILOTS_API_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Host the Pilots API (api/pilots_api.py) inside the persistent "
+            "orchestrator daemon process (desktop/orchestrator_daemon.py) on "
+            "PILOTS_API_PORT, alongside the existing Control API. False "
+            "(default) preserves today's exact behavior — pilots_api.py "
+            "remains a manually-launched standalone `uvicorn` service, "
+            "unaffected by the daemon's lifecycle. Only takes effect when the "
+            "daemon entrypoint itself is run — does not require "
+            "ORCHESTRATOR_DAEMON_ENABLED (that flag controls the DESKTOP "
+            "SHELL's choice of subprocess; this flag controls what the "
+            "daemon PROCESS hosts once launched, by either path)."
+        ),
+    )
+    PILOTS_API_PORT: int = Field(
+        default=8602,
+        description=(
+            "TCP port the Pilots API (api/pilots_api.py) binds to when hosted "
+            "inside the orchestrator daemon process (PILOTS_API_ENABLED=True). "
+            "Bound to 127.0.0.1 only. Matches the port used in the documented "
+            "standalone launch command (`uvicorn api.pilots_api:app --port 8602`)."
+        ),
+    )
 
     # --- Market-data layer (data/market_data.py) ---
     # Explicit provider override.  When absent the platform auto-selects:
