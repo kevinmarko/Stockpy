@@ -15,6 +15,7 @@ from validation.harness import (
     MAX_EQUITY_CURVE_POINTS,
     ValidationReport,
     _build_equity_curve,
+    _build_macro_benchmark_curve,
 )
 
 
@@ -113,11 +114,103 @@ class TestSummaryContract:
         summary = _dummy_report().to_summary_dict()
         assert summary["benchmark_curve"] == []
 
+    def test_to_summary_dict_emits_macro_benchmark_curve(self):
+        pts = [
+            {"date": "2020-01-31", "value": 100.0},
+            {"date": "2020-02-28", "value": 101.3},
+        ]
+        summary = _dummy_report(macro_benchmark_curve=pts).to_summary_dict()
+        assert summary["macro_benchmark_curve"] == pts
+
+    def test_absent_macro_benchmark_curve_defaults_to_empty_list(self):
+        # No macro_benchmark_curve passed -> [] (never None/missing), mirroring
+        # equity_curve/benchmark_curve so the Pilots read path can rely on the key.
+        summary = _dummy_report().to_summary_dict()
+        assert summary["macro_benchmark_curve"] == []
+
+    def test_macro_benchmark_curve_independent_of_benchmark_curve(self):
+        # The two fields are DISTINCT, independently-set series (not aliases).
+        bench = [{"date": "2020-01-31", "value": 100.0},
+                 {"date": "2020-02-28", "value": 100.5}]
+        macro = [{"date": "2020-01-31", "value": 100.0},
+                 {"date": "2020-02-28", "value": 101.9}]
+        summary = _dummy_report(
+            benchmark_curve=bench, macro_benchmark_curve=macro
+        ).to_summary_dict()
+        assert summary["benchmark_curve"] == bench
+        assert summary["macro_benchmark_curve"] == macro
+
+
+class TestBuildMacroBenchmarkCurve:
+    """The pure ``_build_macro_benchmark_curve`` helper (SPY fetch stubbed)."""
+
+    def _idx(self, n=120):
+        return pd.date_range("2020-01-01", periods=n, freq="B")
+
+    def test_spy_unavailable_yields_empty(self, monkeypatch):
+        idx = self._idx()
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series",
+            lambda oos_index, s, e: None,
+        )
+        y = pd.Series(0.001, index=idx)
+        assert _build_macro_benchmark_curve(idx, y, "2020-01-01", "2020-06-30") == []
+
+    def test_real_spy_series_builds_base100_curve(self, monkeypatch):
+        idx = self._idx()
+        rng = np.random.default_rng(11)
+        spy = pd.Series(rng.normal(0.0004, 0.009, size=len(idx)), index=idx)
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series",
+            lambda oos_index, s, e: spy.reindex(oos_index),
+        )
+        # Underlying is a DISTINCT series -> not redundant -> real macro curve.
+        y = pd.Series(rng.normal(0.0006, 0.011, size=len(idx)), index=idx)
+        curve = _build_macro_benchmark_curve(idx, y, "2020-01-01", "2020-06-30")
+        assert isinstance(curve, list) and len(curve) >= 2
+        assert all(set(p) == {"date", "value"} for p in curve)
+        assert curve[0]["value"] == pytest.approx(100.0, rel=0.05)
+        assert all(np.isfinite(p["value"]) and p["value"] > 0 for p in curve)
+
+    def test_underlying_is_spy_is_redundant_empty(self, monkeypatch):
+        """If the strategy's own underlying already IS SPY, the separate macro
+        overlay is redundant -> [] (never a duplicate/fabricated line)."""
+        idx = self._idx()
+        rng = np.random.default_rng(5)
+        spy = pd.Series(rng.normal(0.0004, 0.009, size=len(idx)), index=idx)
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series",
+            lambda oos_index, s, e: spy.reindex(oos_index),
+        )
+        # underlying == SPY (same series) -> redundancy guard fires.
+        curve = _build_macro_benchmark_curve(idx, spy.copy(), "2020-01-01", "2020-06-30")
+        assert curve == []
+
+    def test_never_raises_on_bad_input(self, monkeypatch):
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series",
+            lambda oos_index, s, e: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        # A raising SPY fetch degrades to [] (CONSTRAINT #6), never propagates.
+        assert _build_macro_benchmark_curve(
+            self._idx(), None, "2020-01-01", "2020-06-30"
+        ) == []
+
 
 class TestRunBenchmarkAlignment:
     """The honest benchmark (buy-&-hold of the underlying `y`) is aligned to the
     SAME OOS index as the strategy equity curve. Exercised through a minimal
     offline StrategyValidationHarness.run() — no yfinance, no real backtest."""
+
+    @pytest.fixture(autouse=True)
+    def _offline_spy(self, monkeypatch):
+        # run() now also builds a SPY macro overlay via _spy_return_series, which
+        # would hit the network. Default it to None so every run() in this class
+        # stays offline (macro persists []); positive macro tests override it.
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series",
+            lambda oos_index, start_date, end_date: None,
+        )
 
     @staticmethod
     def _stub_universe(monkeypatch):
@@ -217,3 +310,89 @@ class TestRunBenchmarkAlignment:
             X=X, y=y, strategy_name="flat_bench",
         )
         assert report.to_summary_dict()["benchmark_curve"] == []
+
+    def test_macro_benchmark_persisted_and_aligned(self, tmp_path, monkeypatch):
+        """A real (stubbed) SPY series is persisted as macro_benchmark_curve,
+        aligned to the SAME downsampled OOS dates as the strategy equity curve
+        and DISTINCT from both the strategy curve and the underlying benchmark."""
+        self._stub_universe(monkeypatch)
+        self._tmp = tmp_path
+        # Override the autouse offline stub with a real synthetic SPY series
+        # (distinct from the harness's y/strat), reindexed to whatever OOS index
+        # run() passes in.
+        rng = np.random.default_rng(21)
+        spy_full = pd.Series(
+            rng.normal(0.0002, 0.007, size=400),
+            index=pd.date_range("2015-01-01", periods=400, freq="B"),
+        )
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series",
+            lambda oos_index, s, e: spy_full.reindex(oos_index),
+        )
+        report = self._run()
+        summary = report.to_summary_dict()
+        eq = summary["equity_curve"]
+        bench = summary["benchmark_curve"]
+        macro = summary["macro_benchmark_curve"]
+        assert isinstance(macro, list) and len(macro) >= 2
+        assert all(set(p) == {"date", "value"} for p in macro)
+        assert macro[0]["value"] == pytest.approx(100.0, rel=0.05)
+        assert all(np.isfinite(p["value"]) and p["value"] > 0 for p in macro)
+        # Aligned to the same downsampled OOS dates as the strategy curve.
+        assert [p["date"] for p in macro] == [p["date"] for p in eq]
+        # A genuine separate overlay — not a copy of the strategy or the
+        # underlying-benchmark line.
+        assert macro != eq
+        assert macro != bench
+
+    def test_spy_unavailable_yields_empty_macro(self, tmp_path, monkeypatch):
+        """With SPY unavailable (autouse stub -> None), macro honestly persists
+        [] — never a fabricated line (CONSTRAINT #4)."""
+        self._stub_universe(monkeypatch)
+        self._tmp = tmp_path
+        report = self._run()  # autouse _offline_spy keeps SPY unavailable
+        assert report.to_summary_dict()["macro_benchmark_curve"] == []
+
+    def test_underlying_is_spy_yields_empty_macro_redundant(self, tmp_path, monkeypatch):
+        """When the strategy's underlying already IS SPY, the separate SPY macro
+        overlay is redundant with benchmark_curve -> persists [] (not a duplicate)."""
+        self._stub_universe(monkeypatch)
+        self._tmp = tmp_path
+        from execution.cost_model import TieredCostModel
+        from validation.harness import StrategyValidationHarness
+
+        idx = pd.date_range("2015-01-01", periods=400, freq="B")
+        rng = np.random.default_rng(31)
+        y = pd.Series(rng.normal(0.0003, 0.008, size=len(idx)), index=idx)
+        strat = pd.Series(rng.normal(0.0005, 0.010, size=len(idx)), index=idx)
+        X = pd.DataFrame({"feat": np.arange(len(idx), dtype=float)}, index=idx)
+        # SPY fetch returns EXACTLY the underlying y -> redundancy guard fires.
+        monkeypatch.setattr(
+            "validation.harness._spy_return_series",
+            lambda oos_index, s, e: y.reindex(oos_index),
+        )
+
+        def strategy_fn(X_tr, y_tr, X_te, y_te):
+            return [{
+                "params": "s",
+                "train_returns": strat.loc[strat.index.intersection(y_tr.index)],
+                "test_returns": strat.loc[strat.index.intersection(y_te.index)],
+                "turnover": 0.01,
+            }]
+
+        harness = StrategyValidationHarness(
+            strategy_fn=strategy_fn,
+            universe_fn=lambda _d: ["SYN"],
+            cost_model=TieredCostModel(),
+            n_cpcv_splits=4,
+            n_test_splits=2,
+            reports_dir=str(tmp_path),
+        )
+        report = harness.run(
+            start_date="2015-01-01", end_date="2016-07-01",
+            X=X, y=y, strategy_name="spy_underlying",
+        )
+        summary = report.to_summary_dict()
+        # The underlying benchmark is real; the macro (SPY) overlay is redundant.
+        assert isinstance(summary["benchmark_curve"], list) and len(summary["benchmark_curve"]) >= 2
+        assert summary["macro_benchmark_curve"] == []

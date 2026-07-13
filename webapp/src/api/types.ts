@@ -81,6 +81,10 @@ export interface PerformanceResponse {
   metrics: Headline;
   curve: CurvePoint[] | null;
   benchmark: CurvePoint[] | null;
+  // SEPARATE, explicitly-labeled SPY (broad-market) overlay — distinct from
+  // `benchmark` (the strategy's own underlying). null when SPY was unavailable
+  // or the underlying already IS SPY (redundant); never fabricated.
+  macro_benchmark: CurvePoint[] | null;
   reason?: string; // present when curve is null ("no backtest series yet")
 }
 

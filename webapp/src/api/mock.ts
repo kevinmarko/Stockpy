@@ -147,6 +147,9 @@ interface MockPilot {
   hasCurve: boolean;
   curveDrift: number; // per-year drift for synthetic mock curve
   curveVol: number;
+  // Whether a SEPARATE SPY (broad-market) macro overlay is available. false
+  // models the honest "underlying already IS SPY → redundant → null" case.
+  macroBenchmark: boolean;
 }
 
 const RAW: Array<{
@@ -162,6 +165,9 @@ const RAW: Array<{
   drift: number;
   vol: number;
   syms: [string, number, number][];
+  // Optional; defaults to true (a distinct SPY macro overlay is available).
+  // Set false to model the honest redundancy case (underlying already IS SPY).
+  macroBenchmark?: boolean;
 }> = [
   {
     id: "trend-following",
@@ -241,6 +247,10 @@ const RAW: Array<{
     hasCurve: true,
     drift: 0.12,
     vol: 0.14,
+    // This Pilot's validation underlying IS SPY (single-name adapter), so a
+    // separate SPY macro overlay would just duplicate the benchmark -> null
+    // (honest redundancy case, mirrors the harness's []-persist rule).
+    macroBenchmark: false,
     syms: [
       ["NVDA", 28, 0.78],
       ["META", 22, 0.6],
@@ -358,6 +368,7 @@ const CATALOG: MockPilot[] = RAW.map((r) => {
     hasCurve: r.hasCurve,
     curveDrift: r.drift,
     curveVol: r.vol,
+    macroBenchmark: r.macroBenchmark ?? true,
   };
 });
 
@@ -508,6 +519,7 @@ export const mockApi = {
         metrics: p.summary.headline,
         curve: null,
         benchmark: null,
+        macro_benchmark: null,
         reason:
           "No backtest series yet — this Pilot's validation report has no persisted return curve.",
       });
@@ -517,6 +529,11 @@ export const mockApi = {
       metrics: p.summary.headline,
       curve: synthCurve(id, range, p.curveDrift, p.curveVol),
       benchmark: synthCurve("SPY-benchmark", range, 0.09, 0.09),
+      // SEPARATE, distinctly-drifted SPY (broad-market) overlay — null when the
+      // Pilot's underlying already IS SPY (redundant), never fabricated.
+      macro_benchmark: p.macroBenchmark
+        ? synthCurve("SPY-macro", range, 0.08, 0.1)
+        : null,
     });
   },
 

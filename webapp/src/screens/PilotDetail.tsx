@@ -98,7 +98,11 @@ export function PilotDetail() {
         {perf.loading ? (
           <div className="skeleton" style={{ height: 200 }} />
         ) : perf.data?.curve ? (
-          <PerfLine data={perf.data.curve} benchmark={perf.data.benchmark} />
+          <PerfLine
+            data={perf.data.curve}
+            benchmark={perf.data.benchmark}
+            macroBenchmark={perf.data.macro_benchmark}
+          />
         ) : (
           <div
             className="empty"
@@ -117,12 +121,18 @@ export function PilotDetail() {
         <div style={{ marginTop: 12 }}>
           <RangeToggle value={range} onChange={setRange} />
         </div>
-        {perf.data?.benchmark && perf.data.curve && (
-          <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11.5 }}>
-            <LegendDot color={theme.growth} label="Pilot" />
-            <LegendDot color={theme.textMuted} label="Benchmark (SPY)" dashed />
-          </div>
-        )}
+        {perf.data?.curve &&
+          (perf.data.benchmark || perf.data.macro_benchmark) && (
+            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11.5 }}>
+              <LegendDot color={theme.growth} label="Pilot" />
+              {perf.data.benchmark && (
+                <LegendDot color={theme.textMuted} label="Benchmark" dashed />
+              )}
+              {perf.data.macro_benchmark && (
+                <LegendDot color={theme.accent} label="S&P 500" dashed />
+              )}
+            </div>
+          )}
       </section>
 
       {/* Sector allocation donut */}

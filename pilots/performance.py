@@ -162,7 +162,8 @@ def pilot_performance(
     """Return a Pilot's performance payload for the detail / performance endpoint.
 
     Shape: ``{"metrics": {...} | None, "curve": [...] | None,
-    "benchmark": [...] | None, "reason": str | None, "range": str}``.
+    "benchmark": [...] | None, "macro_benchmark": [...] | None,
+    "reason": str | None, "range": str}``.
 
     * ``metrics`` is the full validated summary dict when available, else
       ``None``.
@@ -175,6 +176,13 @@ def pilot_performance(
       series, aligned to the same OOS index as ``curve``), tail-sliced to the
       same ``range``. ``None`` when the summary predates that field or no
       meaningful underlying series was available — NEVER synthesized.
+    * ``macro_benchmark`` is the REAL persisted base-100 SPY (broad-market)
+      buy-&-hold curve (``macro_benchmark_curve`` in the summary — a SEPARATE,
+      explicitly-labeled market overlay computed over the same OOS window),
+      tail-sliced to the same ``range``. Independent of both ``curve`` and
+      ``benchmark``. ``None`` when the summary predates that field, SPY data was
+      unavailable, or the strategy's underlying already IS SPY (redundant) —
+      NEVER synthesized.
     * ``reason`` is an honest human-readable explanation whenever ``metrics`` or
       ``curve`` is unavailable, else ``None``.
     * ``range`` is a tail-zoom on the persisted series (see
@@ -187,6 +195,7 @@ def pilot_performance(
             "metrics": None,
             "curve": None,
             "benchmark": None,
+            "macro_benchmark": None,
             "reason": "no validated backtest for this pilot",
             "range": range,
         }
@@ -197,6 +206,7 @@ def pilot_performance(
             "metrics": None,
             "curve": None,
             "benchmark": None,
+            "macro_benchmark": None,
             "reason": (
                 f"no validation summary found for '{strategy_id}' "
                 "(run the validation pipeline first)"
@@ -215,6 +225,19 @@ def pilot_performance(
         else None
     )
 
+    # Macro benchmark (SPY / broad market) is a SEPARATE, explicitly-labeled
+    # overlay, independent of both the strategy curve and the underlying
+    # benchmark: surface the persisted SPY buy-&-hold series (tail-sliced to the
+    # same range) when present and renderable (>= 2 points), else honestly None
+    # (older summary / SPY unavailable / underlying already IS SPY → redundant) —
+    # never fabricated (CONSTRAINT #4).
+    raw_macro_benchmark = summary.get("macro_benchmark_curve")
+    macro_benchmark = (
+        _slice_curve_by_range(raw_macro_benchmark, range)
+        if isinstance(raw_macro_benchmark, list) and len(raw_macro_benchmark) >= 2
+        else None
+    )
+
     # Metrics exist. Surface the persisted equity curve when present, tail-sliced
     # to the requested range; a missing/empty curve stays None with an honest
     # reason (older summary, or no meaningful returns) — never fabricated.
@@ -224,6 +247,7 @@ def pilot_performance(
             "metrics": summary,
             "curve": _slice_curve_by_range(raw_curve, range),
             "benchmark": benchmark,
+            "macro_benchmark": macro_benchmark,
             "reason": None,
             "range": range,
         }
@@ -232,6 +256,7 @@ def pilot_performance(
         "metrics": summary,
         "curve": None,
         "benchmark": benchmark,
+        "macro_benchmark": macro_benchmark,
         "reason": "no backtest series persisted",
         "range": range,
     }

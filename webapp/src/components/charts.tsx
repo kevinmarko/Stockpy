@@ -26,9 +26,13 @@ import { fmtDate, fmtPct } from "../format";
 export function PerfLine({
   data,
   benchmark,
+  macroBenchmark,
 }: {
   data: CurvePoint[];
   benchmark?: CurvePoint[] | null;
+  // SEPARATE, explicitly-labeled SPY (broad-market) overlay — distinct from
+  // `benchmark` (the strategy's own underlying). Omitted/null renders no line.
+  macroBenchmark?: CurvePoint[] | null;
 }) {
   if (data.length === 0) return null;
   const first = data[0].value;
@@ -37,12 +41,14 @@ export function PerfLine({
   const stroke = up ? theme.growth : theme.decline;
   const gradId = up ? "gradUp" : "gradDown";
 
-  // merge benchmark onto the same date axis for a single <AreaChart>
+  // merge benchmark + macro overlay onto the same date axis for one <AreaChart>
   const benchMap = new Map((benchmark ?? []).map((p) => [p.date, p.value]));
+  const macroMap = new Map((macroBenchmark ?? []).map((p) => [p.date, p.value]));
   const merged = data.map((p) => ({
     date: p.date,
     value: p.value,
     bench: benchMap.get(p.date) ?? null,
+    macro: macroMap.get(p.date) ?? null,
   }));
 
   const values = data.map((d) => d.value);
@@ -99,7 +105,11 @@ export function PerfLine({
             labelFormatter={(l) => fmtDate(String(l))}
             formatter={(val: number, name: string) => [
               val.toFixed(2),
-              name === "value" ? "Pilot" : "Benchmark",
+              name === "value"
+                ? "Pilot"
+                : name === "macro"
+                  ? "S&P 500"
+                  : "Benchmark",
             ]}
           />
           {benchmark && benchmark.length > 0 && (
@@ -109,6 +119,18 @@ export function PerfLine({
               stroke={theme.textMuted}
               strokeWidth={1.5}
               strokeDasharray="4 4"
+              dot={false}
+              isAnimationActive={false}
+              connectNulls
+            />
+          )}
+          {macroBenchmark && macroBenchmark.length > 0 && (
+            <Line
+              type="monotone"
+              dataKey="macro"
+              stroke={theme.accent}
+              strokeWidth={1.5}
+              strokeDasharray="2 3"
               dot={false}
               isAnimationActive={false}
               connectNulls

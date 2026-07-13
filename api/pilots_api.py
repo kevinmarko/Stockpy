@@ -367,7 +367,10 @@ def get_pilot_performance(
     out-of-set ``range``. ``curve`` is the real downsampled base-100 OOS equity
     series persisted by the harness, tail-sliced to ``range`` — ``null`` when the
     Pilot has no backtest or the summary predates the field; never synthesized
-    (CONSTRAINT #4)."""
+    (CONSTRAINT #4). ``benchmark`` is the buy-&-hold-of-the-underlying overlay;
+    ``macro_benchmark`` is a SEPARATE, explicitly-labeled SPY (broad-market)
+    overlay — ``null`` when SPY was unavailable or the underlying already IS SPY
+    (redundant), never fabricated."""
     pilot = catalog.get_pilot(pilot_id)
     if pilot is None:
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)

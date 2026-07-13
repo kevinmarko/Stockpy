@@ -98,6 +98,72 @@ def _build_equity_curve(
         return []
 
 
+def _spy_return_series(
+    oos_index: "pd.Index", start_date: str, end_date: str
+) -> Optional["pd.Series"]:
+    """Fetch SPY daily returns over ``[start_date, end_date]`` reindexed to
+    ``oos_index`` (yfinance — CONSTRAINT #7, the same library the harness/tests
+    already use). Returns ``None`` (never raises, never fabricates — CONSTRAINT
+    #6/#4) on any download failure or empty response.
+    """
+    try:
+        df = yf.download("SPY", start=start_date, end=end_date, progress=False)
+        if df is None or df.empty:
+            return None
+        df.index = pd.to_datetime(df.index)
+        close = df["Close"].squeeze()
+        spy_ret = close.pct_change()
+        return spy_ret.reindex(oos_index)
+    except Exception as exc:  # pragma: no cover - network/parse defensive
+        logger.debug("_spy_return_series failed (%s); no macro benchmark", exc)
+        return None
+
+
+def _build_macro_benchmark_curve(
+    oos_index: "pd.Index",
+    underlying_returns: Optional["pd.Series"],
+    start_date: str,
+    end_date: str,
+) -> List[Dict[str, Any]]:
+    """Base-100 SPY buy-&-hold aligned to the OOS index — a SEPARATE, explicitly
+    labeled macro (broad-market) overlay, distinct from ``benchmark_curve`` (the
+    strategy's OWN underlying).
+
+    This is NOT a read-time fallback for a missing strategy benchmark — it is an
+    independent market reference computed over the strategy's REAL OOS window.
+    Returns ``[]`` (→ surfaces downstream as ``macro_benchmark: None``, never a
+    fabricated line — CONSTRAINT #4) when:
+
+      * SPY data is unavailable, OR
+      * the strategy's underlying ALREADY IS SPY (a separate SPY overlay would
+        just duplicate ``benchmark_curve``, so it is redundant).
+
+    Never raises (CONSTRAINT #6).
+    """
+    try:
+        spy_ret = _spy_return_series(oos_index, start_date, end_date)
+        if spy_ret is None:
+            return []
+        # Redundancy guard: if the strategy's own underlying return series is
+        # (numerically) SPY, the macro overlay duplicates benchmark_curve — skip.
+        if underlying_returns is not None:
+            try:
+                aligned = pd.concat(
+                    [underlying_returns.reindex(oos_index), spy_ret], axis=1
+                ).dropna()
+                if len(aligned) >= 2:
+                    a = aligned.iloc[:, 0].to_numpy(dtype=float)
+                    b = aligned.iloc[:, 1].to_numpy(dtype=float)
+                    if np.allclose(a, b, rtol=1e-3, atol=1e-6):
+                        return []
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("macro-benchmark redundancy check failed (%s)", exc)
+        return _build_equity_curve(spy_ret)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("_build_macro_benchmark_curve failed (%s); empty curve", exc)
+        return []
+
+
 class ValidationReport:
     """Standardized validation report output by the harness."""
     def __init__(
@@ -126,6 +192,7 @@ class ValidationReport:
         family_multiple_testing: Optional[Dict[str, Any]] = None,
         equity_curve: Optional[List[Dict[str, Any]]] = None,
         benchmark_curve: Optional[List[Dict[str, Any]]] = None,
+        macro_benchmark_curve: Optional[List[Dict[str, Any]]] = None,
     ):
         self.name = name
         self.start_date = start_date
@@ -167,6 +234,13 @@ class ValidationReport:
         # #4) when no meaningful underlying return series is available, which
         # surfaces downstream as benchmark: None. See run() / _build_equity_curve().
         self.benchmark_curve = benchmark_curve or []
+        # Downsampled base-100 SPY (broad-market) buy-&-hold curve aligned to the
+        # SAME OOS index as equity_curve — a SEPARATE, explicitly-labeled macro
+        # overlay, DISTINCT from benchmark_curve (the strategy's own underlying).
+        # [] (never fabricated — CONSTRAINT #4) when SPY data is unavailable OR the
+        # strategy's underlying already IS SPY (redundant); surfaces downstream as
+        # macro_benchmark: None. See run() / _build_macro_benchmark_curve().
+        self.macro_benchmark_curve = macro_benchmark_curve or []
 
     @property
     def stress_gate_passed(self) -> bool:
@@ -296,6 +370,11 @@ class ValidationReport:
             # to the same OOS index as equity_curve ([] — never fabricated — when
             # no meaningful underlying return series is available).
             "benchmark_curve": self.benchmark_curve or [],
+            # Downsampled base-100 SPY (broad-market) buy-&-hold aligned to the
+            # same OOS index as equity_curve — a SEPARATE labeled macro overlay
+            # ([] — never fabricated — when SPY is unavailable OR the underlying
+            # already IS SPY, making a separate overlay redundant).
+            "macro_benchmark_curve": self.macro_benchmark_curve or [],
         }
 
 
@@ -669,6 +748,19 @@ class StrategyValidationHarness:
         benchmark_returns = y.reindex(full_returns.index) if y is not None else None
         benchmark_curve = _build_equity_curve(benchmark_returns)
 
+        # Honest LABELED macro benchmark: buy-&-hold of SPY (the broad market),
+        # a SEPARATE overlay from benchmark_curve above (which is the strategy's
+        # OWN underlying). Computed over exactly the same OOS index as
+        # equity_curve so it overlays on one x-axis. This is NOT a read-time
+        # fallback for a missing strategy benchmark — it is an independent market
+        # reference. When SPY data is unavailable, OR the strategy's underlying
+        # ALREADY IS SPY (making a separate SPY overlay redundant with
+        # benchmark_curve), _build_macro_benchmark_curve returns [] (→ surfaces as
+        # macro_benchmark: None downstream). NEVER synthesized (CONSTRAINT #4).
+        macro_benchmark_curve = _build_macro_benchmark_curve(
+            full_returns.index, y, start_date, end_date
+        )
+
         # 5b. Tail-scenario stress testing for options-selling strategies.
         # Replays the strategy across each dated shock window (Lehman, Volmageddon,
         # COVID, yen-unwind). Required for options-selling deployability; the gate
@@ -708,6 +800,7 @@ class StrategyValidationHarness:
             stress_test_results=stress_test_results,
             equity_curve=equity_curve,
             benchmark_curve=benchmark_curve,
+            macro_benchmark_curve=macro_benchmark_curve,
         )
 
         # Print the stress summary at the TOP of every options-selling report so
