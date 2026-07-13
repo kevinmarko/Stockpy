@@ -13,6 +13,32 @@ class DividendQualitySignal(SignalModule):
     name = "dividend_quality"
     required_features = []
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        div_yield = df.get("dividend_yield", pd.Series(0.0, index=df.index))
+        is_sustainable = df.get("is_dividend_sustainable", pd.Series(False, index=df.index))
+        
+        score = pd.Series(0.0, index=df.index)
+        exps = pd.Series("", index=df.index)
+        
+        has_div = div_yield > 0
+        
+        # Sustainable
+        sustainable = has_div & is_sustainable
+        score[sustainable] = 10.0 / 25.0
+        exps[sustainable] = "+10pts: Sustainable Dividend"
+        
+        # Yield Trap
+        trap = has_div & ~is_sustainable
+        score[trap] = -25.0 / 25.0
+        exps[trap] = "-25pts: Yield Trap Warning (Payout > 100%)\nWARNING: Dividend Sustainability Failure"
+        
+        return pd.DataFrame({
+            "score": score,
+            "confidence": 1.0,
+            "explanation": exps,
+            "meta_label_proba": 1.0
+        }, index=df.index)
+
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         fundamentals = context.fundamentals
         points = 0.0

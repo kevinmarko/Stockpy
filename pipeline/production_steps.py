@@ -527,6 +527,11 @@ class StrategyEvalStep(PipelineStep):
         
         sma_5_raw = ctx.dashboard_df.get('SMA_5', pd.Series(float('nan'), index=ctx.dashboard_df.index))
         vec_df['SMA_5'] = sma_5_raw.fillna(ctx.dashboard_df['Price']).values
+        
+        vec_df['dividend_yield'] = ctx.dashboard_df['Symbol'].map(lambda x: fund_dtos.get(x).dividend_yield if fund_dtos.get(x) and fund_dtos.get(x).dividend_yield else 0.0).values
+        vec_df['is_dividend_sustainable'] = ctx.dashboard_df['Symbol'].map(lambda x: fund_dtos.get(x).is_dividend_sustainable if fund_dtos.get(x) else False).values
+        vec_df['graham_number'] = ctx.dashboard_df['Symbol'].map(lambda x: fund_dtos.get(x).graham_number if fund_dtos.get(x) and fund_dtos.get(x).graham_number else 0.0).values
+
 
         from signals.base import SignalContext
         from signals import global_registry, SignalAggregator
