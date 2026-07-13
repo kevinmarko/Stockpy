@@ -125,6 +125,7 @@ class ValidationReport:
         stress_test_results: Optional[Dict[str, "StressResult"]] = None,
         family_multiple_testing: Optional[Dict[str, Any]] = None,
         equity_curve: Optional[List[Dict[str, Any]]] = None,
+        benchmark_curve: Optional[List[Dict[str, Any]]] = None,
     ):
         self.name = name
         self.start_date = start_date
@@ -160,6 +161,12 @@ class ValidationReport:
         # Pilots PWA performance chart. [] (never a fabricated flat line) when the
         # strategy produced no meaningful returns. See _build_equity_curve().
         self.equity_curve = equity_curve or []
+        # Downsampled base-100 benchmark curve aligned to the SAME OOS index as
+        # equity_curve — buy-&-hold of the underlying the strategy trades (the
+        # harness's `y` return series). [] (never a fabricated line — CONSTRAINT
+        # #4) when no meaningful underlying return series is available, which
+        # surfaces downstream as benchmark: None. See run() / _build_equity_curve().
+        self.benchmark_curve = benchmark_curve or []
 
     @property
     def stress_gate_passed(self) -> bool:
@@ -285,6 +292,10 @@ class ValidationReport:
             # Downsampled base-100 OOS equity curve for the Pilots PWA performance
             # chart ([] when no meaningful returns — never a fabricated line).
             "equity_curve": self.equity_curve or [],
+            # Downsampled base-100 benchmark (buy-&-hold of the underlying) aligned
+            # to the same OOS index as equity_curve ([] — never fabricated — when
+            # no meaningful underlying return series is available).
+            "benchmark_curve": self.benchmark_curve or [],
         }
 
 
@@ -647,6 +658,17 @@ class StrategyValidationHarness:
         # net-of-cost series that fed sharpe/max_dd above — no extra backtest).
         equity_curve = _build_equity_curve(full_returns)
 
+        # Honest benchmark: buy-&-hold of the SAME underlying the strategy trades.
+        # `y` IS that underlying's per-period return series (SPY for single-name
+        # adapters; the equal-weighted universe return for cross-sectional ones),
+        # so its base-100 cumprod is a genuine passive benchmark — never a
+        # fabricated line (CONSTRAINT #4). Reindexing to full_returns.index aligns
+        # the benchmark to exactly the same OOS dates/downsampling as equity_curve
+        # so the two overlay on one x-axis. When `y` is unavailable/empty,
+        # _build_equity_curve returns [] (→ surfaces as benchmark: None downstream).
+        benchmark_returns = y.reindex(full_returns.index) if y is not None else None
+        benchmark_curve = _build_equity_curve(benchmark_returns)
+
         # 5b. Tail-scenario stress testing for options-selling strategies.
         # Replays the strategy across each dated shock window (Lehman, Volmageddon,
         # COVID, yen-unwind). Required for options-selling deployability; the gate
@@ -685,6 +707,7 @@ class StrategyValidationHarness:
             is_options_selling=self.is_options_selling,
             stress_test_results=stress_test_results,
             equity_curve=equity_curve,
+            benchmark_curve=benchmark_curve,
         )
 
         # Print the stress summary at the TOP of every options-selling report so
