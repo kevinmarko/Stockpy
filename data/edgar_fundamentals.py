@@ -126,8 +126,6 @@ def compute_pit_ratios(facts: Dict[str, Any], report_date: str, price: float, sh
         dividends = extract_latest_fact(us_gaap, "PaymentsOfDividendsCommonStock", report_date)
         
     debt = extract_latest_fact(us_gaap, "LongTermDebt", report_date)
-    if debt is None:
-        debt = 0.0  # Optional if missing
         
     if eps is not None:
         out["eps"] = float(eps)
