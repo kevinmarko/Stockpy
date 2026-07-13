@@ -100,6 +100,7 @@ def build_training_panel(
     step_days: int = 5,
     min_dates: int = 12,
     lookback_days: int = 3 * 365,
+    historical_store=None,
 ) -> TrainingPanel:
     """Assemble a supervised (date, ticker) training panel from historical bars.
 
@@ -108,6 +109,11 @@ def build_training_panel(
     self-bounds to whatever bars actually exist per ticker), thinning to every
     ``step_days``-th trading date to keep CPCV fold cost bounded.  Falls back
     to full date density (``step_days=1``) if thinning leaves too few dates.
+
+    ``historical_store`` is forwarded verbatim to the shared builder for PIT
+    fundamentals (``None`` -> a real ``HistoricalStore()``, the default for
+    real training runs; ``False`` -> skip fundamentals entirely, zero DB
+    touches -- offline tests should pass this).
     """
     end = pd.Timestamp.now().normalize()
     start = end - pd.Timedelta(days=lookback_days)
@@ -116,6 +122,7 @@ def build_training_panel(
         X, y, t1, _price_history = _shared_build_training_panel(
             start, end, tickers,
             data_engine=data_engine, horizon_days=horizon_days, step_days=step,
+            historical_store=historical_store,
         )
         if X.empty:
             return TrainingPanel(pd.DataFrame(), pd.Series(dtype=float), pd.Series(dtype=float), 0)
@@ -335,6 +342,7 @@ def run_training(
     save_path: Optional[Path] = None,
     registry_path: Optional[Path] = None,
     data_engine=None,
+    historical_store=None,
 ) -> dict:
     """End-to-end: build panel, train, CPCV-validate, persist, update registry.
 
@@ -342,6 +350,14 @@ def run_training(
     An explicit ``data_engine`` (any object with ``fetch_technical_raw``) can be
     injected for tests; otherwise ``offline`` selects the synthetic engine and
     the default selects the live ``DataEngine``.
+
+    ``historical_store`` governs the PIT-fundamentals source for the training
+    panel (see ``ml.training_data.build_training_panel``). When not supplied
+    explicitly: ``offline=True`` defaults it to ``False`` (skip fundamentals
+    entirely — keeps the synthetic/offline path fully DB-free and
+    deterministic); otherwise it defaults to ``None`` (a real
+    ``HistoricalStore()``, so real training runs get real PIT fundamentals).
+    An explicit value always wins.
 
     When ``save_path`` is not given, the model is persisted to a fresh dated
     ``ml/models/lgbm_<YYYYMMDD>.pkl`` (via ``LGBMCrossSectionalRanker.save(None)``)
@@ -371,7 +387,17 @@ def run_training(
             de = _SyntheticDataEngine()
 
     # 2. Panel
-    panel = build_training_panel(de, tickers)
+    # historical_store: explicit caller value wins; otherwise offline runs
+    # default to False (no DB fundamentals touch) so the synthetic/offline
+    # path stays fully deterministic, while real runs default to None (a
+    # real HistoricalStore, i.e. real PIT fundamentals).
+    if historical_store is not None:
+        effective_hist_store = historical_store
+    elif offline:
+        effective_hist_store = False
+    else:
+        effective_hist_store = None
+    panel = build_training_panel(de, tickers, historical_store=effective_hist_store)
 
     # 3. Train (safe on empty panel — LGBM ranker no-ops)
     ranker = LGBMCrossSectionalRanker()

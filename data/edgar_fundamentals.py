@@ -48,7 +48,7 @@ def get_cik(symbol: str) -> Optional[str]:
         except Exception as exc:
             logger.warning("Failed to fetch SEC tickers: %s", exc)
             return None
-    
+
     return _cik_cache.get(symbol)
 
 def fetch_companyfacts(cik: str) -> Dict[str, Any]:
@@ -64,7 +64,7 @@ def extract_latest_fact(us_gaap: Dict[str, Any], fact_name: str, max_date: str) 
     """Extract the latest fact value filed ON OR BEFORE max_date."""
     if fact_name not in us_gaap:
         return None
-    
+
     units = us_gaap[fact_name].get("units", {})
     if "USD" in units:
         data = units["USD"]
@@ -82,18 +82,45 @@ def extract_latest_fact(us_gaap: Dict[str, Any], fact_name: str, max_date: str) 
 
     latest_val = None
     latest_filed = ""
-    
+
     for point in data:
         filed = point.get("filed", "")
         if filed and filed <= max_date:
             if filed >= latest_filed:
                 latest_filed = filed
                 latest_val = point.get("val")
-                
+
     return latest_val
 
+def extract_shares(facts: Dict[str, Any], report_date: str) -> float:
+    """Resolve shares outstanding as-of report_date.
+
+    Prefers ``dei:EntityCommonStockSharesOutstanding`` (the cover-page fact
+    EDGAR filings report shares against); falls back to the us-gaap
+    ``CommonStockSharesOutstanding`` fact when dei is absent. Returns 0.0
+    (never fabricated -- callers already guard `shares > 0` before dividing)
+    when neither is available.
+    """
+    dei = facts.get("facts", {}).get("dei", {})
+    val = extract_latest_fact(dei, "EntityCommonStockSharesOutstanding", report_date)
+    if val is not None:
+        return float(val)
+    us_gaap = facts.get("facts", {}).get("us-gaap", {})
+    val = extract_latest_fact(us_gaap, "CommonStockSharesOutstanding", report_date)
+    if val is not None:
+        return float(val)
+    return 0.0
+
+
 def compute_pit_ratios(facts: Dict[str, Any], report_date: str, price: float, shares: float) -> Dict[str, float]:
-    """Compute fundamental ratios as they would have appeared on report_date."""
+    """Compute fundamental ratios as they would have appeared on report_date.
+
+    ``current_ratio`` (AssetsCurrent / LiabilitiesCurrent) is included here
+    for completeness -- it is not one of HistoricalStore.get_fundamentals_asof's
+    9 frozen output keys (that contract intentionally stays stable for its
+    ML consumers), so it is surfaced only via the raw_json blob
+    (HistoricalStore.get_fundamentals_raw), not a dedicated typed DB column.
+    """
     _NAN = float("nan")
     out = {
         "pe_ratio": _NAN,
@@ -104,54 +131,65 @@ def compute_pit_ratios(facts: Dict[str, Any], report_date: str, price: float, sh
         "eps": _NAN,
         "operating_margin": _NAN,
         "debt_to_equity": _NAN,
+        "current_ratio": _NAN,
     }
-    
+
     us_gaap = facts.get("facts", {}).get("us-gaap", {})
     if not us_gaap:
         return out
-        
+
     eps = extract_latest_fact(us_gaap, "EarningsPerShareDiluted", report_date)
     if eps is None:
         eps = extract_latest_fact(us_gaap, "EarningsPerShareBasic", report_date)
-        
+
     equity = extract_latest_fact(us_gaap, "StockholdersEquity", report_date)
     net_income = extract_latest_fact(us_gaap, "NetIncomeLoss", report_date)
     op_income = extract_latest_fact(us_gaap, "OperatingIncomeLoss", report_date)
     revenue = extract_latest_fact(us_gaap, "Revenues", report_date)
     if revenue is None:
         revenue = extract_latest_fact(us_gaap, "SalesRevenueNet", report_date)
-    
+
     dividends = extract_latest_fact(us_gaap, "PaymentsOfDividends", report_date)
     if dividends is None:
         dividends = extract_latest_fact(us_gaap, "PaymentsOfDividendsCommonStock", report_date)
-        
+
+    # debt stays None (never fabricated to 0.0) when the LongTermDebt fact is
+    # simply absent -- "fact missing" must stay distinguishable from
+    # "verified zero debt" (CONSTRAINT #4). debt_to_equity below already
+    # guards `debt is not None` before computing.
     debt = extract_latest_fact(us_gaap, "LongTermDebt", report_date)
-        
+
+    current_assets = extract_latest_fact(us_gaap, "AssetsCurrent", report_date)
+    current_liabilities = extract_latest_fact(us_gaap, "LiabilitiesCurrent", report_date)
+
     if eps is not None:
         out["eps"] = float(eps)
         if np.isfinite(price) and price > 0 and float(eps) > 0:
             out["pe_ratio"] = price / float(eps)
-            
+
     if equity is not None and shares > 0:
         book_value = float(equity) / shares
         if book_value > 0 and np.isfinite(price) and price > 0:
             out["pb_ratio"] = price / book_value
-            
+
     if net_income is not None and equity is not None and float(equity) > 0:
         out["roe"] = float(net_income) / float(equity)
-        
+
     if np.isfinite(price) and price > 0 and shares > 0:
         out["market_cap"] = price * shares
-        
+
     if dividends is not None and out["market_cap"] is not _NAN and out["market_cap"] > 0:
         # dividends paid is total dollar amount over the period (usually annual if 10-K).
         # We assume it's annual total dividend paid if we take the latest.
         out["dividend_yield"] = float(dividends) / out["market_cap"]
-        
+
     if op_income is not None and revenue is not None and float(revenue) > 0:
         out["operating_margin"] = float(op_income) / float(revenue)
-        
+
     if debt is not None and equity is not None and float(equity) > 0:
         out["debt_to_equity"] = (float(debt) / float(equity)) * 100.0
+
+    if current_assets is not None and current_liabilities is not None and float(current_liabilities) > 0:
+        out["current_ratio"] = float(current_assets) / float(current_liabilities)
 
     return out

@@ -10,10 +10,15 @@ This module is the foundation.  For each ``as_of_date`` in ``[start, end]`` it:
 
 1. Assembles a dashboard-shaped, one-row-per-ticker feature frame from bars
    available **strictly before** ``as_of_date`` (no lookahead — the row for a
-   ticker at date D depends only on ``close[: D)``).
-2. Runs :func:`ml.feature_engineering.build_pit_feature_matrix` on that frame to
+   ticker at date D depends only on ``close[: D)``), plus point-in-time
+   fundamentals via ``HistoricalStore.get_fundamentals_asof`` (``report_date
+   <= as_of_date``, a pure local SQLite read — see ``data/historical_store.py``).
+2. Cross-sectionally Z-scores the date's Value/Quality/LowVol/Size factor
+   inputs via :func:`ml.feature_engineering.compute_multifactor_zscores`
+   (mirrors ``signals/multifactor.py``'s live-inference formula exactly).
+3. Runs :func:`ml.feature_engineering.build_pit_feature_matrix` on that frame to
    produce the canonical cross-sectional feature columns.
-3. Persists the snapshot via :class:`ml.data.store.PITFeatureStore` so future
+4. Persists the snapshot via :class:`ml.data.store.PITFeatureStore` so future
    incremental retrains can pull an expanding window without recomputation.
 
 After walking every date it:
@@ -57,6 +62,7 @@ from ml.feature_engineering import (
     FEATURE_COLUMNS,
     build_forward_return_ranks,
     build_pit_feature_matrix,
+    compute_multifactor_zscores,
 )
 from ml.data.store import PITFeatureStore
 
@@ -211,8 +217,11 @@ def _pit_ticker_row(close: pd.Series) -> dict:
     Only the price-derivable dashboard columns are populated here:
     ``ROC_12M``, ``ROC_6M``, ``RSI``, ``RSI_2``, ``low_vol_score``,
     ``GARCH_Vol`` (a realized-vol proxy — see module docstring).  The
-    remaining feature-matrix inputs (fundamentals, factor Z-scores) are
-    absent → ``build_pit_feature_matrix`` fills them with ``NaN``.
+    fundamental inputs (``book_to_market``, ``earnings_yield``,
+    ``quality_factor_score``, ``log_market_cap``) are merged in separately by
+    the caller (``build_training_panel``) via ``_pit_fundamentals_for_symbol``
+    — absent only when no PIT filing exists as of this date (early history)
+    or no ``historical_store`` was supplied, never fabricated.
     """
     row: dict[str, float] = {}
 
@@ -259,6 +268,44 @@ def _pit_ticker_row(close: pd.Series) -> dict:
     return row
 
 
+# Raw PIT-fundamental keys HistoricalStore.get_fundamentals_asof() returns
+# that this module forwards into universe_df -- these are exactly
+# ml.feature_engineering._FUNDAMENTAL_COLS's non-price members plus the two
+# inputs compute_multifactor_zscores() needs (log_market_cap, market_cap).
+_PIT_FUNDAMENTAL_KEYS = (
+    "book_to_market", "earnings_yield", "quality_factor_score",
+    "log_market_cap", "market_cap",
+)
+
+
+def _pit_fundamentals_for_symbol(symbol: str, as_of_date, store) -> dict:
+    """Return PIT fundamental inputs for *symbol* as of *as_of_date* (or an
+    all-NaN dict on any failure -- CONSTRAINT #4/#6, never fabricated, never
+    aborts the caller's per-symbol loop).
+
+    ``store`` is a already-constructed ``HistoricalStore`` (or ``None``, in
+    which case this degrades to all-NaN without touching disk -- callers
+    that never need fundamentals, e.g. tests exercising price-only features,
+    incur zero DB cost).  ``get_fundamentals_asof`` is a pure LOCAL SQLite
+    read (``report_date <= as_of_date``, no network call) -- see
+    ``data/historical_store.py``; it is itself dead-letter safe, but this
+    wrapper adds a belt-and-suspenders try/except so a future change there
+    can never take down a whole training-panel build.
+    """
+    nan_row = {k: float("nan") for k in _PIT_FUNDAMENTAL_KEYS}
+    if store is None:
+        return nan_row
+    try:
+        raw = store.get_fundamentals_asof(symbol, as_of_date)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "training_data: PIT fundamentals fetch failed for %s @ %s: %s",
+            symbol, as_of_date, exc,
+        )
+        return nan_row
+    return {k: raw.get(k, float("nan")) for k in _PIT_FUNDAMENTAL_KEYS}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
@@ -283,6 +330,7 @@ def build_training_panel(
     data_engine=None,
     horizon_days: int = 21,
     step_days: int = 1,
+    historical_store=None,
 ) -> Tuple[pd.DataFrame, pd.Series, pd.Series, pd.DataFrame]:
     """Build the supervised PIT training panel over ``[start, end]``.
 
@@ -308,6 +356,15 @@ def build_training_panel(
         ``scripts/train_lgbm.py``) can pass e.g. ``step_days=5``.  Thinning
         happens BEFORE the per-date walk, so it also saves computation (never
         walks dates it then discards).
+    historical_store :
+        Optional injected ``HistoricalStore`` (e.g. pointed at a tmp/fixture
+        DB for offline tests). Source of PIT (point-in-time) fundamentals via
+        ``get_fundamentals_asof(symbol, as_of_date)`` -- a pure local SQLite
+        read, no network. When ``None`` (the default), a real
+        ``HistoricalStore()`` (default db path) is constructed lazily on
+        first use; pass ``historical_store=False`` explicitly to skip
+        fundamentals entirely (fundamental/factor-Z columns stay NaN, exactly
+        the pre-M3 behavior) without touching disk at all.
 
     Returns
     -------
@@ -320,7 +377,8 @@ def build_training_panel(
     Notes
     -----
     * No lookahead: the feature row for a ticker at date ``D`` uses only bars
-      with timestamp ``< D``.
+      with timestamp ``< D``, and fundamentals via ``get_fundamentals_asof``
+      (``report_date <= D`` -- see ``data/historical_store.py``).
     * Per-ticker try/except (CONSTRAINT #6); NaN never fabricated (CONSTRAINT #4).
     * Each ``as_of_date`` snapshot is persisted via ``PITFeatureStore.write``.
     """
@@ -331,6 +389,25 @@ def build_training_panel(
     if not universe:
         logger.info("build_training_panel: empty universe → empty panel.")
         return _empty_panel(universe)
+
+    # historical_store=False is an explicit opt-out (skip fundamentals,
+    # zero DB touches); None (the default) lazily constructs a real store.
+    if historical_store is False:
+        hist_store = None
+    elif historical_store is not None:
+        hist_store = historical_store
+    else:
+        try:
+            from data.historical_store import HistoricalStore
+
+            hist_store = HistoricalStore()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "build_training_panel: could not construct HistoricalStore for "
+                "PIT fundamentals (%s) -- fundamental/factor-Z columns will be NaN.",
+                exc,
+            )
+            hist_store = None
 
     # ── 1. Load universe bars (batched; dead-lettered) and assemble price_history ──
     bars_by_symbol = _bars_for_universe(universe, data_engine=data_engine)
@@ -374,7 +451,12 @@ def build_training_panel(
                 prior = close.loc[close.index < as_of_date]
                 if prior.empty:
                     continue
-                rows[symbol] = _pit_ticker_row(prior)
+                row = _pit_ticker_row(prior)
+                # PIT fundamentals: report_date <= as_of_date (local DB read,
+                # no network — see data/historical_store.py; degrades to
+                # all-NaN per-symbol on any failure, never aborts the date).
+                row.update(_pit_fundamentals_for_symbol(symbol, as_of_date, hist_store))
+                rows[symbol] = row
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "build_training_panel: %s @ %s dead-lettered: %s",
@@ -387,6 +469,14 @@ def build_training_panel(
 
         universe_df = pd.DataFrame.from_dict(rows, orient="index")
         universe_df.index.name = "ticker"
+
+        # Cross-sectional Value/Quality/LowVol/Size Z-scores for THIS date's
+        # universe -- computed once per date here (not inside
+        # build_pit_feature_matrix, which only reads _FACTOR_COLS if already
+        # present) so a model trained on this panel sees the same Z-score
+        # distribution signals/multifactor.py scores tickers against live.
+        zscores = compute_multifactor_zscores(universe_df)
+        universe_df = universe_df.join(zscores)
 
         feat = build_pit_feature_matrix(universe_df, as_of_date=as_of_date)
 

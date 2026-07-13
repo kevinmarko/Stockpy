@@ -63,6 +63,78 @@ def _percentile_rank(series: pd.Series) -> pd.Series:
     return ranked.reindex(series.index)
 
 
+def compute_multifactor_zscores(universe_df: pd.DataFrame) -> pd.DataFrame:
+    """Cross-sectional Value/Quality/LowVol/Size Z-scores for a single as-of date.
+
+    Mirrors ``signals/multifactor.py::MultifactorSignal.pre_compute``'s EXACT
+    formula (same ``_zscore_winsorize`` primitive, same microcap exclusion,
+    same value/size/composite combination) so a model trained on this offline
+    panel sees the identical Z-score distribution the live pipeline scores
+    tickers against at inference time -- a formula drift here would be a
+    silent train/serve skew bug. Keep this in sync with
+    ``MultifactorSignal.pre_compute`` if that formula ever changes.
+
+    Parameters
+    ----------
+    universe_df:
+        Indexed by ticker (one row per ticker), for a SINGLE as-of date.
+        Expected columns: ``book_to_market``, ``earnings_yield``,
+        ``quality_factor_score``, ``low_vol_score``, ``log_market_cap``,
+        ``market_cap`` (raw dollar figure, used only for the microcap
+        threshold check). Any missing column is treated as all-NaN --
+        never fabricated.
+
+    Returns
+    -------
+    pd.DataFrame indexed by ticker, columns
+    ``["Value_Z", "Quality_Z", "LowVol_Z", "Size_Z", "Multifactor_Composite"]``.
+    A ticker below ``settings.MULTIFACTOR_MICROCAP_THRESHOLD`` (or with no
+    market cap at all) gets all-NaN, matching the live pipeline's
+    microcap-exclusion behavior exactly.
+    """
+    # Lazy imports: keeps this module's import-time cost light for callers
+    # (e.g. signals/lgbm_ranker.py's live pre_compute hook) that never need
+    # the multifactor path, and avoids a hard settings/-signals import at
+    # module load for the many offline tests that only exercise price-based
+    # features.
+    from settings import settings
+    from signals.multifactor import WINSOR_LIMIT, _zscore_winsorize
+
+    cols = ["Value_Z", "Quality_Z", "LowVol_Z", "Size_Z", "Multifactor_Composite"]
+    if universe_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    required = ["book_to_market", "earnings_yield", "quality_factor_score", "low_vol_score", "log_market_cap"]
+    df = universe_df.copy()
+    for col in required + ["market_cap"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    market_cap = df["market_cap"]
+    is_microcap = market_cap.fillna(0.0) < settings.MULTIFACTOR_MICROCAP_THRESHOLD
+    eligible = df.loc[~is_microcap]
+
+    b2m_z = _zscore_winsorize(eligible["book_to_market"])
+    ey_z = _zscore_winsorize(eligible["earnings_yield"])
+    quality_z = _zscore_winsorize(eligible["quality_factor_score"])
+    lowvol_z = _zscore_winsorize(eligible["low_vol_score"])
+    size_z_raw = _zscore_winsorize(eligible["log_market_cap"])
+
+    value_z = pd.concat([b2m_z, ey_z], axis=1).mean(axis=1, skipna=True)
+    size_z = -size_z_raw
+    composite = pd.concat(
+        [value_z, quality_z, lowvol_z, size_z], axis=1
+    ).mean(axis=1, skipna=True).clip(lower=-WINSOR_LIMIT, upper=WINSOR_LIMIT)
+
+    out = pd.DataFrame(np.nan, index=df.index, columns=cols)
+    out.loc[eligible.index, "Value_Z"] = value_z
+    out.loc[eligible.index, "Quality_Z"] = quality_z
+    out.loc[eligible.index, "LowVol_Z"] = lowvol_z
+    out.loc[eligible.index, "Size_Z"] = size_z
+    out.loc[eligible.index, "Multifactor_Composite"] = composite
+    return out
+
+
 def build_pit_feature_matrix(
     universe_df: pd.DataFrame,
     as_of_date: Optional[pd.Timestamp] = None,

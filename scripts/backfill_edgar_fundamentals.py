@@ -21,18 +21,6 @@ def get_all_filed_dates(facts: dict, since: str) -> list[str]:
                         dates.add(filed)
     return sorted(list(dates))
 
-def extract_shares(facts: dict, report_date: str) -> float:
-    dei = facts.get("facts", {}).get("dei", {})
-    val = edgar_fundamentals.extract_latest_fact(dei, "EntityCommonStockSharesOutstanding", report_date)
-    if val is not None:
-        return float(val)
-    # fallback to us-gaap if missing in dei
-    us_gaap = facts.get("facts", {}).get("us-gaap", {})
-    val = edgar_fundamentals.extract_latest_fact(us_gaap, "CommonStockSharesOutstanding", report_date)
-    if val is not None:
-        return float(val)
-    return 0.0
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tickers", required=True, help="Comma separated list of tickers")
@@ -55,11 +43,14 @@ def main():
                 logger.warning("No facts returned for %s (CIK %s), skipping.", symbol, cik)
                 continue
 
-            # Get historical bars for price lookup
-            # Lookback sufficiently to cover the "since" date if possible, but store.get_bars
-            # only fetches recent by default unless we already backfilled. We will just load
-            # what is in the DB.
-            bars = store.get_bars(symbol)
+            # Get historical bars for price lookup. get_bars()'s lookback_days
+            # defaults to 504 (~2 years) -- far short of a multi-year PIT backfill
+            # (--since defaults to 2015-01-01). Compute a lookback that actually
+            # reaches "since", or every report_date older than ~2 years silently
+            # gets no matching bar -> NaN price -> NaN pe_ratio/pb_ratio/market_cap.
+            since_dt = datetime.strptime(args.since, "%Y-%m-%d")
+            lookback_days = max((datetime.now() - since_dt).days + 30, 504)
+            bars = store.get_bars(symbol, lookback_days=lookback_days)
 
             filed_dates = get_all_filed_dates(facts, args.since)
             logger.info("Found %d report_dates for %s since %s", len(filed_dates), symbol, args.since)
@@ -68,20 +59,26 @@ def main():
                 # Find latest price ON OR BEFORE report_date
                 price = float('nan')
                 if not bars.empty:
-                    # pandas slicing
+                    # pandas slicing. Bar columns are capitalized (Open/High/Low/
+                    # Close/Volume) -- see HistoricalStore.get_bars's shape contract.
                     past_bars = bars[bars.index <= report_date]
                     if not past_bars.empty:
                         price = float(past_bars.iloc[-1]["Close"])
 
-                shares = extract_shares(facts, report_date)
+                shares = edgar_fundamentals.extract_shares(facts, report_date)
 
                 ratios = edgar_fundamentals.compute_pit_ratios(facts, report_date, price, shares)
                 store.upsert_fundamentals_pit(
                     symbol,
                     ratios,
-                    {}, # Raw empty because we don't need to persist the massive XBRL
+                    # The computed ratios themselves (NOT the massive raw XBRL
+                    # payload -- that stays unpersisted by design) so fields with
+                    # no dedicated typed DB column (e.g. current_ratio) are still
+                    # retrievable via HistoricalStore.get_fundamentals_raw's
+                    # raw_json blob instead of being silently dropped.
+                    ratios,
                     report_date=report_date,
-                    source="edgar"
+                    source="edgar",
                 )
 
             logger.info("Finished %s", symbol)
