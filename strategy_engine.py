@@ -631,9 +631,17 @@ class StrategyEngine:
             logger.warning("Kelly sizing fallback: realized_vol unavailable/non-positive; sizing weight = 0.0.")
             return 0.0, "cold_start_no_vol"
 
-        return volatility_target_weight(
+        # Cold-start scale-in (WS3): ramp the vol-target fallback weight in by
+        # min(1.0, n_trades / MIN_TRADES_REQUIRED) so sizing does not step
+        # discontinuously from the Kelly-capped path to a full vol-target weight
+        # the instant trade history is wiped or a new strategy is added. Factor
+        # is 1.0 once >= MIN_TRADES_REQUIRED trades exist (warm behaviour
+        # unchanged); it only ever reduces sizing on cold start.
+        scale_in = min(1.0, max(0, n_trades) / MIN_TRADES_REQUIRED)
+        weight = volatility_target_weight(
             realized_vol, target_vol=settings.VOL_TARGET, max_leverage=settings.MAX_LEVERAGE
-        ), "vol_target_fallback"
+        ) * scale_in
+        return weight, f"vol_target_fallback(scalein={scale_in:.2f},n={n_trades})"
 
 
 # =============================================================================

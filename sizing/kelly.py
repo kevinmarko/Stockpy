@@ -433,8 +433,19 @@ def kelly_sizing_for_strategy(
     """
     from sizing.vol_target import volatility_target_weight  # avoid circular at module level
 
-    def _vol_fallback(reason: str) -> Tuple[float, str]:
-        """Shared vol-target fallback branch."""
+    def _vol_fallback(reason: str, n_trades_for_scalein: int = 0) -> Tuple[float, str]:
+        """Shared vol-target fallback branch.
+
+        Cold-start scale-in (WS3): the vol-target fallback weight is ramped in
+        by ``min(1.0, n_trades / MIN_TRADES_REQUIRED)`` so sizing does not jump
+        discontinuously from the Kelly-capped path (<= ``KELLY_CAP``) to a full
+        vol-target weight (up to ``MAX_POSITION_WEIGHT``) the instant a strategy
+        is new or its trade history is wiped. The factor is 1.0 once enough
+        trades exist (>= ``MIN_TRADES_REQUIRED``), so warm behaviour is
+        unchanged; it only ever REDUCES sizing on cold start (never inflates),
+        keeping it honesty-safe. It is reflected in the returned path tag so the
+        sizing decision stays auditable.
+        """
         if realized_vol is None or (isinstance(realized_vol, float) and math.isnan(realized_vol)) or realized_vol <= 0:
             logger.warning(
                 "kelly_sizing_for_strategy: %s AND realized_vol unavailable/non-positive; "
@@ -442,11 +453,14 @@ def kelly_sizing_for_strategy(
             )
             return 0.0, "cold_start_no_vol"
         weight = volatility_target_weight(realized_vol, target_vol=target_vol, max_leverage=max_leverage)
+        scale_in = min(1.0, max(0, n_trades_for_scalein) / MIN_TRADES_REQUIRED)
+        weight *= scale_in
         logger.warning(
-            "kelly_sizing_for_strategy: %s. Falling back to vol-target weight=%.4f.",
-            reason, weight
+            "kelly_sizing_for_strategy: %s. Falling back to vol-target weight=%.4f "
+            "(scale_in=%.2f, n=%d).",
+            reason, weight, scale_in, n_trades_for_scalein
         )
-        return weight, "vol_target_fallback"
+        return weight, f"vol_target_fallback(scalein={scale_in:.2f},n={n_trades_for_scalein})"
 
     # 1. Attempt to read from the transactions store
     try:
@@ -455,7 +469,7 @@ def kelly_sizing_for_strategy(
         logger.error(
             "kelly_sizing_for_strategy: failed to read transactions store: %s", e
         )
-        return _vol_fallback(f"transactions store read error: {e}")
+        return _vol_fallback(f"transactions store read error: {e}", 0)
 
     # 2. Check per-strategy trade count; gate Kelly on min_trades
     p, b, n_trades = estimate_win_rate_and_payoff_per_strategy(
@@ -463,7 +477,8 @@ def kelly_sizing_for_strategy(
     )
     if math.isnan(p) or math.isnan(b):
         return _vol_fallback(
-            f"cold start: only {n_trades} trades for strategy='{strategy_id}' (< {min_trades} required)"
+            f"cold start: only {n_trades} trades for strategy='{strategy_id}' (< {min_trades} required)",
+            n_trades,
         )
 
     # 3. Extract per-strategy returns for the bootstrap
@@ -471,7 +486,10 @@ def kelly_sizing_for_strategy(
     if returns is None or len(returns) == 0:
         # Shouldn't happen if estimate_win_rate_and_payoff_per_strategy passed,
         # but guard defensively.
-        return _vol_fallback(f"no returns extractable for strategy='{strategy_id}' despite n_trades={n_trades}")
+        return _vol_fallback(
+            f"no returns extractable for strategy='{strategy_id}' despite n_trades={n_trades}",
+            n_trades,
+        )
 
     # 4. Bootstrap the return distribution and take the 5th-percentile Kelly
     # Convert the raw returns numpy array to a Series so bootstrap_kelly_confidence
@@ -488,7 +506,8 @@ def kelly_sizing_for_strategy(
         # distributions where b is undefined; fall back to vol-target.
         return _vol_fallback(
             f"bootstrap produced NaN kelly_5th for strategy='{strategy_id}' "
-            f"(n_trades={n_trades}; likely degenerate sample)"
+            f"(n_trades={n_trades}; likely degenerate sample)",
+            n_trades,
         )
 
     path_tag = (

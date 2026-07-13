@@ -87,6 +87,25 @@ def _engine() -> StrategyEngine:
     return StrategyEngine(transactions_store=TransactionsStore(db_url="sqlite:///:memory:"))
 
 
+def _engine_warm_vol_target() -> StrategyEngine:
+    """StrategyEngine whose store is warmed to the WS3 scale-in ceiling.
+
+    Seeds 30 all-winning closed trades: the aggregate payoff ratio b is
+    undefined (no losses) so sizing still takes the vol-target fallback, but with
+    n_trades=30 the WS3 cold-start scale-in factor is exactly 1.0 -- i.e. the
+    pre-regime weight equals the UN-scaled vol-target weight. Used by the sizing-
+    wiring tests, whose assertions verify the regime-multiplier/clamp arithmetic
+    layered on top of a full (un-ramped) vol-target weight."""
+    store = TransactionsStore(db_url="sqlite:///:memory:")
+    ts = datetime.now()
+    for _i in range(30):
+        _tid = store.record_trade(
+            symbol="SEED", side="long", entry_ts=ts, entry_price=100.0, shares=1.0
+        )
+        store.close_trade(_tid, exit_ts=ts, exit_price=110.0)
+    return StrategyEngine(transactions_store=store)
+
+
 def _bar(ticker: str = "JNJ", close: float = 157.50) -> MarketBarDTO:
     # High/low chosen wide enough that the DTO does not clamp open/close.
     return MarketBarDTO(datetime.now(), ticker, close - 2.5, close + 0.5, close - 3.0, close, 4_500_000)
@@ -201,13 +220,15 @@ class TestSizingWiring:
             global_meta_registry._labelers.update(snapshot)
 
     def _run(self, *, garch_vol=0.20, hmm=None):
-        return _engine().evaluate_security(
+        # Warm store (WS3 scale-in factor 1.0) so the pre-regime weight is the
+        # full un-ramped vol-target weight these wiring assertions expect.
+        return _engine_warm_vol_target().evaluate_security(
             bar=_bar(), fundamentals=_fund(), macro=_macro_riskon(hmm=hmm),
             forecast_price=168.00, trend_strength=72.0, atr=2.50, garch_vol=garch_vol,
         )
 
     def test_vol_target_fallback_sets_pre_regime_weight(self):
-        """Empty store + garch_vol=0.20 -> vol-target fallback = 0.10/0.20 = 0.5 (Pre-regime)."""
+        """Warm store (scale-in 1.0) + garch_vol=0.20 -> vol-target fallback = 0.10/0.20 = 0.5 (Pre-regime)."""
         out = self._run(garch_vol=0.20, hmm=None)
         assert out["Kelly_Target_Pre_Regime"] == pytest.approx(0.5, rel=1e-6)
 

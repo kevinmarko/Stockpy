@@ -1057,11 +1057,24 @@ def test_garch_and_edge_scoring(monkeypatch):
         settings, "SIGNAL_WEIGHTS", type(settings)(_env_file=None).SIGNAL_WEIGHTS
     )
 
-    # Inject an empty in-memory store so this test's Kelly-sizing assertions are
+    # Inject an in-memory store so this test's Kelly-sizing assertions are
     # deterministic regardless of how many real closed trades exist in the live
     # quant_platform.db (the previous version implicitly, and incorrectly,
     # assumed the production database was empty).
+    #
+    # WS3 cold-start scale-in note: the vol-target fallback weight is now ramped
+    # in by min(1, n_trades / MIN_TRADES_REQUIRED). To keep the Case A / Case D
+    # sizing assertions (which verify the *un-scaled* 2/3 vol-target weight),
+    # seed 30 all-winning trades: n_trades=30 makes the scale-in factor exactly
+    # 1.0, while an all-winning sample leaves the payoff ratio b undefined so the
+    # aggregate path still takes the vol-target fallback (not the Kelly path).
     empty_store = TransactionsStore(db_url="sqlite:///:memory:")
+    _seed_ts = datetime.now()
+    for _i in range(30):
+        _tid = empty_store.record_trade(
+            symbol="SEED", side="long", entry_ts=_seed_ts, entry_price=100.0, shares=1.0
+        )
+        empty_store.close_trade(_tid, exit_ts=_seed_ts, exit_price=110.0)
     engine = StrategyEngine(transactions_store=empty_store)
 
     # Common test DTOs
