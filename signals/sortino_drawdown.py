@@ -13,6 +13,36 @@ class SortinoDrawdownSignal(SignalModule):
     name = "sortino_drawdown"
     required_features = []
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        sortino = df.get("sortino_ratio", pd.Series(0.0, index=df.index))
+        drawdown = df.get("max_drawdown", pd.Series(0.0, index=df.index))
+        
+        score = pd.Series(0.0, index=df.index)
+        exps = pd.Series("", index=df.index)
+        
+        valid_s = sortino.notna()
+        high_s = valid_s & (sortino > 2.0)
+        score[high_s] += 10.0
+        exps[high_s] = "+10pts: High Sortino (" + sortino[high_s].round(2).astype(str) + ")"
+        
+        valid_d = drawdown.notna()
+        steep_d = valid_d & (drawdown < -0.25)
+        score[steep_d] -= 10.0
+        
+        dd_msg = "-10pts: Steep Drawdown (" + (drawdown[steep_d] * 100).round(1).astype(str) + "%)"
+        has_exp = exps != ""
+        exps[steep_d & has_exp] += "\n" + dd_msg
+        exps[steep_d & ~has_exp] = dd_msg
+        
+        score /= 10.0
+        
+        return pd.DataFrame({
+            "score": score,
+            "confidence": 1.0,
+            "explanation": exps,
+            "meta_label_proba": 1.0
+        }, index=df.index)
+
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         sortino_ratio = row.get("sortino_ratio")
         max_drawdown = row.get("max_drawdown")

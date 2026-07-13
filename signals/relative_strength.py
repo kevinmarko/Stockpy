@@ -13,6 +13,29 @@ class RelativeStrengthSignal(SignalModule):
     name = "relative_strength"
     required_features = []
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        rs = df.get("relative_strength", pd.Series(0.0, index=df.index))
+        
+        score = pd.Series(0.0, index=df.index)
+        exps = pd.Series("", index=df.index)
+        
+        valid = rs.notna()
+        
+        up = valid & (rs > 0)
+        score[up] = 10.0 / 10.0
+        exps[up] = "+10pts: Outperforming S&P 500 (RS: " + rs[up].round(2).astype(str) + ")"
+        
+        down = valid & (rs <= 0)
+        score[down] = -10.0 / 10.0
+        exps[down] = "-10pts: Underperforming S&P 500 (RS: " + rs[down].round(2).astype(str) + ")"
+        
+        return pd.DataFrame({
+            "score": score,
+            "confidence": 1.0,
+            "explanation": exps,
+            "meta_label_proba": 1.0
+        }, index=df.index)
+
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         relative_strength = row.get("relative_strength")
         points = 0.0

@@ -13,6 +13,37 @@ class ForecastAlignmentSignal(SignalModule):
     name = "forecast_alignment"
     required_features = ["current_price", "forecast_price"]
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        current_price = df.get("current_price", pd.Series(0.0, index=df.index))
+        forecast_price = df.get("forecast_price", pd.Series(0.0, index=df.index))
+        
+        score = pd.Series(0.0, index=df.index)
+        exps = pd.Series("", index=df.index)
+        
+        up = forecast_price > current_price
+        expected_gain = ((forecast_price[up] - current_price[up]) / current_price[up]) * 100
+        
+        strong = expected_gain >= 1.5
+        score[up.index[strong]] = 10.0
+        exps[up.index[strong]] = "+10pts: Strong forecast projection (+" + expected_gain[strong].round(1).astype(str) + "%)"
+        
+        mod = (expected_gain > 0) & ~strong
+        score[up.index[mod]] = 5.0
+        exps[up.index[mod]] = "+5pts: Moderate positive forecast (+" + expected_gain[mod].round(1).astype(str) + "%)"
+        
+        down = forecast_price <= current_price
+        score[down] = -10.0
+        exps[down] = "-10pts: Forecast suggests structural price erosion"
+        
+        score /= 10.0
+        
+        return pd.DataFrame({
+            "score": score,
+            "confidence": 1.0,
+            "explanation": exps,
+            "meta_label_proba": 1.0
+        }, index=df.index)
+
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         current_price = row["current_price"]
         forecast_price = row["forecast_price"]
