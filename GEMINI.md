@@ -4,6 +4,9 @@ Project Context: Stock Dashboard Py (InvestYo Quant Platform)
 
 - **No automatic AI agent invocations.** Do not call subagents, multi-agent orchestration/workflows, or any scheduled/background self check-in loops unless the user explicitly asks for it in that turn. This includes autonomous PR-watching that triggers further investigation or fixes without an explicit per-instance ask.
 
+## Active assignment (2026-07-13): Data Layer — PIT Historical Fundamentals
+See `docs/DATA_LAYER_PLAN.md` for the full spec. You own `data/` (esp. new `data/edgar_fundamentals.py`, the `fundamentals_history` PIT seams in `data/historical_store.py`, `scripts/backfill_edgar_fundamentals.py`) and `validation/pit_fundamentals.py`. Do NOT edit `ml/` — that is Claude's ML-pipeline phase. The interface you deliver is `HistoricalStore.get_fundamentals_asof(symbol, as_of_date)` over a `report_date`-keyed `fundamentals_history`. Free-data-only (SEC EDGAR); NaN never fabricated; report_date ≤ decision date is the no-lookahead rule.
+
 ## Key documentation files (Tier 6 — added 2026-06-26)
 | File | Purpose |
 |------|---------|
