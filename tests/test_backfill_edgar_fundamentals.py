@@ -47,7 +47,7 @@ class _FakeStore:
         self._raise_for = set(raise_on_get_bars_for)
         self.upserts = []
 
-    def get_bars(self, symbol):
+    def get_bars(self, symbol, lookback_days=504):
         if symbol in self._raise_for:
             raise RuntimeError(f"simulated get_bars failure for {symbol}")
         return self._bars
