@@ -120,7 +120,9 @@ class BrokerBase(ABC):
 
     Concrete subclasses:
       * AlpacaBroker  — paper / live via alpaca-py AsyncTradingClient
-      * MockBroker    — in-memory stub for unit tests (tests/conftest.py)
+      * MockBroker    — shared in-memory, network-free stub for unit tests,
+        defined in ``tests/conftest.py`` and exposed both as the importable
+        ``MockBroker`` class and the ``mock_broker`` pytest fixture.
 
     NEVER call concrete broker methods directly from strategy or orchestrator
     code — always go through this interface + order_manager.
