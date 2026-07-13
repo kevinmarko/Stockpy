@@ -4,8 +4,16 @@ Project Context: Stock Dashboard Py (InvestYo Quant Platform)
 
 - **No automatic AI agent invocations.** Do not call subagents, multi-agent orchestration/workflows, or any scheduled/background self check-in loops unless the user explicitly asks for it in that turn. This includes autonomous PR-watching that triggers further investigation or fixes without an explicit per-instance ask.
 
-## Active assignment (2026-07-13): Data Layer — PIT Historical Fundamentals
-See `docs/DATA_LAYER_PLAN.md` for the full spec. You own `data/` (esp. new `data/edgar_fundamentals.py`, the `fundamentals_history` PIT seams in `data/historical_store.py`, `scripts/backfill_edgar_fundamentals.py`) and `validation/pit_fundamentals.py`. Do NOT edit `ml/` — that is Claude's ML-pipeline phase. The interface you deliver is `HistoricalStore.get_fundamentals_asof(symbol, as_of_date)` over a `report_date`-keyed `fundamentals_history`. Free-data-only (SEC EDGAR); NaN never fabricated; report_date ≤ decision date is the no-lookahead rule.
+## Completed assignment (2026-07-13): Data Layer — PIT Historical Fundamentals
+**Done — landed on `main`.** See `docs/DATA_LAYER_PLAN.md` for the full spec (kept for historical reference). Delivered `HistoricalStore.get_fundamentals_asof(symbol, as_of_date)` over a `report_date`-keyed `fundamentals_history`, backed by SEC EDGAR (free-data-only). This unblocked ML Phase M3 (already merged — see `docs/ML_PIPELINE_PLAN.md`).
+
+## Active assignment (2026-07-13): Observability Consolidation + Config/Schema Hardening
+Two independent, self-contained plans — read the plan doc's own header before starting either:
+
+- **`docs/CONFIG_SCHEMA_PLAN.md` (config.py / database_setup.py) — start immediately, no gate.** No file overlap with the in-flight 8-agent `execution/`/`gui/` hardening effort. Characterizes and closes the verified ~86-column `COLUMN_SCHEMA` advisory-path population gap (27 populated / 8 silently dropped / 59 orchestrator-only), the unwritten `DailySignals` table, and `Config.validate_config()` never running in CI.
+- **`docs/OBSERVABILITY_PLAN.md` (observability/alerts.py + root alerting.py) — GATED, do not start editing `observability/alerts.py` until confirmed merged.** Two in-flight agents (`exec-unified-alerting` / E2, `exec-fill-stream-flatten` / E4) touch or call into that exact file. Before editing it, re-run: `gh pr list --state merged --limit 30` and confirm both branches appear (or `git log origin/main --oneline --grep="alerting"` / `--grep="flatten"` show their commits merged). If not yet merged, wait or raise it with the user first — this is a real collision risk. Non-`alerts.py` work in that plan (e.g. root `alerting.py` research, call-site wiring in `execution/kill_switch.py`) may start immediately.
+
+Do not touch `ml/`, `data/`, or `gui/panels/observability.py` in either of these — those are Claude's or another in-flight agent's territory.
 
 ## Key documentation files (Tier 6 — added 2026-06-26)
 | File | Purpose |
