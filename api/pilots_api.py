@@ -221,35 +221,72 @@ class FollowRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _pilot_base(pilot: Any) -> Dict[str, Any]:
-    """The stable Pilot identity fields shared by list + detail responses."""
+def _pilot_summary(pilot: Any, snapshot: Optional[dict], store: FollowsStore) -> Dict[str, Any]:
+    """The PilotSummary contract (webapp/src/api/types.ts): identity + headline
+    metrics + follow proxies + holdings_count + ``long_only``.
+
+    Shared by BOTH the marketplace list (``/pilots``) and the detail endpoint
+    (``/pilots/{id}``, whose ``PilotDetail extends PilotSummary``) so the two
+    responses can never silently drift apart again.
+    """
+    holdings_count = len(scoring.pilot_holdings(pilot, snapshot)) if snapshot is not None else 0
     return {
         "id": pilot.id,
         "name": pilot.name,
         "category": pilot.category,
         "description": pilot.description,
-        "long_only": pilot.long_only,
-        "validation_strategy_id": pilot.validation_strategy_id,
-        "weights": dict(pilot.weights),
-    }
-
-
-def _pilot_list_item(pilot: Any, snapshot: Optional[dict], store: FollowsStore) -> Dict[str, Any]:
-    """One marketplace-list entry: identity + headline + proxies + holdings_count."""
-    headline = performance.pilot_headline(pilot, reports_dir=_reports_dir())
-    if snapshot is not None:
-        holdings_count = len(scoring.pilot_holdings(pilot, snapshot))
-    else:
-        holdings_count = 0
-    return {
-        "id": pilot.id,
-        "name": pilot.name,
-        "category": pilot.category,
-        "description": pilot.description,
-        "headline": headline,
+        "headline": performance.pilot_headline(pilot, reports_dir=_reports_dir()),
         "holdings_count": holdings_count,
         "aum_proxy": store.aum_for(pilot.id),
         "followers_proxy": store.followers_for(pilot.id),
+        "long_only": pilot.long_only,
+    }
+
+
+def _serialize_portfolio(snap: Any) -> Dict[str, Any]:
+    """Reshape an ``AccountSnapshot`` into the PWA ``Portfolio`` contract
+    (webapp/src/api/types.ts).
+
+    ``AccountSnapshot.to_dict()`` emits ``positions`` as a *dict* keyed by symbol
+    with ``quantity``/``average_cost`` field names and carries no
+    ``position_count``/``total_unrealized_pl``/``source`` — none of which match
+    the frontend's ``Portfolio``/``PortfolioPositionView``. This serializer maps
+    them across without touching ``to_dict()`` itself (whose shape is load-bearing
+    for the JSON-cache ``from_dict`` round-trip). Every value is read from the real
+    snapshot — nothing is fabricated (CONSTRAINT #4); ``source`` is honestly
+    ``"db"`` because this endpoint reads DB-first via ``HistoricalStore``.
+    """
+    data = snap.to_dict()
+    raw_positions = data.get("positions") or {}
+    positions: List[Dict[str, Any]] = []
+    total_unrealized_pl = 0.0
+    for pos in raw_positions.values():
+        upl = pos.get("unrealized_pl")
+        if isinstance(upl, (int, float)) and upl == upl:  # skip None / NaN
+            total_unrealized_pl += float(upl)
+        positions.append(
+            {
+                "symbol": pos.get("symbol"),
+                "qty": pos.get("quantity"),
+                "avg_cost": pos.get("average_cost"),
+                "current_price": pos.get("current_price"),
+                "market_value": pos.get("market_value"),
+                "unrealized_pl": pos.get("unrealized_pl"),
+                "unrealized_pl_pct": pos.get("unrealized_pl_pct"),
+                "name": pos.get("name"),
+            }
+        )
+    return {
+        "total_equity": data.get("total_equity"),
+        "buying_power": data.get("buying_power"),
+        "total_unrealized_pl": total_unrealized_pl,
+        "total_dividends": data.get("total_dividends"),
+        "position_count": len(positions),
+        "positions": positions,
+        "fetched_at": data.get("fetched_at"),
+        "source": "db",
+        "is_stale": snap.is_stale(),
+        "age_hours": snap.age_hours(),
     }
 
 
@@ -271,7 +308,7 @@ def list_pilots() -> List[Dict[str, Any]]:
     never 404'd on a cold start)."""
     snapshot = _load_snapshot()
     store = FollowsStore()
-    return [_pilot_list_item(p, snapshot, store) for p in catalog.list_pilots()]
+    return [_pilot_summary(p, snapshot, store) for p in catalog.list_pilots()]
 
 
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])
@@ -286,10 +323,15 @@ def get_pilot_detail(pilot_id: str) -> Any:
     if pilot is None:
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
 
-    payload = _pilot_base(pilot)
-    payload["headline"] = performance.pilot_headline(pilot, reports_dir=_reports_dir())
-
     snapshot = _load_snapshot()
+    store = FollowsStore()
+    # Start from the full PilotSummary contract (headline + proxies + long_only)
+    # so detail carries every summary field it extends, then layer on the
+    # detail-only identity + holdings fields.
+    payload = _pilot_summary(pilot, snapshot, store)
+    payload["validation_strategy_id"] = pilot.validation_strategy_id
+    payload["weights"] = dict(pilot.weights)
+
     if snapshot is None:
         payload.update(
             {
@@ -380,10 +422,7 @@ def get_portfolio() -> Any:
     if snap is None:
         return JSONResponse(status_code=404, content={"detail": _MISSING_PORTFOLIO_DETAIL})
     try:
-        data = snap.to_dict()
-        data["is_stale"] = snap.is_stale()
-        data["age_hours"] = snap.age_hours()
-        return data
+        return _serialize_portfolio(snap)
     except Exception as exc:  # noqa: BLE001 - defensive: malformed snapshot -> 404
         logger.warning("pilots_api: portfolio serialization failed: %s", exc)
         return JSONResponse(status_code=404, content={"detail": _MISSING_PORTFOLIO_DETAIL})
@@ -392,10 +431,15 @@ def get_portfolio() -> Any:
 @app.get("/portfolio/equity-curve", dependencies=[Depends(require_read_token)])
 def get_equity_curve(
     range: str = Query("1Y"),  # noqa: A002 - matches the ?range= query param name
-) -> List[Dict[str, Any]]:
-    """Account equity curve from stored snapshots, oldest→newest. Empty list
-    when nothing has been stored yet (never fabricated). An unknown ``range``
-    is treated leniently as "all history"."""
+) -> Dict[str, Any]:
+    """Account equity curve from stored snapshots, oldest→newest.
+
+    Returns the ``{range, curve}`` envelope the PWA expects (client.ts
+    ``getEquityCurve`` / ``CurvePoint``), mapping each stored snapshot to
+    ``{date: <fetched_at ISO date>, value: <total_equity>}``. ``curve`` is an
+    empty list — never fabricated — when nothing has been stored yet or the DB is
+    cold (CONSTRAINT #4). An unknown ``range`` is treated leniently as "all
+    history"."""
     since: Optional[datetime] = None
     days = _RANGE_DAYS.get(range)
     if days:
@@ -403,16 +447,29 @@ def get_equity_curve(
     try:
         store = HistoricalStore()
         df = store.account_snapshot_history(since=since)
-    except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> []
+    except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> empty curve
         logger.warning("pilots_api: account_snapshot_history failed: %s", exc)
-        return []
+        return {"range": range, "curve": []}
     if df is None or df.empty:
-        return []
+        return {"range": range, "curve": []}
+    # account_snapshot_history is ordered ascending by fetched_at, so records are
+    # already oldest→newest. Normalize fetched_at to an ISO date (YYYY-MM-DD) to
+    # match CurvePoint's "ISO date" semantics.
     df = df.copy()
-    for col in df.columns:
-        if str(df[col].dtype).startswith("datetime"):
-            df[col] = df[col].astype(str)
-    return df.to_dict(orient="records")
+    df["fetched_at"] = df["fetched_at"].astype(str).str[:10]
+    curve: List[Dict[str, Any]] = []
+    for row in df.to_dict(orient="records"):
+        equity = row.get("total_equity")
+        if equity is None:
+            continue
+        try:
+            value = float(equity)
+        except (TypeError, ValueError):
+            continue
+        if value != value:  # NaN guard — skip rather than fabricate a point
+            continue
+        curve.append({"date": row.get("fetched_at"), "value": value})
+    return {"range": range, "curve": curve}
 
 
 # ---------------------------------------------------------------------------
