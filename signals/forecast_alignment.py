@@ -24,12 +24,16 @@ class ForecastAlignmentSignal(SignalModule):
         expected_gain = ((forecast_price[up] - current_price[up]) / current_price[up]) * 100
         
         strong = expected_gain >= 1.5
-        score[up.index[strong]] = 10.0
-        exps[up.index[strong]] = "+10pts: Strong forecast projection (+" + expected_gain[strong].round(1).astype(str) + "%)"
-        
+        # Index through expected_gain (already sliced to the up-subset), not
+        # up.index (the full-length index) — up.index[strong] mismatches
+        # lengths and raises IndexError whenever the universe has any
+        # down-tickers at all (bug only manifests with a genuine up/down mix).
+        score[expected_gain.index[strong]] = 10.0
+        exps[expected_gain.index[strong]] = "+10pts: Strong forecast projection (+" + expected_gain[strong].round(1).astype(str) + "%)"
+
         mod = (expected_gain > 0) & ~strong
-        score[up.index[mod]] = 5.0
-        exps[up.index[mod]] = "+5pts: Moderate positive forecast (+" + expected_gain[mod].round(1).astype(str) + "%)"
+        score[expected_gain.index[mod]] = 5.0
+        exps[expected_gain.index[mod]] = "+5pts: Moderate positive forecast (+" + expected_gain[mod].round(1).astype(str) + "%)"
         
         down = forecast_price <= current_price
         score[down] = -10.0
