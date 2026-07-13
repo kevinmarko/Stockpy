@@ -35,6 +35,9 @@ automatically.
 | 2 | FastAPI service | `api/pilots_api.py` (port 8602) | #250 |
 | 3 | Gated follow-mirror | `pilots/mirror.py` | #250 |
 | — | Daemon hosting of the Pilots API (opt-in) | `desktop/orchestrator_daemon.py`, `settings.PILOTS_API_ENABLED` | #252 |
+| — | Reconcile PWA ↔ `pilots_api` response shapes for live cutover | `webapp/src/api/types.ts`, `api/pilots_api.py` | #254 |
+| — | Persist real benchmark comparison series | `validation/harness.py`, `pilots/performance.py` | #256 |
+| — | Mirror force-exit of dropped names via per-follow attribution | `pilots/mirror.py`, `pilots/follows_store.py` | #257 |
 
 ## Decisions
 
@@ -63,10 +66,3 @@ npm run test       # Vitest — mock contract + honesty fixtures
 npm run typecheck
 npm run build      # type-check + production build (+ PWA service worker)
 ```
-
-## Known follow-ups (honest limitations)
-
-- **Benchmark series** — the PWA perf chart's `benchmark` may be `None` until the harness
-  persists a benchmark curve for a given strategy.
-- **Mirror force-exit** — following a Pilot stops topping up a name the Pilot has dropped but
-  does not force-sell it; per-follow position attribution is not yet modelled.
