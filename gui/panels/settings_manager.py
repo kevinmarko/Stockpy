@@ -69,6 +69,7 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
     ("PROMPT_REGISTRY_BACKEND", "text"),
     # Persistent orchestrator daemon + State API CORS policy
     ("ORCHESTRATOR_DAEMON_ENABLED", "bool"),
+    ("PILOTS_API_ENABLED", "bool"),
     ("CORS_ALLOWED_ORIGINS", "json"),
     ("DEFAULT_TICKERS", "tickers"),
 ]

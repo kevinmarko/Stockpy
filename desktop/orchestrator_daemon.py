@@ -14,6 +14,17 @@ Run via::
 
     python -m desktop.orchestrator_daemon [--interval N] [--dry-run] [--strict]
 
+This process always hosts the Control API (``api/control_api.py``) on
+``settings.ORCHESTRATOR_API_PORT``. It ALSO hosts the Pilots API
+(``api/pilots_api.py``) on ``settings.PILOTS_API_PORT`` when
+``settings.PILOTS_API_ENABLED`` is ``True`` (default ``False`` — the Pilots
+API otherwise remains an independently-launched standalone service, as
+documented in ``api/pilots_api.py`` and ``CLAUDE.md``). Both services are
+127.0.0.1-bound only and share this process's lifecycle (started after
+``daemon.start()``, stopped during teardown) but not each other's failure
+modes — a Pilots API startup failure is logged and swallowed, never aborting
+the orchestrator daemon itself.
+
 SIGTERM hardening
 ------------------
 This reuses the EXACT pattern already proven in ``app_shell.py`` (see that
@@ -66,7 +77,13 @@ from dotenv import load_dotenv as _load_dotenv
 logger = logging.getLogger("InvestYo.orchestrator_daemon")
 
 
-def _write_daemon_file(daemon, output_dir: Path, *, port: Optional[int] = None) -> None:
+def _write_daemon_file(
+    daemon,
+    output_dir: Path,
+    *,
+    port: Optional[int] = None,
+    pilots_api_port: Optional[int] = None,
+) -> None:
     """Write ``<output_dir>/daemon.json`` — a discovery file for external
     tooling (e.g. a future CLI/GUI probe) to find this daemon's pid and
     basic state without talking to it directly.
@@ -74,9 +91,12 @@ def _write_daemon_file(daemon, output_dir: Path, *, port: Optional[int] = None) 
     ``port`` (when given) is the TCP port the Control API
     (``api/control_api.py``) is bound to, so external tooling can discover
     it from this one file alongside pid/state/interval_seconds/started_at.
-    Callers should only pass a port once the Control API server has
-    actually started listening — see ``run_forever``'s call site for the
-    ordering rationale.
+    ``pilots_api_port`` (when given — only when ``settings.PILOTS_API_ENABLED``)
+    is the TCP port the Pilots API (``api/pilots_api.py``) is bound to;
+    ``None`` when that service isn't hosted by this daemon process (the
+    default — it remains a manually-launched standalone service). Callers
+    should only pass a port once its server has actually started listening
+    — see ``run_forever``'s call site for the ordering rationale.
 
     Uses the same atomic write-then-rename idiom as
     ``execution/kill_switch.py``'s ``GlobalKillSwitch.activate()`` and
@@ -97,6 +117,7 @@ def _write_daemon_file(daemon, output_dir: Path, *, port: Optional[int] = None) 
             "interval_seconds": status.get("interval_seconds"),
             "started_at": datetime.now(timezone.utc).isoformat(),
             "port": port,
+            "pilots_api_port": pilots_api_port,
         }
         final_path = output_dir / "daemon.json"
         tmp_path = final_path.with_suffix(".tmp")
@@ -177,27 +198,74 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
     api_thread = threading.Thread(target=api_server.run, daemon=True, name="OrchestratorControlAPI")
     api_thread.start()
 
-    # Bounded poll for the API server to report ready (uvicorn.Server exposes
-    # a `started` flag) before writing the discovery file -- a discovery file
-    # pointing at a not-yet-bound port is worse than no file at all. Bounded
-    # to avoid ever blocking daemon startup indefinitely if the server fails
-    # to come up; falls through and writes the file anyway after the
-    # deadline so discovery isn't silently lost on a slow-starting server.
-    _api_ready_deadline = time.monotonic() + 5.0
-    while not getattr(api_server, "started", False) and time.monotonic() < _api_ready_deadline:
-        time.sleep(0.05)
-    if not getattr(api_server, "started", False):
-        logger.warning(
-            "Control API did not report 'started' within 5s; writing discovery "
-            "file anyway (port may not be bound yet)."
-        )
+    # Optional second service: the Pilots API (api/pilots_api.py), hosted
+    # alongside the Control API when settings.PILOTS_API_ENABLED (default
+    # False -- pilots_api.py otherwise remains a manually-launched standalone
+    # `uvicorn` process, exactly as before this flag existed). Deferred
+    # import + conditional construction so an operator who never sets the
+    # flag pays zero extra import/startup cost and the Pilots API's own
+    # dependencies need not be importable in every daemon deployment.
+    # `pilots_api_server`/`pilots_api_thread` stay `None` when disabled so
+    # the readiness poll and `_teardown()` below skip them cleanly.
+    pilots_api_server = None
+    pilots_api_thread = None
+    pilots_api_port: Optional[int] = None
+    if settings.PILOTS_API_ENABLED:
+        try:
+            from api.pilots_api import app as pilots_api_app
 
-    _write_daemon_file(daemon, settings.OUTPUT_DIR, port=settings.ORCHESTRATOR_API_PORT)
+            pilots_api_config = uvicorn.Config(
+                pilots_api_app,
+                host="127.0.0.1",
+                port=settings.PILOTS_API_PORT,
+                log_level="warning",
+            )
+            pilots_api_server = uvicorn.Server(pilots_api_config)
+            pilots_api_thread = threading.Thread(
+                target=pilots_api_server.run, daemon=True, name="PilotsAPI",
+            )
+            pilots_api_thread.start()
+            pilots_api_port = settings.PILOTS_API_PORT
+        except Exception as exc:  # noqa: BLE001 - optional service, never abort daemon startup
+            logger.warning("Failed to start Pilots API (PILOTS_API_ENABLED=True): %s", exc)
+            pilots_api_server = None
+            pilots_api_thread = None
+
+    # Bounded poll for the API server(s) to report ready (uvicorn.Server
+    # exposes a `started` flag) before writing the discovery file -- a
+    # discovery file pointing at a not-yet-bound port is worse than no file
+    # at all. Bounded to avoid ever blocking daemon startup indefinitely if a
+    # server fails to come up; falls through and writes the file anyway
+    # after the deadline so discovery isn't silently lost on a slow-starting
+    # server. One shared deadline covers both servers so enabling the
+    # optional Pilots API never doubles the worst-case startup delay.
+    _servers_to_await = [("Control API", api_server)]
+    if pilots_api_server is not None:
+        _servers_to_await.append(("Pilots API", pilots_api_server))
+    _api_ready_deadline = time.monotonic() + 5.0
+    while (
+        any(not getattr(srv, "started", False) for _, srv in _servers_to_await)
+        and time.monotonic() < _api_ready_deadline
+    ):
+        time.sleep(0.05)
+    for _name, _srv in _servers_to_await:
+        if not getattr(_srv, "started", False):
+            logger.warning(
+                "%s did not report 'started' within 5s; writing discovery "
+                "file anyway (port may not be bound yet).", _name,
+            )
+
+    _write_daemon_file(
+        daemon, settings.OUTPUT_DIR,
+        port=settings.ORCHESTRATOR_API_PORT,
+        pilots_api_port=pilots_api_port,
+    )
 
     _torn_down = False
 
     def _teardown() -> None:
-        """Idempotent teardown of the daemon AND the Control API server.
+        """Idempotent teardown of the daemon, the Control API server, and
+        (when enabled) the Pilots API server.
 
         Shared by the SIGTERM/SIGINT watcher path and the normal-return
         ``finally`` block below -- safe to call more than once (mirrors
@@ -213,6 +281,12 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
             api_thread.join(timeout=5.0)
         except Exception as exc:  # noqa: BLE001
             logger.error("Error shutting down orchestrator Control API: %s", exc)
+        if pilots_api_server is not None:
+            try:
+                pilots_api_server.should_exit = True
+                pilots_api_thread.join(timeout=5.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Error shutting down Pilots API: %s", exc)
         try:
             daemon.shutdown(timeout=10.0)
             logger.info("Orchestrator daemon shut down cleanly.")

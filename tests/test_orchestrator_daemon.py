@@ -78,8 +78,16 @@ class BaseDaemonEntrypointTest(unittest.TestCase):
         exits on its first check instead of waiting out the full timeout.
         Returns a context manager; the constructed fake instance is
         available as ``self.fake_api_server`` once entered indirectly via
-        ``self._fake_api_server_holder`` (set at construction time)."""
+        ``self._fake_api_server_holder`` (set at construction time).
+
+        ``run_forever`` may construct TWO ``uvicorn.Server`` instances (the
+        Control API, always; the Pilots API, only when
+        ``settings.PILOTS_API_ENABLED``) -- the holder's ``"instance"`` key
+        keeps its original last-constructed-wins meaning for existing
+        single-server tests, and ``"instances"`` (a list, construction
+        order) is added for tests that need to distinguish both."""
         holder = self._fake_api_server_holder = {}
+        holder["instances"] = []
 
         class _FakeUvicornServer:
             def __init__(self, config):
@@ -87,6 +95,7 @@ class BaseDaemonEntrypointTest(unittest.TestCase):
                 self.started = True
                 self.should_exit = False
                 holder["instance"] = self
+                holder["instances"].append(self)
 
             def run(self):
                 # Real uvicorn.Server.run() blocks until should_exit; the
@@ -108,15 +117,19 @@ class _FakeWatcherThread:
     .join() a no-op (rather than blocking forever) since the real watcher
     thread in production genuinely never returns until a signal arrives.
 
-    ``run_forever`` now constructs TWO threads via ``threading.Thread``:
+    ``run_forever`` constructs up to THREE threads via ``threading.Thread``:
     the Control API server thread (``name="OrchestratorControlAPI"``,
-    created first) and the SIGTERM/SIGINT watcher thread (unnamed, created
-    second). Tests that only care about the watcher use
+    created first), the OPTIONAL Pilots API server thread
+    (``name="PilotsAPI"``, created second, only when
+    ``settings.PILOTS_API_ENABLED``), and the SIGTERM/SIGINT watcher thread
+    (unnamed, created last). Tests that only care about the watcher use
     ``watcher_instances()`` to filter ``instances`` down to the one whose
-    ``name`` is not ``"OrchestratorControlAPI"``, so this fake continues to
-    serve both call sites without changing every existing assertion's
+    ``name`` is neither known API thread name, so this fake continues to
+    serve all three call sites without changing every existing assertion's
     shape.
     """
+
+    _API_THREAD_NAMES = frozenset({"OrchestratorControlAPI", "PilotsAPI"})
 
     instances: list["_FakeWatcherThread"] = []
 
@@ -135,11 +148,15 @@ class _FakeWatcherThread:
 
     @classmethod
     def watcher_instances(cls) -> list["_FakeWatcherThread"]:
-        return [t for t in cls.instances if t.name != "OrchestratorControlAPI"]
+        return [t for t in cls.instances if t.name not in cls._API_THREAD_NAMES]
 
     @classmethod
     def api_instances(cls) -> list["_FakeWatcherThread"]:
         return [t for t in cls.instances if t.name == "OrchestratorControlAPI"]
+
+    @classmethod
+    def pilots_api_instances(cls) -> list["_FakeWatcherThread"]:
+        return [t for t in cls.instances if t.name == "PilotsAPI"]
 
 
 class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
@@ -285,6 +302,111 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
         # returning cleanly above); explicitly assert it's the same thread
         # object whose .started flag we already verified.
         self.assertTrue(api_threads[0].started)
+
+
+class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
+    """settings.PILOTS_API_ENABLED gates an OPTIONAL second uvicorn service
+    (api/pilots_api.py) hosted alongside the always-on Control API. False
+    (the default) must reproduce every pre-existing behavior byte-for-byte;
+    True must start it, wait for it, tear it down, and record its port."""
+
+    def setUp(self):
+        super().setUp()
+        _FakeWatcherThread.instances = []
+        self._thread_patcher = patch.object(self.mod.threading, "Thread", _FakeWatcherThread)
+        self._thread_patcher.start()
+        self.addCleanup(self._thread_patcher.stop)
+        self._sigmask_patcher = patch.object(self.mod.signal, "pthread_sigmask")
+        self._sigmask_patcher.start()
+        self.addCleanup(self._sigmask_patcher.stop)
+
+    def test_disabled_by_default_no_second_server_or_thread(self):
+        from settings import settings
+        self.assertFalse(settings.PILOTS_API_ENABLED)  # precondition: real default
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file") as mock_write:
+            self.mod.run_forever(60)
+
+        self.assertEqual(len(_FakeWatcherThread.pilots_api_instances()), 0)
+        self.assertEqual(len(self._fake_api_server_holder["instances"]), 1)  # Control API only
+        _, kwargs = mock_write.call_args
+        self.assertIsNone(kwargs.get("pilots_api_port"))
+
+    def test_enabled_starts_second_server_and_thread_on_configured_port(self):
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        with patch.object(settings, "PILOTS_API_ENABLED", True), \
+             patch.object(settings, "PILOTS_API_PORT", 8602), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file") as mock_write:
+            self.mod.run_forever(60)
+
+            # Assert on the uvicorn.Config mock WHILE the patch is active —
+            # it's restored to the real class once this `with` block exits.
+            self.assertEqual(self.mod.uvicorn.Config.call_count, 2)
+            pilots_config_kwargs = self.mod.uvicorn.Config.call_args_list[1].kwargs
+            self.assertEqual(pilots_config_kwargs["host"], "127.0.0.1")
+            self.assertEqual(pilots_config_kwargs["port"], 8602)
+
+        pilots_threads = _FakeWatcherThread.pilots_api_instances()
+        self.assertEqual(len(pilots_threads), 1)
+        self.assertTrue(pilots_threads[0].started)
+        self.assertTrue(pilots_threads[0].daemon)
+
+        # Two uvicorn.Server instances: Control API + Pilots API.
+        self.assertEqual(len(self._fake_api_server_holder["instances"]), 2)
+
+        _, kwargs = mock_write.call_args
+        self.assertEqual(kwargs.get("pilots_api_port"), 8602)
+        # Control API port is unaffected by the optional second service.
+        self.assertEqual(kwargs.get("port"), settings.ORCHESTRATOR_API_PORT)
+
+    def test_enabled_teardown_stops_pilots_api_server_and_joins_thread(self):
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        with patch.object(settings, "PILOTS_API_ENABLED", True), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        control_server, pilots_server = self._fake_api_server_holder["instances"]
+        self.assertTrue(control_server.should_exit)
+        self.assertTrue(pilots_server.should_exit)
+        self.assertTrue(_FakeWatcherThread.pilots_api_instances()[0].started)
+
+    def test_pilots_api_startup_failure_is_swallowed_daemon_still_starts(self):
+        """A broken import/construction for the OPTIONAL Pilots API must never
+        abort the daemon or the always-on Control API (CONSTRAINT #6)."""
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        def _boom(*a, **kw):
+            raise RuntimeError("pilots_api import exploded")
+
+        with patch.object(settings, "PILOTS_API_ENABLED", True), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file") as mock_write, \
+             patch.dict("sys.modules", {"api.pilots_api": None}):
+            # Forcing the deferred `from api.pilots_api import app` to raise:
+            # removing the module from sys.modules with a None sentinel makes
+            # the import machinery raise ImportError on the next `import`.
+            self.mod.run_forever(60)
+
+        instance.start.assert_called_once()  # daemon itself is unaffected
+        self.assertEqual(len(_FakeWatcherThread.pilots_api_instances()), 0)
+        _, kwargs = mock_write.call_args
+        self.assertIsNone(kwargs.get("pilots_api_port"))
+        # Control API still got its one server as usual.
+        self.assertEqual(len(self._fake_api_server_holder["instances"]), 1)
 
 
 class TestDaemonFileWriting(BaseDaemonEntrypointTest):
