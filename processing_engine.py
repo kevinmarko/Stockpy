@@ -135,7 +135,7 @@ class ProcessingEngine:
         returns_dict = {}
         for t, d in raw_tech_data.items():
             if not d.empty and len(d) >= 2:
-                returns_dict[t] = d['Close'].pct_change()
+                returns_dict[t] = d['Close'].pct_change(fill_method=None)
         returns_df = pd.DataFrame(returns_dict)
         # EXPLANATION: The research engine returns a float directly for tail dependency now.
         max_corr = self.research_engine.calculate_portfolio_covar_dependency(returns_df)
@@ -164,7 +164,7 @@ class ProcessingEngine:
                 
                 # --- B. RISK METRICS (NEW) ---
                 # Calculate Returns
-                df['Pct_Change'] = df['Close'].pct_change()
+                df['Pct_Change'] = df['Close'].pct_change(fill_method=None)
                 
                 # 1. VaR 95 (Historical Method, 5th percentile of daily returns)
                 # We assume 1-day VaR. For annual, multiply by sqrt(252)
@@ -227,7 +227,7 @@ class ProcessingEngine:
                 # Compute time-series momentum metrics
                 df = self.calculate_momentum_metrics(df)
 
-                pct_change = df['Close'].pct_change()
+                pct_change = df['Close'].pct_change(fill_method=None)
                 hv = pct_change.std() * np.sqrt(252) if not pct_change.isna().all() else 0.0
                 
                 # Extract Latest
