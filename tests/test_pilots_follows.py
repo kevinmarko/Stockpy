@@ -167,3 +167,93 @@ class TestProxies:
         assert s.followers_proxy() == 0
         assert s.aum_for("trend-following") == 0.0
         assert s.followers_for("trend-following") == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-follow mirrored holding set (attribution for force-exit)
+# ---------------------------------------------------------------------------
+class TestMirroredSet:
+    _SET = [
+        {"symbol": "nvda", "weight": 0.4, "target_notional": 4000.0},
+        {"symbol": "AAPL", "weight": 0.6, "target_notional": 6000.0},
+    ]
+
+    def test_missing_follow_returns_empty(self, tmp_path):
+        s = _store(tmp_path)
+        assert s.get_mirrored("nobody") == []
+
+    def test_legacy_row_without_field_returns_empty(self, tmp_path):
+        s = _store(tmp_path)
+        s.upsert("trend-following", 100.0)  # no mirrored field written by upsert
+        assert s.get_mirrored("trend-following") == []
+
+    def test_set_and_get_roundtrip_sanitizes(self, tmp_path):
+        s = _store(tmp_path)
+        s.upsert("trend-following", 100.0)
+        s.set_mirrored("trend-following", self._SET)
+        got = s.get_mirrored("trend-following")
+        assert got == [
+            {"symbol": "NVDA", "weight": 0.4, "target_notional": 4000.0},
+            {"symbol": "AAPL", "weight": 0.6, "target_notional": 6000.0},
+        ]
+
+    def test_set_mirrored_preserves_amount_and_status(self, tmp_path):
+        s = _store(tmp_path)
+        s.upsert("trend-following", 250.0)
+        s.set_mirrored("trend-following", self._SET)
+        row = s.get("trend-following")
+        # Amount/status/created_at survive the mirrored write.
+        assert row["amount"] == 250.0
+        assert row["status"] == STATUS_ACTIVE
+        assert "created_at" in row
+        assert "mirrored_updated_at" in row
+        # Proxies still see the active follow.
+        assert s.aum_proxy() == 250.0
+
+    def test_upsert_preserves_existing_mirrored(self, tmp_path):
+        s = _store(tmp_path)
+        s.upsert("trend-following", 100.0)
+        s.set_mirrored("trend-following", self._SET)
+        # A later amount change must NOT drop the mirrored attribution.
+        s.upsert("trend-following", 999.0)
+        assert s.get_mirrored("trend-following") == [
+            {"symbol": "NVDA", "weight": 0.4, "target_notional": 4000.0},
+            {"symbol": "AAPL", "weight": 0.6, "target_notional": 6000.0},
+        ]
+
+    def test_set_mirrored_without_prior_row_adds_no_fabricated_amount(self, tmp_path):
+        s = _store(tmp_path)
+        # No upsert first — set_mirrored creates a minimal row.
+        s.set_mirrored("orphan-pilot", self._SET)
+        row = s.get("orphan-pilot")
+        assert row is not None
+        assert "amount" not in row  # no fabricated amount
+        assert "status" not in row
+        # The orphan row is excluded from the AUM / followers proxies.
+        assert s.aum_proxy() == 0.0
+        assert s.followers_proxy() == 0
+        assert s.get_mirrored("orphan-pilot")  # but the attribution is readable
+
+    def test_set_mirrored_persisted_across_instances(self, tmp_path):
+        path = str(tmp_path / "follows.json")
+        FollowsStore(path=path).set_mirrored("trend-following", self._SET)
+        reloaded = FollowsStore(path=path)
+        assert reloaded.get_mirrored("trend-following") == [
+            {"symbol": "NVDA", "weight": 0.4, "target_notional": 4000.0},
+            {"symbol": "AAPL", "weight": 0.6, "target_notional": 6000.0},
+        ]
+
+    def test_upsert_only_row_schema_unchanged(self, tmp_path):
+        """A row created by upsert alone still carries exactly the legacy 5 keys
+        (the mirrored field is written only by set_mirrored)."""
+        path = tmp_path / "follows.json"
+        FollowsStore(path=str(path)).upsert("dip-buyer", 50.0)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert set(data["follows"][0]) == {
+            "pilot_id", "amount", "created_at", "updated_at", "status",
+        }
+
+    def test_set_mirrored_empty_pilot_id_rejected(self, tmp_path):
+        s = _store(tmp_path)
+        with pytest.raises(ValueError):
+            s.set_mirrored("", self._SET)

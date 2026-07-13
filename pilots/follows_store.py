@@ -18,7 +18,21 @@ Schema (``output/follows.json``)::
           "amount": 500.0,
           "created_at": "2026-07-12T00:00:00+00:00",
           "updated_at": "2026-07-12T00:00:00+00:00",
-          "status": "active"        # "active" | "cancelled"
+          "status": "active",       # "active" | "cancelled"
+
+          # OPTIONAL, additive (written only by ``set_mirrored``): the last
+          # holding set this follow rebalanced to — the per-follow position
+          # attribution ``pilots.mirror`` needs to force-exit a name the Pilot
+          # later drops. Absent on legacy rows and on rows that have never been
+          # planned; ``get_mirrored`` returns ``[]`` in that case (the honest
+          # "no attribution → no force-exit" signal). No fabricated amount is
+          # attached to a mirrored-only row, so the AUM / followers proxies are
+          # unaffected.
+          "mirrored": [
+            {"symbol": "NVDA", "weight": 0.375, "target_notional": 3750.0},
+            ...
+          ],
+          "mirrored_updated_at": "2026-07-12T00:00:00+00:00"
         },
         ...
       ]
@@ -33,6 +47,9 @@ Design constraints:
 * **No fabrication** (CONSTRAINT #4) — a cancelled follow (amount 0) keeps its
   row with ``status="cancelled"`` rather than inventing an amount; the AUM /
   followers proxies count only ``active`` rows.
+* **Backward-compatible** — the ``mirrored`` field is additive: an old
+  ``follows.json`` without it still loads, ``upsert`` never adds it (only
+  ``set_mirrored`` does), and ``upsert`` preserves it when present.
 """
 from __future__ import annotations
 
@@ -191,6 +208,82 @@ class FollowsStore:
             return False
         self._save(kept)
         return True
+
+    # ------------------------------------------------------------------
+    # Per-follow position attribution (the last mirrored holding set)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _sanitize_mirrored(mirrored: Any) -> List[Dict[str, Any]]:
+        """Coerce a mirrored holding set to a clean, JSON-safe list of rows.
+
+        Each surviving row carries a non-empty upper-cased ``symbol`` plus,
+        when parseable, ``weight`` and ``target_notional``. Unparseable numeric
+        fields are dropped rather than fabricated (CONSTRAINT #4).
+        """
+        out: List[Dict[str, Any]] = []
+        for m in mirrored or []:
+            if not isinstance(m, dict):
+                continue
+            symbol = str(m.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            entry: Dict[str, Any] = {"symbol": symbol}
+            for key, ndigits in (("weight", 6), ("target_notional", 2)):
+                val = m.get(key)
+                if val is None:
+                    continue
+                try:
+                    entry[key] = round(float(val), ndigits)
+                except (TypeError, ValueError):
+                    continue
+            out.append(entry)
+        return out
+
+    def get_mirrored(self, pilot_id: str) -> List[Dict[str, Any]]:
+        """Return the last persisted mirrored holding set for *pilot_id*.
+
+        ``[]`` when the follow row is missing, carries no ``mirrored`` field
+        (legacy row), or the field is malformed — the honest "no attribution"
+        signal that suppresses force-exit in :mod:`pilots.mirror`. Never raises.
+        """
+        row = self.get(pilot_id)
+        if not row:
+            return []
+        return self._sanitize_mirrored(row.get("mirrored"))
+
+    def set_mirrored(self, pilot_id: str, mirrored: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Persist the last mirrored holding set for *pilot_id* (atomic).
+
+        Additive: updates the existing follow row in place (preserving
+        ``amount`` / ``status`` / ``created_at``). If no row exists yet, a
+        minimal row is created carrying only ``pilot_id`` + ``mirrored`` (+
+        timestamps) — deliberately NO fabricated ``amount``/``status`` so the
+        AUM / followers proxies (which count active, positive-amount rows) are
+        unaffected. Returns the resulting row.
+        """
+        if not pilot_id:
+            raise ValueError("pilot_id must be a non-empty string")
+        clean = self._sanitize_mirrored(mirrored)
+        now = self._clock()
+
+        follows = self._load()
+        for f in follows:
+            if f.get("pilot_id") == pilot_id:
+                f["mirrored"] = clean
+                f["mirrored_updated_at"] = now
+                self._save(follows)
+                return dict(f)
+
+        row: Dict[str, Any] = {
+            "pilot_id": pilot_id,
+            "mirrored": clean,
+            "mirrored_updated_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        follows.append(row)
+        self._save(follows)
+        return dict(row)
 
     # ------------------------------------------------------------------
     # Marketplace proxies (honest, derived only from active follows)

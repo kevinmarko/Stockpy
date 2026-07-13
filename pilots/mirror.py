@@ -31,12 +31,29 @@ Flow
     builder's partial-trim signal, resolved to a share count downstream and capped
     at the held quantity — see ``execution/queue_builder.py::_intent_dict``).
 
-    **Rebalance scope (honest limitation):** rebalancing is confined to the
-    Pilot's CURRENT holding set. A name the follower holds that is NOT in the
-    Pilot's holdings is left untouched — fully exiting it would require per-follow
-    position attribution (knowing which shares came from this follow vs. bought
-    for other reasons), which is not modelled. So a Pilot that fully drops a name
-    stops topping it up; it does not force-sell the follower's existing position.
+    **Rebalance scope — force-exit of dropped names (per-follow attribution):**
+    rebalancing covers the Pilot's CURRENT holdings AND names the follow itself
+    previously mirrored that the Pilot has since fully dropped. The attribution
+    comes from ``FollowsStore``'s persisted *last mirrored holding set* per
+    follow (symbol + target weight + target notional): ``plan_follow`` loads that
+    set, ``build_follow_intents`` diffs it against the Pilot's current holdings,
+    and for each symbol previously mirrored but no longer held by the Pilot it
+    emits a **SELL to zero** — but sized to the FOLLOW-ATTRIBUTED quantity only
+    (``min(last target notional, currently held market value)``), reusing the
+    queue builder's partial-trim signalling (a positive
+    ``suggested_position_pct`` capped downstream at the held quantity — see
+    ``execution/queue_builder.py::_intent_dict``). It therefore never touches the
+    follower's shares beyond what this follow put on, and never oversells.
+
+    Honest bounds that remain: (1) attribution is the last *target* notional, not
+    a real per-lot cost basis, so it is a proportional estimate capped by what is
+    actually held — never a fabricated position; (2) with NO prior mirrored set
+    (a legacy follow, or the very first follow) there is nothing to attribute, so
+    the pre-existing behavior holds and NOTHING is force-sold; (3) a name that is
+    unrelated to any Pilot the follower ever mirrored is still left untouched;
+    (4) the exit is emitted once, when the drop is first observed — the mirrored
+    set is then updated to the Pilot's current holdings, so a follower who does
+    not act on the queued sell is not re-prompted every cycle.
 
 ``plan_follow(pilot, amount, account_snapshot, snapshot=None)``
     Wrap the intents in a ``RunResult``-shaped object (``.recommendations`` +
@@ -244,6 +261,54 @@ def _current_market_value(account_snapshot: Any, symbol: str) -> float:
     return 0.0
 
 
+def _current_target_holdings(
+    pilot: Pilot,
+    amount: float,
+    snapshot: Optional[dict],
+    top_n: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Return the Pilot's CURRENT target holding set for persistence.
+
+    ``[{"symbol", "weight", "target_notional"}]`` where ``target_notional`` is
+    the follow's TARGET position notional in that name (``amount * weight``,
+    clamped by the per-order cap) — the exact quantity :func:`build_follow_intents`
+    rebalances toward. This is what ``FollowsStore.set_mirrored`` records so a
+    future follow can attribute (and force-exit) a name the Pilot later drops.
+
+    Empty on a non-positive ``amount``, a missing snapshot, or no Pilot holdings.
+    Never raises (CONSTRAINT #6); no fabricated positions (CONSTRAINT #4).
+    """
+    try:
+        amt = _coerce_float(amount)
+        if amt is None or amt <= 0 or not isinstance(snapshot, dict):
+            return []
+        holdings = pilot_holdings(pilot, snapshot, top_n=top_n)
+        if not holdings:
+            return []
+        cap = _max_notional_cap()
+        out: List[Dict[str, Any]] = []
+        for h in holdings:
+            symbol = str(h.get("symbol") or "").upper().strip()
+            weight = _coerce_float(h.get("weight"))
+            if not symbol or weight is None or weight <= 0:
+                continue
+            target = amt * weight
+            if cap is not None:
+                target = min(target, cap)
+            if target <= 0:
+                continue
+            out.append({
+                "symbol": symbol,
+                "weight": round(float(weight), 6),
+                "target_notional": round(float(target), 2),
+            })
+        return out
+    except Exception as exc:  # pragma: no cover - defensive dead-letter
+        logger.debug("mirror: _current_target_holdings failed for %s: %s",
+                     getattr(pilot, "id", "?"), exc)
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Public API — intent building
 # ---------------------------------------------------------------------------
@@ -254,8 +319,9 @@ def build_follow_intents(
     account_snapshot: Any,
     snapshot: Optional[dict] = None,
     top_n: Optional[int] = None,
+    prior_mirrored: Optional[List[Dict[str, Any]]] = None,
 ) -> List[FollowIntent]:
-    """Build proportional target-notional BUY intents to mirror ``pilot``.
+    """Build proportional target-notional rebalance intents to mirror ``pilot``.
 
     Parameters
     ----------
@@ -275,6 +341,16 @@ def build_follow_intents(
     top_n:
         Optional override for the number of holdings (defaults to the Pilot's
         normal ``settings.PILOTS_TOP_N`` cap inside ``pilot_holdings``).
+    prior_mirrored:
+        Optional last-mirrored holding set for THIS follow
+        (``[{"symbol", "weight", "target_notional"}]`` from
+        ``FollowsStore.get_mirrored``). Enables force-exit of names the Pilot has
+        since fully dropped: any symbol in this set that is no longer a current
+        Pilot holding gets a **SELL to zero** intent sized to the follow-attributed
+        quantity only (``min(last target notional, currently held market value)``),
+        capped downstream at the held quantity. ``None``/empty (a legacy or
+        first-ever follow) → no force-exit, byte-identical to the pre-attribution
+        behavior. Callers must pass the FOLLOW's own prior set — never a shared one.
 
     Returns
     -------
@@ -282,10 +358,11 @@ def build_follow_intents(
         One ``FollowIntent`` per Pilot holding that is outside the no-trade band:
         a **BUY** (underweight vs. target) or a **SELL** partial trim (overweight),
         ``target_notional`` = the |delta| clamped by the per-order cap. Holdings
-        already within ``_REBALANCE_BAND_FRACTION`` of target are omitted. Empty on
-        any failure, on a non-positive ``amount``, on a non-positive account equity,
-        or when the Pilot has no holdings. Never raises (CONSTRAINT #6). Pure —
-        writes nothing.
+        already within ``_REBALANCE_BAND_FRACTION`` of target are omitted. Plus, when
+        ``prior_mirrored`` is supplied, one **SELL** force-exit per dropped name the
+        follow still holds. Empty on any failure, on a non-positive ``amount``, on a
+        non-positive account equity, or when the Pilot has no holdings AND there is
+        nothing to force-exit. Never raises (CONSTRAINT #6). Pure — writes nothing.
     """
     try:
         amt = _coerce_float(amount)
@@ -310,7 +387,8 @@ def build_follow_intents(
             return []
 
         holdings = pilot_holdings(pilot, snapshot, top_n=top_n)
-        if not holdings:
+        prior = prior_mirrored or []
+        if not holdings and not prior:
             logger.info(
                 "mirror: pilot %s produced no holdings from the current snapshot.",
                 getattr(pilot, "id", "?"),
@@ -363,6 +441,60 @@ def build_follow_intents(
                 score=_coerce_float(h.get("score")),
                 rationale=strategy_label,
             ))
+
+        # -------------------------------------------------------------------
+        # Force-exit of dropped names (requires per-follow attribution).
+        # For each symbol this follow previously mirrored that is NO LONGER a
+        # current Pilot holding, emit a SELL sized to the follow-attributed
+        # quantity only: min(last target notional, currently held market value),
+        # further clamped by the per-order cap. A positive suggested_position_pct
+        # makes the queue builder treat this as a partial trim (qty resolved
+        # downstream and capped at the held quantity — never an oversell, never
+        # the follower's whole unrelated position). Skipped entirely when
+        # `prior` is empty (legacy/first follow → honest no-op).
+        # -------------------------------------------------------------------
+        if prior:
+            current_symbols = {
+                str(h.get("symbol") or "").upper().strip() for h in holdings
+            }
+            already = {i.symbol for i in intents}
+            for m in prior:
+                if not isinstance(m, dict):
+                    continue
+                sym = str(m.get("symbol") or "").upper().strip()
+                if not sym or sym in current_symbols or sym in already:
+                    continue
+                attributed = _coerce_float(m.get("target_notional"))
+                if attributed is None or attributed <= 0:
+                    # No usable attribution for this name (e.g. a legacy row that
+                    # stored no target_notional) — never fabricate one.
+                    continue
+                held_mv = _current_market_value(account_snapshot, sym)
+                if held_mv <= 0:
+                    # The attributed position is not actually held anymore —
+                    # nothing to sell (no fabricated position, CONSTRAINT #4).
+                    continue
+                order_notional = min(attributed, held_mv)
+                if cap is not None:
+                    order_notional = min(order_notional, cap)
+                if order_notional <= 0:
+                    continue
+                pct = order_notional / equity  # equity > 0 guaranteed above
+                intents.append(FollowIntent(
+                    symbol=sym,
+                    action="SELL",
+                    strategy=strategy_label,
+                    # Honest per-name conviction: a dropped name's target weight
+                    # is 0.0 (Decision D3 — never inflate to clear a gate).
+                    conviction=0.0,
+                    suggested_position_pct=float(pct),
+                    target_notional=round(float(order_notional), 2),
+                    weight=0.0,
+                    price=None,
+                    score=None,
+                    rationale=f"{strategy_label} (exit: dropped from pilot)",
+                ))
+
         return intents
     except Exception as exc:  # pragma: no cover - defensive dead-letter
         logger.debug("mirror: build_follow_intents failed for %s: %s",
@@ -381,14 +513,25 @@ def plan_follow(
     snapshot: Optional[dict] = None,
     *,
     output_dir: Optional[Any] = None,
+    follows_store: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Plan a Pilot follow: build intents and emit the gated dry-run queue.
 
-    Builds the proportional BUY intents (:func:`build_follow_intents`), wraps them
-    in a ``RunResult``-shaped :class:`FollowRunResult`, and hands them to
-    ``execution.queue_builder.emit_execution_queue`` with a follow-specific
+    Builds the proportional rebalance intents (:func:`build_follow_intents`),
+    wraps them in a ``RunResult``-shaped :class:`FollowRunResult`, and hands them
+    to ``execution.queue_builder.emit_execution_queue`` with a follow-specific
     ``config`` (``strategy_id=f"follow-{pilot.id}"`` + the low
     ``min_conviction`` floor from Decision D3).
+
+    **Per-follow attribution (force-exit of dropped names):** the follow's *last
+    mirrored holding set* is loaded from ``FollowsStore`` and threaded into
+    :func:`build_follow_intents` as ``prior_mirrored`` so a name the Pilot has
+    since fully dropped is force-sold (attributed quantity only). After building,
+    the Pilot's CURRENT target holdings are persisted back via
+    ``FollowsStore.set_mirrored`` so the next follow can attribute the next drop.
+    The store path follows ``output_dir`` when supplied (keeping the follows file
+    beside the queue for isolated tests), else the default
+    ``settings.OUTPUT_DIR / "follows.json"`` the API already writes.
 
     The emitter itself decides whether anything is written: in ``off`` mode
     (the default) it returns ``None`` and NOTHING is written, but the
@@ -409,9 +552,43 @@ def plan_follow(
     mode = _resolve_mode()
     intents: List[FollowIntent] = []
     queue_written = False
+    pilot_id = str(getattr(pilot, "id", "unknown"))
+
+    # Load the snapshot once so both the intent build and the mirrored-set
+    # persistence see the same state.
+    if snapshot is None:
+        try:
+            from pilots.scoring import load_snapshot
+            snapshot = load_snapshot()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("mirror: plan_follow could not load snapshot (%s)", exc)
+            snapshot = None
+
+    # Resolve the follows store (DI for tests). Align its path with output_dir
+    # when supplied so a test's queue + follows file share one scratch dir; the
+    # API path (no output_dir) uses the same default file it upserts into.
+    store = follows_store
+    prior_mirrored: List[Dict[str, Any]] = []
+    try:
+        if store is None:
+            from pilots.follows_store import FollowsStore
+            if output_dir is not None:
+                from pathlib import Path
+                store = FollowsStore(path=str(Path(output_dir) / "follows.json"))
+            else:
+                store = FollowsStore()
+        prior_mirrored = store.get_mirrored(pilot_id) or []
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("mirror: plan_follow could not load prior mirrored set for %s (%s)",
+                     pilot_id, exc)
+        store = None
+        prior_mirrored = []
 
     try:
-        intents = build_follow_intents(pilot, amount, account_snapshot, snapshot=snapshot)
+        intents = build_follow_intents(
+            pilot, amount, account_snapshot,
+            snapshot=snapshot, prior_mirrored=prior_mirrored,
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("mirror: plan_follow intent build failed (%s)", exc)
         intents = []
@@ -424,7 +601,7 @@ def plan_follow(
 
             run_result = FollowRunResult(recommendations=intents, snapshot=account_snapshot)
             config = {
-                "strategy_id": f"follow-{getattr(pilot, 'id', 'unknown')}",
+                "strategy_id": f"follow-{pilot_id}",
                 "min_conviction": FOLLOW_MIN_CONVICTION,
             }
             kwargs: Dict[str, Any] = {"config": config}
@@ -435,8 +612,21 @@ def plan_follow(
             queue_written = written_path is not None
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("mirror: emit_execution_queue failed for %s (%s); "
-                           "returning preview only", getattr(pilot, "id", "?"), exc)
+                           "returning preview only", pilot_id, exc)
             queue_written = False
+
+    # Persist the CURRENT target holding set so a future follow can attribute (and
+    # force-exit) any name the Pilot drops between now and then. Only when we have
+    # a positive amount + usable snapshot: a cancel (amount <= 0) or an
+    # unavailable snapshot must NOT wipe the prior attribution.
+    if store is not None:
+        try:
+            current_set = _current_target_holdings(pilot, amount, snapshot)
+            if current_set:
+                store.set_mirrored(pilot_id, current_set)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("mirror: plan_follow could not persist mirrored set for %s (%s)",
+                         pilot_id, exc)
 
     return {
         "planned_intents": planned,
