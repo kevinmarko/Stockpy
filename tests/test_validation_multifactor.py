@@ -5,18 +5,40 @@ Runs a price-derived multifactor proxy strategy over real historical price
 data (2005-2023) for a representative cross-section of liquid equities and
 verifies the StrategyValidationHarness produces a well-formed report.
 
-SCOPE LIMITATION (read before extending this test)
-----------------------------------------------------
-A literal "S&P 500 2005-2023" backtest using POINT-IN-TIME fundamentals
-is computationally heavy to pull live. We use synthetic PIT fundamentals
-populated into a mock HistoricalStore to validate the Value and Quality
-paths through the validation harness.
+Value/Quality now runs against REAL PIT fundamentals (2026-07, D5)
+--------------------------------------------------------------------
+This test used to be scope-limited: literal S&P-500-era, point-in-time
+fundamentals weren't available from any free source, so Value/Quality were
+only validated against a mock HistoricalStore seeded with random numbers.
 
-This validates that the `validation/harness.py` mechanics (Sharpe, DSR, etc)
-work transparently over PIT fundamental DataFrames.
+That gap is now closed. ``tests/fixtures/edgar_pit_fundamentals_sample.json``
+is a REAL, committed dump of SEC EDGAR ``companyfacts`` XBRL data for this
+test's 10-ticker universe (data/edgar_fundamentals.py's live client, run
+once via scripts/backfill_edgar_fundamentals.py's logic) -- every
+book-to-market/quality input below is a genuine number from a real SEC
+filing, keyed by the date it actually became public (``report_date``), never
+fabricated. See that fixture file's own ``generated_note`` for full
+provenance, including a documented, real data-quality caveat (SEC's current
+XOM ticker mapping resolves to a newly-reorganized holding entity with
+minimal own filing history) and the price-reconstruction methodology
+(un-adjusting yfinance's retroactively split-adjusted Close using real
+split-history data, since EDGAR's EPS/shares are as-filed and never
+retroactively restated for later splits -- naively combining the two would
+silently distort market_cap/PE/PB for any ticker that later split).
+
+Real EDGAR XBRL coverage only reaches back to ~2009 (the SEC's XBRL mandate
+phase-in), not 2005 -- so Value/Quality's effective window is real-but-
+narrower than the Low-Vol/Size proxy's full 2005-2023 span. Dates before the
+earliest real filing degrade honestly to NaN fundamentals (never fabricated)
+via the same forward-fill/merge_asof logic as before.
+
+The harness reports whatever DEPLOYABLE verdict the real data honestly
+produces -- never tuned to force a pass (CONSTRAINT #4).
 """
 
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -25,6 +47,8 @@ import yfinance as yf
 
 from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
+
+_EDGAR_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "edgar_pit_fundamentals_sample.json"
 
 # Downloads real multi-ticker price history live from Yahoo Finance in its
 # module-scoped fixtures — network-dependent, deselected in CI via
@@ -66,33 +90,33 @@ def current_shares_outstanding() -> dict:
 
 
 @pytest.fixture(scope="module")
-def mock_fundamentals_store(price_history, tmp_path_factory):
-    """Generates synthetic PIT fundamental history for the test universe."""
+def real_pit_fundamentals_store(tmp_path_factory):
+    """Real SEC EDGAR PIT fundamentals for the test universe, loaded from a
+    checked-in fixture (tests/fixtures/edgar_pit_fundamentals_sample.json).
+
+    Every row is a genuine value from a real SEC filing, keyed by the date it
+    actually became public (report_date) -- never fabricated (CONSTRAINT #4).
+    See the fixture file's own ``generated_note`` for full provenance and
+    documented data-quality caveats (this module's docstring summarizes them).
+    """
     from data.historical_store import HistoricalStore
-    db_path = tmp_path_factory.mktemp("db") / "cov.db"
+
+    with open(_EDGAR_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        fixture = json.load(f)
+
+    db_path = tmp_path_factory.mktemp("db") / "edgar_pit.db"
     store = HistoricalStore(db_path=str(db_path))
-    
-    for ticker, df in price_history.items():
-        if df.empty:
-            continue
-        start_year = df.index[0].year
-        end_year = df.index[-1].year
-        
-        for year in range(start_year, end_year + 1):
-            for month in [3, 6, 9, 12]:
-                report_date = f"{year}-{month:02d}-15"
-                store.upsert_fundamentals_pit(
-                    ticker,
-                    {
-                        "pb_ratio": float(np.random.uniform(1.0, 5.0)),
-                        "pe_ratio": float(np.random.uniform(10.0, 30.0)),
-                        "roe": float(np.random.uniform(0.05, 0.25)),
-                        "operating_margin": float(np.random.uniform(0.1, 0.3)),
-                    },
-                    {},
-                    report_date=report_date,
-                    source="mock"
-                )
+
+    typed_keys = (
+        "pe_ratio", "pb_ratio", "roe", "dividend_yield",
+        "market_cap", "eps", "operating_margin", "debt_to_equity",
+    )
+    for row in fixture["rows"]:
+        typed = {k: row.get(k) for k in typed_keys}
+        store.upsert_fundamentals_pit(
+            row["symbol"], typed, typed,
+            report_date=row["report_date"], source="edgar_fixture",
+        )
     return store
 
 
@@ -229,9 +253,15 @@ def test_low_vol_proxy_is_lookahead_free(price_history):
     )
 
 
-def test_value_quality_proxy_validation_harness_runs(price_history, mock_fundamentals_store, tmp_path):
-    """Smoke-tests the StrategyValidationHarness end-to-end on a Value +
-    Quality multifactor proxy built from the new PIT fundamentals layer.
+def test_value_quality_proxy_validation_harness_runs(price_history, real_pit_fundamentals_store, tmp_path):
+    """Runs the StrategyValidationHarness end-to-end on a Value + Quality
+    multifactor proxy built from REAL SEC EDGAR PIT fundamentals (D5 --
+    see the module docstring). Reports the harness's honest metrics/verdict
+    (mirrors the sibling Low-Vol/Size test's own reporting) rather than only
+    asserting well-formedness -- an 18-year, 10-name proxy with real,
+    occasionally sparse PIT coverage is not expected to clear the Sharpe/DSR
+    deployability bar on its own, and that is not what this test enforces;
+    the point is that the verdict is HONEST, never tuned to force a pass.
     """
     closes = {t: df["Close"].squeeze() for t, df in price_history.items()}
     common_index = None
@@ -247,7 +277,7 @@ def test_value_quality_proxy_validation_harness_runs(price_history, mock_fundame
         close = close.reindex(common_index)
         daily_rets[ticker] = close.pct_change()
 
-        hist = mock_fundamentals_store.get_fundamentals_history(ticker)
+        hist = real_pit_fundamentals_store.get_fundamentals_history(ticker)
         if not hist.empty:
             hist["as_of"] = pd.to_datetime(hist["as_of"])
             hist = hist.sort_values("as_of")
@@ -328,6 +358,15 @@ def test_value_quality_proxy_validation_harness_runs(price_history, mock_fundame
         y=y,
         strategy_name="Multifactor_Value_Quality_Test",
     )
+
+    # Honest verdict -- printed, never tuned to force a pass (CONSTRAINT #4).
+    # Mirrors test_low_vol_and_size_proxy_validation_harness_runs's reporting.
+    print("\n--- MULTIFACTOR (VALUE + QUALITY, REAL EDGAR PIT DATA) REPORT ---")
+    print(f"Sharpe Ratio (net): {report.sharpe:.3f}")
+    print(f"Max Drawdown: {report.max_dd * 100:.2f}%")
+    print(f"DSR: {report.dsr:.4f}")
+    print(f"PBO: {report.pbo:.4f}")
+    print(f"Deployable: {report.deployable}")
 
     assert not np.isnan(report.sharpe)
     assert not np.isnan(report.max_dd)
