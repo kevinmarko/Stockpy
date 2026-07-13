@@ -75,7 +75,23 @@ def _make_settings(tmp_path: Path, **overrides) -> Any:
     m.ALERT_SMTP_PORT = overrides.get("ALERT_SMTP_PORT", 587)
     m.ALERT_SMTP_USER = overrides.get("ALERT_SMTP_USER", None)
     m.ALERT_SMTP_PASSWORD = overrides.get("ALERT_SMTP_PASSWORD", None)
+    m.ALERT_DEDUP_WINDOW_SECONDS = overrides.get("ALERT_DEDUP_WINDOW_SECONDS", 900)
     return m
+
+
+@pytest.fixture(autouse=True)
+def _reset_dedup_state():
+    """Clear in-process alert-dedup state before and after every test.
+
+    Without this, a test earlier in the run that fires ``send_alert(...,
+    dedup_key="x")`` could silently suppress a later, unrelated test's alert
+    with the same key (module-level dict persists across tests in the same
+    process).
+    """
+    from observability.alerts import reset_dedup_state
+    reset_dedup_state()
+    yield
+    reset_dedup_state()
 
 
 # ---------------------------------------------------------------------------
@@ -472,3 +488,179 @@ class TestDailySummary:
             # Requesting all known channels on a settings object that has none
             # of them configured must silently succeed (no exception).
             send_alert("INFO", "test", channels=["discord", "slack", "email", "file"])
+
+
+# ---------------------------------------------------------------------------
+# Dedup / rate-limiting (Phase O2)
+# ---------------------------------------------------------------------------
+
+class TestDedup:
+    """``send_alert(..., dedup_key=...)`` suppresses repeat alerts within a
+    TTL window (``settings.ALERT_DEDUP_WINDOW_SECONDS``), and is purely
+    additive: omitting ``dedup_key`` reproduces the pre-dedup always-fires
+    behavior exactly (covered by every other test class in this file, none
+    of which pass ``dedup_key``).
+    """
+
+    def _counting_settings(self, tmp_path: Path, **overrides) -> Any:
+        return _make_settings(tmp_path, **overrides)
+
+    def test_same_key_within_window_is_suppressed(self, tmp_path: Path):
+        """A second call with the same dedup_key inside the window dispatches nowhere."""
+        from observability.alerts import send_alert
+        calls: list[str] = []
+
+        def fake_console(level, ts, message):
+            calls.append(message)
+
+        s = self._counting_settings(tmp_path, ALERT_DEDUP_WINDOW_SECONDS=900)
+        with _patch("observability.alerts.settings", s):
+            with _patch("observability.alerts._send_console", fake_console):
+                send_alert("WARNING", "first", channels=["console"], dedup_key="heat_AAPL")
+                send_alert("WARNING", "second", channels=["console"], dedup_key="heat_AAPL")
+
+        assert calls == ["first"]
+
+    def test_different_key_not_suppressed(self, tmp_path: Path):
+        """A different dedup_key is an independent suppression bucket."""
+        from observability.alerts import send_alert
+        calls: list[str] = []
+
+        def fake_console(level, ts, message):
+            calls.append(message)
+
+        s = self._counting_settings(tmp_path, ALERT_DEDUP_WINDOW_SECONDS=900)
+        with _patch("observability.alerts.settings", s):
+            with _patch("observability.alerts._send_console", fake_console):
+                send_alert("WARNING", "AAPL heat", channels=["console"], dedup_key="heat_AAPL")
+                send_alert("WARNING", "MSFT heat", channels=["console"], dedup_key="heat_MSFT")
+
+        assert calls == ["AAPL heat", "MSFT heat"]
+
+    def test_same_key_after_window_elapses_fires_again(self, tmp_path: Path):
+        """Once the TTL elapses, the same dedup_key fires a fresh alert."""
+        from observability import alerts
+        calls: list[str] = []
+
+        def fake_console(level, ts, message):
+            calls.append(message)
+
+        fake_time = [1000.0]
+
+        def fake_monotonic():
+            return fake_time[0]
+
+        s = self._counting_settings(tmp_path, ALERT_DEDUP_WINDOW_SECONDS=60)
+        with _patch("observability.alerts.settings", s):
+            with _patch("observability.alerts._send_console", fake_console):
+                with _patch("observability.alerts.time.monotonic", fake_monotonic):
+                    alerts.send_alert("CRITICAL", "first", channels=["console"], dedup_key="ks")
+                    fake_time[0] += 30.0  # inside the 60s window — suppressed
+                    alerts.send_alert("CRITICAL", "second", channels=["console"], dedup_key="ks")
+                    fake_time[0] += 61.0  # now past the window from the first fire
+                    alerts.send_alert("CRITICAL", "third", channels=["console"], dedup_key="ks")
+
+        assert calls == ["first", "third"]
+
+    def test_no_dedup_key_always_fires(self, tmp_path: Path):
+        """Omitting dedup_key (the default) means every call dispatches — no suppression."""
+        from observability.alerts import send_alert
+        calls: list[str] = []
+
+        def fake_console(level, ts, message):
+            calls.append(message)
+
+        s = self._counting_settings(tmp_path, ALERT_DEDUP_WINDOW_SECONDS=900)
+        with _patch("observability.alerts.settings", s):
+            with _patch("observability.alerts._send_console", fake_console):
+                send_alert("INFO", "a", channels=["console"])
+                send_alert("INFO", "b", channels=["console"])
+                send_alert("INFO", "c", channels=["console"])
+
+        assert calls == ["a", "b", "c"]
+
+    def test_reset_dedup_state_clears_suppression(self, tmp_path: Path):
+        """``reset_dedup_state()`` allows an immediately-following same-key alert to fire."""
+        from observability import alerts
+        calls: list[str] = []
+
+        def fake_console(level, ts, message):
+            calls.append(message)
+
+        s = self._counting_settings(tmp_path, ALERT_DEDUP_WINDOW_SECONDS=900)
+        with _patch("observability.alerts.settings", s):
+            with _patch("observability.alerts._send_console", fake_console):
+                alerts.send_alert("WARNING", "first", channels=["console"], dedup_key="x")
+                alerts.reset_dedup_state()
+                alerts.send_alert("WARNING", "second", channels=["console"], dedup_key="x")
+
+        assert calls == ["first", "second"]
+
+
+# ---------------------------------------------------------------------------
+# Channel health-check / self-test (Phase O4)
+# ---------------------------------------------------------------------------
+
+class TestChannelHealth:
+    """``check_channel_health()`` probes every active channel and reports
+    per-channel reachability without ever raising, even when a channel is
+    broken.
+    """
+
+    def test_console_only_reports_ok(self, tmp_path: Path):
+        """With no webhook/email configured, only 'console' is probed and it reports ok."""
+        from observability.alerts import check_channel_health
+        s = _make_settings(tmp_path)  # all channels unconfigured
+        with _patch("observability.alerts.settings", s):
+            result = check_channel_health()
+        assert result == {"console": {"ok": True, "error": None}}
+
+    def test_healthy_discord_reports_ok(self, tmp_path: Path):
+        """A reachable Discord webhook reports ok=True, error=None."""
+        from observability.alerts import check_channel_health
+        s = _make_settings(tmp_path, DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/x/y")
+
+        def fake_urlopen(req, timeout=None):
+            return _FakeOkResponse()
+
+        with _patch("observability.alerts.settings", s):
+            with _patch("observability.alerts.urllib.request.urlopen", fake_urlopen):
+                result = check_channel_health()
+        assert result["discord"] == {"ok": True, "error": None}
+        assert result["console"]["ok"] is True
+
+    def test_broken_discord_reports_failure_without_raising(self, tmp_path: Path):
+        """A webhook that raises URLError is captured as ok=False with the error text."""
+        from observability.alerts import check_channel_health
+        s = _make_settings(tmp_path, DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/x/y")
+
+        def fail(*a, **kw):
+            raise urllib.error.URLError("connection refused")
+
+        with _patch("observability.alerts.settings", s):
+            with _patch("observability.alerts.urllib.request.urlopen", fail):
+                result = check_channel_health()  # must not raise
+        assert result["discord"]["ok"] is False
+        assert "connection refused" in result["discord"]["error"]
+        # console must still be probed and healthy despite discord's failure —
+        # one channel's failure must never suppress the others.
+        assert result["console"] == {"ok": True, "error": None}
+
+    def test_broken_channel_never_touches_real_network_in_offline_test(self, tmp_path: Path):
+        """Sanity: this test file makes zero real network calls (all urlopen mocked)."""
+        from observability.alerts import check_channel_health
+        s = _make_settings(
+            tmp_path,
+            SLACK_WEBHOOK_URL="https://hooks.slack.com/services/x/y",
+        )
+        calls: list[Any] = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req)
+            return _FakeOkResponse()
+
+        with _patch("observability.alerts.settings", s):
+            with _patch("observability.alerts.urllib.request.urlopen", fake_urlopen):
+                result = check_channel_health()
+        assert len(calls) == 1
+        assert result["slack"]["ok"] is True

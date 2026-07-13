@@ -95,6 +95,15 @@ class GlobalKillSwitch:
         # operator is notified out-of-band (Discord/Slack/email/file), not just
         # via a log line. send_alert never raises, but we still guard the whole
         # call so a broken import can never destabilise activation.
+        #
+        # dedup_key="kill_switch_activate": activate() is idempotent (see the
+        # class docstring) and can be called repeatedly while the sentinel is
+        # already active (e.g. a watchdog re-asserting it every poll cycle).
+        # Without dedup, that would fire an identical CRITICAL alert on every
+        # call. The dedup key is intentionally reason-agnostic — "kill switch
+        # is active" is the condition being alerted on, not the specific
+        # reason text — so a burst of activate() calls with different reason
+        # strings inside the window still collapses to one alert.
         try:
             from observability.alerts import send_alert
             send_alert(
@@ -102,6 +111,7 @@ class GlobalKillSwitch:
                 f"Kill switch ACTIVATED — all order submission BLOCKED. "
                 f"Reason: {reason or '(no reason given)'}",
                 extra={"reason": reason, "sentinel_file": str(self._path)},
+                dedup_key="kill_switch_activate",
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("kill_switch: send_alert on activation failed (%s)", exc)

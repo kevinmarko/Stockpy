@@ -135,12 +135,31 @@ Checks (15 total)
                                   yet enough tracking history.  NOT auto-skipped
                                   in advisory mode — the decision log this reads
                                   is itself an advisory-mode feature.
+18. alert_channels_reachable    — WARNING-ONLY (never blocking).  Probes every
+                                  currently-active observability.alerts channel
+                                  (docs/OBSERVABILITY_PLAN.md Phase O4) via
+                                  observability.alerts.check_channel_health()
+                                  and reports which, if any, are unreachable —
+                                  so a broken Discord/Slack webhook or SMTP
+                                  relay is discovered here rather than during
+                                  a real incident.  NOT auto-skipped in
+                                  advisory mode (alert channels matter
+                                  regardless of broker mode).
+
+Note: the "(N total)" figure above and the numbered list are historical and
+have drifted from ALL_CHECKS as checks were added over time (23 entries as
+of this writing, most recently robinhood_execution_mode /
+robinhood_kill_switch_clear / robinhood_queue_fresh / robinhood_mfa_configured
+/ env_no_duplicate_keys / alert_channels_reachable, none of which carry a
+number above). ALL_CHECKS is the single source of truth for the actual set
+and order of checks that run.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -153,6 +172,8 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -930,7 +951,12 @@ def check_paper_trading_duration(min_days: int = 90) -> CheckResult:
     )
 
 
-def check_validation_reports(max_age_days: int = 30) -> CheckResult:
+def check_validation_reports(
+    max_age_days: int = 30,
+    *,
+    fire_alert: bool = False,
+    send_alert_fn=None,
+) -> CheckResult:
     """Verify that every strategy has a current, deployable validation report.
 
     Reads all ``*_validation_summary.json`` files in ``reports/``, written by
@@ -946,20 +972,41 @@ def check_validation_reports(max_age_days: int = 30) -> CheckResult:
     All problems are accumulated into a single FAIL message rather than
     short-circuiting after the first, so the operator sees all issues in one
     run rather than fixing them one by one.
+
+    Parameters
+    ----------
+    fire_alert:
+        When True AND the check fails (missing/stale/non-deployable
+        report(s)), also dispatch a CRITICAL alert via
+        ``observability.alerts.send_alert``. Defaults to False so that an
+        ad-hoc, interactive ``python scripts/preflight_check.py`` run on a
+        developer's laptop does not spam the team's alert channels every
+        time it is invoked — this is gated to fire only from a scheduled/CI
+        invocation via ``--fire-alerts`` (see ``main()``/``run_checks()``).
+        Mirrors ``validation/drift.py::check_and_alert_recommendation_drift``'s
+        gating style (an on-demand preflight check is not automatically a
+        live pipeline hook).
+    send_alert_fn:
+        Injectable for tests. Defaults to ``observability.alerts.send_alert``
+        (lazy-imported to avoid a module-load-time dependency on
+        ``observability`` and to match this repo's existing lazy-import
+        convention for alert dispatch call sites).
     """
     name = "validation_reports"
     reports_dir = _REPO_ROOT / "reports"
     if not reports_dir.exists():
-        return CheckResult(
+        return _validation_reports_result(
             name, False,
             "reports/ directory not found. Run validation harness for all active strategies.",
+            fire_alert=fire_alert, send_alert_fn=send_alert_fn,
         )
     summaries = list(reports_dir.glob("*_validation_summary.json"))
     if not summaries:
-        return CheckResult(
+        return _validation_reports_result(
             name, False,
             "No validation summary JSON files found in reports/. "
             "Run: python -m validation.harness --strategy <name> --start ... --end ...",
+            fire_alert=fire_alert, send_alert_fn=send_alert_fn,
         )
     problems: list[str] = []
     # ISO date strings compare lexicographically, so string < string is correct
@@ -978,11 +1025,47 @@ def check_validation_reports(max_age_days: int = 30) -> CheckResult:
         except Exception as exc:
             problems.append(f"{f.name}: could not parse — {exc}")
     if problems:
-        return CheckResult(name, False, "; ".join(problems))
+        return _validation_reports_result(
+            name, False, "; ".join(problems),
+            fire_alert=fire_alert, send_alert_fn=send_alert_fn,
+        )
     return CheckResult(
         name, True,
         f"All {len(summaries)} strategy report(s) are deployable and recent",
     )
+
+
+def _validation_reports_result(
+    name: str,
+    passed: bool,
+    reason: str,
+    *,
+    fire_alert: bool,
+    send_alert_fn,
+) -> CheckResult:
+    """Build the FAIL ``CheckResult`` for ``check_validation_reports`` and,
+    when ``fire_alert`` is True, dispatch the matching CRITICAL alert.
+
+    Factored out of ``check_validation_reports`` because there are three
+    distinct FAIL sites (missing reports/ dir, no summary files, per-file
+    problems) that must all alert identically when gated on — duplicating
+    the dispatch block three times would risk the three call sites drifting.
+    Dead-letter safe: an alert-dispatch failure never changes the returned
+    ``CheckResult`` (CONSTRAINT #6).
+    """
+    if fire_alert:
+        try:
+            if send_alert_fn is None:
+                from observability.alerts import send_alert as send_alert_fn  # noqa: PLC0415
+            send_alert_fn(
+                "CRITICAL",
+                f"Preflight: validation_reports check FAILED — {reason}",
+                extra={"type": "validation_reports_missing", "reason": reason},
+                dedup_key="validation_reports_missing",
+            )
+        except Exception as exc:
+            logger.debug("check_validation_reports: send_alert failed (%s)", exc)
+    return CheckResult(name, passed, reason)
 
 
 def check_no_unexpected_risk_blocks(hours: float = 24.0) -> CheckResult:
@@ -1107,6 +1190,55 @@ def check_calibration_drift() -> CheckResult:
         )
 
 
+def check_alert_channels_reachable() -> CheckResult:
+    """WARNING-ONLY: probe every currently-active alert channel and report
+    reachability via ``observability.alerts.check_channel_health()``.
+
+    This is deliberately **never blocking** (``CheckResult.warning=True``
+    unconditionally) — a broken Discord webhook or unreachable SMTP relay is
+    an operational annoyance an operator should fix, not a reason to refuse
+    go-live. The value of this check is purely diagnostic: without it, a
+    broken channel is discovered only when a REAL alert silently fails (see
+    ``observability/alerts.py``'s "Failure isolation invariant"), which is
+    easy to miss in normal log volume and especially costly to discover for
+    the first time during an actual incident.
+
+    Degrades gracefully to PASS (with a note, never a FAIL) if the health
+    check itself raises — a broken diagnostic must not become a new failure
+    mode for the go-live gate.
+    """
+    name = "alert_channels_reachable"
+    try:
+        from observability.alerts import check_channel_health
+
+        results = check_channel_health()
+        if not results:
+            return CheckResult(
+                name, True, "No alert channels configured (console-only).", warning=True,
+            )
+        broken = {ch: r for ch, r in results.items() if not r.get("ok")}
+        if broken:
+            detail = "; ".join(f"{ch}: {r.get('error')}" for ch, r in broken.items())
+            return CheckResult(
+                name, True,
+                f"⚠️  {len(broken)}/{len(results)} alert channel(s) unreachable — {detail}. "
+                "Fix before relying on this channel during an incident.",
+                warning=True,
+            )
+        return CheckResult(
+            name, True,
+            f"All {len(results)} active alert channel(s) reachable: {', '.join(results)}.",
+            warning=True,
+        )
+    except Exception as exc:
+        # Never a blocking failure — a broken health-check must not gate go-live.
+        return CheckResult(
+            name, True,
+            f"⚠️  alert_channels_reachable check could not run ({exc}).",
+            warning=True,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -1138,6 +1270,7 @@ ALL_CHECKS = [
     check_validation_reports,
     check_no_unexpected_risk_blocks,
     check_calibration_drift,
+    check_alert_channels_reachable,
 ]
 
 
@@ -1198,7 +1331,7 @@ _ADVISORY_AUTO_SKIP: dict[str, str] = {
 }
 
 
-def run_checks(skip: list[str] | None = None) -> list[CheckResult]:
+def run_checks(skip: list[str] | None = None, fire_alerts: bool = False) -> list[CheckResult]:
     """Execute all checks and return one ``CheckResult`` per check.
 
     Parameters
@@ -1207,6 +1340,13 @@ def run_checks(skip: list[str] | None = None) -> list[CheckResult]:
         List of check names (without the ``check_`` prefix) to skip.
         Skipped checks produce a PASS result with reason "(skipped via --skip)"
         so the result list always has ``len(ALL_CHECKS)`` entries.
+    fire_alerts:
+        When True, threaded through to ``check_validation_reports(fire_alert=...)``
+        so a FAILing validation_reports check also dispatches a CRITICAL alert
+        via ``observability.alerts.send_alert``. Defaults to False — an
+        interactive, ad-hoc preflight run should not page anyone; only a
+        scheduled/CI invocation (``--fire-alerts`` on the CLI) opts in. See
+        ``check_validation_reports``'s own docstring for the full rationale.
 
     Notes
     -----
@@ -1235,7 +1375,10 @@ def run_checks(skip: list[str] | None = None) -> list[CheckResult]:
             ))
             continue
         try:
-            results.append(fn())
+            if check_name == "validation_reports":
+                results.append(fn(fire_alert=fire_alerts))
+            else:
+                results.append(fn())
         except Exception as exc:
             results.append(CheckResult(check_name, False, f"Check raised exception: {exc}"))
     return results
@@ -1292,9 +1435,19 @@ def main(argv: list[str] | None = None) -> int:
             "Useful in CI where certain checks are contextually inapplicable."
         ),
     )
+    parser.add_argument(
+        "--fire-alerts",
+        action="store_true",
+        help=(
+            "Dispatch a CRITICAL alert via observability.alerts.send_alert when "
+            "validation_reports fails. Off by default so an interactive run "
+            "never pages anyone; intended for a scheduled/CI invocation of "
+            "this script."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    results = run_checks(skip=args.skip)
+    results = run_checks(skip=args.skip, fire_alerts=args.fire_alerts)
 
     if args.json:
         print(json.dumps(

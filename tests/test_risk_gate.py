@@ -164,6 +164,53 @@ class TestPortfolioHeatCheck:
         assert result.passed
 
 
+class TestPortfolioHeatAlertDispatch:
+    """Phase O3: a blocked portfolio_heat_check must fire a WARNING alert via
+    observability.alerts.send_alert; a passing check must not (that would be
+    an alert storm, not a warning)."""
+
+    def test_fails_high_heat_calls_send_alert_warning(self):
+        from unittest import mock
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06)
+        ctx = RiskContext(
+            open_positions=[_position("MSFT", unrealized_pl=-7000.0)],
+            account=_account(100_000),
+        )
+        with mock.patch("observability.alerts.send_alert") as m_alert:
+            result = gate.portfolio_heat_check(_buy("AAPL"), ctx)
+        assert not result.passed
+        assert m_alert.called
+        args, kwargs = m_alert.call_args
+        assert args[0] == "WARNING"
+        assert kwargs.get("dedup_key") == "portfolio_heat"
+
+    def test_passes_low_heat_does_not_call_send_alert(self):
+        from unittest import mock
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06)
+        ctx = RiskContext(
+            open_positions=[_position("MSFT", unrealized_pl=-500.0)],
+            account=_account(100_000),
+        )
+        with mock.patch("observability.alerts.send_alert") as m_alert:
+            result = gate.portfolio_heat_check(_buy(), ctx)
+        assert result.passed
+        assert not m_alert.called
+
+    def test_raising_send_alert_does_not_break_the_check_verdict(self):
+        """A broken alert channel must never change the risk-gate's own verdict."""
+        from unittest import mock
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06)
+        ctx = RiskContext(
+            open_positions=[_position("MSFT", unrealized_pl=-7000.0)],
+            account=_account(100_000),
+        )
+        with mock.patch(
+            "observability.alerts.send_alert", side_effect=RuntimeError("webhook down")
+        ):
+            result = gate.portfolio_heat_check(_buy(), ctx)  # must not raise
+        assert not result.passed
+
+
 # ---------------------------------------------------------------------------
 # 3. max_correlation_check
 # ---------------------------------------------------------------------------
@@ -219,6 +266,59 @@ class TestMaxCorrelationCheck:
         )
         result = gate.max_correlation_check(_buy("AAPL"), ctx)
         assert result.passed  # AAPL not in returns_df
+
+
+class TestCorrelationAlertDispatch:
+    """Phase O3: a blocked max_correlation_check must fire a WARNING alert via
+    observability.alerts.send_alert; a passing check must not."""
+
+    def _corr_df(self, r: float, sym_a: str = "AAPL", sym_b: str = "MSFT") -> pd.DataFrame:
+        import numpy as np
+        rng = np.random.default_rng(42)
+        base = rng.standard_normal(50)
+        noise = rng.standard_normal(50)
+        b_col = r * base + (1 - abs(r)) ** 0.5 * noise
+        return pd.DataFrame({sym_a: base, sym_b: b_col})
+
+    def test_fails_high_correlation_calls_send_alert_warning(self):
+        from unittest import mock
+        gate = PreTradeRiskGate(max_correlation=0.85)
+        ctx = RiskContext(
+            open_positions=[_position("MSFT")],
+            returns_df=self._corr_df(0.95),
+        )
+        with mock.patch("observability.alerts.send_alert") as m_alert:
+            result = gate.max_correlation_check(_buy("AAPL"), ctx)
+        assert not result.passed
+        assert m_alert.called
+        args, kwargs = m_alert.call_args
+        assert args[0] == "WARNING"
+        assert kwargs.get("dedup_key") == "correlation_concentration"
+
+    def test_passes_low_correlation_does_not_call_send_alert(self):
+        from unittest import mock
+        gate = PreTradeRiskGate(max_correlation=0.85)
+        ctx = RiskContext(
+            open_positions=[_position("MSFT")],
+            returns_df=self._corr_df(0.3),
+        )
+        with mock.patch("observability.alerts.send_alert") as m_alert:
+            result = gate.max_correlation_check(_buy("AAPL"), ctx)
+        assert result.passed
+        assert not m_alert.called
+
+    def test_raising_send_alert_does_not_break_the_check_verdict(self):
+        from unittest import mock
+        gate = PreTradeRiskGate(max_correlation=0.85)
+        ctx = RiskContext(
+            open_positions=[_position("MSFT")],
+            returns_df=self._corr_df(0.95),
+        )
+        with mock.patch(
+            "observability.alerts.send_alert", side_effect=RuntimeError("webhook down")
+        ):
+            result = gate.max_correlation_check(_buy("AAPL"), ctx)  # must not raise
+        assert not result.passed
 
 
 # ---------------------------------------------------------------------------
