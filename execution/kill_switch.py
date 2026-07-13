@@ -90,11 +90,40 @@ class GlobalKillSwitch:
             reason or "(no reason given)",
             self._path,
         )
-        if settings.FLATTEN_ON_KILL:
-            logger.critical(
-                "FLATTEN_ON_KILL=True — manually close all open positions before "
-                "reactivating. Automatic flattening is not yet implemented."
+
+        # Route the activation through the unified alert dispatcher so an
+        # operator is notified out-of-band (Discord/Slack/email/file), not just
+        # via a log line. send_alert never raises, but we still guard the whole
+        # call so a broken import can never destabilise activation.
+        try:
+            from observability.alerts import send_alert
+            send_alert(
+                "CRITICAL",
+                f"Kill switch ACTIVATED — all order submission BLOCKED. "
+                f"Reason: {reason or '(no reason given)'}",
+                extra={"reason": reason, "sentinel_file": str(self._path)},
             )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("kill_switch: send_alert on activation failed (%s)", exc)
+
+        if settings.FLATTEN_ON_KILL:
+            # Replace the old log-only "close positions manually" reminder with a
+            # concrete, human-reviewable GATED DRY-RUN proposal. This NEVER
+            # places an order — see execution/flatten_proposal.py. Guarded so a
+            # proposal-emission failure can never prevent the kill switch from
+            # activating (the safety-critical action already completed above).
+            try:
+                from execution.flatten_proposal import emit_flatten_proposal
+                emit_flatten_proposal(
+                    reason=reason,
+                    output_dir=self._path.parent,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error(
+                    "kill_switch: flatten-on-kill proposal emission failed (%s). "
+                    "Manually close all open positions before reactivating.",
+                    exc,
+                )
 
     def deactivate(self) -> None:
         """Remove the sentinel file, re-enabling order submission."""

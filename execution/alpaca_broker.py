@@ -23,9 +23,11 @@ construction if either is missing.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections import deque
 from datetime import datetime, timezone
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 from execution.broker_base import (
     AccountSnapshot,
@@ -41,6 +43,21 @@ from execution.broker_base import (
 from settings import settings
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Trade-update stream tuning (observability plumbing only — never order code).
+# ---------------------------------------------------------------------------
+# Bounded ring buffer: the WebSocket handler runs in an executor thread and
+# appends to a ``collections.deque(maxlen=...)`` whose append/popleft are atomic
+# under the GIL, so it is safe to hand off to the async consumer without a lock.
+# ``maxlen`` provides BACKPRESSURE: if the consumer falls behind, the OLDEST
+# buffered events are evicted rather than growing memory without bound.
+_STREAM_BUFFER_MAXLEN = 2000
+# How often the async side drains the buffer.
+_STREAM_POLL_SECONDS = 0.1
+# Reconnection backoff bounds when the underlying WebSocket run() returns/raises.
+_STREAM_RECONNECT_BASE_SECONDS = 1.0
+_STREAM_RECONNECT_MAX_SECONDS = 30.0
 
 # ---------------------------------------------------------------------------
 # Lazy imports — alpaca-py is optional (tests that don't need a broker can
@@ -365,78 +382,224 @@ class AlpacaBroker(BrokerBase):
     # stream_trade_updates  (async generator)
     # ------------------------------------------------------------------
 
+    def _normalize_stream_event(self, data) -> Optional[TradeUpdateEvent]:
+        """Convert a raw alpaca trade-update payload into a ``TradeUpdateEvent``.
+
+        Returns ``None`` if the payload cannot be parsed (logged) so a single
+        malformed event never poisons the buffer.  This is pure normalization —
+        it reads fields only and NEVER submits, cancels, or mutates any order.
+        """
+        from alpaca.trading.enums import OrderSide as AOS
+        try:
+            order = data.order
+            side = OrderSide.BUY if order.side == AOS.BUY else OrderSide.SELL
+            ts = getattr(data, "timestamp", None) or datetime.now(timezone.utc)
+            if hasattr(ts, "replace"):
+                ts = ts.replace(tzinfo=None)
+            return TradeUpdateEvent(
+                event_type=str(data.event),
+                broker_order_id=str(order.id),
+                client_order_id=str(order.client_order_id or ""),
+                symbol=str(order.symbol),
+                side=side,
+                filled_qty=float(order.filled_qty or 0.0),
+                filled_avg_price=(
+                    float(order.filled_avg_price)
+                    if order.filled_avg_price
+                    else None
+                ),
+                timestamp=ts,
+            )
+        except Exception as exc:
+            logger.error("stream handler error: %s", exc, exc_info=True)
+            return None
+
     async def stream_trade_updates(self) -> AsyncIterator[TradeUpdateEvent]:
         """
         Subscribe to Alpaca's real-time trade update WebSocket stream.
 
-        Each fill / cancel / rejection emitted by Alpaca is converted to a
-        ``TradeUpdateEvent`` and yielded.  The generator reconnects
-        automatically on transient errors (alpaca-py handles this internally).
+        Each fill / cancel / rejection emitted by Alpaca is normalised into a
+        ``TradeUpdateEvent`` and yielded.  This is OBSERVABILITY plumbing only:
+        it reads the broker's own trade-update feed and NEVER submits, cancels,
+        or otherwise mutates an order.
+
+        Hardening (per ``BrokerBase.stream_trade_updates`` contract):
+          * **Bounded buffer** — events land in a ``deque(maxlen=...)`` instead
+            of an unbounded list, so a slow/paused consumer evicts the OLDEST
+            events (backpressure) rather than growing memory without limit.  The
+            handler thread's ``append`` and the async drain's ``popleft`` are
+            atomic under the GIL, so no lock is required.
+          * **Reconnection** — the blocking ``stream.run()`` is supervised in a
+            loop with exponential backoff; a disconnect (run returning or
+            raising) triggers a fresh ``TradingStream`` and re-subscription
+            instead of ending the generator.
 
         This method is intended to run in a background asyncio.Task::
 
             task = asyncio.create_task(
-                _consume_stream(broker.stream_trade_updates())
+                consume_trade_updates(broker.stream_trade_updates())
             )
         """
-        from alpaca.trading.enums import OrderSide as AOS
         from alpaca.trading.stream import TradingStream
 
-        stream = TradingStream(
-            api_key=self._api_key,
-            secret_key=self._secret_key,
-            paper=self._paper,
-        )
-
-        events: list[TradeUpdateEvent] = []
+        # Bounded ring buffer — the source of backpressure.
+        buffer: "deque[TradeUpdateEvent]" = deque(maxlen=_STREAM_BUFFER_MAXLEN)
 
         async def _handler(data) -> None:
-            try:
-                order = data.order
-                side = (
-                    OrderSide.BUY
-                    if order.side == AOS.BUY
-                    else OrderSide.SELL
+            evt = self._normalize_stream_event(data)
+            if evt is None:
+                return
+            if len(buffer) == buffer.maxlen:
+                # deque silently drops the oldest on append at capacity; surface
+                # it so a persistently-slow consumer is visible in the logs.
+                logger.warning(
+                    "AlpacaBroker: trade-update buffer full (maxlen=%d) — "
+                    "evicting oldest event (consumer is falling behind)",
+                    buffer.maxlen,
                 )
-                ts = getattr(data, "timestamp", None) or datetime.now(timezone.utc)
-                if hasattr(ts, "replace"):
-                    ts = ts.replace(tzinfo=None)
-                evt = TradeUpdateEvent(
-                    event_type=str(data.event),
-                    broker_order_id=str(order.id),
-                    client_order_id=str(order.client_order_id or ""),
-                    symbol=str(order.symbol),
-                    side=side,
-                    filled_qty=float(order.filled_qty or 0.0),
-                    filled_avg_price=(
-                        float(order.filled_avg_price)
-                        if order.filled_avg_price
-                        else None
-                    ),
-                    timestamp=ts,
-                )
-                events.append(evt)
-            except Exception as exc:
-                logger.error("stream handler error: %s", exc, exc_info=True)
-
-        stream.subscribe_trade_updates(_handler)
-        logger.info("AlpacaBroker: starting trade-update stream")
-
-        # Run the WebSocket connection and yield buffered events.
-        # alpaca-py's run() is blocking; we run it in a thread to avoid
-        # stalling the event loop, yielding events as they accumulate.
-        import asyncio
+            buffer.append(evt)
 
         loop = asyncio.get_event_loop()
-        stream_task = loop.run_in_executor(None, stream.run)
+        stream = None
+        stream_task = None
+        backoff = _STREAM_RECONNECT_BASE_SECONDS
+
+        def _spawn_stream():
+            """(Re)create the stream, subscribe, and launch its blocking run()."""
+            nonlocal stream, stream_task, backoff
+            stream = TradingStream(
+                api_key=self._api_key,
+                secret_key=self._secret_key,
+                paper=self._paper,
+            )
+            stream.subscribe_trade_updates(_handler)
+            stream_task = loop.run_in_executor(None, stream.run)
+            backoff = _STREAM_RECONNECT_BASE_SECONDS
+            logger.info("AlpacaBroker: trade-update stream connected")
+
+        _spawn_stream()
 
         try:
             while True:
-                await asyncio.sleep(0.1)
-                while events:
-                    yield events.pop(0)
+                await asyncio.sleep(_STREAM_POLL_SECONDS)
+
+                # Drain everything buffered since the last tick.
+                while buffer:
+                    yield buffer.popleft()
+
+                # Supervise the underlying connection; reconnect on disconnect.
+                if stream_task is not None and stream_task.done():
+                    exc = stream_task.exception()
+                    if exc is not None:
+                        logger.critical(
+                            "AlpacaBroker: trade-update stream errored (%s) — "
+                            "reconnecting in %.1fs",
+                            exc, backoff,
+                        )
+                    else:
+                        logger.warning(
+                            "AlpacaBroker: trade-update stream closed — "
+                            "reconnecting in %.1fs", backoff,
+                        )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, _STREAM_RECONNECT_MAX_SECONDS)
+                    try:
+                        if stream is not None:
+                            stream.stop()
+                    except Exception:
+                        pass
+                    _spawn_stream()
         except asyncio.CancelledError:
             logger.info("AlpacaBroker: trade-update stream cancelled")
-            stream.stop()
-            await stream_task
+            try:
+                if stream is not None:
+                    stream.stop()
+                if stream_task is not None:
+                    await stream_task
+            except Exception:
+                pass
             return
+
+
+# ---------------------------------------------------------------------------
+# Advisory-only fill consumer (observability plumbing — never order code).
+# ---------------------------------------------------------------------------
+
+# event_type values that warrant an out-of-band alert (a real fill happened).
+_NOTABLE_FILL_EVENTS = frozenset({"fill", "partial_fill"})
+# event_type values that warrant a WARNING alert (an order failed).
+_ADVERSE_EVENTS = frozenset({"rejected", "canceled", "cancelled"})
+
+
+async def consume_trade_updates(
+    event_source: AsyncIterator[TradeUpdateEvent],
+    *,
+    send_alert_fn: Optional[Callable[..., None]] = None,
+    notable_events: frozenset = _NOTABLE_FILL_EVENTS,
+    adverse_events: frozenset = _ADVERSE_EVENTS,
+) -> None:
+    """Drain a trade-update stream, LOG every event, and ALERT on notable ones.
+
+    ADVISORY-ONLY: this consumer reads / logs / alerts and takes NO order
+    action of any kind.  It is the intended consumer for
+    ``AlpacaBroker.stream_trade_updates`` (which previously had none).
+
+    Parameters
+    ----------
+    event_source:
+        Any async iterator of ``TradeUpdateEvent`` — normally
+        ``broker.stream_trade_updates()``.
+    send_alert_fn:
+        Injected for testability.  Defaults to
+        ``observability.alerts.send_alert``.  A fill routes an ``INFO`` alert;
+        a rejection/cancel routes a ``WARNING`` alert.
+    """
+    if send_alert_fn is None:
+        from observability.alerts import send_alert as send_alert_fn  # type: ignore
+
+    async for evt in event_source:
+        etype = str(evt.event_type).lower()
+        logger.info(
+            "Trade update: event=%s symbol=%s side=%s filled_qty=%.4f "
+            "avg_price=%s coid=%s broker_id=%s",
+            evt.event_type,
+            evt.symbol,
+            getattr(evt.side, "value", evt.side),
+            evt.filled_qty,
+            evt.filled_avg_price,
+            evt.client_order_id,
+            evt.broker_order_id,
+        )
+
+        extra = {
+            "event_type": evt.event_type,
+            "symbol": evt.symbol,
+            "side": getattr(evt.side, "value", str(evt.side)),
+            "filled_qty": evt.filled_qty,
+            "filled_avg_price": evt.filled_avg_price,
+            "client_order_id": evt.client_order_id,
+            "broker_order_id": evt.broker_order_id,
+        }
+
+        try:
+            if etype in notable_events:
+                price = (
+                    f"@ ${evt.filled_avg_price:.4f}"
+                    if evt.filled_avg_price is not None
+                    else "@ (no avg price)"
+                )
+                send_alert_fn(
+                    "INFO",
+                    f"Fill: {getattr(evt.side, 'value', evt.side)} "
+                    f"{evt.filled_qty:.4f} {evt.symbol} {price}",
+                    extra=extra,
+                )
+            elif etype in adverse_events:
+                send_alert_fn(
+                    "WARNING",
+                    f"Order {etype}: {evt.symbol} (coid={evt.client_order_id})",
+                    extra=extra,
+                )
+        except Exception as exc:
+            # Alerting must never break the consumer loop.
+            logger.error("consume_trade_updates: alert dispatch failed (%s)", exc)
