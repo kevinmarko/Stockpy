@@ -43,47 +43,51 @@ def main():
     store = HistoricalStore()
 
     for symbol in tickers:
-        logger.info("Processing %s...", symbol)
-        cik = edgar_fundamentals.get_cik(symbol)
-        if not cik:
-            logger.warning("Could not resolve CIK for %s, skipping.", symbol)
+        try:
+            logger.info("Processing %s...", symbol)
+            cik = edgar_fundamentals.get_cik(symbol)
+            if not cik:
+                logger.warning("Could not resolve CIK for %s, skipping.", symbol)
+                continue
+
+            facts = edgar_fundamentals.fetch_companyfacts(cik)
+            if not facts:
+                logger.warning("No facts returned for %s (CIK %s), skipping.", symbol, cik)
+                continue
+
+            # Get historical bars for price lookup
+            # Lookback sufficiently to cover the "since" date if possible, but store.get_bars
+            # only fetches recent by default unless we already backfilled. We will just load
+            # what is in the DB.
+            bars = store.get_bars(symbol)
+
+            filed_dates = get_all_filed_dates(facts, args.since)
+            logger.info("Found %d report_dates for %s since %s", len(filed_dates), symbol, args.since)
+
+            for report_date in filed_dates:
+                # Find latest price ON OR BEFORE report_date
+                price = float('nan')
+                if not bars.empty:
+                    # pandas slicing
+                    past_bars = bars[bars.index <= report_date]
+                    if not past_bars.empty:
+                        price = float(past_bars.iloc[-1]["Close"])
+
+                shares = extract_shares(facts, report_date)
+
+                ratios = edgar_fundamentals.compute_pit_ratios(facts, report_date, price, shares)
+                store.upsert_fundamentals_pit(
+                    symbol,
+                    ratios,
+                    {}, # Raw empty because we don't need to persist the massive XBRL
+                    report_date=report_date,
+                    source="edgar"
+                )
+
+            logger.info("Finished %s", symbol)
+        except Exception as exc:
+            logger.error("Backfill failed for %s: %s", symbol, exc, exc_info=True)
             continue
-            
-        facts = edgar_fundamentals.fetch_companyfacts(cik)
-        if not facts:
-            logger.warning("No facts returned for %s (CIK %s), skipping.", symbol, cik)
-            continue
-            
-        # Get historical bars for price lookup
-        # Lookback sufficiently to cover the "since" date if possible, but store.get_bars
-        # only fetches recent by default unless we already backfilled. We will just load
-        # what is in the DB.
-        bars = store.get_bars(symbol)
-        
-        filed_dates = get_all_filed_dates(facts, args.since)
-        logger.info("Found %d report_dates for %s since %s", len(filed_dates), symbol, args.since)
-        
-        for report_date in filed_dates:
-            # Find latest price ON OR BEFORE report_date
-            price = float('nan')
-            if not bars.empty:
-                # pandas slicing
-                past_bars = bars[bars.index <= report_date]
-                if not past_bars.empty:
-                    price = float(past_bars.iloc[-1]["close"])
-                    
-            shares = extract_shares(facts, report_date)
-            
-            ratios = edgar_fundamentals.compute_pit_ratios(facts, report_date, price, shares)
-            store.upsert_fundamentals_pit(
-                symbol,
-                ratios,
-                {}, # Raw empty because we don't need to persist the massive XBRL
-                report_date=report_date,
-                source="edgar"
-            )
-            
-        logger.info("Finished %s", symbol)
 
 if __name__ == "__main__":
     main()

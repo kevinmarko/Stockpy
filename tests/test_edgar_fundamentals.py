@@ -75,6 +75,23 @@ def test_compute_pit_ratios():
     # debt_to_equity = (50000 / 100000) * 100 = 50.0
     assert out["debt_to_equity"] == 50.0
 
+def test_compute_pit_ratios_missing_debt_fact_is_nan_not_zero():
+    """A company whose LongTermDebt XBRL fact simply wasn't found must report
+    debt_to_equity as NaN (undefined), never a fabricated 0.0 that would read
+    as "verified zero debt" (CONSTRAINT #4)."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "StockholdersEquity": {"units": {"USD": [{"val": 100000.0, "filed": "2020-01-15"}]}},
+                # No "LongTermDebt" key at all.
+            }
+        }
+    }
+
+    out = edgar_fundamentals.compute_pit_ratios(facts, "2020-01-15", 100.0, 1000.0)
+
+    assert math.isnan(out["debt_to_equity"])
+
 def test_fetch_companyfacts(monkeypatch):
     mock_get = mock.Mock(return_value=b'{"facts": {"us-gaap": {}}}')
     monkeypatch.setattr(edgar_fundamentals, "_http_get", mock_get)
