@@ -540,7 +540,19 @@ class StrategyEvalStep(PipelineStep):
         dummy_fund = FundamentalDataDTO(ticker="DUMMY", pe_ratio=None, pb_ratio=None, dividend_yield=0.0, book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0, payout_ratio=0.0, sector="Unknown", company_name="Unknown")
         sig_ctx = SignalContext(bar=dummy_bar, fundamentals=dummy_fund, macro=ctx.macro_dto, multifactor_scores=shared_context.multifactor_scores)
         aggregator = SignalAggregator(global_registry)
-        vectorized_results = aggregator.aggregate_vectorized(vec_df, sig_ctx)
+        try:
+            vectorized_results = aggregator.aggregate_vectorized(vec_df, sig_ctx)
+        except Exception as vec_exc:
+            # Dead-letter, don't crash: a bug in any one vectorized signal
+            # module must not abort the whole cycle. Falling back to {} makes
+            # every ticker's precomputed_signal_tuple=None below, which is
+            # the pre-existing default that routes evaluate_security() back
+            # through the proven-safe per-ticker aggregator.aggregate() path.
+            telemetry.warning(
+                "aggregate_vectorized failed universe-wide (%s); falling back to per-ticker aggregate() for this cycle.",
+                vec_exc,
+            )
+            vectorized_results = {}
         # -----------------------------------
 
         for idx, row in ctx.dashboard_df.iterrows():
