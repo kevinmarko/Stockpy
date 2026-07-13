@@ -44,6 +44,7 @@ from gui.panels._shared import (  # noqa: E402
     _kill_switch,
     _signal_symbols,
     _watchlist_symbols,
+    apply_session_regime_filter,
     load_block_log,
     logger,
 )
@@ -55,20 +56,31 @@ from gui.panels._shared import (  # noqa: E402
 # ===========================================================================
 
 
-def load_state_snapshot() -> dict:
+def load_state_snapshot(apply_filter: bool = True) -> dict:
     """Load the orchestrator's last ``state_snapshot.json`` (empty dict if absent).
 
     The cache is keyed on the file's **mtime** (not just a TTL), so a fresh
     orchestrator / advisory run is reflected on the NEXT render instead of after
     up to ``DASHBOARD_REFRESH_SECONDS`` (default 30 min) of staleness. The TTL
     remains as an upper bound for the case where mtime is unavailable.
+
+    When ``apply_filter`` is ``True`` (the default), the cross-tab macro-regime
+    filter selected in the sidebar (``st.session_state["regime_filter"]``) is
+    applied to the ``signals`` list *outside* the cache so every panel reading
+    the shared snapshot is automatically regime-filtered. The default
+    "All regimes" selection is an identity no-op, so behavior is unchanged until
+    the operator picks a concrete regime. Pass ``apply_filter=False`` to read the
+    raw, unfiltered snapshot (e.g. to show an "of N total" denominator).
     """
     snap = settings.OUTPUT_DIR / "state_snapshot.json"
     try:
         mtime = snap.stat().st_mtime if snap.exists() else 0.0
     except OSError:
         mtime = 0.0
-    return _load_state_snapshot_cached(str(snap), mtime)
+    data = _load_state_snapshot_cached(str(snap), mtime)
+    if apply_filter:
+        return apply_session_regime_filter(data)
+    return data
 
 
 
