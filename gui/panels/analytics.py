@@ -45,9 +45,19 @@ import streamlit as st
 
 from settings import settings
 from gui import help_widgets
+from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS, metric_help
 from gui.panels import load_state_snapshot
 
 logger = logging.getLogger(__name__)
+
+# Repo root = two levels up from this file (gui/panels/analytics.py).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Retrain window (days) beyond which an ML model is flagged 'Needs Retrain'.
+# Sourced from gui.help_content.MODEL_RETRAIN_WINDOW_DAYS (which itself mirrors
+# ml.meta_labeling.MetaLabeler(retrain_freq_days=30)) so the panel and its help
+# text stay driven by one constant rather than two re-typed literals.
+_RETRAIN_WINDOW_DAYS = MODEL_RETRAIN_WINDOW_DAYS
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +95,47 @@ def _trade_to_row(trade: Any) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# ML model freshness helpers (pure — unit-testable outside Streamlit)
+# ---------------------------------------------------------------------------
+
+
+def _days_since(trained_date: Any) -> Optional[int]:
+    """Whole days between *trained_date* and today, or ``None`` when unparseable.
+
+    Accepts an ISO date/datetime string (``"2026-07-06"``) or a ``date`` /
+    ``datetime`` object (PyYAML may parse an unquoted date as ``datetime.date``).
+    Returns ``None`` — never a fabricated ``0`` — for missing / malformed input
+    (CONSTRAINT #4).  A future-dated value clamps at ``0`` rather than going
+    negative.
+    """
+    if trained_date is None:
+        return None
+    try:
+        ts = pd.to_datetime(trained_date, errors="coerce")
+    except Exception:  # noqa: BLE001
+        return None
+    if ts is None or pd.isna(ts):
+        return None
+    try:
+        delta_days = (pd.Timestamp.now().normalize() - ts.normalize()).days
+    except Exception:  # noqa: BLE001
+        return None
+    return max(0, int(delta_days))
+
+
+def _needs_retrain(age_days: Optional[int], window: int = _RETRAIN_WINDOW_DAYS) -> Optional[bool]:
+    """Whether a model is stale: last trained ``>= window`` days ago.
+
+    Returns ``None`` (unknown) when *age_days* is ``None`` so the caller renders
+    "—" rather than a fabricated verdict.  Mirrors
+    ``ml.meta_labeling.MetaLabeler.needs_retrain()`` semantics (``>=`` window).
+    """
+    if age_days is None:
+        return None
+    return age_days >= window
+
+
+# ---------------------------------------------------------------------------
 # Cached loaders (PR B — GUI panel caching)
 #
 # Streamlit reruns the whole script on every interaction, so these two
@@ -117,6 +168,75 @@ def _load_realized_performance() -> Optional[Dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
         logger.debug("realized_performance() failed: %s", exc)
         return None
+
+
+def _parse_registry_rows(text: str) -> List[Dict[str, Any]]:
+    """Parse ``ml/registry.yaml`` text into a flat list of model row dicts (pure).
+
+    Returns ``[]`` on ANY failure (PyYAML missing, malformed YAML, unexpected
+    shape) so the caller renders an "unavailable" message instead of a traceback
+    (CONSTRAINT #6). ``null`` metrics are preserved as ``None`` (the render layer
+    maps them to "—", never 0 — CONSTRAINT #4).
+    """
+    try:
+        import yaml  # PyYAML — already a repo dependency.
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("PyYAML unavailable for registry load: %s", exc)
+        return []
+    try:
+        raw = yaml.safe_load(text)
+    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise into UI
+        logger.debug("registry YAML parse failed: %s", exc)
+        return []
+    if not isinstance(raw, dict):
+        return []
+    models = raw.get("models")
+    if not isinstance(models, dict):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for name, meta in models.items():
+        if not isinstance(meta, dict):
+            continue  # skip malformed entry rather than fabricating fields
+        rows.append({
+            "model": str(name),
+            "role": meta.get("role"),
+            "trained_date": meta.get("trained_date"),
+            "cpcv_dsr": meta.get("cpcv_dsr"),
+            "pbo": meta.get("pbo"),
+            "n_train": meta.get("n_train"),
+            "deployable": meta.get("deployable"),
+        })
+    return rows
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_registry_rows_cached(path_str: str, mtime: float) -> List[Dict[str, Any]]:
+    """mtime-keyed cached read of the registry file (``mtime`` in the cache key
+    forces a refresh when the file changes, mirroring ``load_state_snapshot``)."""
+    try:
+        text = Path(path_str).read_text(encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise into UI
+        logger.debug("registry file read failed: %s", exc)
+        return []
+    return _parse_registry_rows(text)
+
+
+def _load_ml_registry_rows() -> List[Dict[str, Any]]:
+    """Resolve ``ml/registry.yaml`` (repo-root relative) and load its rows.
+
+    Returns ``[]`` when the file is missing/unreadable/malformed so the panel
+    shows an "unavailable" info message rather than an exception or a fabricated
+    row (CONSTRAINT #6).
+    """
+    path = _REPO_ROOT / "ml" / "registry.yaml"
+    try:
+        if not path.exists():
+            return []
+        mtime = path.stat().st_mtime
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("registry stat failed: %s", exc)
+        return []
+    return _load_registry_rows_cached(str(path), mtime)
 
 
 @st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
@@ -484,6 +604,123 @@ def _render_rolling_beta_chart(snap: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section (e) — ML Model Freshness & Deployability Monitoring
+# ---------------------------------------------------------------------------
+
+
+def _deployable_chip(deployable: Any) -> str:
+    """Map a registry ``deployable`` flag to a ✅/❌ chip, or "—" when absent."""
+    if deployable is True:
+        return "✅ Yes"
+    if deployable is False:
+        return "❌ No"
+    return "—"
+
+
+def _render_ml_model_monitoring() -> None:
+    """ML model freshness + deployability monitor over ``ml/registry.yaml``.
+
+    Extends the sibling registry table (``analytics_signals.render_ml_registry``)
+    with per-model **last-trained age**, a **Needs Retrain** flag (age vs the
+    ``_RETRAIN_WINDOW_DAYS`` window), **DSR / PBO** (formatted, "—" on null), and
+    a **deployable ✅/❌ chip**. Dead-letter safe: a missing/malformed registry
+    renders an info message, never a traceback or fabricated row (CONSTRAINT #6).
+    """
+    st.markdown("### 🩺 ML Model Freshness & Deployability")
+    st.caption(
+        f"Per-model training freshness and the deployability gate from "
+        f"`ml/registry.yaml`. A model is flagged **Needs Retrain** once its last "
+        f"training run is older than the {_RETRAIN_WINDOW_DAYS}-day window "
+        f"(mirrors `ml.meta_labeling.MetaLabeler.needs_retrain()`). Deployability "
+        f"is separate from freshness — a deployable model can still be stale. "
+        f"`null` metrics render `—`, never a fabricated 0."
+    )
+
+    rows = _load_ml_registry_rows()
+    if not rows:
+        st.info(
+            "ML model registry unavailable (`ml/registry.yaml` missing, "
+            "unreadable, or malformed)."
+        )
+        return
+
+    table_rows: List[Dict[str, Any]] = []
+    stale_count = 0
+    for r in rows:
+        age = _days_since(r.get("trained_date"))
+        stale = _needs_retrain(age)
+        if stale is True:
+            stale_count += 1
+        if stale is True:
+            retrain_str = "⚠️ Yes"
+        elif stale is False:
+            retrain_str = "✅ No"
+        else:
+            retrain_str = "—"
+
+        cpcv_dsr = r.get("cpcv_dsr")
+        pbo = r.get("pbo")
+        table_rows.append({
+            "Model": r.get("model") or "—",
+            "Role": r.get("role") or "—",
+            "Trained": r.get("trained_date") or "—",
+            "Age (days)": f"{age:,}" if age is not None else "—",
+            "Needs Retrain": retrain_str,
+            "CPCV DSR": _fmt_ml_metric(cpcv_dsr, "{:.4f}"),
+            "PBO": _fmt_ml_metric(pbo, "{:.4f}"),
+            "Deployable": _deployable_chip(r.get("deployable")),
+        })
+
+    # Summary tiles with help tooltips sourced from gui/help_content.py.
+    deployable_count = sum(1 for r in rows if r.get("deployable") is True)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Models Tracked", f"{len(rows):,}")
+    c2.metric(
+        "Deployable",
+        f"{deployable_count:,}",
+        help=metric_help("analytics.deployable"),
+    )
+    c3.metric(
+        "Needs Retrain",
+        f"{stale_count:,}",
+        help=metric_help("analytics.needs_retrain"),
+    )
+
+    df = pd.DataFrame(
+        table_rows,
+        columns=[
+            "Model", "Role", "Trained", "Age (days)", "Needs Retrain",
+            "CPCV DSR", "PBO", "Deployable",
+        ],
+    )
+    st.dataframe(df, width="stretch", hide_index=True)
+
+    # Column-level tooltips (help text lives ONLY in gui/help_content.py).
+    with st.expander("ℹ️ What these columns mean"):
+        st.markdown(f"- **Age (days)** — {metric_help('analytics.last_trained_age')}")
+        st.markdown(f"- **Needs Retrain** — {metric_help('analytics.needs_retrain')}")
+        st.markdown(f"- **CPCV DSR** — {metric_help('analytics.cpcv_dsr')}")
+        st.markdown(f"- **PBO** — {metric_help('analytics.pbo')}")
+        st.markdown(f"- **Deployable** — {metric_help('analytics.deployable')}")
+
+
+def _fmt_ml_metric(value: Any, fmt: str = "{:.4f}") -> str:
+    """Format a registry metric, degrading ``None``/``NaN``/non-numeric to "—".
+
+    CONSTRAINT #4: a missing metric is "—", never a fabricated 0.
+    """
+    if value is None:
+        return "—"
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if f != f:  # NaN
+        return "—"
+    return fmt.format(f)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -514,6 +751,8 @@ def render_analytics() -> None:
     _render_recent_alerts()
     st.divider()
     _render_rolling_beta_chart(snap)
+    st.divider()
+    _render_ml_model_monitoring()
 
     # ── Sibling signals-analytics panels (Agent C's module) ──────────────────
     try:
