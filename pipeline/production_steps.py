@@ -487,6 +487,57 @@ class StrategyEvalStep(PipelineStep):
         tech_opt_indicators = ctx.context_extras.get("tech_opt_indicators", {})
         robinhood_positions = ctx.context_extras.get("robinhood_positions", {})
 
+        # -- Vectorized Signal Aggregation --
+        vec_df = pd.DataFrame(index=ctx.dashboard_df['Symbol'].values)
+        vec_df['forecast_price'] = ctx.dashboard_df.get('Forecast_30', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['trend_strength'] = ctx.dashboard_df.get('Aroon Up', pd.Series(50.0, index=ctx.dashboard_df.index)).fillna(50.0).values
+        vec_df['atr'] = ctx.dashboard_df.get('ATR', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['macd_line'] = ctx.dashboard_df.get('MACD_Line', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['macd_signal'] = ctx.dashboard_df.get('MACD_Signal', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['aroon_osc'] = ctx.dashboard_df.get('Aroon Oscillator', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['rsi'] = ctx.dashboard_df.get('RSI', pd.Series(50.0, index=ctx.dashboard_df.index)).fillna(50.0).values
+        
+        sortino = ctx.dashboard_df.get('Sortino Ratio', ctx.dashboard_df.get('Sortino_Ratio', pd.Series(0.0, index=ctx.dashboard_df.index)))
+        vec_df['sortino_ratio'] = sortino.fillna(0.0).values
+        
+        drawdown = ctx.dashboard_df.get('Max Drawdown', ctx.dashboard_df.get('Max_Drawdown', pd.Series(0.0, index=ctx.dashboard_df.index)))
+        vec_df['max_drawdown'] = drawdown.fillna(0.0).values
+        
+        rs = ctx.dashboard_df.get('Relative_Strength', ctx.dashboard_df.get('RS vs SPY', ctx.dashboard_df.get('Relative Strength', pd.Series(0.0, index=ctx.dashboard_df.index))))
+        vec_df['relative_strength'] = rs.fillna(0.0).values
+        
+        vec_df['garch_vol'] = ctx.dashboard_df.get('GARCH_Vol', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['GARCH_Vol'] = vec_df['garch_vol']
+        
+        edge = ctx.dashboard_df.get('Edge Ratio', ctx.dashboard_df.get('Edge_Ratio', pd.Series(0.0, index=ctx.dashboard_df.index)))
+        vec_df['edge_ratio'] = edge.fillna(0.0).values
+        
+        vec_df['chandelier_long'] = ctx.dashboard_df['Symbol'].map(lambda x: tech_opt_indicators.get(x, {}).get('Chandelier_Long', 0.0)).values
+        vec_df['chandelier_short'] = ctx.dashboard_df['Symbol'].map(lambda x: tech_opt_indicators.get(x, {}).get('Chandelier_Short', 0.0)).values
+        
+        vec_df['current_price'] = ctx.dashboard_df.get('Price', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['Close'] = vec_df['current_price']
+        vec_df['ticker'] = ctx.dashboard_df['Symbol'].values
+        vec_df['sector'] = ctx.dashboard_df['Symbol'].map(lambda x: fund_dtos.get(x).sector if fund_dtos.get(x) else "Unknown").values
+        
+        vec_df['roc_12m'] = ctx.dashboard_df.get('ROC_12M', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['ROC_12M'] = vec_df['roc_12m']
+        vec_df['SMA_200'] = ctx.dashboard_df.get('SMA_200', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        vec_df['RSI_2'] = ctx.dashboard_df.get('RSI_2', pd.Series(50.0, index=ctx.dashboard_df.index)).fillna(50.0).values
+        
+        sma_5_raw = ctx.dashboard_df.get('SMA_5', pd.Series(float('nan'), index=ctx.dashboard_df.index))
+        vec_df['SMA_5'] = sma_5_raw.fillna(ctx.dashboard_df['Price']).values
+
+        from signals.base import SignalContext
+        from signals import global_registry, SignalAggregator
+        from dto_models import MarketBarDTO, FundamentalDataDTO
+        dummy_bar = MarketBarDTO(date=datetime.now(), ticker="DUMMY", open_price=0.0, high_price=0.0, low_price=0.0, close_price=0.0, volume=0)
+        dummy_fund = FundamentalDataDTO(ticker="DUMMY", pe_ratio=None, pb_ratio=None, dividend_yield=0.0, book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0, payout_ratio=0.0, sector="Unknown", company_name="Unknown")
+        sig_ctx = SignalContext(bar=dummy_bar, fundamentals=dummy_fund, macro=ctx.macro_dto, multifactor_scores=shared_context.multifactor_scores)
+        aggregator = SignalAggregator(global_registry)
+        vectorized_results = aggregator.aggregate_vectorized(vec_df, sig_ctx)
+        # -----------------------------------
+
         for idx, row in ctx.dashboard_df.iterrows():
             ticker = row['Symbol']
             price = row['Price']
@@ -563,7 +614,8 @@ class StrategyEvalStep(PipelineStep):
                     sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
                     rsi_2=rsi_2_val,
                     sma_5=sma_5_val,
-                    robinhood_position=rh_position
+                    robinhood_position=rh_position,
+                    precomputed_signal_tuple=vectorized_results.get(ticker)
                 )
 
                 stage = "edge_ratio"

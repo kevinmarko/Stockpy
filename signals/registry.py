@@ -80,6 +80,28 @@ class SignalRegistry:
             outputs[name] = module.compute(row, context)
         return outputs
 
+    def compute_all_vectorized(self, df: pd.DataFrame, context: SignalContext) -> Dict[str, pd.DataFrame]:
+        """
+        Executes compute_vectorized() on all registered signal modules for a universe DataFrame.
+        
+        Args:
+            df: pandas DataFrame representing indicator features for all tickers.
+            context: SignalContext containing global context data.
+            
+        Returns:
+            Dict mapping signal names to output DataFrames (with columns score, confidence, explanation, meta_label_proba).
+        """
+        outputs = {}
+        for name, module in self._modules.items():
+            # Validate required features exist in the dataframe
+            for feature in module.required_features:
+                if feature not in df.columns:
+                    raise ValueError(
+                        f"Required feature '{feature}' for signal '{name}' is missing from DataFrame columns."
+                    )
+            outputs[name] = module.compute_vectorized(df, context)
+        return outputs
+
 
 # Default global registry singleton
 global_registry = SignalRegistry()

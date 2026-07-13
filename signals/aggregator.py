@@ -454,3 +454,123 @@ class SignalAggregator:
             meta_label_composite = 1.0
 
         return final_score, score_log, warnings, details, outputs, meta_label_composite
+
+    def aggregate_vectorized(self, universe_df: pd.DataFrame, context: SignalContext) -> Dict[str, Tuple[float, List[str], List[str], List[str], Dict[str, SignalOutput], float]]:
+        """
+        Executes signal calculations and aggregations for all tickers simultaneously.
+        
+        This significantly reduces overhead compared to calling aggregate() per ticker
+        in a loop.
+
+        Returns:
+            Dict mapping ticker string to the standard 6-tuple returned by aggregate().
+        """
+        market_regime = getattr(context.macro, "market_regime", "")
+        effective_weights = resolve_regime_weights(
+            market_regime,
+            settings.REGIME_SIGNAL_WEIGHTS,
+            self.weights,
+        )
+
+        outputs = self.registry.compute_all_vectorized(universe_df, context)
+        meta_registry = _get_meta_registry()
+
+        final_scores = pd.Series(50.0, index=universe_df.index)
+        
+        ticker_results = {
+            ticker: {
+                "score_log": [],
+                "warnings": [],
+                "details": [],
+                "outputs": {},
+                "meta_log_sum": 0.0,
+                "meta_active_count": 0,
+                "meta_hard_gate": False
+            }
+            for ticker in universe_df.index
+        }
+
+        for name, df_out in outputs.items():
+            if name in settings.DISABLED_SIGNAL_MODULES:
+                continue
+            
+            module = self.registry.get(name)
+            if not module.is_active_in_regime(context.macro):
+                continue
+
+            weight = effective_weights.get(name, 0.0)
+            
+            contribs = df_out['score'] * weight
+            final_scores += contribs
+
+            # Vectorize Meta Label Proba
+            if meta_registry.has(name):
+                try:
+                    feat_df = universe_df.copy()
+                    feat_df["primary_score"] = df_out['score']
+                    labeler = meta_registry._labelers.get(name)
+                    if labeler:
+                        mlps = labeler.predict_proba(feat_df)
+                        df_out['meta_label_proba'] = mlps
+                except Exception as exc:
+                    logger.warning(
+                        "MetaLabelerRegistry vectorized predict failed: %s — defaulting to 1.0.", exc
+                    )
+
+            # Extract per-ticker items
+            for i, ticker in enumerate(universe_df.index):
+                t_res = ticker_results[ticker]
+                score_val = df_out.at[ticker, 'score']
+                conf_val = df_out.at[ticker, 'confidence']
+                expl_val = df_out.at[ticker, 'explanation']
+                mlp_val = df_out.at[ticker, 'meta_label_proba']
+                
+                out_obj = SignalOutput(
+                    score=float(score_val),
+                    confidence=float(conf_val),
+                    explanation=str(expl_val),
+                    meta_label_proba=float(mlp_val)
+                )
+                t_res["outputs"][name] = out_obj
+
+                mlp = max(1e-9, min(1.0, float(mlp_val)))
+                if mlp < settings.META_LABEL_MIN_CONFIDENCE:
+                    t_res["meta_hard_gate"] = True
+                
+                if not t_res["meta_hard_gate"]:
+                    t_res["meta_log_sum"] += math.log(mlp)
+                t_res["meta_active_count"] += 1
+
+                if out_obj.explanation:
+                    lines = out_obj.explanation.strip().split("\n")
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith("WARNING:"):
+                            t_res["warnings"].append(line[len("WARNING:"):].strip())
+                        elif line.startswith("DETAIL:"):
+                            t_res["details"].append(line[len("DETAIL:"):].strip())
+                        else:
+                            t_res["score_log"].append(line)
+
+        final_scores = final_scores.clip(lower=0.0, upper=100.0)
+        
+        result_dict = {}
+        for ticker in universe_df.index:
+            t_res = ticker_results[ticker]
+            if t_res["meta_hard_gate"]:
+                meta_comp = 0.0
+            elif t_res["meta_active_count"] > 0:
+                meta_comp = math.exp(t_res["meta_log_sum"] / t_res["meta_active_count"])
+            else:
+                meta_comp = 1.0
+                
+            result_dict[ticker] = (
+                float(final_scores.at[ticker]),
+                t_res["score_log"],
+                t_res["warnings"],
+                t_res["details"],
+                t_res["outputs"],
+                meta_comp
+            )
+            
+        return result_dict

@@ -210,7 +210,8 @@ class StrategyEngine:
                           sma_5: Optional[float] = None,
                           strategy_id: Optional[str] = None,
                           robinhood_position: Optional[RobinhoodPositionDTO] = None,
-                          context_extras: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                          context_extras: Optional[Dict[str, Any]] = None,
+                          precomputed_signal_tuple: Optional[tuple] = None) -> Dict[str, Any]:
         """
         Executes multi-phase quantitative scoring across the security.
         Synthesizes technical, fundamental, macro, and volatility factors to produce
@@ -277,11 +278,15 @@ class StrategyEngine:
             context.multifactor_scores = context_extras.get('multifactor_scores', {})
 
         # 2. Run weighted aggregation
-        aggregator = SignalAggregator(global_registry)
-        # aggregate() returns a 6-tuple; the 6th element (meta_label_composite)
-        # is a Stage 4 placeholder — geometric mean of active modules'
-        # meta_label_proba values, always 1.0 until real meta-labels are wired.
-        final_score_raw, score_log, warnings, details, outputs, meta_label_composite = aggregator.aggregate(row, context)
+        if precomputed_signal_tuple is not None:
+            final_score_raw, score_log, warnings, details, outputs, meta_label_composite = precomputed_signal_tuple
+        else:
+            aggregator = SignalAggregator(global_registry)
+            # aggregate() returns a 6-tuple; the 6th element (meta_label_composite)
+            # is a Stage 4 placeholder — geometric mean of active modules'
+            # meta_label_proba values, always 1.0 until real meta-labels are wired.
+            final_score_raw, score_log, warnings, details, outputs, meta_label_composite = aggregator.aggregate(row, context)
+            
         final_score = int(round(final_score_raw))
 
         # ---------------------------------------------------------------------

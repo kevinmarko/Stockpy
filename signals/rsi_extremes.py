@@ -13,6 +13,31 @@ class RSIExtremesSignal(SignalModule):
     name = "rsi_extremes"
     required_features = []
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        points = pd.Series(0.0, index=df.index)
+        exps = pd.Series("", index=df.index)
+        
+        if "rsi" in df.columns:
+            rsi_val = df["rsi"]
+            valid = rsi_val.notna()
+            
+            cond_low = valid & (rsi_val < 30)
+            cond_high = valid & (rsi_val > 70)
+            
+            points[cond_low] = 20.0
+            exps[cond_low] = "+20pts: RSI < 30 (Mean Reversion)"
+            
+            points[cond_high] = -20.0
+            exps[cond_high] = "-20pts: RSI > 70 (Overbought)"
+            
+        score = points / 20.0
+        return pd.DataFrame({
+            "score": score,
+            "confidence": 1.0,
+            "explanation": exps,
+            "meta_label_proba": 1.0
+        }, index=df.index)
+
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         rsi = row.get("rsi")
         points = 0.0

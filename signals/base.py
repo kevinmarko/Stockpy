@@ -156,6 +156,37 @@ class SignalModule(ABC):
             mutated in-place.
         """
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        """Executes signal calculation logic in bulk across a universe DataFrame.
+
+        Default implementation falls back to calling the scalar `compute()` method
+        row-by-row. Modules that can be vectorized should override this method
+        to perform pandas/numpy operations directly.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            One row per ticker containing all indicator features.
+        context : SignalContext
+            Global macro, market, and fundamental data (and xsec ranks).
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with the same index as `df`, and columns:
+            ['score', 'confidence', 'explanation', 'meta_label_proba']
+        """
+        results = df.apply(lambda row: self.compute(row, context), axis=1)
+        # Convert list of SignalOutput objects into a DataFrame
+        return pd.DataFrame([
+            {
+                "score": r.score,
+                "confidence": r.confidence,
+                "explanation": r.explanation,
+                "meta_label_proba": r.meta_label_proba
+            } for r in results
+        ], index=df.index)
+
     @abstractmethod
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         """Executes signal calculation logic on a single security observation.
