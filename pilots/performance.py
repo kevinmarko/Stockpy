@@ -5,6 +5,18 @@ backtest summary off disk (``reports/<validation_strategy_id>_validation_summary
 the JSON produced by ``validation.harness.ValidationReport.to_summary_dict()``)
 and surfaces the headline metrics for the marketplace list and Pilot-detail page.
 
+**Per-Pilot equity curve (D2 decision, 2026-07-13):** ``pilot_performance()``
+also attempts to read ``reports/<validation_strategy_id>_equity_curve.json``
+(written by ``validation.harness.StrategyValidationHarness._write_equity_curve``)
+— the 60/40 walk-forward split's HELD-OUT, out-of-sample test-period returns,
+converted to a cumulative equity series. This is deliberately NOT the
+full-sample curve used for the headline Sharpe/Sortino/Calmar metrics, which
+is fit by selecting the best IN-SAMPLE Sharpe over the whole window and would
+be misleading to present as "the Pilot's track record". A strategy validated
+before this file existed (or whose validation run degraded to an empty
+returns series) has no equity-curve file yet; ``curve`` stays honestly
+``None`` with an explanatory ``reason`` until the next validation run.
+
 Design constraints (mirror the wider codebase conventions):
 
 * **Dependency-light** — imports only ``settings`` + stdlib. NEVER imports the
@@ -13,8 +25,8 @@ Design constraints (mirror the wider codebase conventions):
 * **Never fabricate** (CONSTRAINT #4) — when a Pilot has no ``validation_strategy_id``,
   or its summary file is missing/unreadable, we return ``metrics=None`` /
   ``curve=None`` with an honest ``reason`` string. We NEVER synthesize a curve
-  or invent metrics. No per-range equity curve is persisted yet, so ``curve`` is
-  always ``None`` and ``range`` is echoed for API symmetry only.
+  or invent metrics; when a real curve file exists it is filtered by
+  ``range`` (never extrapolated beyond what's persisted) before being returned.
 * **Dead-letter resilient** (CONSTRAINT #6) — a missing/corrupt file degrades to
   ``None``, never an exception.
 """
@@ -22,8 +34,9 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from settings import settings
 
@@ -31,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "load_validation_summary",
+    "load_equity_curve",
     "pilot_performance",
     "pilot_headline",
 ]
@@ -38,6 +52,19 @@ __all__ = [
 # The five headline fields surfaced on the marketplace list / detail badge.
 # Kept as a module constant so the headline helper and the detail path agree.
 _HEADLINE_KEYS = ("sharpe", "dsr", "pbo", "max_drawdown", "deployable")
+
+# Maps the API's ?range= values to a lookback window in calendar days, for
+# slicing the persisted equity curve. A range longer than the persisted
+# history is NOT an error -- we just return whatever's actually there
+# (never fabricate history beyond what was validated).
+_RANGE_DAYS = {
+    "1W": 7,
+    "1M": 30,
+    "3M": 91,
+    "6M": 182,
+    "1Y": 365,
+    "2Y": 730,
+}
 
 
 def _reports_dir(reports_dir: Optional[str]) -> Path:
@@ -112,6 +139,66 @@ def pilot_headline(pilot: Any, reports_dir: Optional[str] = None) -> Dict[str, A
     return headline
 
 
+def load_equity_curve(
+    strategy_id: str,
+    reports_dir: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Read ``<reports_dir>/<strategy_id>_equity_curve.json``.
+
+    Returns the raw ``{"strategy", "source", "note", "points"}`` dict (see
+    ``validation.harness.StrategyValidationHarness._write_equity_curve``) or
+    ``None`` when the file is absent, empty, unreadable, malformed, or has no
+    points -- NEVER raises (CONSTRAINT #6), and never synthesizes points that
+    aren't actually on disk (CONSTRAINT #4).
+    """
+    if not strategy_id:
+        return None
+    path = _reports_dir(reports_dir) / f"{strategy_id}_equity_curve.json"
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        logger.debug("load_equity_curve(%s): unreadable %s: %s", strategy_id, path, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    points = data.get("points")
+    if not isinstance(points, list) or not points:
+        return None
+    return data
+
+
+def _filter_curve_by_range(points: List[Dict[str, Any]], range: str) -> List[Dict[str, Any]]:  # noqa: A002
+    """Slice ``points`` (sorted ascending by date) to the trailing window
+    named by ``range``. An unrecognized ``range`` or a window longer than the
+    persisted history returns every point unfiltered -- we only ever narrow
+    what's on disk, never widen/fabricate it."""
+    days = _RANGE_DAYS.get(range)
+    if not days or not points:
+        return points
+    try:
+        last_date = datetime.strptime(points[-1]["date"], "%Y-%m-%d")
+    except (KeyError, ValueError):
+        return points
+    cutoff = last_date - timedelta(days=days)
+    filtered = [
+        p for p in points
+        if _safe_parse_date(p.get("date")) is not None and _safe_parse_date(p["date"]) >= cutoff
+    ]
+    return filtered or points
+
+
+def _safe_parse_date(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 def pilot_performance(
     pilot: Any,
     range: str = "1M",  # noqa: A002 - matches the ?range= API query param name
@@ -119,17 +206,20 @@ def pilot_performance(
 ) -> Dict[str, Any]:
     """Return a Pilot's performance payload for the detail / performance endpoint.
 
-    Shape: ``{"metrics": {...} | None, "curve": None, "benchmark": None,
-    "reason": str | None, "range": str}``.
+    Shape: ``{"metrics": {...} | None, "curve": [{"date","value"}, ...] | None,
+    "benchmark": None, "reason": str | None, "range": str}``.
 
     * ``metrics`` is the full validated summary dict when available, else
       ``None``.
-    * ``curve`` and ``benchmark`` are always ``None`` in v1 — no per-Pilot
-      equity series is persisted yet, and we NEVER synthesize one (CONSTRAINT #4).
+    * ``curve`` is the persisted out-of-sample equity curve (see the module
+      docstring's D2 decision) filtered to ``range``, or ``None`` when no
+      curve has been persisted yet for this strategy -- we NEVER synthesize
+      one (CONSTRAINT #4). ``benchmark`` stays ``None`` in v1 (no benchmark
+      series is persisted alongside the curve yet).
     * ``reason`` is an honest human-readable explanation whenever ``metrics`` or
       ``curve`` is unavailable, else ``None``.
-    * ``range`` is echoed for API symmetry; since no per-range curve exists it
-      does not change the output.
+    * ``range`` is echoed for API symmetry and used to slice ``curve`` when
+      one exists.
     """
     strategy_id = getattr(pilot, "validation_strategy_id", None)
 
@@ -155,11 +245,22 @@ def pilot_performance(
             "range": range,
         }
 
-    # Metrics exist; curve does not (never persisted per-Pilot yet).
+    # Metrics exist. Attempt the persisted out-of-sample equity curve too.
+    curve_data = load_equity_curve(strategy_id, reports_dir=reports_dir)
+    if curve_data is None:
+        return {
+            "metrics": summary,
+            "curve": None,
+            "benchmark": None,
+            "reason": "no backtest series persisted",
+            "range": range,
+        }
+
+    filtered_points = _filter_curve_by_range(curve_data["points"], range)
     return {
         "metrics": summary,
-        "curve": None,
+        "curve": filtered_points,
         "benchmark": None,
-        "reason": "no backtest series persisted",
+        "reason": curve_data.get("note", "out-of-sample walk-forward equity curve"),
         "range": range,
     }

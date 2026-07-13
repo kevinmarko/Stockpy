@@ -520,11 +520,23 @@ class StrategyValidationHarness:
         
         # 3. Walk-Forward Stability Checks (60/40, 70/30, 80/20)
         wf_sharpes = {}
+        # D2 decision: the per-Pilot equity curve persisted below is sourced
+        # from the 60/40 split's HELD-OUT test-period returns (genuinely
+        # out-of-sample), not the full-sample curve computed in step 5 below.
+        # The full-sample curve there is fit by selecting the best
+        # IN-SAMPLE Sharpe across strategy_fn(X, y, X, y) — i.e. train==test
+        # over the whole window — which is exactly the kind of rosy,
+        # overfitting-prone curve DSR/PBO exist to flag. Showing that as "the
+        # Pilot's track record" would be misleading even though the numbers
+        # are real. The 60/40 split is chosen over 70/30 / 80/20 because it
+        # has the longest held-out test window of the three, while still
+        # being a genuine train-then-test split (never seen during fitting).
+        oos_curve_returns: Optional[pd.Series] = None
         for split_pct in [0.60, 0.70, 0.80]:
             split_idx = int(n_samples * split_pct)
             X_train, y_train = X.iloc[:split_idx], y.iloc[:split_idx]
             X_test, y_test = X.iloc[split_idx:], y.iloc[split_idx:]
-            
+
             trials = self.strategy_fn(X_train, y_train, X_test, y_test)
             if trials:
                 # Find best in-sample configuration
@@ -540,6 +552,8 @@ class StrategyValidationHarness:
                 net_test_returns = self._apply_cost_model(best_trial["test_returns"], turnover=turnover)
                 wf_sr = sharpe_ratio(net_test_returns)
                 wf_sharpes[split_pct] = wf_sr if not np.isnan(wf_sr) else 0.0
+                if split_pct == 0.60:
+                    oos_curve_returns = net_test_returns
             else:
                 wf_sharpes[split_pct] = 0.0
 
@@ -640,6 +654,14 @@ class StrategyValidationHarness:
         # summary must already be present for it to participate.
         self._write_json_summary(report)
 
+        # 6a2. Persist the out-of-sample equity curve consumed by
+        # pilots/performance.py's Pilot-detail perf chart (D2 decision — see
+        # the comment above the walk-forward loop in step 3). A SEPARATE
+        # sibling file, not a key inside to_summary_dict(), so the per-run
+        # history JSONL (_append_validation_history below) stays scalar-only
+        # and doesn't grow unbounded with a full return series every run.
+        self._write_equity_curve(report, oos_curve_returns)
+
         # 6b. Opportunistic family-wise multiple-testing correction (Benjamini-
         # Hochberg + family-corrected DSR) across every strategy validation
         # summary currently on disk — see validation/multiple_testing.py and
@@ -695,6 +717,69 @@ class StrategyValidationHarness:
             import logging
             logging.getLogger(__name__).warning(
                 "Failed to write validation JSON summary: %s", exc
+            )
+
+    def _write_equity_curve(
+        self, report: "ValidationReport", oos_returns: Optional[pd.Series]
+    ) -> None:
+        """Write the persisted per-Pilot equity curve to
+        reports/<strategy_id>_equity_curve.json, consumed by
+        pilots/performance.py::pilot_performance().
+
+        ``oos_returns`` is the 60/40 walk-forward split's HELD-OUT
+        test-period net-of-cost returns (see the D2 decision comment above
+        the walk-forward loop in run()) — genuinely out-of-sample, unlike
+        the full-sample curve used for the headline Sharpe/Sortino/Calmar
+        metrics. Dead-letter safe: any failure, or an empty/None returns
+        series, skips the write entirely rather than persisting a
+        fabricated or misleading curve (CONSTRAINT #4) —
+        pilots/performance.py already degrades gracefully (curve=None) when
+        this file is absent.
+        """
+        if oos_returns is None:
+            return
+        clean_returns = oos_returns.dropna()
+        if clean_returns.empty:
+            return
+        try:
+            import json
+            from pathlib import Path
+
+            equity = (1.0 + clean_returns).cumprod()
+            points = [
+                {
+                    "date": idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
+                    "value": float(val),
+                }
+                for idx, val in equity.items()
+            ]
+            reports_dir = Path(self.reports_dir)
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = report.name.replace(" ", "_").replace("/", "_")
+            dest = reports_dir / f"{safe_name}_equity_curve.json"
+            dest.write_text(
+                json.dumps(
+                    {
+                        "strategy": report.name,
+                        "source": "walk_forward_60_40_test_period",
+                        "note": (
+                            "Out-of-sample equity curve from the 60% train / "
+                            "40% held-out test walk-forward split, net of "
+                            "transaction costs. This is NOT the full-sample "
+                            "backtest curve used for the headline Sharpe/"
+                            "Sortino/Calmar metrics -- see dsr/pbo on the "
+                            "validation summary for full-sample overfitting risk."
+                        ),
+                        "points": points,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to write equity curve: %s", exc
             )
 
     def _append_validation_history(self, report: "ValidationReport") -> None:

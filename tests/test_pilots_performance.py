@@ -13,6 +13,7 @@ import pytest
 
 from pilots.catalog import get_pilot
 from pilots.performance import (
+    load_equity_curve,
     load_validation_summary,
     pilot_headline,
     pilot_performance,
@@ -150,3 +151,80 @@ class TestPilotPerformance:
         perf = pilot_performance(_Empty(), reports_dir=FIXTURES_DIR)
         assert perf["metrics"] is None
         assert perf["reason"] == "no validated backtest for this pilot"
+
+
+class _CurvePilot:
+    """Bare pilot-shaped object pointing at the curve_test_strategy fixture
+    pair (both _validation_summary.json and _equity_curve.json exist)."""
+    validation_strategy_id = "curve_test_strategy"
+
+
+# ---------------------------------------------------------------------------
+# load_equity_curve
+# ---------------------------------------------------------------------------
+class TestLoadEquityCurve:
+    def test_hit_returns_parsed_dict_with_points(self):
+        curve = load_equity_curve("curve_test_strategy", reports_dir=FIXTURES_DIR)
+        assert curve is not None
+        assert curve["source"] == "walk_forward_60_40_test_period"
+        assert len(curve["points"]) == 12
+        assert curve["points"][0] == {"date": "2024-01-01", "value": 1.0}
+
+    def test_miss_returns_none(self):
+        assert load_equity_curve("does_not_exist", reports_dir=FIXTURES_DIR) is None
+
+    def test_empty_strategy_id_returns_none(self):
+        assert load_equity_curve("", reports_dir=FIXTURES_DIR) is None
+
+    def test_no_points_key_returns_none(self, tmp_path):
+        (tmp_path / "no_points_equity_curve.json").write_text(
+            json.dumps({"strategy": "no_points", "source": "x"}), encoding="utf-8"
+        )
+        assert load_equity_curve("no_points", reports_dir=str(tmp_path)) is None
+
+    def test_empty_points_list_returns_none(self, tmp_path):
+        (tmp_path / "empty_points_equity_curve.json").write_text(
+            json.dumps({"strategy": "empty_points", "points": []}), encoding="utf-8"
+        )
+        assert load_equity_curve("empty_points", reports_dir=str(tmp_path)) is None
+
+    def test_corrupt_file_returns_none(self, tmp_path):
+        bad = tmp_path / "broken_equity_curve.json"
+        bad.write_text("{not valid json", encoding="utf-8")
+        assert load_equity_curve("broken", reports_dir=str(tmp_path)) is None
+
+
+# ---------------------------------------------------------------------------
+# pilot_performance — with a persisted equity curve
+# ---------------------------------------------------------------------------
+class TestPilotPerformanceWithCurve:
+    def test_curve_present_returns_points_and_honest_reason(self):
+        perf = pilot_performance(_CurvePilot(), range="2Y", reports_dir=FIXTURES_DIR)
+        assert perf["metrics"] is not None
+        assert perf["curve"] is not None
+        assert len(perf["curve"]) == 12
+        assert perf["benchmark"] is None
+        assert "out-of-sample" in perf["reason"].lower()
+        assert "full-sample" in perf["reason"].lower()
+
+    def test_range_filters_the_curve_tail(self):
+        # Fixture spans 2024-01-01..2024-12-01 monthly points. A 3-month
+        # range should keep only the trailing ~3 points, never fabricate more.
+        perf = pilot_performance(_CurvePilot(), range="3M", reports_dir=FIXTURES_DIR)
+        assert perf["curve"] is not None
+        assert len(perf["curve"]) < 12
+        assert perf["curve"][-1]["date"] == "2024-12-01"
+        assert perf["curve"][0]["date"] >= "2024-09-01"
+
+    def test_range_wider_than_history_returns_everything_not_fabricated(self):
+        perf = pilot_performance(_CurvePilot(), range="2Y", reports_dir=FIXTURES_DIR)
+        assert perf["curve"] is not None
+        assert len(perf["curve"]) == 12  # everything on disk, nothing extrapolated
+
+    def test_no_curve_fixture_still_honest_null(self):
+        # trend-following -> timeseries_momentum has a summary but no curve fixture.
+        pilot = get_pilot("trend-following")
+        perf = pilot_performance(pilot, reports_dir=FIXTURES_DIR)
+        assert perf["metrics"] is not None
+        assert perf["curve"] is None
+        assert perf["reason"] == "no backtest series persisted"

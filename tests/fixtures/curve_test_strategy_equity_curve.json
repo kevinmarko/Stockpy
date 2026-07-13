@@ -1,0 +1,19 @@
+{
+  "strategy": "curve_test_strategy",
+  "source": "walk_forward_60_40_test_period",
+  "note": "Out-of-sample equity curve from the 60% train / 40% held-out test walk-forward split, net of transaction costs. This is NOT the full-sample backtest curve used for the headline Sharpe/Sortino/Calmar metrics -- see dsr/pbo on the validation summary for full-sample overfitting risk.",
+  "points": [
+    {"date": "2024-01-01", "value": 1.0},
+    {"date": "2024-02-01", "value": 1.02},
+    {"date": "2024-03-01", "value": 1.05},
+    {"date": "2024-04-01", "value": 1.03},
+    {"date": "2024-05-01", "value": 1.07},
+    {"date": "2024-06-01", "value": 1.10},
+    {"date": "2024-07-01", "value": 1.09},
+    {"date": "2024-08-01", "value": 1.12},
+    {"date": "2024-09-01", "value": 1.15},
+    {"date": "2024-10-01", "value": 1.18},
+    {"date": "2024-11-01", "value": 1.20},
+    {"date": "2024-12-01", "value": 1.23}
+  ]
+}

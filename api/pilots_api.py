@@ -322,8 +322,10 @@ def get_pilot_performance(
     range: str = Query("1M"),  # noqa: A002 - matches the ?range= query param name
 ) -> Dict[str, Any]:
     """Honest backtest performance for a Pilot. 404 on unknown Pilot, 422 on an
-    out-of-set ``range``. ``curve`` is always ``null`` (no per-range series is
-    persisted yet) — never synthesized (CONSTRAINT #4)."""
+    out-of-set ``range``. ``curve`` is the persisted out-of-sample walk-forward
+    equity curve (see ``pilots.performance``'s D2 decision) filtered to
+    ``range`` when one has been persisted for this strategy, else ``null`` —
+    never synthesized (CONSTRAINT #4)."""
     pilot = catalog.get_pilot(pilot_id)
     if pilot is None:
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)

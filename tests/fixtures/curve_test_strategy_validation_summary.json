@@ -1,0 +1,17 @@
+{
+  "strategy_id": "curve_test_strategy",
+  "deployable": true,
+  "family_deployable": true,
+  "family_bh_significant": true,
+  "pbo": 0.22,
+  "dsr": 0.961,
+  "sharpe": 0.98,
+  "max_drawdown": 0.141,
+  "is_options_selling": false,
+  "stress_gate_passed": true,
+  "start_date": "2005-01-01",
+  "end_date": "2024-12-31",
+  "report_date": "2026-07-13",
+  "n_trials": 12,
+  "family_multiple_testing": null
+}
