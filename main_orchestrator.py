@@ -658,6 +658,80 @@ def _validate_dashboard(final_df, *, strict: bool) -> bool:
         return False
 
 
+def _build_daily_summary(ctx) -> "tuple[dict, list]":
+    """Build the ``(pnl_summary, warnings)`` pair for the end-of-cycle summary
+    from state the just-completed cycle already produced.
+
+    Both halves degrade to safe empties on any failure (CONSTRAINT #6) — the
+    summary is a diagnostic, never a source of fabricated numbers (CONSTRAINT
+    #4). ``pnl_summary`` is realized P&L by strategy for trades CLOSED today
+    (empty when no round-trip closed this session → the dispatcher renders a
+    "no closed trades today" line). ``warnings`` surfaces macro-gate and
+    empty-signal conditions read straight off ``ctx``.
+    """
+    pnl_summary: dict = {}
+    warnings: list = []
+
+    # --- Realized P&L by strategy, for trades closed today (UTC) ---
+    try:
+        from transactions_store import TransactionsStore
+
+        closed = TransactionsStore().closed_trades_df()
+        if closed is not None and not closed.empty:
+            closed = closed.copy()
+            closed["exit_ts"] = pd.to_datetime(closed["exit_ts"], errors="coerce")
+            today = pd.Timestamp(datetime.now(timezone.utc).date())
+            todays = closed[closed["exit_ts"].dt.normalize() == today]
+            for _, tr in todays.iterrows():
+                try:
+                    entry = float(tr["entry_price"])
+                    exit_ = float(tr["exit_price"])
+                    shares = float(tr["shares"])
+                    direction = -1.0 if str(tr.get("side", "long")).lower() == "short" else 1.0
+                    realized = (exit_ - entry) * shares * direction
+                    strat = str(tr.get("strategy") or "unattributed")
+                    pnl_summary[strat] = pnl_summary.get(strat, 0.0) + realized
+                except Exception:
+                    # One malformed row must not drop the whole summary.
+                    continue
+    except Exception as exc:
+        telemetry.debug("Daily summary: P&L aggregation skipped: %s", exc)
+
+    # --- Operational warnings read off the cycle state ---
+    try:
+        macro_dto = getattr(ctx, "macro_dto", None)
+        if macro_dto is not None:
+            if getattr(macro_dto, "killSwitch", False):
+                warnings.append(
+                    f"Macro kill-switch condition active (regime: "
+                    f"{getattr(macro_dto, 'market_regime', 'UNKNOWN')})."
+                )
+    except Exception as exc:
+        telemetry.debug("Daily summary: macro warning check skipped: %s", exc)
+
+    try:
+        df = getattr(ctx, "dashboard_df", None)
+        if df is None or (hasattr(df, "empty") and df.empty):
+            warnings.append("No signals were produced this cycle (empty dashboard).")
+    except Exception as exc:
+        telemetry.debug("Daily summary: dashboard warning check skipped: %s", exc)
+
+    return pnl_summary, warnings
+
+
+def _dispatch_daily_summary(ctx) -> None:
+    """Compose and dispatch the end-of-cycle summary through the multi-channel
+    alert dispatcher (``observability.alerts.send_daily_summary``).
+
+    Imported lazily (repo convention) to avoid any import cycle. Wrapped by the
+    caller in try/except so this is strictly non-fatal.
+    """
+    pnl_summary, warnings = _build_daily_summary(ctx)
+    from observability.alerts import send_daily_summary
+
+    send_daily_summary(pnl_summary, warnings)
+
+
 async def _main_body(effective_dry_run: bool, strict: bool = False,
                       *, engines: Optional[EngineContext] = None,
                       data_engine: Optional[Any] = None) -> None:
@@ -737,8 +811,16 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
 
     if ctx.dashboard_df is not None:
         _validate_dashboard(ctx.dashboard_df, strict=strict)
-    
+
     telemetry.info("✅ Master Orchestration finished successfully.")
+
+    # End-of-cycle summary through the hardened multi-channel alert dispatcher.
+    # Non-fatal: a summary-dispatch failure must never fail an otherwise
+    # successful pipeline cycle (CONSTRAINT #6).
+    try:
+        _dispatch_daily_summary(ctx)
+    except Exception as exc:
+        telemetry.warning("Daily summary dispatch failed (non-fatal): %s", exc)
 
 
 

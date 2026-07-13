@@ -219,3 +219,40 @@ def test_empty_both_sides_ok():
     assert report.ok
     assert report.broker_positions_count == 0
     assert report.internal_positions_count == 0
+
+
+def test_drift_routes_through_multichannel_alert():
+    """Drift dispatches through observability.alerts.send_alert at CRITICAL.
+
+    (Full coverage of the unified-alerting wiring lives in
+    tests/test_execution_alerts.py; this is a minimal in-place guard so a
+    regression here fails the reconciliation suite too.)"""
+    from unittest import mock
+
+    broker = PositionMockBroker([_pos("MSFT", 3.0)])
+    ts = _mock_ts({})  # MSFT drift
+    om = OrderManager(broker, dry_run=True)
+
+    with mock.patch("observability.alerts.send_alert") as m_alert:
+        report = asyncio.run(om.reconcile_state(ts))
+
+    assert report.has_drift
+    assert m_alert.called
+    assert m_alert.call_args[0][0] == "CRITICAL"
+
+
+def test_raising_alert_path_does_not_break_reconcile():
+    """A raising send_alert must not set report.error or raise (dead-letter)."""
+    from unittest import mock
+
+    broker = PositionMockBroker([_pos("MSFT", 3.0)])
+    ts = _mock_ts({})
+    om = OrderManager(broker, dry_run=True)
+
+    with mock.patch(
+        "observability.alerts.send_alert", side_effect=RuntimeError("boom")
+    ):
+        report = asyncio.run(om.reconcile_state(ts))
+
+    assert report.has_drift
+    assert report.error is None

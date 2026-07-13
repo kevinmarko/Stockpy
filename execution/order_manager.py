@@ -400,18 +400,63 @@ class OrderManager:
         return last_result  # type: ignore[return-value]
 
     async def _send_alert(self, report: ReconciliationReport) -> None:
-        """POST a JSON alert to the configured webhook URL (Slack/Discord)."""
+        """Dispatch a reconciliation-drift alert via two independent paths.
+
+        (1) The hardened multi-channel dispatcher
+            (``observability.alerts.send_alert``) at CRITICAL severity — its
+            console + file channels are always-on, plus discord/slack/email
+            when configured. This is the primary path and fires even when no
+            ``ALERT_WEBHOOK_URL`` is set.
+        (2) The legacy single ``ALERT_WEBHOOK_URL`` POST, kept for backward
+            compatibility.
+
+        The two paths are isolated so a failure in one never suppresses the
+        other, and this method never raises (dead-letter safe — reconciliation
+        must complete regardless of alert-channel health).
+        """
+        lines = [
+            f"*InvestYo RECONCILIATION DRIFT* — {report.timestamp.isoformat()}",
+            f"Broker positions: {report.broker_positions_count}",
+            f"Internal positions: {report.internal_positions_count}",
+        ] + [f"• {d.symbol}: {d.description}" for d in report.drift_items]
+        message = "\n".join(lines)
+
+        # (1) Multi-channel dispatcher. Imported lazily (repo convention) to
+        #     avoid any import cycle between execution/ and observability/.
+        #     send_alert() is itself dead-letter safe, but we still guard the
+        #     import + call so a broken observability module can never crash
+        #     reconcile_state.
+        try:
+            from observability.alerts import send_alert as _multichannel_alert
+
+            _multichannel_alert(
+                "CRITICAL",
+                message,
+                extra={
+                    "type": "reconciliation_drift",
+                    "broker_positions": report.broker_positions_count,
+                    "internal_positions": report.internal_positions_count,
+                    "drift": [
+                        {
+                            "symbol": d.symbol,
+                            "broker_qty": d.broker_qty,
+                            "internal_qty": d.internal_qty,
+                            "description": d.description,
+                        }
+                        for d in report.drift_items
+                    ],
+                },
+            )
+        except Exception as exc:
+            logger.warning("Multi-channel drift alert dispatch failed: %s", exc)
+
+        # (2) Legacy webhook POST — unchanged back-compat behavior.
         if not self._alert_url:
             return
         try:
             import urllib.request
 
-            lines = [
-                f"*InvestYo RECONCILIATION DRIFT* — {report.timestamp.isoformat()}",
-                f"Broker positions: {report.broker_positions_count}",
-                f"Internal positions: {report.internal_positions_count}",
-            ] + [f"• {d.symbol}: {d.description}" for d in report.drift_items]
-            payload = json.dumps({"text": "\n".join(lines)}).encode()
+            payload = json.dumps({"text": message}).encode()
             req = urllib.request.Request(
                 self._alert_url,
                 data=payload,
