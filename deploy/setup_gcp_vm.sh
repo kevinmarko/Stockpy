@@ -53,15 +53,13 @@ if ! id -u "${SERVICE_USER}" &>/dev/null; then
     useradd --system --create-home --shell /bin/bash "${SERVICE_USER}"
 fi
 
-# ─── 3. Clone Repository ─────────────────────────────────────────────────────
-echo "[3/8] Cloning repository to ${INSTALL_DIR}..."
-if [ -d "${INSTALL_DIR}" ]; then
-    echo "  → Directory exists, pulling latest..."
-    cd "${INSTALL_DIR}" && sudo -u "${SERVICE_USER}" git pull --rebase
-else
-    git clone "${REPO_URL}" "${INSTALL_DIR}"
-    chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
+# ─── 3. Copy Repository ─────────────────────────────────────────────────────
+echo "[3/8] Extracting repository to ${INSTALL_DIR}..."
+if [ ! -d "${INSTALL_DIR}" ]; then
+    mkdir -p "${INSTALL_DIR}"
 fi
+tar -xzf /tmp/investyo.tar.gz -C "${INSTALL_DIR}"
+chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
 # ─── 4. Python Virtual Environment ───────────────────────────────────────────
 echo "[4/8] Setting up Python virtual environment..."

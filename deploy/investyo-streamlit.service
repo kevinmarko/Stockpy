@@ -11,7 +11,7 @@ Group=investyo
 WorkingDirectory=/opt/investyo
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/opt/investyo/.env
-ExecStart=/opt/investyo/.venv/bin/python -m streamlit run gui/command_center.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
+ExecStart=/opt/investyo/.venv/bin/python -m streamlit run gui/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=60
@@ -20,7 +20,6 @@ StartLimitBurst=5
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
 ReadWritePaths=/opt/investyo
 PrivateTmp=true
 
