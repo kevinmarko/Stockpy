@@ -206,12 +206,39 @@ class PreTradeRiskGate:
         )
         heat = adverse_pl / context.account.equity
         if heat > self.max_portfolio_heat:
-            return RiskCheckResult(
-                name, False,
+            reason = (
                 f"portfolio heat {heat*100:.2f}% > limit {self.max_portfolio_heat*100:.2f}% — "
-                "halting new long exposure",
+                "halting new long exposure"
             )
+            self._alert_portfolio_heat(heat, intent.symbol)
+            return RiskCheckResult(name, False, reason)
         return RiskCheckResult(name, True, f"heat {heat*100:.2f}% ≤ {self.max_portfolio_heat*100:.2f}%")
+
+    def _alert_portfolio_heat(self, heat: float, symbol: str) -> None:
+        """Dispatch a WARNING alert when the portfolio-heat check blocks an order.
+
+        Only called from the failing branch of ``portfolio_heat_check`` — a
+        passing check is expected steady-state, not something an operator
+        needs paged about (that would itself be an alert-storm source).
+        ``dedup_key`` is intentionally NOT per-symbol: portfolio heat is a
+        single aggregate account-level condition (unlike per-symbol
+        correlation), so repeated blocks across different incoming symbols
+        while heat stays elevated should still collapse to one alert.
+        Lazy-imported and guarded per this codebase's dead-letter convention
+        (CONSTRAINT #6) — a broken alert channel must never affect the
+        already-computed risk-gate verdict.
+        """
+        try:
+            from observability.alerts import send_alert
+            send_alert(
+                "WARNING",
+                f"Portfolio heat {heat*100:.2f}% exceeds limit {self.max_portfolio_heat*100:.2f}% "
+                f"— new BUY for {symbol} blocked by pre-trade risk gate.",
+                extra={"type": "portfolio_heat", "heat": heat, "symbol": symbol},
+                dedup_key="portfolio_heat",
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("risk_gate: send_alert on portfolio_heat failed (%s)", exc)
 
     def max_correlation_check(
         self, intent: OrderIntent, context: RiskContext
@@ -238,11 +265,43 @@ class PreTradeRiskGate:
                 continue
             corr = float(new_ret.loc[common].corr(other_ret.loc[common]))
             if abs(corr) > self.max_correlation:
-                return RiskCheckResult(
-                    name, False,
-                    f"{new_sym} ↔ {sym}: |r|={abs(corr):.3f} > threshold {self.max_correlation:.2f}",
+                reason = (
+                    f"{new_sym} ↔ {sym}: |r|={abs(corr):.3f} > threshold {self.max_correlation:.2f}"
                 )
+                self._alert_correlation_concentration(new_sym, sym, corr)
+                return RiskCheckResult(name, False, reason)
         return RiskCheckResult(name, True, f"all pairwise |r| ≤ {self.max_correlation:.2f}")
+
+    def _alert_correlation_concentration(self, new_sym: str, existing_sym: str, corr: float) -> None:
+        """Dispatch a WARNING alert when the correlation check blocks an order.
+
+        Only called from the failing branch — a passing check is expected
+        steady-state and would create an alert storm if it also alerted.
+        ``dedup_key="correlation_concentration"`` is a single shared bucket
+        (not per-symbol-pair) since a concentrated portfolio tends to trip
+        this check across many candidate symbols simultaneously; alerting on
+        each pair individually would itself be the alert-storm this dedup
+        layer exists to prevent. Lazy-imported and guarded (CONSTRAINT #6) —
+        a broken alert channel must never affect the already-computed
+        risk-gate verdict.
+        """
+        try:
+            from observability.alerts import send_alert
+            send_alert(
+                "WARNING",
+                f"Single-name correlation concentration: {new_sym} ↔ {existing_sym} "
+                f"|r|={abs(corr):.3f} > threshold {self.max_correlation:.2f} — "
+                f"order for {new_sym} blocked by pre-trade risk gate.",
+                extra={
+                    "type": "correlation_concentration",
+                    "new_symbol": new_sym,
+                    "existing_symbol": existing_sym,
+                    "correlation": corr,
+                },
+                dedup_key="correlation_concentration",
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("risk_gate: send_alert on max_correlation failed (%s)", exc)
 
     def daily_loss_limit_check(
         self, intent: OrderIntent, context: RiskContext

@@ -36,12 +36,20 @@ Supported channels (all optional, controlled by `settings.*`):
 
 Public API
 ----------
-``send_alert(level, message, channels=None, extra=None)``
+``send_alert(level, message, channels=None, extra=None, dedup_key=None)``
     Dispatch a single alert.  ``channels=None`` uses every active channel.
+    Pass ``dedup_key`` to suppress repeated identical-condition alerts within
+    ``settings.ALERT_DEDUP_WINDOW_SECONDS`` — see "Dedup / rate-limiting"
+    below.
 
 ``send_daily_summary(pnl_summary, warnings)``
     Compose and dispatch a structured end-of-day summary.  Called from the
     orchestrator (or a cron job) after the last pipeline run of the session.
+
+``check_channel_health()``
+    Probe every currently-active channel with a lightweight, clearly-labeled
+    test dispatch and report per-channel reachability.  See "Channel
+    health-check" below.
 
 Alert-level contract (caller's responsibility to evaluate conditions):
   CRITICAL — kill switch activated, reconciliation drift detected, broker
@@ -49,6 +57,38 @@ Alert-level contract (caller's responsibility to evaluate conditions):
   WARNING  — portfolio heat approaching limit (>5%), single-name correlation
              concentration, large fill slippage versus the expected model cost.
   INFO     — order filled, daily rebalance complete, daily summary.
+
+Dedup / rate-limiting
+----------------------
+``send_alert()`` accepts an optional ``dedup_key: str`` parameter.  When
+supplied, a second call with the same key within
+``settings.ALERT_DEDUP_WINDOW_SECONDS`` (default 900s / 15 min) is suppressed
+(logged at DEBUG, dispatched to no channel) rather than re-firing an
+identical alert every time the caller re-evaluates a still-true condition
+(e.g. sustained portfolio heat on every pipeline cycle — the classic alert-
+storm failure mode). Dedup state is an in-process ``dict[str, float]``
+keyed by ``dedup_key`` (``time.monotonic()`` timestamps, never persisted to
+disk), matching this codebase's existing in-process-cache convention (see
+``data/market_data.py``'s ``_BarsCache``/``_FundamentalsCache``). This is
+intentionally NOT a durable audit trail — the ``file`` channel already
+provides that. Omitting ``dedup_key`` (the default) reproduces the exact
+pre-dedup always-fires behavior; this feature is purely additive.
+``reset_dedup_state()`` clears all dedup state — intended for test isolation.
+
+Two-system note (root ``alerting.py``)
+---------------------------------------
+This module is the general multi-channel dispatcher for strategy / risk /
+execution-layer alerts (CRITICAL / WARNING / INFO fanned out to Discord,
+Slack, email, the JSON-lines file log, and console). Root-level
+``alerting.py`` is a *separate, narrower* module: it owns ``main.py``'s
+advisory-loop mobile push notification (ntfy.sh) plus root-logger setup for
+that same entry point. The two modules are deliberately **not merged** — they
+serve genuinely different audiences and channels (a personal phone push vs.
+a team/ops channel dispatcher) and share no code. If you are adding a new
+alert trigger, use *this* module unless the alert is specifically a
+personal mobile push tied to ``main.py``'s advisory loop, in which case use
+``alerting.notify()`` instead. See ``alerting.py``'s module docstring for its
+own side of this cross-reference.
 """
 
 from __future__ import annotations
@@ -57,6 +97,7 @@ import json
 import logging
 import smtplib
 import ssl
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -83,6 +124,24 @@ _LEVEL_EMOJI: dict[str, str] = {
 # Canonical channel names understood by ``send_alert``.  Listed for reference
 # and for callers that want to enumerate all known channels.
 ALL_CHANNELS = ("console", "file", "discord", "slack", "email")
+
+# In-process TTL dedup state: dedup_key -> time.monotonic() of last DISPATCHED
+# (i.e. not itself suppressed) alert with that key. Never persisted to disk —
+# see the module docstring's "Dedup / rate-limiting" section. A fresh process
+# (e.g. after a restart) starts with empty state, which is the conservative
+# direction (a real condition can never be permanently silenced by a stale
+# on-disk timestamp).
+_dedup_state: dict[str, float] = {}
+
+
+def reset_dedup_state() -> None:
+    """Clear all in-process alert-dedup state.
+
+    Intended for test isolation (mirrors ``data/market_data.py``'s
+    ``reset_provider()`` pattern) — call this in a test's setup/teardown so
+    one test's ``dedup_key`` usage cannot suppress another test's alert.
+    """
+    _dedup_state.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +182,7 @@ def send_alert(
     message: str,
     channels: Optional[list[str]] = None,
     extra: Optional[dict[str, Any]] = None,
+    dedup_key: Optional[str] = None,
 ) -> None:
     """Dispatch an alert to one or more output channels.
 
@@ -143,6 +203,15 @@ def send_alert(
         Use this for machine-parseable metadata (symbol, strategy_id, etc.)
         that should be present in the JSON record but need not appear in the
         human-readable ``message``.
+    dedup_key:
+        Optional opt-in suppression key (see module docstring's "Dedup /
+        rate-limiting" section).  When provided and an alert with the same
+        key was already dispatched within ``settings.ALERT_DEDUP_WINDOW_SECONDS``,
+        this call is suppressed entirely (logged at DEBUG only — no channel
+        is touched). ``None`` (the default) means "always fire", identical to
+        this function's behavior before dedup existed. Use a key that is
+        stable for the *condition*, not the individual event, e.g.
+        ``dedup_key="kill_switch_activate"`` or ``dedup_key=f"heat_{symbol}"``.
 
     Side effects
     ------------
@@ -154,6 +223,19 @@ def send_alert(
     This function *never raises*.  Any channel-level error is caught, logged
     at ERROR level, and discarded so the calling pipeline is not interrupted.
     """
+    if dedup_key is not None:
+        now = time.monotonic()
+        last = _dedup_state.get(dedup_key)
+        window = settings.ALERT_DEDUP_WINDOW_SECONDS
+        if last is not None and (now - last) < window:
+            logger.debug(
+                "send_alert: suppressed duplicate [dedup_key=%s level=%s] — "
+                "last fired %.1fs ago (window=%ss)",
+                dedup_key, level, now - last, window,
+            )
+            return
+        _dedup_state[dedup_key] = now
+
     ts = datetime.now(timezone.utc).isoformat()
     targets = channels if channels is not None else _active_channels()
 
@@ -241,6 +323,77 @@ def send_daily_summary(
 
     message = "\n".join(lines)
     send_alert("INFO", message, extra={"type": "daily_summary", "pnl": pnl_summary})
+
+
+def check_channel_health() -> dict[str, dict[str, Any]]:
+    """Probe every currently-active channel with a lightweight test dispatch.
+
+    For each channel returned by ``_active_channels()``, attempt a clearly-
+    labeled INFO-level test send and report whether it succeeded.
+
+    This exists because, absent this function, an operator only discovers a
+    broken Discord/Slack webhook or a misconfigured SMTP relay when a REAL
+    alert silently fails — the failure is caught and logged at
+    ``logger.error`` inside ``send_alert()``, which is easy to miss in normal
+    log volume, especially in the middle of an actual incident when the
+    operator most needs the channel to work.
+
+    Implementation note
+    --------------------
+    This deliberately does NOT call ``send_alert()`` itself: ``send_alert()``
+    is intentionally, load-bearingly non-raising (see the module docstring's
+    "Failure isolation invariant") and does not report per-channel success —
+    that broad catch is exactly what makes a broken channel invisible to a
+    caller in the first place. To surface per-channel ``ok``/``error``,
+    ``check_channel_health()`` invokes the same ``_send_*`` implementations
+    ``send_alert()`` uses internally, but with its OWN try/except per
+    channel so a failure is captured rather than silently discarded.
+
+    Returns
+    -------
+    dict[str, dict]
+        ``{channel_name: {"ok": bool, "error": Optional[str]}}`` for every
+        channel in ``_active_channels()``. An empty-ish result (just
+        ``{"console": {"ok": True, "error": None}}``) means no other channel
+        is currently configured — ``console`` cannot meaningfully fail
+        (it is a local ``logging`` call, not network I/O).
+
+    Notes
+    -----
+    Never raises — a probe failure for one channel is captured in its own
+    dict entry and does not prevent the remaining channels from being probed
+    (CONSTRAINT #6). This function performs real outbound network calls (for
+    discord/slack/email) when those channels are configured; callers that
+    want a fully offline check should mock the relevant ``_send_*`` /
+    ``urllib.request.urlopen`` / ``smtplib.SMTP`` boundary, exactly as
+    ``tests/test_alerts.py`` already does for the channel-level tests.
+    """
+    ts = datetime.now(timezone.utc).isoformat()
+    message = "[Health Check] observability/alerts.py self-test — ignore"
+    results: dict[str, dict[str, Any]] = {}
+    for ch in _active_channels():
+        try:
+            if ch == "console":
+                _send_console("INFO", ts, message)
+            elif ch == "file":
+                _send_file({
+                    "timestamp": ts, "level": "INFO", "message": message,
+                    "type": "channel_health_check",
+                })
+            elif ch == "discord":
+                _send_discord("INFO", ts, message, None)
+            elif ch == "slack":
+                _send_slack("INFO", ts, message, None)
+            elif ch == "email":
+                _send_email("INFO", message, None)
+            else:
+                results[ch] = {"ok": False, "error": f"unknown channel {ch!r}"}
+                continue
+            results[ch] = {"ok": True, "error": None}
+        except Exception as exc:
+            logger.warning("check_channel_health: channel %r unreachable: %s", ch, exc)
+            results[ch] = {"ok": False, "error": str(exc)}
+    return results
 
 
 # ---------------------------------------------------------------------------

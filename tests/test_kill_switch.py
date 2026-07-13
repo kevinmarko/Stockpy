@@ -178,3 +178,68 @@ class TestOrderManagerKillSwitch:
         with pytest.raises(KillSwitchActiveError):
             asyncio.run(om.submit_order_with_idempotency(_buy_intent()))
         assert broker.submit_count == 0
+
+
+# ---------------------------------------------------------------------------
+# activate() -> observability.alerts.send_alert wiring (Phase O3)
+# ---------------------------------------------------------------------------
+
+class TestKillSwitchAlertDispatch:
+    """``GlobalKillSwitch.activate()`` must fire a CRITICAL alert via
+    ``observability.alerts.send_alert`` out-of-band from the ``logger.critical``
+    call, so an operator relying only on Discord/Slack/email (not tailing
+    logs) is still notified — the platform's single highest-value
+    observability gap per docs/OBSERVABILITY_PLAN.md.
+    """
+
+    def test_activate_calls_send_alert_critical(self, tmp_ks: GlobalKillSwitch):
+        from unittest import mock
+        with mock.patch("observability.alerts.send_alert") as m_alert:
+            tmp_ks.activate(reason="circuit breaker tripped")
+        assert m_alert.called
+        args, kwargs = m_alert.call_args
+        assert args[0] == "CRITICAL"
+        assert "circuit breaker tripped" in args[1]
+        assert kwargs.get("dedup_key") == "kill_switch_activate"
+
+    def test_deactivate_does_not_call_send_alert(self, tmp_ks: GlobalKillSwitch):
+        """Deactivation is a recovery action, not an incident — no alert expected."""
+        from unittest import mock
+        tmp_ks.activate(reason="setup")
+        with mock.patch("observability.alerts.send_alert") as m_alert:
+            tmp_ks.deactivate()
+        assert not m_alert.called
+
+    def test_raising_send_alert_does_not_prevent_activation(self, tmp_ks: GlobalKillSwitch):
+        """A broken alert dispatch must never stop the kill switch from activating —
+        the safety-critical action (writing the sentinel file) must always succeed."""
+        from unittest import mock
+        with mock.patch(
+            "observability.alerts.send_alert", side_effect=RuntimeError("webhook down")
+        ):
+            tmp_ks.activate(reason="test")  # must not raise
+        assert tmp_ks.is_active()
+
+    def test_repeated_activate_dedup_suppresses_after_first(self, tmp_ks: GlobalKillSwitch):
+        """activate() is idempotent and may be called repeatedly by a watchdog;
+        the real (non-mocked) send_alert's dedup_key must collapse repeat
+        activations within the TTL window to a single dispatched alert.
+
+        ``_active_channels`` is pinned to ``["console"]`` so this test is
+        deterministic regardless of whatever Discord/Slack/email settings
+        happen to be configured in the environment running the suite.
+        """
+        from observability.alerts import reset_dedup_state
+        reset_dedup_state()
+        calls: list[str] = []
+
+        def fake_console(level, ts, message):
+            calls.append(message)
+
+        from unittest import mock
+        with mock.patch("observability.alerts._active_channels", return_value=["console"]):
+            with mock.patch("observability.alerts._send_console", fake_console):
+                tmp_ks.activate(reason="first")
+                tmp_ks.activate(reason="second")  # same dedup_key, within window — suppressed
+        assert len(calls) == 1
+        reset_dedup_state()

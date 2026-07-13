@@ -474,6 +474,116 @@ class TestValidationReports:
         assert not r.passed
 
 
+class TestValidationReportsFireAlert:
+    """Phase O3: check_validation_reports(fire_alert=True) dispatches a
+    CRITICAL alert on FAIL via observability.alerts.send_alert (injectable
+    for tests, matching validation/drift.py's send_alert_fn pattern);
+    fire_alert=False (the default) never dispatches, even on FAIL.
+    """
+
+    def _bad_reports_dir(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        summary = {"strategy_id": "bad_strat", "deployable": False,
+                   "report_date": date.today().isoformat()}
+        (reports_dir / "bad_strat_validation_summary.json").write_text(
+            json.dumps(summary), encoding="utf-8"
+        )
+        return reports_dir
+
+    def test_fire_alert_false_never_dispatches_even_on_fail(self, tmp_path):
+        from scripts.preflight_check import check_validation_reports
+        self._bad_reports_dir(tmp_path)
+        calls = []
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_validation_reports(fire_alert=False, send_alert_fn=calls.append)
+        assert not r.passed
+        assert calls == []
+
+    def test_fire_alert_true_dispatches_critical_on_fail(self, tmp_path):
+        from scripts.preflight_check import check_validation_reports
+        self._bad_reports_dir(tmp_path)
+        calls = []
+
+        def fake_send(level, message, **kwargs):
+            calls.append((level, message, kwargs))
+
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_validation_reports(fire_alert=True, send_alert_fn=fake_send)
+        assert not r.passed
+        assert len(calls) == 1
+        level, message, kwargs = calls[0]
+        assert level == "CRITICAL"
+        assert "bad_strat" in message or "deployable" in kwargs.get("extra", {}).get("reason", "")
+        assert kwargs.get("dedup_key") == "validation_reports_missing"
+
+    def test_fire_alert_true_does_not_dispatch_on_pass(self, tmp_path):
+        from scripts.preflight_check import check_validation_reports
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        summary = {"strategy_id": "good_strat", "deployable": True,
+                   "report_date": date.today().isoformat()}
+        (reports_dir / "good_strat_validation_summary.json").write_text(
+            json.dumps(summary), encoding="utf-8"
+        )
+        calls = []
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_validation_reports(fire_alert=True, send_alert_fn=calls.append)
+        assert r.passed
+        assert calls == []
+
+    def test_raising_send_alert_fn_does_not_break_check_verdict(self, tmp_path):
+        """A broken alert dispatch must never change the check's own PASS/FAIL verdict."""
+        from scripts.preflight_check import check_validation_reports
+        self._bad_reports_dir(tmp_path)
+
+        def raising_send(*a, **kw):
+            raise RuntimeError("webhook down")
+
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            r = check_validation_reports(fire_alert=True, send_alert_fn=raising_send)
+        assert not r.passed  # verdict unaffected by the alert failure
+
+    def test_run_checks_threads_fire_alerts_flag(self, tmp_path):
+        """run_checks(fire_alerts=True) must reach check_validation_reports as fire_alert=True.
+
+        The stub is named exactly ``check_validation_reports`` (not e.g.
+        ``fake_check_validation_reports``) because ``run_checks`` matches on
+        ``fn.__name__.replace("check_", "")`` — an unrelated name would not
+        be routed through the special-cased ``fire_alert=`` kwarg at all,
+        silently making this test pass for the wrong reason.
+        """
+        from scripts.preflight_check import run_checks, CheckResult
+        captured = {}
+
+        def check_validation_reports(fire_alert=False):
+            captured["fire_alert"] = fire_alert
+            return CheckResult("validation_reports", True, "stub")
+
+        # ADVISORY_ONLY defaults to True in this project, which would
+        # auto-skip "validation_reports" via _ADVISORY_AUTO_SKIP before the
+        # stub is ever called — force it False so the check actually runs.
+        s = _settings(tmp_path, ADVISORY_ONLY=False)
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check.ALL_CHECKS", [check_validation_reports]):
+                run_checks(fire_alerts=True)
+        assert captured["fire_alert"] is True
+
+    def test_run_checks_default_fire_alerts_false(self, tmp_path):
+        from scripts.preflight_check import run_checks, CheckResult
+        captured = {}
+
+        def check_validation_reports(fire_alert=False):
+            captured["fire_alert"] = fire_alert
+            return CheckResult("validation_reports", True, "stub")
+
+        s = _settings(tmp_path, ADVISORY_ONLY=False)
+        with patch("scripts.preflight_check.settings", s):
+            with patch("scripts.preflight_check.ALL_CHECKS", [check_validation_reports]):
+                run_checks()
+        assert captured["fire_alert"] is False
+
+
 # ---------------------------------------------------------------------------
 # env_no_duplicate_keys
 # ---------------------------------------------------------------------------
@@ -1089,7 +1199,7 @@ class TestMainExitCode:
         """
         from scripts.preflight_check import main, CheckResult
 
-        def _one_fail(skip=None):
+        def _one_fail(skip=None, fire_alerts=False):
             return [CheckResult("fred_key_configured", False, "forced fail")]
 
         with patch("scripts.preflight_check.run_checks", _one_fail):
@@ -1252,3 +1362,80 @@ class TestAdvisoryAutoSkip:
         for name in _ADVISORY_AUTO_SKIP:
             assert by_name[name].passed, f"Expected {name} to be auto-skipped (PASS)"
             assert "ADVISORY_ONLY" in by_name[name].reason
+
+
+# ---------------------------------------------------------------------------
+# alert_channels_reachable (Phase O4)
+# ---------------------------------------------------------------------------
+
+class TestAlertChannelsReachable:
+    """check_alert_channels_reachable() is warning-only (never blocks the
+    overall gate) regardless of whether channels are healthy, broken, or the
+    health-check machinery itself raises.
+    """
+
+    def test_all_healthy_is_warning_only_pass(self):
+        from scripts.preflight_check import check_alert_channels_reachable
+        fake_health = lambda: {"console": {"ok": True, "error": None}}
+        with patch("observability.alerts.check_channel_health", fake_health):
+            r = check_alert_channels_reachable()
+        assert r.passed
+        assert r.warning is True
+
+    def test_broken_channel_still_passes_but_warns(self):
+        """A genuinely broken channel must not fail the overall preflight gate —
+        only surface as a warning so the operator can fix it before relying on it."""
+        from scripts.preflight_check import check_alert_channels_reachable
+        fake_health = lambda: {
+            "console": {"ok": True, "error": None},
+            "discord": {"ok": False, "error": "connection refused"},
+        }
+        with patch("observability.alerts.check_channel_health", fake_health):
+            r = check_alert_channels_reachable()
+        assert r.passed  # never blocking
+        assert r.warning is True
+        assert "discord" in r.reason
+        assert "connection refused" in r.reason
+
+    def test_no_channels_configured_passes(self):
+        from scripts.preflight_check import check_alert_channels_reachable
+        fake_health = lambda: {}
+        with patch("observability.alerts.check_channel_health", fake_health):
+            r = check_alert_channels_reachable()
+        assert r.passed
+        assert r.warning is True
+
+    def test_health_check_raising_degrades_to_warning_pass_never_fail(self):
+        """A broken health-check itself must not become a new failure mode for go-live."""
+        from scripts.preflight_check import check_alert_channels_reachable
+
+        def raising_health():
+            raise RuntimeError("observability module broken")
+
+        with patch("observability.alerts.check_channel_health", raising_health):
+            r = check_alert_channels_reachable()  # must not raise
+        assert r.passed
+        assert r.warning is True
+
+    def test_included_in_all_checks(self):
+        from scripts.preflight_check import ALL_CHECKS, check_alert_channels_reachable
+        assert check_alert_channels_reachable in ALL_CHECKS
+
+    def test_run_checks_never_fails_gate_on_broken_channel(self):
+        """End-to-end: a broken alert channel surfaces in run_checks() results
+        as warning=True and does not, by itself, cause main()'s exit code to
+        be 1 (warnings don't count toward the fail total).
+
+        ALL_CHECKS is patched to just this one check so the test is isolated
+        from every other check's environment requirements.
+        """
+        from scripts.preflight_check import run_checks, check_alert_channels_reachable
+        fake_health = lambda: {"discord": {"ok": False, "error": "timeout"}}
+        with patch("scripts.preflight_check.ALL_CHECKS", [check_alert_channels_reachable]):
+            with patch("observability.alerts.check_channel_health", fake_health):
+                results = run_checks(skip=[])
+        assert len(results) == 1
+        assert results[0].name == "alert_channels_reachable"
+        assert results[0].passed
+        assert results[0].warning
+        assert all(r.passed for r in results)  # exit-code-relevant condition

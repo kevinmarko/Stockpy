@@ -370,6 +370,19 @@ class Settings(BaseSettings):
     ALERT_SMTP_PORT: int = Field(default=587, description="SMTP server port (587=STARTTLS).")
     ALERT_SMTP_USER: Optional[str] = Field(default=None, description="SMTP authentication username.")
     ALERT_SMTP_PASSWORD: Optional[str] = Field(default=None, description="SMTP authentication password.")
+    ALERT_DEDUP_WINDOW_SECONDS: int = Field(
+        default=900,
+        description=(
+            "TTL (seconds) for observability.alerts.send_alert()'s optional "
+            "dedup_key suppression window. 900s (15 min) is chosen to be long "
+            "enough to absorb a tight retry/poll loop or a condition that "
+            "re-evaluates every pipeline cycle (an alert storm) while still "
+            "short enough that a genuinely new occurrence of the same "
+            "condition is re-surfaced well within a single trading session. "
+            "Only applies to callers that opt in via dedup_key; omitting it "
+            "reproduces the pre-dedup always-fires behavior exactly."
+        ),
+    )
     DASHBOARD_REFRESH_SECONDS: int = Field(
         default=1800, description="Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min."
     )
