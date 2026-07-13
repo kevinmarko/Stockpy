@@ -1126,9 +1126,10 @@ SECTION_HELP: Dict[str, str] = {
         "If the hash hasn't changed, the file was not modified since last deploy."
     ),
     "recommendation_tracking": (
-        "Measures whether your judgment adds alpha over the raw model signal: "
-        "model {N}-day return (conviction-weighted) vs your actual return "
-        "for 'Acted' entries in the Decision Journal."
+        "Model return = conviction-weighted paper return had you taken every BUY "
+        "signal and held for the horizon.  Operator return = average actual "
+        "closed-trade return from acted signals.  "
+        "**Delta > 0 → your judgment adds alpha over the model.**"
     ),
     "correlation_clusters": (
         "Groups your symbols by how correlated their returns are, using "
@@ -1192,6 +1193,48 @@ SECTION_HELP: Dict[str, str] = {
         f"Refreshes every {_PROGRESS_POLL_SECONDS} seconds while a run is "
         "active.  Advisory-only — no orders are placed; this only reflects "
         "analysis progress."
+    ),
+    "observability.snapshot_summary": (
+        "Summary of the file-backed state last written by the orchestrator."
+    ),
+    "observability.macro_gate_write": (
+        "Writes `MACRO_REGIME_GATE_ENABLED` to `.env` via `gui/env_io.py`.  "
+        "Change takes effect when the orchestrator next starts."
+    ),
+    "observability.recession_telemetry": (
+        "Values are sourced from the last orchestrator run's state snapshot "
+        "(FRED data).  They reflect conditions at pipeline execution time, "
+        "not real-time — run the orchestrator to refresh."
+    ),
+    "strategy_health_gates": (
+        "Sourced from `output/gravity_verification_report.json` (written by the "
+        "Gravity AI Review Suite). Evaluated against thresholds in "
+        "`validation/thresholds.py` — the same constants used by "
+        "`validation/harness.py`."
+    ),
+    "options.matrix_intro": (
+        "Hydrated premium-selling matrix: GJR-GARCH σ, realized-vol IVR proxy, "
+        "Aroon+Coppock trend bias, ATM Black-Scholes Greeks, and the "
+        "deterministic strategy directive with $0.50 strike-grid integrity checks."
+    ),
+    "options.matrix_methodology": (
+        "σ from GJR-GARCH(1,1) with 20-day realized fallback; **IVR proxy** is a "
+        "realized-vol percentile (true IVR requires an options chain). Trend bias is "
+        "Aroon+Coppock sign agreement. **Stale=True** marks delayed (~15 min) yfinance "
+        "quotes. Realizable Theta applies a DTE-scaled execution-friction haircut "
+        "(40% @ 1DTE, 22% @ 7DTE, 12% @ 30DTE, 5% baseline)."
+    ),
+    "strategy_matrix.signal_modules": (
+        "**Signal modules** — disable a module or adjust its weight; "
+        "saved to `.env` and honored by `SignalAggregator` on next run."
+    ),
+    "strategy_matrix.regime_multiplier_note": (
+        "Note: `regime_multiplier` must keep weight 0.0 — it carries the HMM "
+        "second opinion as a sizing multiplier, not a score."
+    ),
+    "report_viewer.llm_commentary_off": (
+        "LLM commentary is off.  Set `LLM_COMMENTARY_ENABLED=true` and "
+        "`ANTHROPIC_API_KEY=…` in `.env`, then relaunch the GUI."
     ),
 }
 
@@ -1506,6 +1549,16 @@ def get_glossary(term: str) -> Optional[GlossaryEntry]:
 def metric_help(key: str) -> str:
     """Return the tooltip string for column *key*, or empty string if unknown."""
     return METRIC_HELP.get(key, "")
+
+
+def section_help(key: str) -> str:
+    """Return the section-level explainer string for *key*, or empty string if unknown.
+
+    Mirrors :func:`metric_help` — an empty string is the correct sentinel for a
+    missing key (renders no caption, never raises — CONSTRAINT #6).  Never add a
+    default-fallback value here; ``""`` is the intended miss behaviour.
+    """
+    return SECTION_HELP.get(key, "")
 
 
 def search_glossary(query: str) -> List[GlossaryEntry]:

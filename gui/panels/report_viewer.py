@@ -104,10 +104,7 @@ def _render_llm_commentary_button(
     st.markdown("**🤖 Claude analyst commentary**")
 
     if status == "disabled":
-        st.caption(
-            "LLM commentary is off.  Set `LLM_COMMENTARY_ENABLED=true` and "
-            "`ANTHROPIC_API_KEY=…` in `.env`, then relaunch the GUI."
-        )
+        help_widgets.section_caption("report_viewer.llm_commentary_off")
         return
 
     if status == "missing_key":
@@ -485,11 +482,7 @@ def _render_recommendation_tracking_section() -> None:
 
     st.markdown("---")
     st.markdown("### 📊 Recommendation Tracking vs. Actual Decisions")
-    st.caption(
-        "Model return = conviction-weighted paper return had you taken every BUY signal "
-        "and held for the horizon.  Operator return = average actual closed-trade return "
-        "from acted signals.  **Delta > 0 → your judgment adds alpha over the model.**"
-    )
+    help_widgets.section_caption("recommendation_tracking")
 
     try:
         from evaluation_engine import recommendation_tracking_report

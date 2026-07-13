@@ -36,7 +36,7 @@ from typing import Any, Optional
 
 import streamlit as st
 
-from gui.help_content import get_tab_help, metric_help
+from gui.help_content import get_tab_help, metric_help, section_help
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,21 @@ def metric_with_help(label: str, value: Any, metric_key: str, **kw: Any) -> None
     """
     tip = metric_help(metric_key)
     st.metric(label, value, help=tip or None, **kw)
+
+
+def section_caption(section_key: str, **kw: Any) -> None:
+    """Render ``st.caption(section_help(section_key))`` for a section explainer.
+
+    The single-source-of-truth replacement for hard-coded explainer captions in
+    panels (see CLAUDE.md: "All operator-facing explainer prose MUST live in
+    ``gui/help_content.py``").  No-ops with a DEBUG log when *section_key* has no
+    entry in ``SECTION_HELP`` — never raises (CONSTRAINT #6).
+    """
+    body = section_help(section_key)
+    if not body:
+        logger.debug("section_caption: no SECTION_HELP entry for key=%r", section_key)
+        return
+    st.caption(body, **kw)
 
 
 def glossary_chip(term: str) -> None:

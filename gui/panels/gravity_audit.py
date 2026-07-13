@@ -112,10 +112,7 @@ def _render_circuit_breaker_dashboard() -> None:
     )
 
     st.markdown("### 🚧 Circuit Breaker Dashboard")
-    st.caption(
-        "Trips derived from `output/KILL_SWITCH` and `output/risk_gate_blocks.jsonl` "
-        "(last 24 h). Most recent per (breaker, strategy) shown."
-    )
+    help_widgets.section_caption("circuit_breaker_dashboard")
 
     trips = collect_circuit_breaker_trips(
         kill_switch_sentinel=settings.OUTPUT_DIR / "KILL_SWITCH",
@@ -163,12 +160,7 @@ def _render_dependency_map() -> None:
     )
 
     st.markdown("### 🕸️ Dependency Map")
-    st.caption(
-        "Declarative source → consumer graph. Pick the sources that are "
-        "degraded right now and the panel projects which strategies, tabs, "
-        "and reports lose coverage. The map itself lives in "
-        "`gui/dependency_map.py`; extend it there as new consumers come online."
-    )
+    help_widgets.section_caption("dependency_map")
 
     options = [s for s in DataSource if s is not DataSource.UNKNOWN]
     labels = {s.label: s for s in options}
@@ -227,12 +219,7 @@ def _render_strategy_health() -> None:
     from validation.thresholds import DSR_MIN, MAX_DRAWDOWN_MAX, NET_SHARPE_MIN, PBO_MAX
 
     st.markdown("### 📊 Strategy Health — Deployability Gates")
-    st.caption(
-        "Sourced from `output/gravity_verification_report.json` (written by the "
-        "Gravity AI Review Suite). Evaluated against thresholds in "
-        "`validation/thresholds.py` — the same constants used by "
-        "`validation/harness.py`."
-    )
+    help_widgets.section_caption("strategy_health_gates")
 
     strategies = _load_gravity_report()
 

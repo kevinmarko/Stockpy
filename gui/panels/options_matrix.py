@@ -137,11 +137,7 @@ def render_options_matrix() -> None:
     """
     help_widgets.explain("options")
     st.subheader("🧮 Technical Options Matrix")
-    st.caption(
-        "Hydrated premium-selling matrix: GJR-GARCH σ, realized-vol IVR proxy, "
-        "Aroon+Coppock trend bias, ATM Black-Scholes Greeks, and the "
-        "deterministic strategy directive with $0.50 strike-grid integrity checks."
-    )
+    help_widgets.section_caption("options.matrix_intro")
 
     snap = load_state_snapshot()
     default_universe = _active_symbols(snap)
@@ -253,13 +249,7 @@ def render_options_matrix() -> None:
             for e in errors:
                 st.markdown(f"- {e}")
 
-    st.caption(
-        "σ from GJR-GARCH(1,1) with 20-day realized fallback; **IVR proxy** is a "
-        "realized-vol percentile (true IVR requires an options chain). Trend bias is "
-        "Aroon+Coppock sign agreement. **Stale=True** marks delayed (~15 min) yfinance "
-        "quotes. Realizable Theta applies a DTE-scaled execution-friction haircut "
-        "(40% @ 1DTE, 22% @ 7DTE, 12% @ 30DTE, 5% baseline)."
-    )
+    help_widgets.section_caption("options.matrix_methodology")
 
     _render_portfolio_greeks_rollup(df)
 
