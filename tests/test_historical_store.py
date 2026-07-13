@@ -1000,3 +1000,62 @@ class TestMacroHistory:
         """settings.MACRO_REFRESH_HOURS == 12."""
         from settings import settings as _s
         assert _s.MACRO_REFRESH_HOURS == 12
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase D1 — TestPITFundamentals
+# ─────────────────────────────────────────────────────────────────────────────
+from datetime import datetime, timezone
+import math
+
+class TestPITFundamentals:
+    def test_upsert_fundamentals_pit_idempotency(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "pit.db"))
+        
+        typed = {"pe_ratio": 15.0, "pb_ratio": 2.5, "roe": 0.15, "eps": 3.0}
+        raw = {"mock": "data"}
+        
+        # Insert once
+        store.upsert_fundamentals_pit("AAPL", typed, raw, report_date="2020-01-15", source="edgar")
+        
+        # Insert again with same report_date
+        store.upsert_fundamentals_pit("AAPL", typed, raw, report_date="2020-01-15", source="edgar")
+        
+        hist = store.get_fundamentals_history("AAPL")
+        assert len(hist) == 1
+        assert hist.iloc[0]["report_date"] == "2020-01-15"
+        assert hist.iloc[0]["pe_ratio"] == 15.0
+
+    def test_get_fundamentals_asof_latest_leq_cutoff(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "pit.db"))
+        
+        # Insert two filings
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 10.0, "roe": 0.1}, {}, report_date="2019-10-30", source="edgar")
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 15.0, "roe": 0.2}, {}, report_date="2020-01-30", source="edgar")
+        
+        # Query before first filing
+        out_early = store.get_fundamentals_asof("AAPL", datetime(2019, 10, 29, tzinfo=timezone.utc))
+        assert math.isnan(out_early["pe_ratio"])
+        
+        # Query exactly on first filing
+        out_first = store.get_fundamentals_asof("AAPL", datetime(2019, 10, 30, tzinfo=timezone.utc))
+        assert out_first["pe_ratio"] == 10.0
+        assert out_first["earnings_yield"] == 0.1
+        
+        # Query between filings
+        out_mid = store.get_fundamentals_asof("AAPL", datetime(2019, 12, 31, tzinfo=timezone.utc))
+        assert out_mid["pe_ratio"] == 10.0
+        
+        # Query after second filing
+        out_latest = store.get_fundamentals_asof("AAPL", datetime(2020, 2, 1, tzinfo=timezone.utc))
+        assert out_latest["pe_ratio"] == 15.0
+
+    def test_get_fundamentals_history_additive(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "pit.db"))
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 12.0}, {"raw": 1}, report_date="2021-05-01", source="edgar")
+        
+        hist = store.get_fundamentals_history("AAPL")
+        # Ensure it has both the new columns and the old ones
+        assert "report_date" in hist.columns
+        assert "raw_json" in hist.columns
+        assert "eps" in hist.columns
+        assert len(hist) == 1
+        assert hist.iloc[0]["report_date"] == "2021-05-01"

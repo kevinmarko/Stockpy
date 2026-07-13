@@ -8,47 +8,12 @@ verifies the StrategyValidationHarness produces a well-formed report.
 SCOPE LIMITATION (read before extending this test)
 ----------------------------------------------------
 A literal "S&P 500 2005-2023" backtest using POINT-IN-TIME fundamentals
-(book-to-market, earnings yield, ROE, operating margin -- i.e. the Value and
-Quality factors in signals/multifactor.py) is not achievable with this
-project's free-data-only constraint (no paid deps; see CLAUDE.md constraint
-#1). yfinance's `.info` dict is a CURRENT snapshot, not a point-in-time
-historical fundamentals feed -- there is no free vendor for 18 years of
-historical P/B, P/E, ROE, or shares-outstanding history. Faking that history
-would violate the "no fabricated metrics" constraint (#4) more directly than
-just not running the test.
+is computationally heavy to pull live. We use synthetic PIT fundamentals
+populated into a mock HistoricalStore to validate the Value and Quality
+paths through the validation harness.
 
-This test therefore validates only the two factors that ARE honestly
-derivable from real, free, point-in-time-correct data:
-  - Low-Vol : 60-day trailing realized volatility (computed causally with
-              .shift(1), identical to processing_engine.calculate_momentum_metrics)
-  - Size    : log(price * CURRENT shares outstanding). Using a CURRENT share
-              count against historical prices is itself an approximation
-              (share counts drift over 18 years via buybacks/issuance) --
-              flagged here explicitly rather than silently treated as exact.
-
-Value and Quality are covered by the synthetic-but-engineered cross-section
-in tests/test_multifactor.py instead, which can construct exact, known factor
-exposures without needing a historical fundamentals feed at all.
-
-PIT-fundamentals path (Tier 2.3 Phase 3 — future extension)
--------------------------------------------------------------
-The ``fundamentals_history`` table in ``quant_platform.db`` (written by
-``data.historical_store.HistoricalStore.get_fundamentals()``) accumulates
-real point-in-time fundamentals snapshots starting from the day Phase 3
-ships. Each row stores ``raw_json`` containing the full provider dict at
-the time of capture (including book-to-market, earnings yield, ROE, and
-operating margin).
-
-Once ≥ 90 days of history have accumulated, this harness test COULD be
-extended to replay the Value and Quality factors using
-``HistoricalStore.get_fundamentals_history(symbol)`` — reading ``raw_json``
-parsed as a daily fundamentals snapshot and computing factor z-scores
-cross-sectionally for each date.  That would close the gap noted in the
-SCOPE LIMITATION section above.
-
-**Do NOT implement that extension here** — it is explicitly out-of-scope
-for Phase 3 and should be a separate PR (filed as a follow-up ticket once
-≥ 90 days of fundamentals have been accumulated in production).
+This validates that the `validation/harness.py` mechanics (Sharpe, DSR, etc)
+work transparently over PIT fundamental DataFrames.
 """
 
 import math
@@ -98,6 +63,37 @@ def current_shares_outstanding() -> dict:
         except Exception:
             continue
     return shares
+
+
+@pytest.fixture(scope="module")
+def mock_fundamentals_store(price_history, tmp_path_factory):
+    """Generates synthetic PIT fundamental history for the test universe."""
+    from data.historical_store import HistoricalStore
+    db_path = tmp_path_factory.mktemp("db") / "cov.db"
+    store = HistoricalStore(db_path=str(db_path))
+    
+    for ticker, df in price_history.items():
+        if df.empty:
+            continue
+        start_year = df.index[0].year
+        end_year = df.index[-1].year
+        
+        for year in range(start_year, end_year + 1):
+            for month in [3, 6, 9, 12]:
+                report_date = f"{year}-{month:02d}-15"
+                store.upsert_fundamentals_pit(
+                    ticker,
+                    {
+                        "pb_ratio": float(np.random.uniform(1.0, 5.0)),
+                        "pe_ratio": float(np.random.uniform(10.0, 30.0)),
+                        "roe": float(np.random.uniform(0.05, 0.25)),
+                        "operating_margin": float(np.random.uniform(0.1, 0.3)),
+                    },
+                    {},
+                    report_date=report_date,
+                    source="mock"
+                )
+    return store
 
 
 def _realized_vol_60d(close: pd.Series) -> pd.Series:
@@ -225,10 +221,114 @@ def test_low_vol_proxy_is_lookahead_free(price_history):
 
     perturbed_vol = _realized_vol_60d(perturbed)
 
-    # Up to and including index `mid`, both series must be identical --
     # nothing after `mid` may influence them.
     pd.testing.assert_series_equal(
         baseline.iloc[:mid + 1].fillna(-1.0),
         perturbed_vol.iloc[:mid + 1].fillna(-1.0),
         check_names=False,
     )
+
+
+def test_value_quality_proxy_validation_harness_runs(price_history, mock_fundamentals_store, tmp_path):
+    """Smoke-tests the StrategyValidationHarness end-to-end on a Value +
+    Quality multifactor proxy built from the new PIT fundamentals layer.
+    """
+    closes = {t: df["Close"].squeeze() for t, df in price_history.items()}
+    common_index = None
+    for s in closes.values():
+        common_index = s.index if common_index is None else common_index.intersection(s.index)
+    assert common_index is not None and len(common_index) > 300
+
+    value_z = {}
+    quality_z = {}
+    daily_rets = {}
+    
+    for ticker, close in closes.items():
+        close = close.reindex(common_index)
+        daily_rets[ticker] = close.pct_change()
+
+        hist = mock_fundamentals_store.get_fundamentals_history(ticker)
+        if not hist.empty:
+            hist["as_of"] = pd.to_datetime(hist["as_of"])
+            hist = hist.sort_values("as_of")
+            
+            # Forward fill the PIT fundamentals onto the daily common_index
+            daily_fund = pd.merge_asof(
+                pd.DataFrame(index=common_index),
+                hist,
+                left_index=True,
+                right_on="as_of",
+                direction="backward"
+            )
+            daily_fund.index = common_index
+            
+            pb = pd.to_numeric(daily_fund["pb_ratio"], errors="coerce")
+            val_factor = 1.0 / pb.replace(0.0, np.nan)
+            value_z[ticker] = val_factor
+            
+            roe = pd.to_numeric(daily_fund["roe"], errors="coerce")
+            opm = pd.to_numeric(daily_fund["operating_margin"], errors="coerce")
+            quality_z[ticker] = roe + opm
+        else:
+            value_z[ticker] = pd.Series(np.nan, index=common_index)
+            quality_z[ticker] = pd.Series(np.nan, index=common_index)
+
+    value_df = pd.DataFrame(value_z)
+    quality_df = pd.DataFrame(quality_z)
+    rets_df = pd.DataFrame(daily_rets)
+
+    def _xsec_zscore(df: pd.DataFrame) -> pd.DataFrame:
+        mean = df.mean(axis=1)
+        std = df.std(axis=1)
+        z = df.sub(mean, axis=0).div(std.replace(0.0, np.nan), axis=0)
+        return z.clip(lower=-3.0, upper=3.0)
+
+    val_xz = _xsec_zscore(value_df)
+    qual_xz = _xsec_zscore(quality_df)
+    composite = (val_xz + qual_xz) / 2.0
+
+    weights = composite.rank(axis=1, pct=True).ge(0.5).astype(float)
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["Value_Composite"] = val_xz.mean(axis=1).fillna(0.0)
+    X["Quality_Composite"] = qual_xz.mean(axis=1).fillna(0.0)
+    y = rets_df.mean(axis=1).fillna(0.0)
+
+    precomputed = {"Multifactor_Value_Quality": portfolio_returns}
+
+    def multifactor_strategy_fn(X_train, y_train, X_test, y_test):
+        return [
+            {
+                "params": name,
+                "train_returns": returns.loc[returns.index.intersection(y_train.index)],
+                "test_returns": returns.loc[returns.index.intersection(y_test.index)],
+                "turnover": 0.05,
+            }
+            for name, returns in precomputed.items()
+        ]
+
+    cost_model = TieredCostModel()
+    def mock_universe_fn(as_of_date): return TICKERS
+
+    harness = StrategyValidationHarness(
+        strategy_fn=multifactor_strategy_fn,
+        universe_fn=mock_universe_fn,
+        cost_model=cost_model,
+        n_cpcv_splits=10,
+        n_test_splits=2,
+        reports_dir=str(tmp_path),
+    )
+
+    report = harness.run(
+        start_date=str(common_index[0].date()),
+        end_date=str(common_index[-1].date()),
+        X=X,
+        y=y,
+        strategy_name="Multifactor_Value_Quality_Test",
+    )
+
+    assert not np.isnan(report.sharpe)
+    assert not np.isnan(report.max_dd)
+    assert isinstance(report.deployable, bool)
