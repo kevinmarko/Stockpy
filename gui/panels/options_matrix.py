@@ -76,6 +76,11 @@ def _compute_directive_row(
     vix: float,
     market_regime: str,
     risk_free_rate: float,
+    ivr_sell_threshold: float = 50.0,
+    ivr_buy_threshold: float = 30.0,
+    delta_target_scale: float = 1.0,
+    delta_tolerance: float = 0.05,
+    strike_grid: float = 0.50,
 ) -> Dict[str, Any]:
     """Cached single-symbol premium-directive compute.
 
@@ -84,6 +89,10 @@ def _compute_directive_row(
     is the same error-shaped placeholder the inline loop produced and ``error``
     carries the operator-facing message for the errors expander (CONSTRAINT #6:
     a bad symbol degrades, never raises).
+
+    The five ``ivr_*``/``delta_*``/``strike_grid`` kwargs are the session-scoped
+    operator controls; ALL default to the engine constants so an untouched
+    controls form reproduces the pre-controls output byte-for-byte.
     """
     from technical_options_engine import build_premium_directive
     from data.market_data import get_provider, MarketDataError
@@ -102,6 +111,11 @@ def _compute_directive_row(
             macro_dto=macro_proxy,
             vrp=None,  # VRP requires an options chain — left None to skip that gate
             risk_free_rate=risk_free_rate,
+            ivr_sell_threshold=float(ivr_sell_threshold),
+            ivr_buy_threshold=float(ivr_buy_threshold),
+            delta_target_scale=float(delta_target_scale),
+            delta_tolerance=float(delta_tolerance),
+            strike_grid=float(strike_grid),
         )
         return {"row": row, "error": None}
     except MarketDataError as exc:
@@ -164,6 +178,43 @@ def render_options_matrix() -> None:
             help="Recompute on every rerun (otherwise click the button).",
         )
 
+    # ── Directive controls (session-scoped — never written to .env) ──────────
+    # Mirrors the dynamic-editing form pattern in strategy_matrix.py: an
+    # ``st.form`` groups the tunables so they are applied atomically on submit.
+    # Every default equals the engine constant, so an untouched form reproduces
+    # the pre-controls behaviour byte-for-byte (CONSTRAINT: no change at defaults).
+    with st.form("options_matrix_controls_form"):
+        st.caption("Directive controls — session-scoped (not saved to .env). Defaults = engine constants.")
+        fc1, fc2, fc3 = st.columns(3)
+        target_delta_scale = fc1.number_input(
+            "Target delta ×", min_value=0.25, max_value=2.0, value=1.0, step=0.05,
+            help="Scales the short/long leg delta targets (1.0 = engine defaults: "
+                 "0.30/0.15 credit spreads, 0.16/0.05 iron condor). ATM legs stay 0.50.",
+        )
+        ivr_sell_threshold_w = fc2.number_input(
+            "IVR sell threshold >", min_value=0.0, max_value=100.0, value=50.0, step=1.0,
+            help="True-IVR above this enters the premium-SELLING regime (engine default 50).",
+        )
+        ivr_buy_threshold_w = fc3.number_input(
+            "IVR buy threshold <", min_value=0.0, max_value=100.0, value=30.0, step=1.0,
+            help="True-IVR below this enters the premium-BUYING (debit) regime (engine default 30).",
+        )
+        fc4, fc5, fc6 = st.columns(3)
+        rfr_pct = fc4.number_input(
+            "Risk-free rate %", min_value=0.0, max_value=15.0,
+            value=float(settings.RISK_FREE_RATE) * 100.0, step=0.25,
+            help="Annualized risk-free rate for Black-Scholes pricing (default from settings.RISK_FREE_RATE).",
+        )
+        strike_grid_w = fc5.number_input(
+            "Strike grid $", min_value=0.5, max_value=10.0, value=0.50, step=0.5,
+            help="Integrity check: every leg strike must lie on this USD grid (engine default $0.50).",
+        )
+        delta_tolerance_w = fc6.number_input(
+            "Delta tolerance", min_value=0.01, max_value=0.25, value=0.05, step=0.01,
+            help="Integrity check: |resolved delta − (scaled) target| must be ≤ this (engine default 0.05).",
+        )
+        st.form_submit_button("Apply controls")
+
     symbols = [s.strip().upper() for s in sym_text.split(",") if s.strip()]
     if not symbols:
         st.info("Enter at least one symbol.")
@@ -182,10 +233,16 @@ def render_options_matrix() -> None:
     rows: List[Dict[str, Any]] = []
     errors: List[str] = []
 
+    risk_free_rate = float(rfr_pct) / 100.0
     progress = st.progress(0.0, text="Computing premium directives…")
     for i, sym in enumerate(symbols):
         result = _compute_directive_row(
-            sym, int(target_dte), vix, market_regime, settings.RISK_FREE_RATE
+            sym, int(target_dte), vix, market_regime, risk_free_rate,
+            ivr_sell_threshold=float(ivr_sell_threshold_w),
+            ivr_buy_threshold=float(ivr_buy_threshold_w),
+            delta_target_scale=float(target_delta_scale),
+            delta_tolerance=float(delta_tolerance_w),
+            strike_grid=float(strike_grid_w),
         )
         rows.append(result["row"])
         if result["error"]:

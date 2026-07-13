@@ -165,17 +165,32 @@ class OptionsPricingRecommender:
         return theoretical_theta * (1.0 - haircut)
 
     def generate_strategy_pricing_matrix(
-        self, 
-        true_ivr: float, 
-        current_iv: float, 
-        trend_bias: str, 
+        self,
+        true_ivr: float,
+        current_iv: float,
+        trend_bias: str,
         target_dte: int = 30,
         vrp: Optional[float] = None,
-        macro_dto: Optional[Any] = None
+        macro_dto: Optional[Any] = None,
+        *,
+        ivr_sell_threshold: float = 50.0,
+        ivr_buy_threshold: float = 30.0,
+        delta_target_scale: float = 1.0,
     ) -> dict:
         """
-        Deterministic Options Matrix synthesizing Trend, True IVR, and Target Deltas 
+        Deterministic Options Matrix synthesizing Trend, True IVR, and Target Deltas
         to output specific recommended Call and Put prices, gated by Volatility Risk Premium (VRP).
+
+        Optional (keyword-only) operator overrides — ALL default to the historical
+        hardcoded constants so the output is byte-identical when untouched:
+          * ``ivr_sell_threshold`` (default 50.0): true-IVR above which the engine
+            enters the premium-SELLING regime.
+          * ``ivr_buy_threshold`` (default 30.0): true-IVR below which the engine
+            enters the premium-BUYING (debit) regime.
+          * ``delta_target_scale`` (default 1.0): multiplies the short/long leg
+            delta targets (0.30/0.15 credit, 0.16/0.05 condor). The ATM target
+            (0.50) is definitional and stays fixed. ``validate_directive_integrity``
+            must receive the SAME scale so the delta-tolerance check stays consistent.
         """
         T = target_dte / 365.0
         sigma = current_iv
@@ -189,11 +204,13 @@ class OptionsPricingRecommender:
             "Realizable_Daily_Theta": 0.0
         }
 
-        # Defined Risk Parameters (Standard Target Deltas)
-        SHORT_DELTA_TARGET = 0.30
-        LONG_DELTA_TARGET = 0.15
-        CONDOR_SHORT_TARGET = 0.16
-        CONDOR_LONG_TARGET = 0.05
+        # Defined Risk Parameters (Standard Target Deltas). ``delta_target_scale``
+        # (default 1.0 → byte-identical) widens/narrows the short/long leg deltas;
+        # ATM stays 0.50 by definition (scaling an at-the-money leg is meaningless).
+        SHORT_DELTA_TARGET = 0.30 * delta_target_scale
+        LONG_DELTA_TARGET = 0.15 * delta_target_scale
+        CONDOR_SHORT_TARGET = 0.16 * delta_target_scale
+        CONDOR_LONG_TARGET = 0.05 * delta_target_scale
         ATM_DELTA_TARGET = 0.50
 
         # Enforce VRP regime gate: only sell premium if true_ivr > 50, vrp > 0.02, vix < 30, not CREDIT EVENT
@@ -206,7 +223,7 @@ class OptionsPricingRecommender:
             if vix >= 30.0 or regime == 'CREDIT EVENT':
                 sell_premium_allowed = False
 
-        if true_ivr > 50.0:
+        if true_ivr > ivr_sell_threshold:
             if not sell_premium_allowed:
                 return directive  # high IV but gated -> Cash / Wait (do not buy expensive options)
             # HIGH IVR REGIME: Premium Selling Environment
@@ -280,7 +297,7 @@ class OptionsPricingRecommender:
                 raw_theta = (short_put_metrics['Theta_Daily'] - long_put_metrics['Theta_Daily']) + (short_call_metrics['Theta_Daily'] - long_call_metrics['Theta_Daily'])
                 directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
 
-        elif true_ivr < 30.0:
+        elif true_ivr < ivr_buy_threshold:
             # LOW IVR REGIME: Premium Buying Environment
             if trend_bias == 'Bullish':
                 directive["Strategy"] = "Call Debit Spread"
@@ -614,6 +631,7 @@ def validate_directive_integrity(
     *,
     delta_tolerance: float = 0.05,
     strike_grid: float = STRIKE_GRID_USD,
+    delta_target_scale: float = 1.0,
 ) -> Dict[str, Any]:
     """Audit a strategy directive against the matrix-integrity invariants.
 
@@ -648,6 +666,12 @@ def validate_directive_integrity(
         on_grid = _on_strike_grid(strike, strike_grid)
         delta_ok: Optional[bool] = None
         target = EXPECTED_DELTA_TARGETS.get((strategy, side, typ))
+        # Mirror ``generate_strategy_pricing_matrix``'s ``delta_target_scale``:
+        # scale non-ATM targets by the same factor so an operator-widened target
+        # delta stays consistent between generation and validation. ATM legs
+        # (|target| == 0.50) are definitional and never scaled.
+        if target is not None and abs(abs(target) - 0.50) > 1e-9:
+            target = target * delta_target_scale
         if "Delta" in leg and target is not None:
             delta = float(leg["Delta"])
             delta_ok = abs(delta - target) <= delta_tolerance
@@ -694,6 +718,11 @@ def build_premium_directive(
     macro_dto: Optional[Any] = None,
     vrp: Optional[float] = None,
     risk_free_rate: float = RISK_FREE_RATE,
+    ivr_sell_threshold: float = 50.0,
+    ivr_buy_threshold: float = 30.0,
+    delta_target_scale: float = 1.0,
+    delta_tolerance: float = 0.05,
+    strike_grid: float = STRIKE_GRID_USD,
 ) -> Dict[str, Any]:
     """Compute a fully-hydrated premium-selling row for one symbol.
 
@@ -716,6 +745,16 @@ def build_premium_directive(
     target_dte, macro_dto, vrp, risk_free_rate :
         Forwarded to
         :meth:`OptionsPricingRecommender.generate_strategy_pricing_matrix`.
+    ivr_sell_threshold, ivr_buy_threshold, delta_target_scale :
+        Optional operator overrides forwarded to the recommender (see that
+        method's docstring). ``delta_target_scale`` is ALSO forwarded to
+        :func:`validate_directive_integrity` so the integrity verdict stays
+        consistent with the (scaled) target deltas. All default to the engine
+        constants → byte-identical output when untouched.
+    delta_tolerance, strike_grid :
+        Forwarded to :func:`validate_directive_integrity` so the per-run
+        matrix-integrity check (delta-target tolerance + strike grid) is
+        operator-adjustable. Default to the engine constants.
 
     Returns
     -------
@@ -811,6 +850,9 @@ def build_premium_directive(
             target_dte=int(target_dte),
             vrp=vrp,
             macro_dto=macro_dto,
+            ivr_sell_threshold=ivr_sell_threshold,
+            ivr_buy_threshold=ivr_buy_threshold,
+            delta_target_scale=delta_target_scale,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Strategy directive failed for %s: %s", symbol, exc)
@@ -834,8 +876,15 @@ def build_premium_directive(
         row["Long_Strike"] = float(long_legs[0].get("Strike", nan))
         row["Long_Delta"] = float(long_legs[0].get("Delta", nan))
 
-    # 6) Matrix integrity (strike grid + delta-target tolerance).
-    integrity = validate_directive_integrity(directive)
+    # 6) Matrix integrity (strike grid + delta-target tolerance). ``delta_target_scale``
+    # is passed through so the tolerance check compares against the SAME scaled
+    # targets the directive was generated with.
+    integrity = validate_directive_integrity(
+        directive,
+        delta_tolerance=delta_tolerance,
+        strike_grid=strike_grid,
+        delta_target_scale=delta_target_scale,
+    )
     row["Integrity_OK"] = bool(integrity["ok"])
     row["Integrity_Issues"] = list(integrity["issues"])
     return row

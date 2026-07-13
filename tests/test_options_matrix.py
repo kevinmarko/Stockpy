@@ -228,3 +228,97 @@ def test_every_engine_strategy_passes_integrity(true_ivr, trend):
     )
     integrity = validate_directive_integrity(directive)
     assert integrity["ok"], (directive["Strategy"], integrity["issues"])
+
+
+# --------------------------------------------------------------------------- #
+# Operator override: IVR sell threshold changes the regime gate               #
+# --------------------------------------------------------------------------- #
+def test_ivr_sell_threshold_default_matches_constant_and_override_changes_gate():
+    """At the default threshold (50) an IVR of 45 sits in the NEUTRAL band
+    (Bullish → Covered Call). Lowering the sell threshold to 40 pushes the same
+    IVR into the premium-SELLING regime (Bullish → Put Credit Spread)."""
+    rec = OptionsPricingRecommender(stock_price=100.0)
+
+    # Default is byte-identical whether or not the kwarg is passed explicitly.
+    baseline = rec.generate_strategy_pricing_matrix(
+        true_ivr=45.0, current_iv=0.25, trend_bias="Bullish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(),
+    )
+    default_explicit = rec.generate_strategy_pricing_matrix(
+        true_ivr=45.0, current_iv=0.25, trend_bias="Bullish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(), ivr_sell_threshold=50.0,
+    )
+    assert baseline["Strategy"] == default_explicit["Strategy"] == "Covered Call"
+
+    # Override lowers the gate → 45 > 40 → premium-selling regime.
+    overridden = rec.generate_strategy_pricing_matrix(
+        true_ivr=45.0, current_iv=0.25, trend_bias="Bullish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(), ivr_sell_threshold=40.0,
+    )
+    assert overridden["Strategy"] == "Put Credit Spread"
+
+
+def test_ivr_buy_threshold_override_changes_gate():
+    """Raising the buy threshold from 30 to 40 pushes an IVR of 35 out of the
+    neutral band into the premium-BUYING (debit) regime."""
+    rec = OptionsPricingRecommender(stock_price=100.0)
+
+    default = rec.generate_strategy_pricing_matrix(
+        true_ivr=35.0, current_iv=0.20, trend_bias="Bullish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(),
+    )
+    assert default["Strategy"] == "Covered Call"  # 30 <= 35 <= 50 → neutral band
+
+    overridden = rec.generate_strategy_pricing_matrix(
+        true_ivr=35.0, current_iv=0.20, trend_bias="Bullish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(), ivr_buy_threshold=40.0,
+    )
+    assert overridden["Strategy"] == "Call Debit Spread"  # 35 < 40 → buy regime
+
+
+# --------------------------------------------------------------------------- #
+# Operator override: delta_target_scale stays consistent with validation      #
+# --------------------------------------------------------------------------- #
+def test_delta_target_scale_widens_deltas_and_stays_integrity_consistent():
+    rec = OptionsPricingRecommender(stock_price=100.0)
+
+    # Scale 1.0 → engine default short-put delta ≈ -0.30.
+    base = rec.generate_strategy_pricing_matrix(
+        true_ivr=75.0, current_iv=0.30, trend_bias="Bullish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(), delta_target_scale=1.0,
+    )
+    base_short = next(l for l in base["Legs"] if l["Side"] == "Short")
+    assert abs(base_short["Delta"] - (-0.30)) <= 0.05
+    assert validate_directive_integrity(base, delta_target_scale=1.0)["ok"]
+
+    # Scale 1.5 → short-put delta target ≈ -0.45.
+    scaled = rec.generate_strategy_pricing_matrix(
+        true_ivr=75.0, current_iv=0.30, trend_bias="Bullish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(), delta_target_scale=1.5,
+    )
+    scaled_short = next(l for l in scaled["Legs"] if l["Side"] == "Short")
+    assert abs(scaled_short["Delta"] - (-0.45)) <= 0.05
+
+    # Validation with the SAME scale passes; validating a scaled directive
+    # against the UNSCALED (default) targets correctly flags the deviation.
+    assert validate_directive_integrity(scaled, delta_target_scale=1.5)["ok"]
+    mismatched = validate_directive_integrity(scaled, delta_target_scale=1.0)
+    assert not mismatched["ok"]
+
+
+def test_build_premium_directive_defaults_are_byte_identical():
+    """Passing the override kwargs at their defaults must not change the row."""
+    bars = _synthetic_bars(252, seed=11)
+    kwargs = dict(
+        spot_price=float(bars["Close"].iloc[-1]), is_stale=False,
+        target_dte=30, macro_dto=_MacroProxy(), vrp=None,
+    )
+    plain = build_premium_directive("TEST", bars, **kwargs)
+    explicit = build_premium_directive(
+        "TEST", bars, **kwargs,
+        ivr_sell_threshold=50.0, ivr_buy_threshold=30.0,
+        delta_target_scale=1.0, delta_tolerance=0.05, strike_grid=STRIKE_GRID_USD,
+    )
+    assert plain["Strategy"] == explicit["Strategy"]
+    assert plain["Legs"] == explicit["Legs"]
+    assert plain["Integrity_OK"] == explicit["Integrity_OK"]
