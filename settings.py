@@ -881,6 +881,18 @@ class Settings(BaseSettings):
             "to target weights before the top-N cut."
         ),
     )
+    # Minimum dollar amount the Pilots PWA accepts for a "Follow" allocation.
+    # A UX floor surfaced by api/pilots_api.py's POST /pilots/{id}/follow response
+    # (min_amount) and enforced client-side by the Follow modal — NOT a broker
+    # constraint; the gated queue itself is bounded by ROBINHOOD_MAX_NOTIONAL_PER_ORDER.
+    FOLLOW_MIN_AMOUNT: float = Field(
+        default=100.0,
+        description=(
+            "Minimum USD amount accepted for a Pilot follow allocation, surfaced "
+            "as `min_amount` in the follow API response and enforced in the PWA "
+            "Follow modal. Not a broker constraint."
+        ),
+    )
 
     # --- Multifactor signal (signals/multifactor.py) ---
     MULTIFACTOR_MICROCAP_THRESHOLD: float = Field(

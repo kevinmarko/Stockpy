@@ -19,6 +19,7 @@ import ast
 import pathlib
 from unittest import mock
 
+import pytest
 import pandas as pd
 from fastapi.testclient import TestClient
 
@@ -156,13 +157,28 @@ def test_pilot_detail_cold_start_empty_but_not_404(tmp_path, monkeypatch):
 
 def test_performance_good_range(monkeypatch):
     _point_reports_at_fixtures(monkeypatch)
-    resp = client.get("/pilots/trend-following/performance?range=1M")
+    resp = client.get("/pilots/trend-following/performance?range=2Y")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["range"] == "1M"
+    assert body["range"] == "2Y"
     assert body["metrics"]["sharpe"] == 1.14
-    # Never fabricate a curve.
+    # The fixture summary carries a persisted equity_curve -> a real curve serves,
+    # tail-sliced to the range, {date, value} shaped (never fabricated).
+    curve = body["curve"]
+    assert isinstance(curve, list) and len(curve) >= 2
+    assert all(set(p) == {"date", "value"} for p in curve)
+    assert body["reason"] is None
+
+
+def test_performance_curve_null_for_pilot_without_backtest(monkeypatch):
+    """A Pilot whose validation_strategy_id is None honestly reports curve=null."""
+    _point_reports_at_fixtures(monkeypatch)
+    resp = client.get("/pilots/balanced-blend/performance?range=1M")
+    assert resp.status_code == 200
+    body = resp.json()
     assert body["curve"] is None
+    assert body["metrics"] is None
+    assert body["reason"]  # honest explanation present
 
 
 def test_performance_bad_range_422():
@@ -383,6 +399,39 @@ class TestFollowAuthorized:
         assert len(body["planned_intents"]) == 5
         total = sum(i["target_notional"] for i in body["planned_intents"])
         assert abs(total - 1000.0) < 1.0  # proportional split of the amount
+
+    def test_post_follow_response_matches_followresult_contract(self, tmp_path):
+        """Lock the live POST /follow response to the webapp FollowResult type
+        (webapp/src/api/types.ts) so the live and mock shapes can't silently
+        diverge again — the bug that left the live Follow modal blank."""
+        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
+
+        class _FakeSnap:
+            total_equity = 100000.0
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return _FakeSnap()
+
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                with mock.patch.object(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 2500.0):
+                    with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
+                        resp = client.post(
+                            "/pilots/trend-following/follow",
+                            json={"amount": 1000.0},
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        body = resp.json()
+        required = {
+            "follow", "planned_intents", "mode", "queue_written",
+            "notional_cap", "min_amount", "notice",
+        }
+        assert required.issubset(body.keys()), f"missing keys: {required - set(body)}"
+        assert body["notional_cap"] == pytest.approx(2500.0)
+        assert body["min_amount"] == pytest.approx(settings.FOLLOW_MIN_AMOUNT)
+        assert isinstance(body["notice"], str) and body["notice"]
 
     def test_post_follow_kill_switch_423(self, tmp_path):
         class _ActiveKS:

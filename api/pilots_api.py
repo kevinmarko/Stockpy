@@ -322,8 +322,10 @@ def get_pilot_performance(
     range: str = Query("1M"),  # noqa: A002 - matches the ?range= query param name
 ) -> Dict[str, Any]:
     """Honest backtest performance for a Pilot. 404 on unknown Pilot, 422 on an
-    out-of-set ``range``. ``curve`` is always ``null`` (no per-range series is
-    persisted yet) — never synthesized (CONSTRAINT #4)."""
+    out-of-set ``range``. ``curve`` is the real downsampled base-100 OOS equity
+    series persisted by the harness, tail-sliced to ``range`` — ``null`` when the
+    Pilot has no backtest or the summary predates the field; never synthesized
+    (CONSTRAINT #4)."""
     pilot = catalog.get_pilot(pilot_id)
     if pilot is None:
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
@@ -472,16 +474,36 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
 
     plan = plan_follow(pilot, body.amount, account_snapshot, snapshot=snapshot)
 
+    # Always render a human-readable gating notice — the PWA Follow modal renders
+    # `notice` unconditionally, so an empty/missing value shows a blank banner.
+    notice = (
+        "This creates a gated, paper-first order queue that you must confirm. "
+        "No order is placed automatically."
+    )
+    note = None
+    if account_snapshot is None:
+        note = (
+            "No account snapshot available — follow persisted, but a "
+            "proportional order preview requires a stored account snapshot "
+            "(run the pipeline). No equity was fabricated."
+        )
+        # Merge the honesty message into the always-rendered notice so it isn't
+        # dropped by clients that only read `notice`.
+        notice = f"{notice} {note}"
+
     response: Dict[str, Any] = {
         "follow": follow,
         "planned_intents": plan.get("planned_intents", []),
         "mode": plan.get("mode"),
         "queue_written": plan.get("queue_written", False),
+        # Fields the FollowResult UI contract (webapp/src/api/types.ts) requires.
+        # notional_cap is the live per-order ceiling (0.0 = unset — the UI renders
+        # "not configured" rather than "$0.00"); min_amount is the PWA's dollar floor.
+        "notional_cap": float(settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER),
+        "min_amount": float(settings.FOLLOW_MIN_AMOUNT),
+        "notice": notice,
     }
-    if account_snapshot is None:
-        response["note"] = (
-            "No account snapshot available — follow persisted, but a "
-            "proportional order preview requires a stored account snapshot "
-            "(run the pipeline). No equity was fabricated."
-        )
+    if note is not None:
+        # Retained for back-compat with any client reading `note` directly.
+        response["note"] = note
     return response

@@ -1,6 +1,7 @@
 """Gated auto-mirror for Stockpy "Pilots" — turn *Follow Pilot P with $A* into a
-proportional, target-notional BUY queue that flows through the EXISTING gated,
-dry-run execution bridge (``execution/queue_builder.py``).
+proportional, target-notional **rebalance** queue (BUY to add, SELL to trim) that
+flows through the EXISTING gated, dry-run execution bridge
+(``execution/queue_builder.py``).
 
 This module is the *write* side of the Pilot layer (Phase 3 of the Autopilot
 remodel). It NEVER contacts a broker and defines NO order-submission function
@@ -14,14 +15,28 @@ Flow
 ----
 ``build_follow_intents(pilot, amount, account_snapshot, snapshot=None)``
     Compute the Pilot's live holdings (:func:`pilots.scoring.pilot_holdings`),
-    then for each holding ``target_notional_i = amount * weight_i`` (clamped by
-    ``settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER`` when that cap is set). Each
-    intent is a lightweight :class:`FollowIntent` carrying exactly the attributes
-    ``execution.queue_builder._intent_dict`` reads off a ``Recommendation``:
-    ``action="BUY"``, ``symbol``, ``strategy=f"Follow:{pilot.id}"``, ``conviction``,
-    and — crucially — ``suggested_position_pct = target_notional_i / total_equity``
-    so the builder's own ``notional = equity * pct`` math reproduces
-    ``target_notional_i`` verbatim.
+    then for each holding a **target notional** ``target_i = amount * weight_i``
+    (clamped by ``settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER`` when set). This is a
+    *rebalance to target*, not a blind buy: the follower's CURRENT market value in
+    that name (from ``account_snapshot.positions``) is netted off, so the order is
+    sized to the delta ``target_i - current_i`` — a **BUY** when underweight, a
+    **SELL** (partial trim) when overweight, and nothing when already within a
+    small no-trade band. Each intent is a lightweight :class:`FollowIntent`
+    carrying exactly the attributes ``execution.queue_builder._intent_dict`` reads
+    off a ``Recommendation``: ``action`` (``"BUY"``/``"SELL"``), ``symbol``,
+    ``strategy=f"Follow:{pilot.id}"``, ``conviction``, and — crucially —
+    ``suggested_position_pct = |delta_i| / total_equity`` so the builder's own
+    ``notional = equity * pct`` math reproduces the order notional verbatim (for
+    BOTH sides: a SELL carrying a positive ``suggested_position_pct`` is the
+    builder's partial-trim signal, resolved to a share count downstream and capped
+    at the held quantity — see ``execution/queue_builder.py::_intent_dict``).
+
+    **Rebalance scope (honest limitation):** rebalancing is confined to the
+    Pilot's CURRENT holding set. A name the follower holds that is NOT in the
+    Pilot's holdings is left untouched — fully exiting it would require per-follow
+    position attribution (knowing which shares came from this follow vs. bought
+    for other reasons), which is not modelled. So a Pilot that fully drops a name
+    stops topping it up; it does not force-sell the follower's existing position.
 
 ``plan_follow(pilot, amount, account_snapshot, snapshot=None)``
     Wrap the intents in a ``RunResult``-shaped object (``.recommendations`` +
@@ -74,6 +89,13 @@ __all__ = [
 # See the module docstring for the full rationale.
 FOLLOW_MIN_CONVICTION: float = 0.0
 
+# Rebalance no-trade band: skip an order whose delta (target - current) is within
+# max(_REBALANCE_MIN_DELTA_USD, _REBALANCE_BAND_FRACTION * target) of zero, so a
+# follow doesn't churn tiny corrections. Fraction-of-target keeps the band
+# proportional to the position; the absolute floor avoids sub-dollar orders.
+_REBALANCE_BAND_FRACTION: float = 0.05
+_REBALANCE_MIN_DELTA_USD: float = 1.0
+
 # Fallback per-order notional ceiling (USD) used ONLY if
 # ``settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER`` cannot be read at all. The real
 # setting exists (default ``0.0`` == "unset / no cap"), so this constant is a
@@ -87,19 +109,22 @@ _FALLBACK_MAX_NOTIONAL: Optional[float] = None
 
 @dataclass(frozen=True)
 class FollowIntent:
-    """A single proportional BUY intent produced by a Pilot follow.
+    """A single proportional rebalance intent produced by a Pilot follow.
 
-    Carries exactly the attributes ``execution.queue_builder._intent_dict`` reads
-    off a ``Recommendation`` (``action`` / ``symbol`` / ``conviction`` /
+    ``action`` is ``"BUY"`` (underweight → add) or ``"SELL"`` (overweight → partial
+    trim). Carries exactly the attributes ``execution.queue_builder._intent_dict``
+    reads off a ``Recommendation`` (``action`` / ``symbol`` / ``conviction`` /
     ``suggested_position_pct`` / ``strategy``), plus a few preview-only fields
     (``target_notional`` / ``weight`` / ``price`` / ``score``) that the queue
-    builder ignores but the API/UI surfaces. Deliberately NOT the heavy
+    builder ignores but the API/UI surfaces. ``target_notional`` here is the
+    notional of THIS order (the |delta|), i.e. how much to add or trim — not the
+    absolute target position size. Deliberately NOT the heavy
     ``engine.advisory.Recommendation`` dataclass: a plain object keeps this
     write-path module free of any heavy-engine import.
     """
 
     symbol: str
-    action: str  # always "BUY" for a follow-mirror
+    action: str  # "BUY" (add) or "SELL" (partial trim) for a follow-mirror
     strategy: str
     conviction: float
     suggested_position_pct: float
@@ -194,6 +219,31 @@ def _resolve_mode() -> str:
             return "off"
 
 
+def _current_market_value(account_snapshot: Any, symbol: str) -> float:
+    """Follower's CURRENT market value (USD) in ``symbol``, or ``0.0``.
+
+    Reads ``account_snapshot.positions`` (a ``{symbol: PortfolioPosition}`` dict,
+    the same shape ``execution.queue_builder`` reads via ``getattr``). Prefers the
+    position's ``market_value``; falls back to ``quantity * current_price`` when
+    that field is absent. Never fabricates a value — an unheld name, a missing
+    position, or unparseable fields all yield ``0.0`` (CONSTRAINT #4/#6).
+    """
+    positions = getattr(account_snapshot, "positions", None) or {}
+    if not isinstance(positions, dict):
+        return 0.0
+    pos = positions.get(symbol) or positions.get(symbol.upper())
+    if pos is None:
+        return 0.0
+    mv = _coerce_float(getattr(pos, "market_value", None))
+    if mv is not None and mv > 0:
+        return mv
+    qty = _coerce_float(getattr(pos, "quantity", None))
+    price = _coerce_float(getattr(pos, "current_price", None))
+    if qty is not None and price is not None and qty > 0 and price > 0:
+        return qty * price
+    return 0.0
+
+
 # ---------------------------------------------------------------------------
 # Public API — intent building
 # ---------------------------------------------------------------------------
@@ -214,9 +264,11 @@ def build_follow_intents(
     amount:
         Total USD the operator wants to allocate across the Pilot's holdings.
     account_snapshot:
-        The Robinhood ``AccountSnapshot`` (needs ``.total_equity``); used only to
-        translate each target notional into a ``suggested_position_pct`` the queue
-        builder can turn back into the same notional.
+        The Robinhood ``AccountSnapshot`` (needs ``.total_equity`` and, for the
+        rebalance netting, ``.positions``); used both to translate each order
+        notional into a ``suggested_position_pct`` the queue builder can turn back
+        into the same notional AND to read the follower's current market value per
+        name so the order is sized to the delta vs. the Pilot target.
     snapshot:
         Optional pre-loaded ``output/state_snapshot.json`` dict. When ``None`` it
         is loaded via :func:`pilots.scoring.load_snapshot`.
@@ -227,10 +279,13 @@ def build_follow_intents(
     Returns
     -------
     list[FollowIntent]
-        One ``FollowIntent`` per Pilot holding, ``target_notional`` clamped by the
-        per-order cap. Empty on any failure, on a non-positive ``amount``, on a
-        non-positive account equity, or when the Pilot has no holdings. Never
-        raises (CONSTRAINT #6). Pure — writes nothing.
+        One ``FollowIntent`` per Pilot holding that is outside the no-trade band:
+        a **BUY** (underweight vs. target) or a **SELL** partial trim (overweight),
+        ``target_notional`` = the |delta| clamped by the per-order cap. Holdings
+        already within ``_REBALANCE_BAND_FRACTION`` of target are omitted. Empty on
+        any failure, on a non-positive ``amount``, on a non-positive account equity,
+        or when the Pilot has no holdings. Never raises (CONSTRAINT #6). Pure —
+        writes nothing.
     """
     try:
         amt = _coerce_float(amount)
@@ -278,15 +333,31 @@ def build_follow_intents(
             if target <= 0:
                 continue
 
-            pct = target / equity  # equity > 0 guaranteed above
+            # Rebalance to target: net off the follower's CURRENT market value in
+            # this name and size the order to the delta. BUY when underweight, SELL
+            # (partial trim) when overweight, skip within the no-trade band.
+            current = _current_market_value(account_snapshot, symbol)
+            delta = target - current
+            band = max(_REBALANCE_MIN_DELTA_USD, _REBALANCE_BAND_FRACTION * target)
+            if abs(delta) < band:
+                continue
+
+            action = "BUY" if delta > 0 else "SELL"
+            order_notional = abs(delta)
+            if cap is not None:
+                order_notional = min(order_notional, cap)
+            if order_notional <= 0:
+                continue
+
+            pct = order_notional / equity  # equity > 0 guaranteed above
             intents.append(FollowIntent(
                 symbol=symbol,
-                action="BUY",
+                action=action,
                 strategy=strategy_label,
                 # Decision D3: honest per-name conviction == normalized weight.
                 conviction=float(weight),
                 suggested_position_pct=float(pct),
-                target_notional=round(float(target), 2),
+                target_notional=round(float(order_notional), 2),
                 weight=float(weight),
                 price=_coerce_float(h.get("price")),
                 score=_coerce_float(h.get("score")),

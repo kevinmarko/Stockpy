@@ -198,7 +198,8 @@ export function FollowModal({
             </div>
 
             <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 10 }}>
-              Per-order notional cap {fmtUsd(result.notional_cap)}.
+              Per-order notional cap{" "}
+              {result.notional_cap > 0 ? fmtUsd(result.notional_cap) : "not configured"}.
               {result.queue_written
                 ? " Written to the execution queue — confirm it in the robinhood-execution flow."
                 : " Nothing written."}

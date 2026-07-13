@@ -91,3 +91,7 @@ output/follows.json
 webapp/node_modules/
 webapp/dist/
 webapp/.vite/
+# Vite entry point — a real, committed source file that the blanket `*.html`
+# rule (above) would otherwise swallow, breaking `npm run dev`/`build` on a
+# fresh checkout. Negation must come after `*.html` (last-match-wins).
+!webapp/index.html
