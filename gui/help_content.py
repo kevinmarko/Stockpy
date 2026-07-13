@@ -155,6 +155,12 @@ _CONV_DELTA = settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD
 _RH_QUEUE_STALE_MIN = int(_RH_QUEUE_STALE_SECONDS // 60)
 _RH_MAX_NOTIONAL = settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
 _PROGRESS_POLL_SECONDS = settings.PROGRESS_POLL_SECONDS
+# Retrain window (days) used by the Analytics ML-model-monitoring section to
+# flag a stale model. No dedicated setting exists, so this mirrors the default
+# ml.meta_labeling.MetaLabeler(retrain_freq_days=30) cadence and the LGBM ranker's
+# monthly retraining job. Imported by gui/panels/analytics.py so the panel and its
+# help text stay driven by one source rather than two re-typed literals.
+MODEL_RETRAIN_WINDOW_DAYS = 30
 
 GLOSSARY: Dict[str, GlossaryEntry] = {
     # ── Action signals ────────────────────────────────────────────────────────
@@ -465,6 +471,21 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         f"by chance.  DSR accounts for this inflation.  Must be > {DSR_MIN} to "
         f"deploy.  Protects against cherry-picking the best backtest out of many runs.",
         "#10-validating-a-strategy-before-going-live",
+    ),
+    "needs retrain": _g(
+        "Needs Retrain",
+        f"Flags an ML model whose last training run is older than the "
+        f"{MODEL_RETRAIN_WINDOW_DAYS}-day retrain window.  A stale model's "
+        f"validation metrics (DSR/PBO) describe an out-of-date fit, so it is "
+        f"flagged for the next monthly retraining job.  Mirrors "
+        f"ml.meta_labeling.MetaLabeler.needs_retrain().",
+    ),
+    "model freshness": _g(
+        "Model Freshness",
+        f"How many days have elapsed since an ML model was last trained.  Beyond "
+        f"the {MODEL_RETRAIN_WINDOW_DAYS}-day retrain window the model is "
+        f"considered stale and is flagged 'Needs Retrain'.  Freshness is separate "
+        f"from deployability — a fresh model can still fail the DSR/PBO gate.",
     ),
     "sharpe ratio": _g(
         "Sharpe Ratio",
@@ -1434,6 +1455,36 @@ METRIC_HELP: Dict[str, str] = {
         "Fraction of the currently held quantity recommended for exit on a "
         "SELL action — 100% for the Case A loss+bearish-forecast escalation, "
         "50% for a base-signal trim. Blank when not a held SELL."
+    ),
+
+    # ── Analytics tab — ML model freshness & deployability monitoring ────────
+    "analytics.last_trained_age": (
+        f"Days since the model's `trained_date` in `ml/registry.yaml`.  Beyond "
+        f"the {MODEL_RETRAIN_WINDOW_DAYS}-day retrain window the model is flagged "
+        f"'Needs Retrain'.  '—' when the registry carries no valid date "
+        f"(never fabricated as 0)."
+    ),
+    "analytics.needs_retrain": (
+        f"⚠️ when the last training run is older than the "
+        f"{MODEL_RETRAIN_WINDOW_DAYS}-day retrain window (mirrors "
+        f"ml.meta_labeling.MetaLabeler.needs_retrain()); ✅ when fresh.  '—' when "
+        f"the model has no valid trained date to measure against."
+    ),
+    "analytics.cpcv_dsr": (
+        f"Deflated Sharpe Ratio from CPCV path evaluation.  Must be > {DSR_MIN} "
+        f"(with PBO < {PBO_MAX}) for the model to be deployable.  '—' when null — "
+        f"never a fabricated 0."
+    ),
+    "analytics.pbo": (
+        f"Probability of Backtest Overfitting from CPCV.  Must be < {PBO_MAX} "
+        f"(with DSR > {DSR_MIN}) for the model to be deployable.  Lower is better; "
+        f"'—' when null — never a fabricated 0."
+    ),
+    "analytics.deployable": (
+        f"✅ only when `cpcv_dsr > {DSR_MIN}` AND `pbo < {PBO_MAX}` (plus Gravity "
+        f"gates), per the registry's own gate.  ❌ otherwise; '—' when the "
+        f"registry does not record a deployable flag.  Deployability is separate "
+        f"from freshness — a deployable model can still be stale."
     ),
 }
 
