@@ -262,3 +262,90 @@ class TestMigrateDailySignalsSchema:
             assert {"Col_A", "Col_B"} <= columns
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# migrate_daily_signals_schema — orphaned-column detection (Phase C3,
+# docs/CONFIG_SCHEMA_PLAN.md)
+# ---------------------------------------------------------------------------
+
+class TestOrphanedColumnDetection:
+    """A COLUMN_SCHEMA key that gets renamed or removed leaves its old
+    DailySignals column permanently orphaned (migrate_daily_signals_schema
+    is additive-only — confirmed by TestMigrateDailySignalsSchema above).
+    These tests pin the Phase C3 non-destructive, warning-only detector:
+    it must WARN about orphaned columns and must NEVER drop them."""
+
+    def test_orphan_warning_logged_and_column_not_dropped(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        db_file = str(tmp_path / "orphan.db")
+        original_schema = [
+            {"header": "Ticker", "key": "Symbol", "format": "string"},
+            {"header": "Old Metric", "key": "Old_Metric", "format": "number"},
+        ]
+        with mock.patch.object(database_setup.config, "COLUMN_SCHEMA", original_schema):
+            database_setup.initialize_database(db_file)
+
+        # Simulate a since-removed COLUMN_SCHEMA key: "Old_Metric" no longer
+        # appears in the new schema, but its column is still live in the DB
+        # (as would happen after a real rename/removal, since the migration
+        # never drops columns).
+        shrunk_schema = [{"header": "Ticker", "key": "Symbol", "format": "string"}]
+        conn = sqlite3.connect(db_file)
+        try:
+            cursor = conn.cursor()
+            with mock.patch.object(database_setup.config, "COLUMN_SCHEMA", shrunk_schema):
+                with caplog.at_level("WARNING", logger="DatabaseSetup"):
+                    database_setup.migrate_daily_signals_schema(cursor, conn)
+
+            assert "orphaned column" in caplog.text
+            assert "Old_Metric" in caplog.text
+
+            # Never dropped — column must still be present.
+            cursor.execute("PRAGMA table_info(DailySignals);")
+            columns = {row[1] for row in cursor.fetchall()}
+            assert "Old_Metric" in columns
+        finally:
+            conn.close()
+
+    def test_no_orphan_warning_when_schema_is_current(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        db_file = str(tmp_path / "no_orphan.db")
+        schema = [{"header": "Ticker", "key": "Symbol", "format": "string"}]
+        with mock.patch.object(database_setup.config, "COLUMN_SCHEMA", schema):
+            database_setup.initialize_database(db_file)
+
+        conn = sqlite3.connect(db_file)
+        try:
+            cursor = conn.cursor()
+            with mock.patch.object(database_setup.config, "COLUMN_SCHEMA", schema):
+                with caplog.at_level("WARNING", logger="DatabaseSetup"):
+                    database_setup.migrate_daily_signals_schema(cursor, conn)
+
+            assert "orphaned column" not in caplog.text
+        finally:
+            conn.close()
+
+    def test_id_and_timestamp_never_flagged_as_orphaned(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The base id/timestamp columns are never part of COLUMN_SCHEMA and
+        must never be reported as orphaned."""
+        db_file = str(tmp_path / "base_cols.db")
+        schema = [{"header": "Ticker", "key": "Symbol", "format": "string"}]
+        with mock.patch.object(database_setup.config, "COLUMN_SCHEMA", schema):
+            database_setup.initialize_database(db_file)
+
+        conn = sqlite3.connect(db_file)
+        try:
+            cursor = conn.cursor()
+            with mock.patch.object(database_setup.config, "COLUMN_SCHEMA", schema):
+                with caplog.at_level("WARNING", logger="DatabaseSetup"):
+                    database_setup.migrate_daily_signals_schema(cursor, conn)
+
+            assert "'id'" not in caplog.text
+            assert "'timestamp'" not in caplog.text
+        finally:
+            conn.close()
