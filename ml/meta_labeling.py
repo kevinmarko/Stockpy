@@ -183,7 +183,7 @@ class MetaLabeler(Model):
 
         self._feature_names = list(X.columns)
         clf = lgb.LGBMClassifier(**self.lgbm_params)
-        clf.fit(X.fillna(0.0).values, y.values.astype(int))
+        clf.fit(X.fillna(0.0), y.values.astype(int))
         self._model = clf
         self._last_trained = datetime.now()
         self._n_train_samples = len(X)
@@ -254,16 +254,16 @@ class MetaLabeler(Model):
         probas = self.predict_proba(X)
         return float(np.mean(probas)) if len(probas) > 0 else 1.0
 
-    def _prepare_X(self, X: pd.DataFrame) -> np.ndarray:
+    def _prepare_X(self, X: pd.DataFrame) -> pd.DataFrame:
         """Align columns to training feature set and fill NaN with 0."""
         if not self._feature_names:
-            return X.fillna(0.0).values
+            return X.fillna(0.0)
         missing = [c for c in self._feature_names if c not in X.columns]
         if missing:
             X = X.copy()
             for c in missing:
                 X[c] = 0.0
-        return X[self._feature_names].fillna(0.0).values
+        return X[self._feature_names].fillna(0.0)
 
     # ── Lifecycle helpers ─────────────────────────────────────────────────────
 

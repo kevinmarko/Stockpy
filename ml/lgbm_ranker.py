@@ -213,8 +213,8 @@ class LGBMCrossSectionalRanker(Model):
                 X_today = X_today.copy()
                 X_today[c] = np.nan
 
-        X_arr = X_today[self._feature_names].fillna(0.0).values
-        raw_scores = self._model.predict(X_arr)
+        X_df = X_today[self._feature_names].fillna(0.0)
+        raw_scores = self._model.predict(X_df)
         # Normalise to [0, 1] percentile rank within this cross-section
         ranks = pd.Series(raw_scores, index=X_today.index).rank(pct=True)
         return ranks
@@ -235,8 +235,8 @@ class LGBMCrossSectionalRanker(Model):
         """Model ABC: returns raw ranker scores (not normalised rank percentiles)."""
         if self._model is None:
             return np.full(len(X), 0.5)
-        X_arr = X[self._feature_names].fillna(0.0).values if self._feature_names else X.fillna(0.0).values
-        return self._model.predict(X_arr)
+        X_df = X[self._feature_names].fillna(0.0) if self._feature_names else X.fillna(0.0)
+        return self._model.predict(X_df)
 
     # ── persistence ───────────────────────────────────────────────────────────
 
