@@ -70,10 +70,14 @@ def test_pilots_list_shape(monkeypatch):
     assert isinstance(data, list) and data
 
     tf = next(p for p in data if p["id"] == "trend-following")
+    # long_only is part of the PilotSummary contract (webapp types.ts) — the live
+    # cutover needs it on every list item, so it's an exact key of the response.
     assert set(tf.keys()) == {
         "id", "name", "category", "description",
         "headline", "holdings_count", "aum_proxy", "followers_proxy",
+        "long_only",
     }
+    assert tf["long_only"] is False
     # Headline comes from tests/fixtures/timeseries_momentum_validation_summary.json.
     assert tf["headline"]["sharpe"] == 1.14
     assert tf["headline"]["deployable"] is True
@@ -121,6 +125,12 @@ def test_pilot_detail_shape(monkeypatch):
     assert body["id"] == "trend-following"
     assert body["validation_strategy_id"] == "timeseries_momentum"
     assert isinstance(body["weights"], dict)
+    # PilotDetail extends PilotSummary — detail must carry the summary proxies +
+    # long_only so the live frontend type is satisfied (Mismatch 3).
+    assert body["long_only"] is False
+    assert body["holdings_count"] == 5
+    assert body["aum_proxy"] == 0.0
+    assert body["followers_proxy"] == 0
     assert len(body["holdings"]) == 5
     assert body["holdings"][0]["symbol"]  # each holding carries a symbol
     assert isinstance(body["sector_allocation"], list) and body["sector_allocation"]
@@ -279,7 +289,69 @@ def test_portfolio_serializes_snapshot():
     assert body["age_hours"] == 1.5
 
 
-def test_equity_curve_empty_list_when_none():
+def test_portfolio_matches_frontend_contract():
+    """The /portfolio response must satisfy the webapp Portfolio /
+    PortfolioPositionView type (Mismatch 4): positions is a LIST with
+    qty/avg_cost field names, plus derived position_count/total_unrealized_pl
+    and an honest source tag."""
+
+    class _FakeSnap:
+        def to_dict(self):
+            return {
+                "positions": {
+                    "AAPL": {
+                        "symbol": "AAPL", "quantity": 10.0, "average_cost": 100.0,
+                        "current_price": 120.0, "market_value": 1200.0,
+                        "unrealized_pl": 200.0, "unrealized_pl_pct": 20.0,
+                        "dividends_received": 5.0, "name": "Apple",
+                    },
+                    "MSFT": {
+                        "symbol": "MSFT", "quantity": 4.0, "average_cost": 300.0,
+                        "current_price": 280.0, "market_value": 1120.0,
+                        "unrealized_pl": -80.0, "unrealized_pl_pct": -6.67,
+                        "dividends_received": 2.0, "name": "Microsoft",
+                    },
+                },
+                "buying_power": 500.0,
+                "total_equity": 2820.0,
+                "total_dividends": 7.0,
+                "fetched_at": "2026-07-12T00:00:00+00:00",
+            }
+
+        def is_stale(self):
+            return True
+
+        def age_hours(self):
+            return 25.0
+
+    class _Store:
+        def latest_account_snapshot(self):
+            return _FakeSnap()
+
+    with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
+        resp = client.get("/portfolio")
+    assert resp.status_code == 200
+    body = resp.json()
+    # Frontend Portfolio contract fields.
+    for key in ("total_equity", "buying_power", "total_unrealized_pl",
+                "total_dividends", "position_count", "positions", "fetched_at",
+                "source", "is_stale", "age_hours"):
+        assert key in body, f"missing Portfolio field: {key}"
+    assert body["source"] == "db"
+    assert body["position_count"] == 2
+    assert body["total_unrealized_pl"] == pytest.approx(120.0)  # 200 + (-80)
+    assert isinstance(body["positions"], list) and len(body["positions"]) == 2
+    aapl = next(p for p in body["positions"] if p["symbol"] == "AAPL")
+    # PortfolioPositionView uses qty/avg_cost, not quantity/average_cost.
+    assert aapl["qty"] == 10.0
+    assert aapl["avg_cost"] == 100.0
+    assert set(aapl.keys()) == {
+        "symbol", "qty", "avg_cost", "current_price",
+        "market_value", "unrealized_pl", "unrealized_pl_pct", "name",
+    }
+
+
+def test_equity_curve_envelope_empty_when_none():
     class _Store:
         def account_snapshot_history(self, since=None):
             return pd.DataFrame()
@@ -287,23 +359,32 @@ def test_equity_curve_empty_list_when_none():
     with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
         resp = client.get("/portfolio/equity-curve")
     assert resp.status_code == 200
-    assert resp.json() == []
+    # {range, curve:[]} envelope — never a bare list, never null (Mismatch 1).
+    assert resp.json() == {"range": "1Y", "curve": []}
 
 
-def test_equity_curve_rows():
+def test_equity_curve_envelope_rows():
     class _Store:
         def account_snapshot_history(self, since=None):
             return pd.DataFrame(
-                [["2026-07-10T00:00:00+00:00", 500.0, 1400.0, 10.0]],
+                [
+                    ["2026-07-09T00:00:00+00:00", 500.0, 1380.0, 8.0],
+                    ["2026-07-10T00:00:00+00:00", 500.0, 1400.0, 10.0],
+                ],
                 columns=["fetched_at", "buying_power", "total_equity", "total_dividends"],
             )
 
     with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
         resp = client.get("/portfolio/equity-curve?range=1M")
     assert resp.status_code == 200
-    rows = resp.json()
-    assert len(rows) == 1
-    assert rows[0]["total_equity"] == 1400.0
+    body = resp.json()
+    assert body["range"] == "1M"
+    curve = body["curve"]
+    assert isinstance(curve, list) and len(curve) == 2
+    # Each point is a CurvePoint {date, value}, fetched_at mapped to an ISO date.
+    assert all(set(p) == {"date", "value"} for p in curve)
+    assert curve[0] == {"date": "2026-07-09", "value": 1380.0}
+    assert curve[1] == {"date": "2026-07-10", "value": 1400.0}
 
 
 # ---------------------------------------------------------------------------

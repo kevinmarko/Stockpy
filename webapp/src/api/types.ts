@@ -105,6 +105,10 @@ export interface Portfolio {
   positions: PortfolioPositionView[];
   fetched_at: string | null;
   source: string; // "db" | "cache" | "live" | "unavailable"
+  // Freshness fields emitted by GET /portfolio (api/pilots_api.py). Optional so
+  // the mock (which omits them) still satisfies the type.
+  is_stale?: boolean;
+  age_hours?: number;
 }
 
 /** Execution mode surfaced to the UI so a follow is never presented as executed. */
