@@ -17,6 +17,50 @@ class TimeSeriesMomentumSignal(SignalModule):
     name = "timeseries_momentum"
     required_features = ["ROC_12M", "GARCH_Vol"]
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        roc_12m = df["ROC_12M"]
+        garch_vol = df["GARCH_Vol"]
+        
+        rf = settings.RISK_FREE_RATE
+        target_vol = 0.10
+        
+        valid = roc_12m.notna() & garch_vol.notna() & (garch_vol > 0)
+        
+        score = pd.Series(0.0, index=df.index)
+        confidence = pd.Series(0.0, index=df.index)
+        exps = pd.Series("WARNING: Missing ROC_12M or GARCH_Vol. Time-Series Momentum score set to 0.0.", index=df.index)
+        
+        if valid.any():
+            diff = roc_12m[valid] - rf
+            sign_val = np.sign(diff)
+            
+            vol_scalar = np.minimum(1.0, target_vol / garch_vol[valid])
+            strength_factor = np.tanh(roc_12m[valid].abs() * 3)
+            
+            sub_score = sign_val * vol_scalar * strength_factor
+            score[valid] = sub_score
+            confidence[valid] = vol_scalar
+            
+            weight = settings.SIGNAL_WEIGHTS.get(self.name, 15.0)
+            contrib = sub_score * weight
+            
+            contrib_pos = contrib >= 0
+            
+            exp_pos = "+" + contrib.round(1).astype(str) + "pts: Time-Series Momentum Bullish (ROC_12M=" + (roc_12m[valid] * 100).round(1).astype(str) + "%, GARCH_Vol=" + (garch_vol[valid] * 100).round(1).astype(str) + "%, Vol_Scalar=" + vol_scalar.round(2).astype(str) + ")"
+            exp_neg = "-" + contrib.abs().round(1).astype(str) + "pts: Time-Series Momentum Bearish (ROC_12M=" + (roc_12m[valid] * 100).round(1).astype(str) + "%, GARCH_Vol=" + (garch_vol[valid] * 100).round(1).astype(str) + "%, Vol_Scalar=" + vol_scalar.round(2).astype(str) + ")"
+            
+            exp_sub = pd.Series("", index=valid[valid].index)
+            exp_sub[contrib_pos] = exp_pos[contrib_pos]
+            exp_sub[~contrib_pos] = exp_neg[~contrib_pos]
+            exps[valid] = exp_sub
+            
+        return pd.DataFrame({
+            "score": score,
+            "confidence": confidence,
+            "explanation": exps,
+            "meta_label_proba": 1.0
+        }, index=df.index)
+
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         roc_12m = row["ROC_12M"]
         garch_vol = row["GARCH_Vol"]

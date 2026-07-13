@@ -58,6 +58,61 @@ class RSI2MeanReversionSignal(SignalModule):
             return False
         return True
 
+    def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
+        close = df["Close"]
+        rsi_2 = df["RSI_2"]
+        sma_5 = df["SMA_5"]
+        sma_200 = df["SMA_200"]
+        
+        score = pd.Series(0.0, index=df.index)
+        confidence = pd.Series(0.0, index=df.index)
+        exps = pd.Series("DETAIL: Insufficient data for RSI(2) mean reversion (NaN inputs).", index=df.index)
+        
+        valid = close.notna() & rsi_2.notna() & sma_5.notna() & sma_200.notna()
+        
+        if valid.any():
+            confidence[valid] = 1.0
+            
+            uptrend = valid & (close > sma_200)
+            exps[valid & ~uptrend] = (
+                "0.0: Downtrend (Close " + close[valid & ~uptrend].round(2).astype(str) + 
+                " <= SMA200 " + sma_200[valid & ~uptrend].round(2).astype(str) + 
+                ") — RSI(2) mean reversion long disabled."
+            )
+            
+            not_reverted = uptrend & (close <= sma_5)
+            exps[uptrend & ~not_reverted] = (
+                "0.0: Close " + close[uptrend & ~not_reverted].round(2).astype(str) + 
+                " already back above SMA5 " + sma_5[uptrend & ~not_reverted].round(2).astype(str) + 
+                " — mean-reversion move has already occurred, no fresh entry."
+            )
+            
+            oversold = not_reverted & (rsi_2 < self.oversold_threshold)
+            exps[not_reverted & ~oversold] = (
+                "0.0: RSI(2) " + rsi_2[not_reverted & ~oversold].round(1).astype(str) + 
+                " >= oversold threshold " + str(self.oversold_threshold) + "."
+            )
+            
+            if oversold.any():
+                import numpy as np
+                sub_score = (self.oversold_threshold - rsi_2[oversold]) / self.oversold_threshold
+                sub_score = np.maximum(0.0, np.minimum(1.0, sub_score))
+                score[oversold] = sub_score
+                
+                exps[oversold] = (
+                    sub_score.round(2).astype(str) + ": Oversold-in-uptrend — RSI(2)=" + 
+                    rsi_2[oversold].round(1).astype(str) + " (< " + str(self.oversold_threshold) + 
+                    "), Close " + close[oversold].round(2).astype(str) + " > SMA200 " + 
+                    sma_200[oversold].round(2).astype(str) + "."
+                )
+                
+        return pd.DataFrame({
+            "score": score,
+            "confidence": confidence,
+            "explanation": exps,
+            "meta_label_proba": 1.0
+        }, index=df.index)
+
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         close = row["Close"]
         rsi_2 = row["RSI_2"]
