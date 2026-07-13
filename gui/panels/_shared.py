@@ -87,6 +87,49 @@ def _kill_switch():
     return GlobalKillSwitch(sentinel_file=settings.OUTPUT_DIR / "KILL_SWITCH")
 
 
+# ---------------------------------------------------------------------------
+# Cross-tab regime filter — session-aware glue over gui.regime_filter.
+# ---------------------------------------------------------------------------
+# The sidebar in gui/app.py stores the operator's regime selection in
+# st.session_state["regime_filter"]. These helpers read that selection safely
+# (they no-op outside a Streamlit run context, e.g. in tests) and apply the
+# pure gui.regime_filter logic so the shared state-snapshot loader can hand
+# every panel a regime-filtered `signals` list without any per-panel edits.
+
+
+def active_regime_filter() -> str:
+    """Return the operator's selected macro-regime filter (session state).
+
+    Reads ``st.session_state["regime_filter"]``; defaults to the no-op
+    ``"All regimes"`` label when Streamlit isn't running, the key is unset, or
+    anything goes wrong (dead-letter — the loader must never crash over this).
+    """
+    from gui.regime_filter import ALL_REGIMES_LABEL
+
+    try:
+        import streamlit as st
+
+        return str(st.session_state.get("regime_filter", ALL_REGIMES_LABEL))
+    except Exception:  # noqa: BLE001 - no Streamlit context / no session state
+        return ALL_REGIMES_LABEL
+
+
+def apply_session_regime_filter(snapshot):
+    """Filter a loaded snapshot's ``signals`` by the active session regime.
+
+    Thin wrapper: reads the selection via :func:`active_regime_filter` and
+    delegates to :func:`gui.regime_filter.filter_snapshot`. The "All regimes"
+    default returns the snapshot unchanged (identity), so the behavior with no
+    explicit selection is byte-for-byte today's behavior.
+    """
+    from gui.regime_filter import filter_snapshot
+
+    try:
+        return filter_snapshot(snapshot, active_regime_filter())
+    except Exception:  # noqa: BLE001 - never break loading over a cosmetic filter
+        return snapshot
+
+
 def list_report_files(
     directory: Path, pattern: str, *, newest_first: bool = True
 ) -> List[Path]:

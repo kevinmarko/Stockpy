@@ -36,12 +36,74 @@ helpers too without pulling in Streamlit-panel machinery).
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Dict, Optional
 
 import pandas as pd
 
 from engine.advisory import CONFIG as _ADVISORY_CONFIG
 from validation.thresholds import NET_SHARPE_MIN
+
+# ---------------------------------------------------------------------------
+# Severity palette — single source of truth (light + dark variants)
+# ---------------------------------------------------------------------------
+# Every severity colour used by the Styler helpers below (and, going forward,
+# by any panel that wants theme-aware chrome) is defined ONCE here, with a
+# light-mode and a dark-mode hex chosen for WCAG-reasonable contrast against
+# that theme's table/background surface.
+#
+# Why not the raw brand accents?  The bright brand greens/ambers
+# (``#10b981`` / ``#f59e0b``) are eye-catching but score badly for *text*
+# contrast — ``#10b981`` on white is ~2.1:1 and ``#f59e0b`` ~1.9:1, both well
+# under the 4.5:1 AA threshold.  The ``light`` values below are the same hues
+# darkened into an AA-reasonable range for coloured text; the ``dark`` values
+# are lightened so they stay legible on a dark surface.  The bright accents are
+# retained under :data:`BRAND_ACCENTS` for non-text UI chrome (bars, dots,
+# borders) where luminance contrast matters far less.
+SEVERITY_PALETTE: Dict[str, Dict[str, str]] = {
+    "light": {
+        "positive": "#047857",  # emerald-700  — ~5:1 on white
+        "negative": "#dc2626",  # red-600      — ~4.5:1 on white
+        "warning": "#b45309",   # amber-700    — ~4.7:1 on white (was #f59e0b)
+        "neutral": "#334155",   # slate-700
+    },
+    "dark": {
+        "positive": "#34d399",  # emerald-400  — legible on dark surfaces
+        "negative": "#f87171",  # red-400
+        "warning": "#fbbf24",   # amber-400
+        "neutral": "#cbd5e1",   # slate-300
+    },
+}
+
+#: Bright brand accents — kept for non-text chrome (progress bars, status dots,
+#: borders) where the low text-contrast of these hues is irrelevant. Not used
+#: for coloured *text* (see the accessible :data:`SEVERITY_PALETTE`).
+BRAND_ACCENTS: Dict[str, str] = {
+    "positive": "#10b981",
+    "negative": "#ef4444",
+    "warning": "#f59e0b",
+    "neutral": "#64748b",
+}
+
+
+def severity_color(name: str, theme: str = "light") -> str:
+    """Return the hex for a severity (``positive``/``negative``/``warning``/
+    ``neutral``) in the given ``theme`` (``"light"`` | ``"dark"``).
+
+    Falls back to the light palette for an unknown theme and to ``""`` for an
+    unknown severity name — never raises (used in render paths).
+    """
+    palette = SEVERITY_PALETTE.get(theme, SEVERITY_PALETTE["light"])
+    return palette.get(name, "")
+
+
+# Convenience light-mode shortcuts used by the pandas-Styler helpers below.
+# Styler emits *static* inline CSS (it cannot react to prefers-color-scheme per
+# cell), so the helpers use the accessible light-mode values; the dark variants
+# and the CSS custom properties below drive the theme-aware app chrome and any
+# future per-panel retrofit.
+_POSITIVE = SEVERITY_PALETTE["light"]["positive"]
+_NEGATIVE = SEVERITY_PALETTE["light"]["negative"]
+_WARNING = SEVERITY_PALETTE["light"]["warning"]
 
 # ---------------------------------------------------------------------------
 # Thresholds — sourced from live config, never re-typed literals.
@@ -80,9 +142,9 @@ def _color_pnl(val) -> str:
     except (TypeError, ValueError):
         return ""
     if v > 0:
-        return "color: #10b981; font-weight: 600;"
+        return f"color: {_POSITIVE}; font-weight: 600;"
     if v < 0:
-        return "color: #ef4444; font-weight: 600;"
+        return f"color: {_NEGATIVE}; font-weight: 600;"
     return ""
 
 
@@ -93,9 +155,9 @@ def _color_kelly_target(val) -> str:
     except (TypeError, ValueError):
         return ""
     if v >= KELLY_CEILING_PCT:
-        return "color: #ef4444; font-weight: 700;"
+        return f"color: {_NEGATIVE}; font-weight: 700;"
     if v >= KELLY_WARN_PCT:
-        return "color: #f59e0b; font-weight: 600;"
+        return f"color: {_WARNING}; font-weight: 600;"
     return ""
 
 
@@ -106,11 +168,11 @@ def _color_conviction(val) -> str:
     except (TypeError, ValueError):
         return ""
     if v >= CONVICTION_GREEN_MIN:
-        return "color: #10b981; font-weight: 600;"
+        return f"color: {_POSITIVE}; font-weight: 600;"
     if v < _CONVICTION_LOW_CUTOFF:
-        return "color: #ef4444; font-weight: 600;"
+        return f"color: {_NEGATIVE}; font-weight: 600;"
     if v < CONVICTION_YELLOW_MIN:
-        return "color: #f59e0b;"
+        return f"color: {_WARNING};"
     return ""
 
 
@@ -121,8 +183,8 @@ def _color_sharpe(val) -> str:
     except (TypeError, ValueError):
         return ""
     if v < VALIDATION_SHARPE_MIN:
-        return "color: #ef4444; font-weight: 600;"
-    return "color: #10b981;"
+        return f"color: {_NEGATIVE}; font-weight: 600;"
+    return f"color: {_POSITIVE};"
 
 
 def style_severity(
@@ -198,3 +260,69 @@ def freshness_badge(
         age_min = age_seconds / 60.0
         return f":red[**{label} as of {ts_str} — STALE ({age_min:.0f} min old)**]"
     return f"{label} as of {ts_str}"
+
+
+# ---------------------------------------------------------------------------
+# Global CSS injection — theme-aware severity custom properties + tab-bar
+# responsiveness.  Injected ONCE at app startup by gui/app.py.
+# ---------------------------------------------------------------------------
+
+
+def build_global_css() -> str:
+    """Return the ``<style>`` block that defines the theme-aware severity
+    palette as CSS custom properties plus light tab-bar responsiveness tweaks.
+
+    The custom properties (``--sev-positive`` etc.) default to the accessible
+    **light** values on ``:root`` and are overridden to the **dark** values via
+    both a ``@media (prefers-color-scheme: dark)`` block (honors the OS/browser
+    theme) and a ``[data-theme="dark"]`` selector (honors Streamlit's own theme
+    toggle, which stamps ``data-theme`` on the app root).  Nothing consumes the
+    variables yet beyond this injection, so app chrome renders exactly as
+    before; the variables are the foundation for the documented follow-up
+    per-panel palette retrofit.
+
+    The tab-bar rules let the 18-tab row **wrap** instead of overflowing /
+    horizontally scrolling on narrow viewports — all tabs stay reachable.
+    """
+    light = SEVERITY_PALETTE["light"]
+    dark = SEVERITY_PALETTE["dark"]
+
+    def _vars(palette: Dict[str, str], indent: str) -> str:
+        return "\n".join(
+            f"{indent}--sev-{name}: {palette[name]};"
+            for name in ("positive", "negative", "warning", "neutral")
+        )
+
+    return f"""<style>
+:root {{
+{_vars(light, "  ")}
+}}
+@media (prefers-color-scheme: dark) {{
+  :root {{
+{_vars(dark, "    ")}
+  }}
+}}
+:root[data-theme="dark"], [data-theme="dark"] {{
+{_vars(dark, "  ")}
+}}
+/* Let the 18-tab bar wrap onto multiple rows instead of overflowing on
+   narrow viewports — every tab stays reachable without horizontal scroll. */
+.stTabs [data-baseweb="tab-list"] {{
+  flex-wrap: wrap;
+  row-gap: 0.25rem;
+}}
+</style>"""
+
+
+def inject_global_css() -> None:
+    """Inject :func:`build_global_css` into the current Streamlit app once.
+
+    Safe to import in non-Streamlit contexts: ``streamlit`` is imported lazily
+    and any failure is swallowed (a stylesheet must never crash the app).
+    """
+    try:
+        import streamlit as st
+
+        st.markdown(build_global_css(), unsafe_allow_html=True)
+    except Exception:  # noqa: BLE001 - cosmetic; never break the app over CSS
+        pass

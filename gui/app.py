@@ -72,9 +72,10 @@ except Exception:  # pragma: no cover - dotenv always present per requirements.t
 import streamlit as st
 
 from settings import settings
-from gui import panels, run_mode
+from gui import panels, run_mode, styling
 from gui.export_utils import dataframe_to_csv_bytes, signals_snapshot_to_dataframe
 from gui.help_content import metric_help
+from gui.regime_filter import ALL_REGIMES_LABEL, apply_regime_filter
 
 logging.basicConfig(level=getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO))
 logger = logging.getLogger("gui.app")
@@ -86,6 +87,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Inject the theme-aware severity palette (CSS custom properties + light/dark
+# variants) and the responsive tab-bar rules ONCE at startup. Purely additive
+# chrome — nothing consumes the variables yet, so the app renders as before.
+styling.inject_global_css()
 
 
 def _canonical_regimes() -> list[str]:
@@ -151,15 +157,17 @@ if st.sidebar.button("🔄 Clear cached reads"):
 # ---------------------------------------------------------------------------
 # Cross-tab regime-conditional filter
 # ---------------------------------------------------------------------------
-# Stored in st.session_state so any panel COULD read it in the future without
-# needing to be wired today. Not yet consumed by any gui/panels/*.py render
-# function — this is the first concrete proof-of-use, scoped to gui/app.py's
-# own sidebar (a "N symbols match" count + CSV export), per the task's
-# low-conflict boundary with the other in-flight agents' panel work.
+# The selection lives in st.session_state["regime_filter"] and is now consumed
+# at the SHARED snapshot-loading layer: gui.panels.load_state_snapshot() applies
+# it (via gui.regime_filter) so every panel reading the shared snapshot gets a
+# regime-filtered `signals` list without any per-panel edits. "All regimes" is
+# an identity no-op, so the default reproduces today's behavior exactly. Here in
+# the sidebar we read the RAW (unfiltered) snapshot for an honest "N of M"
+# denominator and apply the pure filter for the numerator + CSV export.
 st.sidebar.divider()
 st.sidebar.subheader("🌐 Regime Filter")
-_regime_options = ["All regimes"] + _canonical_regimes()
-st.session_state.setdefault("regime_filter", "All regimes")
+_regime_options = [ALL_REGIMES_LABEL] + _canonical_regimes()
+st.session_state.setdefault("regime_filter", ALL_REGIMES_LABEL)
 st.sidebar.selectbox(
     "Filter by macro regime",
     options=_regime_options,
@@ -168,16 +176,15 @@ st.sidebar.selectbox(
 )
 
 try:
-    _snap = panels.load_state_snapshot()
+    # Raw, UNfiltered snapshot — so the "of M in the last run" denominator
+    # reflects the full universe regardless of the active filter.
+    _snap = panels.load_state_snapshot(apply_filter=False)
     _signals = _snap.get("signals", []) if isinstance(_snap, dict) else []
-    _selected_regime = st.session_state.get("regime_filter", "All regimes")
-    if _selected_regime == "All regimes":
-        _matching = _signals
-    else:
-        _matching = [
-            s for s in _signals
-            if str(s.get("macro_status", "")).strip().upper() == _selected_regime.upper()
-        ]
+    _selected_regime = st.session_state.get("regime_filter", ALL_REGIMES_LABEL)
+    _snapshot_regime = _snap.get("market_regime") if isinstance(_snap, dict) else None
+    _matching = apply_regime_filter(
+        _signals, _selected_regime, default_regime=_snapshot_regime
+    )
     st.sidebar.caption(
         f"**{len(_matching)}** symbols match the selected regime "
         f"(of {len(_signals)} in the last run).",
@@ -295,6 +302,20 @@ tab_labels = [
     "📁 Report Library",
     "🔬 Validation Lab",
 ]
+# Light tab grouping: a compact legend that maps the 18-tab row into five
+# logical clusters so operators can orient quickly. The tabs themselves stay a
+# single st.tabs row (indices/safe_panel wrapping unchanged); the responsive
+# wrap CSS injected by styling.inject_global_css() keeps every tab reachable on
+# narrow viewports instead of overflowing off-screen.
+st.caption(
+    "🗂️ **Tab groups** — "
+    "**Operate:** 🚀 Launcher · 🧩 Strategy Matrix · 🛰️ Market Data · 📡 Live Inventory   |   "
+    "**Analyze:** 📈 Reports · 🧮 Options · 📊 Observability · 📊 Analytics · 🔗 Pairs   |   "
+    "**Validate:** 🛡️ Gravity Audit · 🔬 Validation Lab · 📁 Report Library   |   "
+    "**AI:** 🪄 AI Insights · 🎛️ AI Control Center · 📝 Prompts   |   "
+    "**Configure:** ⚙️ Settings · 📒 Paper Monitor · ❓ Help"
+)
+
 tabs = st.tabs(tab_labels)
 
 with tabs[0]:
