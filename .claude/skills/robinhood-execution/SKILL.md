@@ -79,7 +79,14 @@ not — read them a checklist only if they ask for one.
 3. **Preview every intent (ALWAYS), one at a time, narrated.** For each
    intent, call `review_equity_order` with its `symbol`, `side`, `order_type`,
    and quantity:
-   - SELL intents carry a concrete `qty` (the held share count).
+   - SELL intents come in two shapes:
+     - **Full exit** — `qty` is a concrete number (the held share count). Sell
+       exactly that quantity.
+     - **Partial trim** — `qty: null` with a `target_notional` (a Pilot-follow
+       rebalance-down). Resolve it exactly like a BUY: call `get_equity_quotes`
+       for a live price, compute `qty = floor(target_notional / price)`, then
+       **cap `qty` at the held share count** (`get_equity_positions`) so a trim can
+       never oversell, and verify `qty > 0`. Preview only if the resolved qty is 0.
    - BUY intents carry `qty: null` and a `target_notional`. Call
      `get_equity_quotes` for a live price, compute
      `qty = floor(target_notional / price)`, and verify

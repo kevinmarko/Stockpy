@@ -53,6 +53,51 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
+# Cap on the number of persisted equity-curve points per validation summary.
+# The curve is illustrative (a downsampled OOS equity line for the Pilots PWA),
+# not tick-exact, so ~120 evenly-spaced points bound the on-disk JSON size while
+# still rendering smoothly across the 1W–2Y range toggles.
+MAX_EQUITY_CURVE_POINTS = 120
+
+
+def _build_equity_curve(
+    returns: "pd.Series", max_points: int = MAX_EQUITY_CURVE_POINTS
+) -> List[Dict[str, Any]]:
+    """Downsampled base-100 equity curve from a net-of-cost return series.
+
+    ``equity = (1 + returns).cumprod() * 100`` (base-100 indexed), downsampled to
+    at most ``max_points`` evenly-spaced points as ``[{"date": iso, "value": float}]``.
+    Returns ``[]`` (never a fabricated flat line — CONSTRAINT #4) on empty, all-NaN,
+    all-zero (the no-trials degenerate fallback), or non-finite input; never raises
+    (CONSTRAINT #6).
+    """
+    try:
+        if returns is None or len(returns) == 0:
+            return []
+        r = returns.dropna()
+        if r.empty or bool((r == 0).all()):
+            return []
+        equity = (1.0 + r).cumprod() * 100.0
+        equity = equity[np.isfinite(equity.to_numpy())]
+        if equity.empty:
+            return []
+        n = len(equity)
+        if n > max_points:
+            idx = np.unique(np.linspace(0, n - 1, max_points).round().astype(int))
+            equity = equity.iloc[idx]
+        out: List[Dict[str, Any]] = []
+        for ts, val in equity.items():
+            try:
+                iso = pd.Timestamp(ts).date().isoformat()
+            except Exception:
+                iso = str(ts)
+            out.append({"date": iso, "value": round(float(val), 4)})
+        return out
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("_build_equity_curve failed (%s); returning empty curve", exc)
+        return []
+
+
 class ValidationReport:
     """Standardized validation report output by the harness."""
     def __init__(
@@ -79,6 +124,7 @@ class ValidationReport:
         is_options_selling: bool = False,
         stress_test_results: Optional[Dict[str, "StressResult"]] = None,
         family_multiple_testing: Optional[Dict[str, Any]] = None,
+        equity_curve: Optional[List[Dict[str, Any]]] = None,
     ):
         self.name = name
         self.start_date = start_date
@@ -110,6 +156,10 @@ class ValidationReport:
         # compute_family_multiple_testing_report(). None until that function has
         # been called at least once for this report (e.g. by run()'s final step).
         self.family_multiple_testing = family_multiple_testing
+        # Downsampled base-100 OOS equity curve ([{date, value}, ...]) for the
+        # Pilots PWA performance chart. [] (never a fabricated flat line) when the
+        # strategy produced no meaningful returns. See _build_equity_curve().
+        self.equity_curve = equity_curve or []
 
     @property
     def stress_gate_passed(self) -> bool:
@@ -232,6 +282,9 @@ class ValidationReport:
             # re-run any backtest (see compute_family_multiple_testing_report).
             "n_trials": int(self.n_trials),
             "family_multiple_testing": family_mt,
+            # Downsampled base-100 OOS equity curve for the Pilots PWA performance
+            # chart ([] when no meaningful returns — never a fabricated line).
+            "equity_curve": self.equity_curve or [],
         }
 
 
@@ -590,6 +643,10 @@ class StrategyValidationHarness:
         hit_rate = float((full_returns[trade_days] > 0).mean()) if trade_days.any() else 0.0
         avg_trade_pct = float(full_returns[trade_days].mean()) if trade_days.any() else 0.0
 
+        # Downsampled base-100 OOS equity curve for the Pilots PWA (same
+        # net-of-cost series that fed sharpe/max_dd above — no extra backtest).
+        equity_curve = _build_equity_curve(full_returns)
+
         # 5b. Tail-scenario stress testing for options-selling strategies.
         # Replays the strategy across each dated shock window (Lehman, Volmageddon,
         # COVID, yen-unwind). Required for options-selling deployability; the gate
@@ -627,6 +684,7 @@ class StrategyValidationHarness:
             n_trials=n_trials,
             is_options_selling=self.is_options_selling,
             stress_test_results=stress_test_results,
+            equity_curve=equity_curve,
         )
 
         # Print the stress summary at the TOP of every options-selling report so

@@ -218,9 +218,15 @@ def _intent_dict(
     BUY  → ``qty`` is left null and ``target_notional`` (capped) is emitted; the
            execution agent computes the share count from a LIVE MCP quote at
            review time (the headless pipeline has no live price for unheld names).
-    SELL → only for HELD symbols; ``qty`` is the held quantity (a full exit),
-           ``target_notional`` is the held market value.  A SELL of an unheld
-           symbol is dropped (nothing to sell — no fabricated position).
+    SELL → only for HELD symbols.  A FULL exit (the default, when the rec carries
+           no positive ``suggested_position_pct``) emits ``qty`` = the held
+           quantity and ``target_notional`` = the held market value.  A PARTIAL
+           TRIM (rec carries ``suggested_position_pct > 0`` — the Pilot-follow
+           rebalance signal) instead leaves ``qty`` null and emits a notional-sized
+           ``target_notional`` (``equity * pct``, capped by the per-order cap AND
+           the held market value); the execution agent resolves the share count
+           from a live quote like a BUY and caps it at the held quantity.  A SELL
+           of an unheld symbol is dropped (nothing to sell — no fabricated position).
     """
     action = str(getattr(rec, "action", "")).upper()
     symbol = str(getattr(rec, "symbol", "")).upper()
@@ -258,9 +264,35 @@ def _intent_dict(
         held_qty = _f(getattr(held, "quantity", 0.0))
         if held_qty <= 0:
             return None
-        qty = held_qty
-        gate_qty = held_qty
-        target_notional = round(_f(getattr(held, "market_value", 0.0)), 2)
+        held_mv = _f(getattr(held, "market_value", 0.0))
+        # A SELL carrying a positive `suggested_position_pct` is a PARTIAL TRIM to a
+        # target notional (a Pilot-follow rebalance): size it by notional exactly
+        # like a BUY — `qty` stays null and is resolved DOWNSTREAM from a live quote
+        # at review time, then capped at the held quantity so a trim can never
+        # oversell. A SELL with pct == 0 (every advisory RISK-REDUCE exit, whose
+        # exit fraction lives on a separate field and never lands in
+        # suggested_position_pct) keeps the legacy FULL-exit semantics below,
+        # byte-identical to before this branch existed.
+        trim_pct = _f(getattr(rec, "suggested_position_pct", 0.0))
+        if trim_pct > 0:
+            equity = _f(getattr(snapshot, "total_equity", 0.0))
+            notional = equity * trim_pct
+            if max_notional > 0:
+                notional = min(notional, max_notional)
+            if held_mv > 0:
+                notional = min(notional, held_mv)  # never trim more than we hold
+            if notional <= 0:
+                return None
+            qty = None  # resolved downstream, capped at held_qty (see qty contract)
+            target_notional = round(notional, 2)
+            price = _f(getattr(held, "current_price", 0.0))
+            gate_qty = held_qty
+            if price > 0:
+                gate_qty = max(1.0, min(held_qty, math.floor(notional / price)))
+        else:
+            qty = held_qty
+            gate_qty = held_qty
+            target_notional = round(held_mv, 2)
 
     # -----------------------------------------------------------------------
     # LIMIT-PRICE CONTRACT (verbatim — the robinhood-execution skill/docs copy

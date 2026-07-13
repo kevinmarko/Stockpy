@@ -13,8 +13,11 @@ Design constraints (mirror the wider codebase conventions):
 * **Never fabricate** (CONSTRAINT #4) — when a Pilot has no ``validation_strategy_id``,
   or its summary file is missing/unreadable, we return ``metrics=None`` /
   ``curve=None`` with an honest ``reason`` string. We NEVER synthesize a curve
-  or invent metrics. No per-range equity curve is persisted yet, so ``curve`` is
-  always ``None`` and ``range`` is echoed for API symmetry only.
+  or invent metrics. The ``curve`` is the REAL downsampled base-100 OOS equity
+  series persisted by the harness (``equity_curve`` in the summary JSON); when a
+  summary predates that field, or the strategy produced no meaningful returns, the
+  curve stays ``None``. The ``range`` param is an honest tail-slice (zoom) of that
+  same series — never a re-simulation.
 * **Dead-letter resilient** (CONSTRAINT #6) — a missing/corrupt file degrades to
   ``None``, never an exception.
 """
@@ -22,8 +25,9 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from settings import settings
 
@@ -38,6 +42,44 @@ __all__ = [
 # The five headline fields surfaced on the marketplace list / detail badge.
 # Kept as a module constant so the headline helper and the detail path agree.
 _HEADLINE_KEYS = ("sharpe", "dsr", "pbo", "max_drawdown", "deployable")
+
+# Approximate calendar-day windows for the PWA's range toggles. The persisted
+# equity curve is downsampled (~120 points over the full OOS span), so a short
+# range is an honest tail zoom limited by that resolution — not a re-run.
+_RANGE_DAYS: Dict[str, int] = {
+    "1W": 7,
+    "1M": 31,
+    "3M": 93,
+    "6M": 186,
+    "1Y": 372,
+    "2Y": 745,
+}
+
+
+def _slice_curve_by_range(
+    curve: List[Dict[str, Any]], range: str  # noqa: A002 - API query param name
+) -> List[Dict[str, Any]]:
+    """Return the tail of ``curve`` covering the last ``range`` calendar days.
+
+    A pure zoom on the persisted series: keeps points whose ISO ``date`` is within
+    ``_RANGE_DAYS[range]`` of the last point. An unknown range (the API validates,
+    but be defensive) or unparseable dates return the full curve. Never returns a
+    single-point curve when ≥2 points exist (a chart needs two), so a very short
+    range on a sparse downsampled curve still renders — falls back to the last 2.
+    """
+    days = _RANGE_DAYS.get((range or "").upper())
+    if not days or len(curve) <= 2:
+        return curve
+    try:
+        last_iso = str(curve[-1].get("date"))
+        last_day = date.fromisoformat(last_iso)
+        cutoff = last_day - timedelta(days=days)
+        sliced = [p for p in curve if date.fromisoformat(str(p.get("date"))) >= cutoff]
+    except (ValueError, TypeError):
+        return curve
+    if len(sliced) < 2:
+        return curve[-2:]
+    return sliced
 
 
 def _reports_dir(reports_dir: Optional[str]) -> Path:
@@ -119,17 +161,20 @@ def pilot_performance(
 ) -> Dict[str, Any]:
     """Return a Pilot's performance payload for the detail / performance endpoint.
 
-    Shape: ``{"metrics": {...} | None, "curve": None, "benchmark": None,
+    Shape: ``{"metrics": {...} | None, "curve": [...] | None, "benchmark": None,
     "reason": str | None, "range": str}``.
 
     * ``metrics`` is the full validated summary dict when available, else
       ``None``.
-    * ``curve`` and ``benchmark`` are always ``None`` in v1 — no per-Pilot
-      equity series is persisted yet, and we NEVER synthesize one (CONSTRAINT #4).
+    * ``curve`` is the REAL downsampled base-100 OOS equity series persisted by
+      the harness (``equity_curve`` in the summary), tail-sliced to ``range``.
+      ``None`` when the summary predates that field or the strategy had no
+      meaningful returns — NEVER synthesized (CONSTRAINT #4). ``benchmark`` is not
+      persisted yet, so it stays ``None``.
     * ``reason`` is an honest human-readable explanation whenever ``metrics`` or
       ``curve`` is unavailable, else ``None``.
-    * ``range`` is echoed for API symmetry; since no per-range curve exists it
-      does not change the output.
+    * ``range`` is a tail-zoom on the persisted series (see
+      :func:`_slice_curve_by_range`).
     """
     strategy_id = getattr(pilot, "validation_strategy_id", None)
 
@@ -155,7 +200,19 @@ def pilot_performance(
             "range": range,
         }
 
-    # Metrics exist; curve does not (never persisted per-Pilot yet).
+    # Metrics exist. Surface the persisted equity curve when present, tail-sliced
+    # to the requested range; a missing/empty curve stays None with an honest
+    # reason (older summary, or no meaningful returns) — never fabricated.
+    raw_curve = summary.get("equity_curve")
+    if isinstance(raw_curve, list) and len(raw_curve) >= 2:
+        return {
+            "metrics": summary,
+            "curve": _slice_curve_by_range(raw_curve, range),
+            "benchmark": None,
+            "reason": None,
+            "range": range,
+        }
+
     return {
         "metrics": summary,
         "curve": None,
