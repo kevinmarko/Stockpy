@@ -500,6 +500,11 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                 sym = str(row.get("Symbol", "")).upper().strip()
                 if sym and shares > 0:
                     held_symbols.add(sym)
+                # NaN is truthy in Python, so a plain "`or ''`" fallback does not
+                # catch a genuinely-missing (NaN float) sector cell and would
+                # otherwise stringify it to the literal text "nan".
+                _sector_val = row.get("sector", row.get("Sector", ""))
+                sector_str = "" if pd.isna(_sector_val) else str(_sector_val or "")
                 signals.append({
                     "symbol": str(row.get("Symbol", "")),
                     "action": str(row.get("Action Signal", "")),
@@ -560,7 +565,14 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     # orchestrator and advisory (reporting/state_snapshot.py)
                     # writers. "" (never fabricated — CONSTRAINT #4) when the
                     # column is absent/blank for this ticker.
-                    "sector": str(row.get("sector", row.get("Sector", "")) or ""),
+                    "sector": sector_str,
+                    # Per-module weighted score breakdown (see
+                    # pipeline/production_steps.py's Score_Components
+                    # threading) so pilots/scoring.py can re-blend the
+                    # already-computed per-signal scores under any Pilot's
+                    # weight vector. {} (never fabricated) when the strategy
+                    # engine produced no breakdown for this ticker.
+                    "score_components": row.get("Score_Components") or {},
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

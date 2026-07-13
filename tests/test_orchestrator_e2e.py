@@ -227,6 +227,24 @@ class TestStateSnapshot:
         symbols = [s["symbol"] for s in snap["signals"]]
         assert "AAPL" in symbols
 
+    def test_score_components_populated_via_real_run_pipeline(self, orchestrator_run):
+        """pilots/scoring.py re-blends each symbol's per-module score by
+        reading score_components out of state_snapshot.json. This confirms
+        the full chain -- StrategyEngine.evaluate_security()'s
+        Score_Components dict -> pipeline/production_steps.py's eval_results
+        column mapping -> dashboard_df -> _write_state_snapshot() -- actually
+        threads a non-empty breakdown through a REAL run_pipeline() call
+        (MockDataEngine data, real signal modules), not just a hand-built
+        DataFrame."""
+        snap = _read_json(orchestrator_run["output_dir"] / "state_snapshot.json")
+        aapl_signal = next(s for s in snap["signals"] if s["symbol"] == "AAPL")
+        assert isinstance(aapl_signal["score_components"], dict)
+        assert len(aapl_signal["score_components"]) > 0
+        assert all(isinstance(v, float) for v in aapl_signal["score_components"].values())
+        # Real GICS string from MockDataEngine's synthetic fundamentals, not
+        # a fabricated/blank value and not the literal "nan".
+        assert aapl_signal["sector"] == "Technology"
+
     def test_advisory_loop_ran_and_populated_advisory_action(self, orchestrator_run):
         """The only externally-observable proof that Step 3b (the advisory
         evaluation loop) actually executed and wrote back into final_df is

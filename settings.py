@@ -431,10 +431,20 @@ class Settings(BaseSettings):
     OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
     CORS_ALLOWED_ORIGINS: list[str] = Field(
-        default_factory=lambda: ["http://localhost:3000"],
+        # http://localhost:3000 is the classic CRA/Node dev-server convention;
+        # the 5173 pair (both host spellings, since browsers treat localhost
+        # and 127.0.0.1 as distinct origins) is Vite's default port, used by
+        # webapp/ (the Pilots PWA, api/pilots_api.py's consumer) — without
+        # these, `npm run dev` + `uvicorn api.pilots_api:app` fails CORS on a
+        # fresh clone with zero .env configuration.
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
         description=(
-            "Allowed browser origins for the read-only State API CORS policy. "
-            "JSON array in .env, e.g. "
+            "Allowed browser origins for the read-only State API / Pilots API "
+            "CORS policy. JSON array in .env, e.g. "
             '["http://localhost:3000", "https://app.example.com"].'
         ),
     )
