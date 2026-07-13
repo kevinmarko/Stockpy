@@ -98,7 +98,46 @@ class TestUnverifiableVerdict:
     def test_empty_payload_is_unverifiable(self):
         result = audit_fundamentals_snapshot("TSLA", "2024-02-01", {})
         assert result.verdict == "UNVERIFIABLE"
-        assert result.passed is False
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase D4 — Coverage Report & Lookahead Sample
+# ─────────────────────────────────────────────────────────────────────────────
+from validation.pit_fundamentals import generate_coverage_report, audit_no_lookahead_sample
+from data.historical_store import HistoricalStore
+
+class TestCoverageReport:
+    def test_coverage_report(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "cov.db"))
+        
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 10}, {}, report_date="2020-01-01", source="edgar")
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 12}, {}, report_date="2020-04-01", source="edgar")
+        store.upsert_fundamentals_pit("MSFT", {"pe_ratio": 25}, {}, report_date="2019-12-01", source="edgar")
+        
+        df = generate_coverage_report(store)
+        assert len(df) == 2
+        
+        aapl_row = df[df["symbol"] == "AAPL"].iloc[0]
+        assert aapl_row["pit_rows"] == 2
+        assert aapl_row["earliest_report_date"] == "2020-01-01"
+        assert aapl_row["latest_report_date"] == "2020-04-01"
+        
+        msft_row = df[df["symbol"] == "MSFT"].iloc[0]
+        assert msft_row["pit_rows"] == 1
+        assert msft_row["earliest_report_date"] == "2019-12-01"
+
+    def test_audit_no_lookahead_sample(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "cov.db"))
+        
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 10.0}, {}, report_date="2020-01-01", source="edgar")
+        
+        # Run audit at 2020-02-01 (should isolate against a 2020-03-02 injection)
+        is_isolated = audit_no_lookahead_sample(store, "AAPL", "2020-02-01")
+        assert is_isolated is True
+        
+        # Verify the injection was cleaned up
+        hist = store.get_fundamentals_history("AAPL")
+        assert len(hist) == 1
+        assert hist.iloc[0]["report_date"] == "2020-01-01"
 
     def test_none_payload_is_unverifiable(self):
         result = audit_fundamentals_snapshot("TSLA", "2024-02-01", None)

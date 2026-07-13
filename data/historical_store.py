@@ -830,7 +830,9 @@ class HistoricalStore:
                     rows = conn.execute(
                         """
                         SELECT as_of, pe_ratio, pb_ratio, roe,
-                               dividend_yield, market_cap
+                               dividend_yield, market_cap,
+                               eps, operating_margin, debt_to_equity,
+                               report_date, raw_json
                         FROM fundamentals_history
                         WHERE symbol = ? AND as_of >= ?
                         ORDER BY as_of ASC
@@ -841,30 +843,166 @@ class HistoricalStore:
                     rows = conn.execute(
                         """
                         SELECT as_of, pe_ratio, pb_ratio, roe,
-                               dividend_yield, market_cap
+                               dividend_yield, market_cap,
+                               eps, operating_margin, debt_to_equity,
+                               report_date, raw_json
                         FROM fundamentals_history
                         WHERE symbol = ?
                         ORDER BY as_of ASC
                         """,
                         (symbol.upper(),),
                     ).fetchall()
+
             if not rows:
                 return pd.DataFrame(
-                    columns=["as_of", "pe_ratio", "pb_ratio", "roe",
-                             "dividend_yield", "market_cap"]
+                    columns=[
+                        "as_of", "pe_ratio", "pb_ratio", "roe", "dividend_yield", "market_cap",
+                        "eps", "operating_margin", "debt_to_equity", "report_date", "raw_json"
+                    ]
                 )
+
             return pd.DataFrame(
                 rows,
-                columns=["as_of", "pe_ratio", "pb_ratio", "roe",
-                         "dividend_yield", "market_cap"],
+                columns=[
+                    "as_of", "pe_ratio", "pb_ratio", "roe", "dividend_yield", "market_cap",
+                    "eps", "operating_margin", "debt_to_equity", "report_date", "raw_json"
+                ],
             )
+
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_fundamentals_history failed: %s", exc)
+            return pd.DataFrame(
+                columns=[
+                    "as_of", "pe_ratio", "pb_ratio", "roe", "dividend_yield", "market_cap",
+                    "eps", "operating_margin", "debt_to_equity", "report_date", "raw_json"
+                ]
+            )
+
+    def get_fundamentals_asof(self, symbol: str, as_of_date: datetime) -> Dict[str, float]:
+        """Return the latest fundamentals_history row with report_date <= as_of_date.
+        
+        Returns exact 9 keys: book_to_market, earnings_yield, quality_factor_score,
+        log_market_cap, pe_ratio, pb_ratio, roe, market_cap, eps.
+        If no such row exists, returns all NaNs.
+        """
+        as_of_str = as_of_date.strftime("%Y-%m-%d")
+        nan = float('nan')
+        out = {
+            "book_to_market": nan,
+            "earnings_yield": nan,
+            "quality_factor_score": nan,
+            "log_market_cap": nan,
+            "pe_ratio": nan,
+            "pb_ratio": nan,
+            "roe": nan,
+            "market_cap": nan,
+            "eps": nan
+        }
+        
+        try:
+            with self._lock:
+                conn = self._get_conn()
+                row = conn.execute(
+                    """
+                    SELECT pe_ratio, pb_ratio, roe, market_cap, eps, operating_margin, debt_to_equity
+                    FROM fundamentals_history
+                    WHERE symbol = ? AND report_date <= ? AND report_date IS NOT NULL
+                    ORDER BY report_date DESC
+                    LIMIT 1
+                    """,
+                    (symbol.upper(), as_of_str)
+                ).fetchone()
+                
+                if row:
+                    pe, pb, roe_val, mcap, eps_val, op_margin, dte = row
+                    
+                    if pe is not None:
+                        out["pe_ratio"] = float(pe)
+                        if pe > 0:
+                            out["earnings_yield"] = 1.0 / float(pe)
+                            
+                    if pb is not None:
+                        out["pb_ratio"] = float(pb)
+                        if pb > 0:
+                            out["book_to_market"] = 1.0 / float(pb)
+                            
+                    if mcap is not None:
+                        out["market_cap"] = float(mcap)
+                        if mcap > 0:
+                            out["log_market_cap"] = math.log(float(mcap))
+                            
+                    if eps_val is not None:
+                        out["eps"] = float(eps_val)
+                        
+                    if roe_val is not None:
+                        out["roe"] = float(roe_val)
+                        
+                    # quality_factor_score
+                    if roe_val is not None and op_margin is not None:
+                        out["quality_factor_score"] = float(roe_val + op_margin) / 2.0
+                    elif dte is not None:
+                        out["quality_factor_score"] = -float(dte)
+                        
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_fundamentals_asof failed: %s", exc)
+            
+        return out
+
+    def upsert_fundamentals_pit(
+        self,
+        symbol: str,
+        typed: Dict[str, float],
+        raw: Dict[str, Any],
+        *,
+        report_date: str,
+        source: str,
+    ) -> None:
+        """INSERT OR REPLACE one fundamentals row deduped on report_date.
+        
+        This overrides as_of to be equal to report_date, ensuring historical idempotence.
+        """
+        now_ts = self._now_utc_iso()
+        raw_json_str = json.dumps(raw, default=str)
+
+        def _db_val(v: float):
+            if isinstance(v, float) and math.isnan(v):
+                return None
+            return v
+
+        from db_config import session_scope, get_dbapi_connection
+        try:
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO fundamentals_history
+                            (symbol, as_of, pe_ratio, pb_ratio, roe, dividend_yield,
+                             market_cap, eps, operating_margin, debt_to_equity,
+                             raw_json, report_date, source, fetched_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            symbol.upper(),
+                            report_date,  # as_of = report_date
+                            _db_val(typed.get("pe_ratio", float("nan"))),
+                            _db_val(typed.get("pb_ratio", float("nan"))),
+                            _db_val(typed.get("roe", float("nan"))),
+                            _db_val(typed.get("dividend_yield", float("nan"))),
+                            _db_val(typed.get("market_cap", float("nan"))),
+                            _db_val(typed.get("eps", float("nan"))),
+                            _db_val(typed.get("operating_margin", float("nan"))),
+                            _db_val(typed.get("debt_to_equity", float("nan"))),
+                            raw_json_str,
+                            report_date,
+                            source,
+                            now_ts,
+                        )
+                    )
         except Exception as exc:
             logger.warning(
-                "HistoricalStore.get_fundamentals_history(%s) failed: %s", symbol, exc,
-            )
-            return pd.DataFrame(
-                columns=["as_of", "pe_ratio", "pb_ratio", "roe",
-                         "dividend_yield", "market_cap"]
+                "HistoricalStore.upsert_fundamentals_pit(%s) failed: %s", symbol, exc,
             )
 
     # ─────────────────────────────────────────────────────────────────────────

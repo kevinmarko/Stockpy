@@ -411,3 +411,75 @@ def format_pit_audit_summary(results: List[PITAuditResult]) -> str:
         )
     lines.append("=" * 64)
     return "\n".join(lines)
+
+
+def generate_coverage_report(store) -> pd.DataFrame:
+    """Returns a DataFrame summarizing PIT fundamental history coverage per symbol.
+    
+    Columns: symbol, pit_rows, earliest_report_date, latest_report_date.
+    """
+    try:
+        with store._lock:
+            conn = store._get_conn()
+            rows = conn.execute(
+                """
+                SELECT symbol, COUNT(*) as pit_rows, 
+                       MIN(report_date) as earliest_report_date, 
+                       MAX(report_date) as latest_report_date
+                FROM fundamentals_history
+                WHERE report_date IS NOT NULL
+                GROUP BY symbol
+                """
+            ).fetchall()
+        
+        return pd.DataFrame(
+            rows, 
+            columns=["symbol", "pit_rows", "earliest_report_date", "latest_report_date"]
+        )
+    except Exception as exc:
+        logger.warning("generate_coverage_report failed: %s", exc)
+        return pd.DataFrame(columns=["symbol", "pit_rows", "earliest_report_date", "latest_report_date"])
+
+def audit_no_lookahead_sample(store, symbol: str, decision_date: str) -> bool:
+    """Verify that querying get_fundamentals_asof at decision_date is strictly
+    unaffected by injecting a later report_date filing. Returns True if isolated.
+    """
+    import math
+    decision_dt = pd.to_datetime(decision_date)
+    
+    # 1. Baseline query
+    before = store.get_fundamentals_asof(symbol, decision_dt)
+    
+    # 2. Inject future look-ahead data
+    future_date = (decision_dt + pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+    store.upsert_fundamentals_pit(
+        symbol,
+        {"pe_ratio": 999.0},
+        {},
+        report_date=future_date,
+        source="audit_injection"
+    )
+    
+    try:
+        # 3. Post-injection query
+        after = store.get_fundamentals_asof(symbol, decision_dt)
+        
+        # 4. Compare
+        def _is_same(a, b):
+            if isinstance(a, float) and math.isnan(a) and isinstance(b, float) and math.isnan(b):
+                return True
+            return a == b
+            
+        for k in before:
+            if not _is_same(before[k], after.get(k, float('nan'))):
+                return False
+        return True
+    finally:
+        # 5. Cleanup
+        with store._lock:
+            conn = store._get_conn()
+            conn.execute(
+                "DELETE FROM fundamentals_history WHERE symbol=? AND report_date=? AND source='audit_injection'", 
+                (symbol.upper(), future_date)
+            )
+
