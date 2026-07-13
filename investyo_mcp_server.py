@@ -1429,7 +1429,7 @@ def configure_alerts(
         pit_audit_failed: Enable/disable alerts when a PIT audit returns FAIL.
     """
     try:
-        from alerting.notifier import get_alert_config, save_alert_config
+        from alerting_mcp.notifier import get_alert_config, save_alert_config
 
         config = get_alert_config()
 
@@ -1471,7 +1471,7 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
         message: Alert message body.
     """
     try:
-        from alerting.notifier import send
+        from alerting_mcp.notifier import send
 
         results = send(title, message, priority="default")
         lines = ["# Test Alert Results\n"]
