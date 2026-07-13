@@ -890,9 +890,625 @@ def trigger_macro_engine() -> str:
         return "Error: macro_engine.py not found."
 
 # ==========================================
-# [4] SERVER EXECUTION
+# [4] PHASE 1 — DATA & INGESTION MANAGEMENT
+# ==========================================
+
+@mcp.tool()
+def trigger_edgar_backfill(tickers: str = "all", since: str = "2015-01-01") -> str:
+    """
+    Triggers the SEC EDGAR PIT fundamentals backfill script.
+
+    Args:
+        tickers: Comma-separated ticker list (e.g., "AAPL,MSFT") or "all" for the full universe.
+        since: Earliest filing date to backfill from (default: 2015-01-01).
+    """
+    try:
+        cmd = [sys.executable, "scripts/backfill_edgar_fundamentals.py", "--since", since]
+        if tickers.strip().lower() != "all":
+            cmd.extend(["--tickers"] + [t.strip().upper() for t in tickers.split(",")])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            return f"EDGAR backfill completed successfully:\n{output}"
+        return f"EDGAR backfill exited with code {result.returncode}:\n{output}"
+    except subprocess.TimeoutExpired:
+        return "EDGAR backfill timed out after 10 minutes. Consider running with fewer tickers."
+    except Exception as e:
+        return f"EDGAR backfill failed: {str(e)}"
+
+
+@mcp.tool()
+def trigger_full_pipeline(tickers: str = "") -> str:
+    """
+    Orchestrates a complete data refresh cycle: price fetch, EDGAR fundamentals,
+    macro indicators, and signal aggregation for the given tickers.
+
+    Args:
+        tickers: Comma-separated ticker list. If empty, uses the active universe.
+    """
+    steps = []
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()] if tickers else None
+
+    # Step 1: Price bars
+    try:
+        if ticker_list:
+            for sym in ticker_list:
+                result = subprocess.run(
+                    [sys.executable, "data_engine.py", "--symbol", sym],
+                    capture_output=True, text=True, timeout=120
+                )
+                steps.append(f"✅ data_engine({sym}): OK" if result.returncode == 0
+                             else f"❌ data_engine({sym}): {result.stderr[:200]}")
+        else:
+            result = subprocess.run(
+                [sys.executable, "data_engine.py"],
+                capture_output=True, text=True, timeout=300
+            )
+            steps.append(f"✅ data_engine(universe): OK" if result.returncode == 0
+                         else f"❌ data_engine(universe): {result.stderr[:200]}")
+    except Exception as e:
+        steps.append(f"❌ data_engine: {str(e)}")
+
+    # Step 2: EDGAR fundamentals
+    try:
+        cmd = [sys.executable, "scripts/backfill_edgar_fundamentals.py", "--since", "2020-01-01"]
+        if ticker_list:
+            cmd.extend(["--tickers"] + ticker_list)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        steps.append(f"✅ edgar_backfill: OK" if result.returncode == 0
+                     else f"❌ edgar_backfill: {result.stderr[:200]}")
+    except Exception as e:
+        steps.append(f"❌ edgar_backfill: {str(e)}")
+
+    # Step 3: Macro engine
+    try:
+        result = subprocess.run(
+            [sys.executable, "macro_engine.py"],
+            capture_output=True, text=True, timeout=120
+        )
+        steps.append(f"✅ macro_engine: OK" if result.returncode == 0
+                     else f"❌ macro_engine: {result.stderr[:200]}")
+    except Exception as e:
+        steps.append(f"❌ macro_engine: {str(e)}")
+
+    return "# Full Pipeline Refresh\n\n" + "\n".join(steps)
+
+
+@mcp.tool()
+def get_pit_coverage_report() -> str:
+    """
+    Returns a markdown table showing PIT fundamental data coverage per symbol:
+    rows, earliest and latest report dates.
+    """
+    try:
+        from data.historical_store import HistoricalStore
+        from validation.pit_fundamentals import generate_coverage_report
+
+        store = HistoricalStore()
+        df = generate_coverage_report(store)
+        if df.empty:
+            return "No PIT fundamental data found in the database."
+        return "# PIT Fundamentals Coverage Report\n\n" + df.to_markdown(index=False)
+    except Exception as e:
+        return f"Coverage report failed: {str(e)}"
+
+
+# ==========================================
+# [5] PHASE 2 — QUANTITATIVE RESEARCH & ML
+# ==========================================
+
+@mcp.tool()
+def run_validation_harness(strategy_name: str = "default", start_date: str = "2020-01-01", end_date: str = "2024-12-31") -> str:
+    """
+    Triggers the StrategyValidationHarness and returns structured results
+    including Sharpe ratio, max drawdown, DSR, PBO, and deployability.
+
+    Args:
+        strategy_name: Name tag for the strategy run.
+        start_date: Backtest start date (YYYY-MM-DD).
+        end_date: Backtest end date (YYYY-MM-DD).
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "scripts/refresh_validations.py",
+             "--strategy", strategy_name,
+             "--start", start_date,
+             "--end", end_date],
+            capture_output=True, text=True, timeout=600
+        )
+        if result.returncode == 0:
+            return f"# Validation Harness Results: {strategy_name}\n\n{result.stdout}"
+        return f"Validation harness failed (exit {result.returncode}):\n{result.stderr}"
+    except subprocess.TimeoutExpired:
+        return "Validation harness timed out after 10 minutes."
+    except Exception as e:
+        return f"Validation harness error: {str(e)}"
+
+
+@mcp.tool()
+def run_pit_audit(symbol: str, decision_date: str) -> str:
+    """
+    Runs a Point-in-Time audit for a symbol at a given decision date.
+    Returns PASS, FAIL, or UNVERIFIABLE with full reasoning.
+
+    Args:
+        symbol: Stock ticker (e.g., AAPL).
+        decision_date: The date the investment decision was made (YYYY-MM-DD).
+    """
+    try:
+        from data.historical_store import HistoricalStore
+        from validation.pit_fundamentals import audit_from_historical_store
+
+        store = HistoricalStore()
+        result = audit_from_historical_store(store, symbol, decision_date)
+        return (
+            f"# PIT Audit: {symbol} @ {decision_date}\n\n"
+            f"- **Verdict**: {result.verdict}\n"
+            f"- **Report Date**: {result.report_date or 'N/A'}\n"
+            f"- **Fields Checked**: {', '.join(result.fields_checked) if result.fields_checked else 'default'}\n"
+            f"- **Reason**: {result.reason or 'N/A'}\n"
+            f"- **Error**: {result.error or 'None'}\n"
+        )
+    except Exception as e:
+        return f"PIT audit failed: {str(e)}"
+
+
+@mcp.tool()
+def run_lookahead_check(symbol: str, decision_date: str) -> str:
+    """
+    Verifies that querying fundamentals at decision_date is strictly isolated
+    from future filings by injecting and testing against a lookahead payload.
+
+    Args:
+        symbol: Stock ticker (e.g., AAPL).
+        decision_date: The date to verify isolation for (YYYY-MM-DD).
+    """
+    try:
+        from data.historical_store import HistoricalStore
+        from validation.pit_fundamentals import audit_no_lookahead_sample
+
+        store = HistoricalStore()
+        is_isolated = audit_no_lookahead_sample(store, symbol, decision_date)
+        verdict = "✅ ISOLATED (no lookahead bias)" if is_isolated else "❌ CONTAMINATED (lookahead detected!)"
+        return f"# Lookahead Check: {symbol} @ {decision_date}\n\n**Result**: {verdict}"
+    except Exception as e:
+        return f"Lookahead check failed: {str(e)}"
+
+
+@mcp.tool()
+def get_signal_breakdown(symbol: str) -> str:
+    """
+    Returns the full composite signal decomposition for a ticker,
+    including individual signal scores, factor weights, and final conviction.
+
+    Args:
+        symbol: Stock ticker (e.g., AAPL).
+    """
+    db_path = "quant_platform.db"
+    if not os.path.exists(db_path):
+        return "Error: quant_platform.db not found."
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Get the most recent signal row for this symbol
+        cursor.execute(
+            """SELECT * FROM DailySignals
+               WHERE symbol = ?
+               ORDER BY date DESC LIMIT 1""",
+            (symbol.upper(),)
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return f"No signals found for {symbol.upper()} in the database."
+
+        columns = [desc[0] for desc in cursor.description]
+        conn.close()
+
+        data = dict(zip(columns, row))
+        lines = [f"# Signal Breakdown: {symbol.upper()} ({data.get('date', 'N/A')})\n"]
+
+        # Separate signal columns from metadata
+        meta_keys = {"symbol", "date", "id", "created_at"}
+        signal_keys = [k for k in columns if k not in meta_keys]
+
+        for key in signal_keys:
+            val = data.get(key)
+            if val is not None:
+                lines.append(f"- **{key}**: {val}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Signal breakdown failed: {str(e)}"
+
+
+@mcp.tool()
+def compare_strategies(strategy_a: str, strategy_b: str, start_date: str = "2020-01-01", end_date: str = "2024-12-31") -> str:
+    """
+    Runs two strategies through the validation harness side-by-side
+    and returns a comparison table.
+
+    Args:
+        strategy_a: First strategy name.
+        strategy_b: Second strategy name.
+        start_date: Backtest start date (YYYY-MM-DD).
+        end_date: Backtest end date (YYYY-MM-DD).
+    """
+    results = {}
+    for name in [strategy_a, strategy_b]:
+        try:
+            result = subprocess.run(
+                [sys.executable, "scripts/refresh_validations.py",
+                 "--strategy", name, "--start", start_date, "--end", end_date,
+                 "--json-output"],
+                capture_output=True, text=True, timeout=600
+            )
+            if result.returncode == 0:
+                results[name] = result.stdout
+            else:
+                results[name] = f"FAILED: {result.stderr[:200]}"
+        except Exception as e:
+            results[name] = f"ERROR: {str(e)}"
+
+    lines = [f"# Strategy Comparison: {strategy_a} vs {strategy_b}\n"]
+    lines.append(f"**Period**: {start_date} → {end_date}\n")
+    for name, output in results.items():
+        lines.append(f"## {name}\n```\n{output}\n```\n")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_model_registry_status() -> str:
+    """
+    Reads ml/registry.yaml and returns model health: last training date,
+    feature importance, OOS metrics, and staleness warnings.
+    """
+    import yaml
+    from datetime import datetime, timedelta
+
+    registry_path = "ml/registry.yaml"
+    if not os.path.exists(registry_path):
+        return "Error: ml/registry.yaml not found."
+
+    try:
+        with open(registry_path, "r") as f:
+            registry = yaml.safe_load(f)
+
+        if not registry:
+            return "Registry is empty."
+
+        lines = ["# ML Model Registry Status\n"]
+        now = datetime.now()
+        stale_threshold = timedelta(days=30)
+
+        models = registry if isinstance(registry, list) else registry.get("models", [registry])
+        if isinstance(models, dict):
+            models = [models]
+
+        for model in models:
+            name = model.get("name", model.get("model_name", "unknown"))
+            trained = model.get("last_trained", model.get("trained_at", "N/A"))
+            lines.append(f"## {name}")
+            lines.append(f"- **Last Trained**: {trained}")
+
+            # Check staleness
+            if trained != "N/A":
+                try:
+                    trained_dt = datetime.fromisoformat(str(trained).replace("Z", "+00:00").split("+")[0])
+                    age = now - trained_dt
+                    if age > stale_threshold:
+                        lines.append(f"- ⚠️ **STALE**: Model is {age.days} days old (threshold: 30 days)")
+                    else:
+                        lines.append(f"- ✅ Fresh ({age.days} days old)")
+                except Exception:
+                    pass
+
+            # Feature importance
+            features = model.get("feature_importance", model.get("top_features", {}))
+            if features:
+                lines.append("- **Top Features**:")
+                items = list(features.items())[:10] if isinstance(features, dict) else features[:10]
+                for item in items:
+                    if isinstance(item, tuple):
+                        lines.append(f"  - `{item[0]}`: {item[1]}")
+                    else:
+                        lines.append(f"  - {item}")
+
+            # Metrics
+            metrics = model.get("metrics", model.get("oos_metrics", {}))
+            if metrics:
+                lines.append("- **OOS Metrics**:")
+                for k, v in metrics.items():
+                    lines.append(f"  - `{k}`: {v}")
+
+            lines.append("")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Registry status failed: {str(e)}"
+
+
+@mcp.tool()
+def trigger_model_retraining(model_name: str = "all") -> str:
+    """
+    Triggers ML model retraining via scripts/retrain_models.py.
+
+    Args:
+        model_name: Specific model to retrain, or "all" for full retrain.
+    """
+    try:
+        cmd = [sys.executable, "scripts/retrain_models.py"]
+        if model_name.strip().lower() != "all":
+            cmd.extend(["--model", model_name])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        if result.returncode == 0:
+            return f"# Model Retraining Complete\n\n{result.stdout}"
+        return f"Retraining failed (exit {result.returncode}):\n{result.stderr}"
+    except subprocess.TimeoutExpired:
+        return "Model retraining timed out after 15 minutes."
+    except Exception as e:
+        return f"Retraining error: {str(e)}"
+
+
+# ==========================================
+# [6] PHASE 3 — EXECUTION & ALERTING
+# ==========================================
+
+@mcp.tool()
+def generate_daily_signals(top_n: int = 10) -> str:
+    """
+    Runs the full signal aggregation pipeline and returns the top N tickers
+    ranked by composite conviction score.
+
+    Args:
+        top_n: Number of top signals to return (default: 10).
+    """
+    db_path = "quant_platform.db"
+    if not os.path.exists(db_path):
+        return "Error: quant_platform.db not found."
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Get the latest date's signals
+        cursor.execute("SELECT MAX(date) FROM DailySignals")
+        latest_date = cursor.fetchone()[0]
+        if not latest_date:
+            conn.close()
+            return "No signals in the database. Run the full pipeline first."
+
+        cursor.execute(
+            """SELECT symbol, composite_score, action, conviction
+               FROM DailySignals
+               WHERE date = ?
+               ORDER BY composite_score DESC
+               LIMIT ?""",
+            (latest_date, top_n)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return f"No signals found for date {latest_date}."
+
+        lines = [f"# Daily Signals — {latest_date}\n"]
+        lines.append("| Rank | Symbol | Score | Action | Conviction |")
+        lines.append("|------|--------|-------|--------|------------|")
+        for i, (sym, score, action, conviction) in enumerate(rows, 1):
+            score_str = f"{score:.1f}" if score is not None else "N/A"
+            conv_str = f"{conviction:.2f}" if conviction is not None else "N/A"
+            action_str = action or "HOLD"
+            lines.append(f"| {i} | `{sym}` | {score_str} | {action_str} | {conv_str} |")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Signal generation failed: {str(e)}"
+
+
+@mcp.tool()
+def get_execution_queue() -> str:
+    """
+    Reads the latest execution_queue.json and returns the gated order intents
+    with their risk-gate verdicts.
+    """
+    queue_path = "output/execution_queue.json"
+    if not os.path.exists(queue_path):
+        return "No execution queue file found at output/execution_queue.json. The pipeline may not have generated orders yet."
+
+    try:
+        with open(queue_path, "r") as f:
+            queue = json.load(f)
+
+        if not queue:
+            return "Execution queue is empty (no orders pending)."
+
+        lines = ["# Execution Queue\n"]
+
+        orders = queue if isinstance(queue, list) else queue.get("orders", [queue])
+        lines.append("| Symbol | Side | Shares | Price | Gated | Reason |")
+        lines.append("|--------|------|--------|-------|-------|--------|")
+
+        for order in orders:
+            sym = order.get("symbol", "?")
+            side = order.get("side", "?")
+            shares = order.get("shares", "?")
+            price = order.get("price", "?")
+            allowed = "✅" if order.get("allow_place", False) else "🚫"
+            reason = order.get("gate_reason", order.get("reason", "N/A"))
+            lines.append(f"| `{sym}` | {side} | {shares} | {price} | {allowed} | {reason} |")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to read execution queue: {str(e)}"
+
+
+@mcp.tool()
+def get_trade_journal(symbol: str = "", last_n: int = 20) -> str:
+    """
+    Returns the last N paper trades, optionally filtered by symbol,
+    with P&L, entry/exit info, and strategy tags.
+
+    Args:
+        symbol: Filter by ticker (leave empty for all).
+        last_n: Number of recent trades to return (default: 20).
+    """
+    try:
+        from transactions_store import TransactionsStore
+        store = TransactionsStore()
+
+        # Closed trades
+        closed_df = store.closed_trades_df()
+        open_df = store.open_trades_df()
+
+        if symbol:
+            sym = symbol.upper().strip()
+            if not closed_df.empty:
+                closed_df = closed_df[closed_df["symbol"] == sym]
+            if not open_df.empty:
+                open_df = open_df[open_df["symbol"] == sym]
+
+        lines = [f"# Trade Journal" + (f" — {symbol.upper()}" if symbol else "") + "\n"]
+
+        # Open positions
+        if not open_df.empty:
+            lines.append("## Open Positions")
+            lines.append(open_df.tail(last_n).to_markdown(index=False) + "\n")
+        else:
+            lines.append("## Open Positions\nNone.\n")
+
+        # Closed trades
+        if not closed_df.empty:
+            recent = closed_df.tail(last_n)
+            lines.append("## Recent Closed Trades")
+            lines.append(recent.to_markdown(index=False) + "\n")
+
+            # Summary stats
+            if "entry_price" in recent.columns and "exit_price" in recent.columns:
+                total_pl = 0.0
+                wins = 0
+                for _, row in recent.iterrows():
+                    if row["side"] == "long":
+                        pl = (row["exit_price"] - row["entry_price"]) * row.get("shares", 1)
+                    else:
+                        pl = (row["entry_price"] - row["exit_price"]) * row.get("shares", 1)
+                    total_pl += pl
+                    if pl > 0:
+                        wins += 1
+                win_rate = (wins / len(recent)) * 100 if len(recent) > 0 else 0
+                lines.append(f"**Win Rate**: {win_rate:.1f}% | **Total P&L**: ${total_pl:+,.2f}")
+        else:
+            lines.append("## Recent Closed Trades\nNone.\n")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Trade journal failed: {str(e)}"
+
+
+@mcp.tool()
+def configure_alerts(
+    channels: Optional[str] = None,
+    signal_fired: Optional[bool] = None,
+    model_stale: Optional[bool] = None,
+    pipeline_failed: Optional[bool] = None,
+    pit_audit_failed: Optional[bool] = None,
+) -> str:
+    """
+    Configures which events trigger notifications and which channels to use.
+
+    Args:
+        channels: Comma-separated alert channels (e.g., "ntfy,email,slack"). Leave empty to keep current.
+        signal_fired: Enable/disable alerts when a signal exceeds conviction threshold.
+        model_stale: Enable/disable alerts when a model is > 30 days old.
+        pipeline_failed: Enable/disable alerts when the daily pipeline fails.
+        pit_audit_failed: Enable/disable alerts when a PIT audit returns FAIL.
+    """
+    try:
+        from alerting.notifier import get_alert_config, save_alert_config
+
+        config = get_alert_config()
+
+        if channels is not None:
+            config["channels"] = [ch.strip().lower() for ch in channels.split(",") if ch.strip()]
+
+        events = config.get("events", {})
+        if signal_fired is not None:
+            events["signal_fired"] = signal_fired
+        if model_stale is not None:
+            events["model_stale"] = model_stale
+        if pipeline_failed is not None:
+            events["pipeline_failed"] = pipeline_failed
+        if pit_audit_failed is not None:
+            events["pit_audit_failed"] = pit_audit_failed
+        config["events"] = events
+
+        save_alert_config(config)
+
+        lines = ["# Alert Configuration Updated\n"]
+        lines.append(f"**Active Channels**: {', '.join(config['channels'])}\n")
+        lines.append("**Event Subscriptions**:")
+        for event, enabled in config["events"].items():
+            status = "✅ Enabled" if enabled else "❌ Disabled"
+            lines.append(f"- `{event}`: {status}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Alert configuration failed: {str(e)}"
+
+
+@mcp.tool()
+def send_test_alert(title: str = "Test Alert", message: str = "This is a test notification from InvestYo.") -> str:
+    """
+    Sends a test notification to all active alert channels to verify configuration.
+
+    Args:
+        title: Alert title.
+        message: Alert message body.
+    """
+    try:
+        from alerting.notifier import send
+
+        results = send(title, message, priority="default")
+        lines = ["# Test Alert Results\n"]
+        for channel, success in results.items():
+            status = "✅ Delivered" if success else "❌ Failed"
+            lines.append(f"- **{channel}**: {status}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Test alert failed: {str(e)}"
+
+
+# ==========================================
+# [7] SERVER EXECUTION
 # ==========================================
 
 if __name__ == "__main__":
-    # The server must run via stdio to communicate with the IDE/Host
-    mcp.run(transport='stdio')
+    import argparse
+
+    parser = argparse.ArgumentParser(description="InvestYo MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="Transport protocol: 'stdio' for local IDE, 'sse' for cloud deployment (default: stdio)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port for SSE transport (default: 8080)",
+    )
+    args = parser.parse_args()
+
+    if args.transport == "sse":
+        print(f"Starting InvestYo MCP Server in SSE mode on port {args.port}...")
+        mcp.run(transport="sse", port=args.port)
+    else:
+        mcp.run(transport="stdio")
+
