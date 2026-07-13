@@ -9,6 +9,7 @@ PR that added it" record** — read it when you need the full backstory, test su
 or Gravity-audit-step details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
+- Autopilot "Pilots" makeover — consumer-style marketplace over Stockpy's own strategies: `pilots/` (Phase 1), `api/pilots_api.py` (Phase 2), `pilots/mirror.py` gated follow-mirror (Phase 3), the `webapp/` PWA, decisions D1/D2/D3 (2026-07-12/13)
 - Gravity split-brain consolidation — delete dead `gravity/__init__.py`, migrate its steps into the single launcher as step_76–86 (2026-07-10)
 - Gravity 6-check repair — 6 stale audit assertions fixed after recent refactors (2026-07-10)
 - Kelly DB-outage degrade — `_OfflineTransactionsStore` vol-target fallback instead of dead-lettering (2026-07-10)
@@ -46,6 +47,95 @@ CONSTRAINT #3/#4/#6, no-fabricated-metrics, dead-letter resilience). This file a
 the full detail, test surface, and Gravity step numbers behind each of those.
 
 ---
+
+## Autopilot "Pilots" makeover — consumer-style marketplace over Stockpy's own strategies (PRs #226/#227, #250, #252; 2026-07-12/13)
+
+**Why.** Stockpy's operator console exposes its 17 signal modules and their backtests as a
+dense analyst surface. The "Pilots" makeover repackages the platform's OWN strategies as
+copyable, Autopilot-style **Pilots** for a consumer-grade mobile experience — browse a
+marketplace, inspect an honest backtest, "Follow" with a dollar amount — WITHOUT loosening a
+single honesty or safety invariant. Every Pilot reads entirely from already-persisted state
+(no heavy-engine imports on the read path), a curve/metric that doesn't exist stays `null`
+with a `reason` (CONSTRAINT #4), and "Follow" is advisory + **paper-first**: it only ever
+builds a gated, human-confirmed order queue — it never places an order automatically (the
+broker quarantine, `PreTradeRiskGate`, kill switch, and `mode != "live"` gating are all
+reused verbatim; no new `place_*`/`submit_order`/`*_order` symbols, so
+`tests/test_pipeline_smoke.py::TestNoOrderFunctions` stays green).
+
+**What shipped — Phase 1 (`pilots/`, PRs #226/#227):** the pure, read-only Pilots layer.
+- `pilots/catalog.py` — frozen `Pilot` dataclass (`id`, `name`, `category`, `description`,
+  `weights` = a subset of `settings.SIGNAL_WEIGHTS` keys, `long_only`,
+  `validation_strategy_id` = the explicit join to `scripts.refresh_validations.STRATEGY_REGISTRY`)
+  + the static 9-Pilot `PILOTS` catalog + `list_pilots()`/`get_pilot(id)`. A Pilot with no
+  honest backtest carries `validation_strategy_id=None` rather than borrowing another
+  strategy's Sharpe (CONSTRAINT #4).
+- `pilots/scoring.py` — pure snapshot math: backs out each module's raw score
+  (`raw = score_components[m] / SIGNAL_WEIGHTS[m]`, guarding the weight-0 divide), re-blends
+  under `pilot.weights`, normalizes the top-N holdings, group-bys sector allocation, and diffs
+  consecutive `output/history/` snapshots into ENTER/EXIT/REWEIGHT trade events. Dead-letter
+  safe (missing/malformed → `[]`/`None`).
+- `pilots/performance.py` — reads `reports/<validation_strategy_id>_validation_summary.json`
+  and returns headline metrics + the REAL downsampled base-100 OOS equity `curve` the
+  harness persists (Decision D2), tail-sliced to the requested `range`. `curve=None` + an
+  honest `reason` when the Pilot has no backtest — never synthesized.
+- `pilots/follows_store.py` — `FollowsStore` atomic write-then-rename JSON at
+  `output/follows.json`; `upsert`/`remove` + the marketplace `aum_proxy`/`followers_proxy`
+  (real local sums, not fabricated).
+
+**What shipped — Phase 2 (`api/pilots_api.py`, PR #250):** a NEW FastAPI app
+(`uvicorn api.pilots_api:app --port 8602`) serving the PWA, copying `api/state_api.py`'s
+auth/CORS pattern. Read endpoints use a fail-open read token (`STATE_API_TOKEN`; `/health`
+always open): `GET /pilots`, `/pilots/{id}`, `/pilots/{id}/performance?range=`,
+`/pilots/{id}/holdings`, `/pilots/{id}/trades`, `/portfolio`, `/portfolio/equity-curve`.
+Follow endpoints are **FAIL-CLOSED** on `FOLLOW_API_TOKEN` (unset ⇒ 403 disabled, mirroring
+`control_api`): `GET /follows`, `PUT /follows`, `POST /pilots/{id}/follow`. Cold-start
+responses return empty collections + an honest `reason`, never fabricated values. An
+AST-guard invariant (`tests/test_pilots_api.py`) keeps it from importing the heavy
+calculation engines — it reaches the execution write-path only transitively through
+`pilots.mirror`. Standalone-launchable, and hosted inside the orchestrator daemon when
+`settings.PILOTS_API_ENABLED=True` (default `False`, PR #252 wired it into the daemon).
+**New env vars:** `FOLLOW_API_TOKEN` (secret, fail-closed), `PILOTS_TOP_N` (default 20).
+
+**What shipped — Phase 3 (`pilots/mirror.py`, PR #250):** the gated auto-mirror.
+`build_follow_intents(pilot, amount, account_snapshot, ...)` **rebalances to target** (not a
+blind buy) — for each holding `target_i = amount * weight_i` (clamped by
+`ROBINHOOD_MAX_NOTIONAL_PER_ORDER`), nets off the follower's CURRENT market value in that
+name and sizes the order to the delta (BUY when underweight, partial SELL trim when
+overweight, nothing inside a no-trade band). `plan_follow(...)` wraps the intents and calls
+`execution.queue_builder.emit_execution_queue(...)`, returning `{planned_intents, mode,
+queue_written}`. Off-mode previews intents without writing. Documented honest limitation:
+rebalance scope is confined to the Pilot's CURRENT holding set — a name the Pilot fully drops
+is left untouched (force-exit needs per-follow position attribution, not modelled here).
+
+**What shipped — the PWA (`webapp/`, PRs #226/#227):** a mobile-first installable PWA
+(Vite + React + TypeScript + react-router + Recharts + vite-plugin-pwa) modeling the
+Autopilot consumer UX over `api/pilots_api.py`. Dark fintech theme reusing `gui/styling.py`'s
+palette. Screens: 3-step Onboarding, Marketplace (`/`), Pilot Detail (`/pilots/:id`),
+Portfolio (`/portfolio`), and the Follow modal (with an unmissable "this creates a gated
+queue you must confirm — no order is placed automatically" notice). Runs fully offline against
+a mock API layer (`src/api/mock.ts`); `src/api/client.ts` flips mock→live via
+`VITE_USE_MOCK=false`, with `src/api/types.ts` the single schema-reconciliation point. UI
+honesty: a non-deployable pilot renders `deployable=false` plainly; a `curve:null` renders
+"no backtest series yet", never a fabricated line.
+
+**Decisions.**
+- **D1 — namespaces genuinely differ.** A signal `name` (== a `SIGNAL_WEIGHTS` key) is NOT
+  the same as a `STRATEGY_REGISTRY` key: e.g. the MACD pilot blends `macd_momentum` +
+  `aroon_trend` signals but joins the `macd_trend` backtest; `multifactor` joins
+  `multifactor_lowvol_size`. `pilots/catalog.py` carries the explicit
+  `validation_strategy_id` join so the three namespaces can't be conflated.
+- **D2 — honest, harness-persisted equity curve.** Rather than synthesize a Pilot curve,
+  `validation/harness.py` now persists a real downsampled base-100 OOS `equity_curve`
+  (≤120 points, built from the same net-of-cost return series that feeds Sharpe/MaxDD);
+  `pilots/performance.py` tail-slices it — an honest zoom, never a re-simulation.
+- **D3 — deliberate Follow keeps every chosen name.** A follow intent's conviction is the
+  Pilot's normalized target weight (an honest proxy, never inflated), and the queue is emitted
+  with `min_conviction=0.0` so a deliberate Follow keeps every holding the Pilot selected.
+
+**Test surface.** `tests/test_pilots_{catalog,scoring,performance,follows,mirror}.py` (Phase 1
++ 3), `tests/test_pilots_api.py` (Phase 2, incl. the import-guard). Frontend: Vitest contract
++ honesty-fixture tests under `webapp/src/api/mock.test.ts` (`npm run test`), plus
+`npm run typecheck` / `npm run build`. See `docs/AUTOPILOT_PLAN.md` for the phasing overview.
 
 ## Gravity split-brain consolidation — delete the dead `gravity/__init__.py`, migrate its steps into the single launcher (PR #209, commit 2f461a70, 2026-07-10)
 
