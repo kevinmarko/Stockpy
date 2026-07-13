@@ -9,7 +9,8 @@ Offline tests for the meta-labeler training + runtime-registration wiring:
 Coverage
 --------
 1. train_signal() trains, persists a pickle, and populates the registry row
-   (both signals; synthetic offline panel — no network).
+   (both signals; synthetic offline panel — no network). The registry row
+   carries the wired-through CPCV metrics and a gate-derived ``deployable``.
 2. bootstrap_meta_registry() registers a saved model so
    global_meta_registry.has(signal_id) is True afterward.
 3. bootstrap_meta_registry() is a strict no-op when no model exists (registry
@@ -18,6 +19,16 @@ Coverage
 5. With a registered LOW-confidence labeler, SignalAggregator.aggregate() fires
    the meta_hard_gate and forces meta_label_composite to 0.0 (reuses the
    pattern from tests/test_meta_labeler_uplift.py).
+6. A REAL CPCV run over the synthetic panel populates non-null numeric
+   cpcv_dsr/pbo and ``deployable`` reflects the honest gate
+   (registry_io.compute_deployable).
+7. HONESTY: a genuinely-bad model (failing metrics) stays deployable:false, and
+   the gate is genuinely applied (good metrics CAN flip it true) — it is never
+   spoofed or hardcoded.
+
+Most tests monkeypatch ``compute_cpcv_metrics`` to a fast deterministic stub
+(``fast_cpcv`` fixture) so the suite stays quick; the dedicated CPCV test
+(``test_real_cpcv_populates_metrics_and_gate``) runs the real evaluation once.
 
 All tests reset the global registry between runs (autouse fixture) so state
 never bleeds across tests.
@@ -69,13 +80,37 @@ def tmp_registry(tmp_path, monkeypatch):
     return dst
 
 
+# Deterministic non-null metrics used by the fast stub. DSR < 0.95 so the gate
+# resolves deployable=False — matching the pre-existing "unvalidated" assertion
+# while still exercising the real metric-wiring path (values flow through into
+# the registry row instead of being hardcoded null).
+_STUB_CPCV = {"dsr": 0.30, "pbo": 0.70, "mean_oos_sharpe": 0.42}
+
+
+@pytest.fixture
+def fast_cpcv(monkeypatch):
+    """Replace the real (slow) CPCV run with a fast deterministic stub.
+
+    Used by the persistence / bootstrap tests that care about WIRING, not the
+    exact metric values, so the suite doesn't pay for a full CPCV sweep in every
+    train_signal() call. The dedicated CPCV test does NOT use this fixture.
+    """
+    monkeypatch.setattr(trainer, "compute_cpcv_metrics", lambda *a, **k: dict(_STUB_CPCV))
+    return _STUB_CPCV
+
+
 # ---------------------------------------------------------------------------
 # 1. Training + persistence + registry population
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("signal_id", list(META_LABELED_SIGNAL_IDS))
-def test_train_signal_persists_and_updates_registry(signal_id, tmp_models_dir, tmp_registry):
-    """train_signal() trains, saves a pickle, and updates the registry row."""
+def test_train_signal_persists_and_updates_registry(signal_id, tmp_models_dir, tmp_registry, fast_cpcv):
+    """train_signal() trains, saves a pickle, and updates the registry row.
+
+    The CPCV metrics are wired through from ``compute_cpcv_metrics`` (stubbed
+    here for speed) into the registry row, and ``deployable`` is derived from
+    them by the shared registry writer — never hardcoded.
+    """
     path = trainer.train_signal(signal_id, force_synthetic=True, seed=3)
 
     assert path is not None, f"{signal_id} should have trained on the synthetic panel"
@@ -88,19 +123,21 @@ def test_train_signal_persists_and_updates_registry(signal_id, tmp_models_dir, t
     assert reloaded._model is not None
     assert reloaded._n_train_samples >= 30
 
-    # Registry row populated (trained_date + n_train), metrics honest (null),
-    # not deployable (no CPCV run).
+    # Registry row populated (trained_date + n_train) and the CPCV metrics from
+    # the stub are wired through; deployable is gate-derived (dsr 0.30 < 0.95).
     import yaml
+    from ml.registry_io import compute_deployable
     data = yaml.safe_load(tmp_registry.read_text())
     row = data["models"][f"meta_labeler_{signal_id}"]
     assert row["trained_date"] is not None
     assert isinstance(row["n_train"], int) and row["n_train"] >= 30
-    assert row["cpcv_dsr"] is None, "no fabricated CPCV metric"
-    assert row["pbo"] is None, "no fabricated PBO metric"
-    assert row["deployable"] is False, "unvalidated model must not be deployable"
+    assert row["cpcv_dsr"] == fast_cpcv["dsr"], "CPCV DSR must be wired into the row"
+    assert row["pbo"] == fast_cpcv["pbo"], "CPCV PBO must be wired into the row"
+    assert row["deployable"] is compute_deployable(fast_cpcv["dsr"], fast_cpcv["pbo"])
+    assert row["deployable"] is False, "dsr 0.30 fails the >0.95 gate → not deployable"
 
 
-def test_train_signal_no_registry_flag_skips_yaml(tmp_models_dir, tmp_registry):
+def test_train_signal_no_registry_flag_skips_yaml(tmp_models_dir, tmp_registry, fast_cpcv):
     """update_registry=False trains + saves but leaves the YAML untouched."""
     before = tmp_registry.read_text()
     path = trainer.train_signal(
@@ -114,7 +151,7 @@ def test_train_signal_no_registry_flag_skips_yaml(tmp_models_dir, tmp_registry):
 # 2. Runtime registration wires the model into the global registry
 # ---------------------------------------------------------------------------
 
-def test_bootstrap_registers_saved_model(tmp_models_dir, tmp_registry):
+def test_bootstrap_registers_saved_model(tmp_models_dir, tmp_registry, fast_cpcv):
     """After a model is saved, bootstrap_meta_registry() registers it."""
     # Train + save into the temp models dir.
     labeler = trainer.train_signal("timeseries_momentum", force_synthetic=True, seed=1)
@@ -142,7 +179,7 @@ def test_bootstrap_noop_when_no_model(tmp_models_dir):
         )
 
 
-def test_bootstrap_respects_disabled_setting(tmp_models_dir, tmp_registry, monkeypatch):
+def test_bootstrap_respects_disabled_setting(tmp_models_dir, tmp_registry, monkeypatch, fast_cpcv):
     """META_LABELING_ENABLED=False disables registration even with a saved model."""
     trainer.train_signal("timeseries_momentum", force_synthetic=True, seed=1)
 
@@ -221,3 +258,73 @@ def test_registered_low_confidence_fires_hard_gate(tmp_models_dir):
         f"Expected meta_label_composite=0.0 when registered MetaLabeler P=0.1 "
         f"< 0.4, got {composite}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. Real CPCV populates non-null numeric metrics + honest deployability gate
+# ---------------------------------------------------------------------------
+
+def test_real_cpcv_populates_metrics_and_gate(tmp_models_dir, tmp_registry):
+    """A REAL CPCV run writes non-null numeric cpcv_dsr/pbo and a gate-derived
+    deployable flag (NOT the fast stub — this is the end-to-end honesty check).
+
+    Uses a small universe to keep the single real CPCV sweep bounded.
+    """
+    import yaml
+    from ml.registry_io import compute_deployable
+
+    small_universe = ("AAPL", "MSFT", "SPY", "JPM")
+    path = trainer.train_signal(
+        "timeseries_momentum",
+        force_synthetic=True,
+        seed=3,
+        universe=small_universe,
+    )
+    assert path is not None and path.exists()
+
+    data = yaml.safe_load(tmp_registry.read_text())
+    row = data["models"]["meta_labeler_timeseries_momentum"]
+
+    # Non-null numeric metrics (no fabrication, but no longer structurally null).
+    assert row["cpcv_dsr"] is not None, "CPCV DSR must be populated by a real run"
+    assert row["pbo"] is not None, "CPCV PBO must be populated by a real run"
+    assert isinstance(row["cpcv_dsr"], float)
+    assert isinstance(row["pbo"], float)
+    assert 0.0 <= row["pbo"] <= 1.0, "PBO is a probability in [0, 1]"
+
+    # deployable is the HONEST gate applied to the real metrics — never spoofed.
+    assert row["deployable"] is compute_deployable(row["cpcv_dsr"], row["pbo"])
+
+
+def test_bad_model_stays_non_deployable_gate_is_genuine(tmp_models_dir, tmp_registry, monkeypatch):
+    """HONESTY: metrics failing the gate → deployable:false; passing → true.
+
+    Proves ``deployable`` is derived from the CPCV metrics (via
+    registry_io.compute_deployable), not hardcoded — a genuinely-bad model is
+    honestly non-deployable, and the gate CAN flip true only when the metrics
+    actually clear DSR>0.95 AND PBO<0.5.
+    """
+    import yaml
+
+    # (dsr, pbo, expected_deployable)
+    cases = [
+        (0.40, 0.90, False),   # bad DSR + bad PBO
+        (0.99, 0.90, False),   # good DSR but overfit (PBO ≥ 0.5)
+        (0.40, 0.10, False),   # low overfit but DSR fails
+        (0.99, 0.10, True),    # only this clears BOTH gates
+    ]
+    for i, (dsr, pbo, expected) in enumerate(cases):
+        monkeypatch.setattr(
+            trainer, "compute_cpcv_metrics",
+            lambda *a, _d=dsr, _p=pbo, **k: {"dsr": _d, "pbo": _p, "mean_oos_sharpe": 0.5},
+        )
+        path = trainer.train_signal("timeseries_momentum", force_synthetic=True, seed=10 + i)
+        assert path is not None
+
+        data = yaml.safe_load(tmp_registry.read_text())
+        row = data["models"]["meta_labeler_timeseries_momentum"]
+        assert row["cpcv_dsr"] == dsr and row["pbo"] == pbo
+        assert row["deployable"] is expected, (
+            f"dsr={dsr}, pbo={pbo} should give deployable={expected}, "
+            f"got {row['deployable']}"
+        )

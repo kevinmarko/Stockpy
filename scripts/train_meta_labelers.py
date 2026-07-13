@@ -40,17 +40,23 @@ no more local YAML round-tripping here.
 
 Metric honesty
 --------------
-This script does NOT run a full CPCV validation. Per CONSTRAINT #4 (no
-fabricated metrics), ``cpcv_dsr`` and ``pbo`` are written as ``null`` and
-``deployable`` stays ``false`` — a trained-but-unvalidated meta-labeler is
-registered at runtime (so the gate is wired) but is not marked deployable until
-a real CPCV run populates those fields.
+This script runs a real Combinatorial Purged Cross-Validation (CPCV) over the
+CUSUM-sampled event set (``compute_cpcv_metrics`` below, mirroring
+``scripts/train_lgbm.py``'s LGBM path) and writes the resulting ``cpcv_dsr`` /
+``pbo`` into the registry. ``deployable`` is then derived by
+``ml.registry_io.compute_deployable`` (DSR > 0.95 AND PBO < 0.5) — it is NEVER
+passed in, so the gate can never be spoofed. Per CONSTRAINT #4 (no fabricated
+metrics), when CPCV cannot run (too few events / no CPCV path), the metrics stay
+``None`` and ``deployable`` stays ``false`` honestly — a genuinely-weak model
+that fails the gate correctly reports ``deployable: false``. Thresholds are
+never loosened to force a green result.
 
 Usage
 -----
     python scripts/train_meta_labelers.py
     python scripts/train_meta_labelers.py --signal timeseries_momentum
     python scripts/train_meta_labelers.py --synthetic     # force offline panel
+                                                          # (still runs real CPCV)
     python scripts/train_meta_labelers.py --no-registry   # skip YAML update
 """
 
@@ -71,10 +77,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from ml.meta_labeling import MetaLabeler  # noqa: E402
+from ml.meta_labeling import MetaLabeler, build_meta_label_target  # noqa: E402
 from ml.triple_barrier import apply_triple_barrier, cusum_filter, get_volatility  # noqa: E402
 from ml.meta_bootstrap import META_LABELED_SIGNAL_IDS  # noqa: E402
 from ml.registry_io import update_model_metrics  # noqa: E402
+from validation.metrics import run_cpcv_evaluation  # noqa: E402
 
 logger = logging.getLogger("ML.TrainMetaLabelers")
 
@@ -267,6 +274,172 @@ def _assemble_training_set(
 
 
 # ---------------------------------------------------------------------------
+# 2b. CPCV out-of-sample metrics (DSR / PBO) — mirrors scripts/train_lgbm.py
+# ---------------------------------------------------------------------------
+
+# Default meta-gating probability threshold for the CPCV returns proxy. Sourced
+# from settings.META_LABEL_MIN_CONFIDENCE (the SAME threshold the live
+# SignalAggregator hard-gate uses) so the validated strategy matches production
+# behaviour; falls back to 0.4 if settings is unavailable (dead-letter).
+def _meta_gate_threshold() -> float:
+    try:
+        from settings import settings  # noqa: PLC0415
+        thr = getattr(settings, "META_LABEL_MIN_CONFIDENCE", 0.4)
+        return float(thr)
+    except Exception:  # dead-letter: never let a settings import abort CPCV
+        return 0.4
+
+
+def _meta_gated_returns(
+    labeler: MetaLabeler,
+    X_feat: pd.DataFrame,
+    y_primary: pd.Series,
+    y_barrier: pd.Series,
+    threshold: float,
+) -> pd.Series:
+    """Per-event P&L of the meta-GATED primary signal — the CPCV returns proxy.
+
+    ``signed_outcome = sign(primary_direction) * sign(barrier_label)`` ∈ {-1,0,+1}:
+      +1  the primary signal's direction MATCHED the realized triple-barrier
+          outcome (it was right — profit-take/stop hit in the signalled direction),
+      -1  the primary signal was directionally WRONG,
+       0  a vertical-timeout event with no directional resolution.
+    This is the primary signal's own raw, un-gated per-event edge (in "R"
+    multiples of the barrier width).
+
+    The meta-labeler's job is to GATE those events: take the trade only when
+    ``P(primary correct) ≥ threshold``, else stay flat (0 return). A well-
+    calibrated meta-labeler therefore RAISES the Sharpe of this gated series
+    versus taking every event — exactly the quantity CPCV's IS/OOS Sharpe matrix
+    (and hence DSR/PBO) is meant to measure. Flat (gated-out) events remain in
+    the series as honest 0-return periods, not dropped, so the Sharpe reflects
+    the real track record of the gated strategy.
+    """
+    proba = labeler.predict_proba(X_feat)  # aligned to X_feat rows
+    signed_outcome = (
+        np.sign(y_primary.to_numpy(dtype=float))
+        * np.sign(y_barrier.to_numpy(dtype=float))
+    )
+    position = (np.asarray(proba, dtype=float) >= threshold).astype(float)
+    rets = position * signed_outcome
+    return pd.Series(rets, index=X_feat.index, dtype=float)
+
+
+def compute_cpcv_metrics(
+    X: pd.DataFrame,
+    y_primary: pd.Series,
+    y_barrier: pd.Series,
+    *,
+    n_splits: int = 6,
+    n_test_splits: int = 2,
+    min_events: int = 60,
+) -> dict:
+    """Run CPCV over the meta-labeler's event set → {'dsr','pbo','mean_oos_sharpe'}.
+
+    Mirrors ``scripts/train_lgbm.py::compute_cpcv_metrics``: each CPCV fold fits
+    a fresh ``MetaLabeler`` on the train slice under EACH of several candidate
+    hyper-parameter configs (so ``n_trials > 1`` and DSR/PBO actually measure
+    SELECTION BIAS — with a single candidate ``n_trials == 1`` and DSR trivially
+    collapses to 1.0), then produces the meta-gated returns proxy
+    (``_meta_gated_returns``) on both the train and test slices. The runner
+    derives DSR / PBO from the resulting IS/OOS Sharpe matrix.
+
+    Returns metrics as ``None`` (honest — CONSTRAINT #4) when the event set is
+    too small to yield any CPCV path. Never raises: any internal failure
+    degrades to all-``None`` (dead-letter — the model simply stays non-deployable).
+    """
+    empty = {"dsr": None, "pbo": None, "mean_oos_sharpe": None}
+    try:
+        if X is None or X.empty or len(X) < min_events:
+            logger.warning(
+                "CPCV skipped: only %d events (< %d) — metrics stay null (honest).",
+                0 if X is None else len(X), min_events,
+            )
+            return empty
+
+        feat_cols = list(X.columns)
+        threshold = _meta_gate_threshold()
+
+        # A fresh RangeIndex so the CUSUM events (stacked across symbols) map
+        # cleanly onto CPCV's positional blocks; y_primary/y_barrier are aligned
+        # positionally to X (they come from the same _assemble_training_set stack).
+        X_flat = X.reset_index(drop=True).copy()
+        yp = pd.Series(np.asarray(y_primary), index=X_flat.index, dtype=float)
+        yb = pd.Series(np.asarray(y_barrier), index=X_flat.index, dtype=float)
+        # Stash the primary/barrier series as hidden columns so strategy_fn can
+        # recover them from each fold's row slice (the CPCV splitter only carries
+        # X/y through, exactly like train_lgbm stashes '_ticker').
+        X_flat = X_flat.assign(_yp=yp.values, _yb=yb.values)
+        # y is nominally the binary meta-label; the splitter only uses it
+        # positionally, our strategy_fn reads _yp/_yb from the X slice instead.
+        y_meta = build_meta_label_target(yp, yb).reindex(X_flat.index).fillna(0).astype(int)
+
+        # ≥ 2 candidate configs → n_trials > 1 (see docstring). Kept modest
+        # (small n_estimators) because this is a VALIDATION sweep run once per
+        # CPCV fold, not the final persisted model — the goal is an honest
+        # selection-bias estimate, not maximal per-fold fit quality.
+        _CANDIDATE_PARAMS = [
+            {"num_leaves": 7, "n_estimators": 60},
+            {"num_leaves": 15, "n_estimators": 120},
+            {"num_leaves": 31, "n_estimators": 200},
+        ]
+
+        def strategy_fn(X_tr, y_tr, X_te, y_te):
+            """Fit candidate meta-labelers on the fold; return IS/OOS gated returns."""
+            try:
+                if len(X_tr) < 30 or len(X_te) < 8:
+                    return []
+                yp_tr = X_tr["_yp"]
+                yb_tr = X_tr["_yb"]
+                Xf_tr = X_tr[feat_cols]
+                yp_te = X_te["_yp"]
+                yb_te = X_te["_yb"]
+                Xf_te = X_te[feat_cols]
+
+                trials = []
+                for params in _CANDIDATE_PARAMS:
+                    labeler = MetaLabeler(signal_id="_cpcv", lgbm_params=params)
+                    labeler.fit_from_primary(Xf_tr, yp_tr, yb_tr)
+                    if labeler._model is None:
+                        continue
+                    train_ret = _meta_gated_returns(labeler, Xf_tr, yp_tr, yb_tr, threshold)
+                    test_ret = _meta_gated_returns(labeler, Xf_te, yp_te, yb_te, threshold)
+                    if train_ret.empty or test_ret.empty:
+                        continue
+                    trials.append({
+                        "params": str(params),
+                        "train_returns": train_ret,
+                        "test_returns": test_ret,
+                    })
+                return trials
+            except Exception as exc:  # dead-letter: a bad fold must not abort CPCV
+                logger.debug("CPCV fold strategy_fn failed: %s", exc)
+                return []
+
+        result = run_cpcv_evaluation(
+            strategy_fn=strategy_fn,
+            X=X_flat,
+            y=y_meta,
+            t1=None,
+            n_splits=n_splits,
+            n_test_splits=n_test_splits,
+        )
+
+        if not result.get("paths"):
+            logger.warning("CPCV produced no paths — leaving metrics null (honest).")
+            return empty
+
+        return {
+            "dsr": float(result["dsr"]),
+            "pbo": float(result["pbo"]),
+            "mean_oos_sharpe": float(result["mean_oos_sharpe"]),
+        }
+    except Exception as exc:  # dead-letter: never crash training over validation
+        logger.warning("CPCV evaluation failed (%s) — metrics stay null (honest).", exc)
+        return empty
+
+
+# ---------------------------------------------------------------------------
 # 3. Registry write — converged onto ml.registry_io.update_model_metrics
 # ---------------------------------------------------------------------------
 
@@ -369,6 +542,15 @@ def train_signal(
         logger.warning("Meta-labeler %r save failed (%s).", signal_id, exc)
         return None
 
+    # Real CPCV out-of-sample validation over the SAME event set the model was
+    # fit on (dead-letter: honest None on failure/too-few-events → non-deployable).
+    cpcv = compute_cpcv_metrics(X, y_primary, y_barrier)
+    cpcv_dsr, pbo = cpcv["dsr"], cpcv["pbo"]
+    logger.info(
+        "Meta-labeler %r CPCV: dsr=%s pbo=%s mean_oos_sharpe=%s",
+        signal_id, cpcv_dsr, pbo, cpcv.get("mean_oos_sharpe"),
+    )
+
     if update_registry:
         # Provenance: the training window spans the union of the price panel's
         # per-symbol date ranges (the events were CUSUM-sampled from within it).
@@ -387,11 +569,10 @@ def train_signal(
             signal_id,
             trained_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             n_train=labeler._n_train_samples,
-            # No CPCV run here — leave metrics null (no fabrication) so
-            # update_model_metrics derives deployable=False until real
-            # validation populates them.
-            cpcv_dsr=None,
-            pbo=None,
+            # Real CPCV metrics (honest None when CPCV couldn't run). deployable
+            # is derived from these by update_model_metrics — never spoofed.
+            cpcv_dsr=cpcv_dsr,
+            pbo=pbo,
             artifact_file=Path(path).name,
             hyperparameters=labeler.lgbm_params,
             train_window=train_window,
