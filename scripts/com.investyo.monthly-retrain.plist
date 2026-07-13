@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.investyo.monthly-retrain.plist
+  ==================================
+  macOS launchd job: retrain every production ML model ONCE a month
+  (1st of the month, 04:00 local time) via the standalone
+  `python -m scripts.retrain_models` entrypoint — the expensive walk-forward
+  retraining job the registry header refers to. This is an OS timer only — it
+  does NOT create any autonomous self-invoking agent loop, and it deliberately
+  runs OUTSIDE the daily advisory cycle (retraining must never run inside
+  main.py / main_orchestrator.py).
+
+  What it does: at 04:00 local on day 1 of each month, launchd invokes
+  `.venv/bin/python3 -m scripts.retrain_models` (a single retraining pass over
+  the LGBM ranker + every meta-labeler) with WorkingDirectory set to the repo
+  root, redirecting stdout/stderr to output/scheduled_retrain.out and
+  output/scheduled_retrain.err. Exit code is 0 even when some models are
+  non-deployable (an honest gate failure is expected, not an error); it is
+  non-zero only on a hard training crash.
+
+  INSTALL (recommended): double-click scripts/install_schedule.command (which
+  installs BOTH the daily-advisory and this monthly-retrain job), or run
+      launchctl load  ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
+
+  UNINSTALL:
+      launchctl unload ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
+      rm ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
+
+  STATUS / LOGS:
+      launchctl list | grep com.investyo.monthly-retrain
+      tail -f /Users/kevinlee/Desktop/Stockpy/output/scheduled_retrain.out
+
+  NOTE: launchd StartCalendarInterval fires in the machine's LOCAL timezone. If
+  the Mac is asleep at 04:00 on the 1st, launchd runs the job at the next wake.
+  Paths below are absolute (launchd does not expand ~ or $HOME inside string
+  values) — edit them if the repo lives elsewhere, or let
+  install_schedule.command rewrite them for you.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.investyo.monthly-retrain</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kevinlee/Desktop/Stockpy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kevinlee/Desktop/Stockpy/.venv/bin/python3</string>
+        <string>-m</string>
+        <string>scripts.retrain_models</string>
+    </array>
+
+    <!-- Day 1 of every month at 04:00 local time. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Day</key><integer>1</integer>
+        <key>Hour</key><integer>4</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <!-- Do NOT run at load time; only on the calendar schedule above. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/scheduled_retrain.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/scheduled_retrain.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

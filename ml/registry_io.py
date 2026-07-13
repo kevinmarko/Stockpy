@@ -37,7 +37,8 @@ _REGISTRY_HEADER = """\
 # InvestYo ML Model Registry
 # ===========================
 # Lists production models with their paths, training metadata, and CPCV validation metrics.
-# Updated automatically by the monthly retraining job in main_orchestrator.py.
+# Updated automatically by the monthly retraining job scripts/retrain_models.py
+# (scheduled via the launchd plist scripts/com.investyo.monthly-retrain.plist).
 #
 # Fields
 # ------
