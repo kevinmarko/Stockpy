@@ -302,3 +302,7 @@ Flat, modular "Engine" architecture using dependency injection — no package di
 ---
 
 **Detailed feature/tier changelog moved out of this file (2026-07-05).** Everything above is the current, load-bearing architecture reference. For the dated, PR-by-PR backstory of every Tier/Task/Scope feature (ML Stage 4, GUI tab build-outs, Tier 1 through Tier 9, AI Control Center, Prompt Registry) — including full test surfaces and Gravity audit step numbers — see [`docs/FEATURE_TIER_HISTORY.md`](docs/FEATURE_TIER_HISTORY.md).
+
+
+## Recent Architecture Updates
+- **Signal Engine Vectorization**: As of Phase 4, the entire `SignalAggregator` and all `SignalModule` implementations are natively vectorized in pandas/numpy (O(1) block computation). Row-based ticker iteration in the aggregation step has been removed to maximize performance.

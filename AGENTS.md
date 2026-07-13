@@ -172,3 +172,7 @@ many iterations, several of them in direct response to real bugs. If a change
 you're about to make contradicts something stated as a convention or
 invariant, that's a signal to stop and ask the user rather than "fixing" the
 convention — it is very likely intentional and load-bearing.
+
+
+## Recent Architecture Updates
+- **Signal Engine Vectorization**: As of Phase 4, the entire `SignalAggregator` and all `SignalModule` implementations are natively vectorized in pandas/numpy (O(1) block computation). Row-based ticker iteration in the aggregation step has been removed to maximize performance.

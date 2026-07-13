@@ -1040,3 +1040,7 @@ python -m prompt_registry sync
 | Risk gate thresholds changed | Code change or settings change, NOT registry | Check `.env` and `execution/risk_gate.py` |
 
 The registry can never change code behavior — only text shown to an AI assistant.
+
+
+## Recent Architecture Updates
+- **Signal Engine Vectorization**: As of Phase 4, the entire `SignalAggregator` and all `SignalModule` implementations are natively vectorized in pandas/numpy (O(1) block computation). Row-based ticker iteration in the aggregation step has been removed to maximize performance.

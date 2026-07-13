@@ -240,3 +240,7 @@ Claude Code owns the entire repo — single-agent workflow, no domain split.
 ---
 
 *Last updated: 2026-07-10. Reflects the Yahoo statement-derived fundamentals engine (`data/yahoo_fundamentals.py`, replacing Finnhub as the fundamentals source; Finnhub is now news_catalyst-only), the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default. Also reconciles the Kelly-sizing DB-outage degrade path (`_OfflineTransactionsStore` → vol-target fallback), `reporting/progress.py` live pipeline-progress telemetry, and the `reporting/html_publisher.py` + `pipeline/steps.py` reporting/pipeline extractions.*
+
+
+## Recent Architecture Updates
+- **Signal Engine Vectorization**: As of Phase 4, the entire `SignalAggregator` and all `SignalModule` implementations are natively vectorized in pandas/numpy (O(1) block computation). Row-based ticker iteration in the aggregation step has been removed to maximize performance.

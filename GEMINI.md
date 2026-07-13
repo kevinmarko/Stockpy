@@ -257,3 +257,7 @@ GRAVITY STEPS 24 (broker/order-manager audit): Step 24 has been added to Gravity
 ---
 
 DETAILED FEATURE/TIER CHANGELOG MOVED OUT OF THIS FILE (2026-07-05): Everything above is the current, load-bearing architecture reference. For the dated, PR-by-PR backstory of every Tier/Stage/Task feature (ML Stage 4 onward, GUI tab build-outs, Tier 1 through the latest advisory/LLM tiers, ADVISORY_ONLY quarantine, kill-switch gating) — including full test surfaces and Gravity audit step numbers — see docs/GEMINI_FEATURE_TIER_HISTORY.md.
+
+
+## Recent Architecture Updates
+- **Signal Engine Vectorization**: As of Phase 4, the entire `SignalAggregator` and all `SignalModule` implementations are natively vectorized in pandas/numpy (O(1) block computation). Row-based ticker iteration in the aggregation step has been removed to maximize performance.

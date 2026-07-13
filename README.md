@@ -240,3 +240,7 @@ Every full pipeline run writes an HTML report to `output/`. The report leads wit
 Snapshots are rotated under `output/history/`; older than `SNAPSHOT_HISTORY_DAYS` are
 pruned each run.
 
+
+
+## Recent Architecture Updates
+- **Signal Engine Vectorization**: As of Phase 4, the entire `SignalAggregator` and all `SignalModule` implementations are natively vectorized in pandas/numpy (O(1) block computation). Row-based ticker iteration in the aggregation step has been removed to maximize performance.
