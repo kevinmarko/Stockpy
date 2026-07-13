@@ -655,7 +655,14 @@ class StrategyEvalStep(PipelineStep):
                     'Robinhood Shares': float(strategy_output.get('Robinhood Shares', 0.0)),
                     'Robinhood Avg Cost': float(strategy_output.get('Robinhood Avg Cost', 0.0)),
                     'Robinhood Dividends': float(strategy_output.get('Robinhood Dividends', 0.0)),
-                    'Robinhood Advice': str(strategy_output.get('Robinhood Advice', 'N/A'))
+                    'Robinhood Advice': str(strategy_output.get('Robinhood Advice', 'N/A')),
+                    # Per-module weighted score breakdown (strategy_engine.py
+                    # evaluate_security()'s Score_Components dict) — threaded
+                    # through so _write_state_snapshot can surface it the same
+                    # way reporting/state_snapshot.py's advisory writer already
+                    # does. {} (never fabricated) when the strategy engine
+                    # didn't produce a breakdown for this ticker.
+                    'Score_Components': strategy_output.get('Score_Components') or {},
                 }
 
             except Exception as ticker_exc:
@@ -698,11 +705,15 @@ class StrategyEvalStep(PipelineStep):
             'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number',
             'Kelly Target', 'Option Strategy', 'buyRange', 'sellRange',
             'Strategy Explainer Notes', 'Robinhood Shares', 'Robinhood Avg Cost',
-            'Robinhood Dividends', 'Robinhood Advice'
+            'Robinhood Dividends', 'Robinhood Advice', 'Score_Components'
         ]:
             if col in ['Edge Ratio', 'Kelly Target', 'Robinhood Shares', 'Robinhood Avg Cost', 'Robinhood Dividends', 'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number']:
                 default_val = 0.0 if col != 'is_dividend_sustainable' else 0
                 ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, default_val))
+            elif col == 'Score_Components':
+                # Dict-valued column — "" is not a sensible default (CONSTRAINT #4:
+                # an empty breakdown, not a fabricated one).
+                ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, {}))
             else:
                 ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, ""))
 

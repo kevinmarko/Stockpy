@@ -468,6 +468,54 @@ class TestWriteStateSnapshot:
         assert data["holdings"] == []
         assert data["tickers"] == []
 
+    def test_nan_sector_degrades_to_empty_string_not_literal_nan(self, tmp_path, monkeypatch):
+        """A missing-fundamentals ticker carries sector=NaN (float) in
+        dashboard_df (CONSTRAINT #4 — NaN, never a fabricated value). NaN is
+        truthy in Python, so a plain `str(val or "")` fallback does not catch
+        it and previously stringified it to the literal text "nan"."""
+        self._redirect_output_dir(monkeypatch, tmp_path)
+        final_df = pd.DataFrame([
+            {"Symbol": "XYZ", "Action Signal": "HOLD", "Price": 10.0,
+             "sector": float("nan")},
+        ])
+        _write_state_snapshot({"market_regime": "NEUTRAL"}, final_df, ["XYZ"])
+        data = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert data["signals"][0]["sector"] == ""
+
+    def test_real_sector_string_passes_through(self, tmp_path, monkeypatch):
+        self._redirect_output_dir(monkeypatch, tmp_path)
+        final_df = pd.DataFrame([
+            {"Symbol": "AAPL", "Action Signal": "HOLD", "Price": 190.0,
+             "sector": "Technology"},
+        ])
+        _write_state_snapshot({"market_regime": "NEUTRAL"}, final_df, ["AAPL"])
+        data = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert data["signals"][0]["sector"] == "Technology"
+
+    def test_score_components_threaded_through(self, tmp_path, monkeypatch):
+        """pilots/scoring.py re-blends each symbol's persisted per-module
+        score under a Pilot's weight vector by reading score_components —
+        it must survive the dashboard_df -> state_snapshot.json round trip
+        the same way both writers document it."""
+        self._redirect_output_dir(monkeypatch, tmp_path)
+        components = {"timeseries_momentum": 7.5, "rsi_extremes": -3.0}
+        final_df = pd.DataFrame([
+            {"Symbol": "AAPL", "Action Signal": "BUY", "Price": 190.0,
+             "Score_Components": components},
+        ])
+        _write_state_snapshot({"market_regime": "RISK ON"}, final_df, ["AAPL"])
+        data = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert data["signals"][0]["score_components"] == components
+
+    def test_missing_score_components_degrades_to_empty_dict(self, tmp_path, monkeypatch):
+        self._redirect_output_dir(monkeypatch, tmp_path)
+        final_df = pd.DataFrame([
+            {"Symbol": "AAPL", "Action Signal": "HOLD", "Price": 190.0},
+        ])
+        _write_state_snapshot({"market_regime": "NEUTRAL"}, final_df, ["AAPL"])
+        data = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert data["signals"][0]["score_components"] == {}
+
 
 # ===========================================================================
 # 9. Robinhood account-cache integration (replaces the old uncached

@@ -70,9 +70,16 @@ def test_settings_defaults(monkeypatch, tmp_path):
     assert s.MAX_PORTFOLIO_HEAT == pytest.approx(0.06)
     assert s.DEFAULT_TICKERS == ["AAPL", "MSFT", "JNJ", "AGNC"]
     assert s.LOG_LEVEL == "INFO"
-    # CORS + bearer-token auth hardening defaults.
+    # CORS + bearer-token auth hardening defaults. 3000 is the classic
+    # CRA/Node dev-server convention; the 5173 pair is Vite's default port
+    # (webapp/, the Pilots PWA) — both host spellings since browsers treat
+    # localhost and 127.0.0.1 as distinct origins.
     assert s.STATE_API_TOKEN is None
-    assert s.CORS_ALLOWED_ORIGINS == ["http://localhost:3000"]
+    assert s.CORS_ALLOWED_ORIGINS == [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
 
 
 # =============================================================================
