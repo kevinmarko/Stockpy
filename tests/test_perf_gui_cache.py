@@ -24,7 +24,17 @@ from __future__ import annotations
 
 import pandas as pd
 
-from gui.panels import ai_insights, analytics, observability, pairs
+from gui.panels import (
+    ai_insights,
+    analytics,
+    analytics_signals,
+    gravity_audit,
+    live_inventory,
+    market_data,
+    observability,
+    options_matrix,
+    pairs,
+)
 
 
 def _is_cached(fn) -> bool:
@@ -37,6 +47,66 @@ def _is_cached(fn) -> bool:
 def test_analytics_loaders_are_cache_wrapped():
     assert _is_cached(analytics._load_realized_performance)
     assert _is_cached(analytics._load_account_equity_history)
+
+
+# ── PR B round 2: the 5 remaining panels' per-rerun loaders are cache-wrapped ─
+
+def test_live_inventory_sync_report_loader_is_cache_wrapped():
+    assert _is_cached(live_inventory._read_sync_report_cache_cached)
+
+
+def test_options_matrix_directive_loader_is_cache_wrapped():
+    assert _is_cached(options_matrix._compute_directive_row)
+
+
+def test_market_data_default_symbols_loader_is_cache_wrapped():
+    assert _is_cached(market_data._load_default_signal_symbols_cached)
+
+
+def test_gravity_audit_loaders_are_cache_wrapped():
+    assert _is_cached(gravity_audit._load_gravity_report_cached)
+    assert _is_cached(gravity_audit._load_validation_summaries_cached)
+
+
+def test_analytics_signals_registry_loader_is_cache_wrapped():
+    assert _is_cached(analytics_signals._load_registry_rows_cached)
+
+
+# ── new loaders preserve dead-letter / empty-state behaviour ─────────────────
+
+def test_live_inventory_sync_report_cache_missing_is_none(tmp_path):
+    """A missing cache file → None (unchanged read_cache contract), never raise."""
+    live_inventory._read_sync_report_cache_cached.clear()
+    out = live_inventory._read_sync_report_cache_cached(
+        str(tmp_path / "sync_report.json"), 0.0
+    )
+    assert out is None
+    live_inventory._read_sync_report_cache_cached.clear()
+
+
+def test_market_data_default_symbols_missing_snapshot_is_empty(tmp_path):
+    market_data._load_default_signal_symbols_cached.clear()
+    out = market_data._load_default_signal_symbols_cached(
+        str(tmp_path / "state_snapshot.json"), 0.0
+    )
+    assert out == []
+    market_data._load_default_signal_symbols_cached.clear()
+
+
+def test_gravity_validation_summaries_empty_dir_is_empty(tmp_path):
+    gravity_audit._load_validation_summaries_cached.clear()
+    out = gravity_audit._load_validation_summaries_cached(str(tmp_path), "")
+    assert out == []
+    gravity_audit._load_validation_summaries_cached.clear()
+
+
+def test_gravity_report_loader_missing_file_is_empty(tmp_path):
+    gravity_audit._load_gravity_report_cached.clear()
+    out = gravity_audit._load_gravity_report_cached(
+        str(tmp_path / "gravity_verification_report.json"), 0.0
+    )
+    assert out == []
+    gravity_audit._load_gravity_report_cached.clear()
 
 
 def test_ai_insights_bars_loader_is_cache_wrapped():

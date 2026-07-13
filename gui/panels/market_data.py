@@ -31,6 +31,45 @@ from gui.panels import load_state_snapshot
 from gui.progress_ui import busy
 
 
+# ---------------------------------------------------------------------------
+# Cached loader (PR B — GUI panel caching)
+#
+# Streamlit reruns the whole script on every interaction, so the state-snapshot
+# read + signal-symbol extraction that seeds the "Quote symbols" input ran on
+# every render. Route it through an ``@st.cache_data`` loader keyed on the
+# snapshot file's **mtime** (the codebase convention — see
+# ``gui.panels.load_state_snapshot``). Behaviour-preserving: the returned symbol
+# list is identical to ``_signal_symbols(load_state_snapshot())``; a changed
+# mtime is a cache miss and forces a fresh read so a new pipeline run's symbols
+# appear on the next render. Dead-letter intact: an absent/unreadable snapshot
+# yields ``[]`` (the same empty default as before), never a raise.
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_default_signal_symbols_cached(path_str: str, _mtime: float) -> List[str]:
+    """mtime-keyed cached read of the snapshot → its signal symbols."""
+    p = Path(path_str)
+    if not p.exists():
+        return []
+    try:
+        snap = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise into UI
+        logger.debug("market-data snapshot read failed: %s", exc)
+        return []
+    return _signal_symbols(snap)
+
+
+def _load_default_signal_symbols() -> List[str]:
+    """Signal symbols from the latest state snapshot (``[]`` when absent)."""
+    snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
+    try:
+        mtime = snap_path.stat().st_mtime if snap_path.exists() else 0.0
+    except OSError:
+        mtime = 0.0
+    return _load_default_signal_symbols_cached(str(snap_path), mtime)
+
+
 def render_market_data() -> None:
     """Market Data Provider tab — diagnostic-rich quote fetcher.
 
@@ -117,8 +156,7 @@ def render_market_data() -> None:
                 st.session_state[tracker_key] = FetchHealthTracker()
             st.rerun()
 
-    snap = load_state_snapshot()
-    symbols_default = _signal_symbols(snap)
+    symbols_default = _load_default_signal_symbols()
     sym_text = st.text_input(
         "Quote symbols",
         value=", ".join(symbols_default[:10]),

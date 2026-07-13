@@ -32,6 +32,8 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # Repo root = three levels up from this file (gui/panels/analytics_signals.py).
@@ -69,41 +71,12 @@ _DSR_GATE = 0.95
 _PBO_GATE = 0.50
 
 
-def _load_registry_rows(path: str = "ml/registry.yaml") -> List[Dict[str, Any]]:
-    """Load + normalise ``ml/registry.yaml`` into a flat list of row dicts.
+def _normalise_registry(raw: Any) -> List[Dict[str, Any]]:
+    """Normalise a parsed ``registry.yaml`` mapping into flat row dicts (pure).
 
-    Pure and testable: returns ``[]`` on ANY failure (missing file, unreadable,
-    malformed YAML, unexpected shape) so the caller can render an info message
-    instead of a traceback (CONSTRAINT #6). ``null`` metrics are preserved as
-    ``None`` (the render layer maps them to "—", never 0 — CONSTRAINT #4).
-
-    A relative ``path`` is resolved against the repo root so the helper works
-    regardless of the process CWD; an absolute path is used as-is.
-
-    Returns
-    -------
-    list[dict]
-        One dict per model with keys: ``model``, ``role``, ``trained_date``,
-        ``cpcv_dsr``, ``pbo``, ``n_train``, ``deployable``, ``notes``.
+    Returns ``[]`` for any non-``dict`` / missing-``models`` shape and skips
+    malformed per-model entries rather than fabricating fields (CONSTRAINT #4).
     """
-    try:
-        import yaml  # PyYAML — already a repo dependency.
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("PyYAML unavailable for registry load: %s", exc)
-        return []
-
-    p = Path(path)
-    if not p.is_absolute():
-        p = _REPO_ROOT / p
-
-    try:
-        if not p.exists():
-            return []
-        raw = yaml.safe_load(p.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise into UI
-        logger.warning("Could not read/parse %s: %s", p, exc)
-        return []
-
     if not isinstance(raw, dict):
         return []
     models = raw.get("models")
@@ -126,6 +99,67 @@ def _load_registry_rows(path: str = "ml/registry.yaml") -> List[Dict[str, Any]]:
             "notes": meta.get("notes"),
         })
     return rows
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_registry_rows_cached(path_str: str, _mtime: float) -> List[Dict[str, Any]]:
+    """mtime-keyed cached read+parse of ``ml/registry.yaml`` (PR B convention).
+
+    Streamlit reruns the whole script on every interaction, so the previously
+    unconditional per-rerun YAML read here now goes through an ``@st.cache_data``
+    loader keyed on the file's **mtime** (mirroring
+    ``gui.panels.load_state_snapshot`` / ``analytics._load_registry_rows_cached``)
+    — a changed mtime is a cache miss and forces a fresh read, so the monthly
+    retraining job's registry update is reflected on the NEXT render. ``[]`` on
+    ANY failure (PyYAML missing, unreadable, malformed) so the caller renders an
+    info message instead of a traceback (CONSTRAINT #6).
+    """
+    try:
+        import yaml  # PyYAML — already a repo dependency.
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("PyYAML unavailable for registry load: %s", exc)
+        return []
+    try:
+        raw = yaml.safe_load(Path(path_str).read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise into UI
+        logger.warning("Could not read/parse %s: %s", path_str, exc)
+        return []
+    return _normalise_registry(raw)
+
+
+def _load_registry_rows(path: str = "ml/registry.yaml") -> List[Dict[str, Any]]:
+    """Load + normalise ``ml/registry.yaml`` into a flat list of row dicts.
+
+    Testable: returns ``[]`` on ANY failure (missing file, unreadable,
+    malformed YAML, unexpected shape) so the caller can render an info message
+    instead of a traceback (CONSTRAINT #6). ``null`` metrics are preserved as
+    ``None`` (the render layer maps them to "—", never 0 — CONSTRAINT #4).
+
+    A relative ``path`` is resolved against the repo root so the helper works
+    regardless of the process CWD; an absolute path is used as-is. The actual
+    read+parse is delegated to the mtime-keyed cached loader
+    :func:`_load_registry_rows_cached` (PR B GUI-caching) so a rerun no longer
+    re-reads/re-parses the file when its mtime is unchanged.
+
+    Returns
+    -------
+    list[dict]
+        One dict per model with keys: ``model``, ``role``, ``trained_date``,
+        ``cpcv_dsr``, ``pbo``, ``n_train``, ``deployable``, ``notes``.
+    """
+    p = Path(path)
+    if not p.is_absolute():
+        p = _REPO_ROOT / p
+
+    try:
+        if not p.exists():
+            return []
+        mtime = p.stat().st_mtime
+    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise into UI
+        logger.debug("registry stat failed for %s: %s", p, exc)
+        return []
+
+    return _load_registry_rows_cached(str(p), mtime)
 
 
 def render_ml_registry() -> None:
