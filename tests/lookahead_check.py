@@ -45,8 +45,9 @@ def verify_no_lookahead(
     if isinstance(data_perturbed, pd.DataFrame):
         for col in data_perturbed.columns:
             if np.issubdtype(data_perturbed[col].dtype, np.number):
-                # Add large noise or set to random values
-                data_perturbed.loc[data_perturbed.index[t + 1]:, col] = 99999.9
+                # Add large noise or set to random values, matched to column dtype to avoid FutureWarning
+                val = 99999.9 if np.issubdtype(data_perturbed[col].dtype, np.floating) else 99999
+                data_perturbed.loc[data_perturbed.index[t + 1]:, col] = val
     else:
         # Series
         data_perturbed.iloc[t + 1:] = 99999.9
