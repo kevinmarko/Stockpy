@@ -1508,7 +1508,8 @@ if __name__ == "__main__":
 
     if args.transport == "sse":
         print(f"Starting InvestYo MCP Server in SSE mode on port {args.port}...")
-        mcp.run(transport="sse", port=args.port)
+        mcp.settings.port = args.port
+        mcp.run(transport="sse")
     else:
         mcp.run(transport="stdio")
 

@@ -87,6 +87,16 @@ def initialize_database(db_file: str = DB_FILE):
             logger.info("Generating 'DailySignals' table schema from config.COLUMN_SCHEMA...")
             
             # Base columns
+            # -------------------------------------------------------------------------
+            # DailySignals Schema (Deprecated / No Writer)
+            # -------------------------------------------------------------------------
+            # NOTE: There are currently zero writers for `DailySignals` in the codebase.
+            # Its original "Step 6" flat-file migration purpose appears to have been 
+            # superseded by `transactions_store.py` (trades) and `historical_store.py`
+            # (bars/account snapshots/fundamentals/macro). 
+            # The schema-creation logic is retained for now, but this table is effectively
+            # a dead sink. Do not assume its contents are populated in production runs.
+            # -------------------------------------------------------------------------
             columns_sql = [
                 "id INTEGER PRIMARY KEY AUTOINCREMENT",
                 "timestamp TEXT DEFAULT CURRENT_TIMESTAMP"
@@ -161,12 +171,21 @@ def migrate_daily_signals_schema(cursor, conn):
     if added:
         try:
             conn.commit()
+            logger.info(f"Successfully migrated schema. Added {len(added)} column(s).")
         except Exception as e:
-            logger.error(f"Schema migration commit FAILED: {e}", exc_info=True)
-        else:
-            logger.info(f"Schema migration complete. Added {len(added)} new columns: {added}")
+            logger.error(f"Failed to commit schema migration: {e}")
+            raise
     else:
         logger.info("Schema migration: DailySignals is already up-to-date.")
+
+    current_schema_keys = {col["key"] for col in config.COLUMN_SCHEMA}
+    orphaned = existing_cols - current_schema_keys - {"id", "timestamp"}
+    if orphaned:
+        logger.warning(
+            f"DailySignals has {len(orphaned)} orphaned column(s) no longer in COLUMN_SCHEMA: {sorted(list(orphaned))}. "
+            "These are never dropped automatically (SQLite ALTER TABLE DROP COLUMN is available since 3.35 but intentionally not used here to avoid destructive migrations); "
+            "review and drop manually if confirmed obsolete."
+        )
 
 
 if __name__ == "__main__":

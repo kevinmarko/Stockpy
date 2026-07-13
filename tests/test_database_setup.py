@@ -262,3 +262,33 @@ class TestMigrateDailySignalsSchema:
             assert {"Col_A", "Col_B"} <= columns
         finally:
             conn.close()
+
+    def test_orphaned_column_warning(self, tmp_path: Path, caplog):
+        """Simulate an orphaned column that exists in DB but not in COLUMN_SCHEMA,
+        and assert that migrate_daily_signals_schema logs a warning but doesn't drop it."""
+        db_file = str(tmp_path / "orphan_warn.db")
+        schema_v1 = [{"header": "A", "key": "Col_A", "format": "string"}, {"header": "B", "key": "Col_Obsolete", "format": "string"}]
+        schema_v2 = [{"header": "A", "key": "Col_A", "format": "string"}]
+
+        # Build DB with v1 schema
+        with mock.patch.object(database_setup.config, "COLUMN_SCHEMA", schema_v1):
+            database_setup.initialize_database(db_file)
+
+        # Re-run migration with v2 schema
+        conn = sqlite3.connect(db_file)
+        try:
+            cursor = conn.cursor()
+            with mock.patch.object(database_setup.config, "COLUMN_SCHEMA", schema_v2):
+                with caplog.at_level("WARNING"):
+                    database_setup.migrate_daily_signals_schema(cursor, conn)
+            
+            # Assert column was NOT dropped
+            cursor.execute("PRAGMA table_info(DailySignals);")
+            columns = {row[1] for row in cursor.fetchall()}
+            assert "Col_Obsolete" in columns
+            
+            # Assert warning was logged
+            assert "orphaned column(s) no longer in COLUMN_SCHEMA" in caplog.text
+            assert "Col_Obsolete" in caplog.text
+        finally:
+            conn.close()

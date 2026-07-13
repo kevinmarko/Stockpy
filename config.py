@@ -161,6 +161,17 @@ COLUMN_SCHEMA = [
     # orchestrator run (no historical batch fetch required).
     # ==========================================================
     {"header": "Cluster", "key": "Correlation_Cluster", "format": "number"},
+
+    # ==========================================================
+    # --- ADVISORY METADATA ---
+    # ==========================================================
+    {"header": "Score", "key": "Score", "format": "number"},
+    {"header": "Forecast 30 Pct", "key": "Forecast_30_Pct", "format": "percent"},
+    {"header": "Advisory Action", "key": "Advisory_Action", "format": "string"},
+    {"header": "Advisory Conviction", "key": "Advisory_Conviction", "format": "number"},
+    {"header": "Advisory Rationale", "key": "Advisory_Rationale", "format": "string"},
+    {"header": "Advisory Position Pct", "key": "Advisory_Position_Pct", "format": "percent"},
+    {"header": "Advisory Data Quality", "key": "Advisory_Data_Quality", "format": "string"},
 ]
 
 def get_headers():

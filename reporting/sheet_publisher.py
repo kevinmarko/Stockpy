@@ -88,7 +88,7 @@ def rec_to_sheet_row(
         "Forecast_30_Pct": round(forecast_pct, 6),
 
         # ── Dividends ────────────────────────────────────────────────────────
-        "Dividend Yield": round(_f("dividend_yield"), 4),
+        "Div Yield": round(_f("dividend_yield"), 4),
 
         # ── Execution ranges ──────────────────────────────────────────────────
         # Now computed every cycle by StrategyEngine.evaluate_security() and
