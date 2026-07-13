@@ -30,194 +30,23 @@ from gui.panels._shared import (  # noqa: E402
 from gui.panels import load_state_snapshot
 from gui.panels.launcher import _render_report_provenance_banner
 from gui.progress_ui import busy
-
-
-def default_brinson_fachler_frame() -> pd.DataFrame:
-    """Return the seed editor DataFrame (GICS 11 sectors, zero weights/returns).
-
-    Kept as a separate factory function so tests can construct the same shape
-    the UI starts with without spinning up Streamlit.
-    """
-    rows = [
-        {
-            "Sector": s,
-            "Portfolio Weight (%)": 0.0,
-            "Portfolio Return (%)": 0.0,
-            "Benchmark Weight (%)": 0.0,
-            "Benchmark Return (%)": 0.0,
-        }
-        for s in GICS_SECTORS
-    ]
-    return pd.DataFrame(rows, columns=list(_BF_EDITOR_COLUMNS))
-
-
-
-def parse_pasted_sector_matrix(text: str) -> pd.DataFrame:
-    """Parse a TSV / CSV block pasted from a spreadsheet into the editor shape.
-
-    The function accepts either:
-
-    *   A 5-column matrix with a header row whose names match (case-insensitive,
-        whitespace-tolerant) :data:`_BF_EDITOR_COLUMNS`.
-    *   A 5-column matrix with no header (positional: sector, p_w, p_r, b_w,
-        b_r).
-
-    Values are coerced to float; missing / unparseable cells become ``0.0`` so
-    the engine never sees ``NaN`` (the engine fills NaN to 0 internally too,
-    but normalizing up front gives a clean editor view).
-
-    Raises
-    ------
-    ValueError
-        On unrecognised column counts or completely empty input.
-    """
-    if not text or not text.strip():
-        raise ValueError("Pasted text is empty.")
-
-    # Detect delimiter — spreadsheet copies are usually TSV; fall back to CSV.
-    sample = text.strip().splitlines()[0]
-    delim = "\t" if "\t" in sample else ","
-
-    # Header detection: pandas would happily promote the first data row to the
-    # header, dropping a real data row in the header-less case. Sniff the first
-    # line directly: if columns 2..5 parse as floats, it's data, not a header.
-    first_cells = [c.strip().replace("%", "") for c in sample.split(delim)]
-    has_header = True
-    if len(first_cells) >= 5:
-        try:
-            for cell in first_cells[1:5]:
-                float(cell)
-            has_header = False  # all numeric → first row is data
-        except ValueError:
-            has_header = True
-
-    header_arg = 0 if has_header else None
-    df = pd.read_csv(io.StringIO(text), sep=delim, dtype=str,
-                     engine="python", header=header_arg)
-
-    if df.shape[1] != 5:
-        raise ValueError(
-            f"Expected 5 columns (Sector, P-Weight, P-Return, B-Weight, B-Return); "
-            f"got {df.shape[1]}."
-        )
-
-    if not has_header:
-        df.columns = list(_BF_EDITOR_COLUMNS)
-    else:
-        # Header present — normalise column names by lowercase comparison.
-        canonical = {c.lower().strip(): c for c in _BF_EDITOR_COLUMNS}
-        renamed: Dict[str, str] = {}
-        for c in df.columns:
-            key = str(c).lower().strip()
-            if key in canonical:
-                renamed[c] = canonical[key]
-        df = df.rename(columns=renamed)
-        # If after renaming we still don't have all canonical columns, treat
-        # the input as positional anyway.
-        if not set(_BF_EDITOR_COLUMNS).issubset(df.columns):
-            df.columns = list(_BF_EDITOR_COLUMNS)
-
-    # Coerce numerics; non-parsable strings -> 0.0
-    for c in _BF_EDITOR_COLUMNS[1:]:
-        df[c] = pd.to_numeric(df[c].astype(str).str.replace("%", "", regex=False),
-                              errors="coerce").fillna(0.0)
-    df["Sector"] = df["Sector"].astype(str).str.strip()
-    df = df[df["Sector"] != ""]  # drop blank rows
-    if df.empty:
-        raise ValueError("No data rows found after parsing.")
-    return df[list(_BF_EDITOR_COLUMNS)].reset_index(drop=True)
-
-
-
-def build_brinson_fachler_inputs(
-    editor_df: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Split the editor frame into the (portfolio_df, benchmark_df) shape the
-    engine's DataFrame-compat path consumes.
-
-    Percentages in the editor are converted to fractions (``/ 100.0``) so the
-    engine's allocation/selection arithmetic is unit-consistent (the engine
-    multiplies weights × returns without rescaling).
-
-    The DataFrames carry the explicit ``portfolio_weight`` / ``portfolio_return``
-    and ``benchmark_weight`` / ``benchmark_return`` column names that
-    ``EvaluationEngine._calculate_brinson_fachler_compat`` looks up — passing
-    the explicit shape exercises the engine's name-mapping branch deterministically.
-    """
-    if editor_df is None or editor_df.empty:
-        raise ValueError("Sector editor is empty.")
-
-    df = editor_df.copy()
-    for c in _BF_EDITOR_COLUMNS:
-        if c not in df.columns:
-            raise ValueError(f"Editor frame missing required column: {c}")
-
-    df["Sector"] = df["Sector"].astype(str).str.strip()
-    df = df[df["Sector"] != ""].copy()
-    if df.empty:
-        raise ValueError("Sector editor has no non-empty rows.")
-
-    portfolio_df = pd.DataFrame({
-        "sector": df["Sector"],
-        "portfolio_weight": pd.to_numeric(df["Portfolio Weight (%)"], errors="coerce").fillna(0.0) / 100.0,
-        "portfolio_return": pd.to_numeric(df["Portfolio Return (%)"], errors="coerce").fillna(0.0) / 100.0,
-    })
-    benchmark_df = pd.DataFrame({
-        "sector": df["Sector"],
-        "benchmark_weight": pd.to_numeric(df["Benchmark Weight (%)"], errors="coerce").fillna(0.0) / 100.0,
-        "benchmark_return": pd.to_numeric(df["Benchmark Return (%)"], errors="coerce").fillna(0.0) / 100.0,
-    })
-    return portfolio_df, benchmark_df
-
-
-
-def compute_brinson_fachler(editor_df: pd.DataFrame) -> Dict[str, Any]:
-    """Run :class:`EvaluationEngine.calculate_brinson_fachler` on editor input.
-
-    Returns the engine's structured dict unchanged so the UI and tests share
-    one canonical result shape — ``Portfolio Return``, ``Benchmark Return``,
-    ``Active Return``, ``Allocation Effect``, ``Selection Effect``,
-    ``Interaction Effect``, ``Attribution Sum``, and ``Sector Details``.
-    """
-    from evaluation_engine import EvaluationEngine
-
-    portfolio_df, benchmark_df = build_brinson_fachler_inputs(editor_df)
-    engine = EvaluationEngine()
-    return engine.calculate_brinson_fachler(portfolio_df, benchmark_df)
-
-
-
-def validate_brinson_fachler_weights(
-    editor_df: pd.DataFrame,
-    *,
-    tolerance_pct: float = 1.0,
-) -> List[str]:
-    """Return a list of human-readable validation warnings (empty when clean).
-
-    Checks:
-      * portfolio weights sum to ~100% (within ``tolerance_pct``);
-      * benchmark weights sum to ~100%;
-      * no negative weights (the engine itself does not forbid them, but
-        negative sector weights almost always indicate a data-entry error in
-        long-only attribution).
-    """
-    warnings: List[str] = []
-    if editor_df is None or editor_df.empty:
-        return ["Sector editor is empty."]
-
-    p_sum = float(pd.to_numeric(editor_df.get("Portfolio Weight (%)", 0), errors="coerce").fillna(0.0).sum())
-    b_sum = float(pd.to_numeric(editor_df.get("Benchmark Weight (%)", 0), errors="coerce").fillna(0.0).sum())
-    if abs(p_sum - 100.0) > tolerance_pct:
-        warnings.append(f"Portfolio weights sum to {p_sum:.2f}% (expected ~100%).")
-    if abs(b_sum - 100.0) > tolerance_pct:
-        warnings.append(f"Benchmark weights sum to {b_sum:.2f}% (expected ~100%).")
-
-    for col in ("Portfolio Weight (%)", "Benchmark Weight (%)"):
-        if col in editor_df.columns:
-            neg = pd.to_numeric(editor_df[col], errors="coerce").fillna(0.0) < 0
-            if neg.any():
-                warnings.append(f"Negative values found in '{col}' — long-only attribution typically requires non-negative weights.")
-    return warnings
+from gui.report_viewer_helpers import (
+    build_brinson_fachler_inputs,
+    build_cluster_assignment_frame,
+    build_cluster_concentration_rows,
+    build_hidden_fields_frame,
+    build_mfe_mae_scatter_frame,
+    build_tactical_ranges_frame,
+    calibration_summary_stats,
+    compute_brinson_fachler,
+    default_brinson_fachler_frame,
+    format_tracking_pct,
+    heavy_concentration_clusters,
+    parse_pasted_sector_matrix,
+    shape_sector_details_frame,
+    tracking_delta_label,
+    validate_brinson_fachler_weights,
+)
 
 
 # ===========================================================================
@@ -613,48 +442,18 @@ def _render_correlation_cluster_section(signals: list) -> None:
             str(s.get("symbol", "")).upper(): s
             for s in cached_signals if s.get("symbol")
         }
-        rows = []
-        for sym in sorted(labels):
-            cid = labels[sym]
-            sig = sig_map.get(sym, {})
-            kelly = float(sig.get("kelly_target", 0.0) or 0.0)
-            action = str(sig.get("action", sig.get("action_signal", "—")))
-            rows.append({
-                "Symbol": sym,
-                "Cluster": cid if cid != 0 else "—",
-                "Action": action,
-                "Kelly Target": f"{kelly:.1%}" if kelly else "—",
-            })
-        assign_df = pd.DataFrame(rows).sort_values(["Cluster", "Symbol"])
+        assign_df = build_cluster_assignment_frame(labels, sig_map)
         st.dataframe(assign_df, width="stretch", hide_index=True)
 
         # ── Cluster concentration ─────────────────────────────────────────────
         if not summary.empty:
             st.markdown("**Per-Cluster Concentration (sum of Kelly Targets)**")
-            conc_rows = []
-            for _, row in summary.iterrows():
-                cid = int(row["cluster_id"])
-                cluster_syms = row["symbols"] if isinstance(row["symbols"], list) else []
-                total_kelly = sum(
-                    float(sig_map.get(s, {}).get("kelly_target", 0.0) or 0.0)
-                    for s in cluster_syms
-                )
-                avg_corr = row.get("avg_intra_corr", float("nan"))
-                conc_rows.append({
-                    "Cluster ID": cid,
-                    "Symbols": ", ".join(cluster_syms),
-                    "Count": int(row["n_symbols"]),
-                    "Total Position %": f"{total_kelly:.1%}",
-                    "Avg |Corr|": f"{avg_corr:.2f}" if avg_corr == avg_corr else "—",
-                })
+            conc_rows = build_cluster_concentration_rows(summary, sig_map)
             conc_df = pd.DataFrame(conc_rows).sort_values("Cluster ID")
             st.dataframe(conc_df, width="stretch", hide_index=True)
 
             # Highlight clusters with heavy concentration
-            heavy = [
-                r for r in conc_rows
-                if float(r["Total Position %"].strip("%")) / 100 > 0.30
-            ]
+            heavy = heavy_concentration_clusters(conc_rows)
             if heavy:
                 names = ", ".join(f"Cluster {r['Cluster ID']}" for r in heavy)
                 st.warning(
@@ -742,17 +541,10 @@ def _render_recommendation_tracking_section() -> None:
     n_completed = rpt["n_completed"]
     n_with_exit = rpt["n_with_exit"]
 
-    def _pct(v: float) -> str:
-        return "—" if _math.isnan(v) else f"{v * 100:+.2f}%"
-
-    def _delta_label(d: float) -> str:
-        if _math.isnan(d):
-            return "— (insufficient data)"
-        if d > 0.005:
-            return f"{d * 100:+.2f}% ✅ judgment adds value"
-        if d < -0.005:
-            return f"{d * 100:+.2f}% ⚠️ judgment costs alpha"
-        return f"{d * 100:+.2f}% ≈ neutral"
+    # Pure formatters extracted to gui.report_viewer_helpers; aliased locally
+    # so the rest of this render body is unchanged.
+    _pct = format_tracking_pct
+    _delta_label = tracking_delta_label
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
@@ -849,10 +641,10 @@ def _render_calibration_section() -> None:
         )
         return
 
-    total = int(cal_df["count"].sum())
-    total_wins = float((cal_df["win_rate"].fillna(0) * cal_df["count"]).sum())
-    overall_wr = total_wins / total if total > 0 else float("nan")
-    cal_error = float((scored["win_rate"] - scored["bin_center"]).abs().mean())
+    stats = calibration_summary_stats(cal_df)
+    total = stats["total"]
+    overall_wr = stats["overall_win_rate"]
+    cal_error = stats["calibration_error"]
 
     kc1, kc2, kc3, kc4 = st.columns(4)
     kc1.metric("Trades w/ Conviction", str(total))
@@ -1030,16 +822,7 @@ def _render_brinson_fachler_section() -> None:
 
         sector_details = result.get("Sector Details") or {}
         if sector_details:
-            sector_df = pd.DataFrame.from_dict(sector_details, orient="index").reset_index()
-            sector_df = sector_df.rename(columns={"index": "sector"})
-            # Pretty column order for display.
-            preferred = [
-                "sector", "weight_p", "weight_b", "return_p", "return_b",
-                "allocation_effect", "selection_effect",
-                "interaction_effect", "total_attribution",
-            ]
-            ordered = [c for c in preferred if c in sector_df.columns]
-            sector_df = sector_df[ordered]
+            sector_df = shape_sector_details_frame(sector_details)
 
             st.markdown("**Per-sector breakdown**")
             st.dataframe(sector_df, width="stretch", hide_index=True)
@@ -1106,26 +889,7 @@ def _render_hidden_fields_section(signals: list) -> None:
         st.info("No pipeline signals yet — run the orchestrator from the Launcher tab.")
         return
 
-    factor_cols = [
-        ("symbol", "Symbol"),
-        ("value_z", "Value Z"),
-        ("quality_z", "Quality Z"),
-        ("lowvol_z", "LowVol Z"),
-        ("size_z", "Size Z"),
-        ("multifactor_composite", "Multifactor Composite"),
-        ("xsec_12_1m", "XSec 12-1M Return"),
-        ("xsec_momentum_rank", "XSec Momentum Rank"),
-    ]
-    rows = []
-    any_populated = False
-    for s in signals:
-        row = {}
-        for key, label in factor_cols:
-            v = s.get(key)
-            if key != "symbol" and v is not None:
-                any_populated = True
-            row[label] = v if v is not None else ("—" if key != "symbol" else s.get("symbol", "—"))
-        rows.append(row)
+    factor_df, any_populated = build_hidden_fields_frame(signals)
 
     if not any_populated:
         st.caption(
@@ -1136,7 +900,6 @@ def _render_hidden_fields_section(signals: list) -> None:
         )
         return
 
-    factor_df = pd.DataFrame(rows)
     st.dataframe(factor_df, width="stretch", hide_index=True)
 
 
@@ -1176,21 +939,7 @@ def _render_trade_quality_section(signals: list) -> None:
 
     # ── 1. MFE vs MAE scatter (current signals) ──────────────────────────────
     st.markdown("**MFE vs. MAE — current signals**")
-    scatter_rows = [
-        {
-            "symbol": s.get("symbol", "?"),
-            "mfe": s.get("mfe"),
-            "mae": s.get("mae"),
-            "edge_ratio": s.get("edge_ratio"),
-            "conviction": s.get("advisory_conviction"),
-            "action": s.get("action") or s.get("advisory_action") or "—",
-        }
-        for s in signals
-    ]
-    scatter_df = pd.DataFrame(
-        scatter_rows,
-        columns=["symbol", "mfe", "mae", "edge_ratio", "conviction", "action"],
-    ).dropna(subset=["mfe", "mae"])
+    scatter_df = build_mfe_mae_scatter_frame(signals)
     if scatter_df.empty:
         st.info(
             "No MFE/MAE data in the last snapshot yet. These populate once a "
@@ -1486,21 +1235,7 @@ def render_report_viewer() -> None:
     # easy to miss buried in that wide table — call it out explicitly here.
     st.markdown("**Tactical Ranges — Buy Zone vs. Sell Zone**")
     if signals:
-        range_rows = [
-            {
-                "Symbol": s.get("symbol", "—"),
-                "Action": s.get("action", "—"),
-                "Buy Range": s.get("buy_range") or "—",
-                "Sell Range": s.get("sell_range") or "—",
-                "Suggested Exit %": (
-                    f"{float(s.get('suggested_exit_pct') or 0.0):.0%}"
-                    if s.get("action") == "SELL" and float(s.get("suggested_exit_pct") or 0.0) > 0
-                    else "—"
-                ),
-            }
-            for s in signals
-        ]
-        st.dataframe(pd.DataFrame(range_rows), width="stretch", hide_index=True)
+        st.dataframe(build_tactical_ranges_frame(signals), width="stretch", hide_index=True)
     else:
         st.caption("Buy/Sell ranges populate once pipeline signals exist.")
 
