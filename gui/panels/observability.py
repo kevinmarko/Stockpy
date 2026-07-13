@@ -29,6 +29,18 @@ from gui.panels._shared import (  # noqa: E402
     logger,
 )
 from gui.panels import load_state_snapshot
+from gui.observability_panel_helpers import (
+    compute_portfolio_heat,
+    format_rmse,
+    format_skill_weight,
+    heartbeat_status,
+    hy_oas_badge,
+    portfolio_heat_badge,
+    regime_emoji,
+    sahm_badge,
+    vix_badge,
+    yield_curve_badge,
+)
 
 
 def _system_health_fragment() -> None:
@@ -49,8 +61,7 @@ def _system_health_fragment() -> None:
             st.success("✅ Kill switch inactive")
     with c_reg:
         regime = snap.get("market_regime", "—")
-        colour = ("🟢" if "RISK ON" in str(regime)
-                  else ("🔴" if "RECESSION" in str(regime) else "🟡"))
+        colour = regime_emoji(regime)
         st.metric("Macro Regime", f"{colour} {regime}")
     with c_vix:
         vix = snap.get("vix")
@@ -213,12 +224,8 @@ def render_observability() -> None:
                 delta=None,
                 help="≥ 0.50 → killSwitch fires; ≥ 0.30 + HMM agreement → lowered-threshold fast-trigger",
             )
-            if sahm >= 0.5:
-                st.error("🔴 ≥ 0.50 — kill-switch threshold breached")
-            elif sahm >= 0.3:
-                st.warning("🟡 ≥ 0.30 — fast-trigger zone (HMM agreement needed)")
-            else:
-                st.success("🟢 < 0.30 — below fast-trigger zone")
+            _b = sahm_badge(sahm)
+            getattr(st, _b.level)(_b.message)
         else:
             st.metric("Sahm Rule", "—", help="Not available in last snapshot")
 
@@ -229,12 +236,8 @@ def render_observability() -> None:
                 "HY OAS (%)", f"{hy_oas:.2f}",
                 help="High-Yield Option-Adjusted Spread. >6.0% → RECESSION; >4.5% → CREDIT EVENT; >6% + yield inversion → RECESSION",
             )
-            if hy_oas >= 6.0:
-                st.error("🔴 ≥ 6.0% — RECESSION regime trigger")
-            elif hy_oas >= 4.5:
-                st.warning("🟡 ≥ 4.5% — CREDIT EVENT zone")
-            else:
-                st.success("🟢 < 4.5% — below credit-stress threshold")
+            _b = hy_oas_badge(hy_oas)
+            getattr(st, _b.level)(_b.message)
         else:
             st.metric("HY OAS (%)", "—")
 
@@ -245,10 +248,8 @@ def render_observability() -> None:
                 "10Y-2Y Spread (%)", f"{yc:.3f}",
                 help="Yield curve 10Y-2Y. < -0.25% + HY OAS > 6% → RECESSION",
             )
-            if yc < -0.25:
-                st.warning("🟡 Inverted (< -0.25%)")
-            else:
-                st.success("🟢 Not inverted")
+            _b = yield_curve_badge(yc)
+            getattr(st, _b.level)(_b.message)
         else:
             st.metric("10Y-2Y Spread (%)", "—")
 
@@ -259,12 +260,8 @@ def render_observability() -> None:
                 "VIX", f"{vix_val:.1f}",
                 help="CBOE Volatility Index. > 30 → killSwitch fires",
             )
-            if vix_val > 30:
-                st.error("🔴 > 30 — kill-switch VIX threshold breached")
-            elif vix_val > 25:
-                st.warning("🟡 > 25 — lowered-threshold zone (HMM-agreement)")
-            else:
-                st.success("🟢 ≤ 25")
+            _b = vix_badge(vix_val)
+            getattr(st, _b.level)(_b.message)
         else:
             st.metric("VIX", "—")
 
@@ -492,10 +489,13 @@ def _render_observability_open_positions_vs_signals(snap: Dict[str, Any]) -> Non
 #
 # Ported from ``observability/dashboard.py``'s "🌡️ Portfolio Risk Metrics"
 # row. Heat/gross/net all derive from the internal TransactionsStore open
-# book — the same caveat as the original applies: the 100_000 heat
-# denominator is a placeholder pending equity coming from the broker account
-# snapshot in the state snapshot; degrades to "—" when the required columns
-# are absent (dead-letter, CONSTRAINT #4 — no fabricated metrics).
+# book. The heat *denominator* is now the real total account equity from the
+# cached Robinhood snapshot (``cache/account_snapshot.json`` via
+# :func:`_load_account_snapshot_cache`), replacing the former hard-coded
+# 100_000 placeholder. When equity is unavailable (no snapshot / non-positive),
+# :func:`gui.observability_panel_helpers.compute_portfolio_heat` returns NaN and
+# the tile degrades to "—" — never a fabricated denominator (CONSTRAINT #4).
+# Gross/net likewise degrade to "—" when the required columns are absent.
 # ---------------------------------------------------------------------------
 
 
@@ -514,9 +514,21 @@ def _render_observability_portfolio_risk_metrics() -> None:
     with col_heat:
         if not open_df.empty and "unrealized_pnl" in open_df.columns:
             adverse = open_df[open_df["unrealized_pnl"] < 0]["unrealized_pnl"].abs().sum()
-            heat_pct = adverse / 100_000
-            heat_colour = "🔴" if heat_pct > 0.05 else ("🟡" if heat_pct > 0.03 else "🟢")
-            st.metric("Portfolio Heat", f"{heat_colour} {heat_pct:.1%}")
+            # Real total account equity as the heat denominator (not a hard-coded
+            # placeholder). Absent/non-positive equity → NaN → "—" tile.
+            total_equity = _load_account_snapshot_cache().get("total_equity")
+            heat_pct = compute_portfolio_heat(float(adverse), total_equity)
+            if heat_pct == heat_pct:  # not NaN
+                heat_colour = portfolio_heat_badge(heat_pct)
+                st.metric("Portfolio Heat", f"{heat_colour} {heat_pct:.1%}")
+            else:
+                st.metric(
+                    "Portfolio Heat", "—",
+                    help="Total account equity unavailable "
+                         "(cache/account_snapshot.json) — cannot compute the heat "
+                         "denominator honestly. Run `python3 main.py "
+                         "--refresh-account` to populate.",
+                )
         else:
             st.metric("Portfolio Heat", "—")
 
@@ -946,8 +958,8 @@ def _forecast_skill_rows(
                         "Model": model,
                         "Pending": pending,
                         "Completed": completed,
-                        "RMSE ($)": (f"{r:.4f}" if r is not None and r == r else "—"),
-                        "Skill weight": (f"{w:.1%}" if w is not None else "—"),
+                        "RMSE ($)": format_rmse(r),
+                        "Skill weight": format_skill_weight(w),
                     })
 
         return {"rows": rows, "any_history": any_history}
@@ -1187,14 +1199,7 @@ def _render_observability_heartbeat_trend() -> None:
         latest_age = valid.iloc[-1] if not valid.empty else float("nan")
         peak_age = valid.max() if not valid.empty else float("nan")
 
-        if latest_age != latest_age:  # NaN
-            status = "⚪ No heartbeat"
-        elif latest_age > 120:
-            status = "🔴 Stale"
-        elif latest_age > 60:
-            status = "🟡 Slow"
-        else:
-            status = "🟢 Fresh"
+        status = heartbeat_status(latest_age)
 
         kc1.metric("Current age", f"{latest_age:.0f} s" if latest_age == latest_age else "—")
         kc2.metric("Peak age", f"{peak_age:.0f} s" if peak_age == peak_age else "—")
