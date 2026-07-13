@@ -185,6 +185,7 @@ def test_training_produces_model_and_real_metrics(tmp_path, tmp_registry):
         data_engine=_DistinctEngine(),
         save_path=save_path,
         registry_path=tmp_registry,
+        historical_store=False,
     )
 
     # Model artifact exists.
@@ -234,6 +235,7 @@ def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, m
         data_engine=_DistinctEngine(),
         save_path=None,
         registry_path=tmp_registry,
+        historical_store=False,
     )
 
     assert received_args["path"] is None, (
@@ -255,6 +257,7 @@ def test_deployable_flag_matches_gate_exactly(tmp_path, tmp_registry):
         data_engine=_DistinctEngine(),
         save_path=save_path,
         registry_path=tmp_registry,
+        historical_store=False,
     )
     expected = registry_io.compute_deployable(summary["dsr"], summary["pbo"])
     assert summary["deployable"] == expected
@@ -270,6 +273,7 @@ def test_empty_panel_no_crash_and_not_deployable(tmp_path, tmp_registry):
         data_engine=_EmptyEngine(),
         save_path=save_path,
         registry_path=tmp_registry,
+        historical_store=False,
     )
     # No artifact written, honest null metrics, not deployable.
     assert not save_path.exists()
@@ -297,6 +301,7 @@ def test_trained_model_is_loadable_and_non_neutral(tmp_path, tmp_registry):
         data_engine=_DistinctEngine(),
         save_path=save_path,
         registry_path=tmp_registry,
+        historical_store=False,
     )
     ranker = LGBMCrossSectionalRanker.load(save_path)
     assert ranker._model is not None
