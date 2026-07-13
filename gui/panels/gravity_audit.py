@@ -29,6 +29,76 @@ from gui.panels._shared import (  # noqa: E402
 )
 
 
+# ---------------------------------------------------------------------------
+# Cached loaders (PR B — GUI panel caching)
+#
+# Streamlit reruns the whole script on every interaction, so these two
+# file-backed loads fired on every render of the Safety tab: (1) the Gravity
+# verification-report JSON read behind Strategy Health, and (2) the
+# glob-and-parse of every ``reports/*_validation_summary.json`` behind the
+# Validation & Stress section. Both are now routed through ``@st.cache_data``
+# loaders keyed on file **mtime** (the codebase convention — see
+# ``gui.panels.load_state_snapshot``). Behaviour-preserving: WHAT renders is
+# identical; a changed mtime is a cache miss, so a fresh Gravity/harness run is
+# reflected on the next render. Dead-letter intact — a missing/corrupt file
+# degrades to ``[]`` (CONSTRAINT #6), never a fabricated row (CONSTRAINT #4).
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_gravity_report_cached(path_str: str, _mtime: float) -> List[Dict[str, Any]]:
+    """mtime-keyed cached read of the Gravity verification report's
+    ``strategies`` list (delegates to :func:`gui.strategy_health.read_gravity_report`)."""
+    from gui.strategy_health import read_gravity_report
+
+    return read_gravity_report(Path(path_str))
+
+
+def _load_gravity_report() -> List[Dict[str, Any]]:
+    """Load the Gravity verification report's ``strategies`` list (``[]`` when
+    absent), via the mtime-keyed cached loader so a rerun no longer re-reads the
+    JSON unless it changed."""
+    from gui.strategy_health import _DEFAULT_REPORT_PATH
+
+    p = _DEFAULT_REPORT_PATH
+    try:
+        mtime = p.stat().st_mtime if p.exists() else 0.0
+    except OSError:
+        mtime = 0.0
+    return _load_gravity_report_cached(str(p), mtime)
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _load_validation_summaries_cached(reports_dir_str: str, _signature: str) -> List[Dict[str, Any]]:
+    """Signature-keyed cached glob+parse of ``*_validation_summary.json`` files.
+
+    ``_signature`` (a ``name:mtime`` digest computed by the wrapper) participates
+    in the cache key only — an added/removed/modified summary file changes it and
+    forces a fresh parse. Malformed files are skipped rather than aborting the
+    load (CONSTRAINT #6)."""
+    summaries: List[Dict[str, Any]] = []
+    d = Path(reports_dir_str)
+    if d.exists():
+        for f in d.glob("*_validation_summary.json"):
+            try:
+                summaries.append(json.loads(f.read_text(encoding="utf-8")))
+            except Exception as exc:  # noqa: BLE001 — dead-letter, never raise
+                logger.debug("Could not parse %s: %s", f, exc)
+    return summaries
+
+
+def _load_validation_summaries(reports_dir: Path) -> List[Dict[str, Any]]:
+    """Load all validation-summary dicts under *reports_dir* via the cached
+    signature-keyed loader (fresh parse only when a file changes/appears)."""
+    try:
+        files = sorted(reports_dir.glob("*_validation_summary.json")) if reports_dir.exists() else []
+        signature = "|".join(f"{f.name}:{f.stat().st_mtime}" for f in files)
+    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise into UI
+        logger.debug("validation-summary signature failed: %s", exc)
+        signature = ""
+    return _load_validation_summaries_cached(str(reports_dir), signature)
+
+
 def _render_circuit_breaker_dashboard() -> None:
     """Render every tripped breaker — kill switch + recent risk-gate blocks.
 
@@ -153,7 +223,7 @@ def _render_strategy_health() -> None:
     Corrupt JSON → same hint. Each strategy shows a gate-by-gate table with
     the observed value, threshold, direction, and pass/fail status.
     """
-    from gui.strategy_health import DeployabilityGate, evaluate_gate, read_gravity_report
+    from gui.strategy_health import DeployabilityGate, evaluate_gate
     from validation.thresholds import DSR_MIN, MAX_DRAWDOWN_MAX, NET_SHARPE_MIN, PBO_MAX
 
     st.markdown("### 📊 Strategy Health — Deployability Gates")
@@ -164,7 +234,7 @@ def _render_strategy_health() -> None:
         "`validation/harness.py`."
     )
 
-    strategies = read_gravity_report()
+    strategies = _load_gravity_report()
 
     # Freshness badge (Task C5): the report is only refreshed when the
     # operator runs the Gravity AI Review Suite below, so its mtime — not a
@@ -307,13 +377,7 @@ def _render_validation_stress_regime_section() -> None:
 
     # ── 1. Cross-strategy validation snapshot ────────────────────────────────
     reports_dir = _REPO_ROOT / "reports"
-    summaries = []
-    if reports_dir.exists():
-        for f in reports_dir.glob("*_validation_summary.json"):
-            try:
-                summaries.append(json.loads(f.read_text(encoding="utf-8")))
-            except Exception as exc:
-                logger.debug("Could not parse %s: %s", f, exc)
+    summaries = _load_validation_summaries(reports_dir)
 
     st.markdown("**Current validation snapshot (all strategies)**")
     if not summaries:

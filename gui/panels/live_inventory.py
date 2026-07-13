@@ -31,6 +31,51 @@ from gui.panels import load_state_snapshot
 from gui.progress_ui import busy
 
 
+# ---------------------------------------------------------------------------
+# Cached loader (PR B — GUI panel caching)
+#
+# Streamlit reruns the whole script on every interaction, so the on-disk
+# sync-report cache (``cache/sync_report.json``) was re-read + JSON-parsed on
+# every render that lacked an in-session report. Route it through an
+# ``@st.cache_data`` loader keyed on the file's **mtime** (the codebase
+# convention — see ``gui.panels.load_state_snapshot`` /
+# ``analytics._load_registry_rows_cached``). Behaviour-preserving: WHAT renders
+# is unchanged (same parsed dict, ``None`` when absent — dead-letter intact); a
+# changed mtime is a cache miss and forces a fresh read, so a "Sync Now" that
+# rewrites the cache is reflected on the next render.
+# ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _read_sync_report_cache_cached(path_str: str, _mtime: float) -> Optional[dict]:
+    """mtime-keyed cached read of the sync-report JSON cache.
+
+    Delegates to :func:`data.portfolio_sync.read_cache` (which itself returns
+    ``None`` on a missing/unreadable/malformed file — CONSTRAINT #6)."""
+    from data.portfolio_sync import read_cache
+
+    return read_cache(Path(path_str))
+
+
+def _load_sync_report_cache() -> Optional[dict]:
+    """Load the most recent sync-report cache dict (``None`` when absent).
+
+    Resolves the canonical cache path and delegates to the mtime-keyed cached
+    loader so a rerun no longer re-reads/re-parses the file unless it changed.
+    """
+    try:
+        from data.portfolio_sync import _CACHE_PATH
+
+        p = _CACHE_PATH
+        if not p.exists():
+            return None
+        mtime = p.stat().st_mtime
+    except Exception as exc:  # noqa: BLE001 — dead-letter, never raise into UI
+        logger.debug("sync-report cache stat failed: %s", exc)
+        return None
+    return _read_sync_report_cache_cached(str(p), mtime)
+
+
 def render_live_inventory() -> None:
     """Render the synchronized portfolio + watchlist inventory + "Sync Now".
 
@@ -218,9 +263,7 @@ def render_live_inventory() -> None:
     report = st.session_state.get("last_sync_report")
     cached_dict: Optional[dict] = None
     if report is None:
-        from data.portfolio_sync import read_cache
-
-        cached_dict = read_cache()
+        cached_dict = _load_sync_report_cache()
         if cached_dict is None:
             st.info(
                 "No sync report yet. Click **Sync Now** to discover and "

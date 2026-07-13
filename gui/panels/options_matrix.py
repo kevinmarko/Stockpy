@@ -31,6 +31,91 @@ from gui.panels import load_state_snapshot
 from gui.help_content import metric_help
 
 
+# ---------------------------------------------------------------------------
+# Cached per-symbol directive compute (PR B — GUI panel caching)
+#
+# ``build_premium_directive`` runs a GJR-GARCH(1,1) MLE fit + full ATM
+# Black-Scholes Greeks per symbol — by far the heaviest per-rerun compute in
+# this tab, and it fired on EVERY rerun in "Auto-run" mode (and on every button
+# click). Extracted into a module-level ``@st.cache_data`` loader keyed on the
+# hashable inputs (symbol, DTE, macro VIX/regime, risk-free rate) + a TTL upper
+# bound (the codebase convention — see ``analytics._load_realized_performance``).
+# Behaviour-preserving: WHAT renders is identical (same directive row per input),
+# the per-symbol progress bar and the per-symbol error surfacing are preserved
+# in the render loop, and each cached call keeps its own dead-letter try/except
+# so a bad symbol never aborts the batch (CONSTRAINT #6).
+# ---------------------------------------------------------------------------
+
+
+class _MacroProxy:
+    """MacroEconomicDTO-shaped stub (``.vix`` / ``.market_regime`` only) so the
+    VRP regime gate in ``build_premium_directive`` fires without a live FRED
+    round-trip. Built from plain scalars so it is trivially constructible inside
+    the cached loader from hashable args."""
+
+    def __init__(self, vix: float, market_regime: str):
+        self.vix = vix
+        self.market_regime = market_regime
+
+
+def _macro_from_snap(snap: dict) -> Tuple[float, str]:
+    """Extract (vix, market_regime) from a state snapshot with neutral defaults.
+
+    Anything missing is left at its neutral default — the gate only flips on
+    positive evidence (VIX 15.0 / regime "RISK ON" reproduce the pre-cache
+    ``_MacroProxy`` inline defaults exactly)."""
+    vix = float(snap.get("vix")) if snap.get("vix") is not None else 15.0
+    regime = str(snap.get("market_regime", "RISK ON"))
+    return vix, regime
+
+
+@st.cache_data(ttl=settings.DASHBOARD_REFRESH_SECONDS)
+def _compute_directive_row(
+    symbol: str,
+    target_dte: int,
+    vix: float,
+    market_regime: str,
+    risk_free_rate: float,
+) -> Dict[str, Any]:
+    """Cached single-symbol premium-directive compute.
+
+    Returns ``{"row": <directive dict>, "error": <str|None>}`` — the directive
+    dict is scalars/lists (picklable by ``st.cache_data``). On failure the row
+    is the same error-shaped placeholder the inline loop produced and ``error``
+    carries the operator-facing message for the errors expander (CONSTRAINT #6:
+    a bad symbol degrades, never raises).
+    """
+    from technical_options_engine import build_premium_directive
+    from data.market_data import get_provider, MarketDataError
+
+    provider = get_provider()
+    macro_proxy = _MacroProxy(vix, market_regime)
+    try:
+        quote = provider.get_latest_quote(symbol)
+        bars = provider.get_intraday_bars(symbol, lookback_days=252)
+        row = build_premium_directive(
+            symbol,
+            bars,
+            spot_price=float(quote.price),
+            is_stale=bool(quote.is_stale),
+            target_dte=int(target_dte),
+            macro_dto=macro_proxy,
+            vrp=None,  # VRP requires an options chain — left None to skip that gate
+            risk_free_rate=risk_free_rate,
+        )
+        return {"row": row, "error": None}
+    except MarketDataError as exc:
+        logger.warning("market data error for %s: %s", symbol, exc)
+        row = {"Symbol": symbol, "Strategy": "—", "Action": "—", "Integrity_OK": False,
+               "Integrity_Issues": [str(exc)]}
+        return {"row": row, "error": f"{symbol}: market data unavailable ({exc})"}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("options matrix failed for %s: %s", symbol, exc)
+        row = {"Symbol": symbol, "Strategy": "—", "Action": "—", "Integrity_OK": False,
+               "Integrity_Issues": [str(exc)]}
+        return {"row": row, "error": f"{symbol}: {exc}"}
+
+
 def render_options_matrix() -> None:
     """Hydrated premium-selling matrix across held + watchlist + signal symbols.
 
@@ -90,48 +175,21 @@ def render_options_matrix() -> None:
                    + (" …" if len(symbols) > 25 else ""))
         return
 
-    from technical_options_engine import build_premium_directive
-    from data.market_data import get_provider, MarketDataError
-
-    # Lightweight MacroEconomicDTO-shaped object built from the snapshot so the
-    # regime gate can fire without a live FRED round-trip. Anything missing is
-    # left at its neutral default — the gate only flips on positive evidence.
-    class _MacroProxy:
-        def __init__(self, snap_: dict):
-            self.vix = float(snap_.get("vix")) if snap_.get("vix") is not None else 15.0
-            self.market_regime = str(snap_.get("market_regime", "RISK ON"))
-
-    macro_proxy = _MacroProxy(snap)
-    provider = get_provider()
+    # Macro state (VIX + regime) forwarded into the directive so the VRP regime
+    # gate fires identically to the live path — extracted as hashable scalars so
+    # the per-symbol compute can be served by the cached loader.
+    vix, market_regime = _macro_from_snap(snap)
     rows: List[Dict[str, Any]] = []
     errors: List[str] = []
 
     progress = st.progress(0.0, text="Computing premium directives…")
     for i, sym in enumerate(symbols):
-        try:
-            quote = provider.get_latest_quote(sym)
-            bars = provider.get_intraday_bars(sym, lookback_days=252)
-            row = build_premium_directive(
-                sym,
-                bars,
-                spot_price=float(quote.price),
-                is_stale=bool(quote.is_stale),
-                target_dte=int(target_dte),
-                macro_dto=macro_proxy,
-                vrp=None,  # VRP requires an options chain — left None to skip that gate
-                risk_free_rate=settings.RISK_FREE_RATE,
-            )
-        except MarketDataError as exc:
-            logger.warning("market data error for %s: %s", sym, exc)
-            errors.append(f"{sym}: market data unavailable ({exc})")
-            row = {"Symbol": sym, "Strategy": "—", "Action": "—", "Integrity_OK": False,
-                   "Integrity_Issues": [str(exc)]}
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("options matrix failed for %s: %s", sym, exc)
-            errors.append(f"{sym}: {exc}")
-            row = {"Symbol": sym, "Strategy": "—", "Action": "—", "Integrity_OK": False,
-                   "Integrity_Issues": [str(exc)]}
-        rows.append(row)
+        result = _compute_directive_row(
+            sym, int(target_dte), vix, market_regime, settings.RISK_FREE_RATE
+        )
+        rows.append(result["row"])
+        if result["error"]:
+            errors.append(result["error"])
         progress.progress((i + 1) / len(symbols),
                           text=f"Computing premium directives… ({i + 1}/{len(symbols)})")
     progress.empty()
