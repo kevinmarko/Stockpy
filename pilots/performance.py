@@ -161,16 +161,20 @@ def pilot_performance(
 ) -> Dict[str, Any]:
     """Return a Pilot's performance payload for the detail / performance endpoint.
 
-    Shape: ``{"metrics": {...} | None, "curve": [...] | None, "benchmark": None,
-    "reason": str | None, "range": str}``.
+    Shape: ``{"metrics": {...} | None, "curve": [...] | None,
+    "benchmark": [...] | None, "reason": str | None, "range": str}``.
 
     * ``metrics`` is the full validated summary dict when available, else
       ``None``.
     * ``curve`` is the REAL downsampled base-100 OOS equity series persisted by
       the harness (``equity_curve`` in the summary), tail-sliced to ``range``.
       ``None`` when the summary predates that field or the strategy had no
-      meaningful returns — NEVER synthesized (CONSTRAINT #4). ``benchmark`` is not
-      persisted yet, so it stays ``None``.
+      meaningful returns — NEVER synthesized (CONSTRAINT #4).
+    * ``benchmark`` is the REAL persisted base-100 buy-&-hold-of-the-underlying
+      curve (``benchmark_curve`` in the summary — the harness's ``y`` return
+      series, aligned to the same OOS index as ``curve``), tail-sliced to the
+      same ``range``. ``None`` when the summary predates that field or no
+      meaningful underlying series was available — NEVER synthesized.
     * ``reason`` is an honest human-readable explanation whenever ``metrics`` or
       ``curve`` is unavailable, else ``None``.
     * ``range`` is a tail-zoom on the persisted series (see
@@ -200,6 +204,17 @@ def pilot_performance(
             "range": range,
         }
 
+    # Benchmark is independent of the strategy curve: surface the persisted
+    # buy-&-hold series (tail-sliced to the same range) when present and
+    # renderable (>= 2 points), else honestly None (older summary / no meaningful
+    # underlying series) — never fabricated (CONSTRAINT #4).
+    raw_benchmark = summary.get("benchmark_curve")
+    benchmark = (
+        _slice_curve_by_range(raw_benchmark, range)
+        if isinstance(raw_benchmark, list) and len(raw_benchmark) >= 2
+        else None
+    )
+
     # Metrics exist. Surface the persisted equity curve when present, tail-sliced
     # to the requested range; a missing/empty curve stays None with an honest
     # reason (older summary, or no meaningful returns) — never fabricated.
@@ -208,7 +223,7 @@ def pilot_performance(
         return {
             "metrics": summary,
             "curve": _slice_curve_by_range(raw_curve, range),
-            "benchmark": None,
+            "benchmark": benchmark,
             "reason": None,
             "range": range,
         }
@@ -216,7 +231,7 @@ def pilot_performance(
     return {
         "metrics": summary,
         "curve": None,
-        "benchmark": None,
+        "benchmark": benchmark,
         "reason": "no backtest series persisted",
         "range": range,
     }

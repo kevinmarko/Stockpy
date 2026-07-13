@@ -118,8 +118,12 @@ class TestPilotPerformance:
         assert isinstance(curve, list) and len(curve) >= 2
         assert all(set(p) == {"date", "value"} for p in curve)
         assert all(isinstance(p["value"], (int, float)) for p in curve)
-        # benchmark is not persisted yet; reason is None when a curve is present.
-        assert perf["benchmark"] is None
+        # The fixture also carries a persisted benchmark_curve -> a real, sliced
+        # benchmark series is served alongside the strategy curve.
+        benchmark = perf["benchmark"]
+        assert isinstance(benchmark, list) and len(benchmark) >= 2
+        assert all(set(p) == {"date", "value"} for p in benchmark)
+        assert all(isinstance(p["value"], (int, float)) for p in benchmark)
         assert perf["reason"] is None
         assert perf["range"] == "2Y"
 
@@ -202,3 +206,101 @@ class TestPilotPerformance:
         perf = pilot_performance(_Empty(), reports_dir=FIXTURES_DIR)
         assert perf["metrics"] is None
         assert perf["reason"] == "no validated backtest for this pilot"
+
+
+# ---------------------------------------------------------------------------
+# pilot_performance — benchmark series (persisted buy-&-hold of the underlying)
+# ---------------------------------------------------------------------------
+class TestPilotPerformanceBenchmark:
+    def test_benchmark_present_when_persisted(self):
+        """The shared fixture carries benchmark_curve -> a real sliced benchmark."""
+        pilot = get_pilot("trend-following")
+        perf = pilot_performance(pilot, range="2Y", reports_dir=FIXTURES_DIR)
+        bench = perf["benchmark"]
+        assert isinstance(bench, list) and len(bench) >= 2
+        assert all(set(p) == {"date", "value"} for p in bench)
+        assert all(isinstance(p["value"], (int, float)) for p in bench)
+
+    def test_benchmark_is_tail_sliced_like_curve(self):
+        """Shorter ranges zoom the benchmark the same way as the strategy curve:
+        fewer-or-equal points and the same latest point (a pure tail slice)."""
+        pilot = get_pilot("trend-following")
+        full = pilot_performance(pilot, range="2Y", reports_dir=FIXTURES_DIR)["benchmark"]
+        one_y = pilot_performance(pilot, range="1Y", reports_dir=FIXTURES_DIR)["benchmark"]
+        one_m = pilot_performance(pilot, range="1M", reports_dir=FIXTURES_DIR)["benchmark"]
+        assert full and one_y and one_m
+        assert len(one_m) <= len(one_y) <= len(full)
+        assert len(one_m) >= 2
+        assert one_m[-1] == one_y[-1] == full[-1]
+
+    def test_absent_benchmark_key_is_honest_none(self, tmp_path):
+        """A summary that predates benchmark_curve -> benchmark None, never
+        fabricated, even when a real equity_curve is present (independent)."""
+        (tmp_path / "nobench_validation_summary.json").write_text(
+            json.dumps({
+                "strategy_id": "nobench",
+                "sharpe": 1.0,
+                "deployable": True,
+                "equity_curve": [
+                    {"date": "2024-01-31", "value": 100.0},
+                    {"date": "2024-02-29", "value": 101.2},
+                    {"date": "2024-03-31", "value": 103.4},
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+        class _P:
+            validation_strategy_id = "nobench"
+
+        perf = pilot_performance(_P(), range="1Y", reports_dir=str(tmp_path))
+        assert isinstance(perf["curve"], list) and len(perf["curve"]) >= 2
+        assert perf["benchmark"] is None
+
+    def test_empty_benchmark_list_is_honest_none(self, tmp_path):
+        """An explicitly-empty benchmark_curve ([] — the honest 'no meaningful
+        underlying series' sentinel) surfaces as None, never a synthesized line."""
+        (tmp_path / "emptybench_validation_summary.json").write_text(
+            json.dumps({
+                "strategy_id": "emptybench",
+                "sharpe": 1.0,
+                "deployable": True,
+                "equity_curve": [
+                    {"date": "2024-01-31", "value": 100.0},
+                    {"date": "2024-02-29", "value": 101.2},
+                ],
+                "benchmark_curve": [],
+            }),
+            encoding="utf-8",
+        )
+
+        class _P:
+            validation_strategy_id = "emptybench"
+
+        perf = pilot_performance(_P(), reports_dir=str(tmp_path))
+        assert perf["benchmark"] is None
+
+    def test_benchmark_surfaces_even_when_strategy_curve_absent(self, tmp_path):
+        """benchmark is independent of curve: a summary with only benchmark_curve
+        still surfaces the benchmark (honest), with curve None + honest reason."""
+        (tmp_path / "benchonly_validation_summary.json").write_text(
+            json.dumps({
+                "strategy_id": "benchonly",
+                "sharpe": 1.0,
+                "deployable": True,
+                "benchmark_curve": [
+                    {"date": "2024-01-31", "value": 100.0},
+                    {"date": "2024-02-29", "value": 100.9},
+                    {"date": "2024-03-31", "value": 102.1},
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+        class _P:
+            validation_strategy_id = "benchonly"
+
+        perf = pilot_performance(_P(), reports_dir=str(tmp_path))
+        assert perf["curve"] is None
+        assert perf["reason"] == "no backtest series persisted"
+        assert isinstance(perf["benchmark"], list) and len(perf["benchmark"]) >= 2
