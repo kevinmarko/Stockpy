@@ -88,7 +88,13 @@ def rec_to_sheet_row(
         "Forecast_30_Pct": round(forecast_pct, 6),
 
         # ── Dividends ────────────────────────────────────────────────────────
-        "Dividend Yield": round(_f("dividend_yield"), 4),
+        # docs/CONFIG_SCHEMA_PLAN.md Phase C1: was keyed "Dividend Yield",
+        # which matches neither COLUMN_SCHEMA's key nor header and was
+        # silently dropped by write_recommendations()'s column filter.
+        # config.COLUMN_SCHEMA already has a slot for this exact value —
+        # {"header": "Div Yield", "key": "Div Yield", "format": "percent"} —
+        # so this maps onto the existing key rather than adding a new column.
+        "Div Yield": round(_f("dividend_yield"), 4),
 
         # ── Execution ranges ──────────────────────────────────────────────────
         # Now computed every cycle by StrategyEngine.evaluate_security() and
@@ -108,9 +114,20 @@ def rec_to_sheet_row(
         ),
 
         # ── Advisory overlay ─────────────────────────────────────────────────
-        "Advisory_Action": rec.action,
+        # docs/CONFIG_SCHEMA_PLAN.md Phase C1: "Advisory_Action" and
+        # "Advisory_Rationale" were REMOVED here (they were dead code —
+        # already-silently-dropped duplicates, never wired to a column):
+        #   - Advisory_Action was byte-identical to the "Action Signal"
+        #     column above (both read rec.action verbatim).
+        #   - Advisory_Rationale was the untruncated rec.rationale, already
+        #     surfaced (truncated) via "Advice" (rec.rationale[:200]) and
+        #     "Strategy Explainer Notes" (rec.rationale[:150]) below.
+        # The remaining three carry genuinely new information not exposed
+        # by any other column and now have real config.COLUMN_SCHEMA slots
+        # under "# --- ADVISORY METADATA ---" ("Score" and "Forecast_30_Pct"
+        # above, in the Signal/Forecast sections, likewise now map onto
+        # real ADVISORY METADATA columns instead of being silently dropped).
         "Advisory_Conviction": round(rec.conviction, 4),
-        "Advisory_Rationale": rec.rationale,
         "Advisory_Position_Pct": round(rec.suggested_position_pct, 6),
         "Advisory_Data_Quality": rec.data_quality,
 

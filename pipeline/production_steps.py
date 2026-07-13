@@ -469,6 +469,21 @@ class StrategyEvalStep(PipelineStep):
             )
         ctx.dashboard_df['Correlation_Cluster'] = float('nan')
 
+        # docs/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
+        # (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---" section) are
+        # populated only by the advisory path (engine/advisory.py via
+        # reporting/sheet_publisher.py::rec_to_sheet_row); this orchestrator
+        # path has no equivalent per-symbol conviction/data-quality concept,
+        # so blank/NaN-fill them here — same pattern already used above for
+        # "Correlation_Cluster" / "News_Sentiment" — so DashboardSchema.validate()
+        # keeps passing (every declared column must be present) without
+        # fabricating advisory-only values (CONSTRAINT #4).
+        ctx.dashboard_df['Score'] = float('nan')
+        ctx.dashboard_df['Forecast_30_Pct'] = float('nan')
+        ctx.dashboard_df['Advisory_Conviction'] = float('nan')
+        ctx.dashboard_df['Advisory_Position_Pct'] = float('nan')
+        ctx.dashboard_df['Advisory_Data_Quality'] = ""
+
         # Strategy evaluation loop
         strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target',
                          'Option Strategy', 'buyRange', 'sellRange', 'Strategy Explainer Notes',

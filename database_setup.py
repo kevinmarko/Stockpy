@@ -84,6 +84,59 @@ def initialize_database(db_file: str = DB_FILE):
             logger.info("'ExecutionLogs' table created successfully.")
 
             # 2. Create DailySignals Table
+            #
+            # docs/CONFIG_SCHEMA_PLAN.md Phase C2 finding (re-verified at
+            # implementation time, not just the plan's original snapshot):
+            # NO PRODUCTION CODE ANYWHERE IN THIS REPO WRITES A ROW TO
+            # DailySignals. This table is schema-created and schema-migrated
+            # (see migrate_daily_signals_schema() below) on every run of this
+            # module, but nothing ever populates it.
+            #
+            # Verification performed (broader than a literal grep, per the
+            # plan's own instruction to search harder):
+            #   - Literal grep for "DailySignals" across all production *.py
+            #     (excluding tests/): only this module (schema owner),
+            #     investyo_mcp_server.py (4 references, ALL read-only SELECT/
+            #     PRAGMA queries -- SELECT COUNT(*), SELECT * ... ORDER BY
+            #     date DESC LIMIT 1, SELECT MAX(date), SELECT symbol,
+            #     composite_score, action, conviction ... -- confirmed by
+            #     reading the surrounding function bodies, not just the
+            #     matched lines), scripts/preflight_check.py (checks the DB
+            #     *file* exists/non-empty, not this table specifically), and
+            #     gui/panels/launcher.py (a UI label string, not code).
+            #   - Dynamic/f-string SQL construction: grepped for
+            #     "INSERT INTO" and ".to_sql(" across all production *.py --
+            #     the only INSERT hits are ExecutionLogs (this module),
+            #     forecast_errors (forecasting/forecast_tracker.py -- an
+            #     unrelated table), and account_snapshots/account_positions
+            #     (data/historical_store.py -- also unrelated tables). Zero
+            #     ".to_sql(" call sites anywhere in production code.
+            #   - git history: `git log -p --all -S "INSERT INTO DailySignals"
+            #     -- '*.py'` across ALL branches returns zero hits -- no
+            #     writer ever existed and was later removed.
+            #   - investyo_mcp_server.py's read queries even reference
+            #     columns ("symbol" lowercase, "date", "composite_score",
+            #     "conviction") that don't match this table's actual schema
+            #     (COLUMN_SCHEMA's keys are "Symbol" capitalized, there is no
+            #     "date"/"composite_score"/"conviction" key at all) -- these
+            #     reads would themselves error against the table this
+            #     function actually creates, further evidence the table was
+            #     never wired up end-to-end.
+            #
+            # transactions_store.py's `trades` table and
+            # data/historical_store.py's price_bars/account_snapshots/
+            # fundamentals_history/macro_history tables -- both of which
+            # post-date this module's original "Step 6" framing (see the
+            # module docstring above: "Transitions local flat-file storage to
+            # an institutional SQLite schema") -- appear to have superseded
+            # whatever DailySignals was originally meant to persist.
+            #
+            # Per the plan's explicit instruction, this docstring note is
+            # NOT accompanied by deleting the schema-creation code below --
+            # that is a product/scope decision for a human, not this
+            # characterization pass. FOLLOW-UP DECISION NEEDED (flagged in
+            # this PR's description): keep as dead-but-harmless schema,
+            # wire up a real writer, or remove the table entirely.
             logger.info("Generating 'DailySignals' table schema from config.COLUMN_SCHEMA...")
             
             # Base columns
@@ -142,6 +195,18 @@ def migrate_daily_signals_schema(cursor, conn):
     to add any new columns defined in config.COLUMN_SCHEMA that are missing.
     This ensures the schema stays synchronized with config.py across re-runs without
     dropping or truncating existing data.
+
+    docs/CONFIG_SCHEMA_PLAN.md Phase C3: this migration is, and remains,
+    ADDITIVE ONLY -- it has never handled renamed or removed COLUMN_SCHEMA
+    keys (a renamed key leaves the old column permanently orphaned; a
+    removed key's column is silently orphaned forever with no warning).
+    After the additive ADD COLUMN loop below, a non-destructive,
+    warning-only orphan detector logs any live DailySignals column that no
+    longer has a matching COLUMN_SCHEMA key. Columns are NEVER auto-dropped
+    -- SQLite's ALTER TABLE DROP COLUMN has been available since 3.35, but a
+    destructive schema change is a human decision, never an automatic one
+    (CONSTRAINT #4/#6 posture; matches this codebase's "historical/runtime
+    data is never destroyed automatically" convention).
     """
     cursor.execute("PRAGMA table_info(DailySignals);")
     existing_cols = {row[1] for row in cursor.fetchall()}  # row[1] = column name
@@ -167,6 +232,30 @@ def migrate_daily_signals_schema(cursor, conn):
             logger.info(f"Schema migration complete. Added {len(added)} new columns: {added}")
     else:
         logger.info("Schema migration: DailySignals is already up-to-date.")
+
+    # docs/CONFIG_SCHEMA_PLAN.md Phase C3 -- non-destructive orphan detection.
+    # Re-read the table's columns post-migration (rather than reusing
+    # existing_cols, which predates the ADD COLUMN loop above) and diff
+    # against the CURRENT COLUMN_SCHEMA key set, excluding the two base
+    # columns this module always creates itself (id/timestamp -- never part
+    # of COLUMN_SCHEMA, never orphaned).
+    try:
+        cursor.execute("PRAGMA table_info(DailySignals);")
+        current_cols = {row[1] for row in cursor.fetchall()}
+        current_schema_keys = {c["key"] for c in config.COLUMN_SCHEMA}
+        orphaned = sorted(current_cols - current_schema_keys - {"id", "timestamp"})
+        if orphaned:
+            logger.warning(
+                "DailySignals has %d orphaned column(s) no longer in COLUMN_SCHEMA: %s. "
+                "These are never dropped automatically (SQLite ALTER TABLE DROP COLUMN "
+                "is available since 3.35 but intentionally not used here to avoid "
+                "destructive migrations); review and drop manually if confirmed obsolete.",
+                len(orphaned), orphaned,
+            )
+    except Exception as e:
+        # Detection is observability-only -- never let it block/fail the
+        # (already-successful) additive migration above (CONSTRAINT #6).
+        logger.warning(f"Orphaned-column detection skipped due to error: {e}")
 
 
 if __name__ == "__main__":

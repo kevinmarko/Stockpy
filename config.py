@@ -161,6 +161,41 @@ COLUMN_SCHEMA = [
     # orchestrator run (no historical batch fetch required).
     # ==========================================================
     {"header": "Cluster", "key": "Correlation_Cluster", "format": "number"},
+
+    # ==========================================================
+    # --- ADVISORY METADATA (docs/CONFIG_SCHEMA_PLAN.md Phase C1) ---
+    # Five fields that reporting/sheet_publisher.py::rec_to_sheet_row()
+    # already computed from engine.advisory.Recommendation but which were
+    # silently dropped before reaching the Sheet because they matched
+    # neither a COLUMN_SCHEMA key nor header (write_recommendations()'s
+    # `df[[h for h in final_headers if h in df.columns]]` filter step).
+    # Confirmed genuinely new information, not duplicates of any existing
+    # column (see the PR description for the full case-by-case audit of
+    # all 8 originally-dropped keys). Advisory-path-only: the orchestrator
+    # path (main_orchestrator.py / pipeline/production_steps.py) blank/NaN
+    # fills these, matching the established pattern used for every other
+    # advisory-vs-orchestrator asymmetric column (e.g. "Macro Status").
+    # ==========================================================
+    # Raw StrategyEngine weighted-sum score (0-100 scale) — distinct from
+    # "Quality Score" (a fundamentals-only metric) and from "Kelly Target"
+    # (post-Kelly position sizing); this is the signal-aggregation score
+    # that gates BUY/SELL/HOLD before sizing is applied.
+    {"header": "Advisory Score", "key": "Score", "format": "number"},
+    # 30-day forecast expressed as a fractional % change from current price
+    # (Forecast_30 is the dollar price target; this is the derived percent).
+    {"header": "Forecast 30D % Change", "key": "Forecast_30_Pct", "format": "percent"},
+    # Recommendation.conviction, in [0.0, 1.0] — confidence in the action,
+    # already decayed for STALE/PARTIAL data quality (see engine/advisory.py
+    # Step 13). Not represented by any existing column.
+    {"header": "Advisory Conviction", "key": "Advisory_Conviction", "format": "percent"},
+    # Recommendation.suggested_position_pct — the FINAL recommended
+    # allocation fraction after Kelly sizing, CONFIG["max_single_position_pct"]
+    # clamping, and the holding-aware overlay (0.0 for SELL/HOLD). Distinct
+    # from "Kelly Target" (the raw pre-clamp Kelly fraction).
+    {"header": "Advisory Position %", "key": "Advisory_Position_Pct", "format": "percent"},
+    # Recommendation.data_quality ("OK"/"STALE"/"PARTIAL") — no existing
+    # column surfaces per-symbol data-quality state end-to-end.
+    {"header": "Advisory Data Quality", "key": "Advisory_Data_Quality", "format": "string"},
 ]
 
 def get_headers():
