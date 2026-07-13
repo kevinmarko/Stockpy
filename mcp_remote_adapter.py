@@ -1,7 +1,26 @@
-import asyncio
+import subprocess
 import sys
-from mcp.client.sse import sse_client
-from mcp.client.session import ClientSession
-from mcp.server.stdio import stdio_server
+import os
 
-# actually, bridging is just reading stdin and forwarding to sse, and reading sse and forwarding to stdout.
+def main():
+    # The crucial fix is `cd /opt/investyo` so pydantic doesn't crash reading .env
+    cmd = [
+        "gcloud", "compute", "ssh", "investyo-vm",
+        "--zone=us-east4-c", "--project=stock-data-engine",
+        "--quiet", "--ssh-flag=-q",
+        "--command", "cd /opt/investyo && sudo -u investyo /opt/investyo/.venv/bin/python /opt/investyo/investyo_mcp_server.py"
+    ]
+    
+    # We pipe stdin, stdout, stderr directly. 
+    # This acts as a transparent stdio proxy.
+    process = subprocess.Popen(
+        cmd,
+        stdin=sys.stdin,
+        stdout=sys.stdout,
+        stderr=sys.stderr
+    )
+    process.wait()
+    sys.exit(process.returncode)
+
+if __name__ == "__main__":
+    main()
