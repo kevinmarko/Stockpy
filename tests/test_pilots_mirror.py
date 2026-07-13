@@ -336,6 +336,192 @@ class TestBidirectionalRebalance:
 
 
 # ---------------------------------------------------------------------------
+# Part D — force-exit of names the Pilot has fully dropped (per-follow attribution)
+# ---------------------------------------------------------------------------
+
+class TestForceExitDroppedNames:
+    """A name the follow previously mirrored that the Pilot has since dropped is
+    force-sold — sized to the FOLLOW-ATTRIBUTED quantity only, capped at what is
+    actually held, never the follower's whole position. Requires a prior mirrored
+    set (per-follow attribution); with none, the pre-existing behavior holds and
+    nothing is force-sold.
+    """
+
+    def _prior(self, **overrides):
+        # TSLA is NOT a trend-following holding in the fixture -> "dropped".
+        row = {"symbol": "TSLA", "weight": 0.2, "target_notional": 2000.0}
+        row.update(overrides)
+        return [row]
+
+    def test_dropped_name_is_force_sold_at_attributed_notional(self, pilot, snapshot):
+        # Follower holds TSLA worth $2500; attribution is $2000 -> SELL $2000.
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        intents = build_follow_intents(
+            pilot, _AMOUNT, acct, snapshot=snapshot, prior_mirrored=self._prior()
+        )
+        by_symbol = {i.symbol: i for i in intents}
+        assert "TSLA" in by_symbol
+        tsla = by_symbol["TSLA"]
+        assert tsla.action == "SELL"
+        # Attributed ($2000) < held ($2500) -> sell exactly the attributed notional.
+        assert tsla.target_notional == pytest.approx(2000.0)
+        # pct reproduces the notional through the builder's equity*pct math.
+        assert tsla.suggested_position_pct * acct.total_equity == pytest.approx(
+            tsla.target_notional, abs=0.01
+        )
+        # Exactly one SELL for the dropped name; the still-held pilot names are BUYs.
+        sells = [i for i in intents if i.action == "SELL"]
+        assert [i.symbol for i in sells] == ["TSLA"]
+
+    def test_force_sell_is_capped_at_currently_held_value(self, pilot, snapshot):
+        # Attribution $2000 but follower only holds $1500 -> cap at held ($1500),
+        # never oversell / never touch shares beyond the held amount.
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=6.0, current_price=250.0),
+        })
+        intents = {i.symbol: i for i in build_follow_intents(
+            pilot, _AMOUNT, acct, snapshot=snapshot, prior_mirrored=self._prior()
+        )}
+        assert intents["TSLA"].action == "SELL"
+        assert intents["TSLA"].target_notional == pytest.approx(1500.0)
+
+    def test_force_sell_clamped_by_per_order_cap(self, pilot, snapshot, monkeypatch):
+        from settings import settings
+        monkeypatch.setattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 1_000.0, raising=False)
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        intents = {i.symbol: i for i in build_follow_intents(
+            pilot, _AMOUNT, acct, snapshot=snapshot, prior_mirrored=self._prior()
+        )}
+        assert intents["TSLA"].action == "SELL"
+        assert intents["TSLA"].target_notional == pytest.approx(1_000.0)
+
+    def test_no_prior_mirrored_means_no_force_exit(self, pilot, snapshot):
+        # Same held TSLA, but NO attribution passed -> honest fallback: untouched.
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        symbols = {i.symbol for i in build_follow_intents(
+            pilot, _AMOUNT, acct, snapshot=snapshot, prior_mirrored=None
+        )}
+        assert "TSLA" not in symbols
+
+    def test_still_held_pilot_name_is_not_force_exited(self, pilot, snapshot):
+        # NVDA is both a current Pilot holding AND in the prior mirrored set:
+        # it must be rebalanced (BUY the delta), never force-sold.
+        prior = [
+            {"symbol": "TSLA", "weight": 0.2, "target_notional": 2000.0},
+            {"symbol": "NVDA", "weight": 0.375, "target_notional": 3750.0},
+        ]
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        intents = {i.symbol: i for i in build_follow_intents(
+            pilot, _AMOUNT, acct, snapshot=snapshot, prior_mirrored=prior
+        )}
+        assert intents["NVDA"].action == "BUY"  # rebalanced, not exited
+        assert intents["TSLA"].action == "SELL"  # dropped -> force-exit
+
+    def test_dropped_name_not_actually_held_yields_no_intent(self, pilot, snapshot):
+        # Attribution exists but the follower no longer holds the name ->
+        # nothing to sell (no fabricated position).
+        acct = _FakeSnapshot(250_000.0, positions={})
+        symbols = {i.symbol for i in build_follow_intents(
+            pilot, _AMOUNT, acct, snapshot=snapshot, prior_mirrored=self._prior()
+        )}
+        assert "TSLA" not in symbols
+
+    def test_attribution_without_target_notional_is_skipped(self, pilot, snapshot):
+        # A legacy mirrored row lacking target_notional gives no usable
+        # attribution -> no fabricated exit size, no force-sell.
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        prior = [{"symbol": "TSLA", "weight": 0.2}]  # no target_notional
+        symbols = {i.symbol for i in build_follow_intents(
+            pilot, _AMOUNT, acct, snapshot=snapshot, prior_mirrored=prior
+        )}
+        assert "TSLA" not in symbols
+
+    def test_full_drop_of_all_names_still_force_exits(self, pilot):
+        # Pilot yields NO current holdings (empty snapshot), but the follow
+        # previously mirrored a name the follower still holds -> it is exited even
+        # though the normal rebalance produces nothing.
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        intents = build_follow_intents(
+            pilot, _AMOUNT, acct, snapshot={"signals": []},
+            prior_mirrored=self._prior(),
+        )
+        assert [i.symbol for i in intents] == ["TSLA"]
+        assert intents[0].action == "SELL"
+
+
+class TestForceExitEndToEnd:
+    """plan_follow wires attribution end-to-end: it loads the follow's prior
+    mirrored set from the store, force-exits a dropped name, and persists the
+    Pilot's current holdings back so the drop is not re-emitted forever."""
+
+    def test_plan_follow_force_exits_and_updates_mirrored_set(
+        self, pilot, snapshot, tmp_path, monkeypatch
+    ):
+        from settings import settings
+        from pilots.follows_store import FollowsStore
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
+
+        # Seed the store (same path plan_follow derives from output_dir) with a
+        # prior mirrored set that includes a now-dropped TSLA the follower holds.
+        store = FollowsStore(path=str(tmp_path / "follows.json"))
+        store.upsert(_PILOT_ID, _AMOUNT)
+        store.set_mirrored(_PILOT_ID, [
+            {"symbol": "TSLA", "weight": 0.2, "target_notional": 2000.0},
+        ])
+
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        plan_follow(pilot, _AMOUNT, acct, snapshot=snapshot, output_dir=tmp_path)
+
+        payload = json.loads((tmp_path / "execution_queue.json").read_text(encoding="utf-8"))
+        by_symbol = {i["symbol"]: i for i in payload["intents"]}
+        # The dropped name is force-sold as a partial trim (qty resolved downstream).
+        assert by_symbol["TSLA"]["action"] == "SELL"
+        assert by_symbol["TSLA"]["qty"] is None
+        assert by_symbol["TSLA"]["target_notional"] == pytest.approx(2000.0, rel=1e-2)
+        assert by_symbol["TSLA"]["allow_place"] is False  # review mode
+
+        # The mirrored set is updated to the CURRENT holdings — TSLA is gone, so a
+        # subsequent follow won't re-emit the exit forever.
+        updated = FollowsStore(path=str(tmp_path / "follows.json")).get_mirrored(_PILOT_ID)
+        updated_symbols = {m["symbol"] for m in updated}
+        assert "TSLA" not in updated_symbols
+        assert updated_symbols  # current pilot holdings persisted
+
+    def test_first_follow_without_prior_set_does_not_force_exit(
+        self, pilot, snapshot, account, tmp_path, monkeypatch
+    ):
+        from settings import settings
+        from pilots.follows_store import FollowsStore
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
+
+        # A never-before-followed pilot: no mirrored set exists.
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        plan_follow(pilot, _AMOUNT, acct, snapshot=snapshot, output_dir=tmp_path)
+
+        payload = json.loads((tmp_path / "execution_queue.json").read_text(encoding="utf-8"))
+        assert "TSLA" not in {i["symbol"] for i in payload["intents"]}
+        # But the current holdings ARE now persisted for next time.
+        persisted = FollowsStore(path=str(tmp_path / "follows.json")).get_mirrored(_PILOT_ID)
+        assert persisted  # attribution now seeded
+
+
+# ---------------------------------------------------------------------------
 # Part B — conviction floor is load-bearing + live-mode placeability
 # ---------------------------------------------------------------------------
 
