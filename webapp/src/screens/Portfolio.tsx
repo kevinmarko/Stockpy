@@ -138,10 +138,10 @@ export function Portfolio() {
                   <div>
                     <span
                       className={`badge ${
-                        f.status === "queued" ? "badge-warn" : "badge-neutral"
+                        f.status === "active" ? "badge-warn" : "badge-neutral"
                       }`}
                     >
-                      {f.status === "queued" ? "gated queue" : f.status}
+                      {f.status === "active" ? "gated queue" : f.status}
                     </span>
                   </div>
                 </div>
