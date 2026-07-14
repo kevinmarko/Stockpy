@@ -160,7 +160,7 @@ export function Portfolio() {
         <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Positions</h2>
         <div className="list">
           {p.positions.map((pos) => (
-            <div className="row" key={pos.symbol}>
+            <Link className="row" key={pos.symbol} to={`/symbol/${pos.symbol}`}>
               <div className="row-main">
                 <span className="row-title">{pos.symbol}</span>
                 <span className="row-sub">
@@ -182,7 +182,7 @@ export function Portfolio() {
                   {fmtPct(pos.unrealized_pl_pct, 1, { signed: true })})
                 </div>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       </section>

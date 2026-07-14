@@ -20,6 +20,8 @@ import type {
   PilotTrade,
   Portfolio,
   SectorSlice,
+  SymbolDetail,
+  SymbolHeldBy,
 } from "./types";
 
 const SECTORS = [
@@ -457,6 +459,15 @@ function pos(symbol: string, qty: number, avg: number, price: number) {
   };
 }
 
+// The set of tickers the mock symbol-detail endpoint recognizes: the union of
+// every Pilot's holdings and every open portfolio position. A ticker outside
+// this set is a legitimate 404 (mirrors the backend, where a symbol absent from
+// the persisted snapshot returns _UNKNOWN_SYMBOL_DETAIL).
+const SYMBOL_UNIVERSE: Set<string> = new Set<string>([
+  ...CATALOG.flatMap((p) => p.holdings.map((x) => x.symbol)),
+  ...PORTFOLIO.positions.map((p) => p.symbol),
+]);
+
 // ---- Local follows store (persisted to localStorage so the mock feels live) ----
 const FOLLOWS_KEY = "stockpy.mock.follows";
 
@@ -549,6 +560,92 @@ export const mockApi = {
     return delay(trades(p.holdings).slice(0, limit));
   },
 
+  async getSymbol(ticker: string): Promise<SymbolDetail> {
+    const sym = ticker.trim().toUpperCase();
+    if (!SYMBOL_UNIVERSE.has(sym)) throw notFoundSymbol(sym);
+
+    // Reverse cross-link — scan the real CATALOG: every Pilot whose holdings
+    // include this symbol, reading its normalized weight, sorted weight-desc.
+    const held_by_pilots: SymbolHeldBy[] = CATALOG.map((p) => {
+      const hd = p.holdings.find((x) => x.symbol === sym);
+      return hd
+        ? { pilot_id: p.summary.id, name: p.summary.name, weight: hd.weight }
+        : null;
+    })
+      .filter((x): x is SymbolHeldBy => x !== null)
+      .sort((a, b) => b.weight - a.weight);
+
+    // Deterministic per-symbol pseudo-values (stable across navigations).
+    const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0));
+    const price = +(50 + rng() * 400).toFixed(2);
+
+    // Aggregate signal = mean of this symbol's blended score across holders.
+    const scores = CATALOG.flatMap((p) =>
+      p.holdings.filter((x) => x.symbol === sym).map((x) => x.score)
+    );
+    const score = scores.length
+      ? +(scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(3)
+      : null;
+    const position_pct = held_by_pilots.length
+      ? +held_by_pilots[0].weight.toFixed(4)
+      : null;
+    const held = PORTFOLIO.positions.find((p) => p.symbol === sym);
+    const conviction = score == null ? null : +(0.55 + score * 0.35).toFixed(2);
+    const action = score != null && score >= 0.5 ? "BUY" : "HOLD";
+
+    const detail: SymbolDetail = {
+      symbol: sym,
+      as_of: new Date(Date.now() - 5_400_000).toISOString(),
+      reason: null,
+      identity: {
+        sector: SECTOR_OF[sym] ?? null,
+        price,
+        action,
+        shares: held ? held.qty : null,
+      },
+      advisory: {
+        action,
+        conviction,
+        position_pct,
+        rationale: held_by_pilots.length
+          ? `Held by ${held_by_pilots.length} Pilot(s); largest allocation in ${held_by_pilots[0].name}.`
+          : "Portfolio position with no active Pilot signal.",
+        kelly_target: position_pct == null ? null : +(position_pct * 0.5).toFixed(4),
+        score,
+      },
+      factors: {
+        // HONEST nulls — point-in-time fundamentals & cross-sectional inputs the
+        // advisory snapshot writer does not carry (mirrors the backend fixture).
+        value_z: null,
+        quality_z: null,
+        xsec_12_1m: null,
+        xsec_momentum_rank: null,
+        lowvol_z: +((rng() - 0.5) * 2).toFixed(3),
+        size_z: +((rng() - 0.5) * 2).toFixed(3),
+        multifactor_composite: +((rng() - 0.5) * 1.5).toFixed(3),
+        score_components: { momentum: +rng().toFixed(3), trend: +rng().toFixed(3) },
+      },
+      ranges: {
+        buy_range: `Buy Zone: $${(price * 0.97).toFixed(2)} - $${price.toFixed(2)}`,
+        sell_range: `Sell Zone: $${(price * 1.08).toFixed(2)} - $${(price * 1.12).toFixed(2)}`,
+      },
+      risk: {
+        // HONEST nulls — no news feed, and realized/excursion metrics need
+        // post-fill trade history (matches the advisory writer / backend fixture).
+        news_sentiment: null,
+        realized_slippage: null,
+        mfe: null,
+        mae: null,
+        edge_ratio: null,
+        macro_status: null,
+        covar_proxy: +(rng() * 0.5).toFixed(3),
+        hmm_risk_on: +(0.5 + rng() * 0.5).toFixed(2),
+      },
+      held_by_pilots,
+    };
+    return delay(detail);
+  },
+
   async getPortfolio(): Promise<Portfolio> {
     return delay(PORTFOLIO);
   },
@@ -608,6 +705,10 @@ export const mockApi = {
 
 function notFound(id: string) {
   return new ApiError(`Pilot '${id}' not found (run the pipeline first).`, 404);
+}
+
+function notFoundSymbol(sym: string) {
+  return new ApiError(`No such symbol '${sym}' in the latest snapshot.`, 404);
 }
 
 export const MOCK_META = {

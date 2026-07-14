@@ -161,6 +161,65 @@ def test_pilot_detail_cold_start_empty_but_not_404(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# GET /symbols/{ticker} — symbol detail
+# ---------------------------------------------------------------------------
+
+
+def test_symbol_detail_shape_and_values():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symbol"] == "AAPL"
+    assert body["as_of"] == "2026-07-11T21:05:00+00:00"
+    assert body["reason"] is None
+    assert set(body) == {
+        "symbol", "as_of", "reason",
+        "identity", "advisory", "factors", "ranges", "risk", "held_by_pilots",
+    }
+    assert body["identity"] == {
+        "sector": "Information Technology", "price": 224.15, "action": "BUY", "shares": 40.0,
+    }
+    assert body["advisory"]["conviction"] == 0.72
+    assert body["advisory"]["score"] == 96.8
+    assert body["ranges"]["buy_range"] == "Buy Zone: $210.00 - $222.00"
+    # Honesty: fields absent from the advisory fixture serialize to null, never 0.0.
+    for k in ("mfe", "mae", "edge_ratio", "macro_status"):
+        assert body["risk"][k] is None
+    for k in ("xsec_12_1m", "xsec_momentum_rank"):
+        assert body["factors"][k] is None
+    # Reverse cross-link: AAPL is held by trend-following; deep-value excluded.
+    held_ids = {p["pilot_id"] for p in body["held_by_pilots"]}
+    assert "trend-following" in held_ids
+    assert "deep-value" not in held_ids
+    assert body["held_by_pilots"]  # non-empty
+    for p in body["held_by_pilots"]:
+        assert set(p) == {"pilot_id", "name", "weight"}
+
+
+def test_symbol_detail_case_insensitive():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/aapl")
+    assert resp.status_code == 200
+    assert resp.json()["symbol"] == "AAPL"
+
+
+def test_symbol_detail_unknown_404():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/ZZZ")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == pilots_api._UNKNOWN_SYMBOL_DETAIL
+
+
+def test_symbol_detail_cold_start_404(tmp_path):
+    # tmp_path has no state_snapshot.json → honest cold-start 404 (distinct detail).
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        resp = client.get("/symbols/AAPL")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == pilots_api._MISSING_SNAPSHOT_DETAIL
+
+
+# ---------------------------------------------------------------------------
 # GET /pilots/{id}/performance
 # ---------------------------------------------------------------------------
 

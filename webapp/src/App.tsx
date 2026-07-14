@@ -9,6 +9,7 @@ import {
 import { Marketplace } from "./screens/Marketplace";
 import { PilotDetail } from "./screens/PilotDetail";
 import { Portfolio } from "./screens/Portfolio";
+import { SymbolDetail } from "./screens/SymbolDetail";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 
@@ -56,6 +57,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Marketplace />} />
         <Route path="/pilots/:id" element={<PilotDetail />} />
+        <Route path="/symbol/:ticker" element={<SymbolDetail />} />
         <Route path="/portfolio" element={<Portfolio />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
