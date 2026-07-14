@@ -514,8 +514,7 @@ def render_strategy_matrix() -> None:
     st.divider()
 
     # ── Module enable/disable + weights ──────────────────────────────────────
-    st.markdown("**Signal modules** — disable a module or adjust its weight; "
-                "saved to `.env` and honored by `SignalAggregator` on next run.")
+    st.markdown(help_widgets.section_help("strategy_matrix.signal_modules"))
 
     try:
         from signals.registry import global_registry
@@ -567,10 +566,7 @@ def render_strategy_matrix() -> None:
         except Exception as exc:
             st.error(f"Failed to save module config: {exc}")
 
-    st.caption(
-        "Note: `regime_multiplier` must keep weight 0.0 — it carries the HMM "
-        "second opinion as a sizing multiplier, not a score."
-    )
+    help_widgets.section_caption("strategy_matrix.regime_multiplier_note")
 
     st.divider()
 

@@ -109,9 +109,7 @@ def render_observability() -> None:
     """
     help_widgets.explain("observability")
     st.subheader("📊 Observability — Mission Control")
-    st.caption(
-        "Summary of the file-backed state last written by the orchestrator."
-    )
+    help_widgets.section_caption("observability.snapshot_summary")
 
     snap = load_state_snapshot()
 
@@ -192,20 +190,13 @@ def render_observability() -> None:
             icon="⚠️",
         )
 
-    st.caption(
-        "Writes `MACRO_REGIME_GATE_ENABLED` to `.env` via `gui/env_io.py`.  "
-        "Change takes effect when the orchestrator next starts."
-    )
+    help_widgets.section_caption("observability.macro_gate_write")
 
     st.divider()
 
     # ── 3. Recession-indicator telemetry ─────────────────────────────────────
     st.markdown("### 📉 Recession Indicator Telemetry")
-    st.caption(
-        "Values are sourced from the last orchestrator run's state snapshot "
-        "(FRED data).  They reflect conditions at pipeline execution time, "
-        "not real-time — run the orchestrator to refresh."
-    )
+    help_widgets.section_caption("observability.recession_telemetry")
 
     sahm = snap.get("sahm_rule")
     hy_oas = snap.get("high_yield_oas")
