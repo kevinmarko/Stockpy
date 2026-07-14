@@ -3,6 +3,7 @@ from datetime import date
 from execution.cost_model import TieredCostModel
 from validation.harness import StrategyValidationHarness
 
+@pytest.mark.network
 def test_validation_harness_buy_and_hold_spy(tmp_path):
     """
     Verify that Buy-and-Hold SPY during a strongly trending period (2013-2014)

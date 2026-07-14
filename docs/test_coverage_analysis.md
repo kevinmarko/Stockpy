@@ -23,6 +23,13 @@ pure logic but the actual Streamlit tab entry point at `gui/panels/<feature>.py`
 contains real, non-trivial pure helper functions) has no direct test coverage at all. Full detail and
 a prioritized roadmap (Phase 5) are below.
 
+**Phase 5 implementation status:** a first pass (same day) closed the two lowest-effort/highest-signal
+items — the `gravity_audit.py` pure-helper tests and the `alerting_mcp`/`mcp_remote_adapter` owning
+suites — and, in the course of verifying the full suite, deleted two dead stray root test files and
+fixed one unrelated pre-existing test that was silently making a live network call. The two largest
+items (`Gravity AI Review Suite.py` step mirroring, GUI render-wrapper helpers for the other ~18
+panels) remain open; see the Phase 5 section for exact status per item.
+
 ---
 
 ## Current state
@@ -86,18 +93,29 @@ workflow, this change extends that existing workflow with `--cov`/coverage-summa
 
 ### (c) Hygiene issues
 
-- **Stray, never-collected root test files (still open as of the 2026-07-14 re-audit).**
-  `test_gravity.py` and `test_mock_abc.py` still live at the repo root, not under `tests/`. Because
-  `pytest.ini` pins `testpaths = tests`, they are **never collected** by `pytest` and never run in CI.
-  (Despite its name, `test_gravity.py`'s actual content exercises `scripts/refresh_validations.py`,
-  not `Gravity AI Review Suite.py` — the filename is doubly misleading now that the Gravity auditor
-  gap below is the audit's top finding.) Fix is mechanical: `git mv test_gravity.py
-  tests/test_refresh_validations_extra.py && git mv test_mock_abc.py tests/test_cnn_lstm_mock_abc.py`
-  (renamed to describe actual content, avoiding collisions with existing `tests/test_gravity_*.py`
-  files) and confirm both still pass under `tests/`.
+- **Stray, never-collected root test files — resolved in Phase 5.** `test_gravity.py` and
+  `test_mock_abc.py` lived at the repo root, not under `tests/`; because `pytest.ini` pins
+  `testpaths = tests`, they were never collected or run in CI. Investigating them (rather than just
+  moving them, per the original plan) found both were dead weight, not gaps: `test_gravity.py`'s
+  entire assertion — an unknown-strategy `run_validations()` call returns `deployable=False` with an
+  `"error"` key — is already a real, passing pytest test at
+  `tests/test_refresh_validations.py::TestRunValidations::test_unknown_strategy_is_dead_lettered`.
+  `test_mock_abc.py` was a scratch script proving out a `sys.modules`-injection technique for mocking
+  `tensorflow` that was never adopted — the actual test suite (`tests/test_forecasting_engine.py`)
+  uses a simpler `monkeypatch`-based `_no_tensorflow` fixture instead, so the script's own technique
+  is unused elsewhere in the codebase. Neither file contained a real `assert` (both were print-based
+  scratch scripts) so even a mechanical rehome would not have added a genuine pytest test. **Both were
+  deleted** rather than rehomed, per this codebase's own "delete rather than carry dead code" convention.
 - **Unregistered marker — resolved.** `pytest.ini` now has a `markers` section registering `network`
   and `slow`; `--strict-markers` is set, so a typo'd marker fails loudly instead of silently no-op'ing.
   No action needed.
+- **New in Phase 5: an unmarked live-network test found while verifying the suite end-to-end.**
+  Running the full offline suite (`pytest -m "not network"`) after the Phase 5 changes below surfaced
+  one pre-existing failure unrelated to any of them: `tests/test_harness_buyhold.py` makes a real,
+  unmocked `yf.download("SPY", ...)` call and had no `@pytest.mark.network` marker, so it was not
+  being deselected by CI's `-m "not network"` filter and would fail (or silently pass/fail depending
+  on network conditions) in any offline environment. Fixed by adding the marker — the offline suite is
+  now genuinely network-free end to end (verified: 5,025 collected, 0 failures with `-m "not network"`).
 
 ---
 
@@ -122,8 +140,8 @@ and false positives (a bare package-level import that doesn't actually exercise 
 | **`Gravity AI Review Suite.py`** | **~14,900** | **Effectively 0% by direct execution.** The file has **zero `def test_` functions of its own** and (by its own module docstring, since it's a space-containing filename that can't be `import`ed normally) is architecturally excluded from ordinary pytest collection. Of its ~30 `step_*` audit functions, only **2 specific invariants** have been reverse-engineered and mirrored into real pytest assertions, in `tests/test_gravity_mirrored_invariants.py` — whose own docstring documents *why*: doing that audit found one of the two ("`sahm_rule_indicator` has no `None`→float coercion, unlike its three FRED siblings") to be **"a genuine, previously-undocumented crash risk."** The other ~28 step functions are exercised only by a human clicking "Run" in the GUI's Gravity Audit Logs tab (`gui/panels/gravity_audit.py`) or via `Gravity_Verification_Report.json` — neither path runs in CI. | **Highest of any module in this audit.** This file is the platform's own documented deployability gate — cited by name for schema invariants, PBO/DSR gating, options-matrix integrity, help-content anchor validation, DB-backend resilience, and ~15 other "step_NN" checks referenced throughout `CLAUDE.md`. A regression here silently weakens every one of those gates and CI would stay green. | Two-track fix, matching the pattern `test_gravity_mirrored_invariants.py` already established: (1) **mirror**, don't `import` — since the file can't be imported (space in filename) and is one 14,900-line script, add pytest assertions that reproduce each `step_*`'s actual invariant against the live code path (as the existing 2 do), prioritizing the steps CLAUDE.md leans on most (PBO/DSR deployability gate, options-matrix strike/delta integrity, DB-backend-resilience, help-anchor validation); (2) track progress with a simple checklist (e.g. a table of `step_NN` → mirrored y/n) in this doc or a code comment, since "spot-check 2 of 30" doesn't scale as an ad-hoc process. |
 | `ai_verification_prompts.py` (the *other* "Gravity AI Auditor" — 6-step static-analysis + LLM sandbox verifier, distinct from `Gravity AI Review Suite.py` above) | 337 | **Partial** — `tests/test_gravity_prompt_sourcing.py` covers prompt-registry-vs-baseline sourcing (the `SYSTEM_PROMPT`/`ALL_PROMPTS` fallback contract) but the `GravityAIAuditor` class itself (~260 of the 337 lines — the actual 6-step static-analysis/sandbox logic) has no direct test. | Medium-High — gates strategy deployment per CLAUDE.md's "Gate deployable status... in verification audits" convention. | Owning `test_ai_verification_prompts.py`: construct a `GravityAIAuditor` against a fixture module/strategy, mock the LLM call, assert each of the 6 `ValidationCriterion`s is checked and `AIReviewReport` aggregates pass/fail correctly. |
 | `investyo_mcp_server.py` | 1,515 | **0% — zero test references anywhere in `tests/`.** Not the same server as the GitHub MCP integration; this is the repo's own MCP server exposing platform tools/resources to MCP clients (Claude Desktop, etc.). | High for a 1,515-line surface with no coverage at all — an MCP tool-schema or handler regression here is invisible to CI and would only surface as a broken client integration. | New `test_investyo_mcp_server.py`: enumerate registered tools/resources and assert schema shape; call each handler with a fixture request and assert it degrades (not crashes) on missing upstream state, mirroring the dead-letter convention used everywhere else in this codebase. |
-| `alerting_mcp/notifier.py` (197) + `mcp_remote_adapter.py` (26) | 223 | **0% — zero test references.** Both are new since the original audit. | Medium — `alerting_mcp` is an alert-dispatch surface (same failure-domain as the already well-tested `observability/alerts.py`, which has full channel-failure-swallowing coverage in `test_alerts.py` — this sibling module has none of that). | Owning tests mirroring `test_alerts.py`'s pattern: channel failures caught and logged, never propagated; `mcp_remote_adapter.py` (small, 26 lines) at minimum needs a smoke test that it degrades gracefully with no MCP transport available. |
-| GUI **render-wrapper panels** — `gui/panels/gravity_audit.py` (862), `report_viewer.py` (1,279), `observability.py` (1,531), `launcher.py` (974), `strategy_matrix.py` (609), `options_matrix.py` (424), `ai_insights.py` (321), `prompt_registry.py` (434), `ai_control_center.py` (337), `live_inventory.py` (392), `pairs.py` (462), `market_data.py` (263), `analytics.py` (772), `paper_monitor.py` (124), `settings_manager.py` (180), `validation_lab.py` (231), `reports_library.py` (237), `analytics_signals.py` (367), `_shared.py` (208) | ~10,000 total | **No owning file for any panel; most have 0-1 incidental references.** A distinct, previously-undocumented pattern has emerged since the original audit: several features now split into a *logic* module at `gui/<feature>.py` (tested — e.g. `gui/ai_control_center.py`, `gui/ai_insights_panel.py`, `gui/gravity_ai_panel.py` all have owning suites) **plus** a *render-wrapper* module at `gui/panels/<feature>.py` that is the actual Streamlit tab entry point and now also contains real pure logic — **and the wrapper has zero direct coverage.** Concretely, `gui/panels/gravity_audit.py` (modified same-day as this audit) contains `_derive_step_status()` — a multi-branch PASS/FAIL classifier whose own docstring says an earlier version of this exact logic **"misreported a passing step as a failure"** — and `_parse_trailing_json()`, a hand-rolled brace-matching JSON extractor over arbitrary subprocess stdout; neither has a single test. | Medium-High for the pure helpers specifically (proven track record of a real bug in `_derive_step_status`), Medium for the panels overall (operator surface, `safe_panel()` catches render exceptions so a broken panel degrades to an error box rather than crashing the app — but a *wrong* rendering, like the prior `_derive_step_status` bug, does not trip that safety net). | Same "extract and test pure helpers" recommendation as the original audit, now with concrete, high-value, low-effort targets: `gui/panels/gravity_audit.py::_derive_step_status` (PASS/FAIL branch matrix — status key, `overall_pass` key, `step_3_5_discrepancy_analysis`'s conclusion string, `step_7_simulation_impact`'s dual-status join, and the `"—"`/`False` fallback for an unrecognized shape) and `::_parse_trailing_json` (no `}` in text, unbalanced braces, malformed JSON after brace-matching, valid trailing JSON preceded by unrelated stdout noise) are both pure functions with no Streamlit dependency and can be unit tested today with zero mocking. |
+| `alerting_mcp/notifier.py` (197) + `mcp_remote_adapter.py` (26) | 223 | **Done in Phase 5** — `tests/test_alerting_mcp_notifier.py` (21 tests: each channel handler's success/skip/exception-swallowed path, the `send()` dispatcher's fan-out and per-channel exception isolation, the JSON config store's round-trip and corrupt-file degradation) and `tests/test_mcp_remote_adapter.py` (3 tests: the exact `gcloud compute ssh` command built, stdin/stdout/stderr passed through untouched, exit-code propagation). | Medium — `alerting_mcp` is an alert-dispatch surface (same failure-domain as `observability/alerts.py`). | Done. One real bug caught in review of the new tests themselves, not the source: an early draft of the dispatcher tests patched `notifier._send_email`/`_send_ntfy` module attributes, which `send()` does not consult (it dispatches through the `CHANNEL_HANDLERS` dict, bound to the original functions at module-load time) — the patches were silent no-ops, and one such test was making a real unmocked network call to ntfy.sh. Fixed by patching `notifier.CHANNEL_HANDLERS` entries directly via `monkeypatch.setitem`. |
+| GUI **render-wrapper panels** — `gui/panels/gravity_audit.py` (862), `report_viewer.py` (1,279), `observability.py` (1,531), `launcher.py` (974), `strategy_matrix.py` (609), `options_matrix.py` (424), `ai_insights.py` (321), `prompt_registry.py` (434), `ai_control_center.py` (337), `live_inventory.py` (392), `pairs.py` (462), `market_data.py` (263), `analytics.py` (772), `paper_monitor.py` (124), `settings_manager.py` (180), `validation_lab.py` (231), `reports_library.py` (237), `analytics_signals.py` (367), `_shared.py` (208) | ~10,000 total | **No owning file for any panel; most have 0-1 incidental references.** A distinct, previously-undocumented pattern has emerged since the original audit: several features now split into a *logic* module at `gui/<feature>.py` (tested — e.g. `gui/ai_control_center.py`, `gui/ai_insights_panel.py`, `gui/gravity_ai_panel.py` all have owning suites) **plus** a *render-wrapper* module at `gui/panels/<feature>.py` that is the actual Streamlit tab entry point and now also contains real pure logic — **and the wrapper has zero direct coverage.** Concretely, `gui/panels/gravity_audit.py` (modified same-day as this audit) contains `_derive_step_status()` — a multi-branch PASS/FAIL classifier whose own docstring says an earlier version of this exact logic **"misreported a passing step as a failure"** — and `_parse_trailing_json()`, a hand-rolled brace-matching JSON extractor over arbitrary subprocess stdout; neither has a single test. | Medium-High for the pure helpers specifically (proven track record of a real bug in `_derive_step_status`), Medium for the panels overall (operator surface, `safe_panel()` catches render exceptions so a broken panel degrades to an error box rather than crashing the app — but a *wrong* rendering, like the prior `_derive_step_status` bug, does not trip that safety net). | Same "extract and test pure helpers" recommendation as the original audit, now with concrete, high-value, low-effort targets: `gui/panels/gravity_audit.py::_derive_step_status` (PASS/FAIL branch matrix — status key, `overall_pass` key, `step_3_5_discrepancy_analysis`'s conclusion string, `step_7_simulation_impact`'s dual-status join, and the `"—"`/`False` fallback for an unrecognized shape) and `::_parse_trailing_json` (no `}` in text, unbalanced braces, malformed JSON after brace-matching, valid trailing JSON preceded by unrelated stdout noise) are both pure functions with no Streamlit dependency and can be unit tested today with zero mocking. **`_derive_step_status`/`_parse_trailing_json` done in Phase 5** — `tests/test_gravity_audit_panel_helpers.py` (27 tests covering every branch of both functions, including the `step_3_5`/`step_7` legacy shapes and the depth-counting brace matcher's nested/unbalanced/dangling-brace edge cases). The other ~18 panels and their remaining pure helpers (`_load_gravity_report`/`_load_validation_summaries`'s cache-key derivation, and equivalents in the other 18 render-wrapper files) are still open. |
 | `webapp/` (Pilots PWA — React/TypeScript, ~separate stack from the Python suite above) | n/a (JS/TS) | **1 test file total** (`webapp/src/api/mock.test.ts`, covering only the mock API layer) despite `vitest` being fully configured (`npm test` → `vitest run`, `jsdom` + `@vitejs/plugin-react` present in `devDependencies`). None of the actual screens — Onboarding, Marketplace, Pilot Detail, Portfolio, the Follow modal (all described as first-class features in `CLAUDE.md`) — have component tests. | Medium — this is a real, shippable consumer-facing surface (`api/pilots_api.py`, the Python backend it talks to, is well tested per CLAUDE.md), but the frontend that renders that data and drives the Follow flow (money-adjacent, even if gated/preview-only) has no regression protection at all. | Out of scope for `pytest`/this Python-focused doc's roadmap numerically, but flagged because it's easy to miss when reasoning about "the test suite" as Python-only. Minimum viable: component tests for the Follow modal's preview/confirmation copy (the "this creates a gated queue... no order is placed automatically" notice is a safety-critical string) and `src/api/client.ts`'s mock↔live switch. |
 | ~~`gravity/__init__.py`~~ | — | **Deleted 2026-07-10** — this was a dead, unimported duplicate of `Gravity AI Review Suite.py`'s `GravityAIAuditor` class from an incomplete Phase 4b package extraction (see `docs/IMPROVEMENT_PLAN.md`'s "4b Gravity split" row). Its 10 audit steps with no live-file equivalent were migrated into `Gravity AI Review Suite.py` (step_75–step_85) before deletion. No longer a coverage gap. | — | — |
 
@@ -166,31 +184,35 @@ Closed the highest risk × gap items:
   current whole-suite total (measured, not guessed) so it catches real regressions without being so
   tight it blocks unrelated PRs.
 
-### Phase 5 — Findings from the 2026-07-14 re-audit *(new)*
-Ranked by risk × gap, reflecting how the codebase evolved since Phase 3:
+### Phase 5 — Findings from the 2026-07-14 re-audit
+Ranked by risk × gap, reflecting how the codebase evolved since Phase 3. First implementation pass
+(same day) landed items 2 and 6, plus the stray-root-file half of item 5:
 
-1. **Mirror `Gravity AI Review Suite.py`'s highest-value `step_*` invariants into pytest**, following
-   the exact pattern `tests/test_gravity_mirrored_invariants.py` already established for 2 of ~30.
-   This is the single largest gap in the codebase relative to the module's documented importance —
-   it is the deployability gate referenced by name throughout `CLAUDE.md`, yet has zero tests of its
-   own and CI cannot catch a regression in it. Start with the steps that gate the highest-blast-radius
-   decisions (PBO/DSR deployability, options-matrix strike/delta integrity, DB-backend resilience).
-2. **Unit test `gui/panels/gravity_audit.py::_derive_step_status` and `::_parse_trailing_json`.**
-   Concrete, low-effort, high-value: both are pure functions, `_derive_step_status` has a documented
-   history of misclassifying a passing step as failed, and neither has a single test today.
-3. **Owning test for `ai_verification_prompts.py`'s `GravityAIAuditor` class** (the 6-step
-   static-analysis/LLM-sandbox auditor, distinct from the file in item 1) — only its prompt-sourcing
-   fallback is currently tested, not its actual review logic.
-4. **`investyo_mcp_server.py`** (1,515 lines, 0% coverage) — new since the original audit, the
-   repo's own MCP server with zero tests of any kind.
-5. **Carry forward from Phase 4:** `data/robinhood_client.py` owning test, the broader GUI
-   render-wrapper panel helper extraction (now ~10,000 lines across 19 panels vs. the original ~4,900
-   across 7), and the stray-root-file rehoming.
-6. **`alerting_mcp/notifier.py` + `mcp_remote_adapter.py`** — smaller (223 lines combined) but
-   zero-tested siblings of the already well-tested `observability/alerts.py`; same failure-swallowing
-   pattern should be verified here too.
-7. **`webapp/` (Pilots PWA) component tests** — a different stack (`vitest`, not `pytest`) and lower
-   priority than the Python items above since the money-adjacent logic it renders is itself
-   gated/preview-only, but flagged because "the test suite" is otherwise reasoned about as Python-only
-   and this frontend currently has 1 test file covering only the mock API layer.
-8. **Coverage-floor ratchet in CI** (carried forward from Phase 4, now unblocked).
+1. **Mirror `Gravity AI Review Suite.py`'s highest-value `step_*` invariants into pytest** — *not yet
+   started*. Following the exact pattern `tests/test_gravity_mirrored_invariants.py` already
+   established for 2 of ~30. This remains the single largest gap in the codebase relative to the
+   module's documented importance — it is the deployability gate referenced by name throughout
+   `CLAUDE.md`, yet has zero tests of its own and CI cannot catch a regression in it. Start with the
+   steps that gate the highest-blast-radius decisions (PBO/DSR deployability, options-matrix
+   strike/delta integrity, DB-backend resilience).
+2. ~~Unit test `gui/panels/gravity_audit.py::_derive_step_status` and `::_parse_trailing_json`.~~
+   **Done** — `tests/test_gravity_audit_panel_helpers.py` (27 tests). The other ~18 render-wrapper
+   panels' pure helpers remain open (see item 5).
+3. **Owning test for `ai_verification_prompts.py`'s `GravityAIAuditor` class** — *not yet started*.
+4. **`investyo_mcp_server.py`** (1,515 lines, 0% coverage) — *not yet started*.
+5. **Carry forward from Phase 4:** `data/robinhood_client.py` owning test (*not yet started*) and the
+   broader GUI render-wrapper panel helper extraction beyond the two functions closed in item 2
+   (*not yet started* — 18 panels remain). ~~The stray-root-file rehoming~~ **done**, as a deletion
+   rather than a rehome — see the hygiene section above for why both files turned out to be dead
+   weight rather than genuine gaps.
+6. ~~`alerting_mcp/notifier.py` + `mcp_remote_adapter.py`~~ — **done**, `tests/test_alerting_mcp_notifier.py`
+   (21 tests) + `tests/test_mcp_remote_adapter.py` (3 tests). See the module-level table for a real bug
+   this caught in the *tests'* own mocking approach (not the source) along the way.
+7. **`webapp/` (Pilots PWA) component tests** — *not yet started*; different stack (`vitest`), lower
+   priority than the Python items above.
+8. **Coverage-floor ratchet in CI** — *not yet started*.
+
+**Bonus finding, not in the original Phase 5 list:** verifying the full offline suite after the above
+changes surfaced `tests/test_harness_buyhold.py` making a real, unmarked live network call to
+yfinance — fixed by adding `@pytest.mark.network` (see hygiene section above). Also verified: the full
+`pytest -m "not network"` suite is green after every change in this pass (5,025 collected, 0 failures).
