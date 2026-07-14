@@ -39,6 +39,27 @@ automatically.
 | — | Persist real benchmark comparison series | `validation/harness.py`, `pilots/performance.py` | #256 |
 | — | Mirror force-exit of dropped names via per-follow attribution | `pilots/mirror.py`, `pilots/follows_store.py` | #257 |
 
+## Hardening (post-Phase-3) — the core ships; this is the "declared done too early" layer
+
+The three phases + follow-ups above are merged and live. What remained after the
+functional build is the hardening layer — the work that's easy to skip once the product
+"works". Tracked here honestly so it doesn't silently rot.
+
+| Item | Status | Where |
+|------|--------|-------|
+| Gravity audit for the follow-mirror (broker quarantine, D3 floor, off/review gating, honesty) | ✅ done | `Gravity AI Review Suite.py::step_92_pilots_mirror_quarantine_audit` |
+| PWA test surface beyond the single mock-contract test (screen + live-client tests) | ⬜ open | `webapp/src/**` (only `api/mock.test.ts` today) |
+| CI gate for `webapp/` (typecheck + build + vitest) | ⬜ open | no `.github/workflows/*` references `webapp` |
+| Verified live cutover (run `pilots_api` + PWA against it, confirm shapes) | ⬜ open | `VITE_USE_MOCK` still defaults `true`; #254 aligned types only |
+
+**Why step_92 matters most.** `pilots/mirror.py` is the only Pilot module that emits order
+*intents*, yet it had zero Gravity coverage while every other order-adjacent subsystem
+(steps 79/80/81) is audited. step_92 pins the broker-quarantine invariant (no
+`place_*`/`submit_order`/`*_order` defs, execution reached only via
+`execution/queue_builder.py`), Decision D3's `FOLLOW_MIN_CONVICTION == 0.0` floor, the
+off/review `allow_place=False` gating, and the honesty/dead-letter contract
+(`build_follow_intents` → `[]` on non-positive amount/equity, never raises).
+
 ## Decisions
 
 - **D1 — namespaces genuinely differ.** A signal `name` (a `SIGNAL_WEIGHTS` key) is not a

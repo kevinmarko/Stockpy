@@ -4493,6 +4493,8 @@ class GravityAIAuditor:
         self.step_90_forecast_reliability_curve_audit()
         # Robinhood account-snapshot cache adapter + orchestrator call-site wiring audit
         self.step_91_robinhood_account_cache_audit()
+        # Autopilot "Pilots" gated follow-mirror — broker-quarantine + gating audit
+        self.step_92_pilots_mirror_quarantine_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -14930,6 +14932,265 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_91_robinhood_account_cache_audit"] = audit
+
+    def step_92_pilots_mirror_quarantine_audit(self) -> None:
+        """Step 92 — Autopilot "Pilots" gated follow-mirror (pilots/mirror.py) audit.
+
+        Background
+        ----------
+        Phase 3 of the Autopilot "Pilots" makeover. ``pilots/mirror.py`` is the
+        *write* side of the Pilot layer: it turns "Follow Pilot P with $A" into a
+        proportional, target-notional **rebalance** queue that flows through the
+        EXISTING gated, dry-run execution bridge (``execution/queue_builder.py``).
+        It is the newest and most safety-sensitive Pilot module because it emits
+        order *intents* — yet before this step it had ZERO Gravity coverage while
+        every other order-adjacent subsystem (steps 79/80/81) is audited.
+
+        Load-bearing invariants (see docs/AUTOPILOT_PLAN.md):
+        * **Broker quarantine.** No new order code, no ``place_*``/``submit_order``/
+          ``*_order`` function names, and no direct broker/order-manager import —
+          all placement stays the sole job of the downstream ``robinhood-execution``
+          skill. mirror.py reaches execution ONLY through
+          ``execution.queue_builder.emit_execution_queue``, reusing its
+          ``PreTradeRiskGate`` / ``GlobalKillSwitch`` / ``allow_place`` gating
+          verbatim.
+        * **Decision D3.** A deliberate Follow keeps every chosen name:
+          ``FOLLOW_MIN_CONVICTION == 0.0`` and ``plan_follow`` passes it as
+          ``config["min_conviction"]`` so the queue builder's default 0.85
+          conviction gate does not silently drop the Pilot's holdings.
+        * **Honesty / dead-letter (CONSTRAINT #4/#6).** A non-positive amount or
+          non-positive account equity yields ``[]`` — never a fabricated intent,
+          never a raise.
+
+        Checks
+        ------
+        1.  ``pilots.mirror`` importable with full surface (``build_follow_intents``,
+            ``plan_follow``, ``FollowIntent``, ``FollowRunResult``,
+            ``FOLLOW_MIN_CONVICTION``).
+        2.  Broker quarantine: no order-submission ``def`` names in mirror.py source
+            (``submit_order`` / ``buy_order`` / ``sell_order`` / ``place_order`` /
+            ``place_equity_order`` / ``place_option_order`` / ``def place_*``).
+        3.  No direct broker/order path: mirror.py reaches execution only via
+            ``from execution.queue_builder import emit_execution_queue`` and never
+            imports a concrete broker / order-manager (``alpaca_broker`` /
+            ``order_manager`` / ``AlpacaBroker`` / ``submit_order_with_idempotency``).
+        4.  Decision D3: ``FOLLOW_MIN_CONVICTION == 0.0`` AND ``plan_follow`` source
+            passes ``"min_conviction": FOLLOW_MIN_CONVICTION`` to the builder.
+        5.  Honesty: ``build_follow_intents`` returns ``[]`` on a non-positive amount
+            AND on non-positive account equity — never raises (CONSTRAINT #6).
+        6.  ``off`` mode emits nothing: ``emit_execution_queue`` with the follow's
+            own intents returns ``None`` and writes no ``execution_queue.json``.
+        7.  ``review`` mode: queue written, EVERY intent ``allow_place=False`` (gated
+            dry-run — the live gate is not satisfied), and with the D3 ``min_conviction=0``
+            floor the follow's names are KEPT (``n_intents == 2``, not dropped by the
+            default 0.85 gate).
+        8.  ``plan_follow`` end-to-end in ``off`` mode returns the
+            ``{planned_intents, mode, queue_written}`` shape with ``mode=="off"`` /
+            ``queue_written is False`` and writes no queue file — never raises.
+        """
+        import importlib
+        import json as _json
+        import tempfile
+        from dataclasses import dataclass as _dc
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        audit: dict = {
+            "step": "step_92_pilots_mirror_quarantine_audit",
+            "description": "Pilots gated follow-mirror — broker quarantine, D3, gating, honesty",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"check": name, "passed": bool(passed), "detail": str(detail)})
+            return bool(passed)
+
+        try:
+            # ── 1: import surface ────────────────────────────────────────
+            try:
+                mirror = importlib.import_module("pilots.mirror")
+                surface = ("build_follow_intents", "plan_follow", "FollowIntent",
+                           "FollowRunResult", "FOLLOW_MIN_CONVICTION")
+                ok1 = all(hasattr(mirror, n) for n in surface)
+                detail1 = "" if ok1 else f"missing={[n for n in surface if not hasattr(mirror, n)]}"
+            except Exception as exc:
+                mirror, ok1, detail1 = None, False, str(exc)
+            all_pass = _chk("pilots.mirror importable with full surface", ok1, detail1) and all_pass
+
+            # ── 2: broker quarantine — no order-submission def names ─────
+            src = Path("pilots/mirror.py").read_text(encoding="utf-8")
+            src_l = src.lower()
+            forbidden = ["submit_order", "buy_order", "sell_order", "place_order",
+                         "place_equity_order", "place_option_order"]
+            present = [kw for kw in forbidden if f"def {kw}" in src_l]
+            # also catch any `def place_*` variant
+            import re as _re92
+            present += _re92.findall(r"def\s+place_\w+", src_l)
+            ok2 = present == []
+            all_pass = _chk(
+                "no order-submission def names in pilots/mirror.py (broker quarantine)",
+                ok2, f"forbidden_defs={present}",
+            ) and all_pass
+
+            # ── 3: no direct broker/order path (reach execution via builder)
+            reaches_builder = "from execution.queue_builder import" in src
+            broker_tokens = ["alpaca_broker", "order_manager", "AlpacaBroker",
+                             "submit_order_with_idempotency", "BrokerBase"]
+            # ignore comment lines so an explanatory note can't trip the guard
+            code_only = "\n".join( l for l in src.splitlines() if not l.strip().startswith("#"))
+            direct_broker = [t for t in broker_tokens if t in code_only]
+            ok3 = reaches_builder and direct_broker == []
+            all_pass = _chk(
+                "reaches execution only via queue_builder; no direct broker/order import",
+                ok3, f"reaches_builder={reaches_builder} direct_broker={direct_broker}",
+            ) and all_pass
+
+            # ── 4: Decision D3 — min_conviction floor is 0.0 and plumbed ──
+            const_ok = ok1 and float(getattr(mirror, "FOLLOW_MIN_CONVICTION", 1.0)) == 0.0
+            plumbed = ('"min_conviction": FOLLOW_MIN_CONVICTION' in src
+                       or "'min_conviction': FOLLOW_MIN_CONVICTION" in src)
+            ok4 = const_ok and plumbed
+            all_pass = _chk(
+                "D3: FOLLOW_MIN_CONVICTION == 0.0 and passed as config['min_conviction']",
+                ok4, f"const_is_zero={const_ok} plumbed={plumbed}",
+            ) and all_pass
+
+            # ── duck-typed account snapshot (queue builder reads via getattr)
+            @_dc
+            class _P:
+                symbol: str; quantity: float; average_cost: float
+                current_price: float; market_value: float; unrealized_pl: float = 0.0
+
+            @_dc
+            class _S:
+                positions: dict; total_equity: float; buying_power: float
+
+            snap = _S({"NVDA": _P("NVDA", 10, 100.0, 120.0, 1200.0, 200.0)}, 10000.0, 3000.0)
+            rth = datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc)  # Tue ~1pm ET
+
+            # ── 5: honesty — non-positive amount / equity → [] ───────────
+            if ok1:
+                try:
+                    from pilots.catalog import get_pilot
+                    pilot = get_pilot("trend-following")
+                    # non-positive amount short-circuits before any scoring math
+                    neg_amt = mirror.build_follow_intents(pilot, -100.0, snap, snapshot={})
+                    # non-positive equity short-circuits too
+                    zero_eq = mirror.build_follow_intents(
+                        pilot, 1000.0, _S({}, 0.0, 0.0), snapshot={})
+                    ok5 = neg_amt == [] and zero_eq == []
+                    detail5 = f"neg_amount->{neg_amt!r} zero_equity->{zero_eq!r}"
+                except Exception as exc:
+                    ok5, detail5 = False, str(exc)
+            else:
+                ok5, detail5 = False, "skipped — import failed"
+            all_pass = _chk(
+                "build_follow_intents returns [] on non-positive amount/equity (CONSTRAINT #6)",
+                ok5, detail5,
+            ) and all_pass
+
+            # ── build the follow's own intents directly (no scoring math) ─
+            follow_cfg = {"strategy_id": "follow-audit",
+                          "min_conviction": 0.0}  # D3 floor plan_follow passes
+            if ok1:
+                fi = mirror.FollowIntent
+                intents = [
+                    fi(symbol="AAPL", action="BUY", strategy="Follow:audit",
+                       conviction=0.60, suggested_position_pct=0.05, target_notional=500.0,
+                       weight=0.60, price=180.0, score=1.0),
+                    fi(symbol="MSFT", action="BUY", strategy="Follow:audit",
+                       conviction=0.40, suggested_position_pct=0.03, target_notional=300.0,
+                       weight=0.40, price=320.0, score=0.8),
+                ]
+                rr = mirror.FollowRunResult(recommendations=intents, snapshot=snap)
+            else:
+                rr = None
+
+            qb = importlib.import_module("execution.queue_builder")
+
+            # ── 6: off mode → emit returns None, writes nothing ──────────
+            if rr is not None:
+                try:
+                    with tempfile.TemporaryDirectory() as td:
+                        out = Path(td)
+                        ret = qb.emit_execution_queue(
+                            rr, mode="off", output_dir=out, config=follow_cfg, now=rth)
+                        ok6 = ret is None and not (out / "execution_queue.json").exists()
+                        detail6 = f"ret={ret!r}"
+                except Exception as exc:
+                    ok6, detail6 = False, str(exc)
+            else:
+                ok6, detail6 = False, "skipped — import failed"
+            all_pass = _chk(
+                "off mode: emit returns None and writes no execution_queue.json",
+                ok6, detail6,
+            ) and all_pass
+
+            # ── 7: review mode → written, all allow_place False, names kept
+            if rr is not None:
+                try:
+                    with tempfile.TemporaryDirectory() as td:
+                        out = Path(td)
+                        path = qb.emit_execution_queue(
+                            rr, mode="review", output_dir=out, config=follow_cfg, now=rth)
+                        qfile = out / "execution_queue.json"
+                        payload = _json.loads(qfile.read_text(encoding="utf-8")) if qfile.exists() else {}
+                        q_intents = payload.get("intents", [])
+                        ok7 = (
+                            path is not None
+                            and qfile.exists()
+                            and payload.get("n_intents") == 2          # D3: both names kept
+                            and len(q_intents) == 2
+                            and all(i.get("allow_place") is False for i in q_intents)
+                        )
+                        detail7 = (f"n_intents={payload.get('n_intents')} "
+                                   f"allow_place={[i.get('allow_place') for i in q_intents]}")
+                except Exception as exc:
+                    ok7, detail7 = False, str(exc)
+            else:
+                ok7, detail7 = False, "skipped — import failed"
+            all_pass = _chk(
+                "review mode: queue written, every intent allow_place=False, D3 keeps both names",
+                ok7, detail7,
+            ) and all_pass
+
+            # ── 8: plan_follow end-to-end (off mode) shape + no write ─────
+            if ok1:
+                try:
+                    from pilots.catalog import get_pilot as _get_pilot
+                    pilot = _get_pilot("trend-following")
+                    with tempfile.TemporaryDirectory() as td:
+                        out = Path(td)
+                        res = mirror.plan_follow(
+                            pilot, 1000.0, snap, snapshot={}, output_dir=out)
+                        ok8 = (
+                            isinstance(res, dict)
+                            and set(("planned_intents", "mode", "queue_written")).issubset(res)
+                            and res.get("mode") == "off"
+                            and res.get("queue_written") is False
+                            and not (out / "execution_queue.json").exists()
+                        )
+                        detail8 = f"keys={sorted(res)[:6] if isinstance(res, dict) else res} mode={res.get('mode') if isinstance(res, dict) else '?'}"
+                except Exception as exc:
+                    ok8, detail8 = False, str(exc)
+            else:
+                ok8, detail8 = False, "skipped — import failed"
+            all_pass = _chk(
+                "plan_follow off-mode returns {planned_intents,mode,queue_written}, writes nothing",
+                ok8, detail8,
+            ) and all_pass
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_92_pilots_mirror_quarantine_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)
