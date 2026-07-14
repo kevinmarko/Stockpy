@@ -48,8 +48,8 @@ functional build is the hardening layer — the work that's easy to skip once th
 | Item | Status | Where |
 |------|--------|-------|
 | Gravity audit for the follow-mirror (broker quarantine, D3 floor, off/review gating, honesty) | ✅ done | `Gravity AI Review Suite.py::step_92_pilots_mirror_quarantine_audit` |
-| PWA test surface beyond the single mock-contract test (screen + live-client tests) | ⬜ open | `webapp/src/**` (only `api/mock.test.ts` today) |
-| CI gate for `webapp/` (typecheck + build + vitest) | ⬜ open | no `.github/workflows/*` references `webapp` |
+| CI gate for `webapp/` (typecheck + build + vitest) | ✅ done | `.github/workflows/ci.yml`'s `webapp` job |
+| PWA test surface beyond the single mock-contract test (screen + live-client tests) | ✅ done | `webapp/src/screens/{Marketplace,PilotDetail,FollowModal,Portfolio}.test.tsx`, `webapp/src/api/client.test.ts` — 43 tests total |
 | Verified live cutover (run `pilots_api` + PWA against it, confirm shapes) | ⬜ open | `VITE_USE_MOCK` still defaults `true`; #254 aligned types only |
 
 **Why step_92 matters most.** `pilots/mirror.py` is the only Pilot module that emits order
@@ -83,7 +83,7 @@ uvicorn api.pilots_api:app --port 8602
 cd webapp
 npm install
 npm run dev        # http://localhost:5173
-npm run test       # Vitest — mock contract + honesty fixtures
+npm run test       # Vitest — mock contract, screen tests (Testing Library), live-client (mocked fetch)
 npm run typecheck
 npm run build      # type-check + production build (+ PWA service worker)
 ```
