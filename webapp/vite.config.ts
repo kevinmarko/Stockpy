@@ -63,10 +63,12 @@ export default defineConfig({
     host: true,
     port: 5173,
   },
-  // Vitest: offline, deterministic unit tests for the mock API contract.
+  // Vitest: offline, deterministic unit tests — the mock API contract plus
+  // screen/component tests (Testing Library) and the live client (mocked fetch).
   // jsdom gives the mock layer a localStorage (follows persistence) to run against.
   test: {
     environment: "jsdom",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["./src/test-setup.ts"],
   },
 });
