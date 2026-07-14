@@ -124,6 +124,12 @@ class TestPilotPerformance:
         assert isinstance(benchmark, list) and len(benchmark) >= 2
         assert all(set(p) == {"date", "value"} for p in benchmark)
         assert all(isinstance(p["value"], (int, float)) for p in benchmark)
+        # The fixture also carries a persisted macro_benchmark_curve (SPY) -> a
+        # real, sliced, SEPARATELY-labeled market overlay is served too.
+        macro = perf["macro_benchmark"]
+        assert isinstance(macro, list) and len(macro) >= 2
+        assert all(set(p) == {"date", "value"} for p in macro)
+        assert all(isinstance(p["value"], (int, float)) for p in macro)
         assert perf["reason"] is None
         assert perf["range"] == "2Y"
 
@@ -133,6 +139,7 @@ class TestPilotPerformance:
         assert perf["metrics"] is None
         assert perf["curve"] is None
         assert perf["benchmark"] is None
+        assert perf["macro_benchmark"] is None
         assert perf["reason"] == "no validated backtest for this pilot"
 
     def test_missing_summary_is_honest_null(self):
@@ -304,3 +311,118 @@ class TestPilotPerformanceBenchmark:
         assert perf["curve"] is None
         assert perf["reason"] == "no backtest series persisted"
         assert isinstance(perf["benchmark"], list) and len(perf["benchmark"]) >= 2
+
+
+# ---------------------------------------------------------------------------
+# pilot_performance — macro_benchmark series (SEPARATE labeled SPY overlay)
+# ---------------------------------------------------------------------------
+class TestPilotPerformanceMacroBenchmark:
+    def test_macro_benchmark_present_when_persisted(self):
+        """The shared fixture carries macro_benchmark_curve -> a real sliced,
+        separately-labeled SPY overlay."""
+        pilot = get_pilot("trend-following")
+        perf = pilot_performance(pilot, range="2Y", reports_dir=FIXTURES_DIR)
+        macro = perf["macro_benchmark"]
+        assert isinstance(macro, list) and len(macro) >= 2
+        assert all(set(p) == {"date", "value"} for p in macro)
+        assert all(isinstance(p["value"], (int, float)) for p in macro)
+
+    def test_macro_benchmark_is_tail_sliced_like_curve(self):
+        """Shorter ranges zoom the macro overlay the same way as the strategy
+        curve: fewer-or-equal points and the same latest point (a pure slice)."""
+        pilot = get_pilot("trend-following")
+        full = pilot_performance(pilot, range="2Y", reports_dir=FIXTURES_DIR)["macro_benchmark"]
+        one_y = pilot_performance(pilot, range="1Y", reports_dir=FIXTURES_DIR)["macro_benchmark"]
+        one_m = pilot_performance(pilot, range="1M", reports_dir=FIXTURES_DIR)["macro_benchmark"]
+        assert full and one_y and one_m
+        assert len(one_m) <= len(one_y) <= len(full)
+        assert len(one_m) >= 2
+        assert one_m[-1] == one_y[-1] == full[-1]
+
+    def test_macro_benchmark_is_independent_of_benchmark(self):
+        """macro_benchmark and benchmark are DISTINCT keys/series — both can be
+        present and independently populated (not aliases of each other)."""
+        pilot = get_pilot("trend-following")
+        perf = pilot_performance(pilot, range="2Y", reports_dir=FIXTURES_DIR)
+        assert perf["benchmark"] is not None
+        assert perf["macro_benchmark"] is not None
+        assert perf["macro_benchmark"] is not perf["benchmark"]
+
+    def test_absent_macro_benchmark_key_is_honest_none(self, tmp_path):
+        """A summary that predates macro_benchmark_curve -> macro_benchmark None,
+        never fabricated, even when equity_curve and benchmark_curve are present."""
+        (tmp_path / "nomacro_validation_summary.json").write_text(
+            json.dumps({
+                "strategy_id": "nomacro",
+                "sharpe": 1.0,
+                "deployable": True,
+                "equity_curve": [
+                    {"date": "2024-01-31", "value": 100.0},
+                    {"date": "2024-02-29", "value": 101.2},
+                    {"date": "2024-03-31", "value": 103.4},
+                ],
+                "benchmark_curve": [
+                    {"date": "2024-01-31", "value": 100.0},
+                    {"date": "2024-02-29", "value": 100.7},
+                    {"date": "2024-03-31", "value": 101.9},
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+        class _P:
+            validation_strategy_id = "nomacro"
+
+        perf = pilot_performance(_P(), range="1Y", reports_dir=str(tmp_path))
+        assert isinstance(perf["curve"], list) and len(perf["curve"]) >= 2
+        assert isinstance(perf["benchmark"], list) and len(perf["benchmark"]) >= 2
+        assert perf["macro_benchmark"] is None
+
+    def test_empty_macro_benchmark_list_is_honest_none(self, tmp_path):
+        """An explicitly-empty macro_benchmark_curve ([] — the honest 'SPY
+        unavailable / underlying already IS SPY' sentinel) surfaces as None,
+        never a synthesized line (CONSTRAINT #4)."""
+        (tmp_path / "emptymacro_validation_summary.json").write_text(
+            json.dumps({
+                "strategy_id": "emptymacro",
+                "sharpe": 1.0,
+                "deployable": True,
+                "equity_curve": [
+                    {"date": "2024-01-31", "value": 100.0},
+                    {"date": "2024-02-29", "value": 101.2},
+                ],
+                "macro_benchmark_curve": [],
+            }),
+            encoding="utf-8",
+        )
+
+        class _P:
+            validation_strategy_id = "emptymacro"
+
+        perf = pilot_performance(_P(), reports_dir=str(tmp_path))
+        assert perf["macro_benchmark"] is None
+
+    def test_macro_benchmark_surfaces_even_when_strategy_curve_absent(self, tmp_path):
+        """macro_benchmark is independent of curve: a summary with only
+        macro_benchmark_curve still surfaces it, with curve None + honest reason."""
+        (tmp_path / "macroonly_validation_summary.json").write_text(
+            json.dumps({
+                "strategy_id": "macroonly",
+                "sharpe": 1.0,
+                "deployable": True,
+                "macro_benchmark_curve": [
+                    {"date": "2024-01-31", "value": 100.0},
+                    {"date": "2024-02-29", "value": 100.4},
+                    {"date": "2024-03-31", "value": 101.6},
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+        class _P:
+            validation_strategy_id = "macroonly"
+
+        perf = pilot_performance(_P(), reports_dir=str(tmp_path))
+        assert perf["curve"] is None
+        assert perf["reason"] == "no backtest series persisted"
+        assert isinstance(perf["macro_benchmark"], list) and len(perf["macro_benchmark"]) >= 2

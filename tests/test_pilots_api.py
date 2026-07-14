@@ -177,6 +177,11 @@ def test_performance_good_range(monkeypatch):
     curve = body["curve"]
     assert isinstance(curve, list) and len(curve) >= 2
     assert all(set(p) == {"date", "value"} for p in curve)
+    # The fixture also carries a persisted macro_benchmark_curve (SPY) -> a real,
+    # separately-labeled market overlay is serialized alongside curve/benchmark.
+    macro = body["macro_benchmark"]
+    assert isinstance(macro, list) and len(macro) >= 2
+    assert all(set(p) == {"date", "value"} for p in macro)
     assert body["reason"] is None
 
 

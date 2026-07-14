@@ -130,6 +130,34 @@ describe("mock API — /pilots/{id}/performance contract", () => {
     expect(
       perf.benchmark === null || Array.isArray(perf.benchmark)
     ).toBe(true);
+    // macro_benchmark (the SEPARATE SPY overlay) field must exist too; for a
+    // multi-name pilot it's a real distinct curve.
+    expect(
+      perf.macro_benchmark === null || Array.isArray(perf.macro_benchmark)
+    ).toBe(true);
+    expect(Array.isArray(perf.macro_benchmark)).toBe(true);
+    perf.macro_benchmark!.forEach(expectCurvePoint);
+  });
+
+  it("macro_benchmark is a SEPARATE series from benchmark (not an alias)", async () => {
+    const perf = await mockApi.getPerformance("trend-following", "1Y");
+    expect(Array.isArray(perf.benchmark)).toBe(true);
+    expect(Array.isArray(perf.macro_benchmark)).toBe(true);
+    // Distinct object identity and at least one differing value.
+    expect(perf.macro_benchmark).not.toBe(perf.benchmark);
+    const b = perf.benchmark!;
+    const m = perf.macro_benchmark!;
+    const anyDifferent = m.some(
+      (pt, i) => b[i] === undefined || pt.value !== b[i].value
+    );
+    expect(anyDifferent).toBe(true);
+  });
+
+  it("macro_benchmark is null when the underlying already IS SPY (redundant)", async () => {
+    // macd-trend models the honest redundancy case — no fabricated SPY overlay.
+    const perf = await mockApi.getPerformance("macd-trend", "1Y");
+    expect(Array.isArray(perf.curve)).toBe(true);
+    expect(perf.macro_benchmark).toBeNull();
   });
 
   it("returns the requested range for every PerfRange", async () => {
@@ -152,6 +180,7 @@ describe("mock API — honesty fixtures (must not be loosened)", () => {
     const perf = await mockApi.getPerformance("value-quality", "1Y");
     expect(perf.curve).toBeNull();
     expect(perf.benchmark).toBeNull();
+    expect(perf.macro_benchmark).toBeNull();
     expect(typeof perf.reason).toBe("string");
     expect(perf.reason!.length).toBeGreaterThan(0);
   });
