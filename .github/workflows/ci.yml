@@ -5,6 +5,11 @@ name: CI
 # `@pytest.mark.network` and deselected here via `-m "not network"` so CI stays
 # deterministic and offline. Python is pinned to 3.12 — the only version the
 # project supports (setup.sh / launch*.command hard-abort on anything else).
+#
+# The `webapp` job separately gates the Pilots PWA (webapp/) — typecheck,
+# vitest, and a production build — so a break there is caught the same way as
+# a Python test failure. It runs offline against the mock API layer
+# (VITE_USE_MOCK defaults true), same as `npm run test`/`npm run build` locally.
 
 on:
   push:
@@ -47,3 +52,31 @@ jobs:
           else
             echo "coverage.json not found; skipping coverage summary" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  webapp:
+    name: webapp (Pilots PWA)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (Vitest)
+        run: npm run test
+
+      - name: Build (typecheck + production build)
+        run: npm run build
