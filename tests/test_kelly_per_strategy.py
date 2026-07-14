@@ -205,14 +205,15 @@ class TestMixedColdAndWarm:
         assert tag_warm.startswith("bootstrap_kelly_5th_pct"), (
             f"MOMENTUM (warm) should use bootstrap path; got '{tag_warm}'"
         )
-        # Cold: vol-target fallback
-        assert tag_cold == "vol_target_fallback", (
-            f"MEAN_REV (cold, 10 trades) should fall back; got '{tag_cold}'"
+        # Cold: vol-target fallback, ramped by WS3 scale-in min(1, 10/30) = 0.3333
+        assert tag_cold == "vol_target_fallback(scalein=0.33,n=10)", (
+            f"MEAN_REV (cold, 10 trades) should fall back with scale-in tag; got '{tag_cold}'"
         )
-        # Cold weight matches standalone vol-target
-        expected_fallback = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0)
+        # Cold weight = standalone vol-target * scale-in factor (10/30)
+        scale_in = 10 / 30
+        expected_fallback = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0) * scale_in
         assert math.isclose(weight_cold, expected_fallback, rel_tol=1e-9), (
-            f"Cold-start weight ({weight_cold:.4f}) != expected vol-target ({expected_fallback:.4f})"
+            f"Cold-start weight ({weight_cold:.4f}) != scaled vol-target ({expected_fallback:.4f})"
         )
 
 
@@ -263,23 +264,23 @@ class TestStrategyEngineDispatch:
             realized_vol=REALIZED_VOL, strategy_id=STRAT_MOMENTUM
         )
 
-        assert tag == "vol_target_fallback", (
-            f"Expected 'vol_target_fallback' for cold strategy, got '{tag}'"
+        # WS3: empty store -> 0 trades -> scale-in 0 -> weight 0.0.
+        assert tag == "vol_target_fallback(scalein=0.00,n=0)", (
+            f"Expected scale-in-tagged fallback for cold strategy, got '{tag}'"
         )
-        expected = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0)
-        assert math.isclose(weight, expected, rel_tol=1e-9)
+        assert math.isclose(weight, 0.0, abs_tol=1e-12)
 
     def test_backward_compat_no_regression_in_empty_store(self):
         """
-        After Stage 1.7: calling _calculate_kelly_sizing(realized_vol)
-        with no strategy_id on an EMPTY store must match pre-Stage-1.7
-        behavior: vol-target fallback, tagged 'vol_target_fallback'.
+        After Stage 1.7 + WS3: calling _calculate_kelly_sizing(realized_vol)
+        with no strategy_id on an EMPTY store takes the aggregate vol-target
+        fallback, ramped by the WS3 scale-in factor min(1, 0/30) = 0, tagged
+        'vol_target_fallback(scalein=0.00,n=0)'.
         """
         store = TransactionsStore(db_url="sqlite:///:memory:")
         engine = StrategyEngine(transactions_store=store)
 
         weight, tag = engine._calculate_kelly_sizing(realized_vol=REALIZED_VOL)
-        expected = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0)
 
-        assert tag == "vol_target_fallback"
-        assert math.isclose(weight, expected, rel_tol=1e-9)
+        assert tag == "vol_target_fallback(scalein=0.00,n=0)"
+        assert math.isclose(weight, 0.0, abs_tol=1e-12)

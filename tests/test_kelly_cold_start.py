@@ -9,8 +9,13 @@ Acceptance tests for cold-start scenarios in kelly_sizing_for_strategy():
   - realized_vol unavailable + no history → weight=0.0, tag="cold_start_no_vol"
 
 INVARIANT: cold-start fallback MUST:
-  1. Return the same value as volatility_target_weight(realized_vol, target_vol, max_leverage).
-  2. Tag the path as "vol_target_fallback" (not "bootstrap_kelly_*").
+  1. Return volatility_target_weight(realized_vol, target_vol, max_leverage)
+     RAMPED IN by the WS3 scale-in factor min(1, n_trades / MIN_TRADES_REQUIRED)
+     so sizing doesn't jump discontinuously to the full vol-target weight the
+     instant a strategy is new. At n_trades >= MIN_TRADES_REQUIRED the factor is
+     1.0 and the value equals the standalone vol-target weight exactly.
+  2. Tag the path with the "vol_target_fallback" prefix (not "bootstrap_kelly_*"),
+     now carrying an audit suffix "(scalein=<f>,n=<n>)".
   3. NEVER return NaN silently — always 0.0 or a positive weight.
 """
 
@@ -61,9 +66,9 @@ class TestColdStartZeroTrades:
         weight, tag = kelly_sizing_for_strategy(
             store, strategy_id=STRATEGY_A, realized_vol=REALIZED_VOL
         )
-        expected = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0)
-        assert math.isclose(weight, expected, rel_tol=1e-9)
-        assert tag == "vol_target_fallback"
+        # WS3: 0 trades -> scale-in factor 0 -> weight ramps to 0.0.
+        assert math.isclose(weight, 0.0, abs_tol=1e-12)
+        assert tag == "vol_target_fallback(scalein=0.00,n=0)"
 
     def test_empty_store_no_realized_vol_returns_zero(self):
         store = TransactionsStore(db_url="sqlite:///:memory:")
@@ -97,9 +102,11 @@ class TestColdStartNoMatchingTrades:
         weight, tag = kelly_sizing_for_strategy(
             store, strategy_id=STRATEGY_A, realized_vol=REALIZED_VOL
         )
-        expected = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0)
-        assert math.isclose(weight, expected, rel_tol=1e-9)
-        assert tag == "vol_target_fallback", f"Expected 'vol_target_fallback', got '{tag}'"
+        # WS3: 0 matching trades for STRATEGY_A -> scale-in 0 -> weight 0.0.
+        assert math.isclose(weight, 0.0, abs_tol=1e-12)
+        assert tag == "vol_target_fallback(scalein=0.00,n=0)", (
+            f"Expected 'vol_target_fallback(scalein=0.00,n=0)', got '{tag}'"
+        )
 
     def test_unmatched_strategy_id_no_vol_returns_zero(self):
         store = TransactionsStore(db_url="sqlite:///:memory:")
@@ -127,12 +134,14 @@ class TestColdStartInsufficientMatchingTrades:
         weight, tag = kelly_sizing_for_strategy(
             store, strategy_id=STRATEGY_A, realized_vol=REALIZED_VOL
         )
-        expected = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0)
-        assert math.isclose(weight, expected, rel_tol=1e-9), (
-            f"Expected vol-target weight ({expected:.4f}) for n={n} trades, got ({weight:.4f})"
+        # WS3: weight is the vol-target weight ramped by min(1, n/30).
+        scale_in = min(1.0, n / MIN_TRADES_REQUIRED)
+        expected = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0) * scale_in
+        assert math.isclose(weight, expected, rel_tol=1e-9, abs_tol=1e-12), (
+            f"Expected scaled vol-target weight ({expected:.4f}) for n={n} trades, got ({weight:.4f})"
         )
-        assert tag == "vol_target_fallback", (
-            f"Expected 'vol_target_fallback' for n={n} trades, got '{tag}'"
+        assert tag == f"vol_target_fallback(scalein={scale_in:.2f},n={n})", (
+            f"Expected scale-in-tagged fallback for n={n} trades, got '{tag}'"
         )
 
     def test_exactly_at_threshold_activates_bootstrap(self):
@@ -173,19 +182,28 @@ class TestColdStartProperties:
         weight, tag = kelly_sizing_for_strategy(
             store, strategy_id=STRATEGY_A, realized_vol=realized_vol
         )
-        assert tag == expected_tag, f"Vol={realized_vol}: expected tag '{expected_tag}', got '{tag}'"
+        # WS3: the vol-target fallback tag carries a "(scalein=..,n=..)" suffix;
+        # the cold_start_no_vol tag is unchanged (exact).
+        assert tag.startswith(expected_tag), f"Vol={realized_vol}: expected tag prefix '{expected_tag}', got '{tag}'"
         assert weight >= 0.0, f"Weight must be non-negative; got {weight}"
         assert not math.isnan(weight), f"Weight must not be NaN; got {weight}"
 
     def test_cold_start_vol_target_matches_standalone_function(self):
-        """The fallback value must equal the standalone volatility_target_weight()."""
+        """At the warm scale-in ceiling (n_trades >= MIN_TRADES_REQUIRED) the
+        fallback value equals the standalone volatility_target_weight().
+
+        Seeds 30 all-winning trades for STRATEGY_A: the payoff ratio b is
+        undefined (no losses) so the per-strategy path still takes the vol-target
+        fallback, but with n_trades=30 the WS3 scale-in factor is 1.0."""
         store = TransactionsStore(db_url="sqlite:///:memory:")
+        _seed_store_with_trades(store, n=MIN_TRADES_REQUIRED, strategy=STRATEGY_A, win=True)
         for vol in [0.10, 0.15, 0.20, 0.30, 0.50]:
-            weight, _tag = kelly_sizing_for_strategy(
+            weight, tag = kelly_sizing_for_strategy(
                 store, strategy_id=STRATEGY_A, realized_vol=vol
             )
             expected = volatility_target_weight(vol, target_vol=0.10, max_leverage=2.0)
             assert math.isclose(weight, expected, rel_tol=1e-9), (
-                f"Cold-start weight ({weight:.4f}) != standalone vol-target ({expected:.4f}) "
+                f"Warm-ceiling weight ({weight:.4f}) != standalone vol-target ({expected:.4f}) "
                 f"for realized_vol={vol}"
             )
+            assert tag == "vol_target_fallback(scalein=1.00,n=30)", tag
