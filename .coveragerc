@@ -14,6 +14,16 @@ omit =
 [report]
 show_missing = True
 skip_covered = True
+# Coverage-floor ratchet (docs/test_coverage_analysis.md Phase 5 item 8).
+# Measured whole-suite total at the time this was added: 61% (`pytest -m
+# "not network" --cov`, 2026-07-14, after the Phase 5 test-coverage pass).
+# Set a few points below that measured baseline, not the baseline itself,
+# so ordinary coverage-neutral PRs and minor measurement noise (branch
+# coverage of conditionally-imported optional deps, etc.) don't fail CI --
+# this exists to catch a real regression, not to block unrelated work.
+# Raise this number as coverage improves; never lower it to paper over a
+# real drop.
+fail_under = 58
 
 [json]
 output = coverage.json

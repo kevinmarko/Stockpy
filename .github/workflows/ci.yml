@@ -41,6 +41,11 @@ jobs:
 
       - name: Run offline test suite
         run: |
+          # --cov reads .coveragerc, which sets fail_under=58 (a coverage-floor
+          # ratchet — see docs/test_coverage_analysis.md Phase 5 item 8). A
+          # regression below that floor fails this step even if every test
+          # passes; coverage.json is still written first, so the summary step
+          # below still runs (it's `if: always()`).
           python -m pytest -m "not network" -v --tb=short \
             --cov --cov-report=term-missing --cov-report=json
 
