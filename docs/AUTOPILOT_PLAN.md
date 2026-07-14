@@ -49,7 +49,7 @@ functional build is the hardening layer — the work that's easy to skip once th
 |------|--------|-------|
 | Gravity audit for the follow-mirror (broker quarantine, D3 floor, off/review gating, honesty) | ✅ done | `Gravity AI Review Suite.py::step_92_pilots_mirror_quarantine_audit` |
 | CI gate for `webapp/` (typecheck + build + vitest) | ✅ done | `.github/workflows/ci.yml`'s `webapp` job |
-| PWA test surface beyond the single mock-contract test (screen + live-client tests) | ✅ done | `webapp/src/screens/{Marketplace,PilotDetail,FollowModal,Portfolio}.test.tsx`, `webapp/src/api/client.test.ts` — 43 tests total |
+| PWA test surface beyond the single mock-contract test (screen + live-client tests) | ✅ done | `webapp/src/screens/{Marketplace,PilotDetail,FollowModal,Portfolio,Onboarding}.test.tsx`, `webapp/src/api/client.test.ts`, `webapp/src/format.test.ts`, `webapp/src/onboarding.test.ts` — every screen now has a test file; 100 tests total |
 | Verified live cutover (run `pilots_api` + PWA against it, confirm shapes) | ✅ done | see below |
 
 **Why step_92 matters most.** `pilots/mirror.py` is the only Pilot module that emits order
@@ -110,6 +110,14 @@ stayed green throughout.
 - **D3 — deliberate Follow keeps every chosen name.** Intent conviction = the Pilot's
   normalized target weight (honest proxy, never inflated); the queue is emitted with
   `min_conviction=0.0` so a deliberate Follow keeps every holding the Pilot selected.
+- **D4 — single `VITE_API_TOKEN` for both read and write, accepted (2026-07-14).** The backend
+  supports two independently-scoped tokens (`STATE_API_TOKEN` read/fail-open,
+  `FOLLOW_API_TOKEN` write/fail-closed — see the live-cutover note above), but `client.ts` sends
+  one shared token for both. Splitting the client to carry two tokens would reduce blast radius
+  (a leaked read-capable token couldn't also write) and allow independent rotation, but for a
+  single-operator deployment hitting their own local backend the risk is low. Decision: leave as
+  one token; revisit only if the frontend is ever exposed more broadly or a second consumer needs
+  scoped read-only access.
 
 ## Running it
 
