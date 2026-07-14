@@ -1377,7 +1377,10 @@ class HistoricalStore:
         from settings import settings  # avoid circular import at module top
 
         max_date = self.latest_bar_date(symbol)
-        today = pd.Timestamp.now(tz=None).normalize()
+        # UTC-based date (tz-naive, midnight-normalized) for consistency with the
+        # fundamentals/macro paths, which use datetime.now(timezone.utc).date().
+        # Matches the tz-naive normalized bar dates returned by latest_bar_date().
+        today = pd.Timestamp(datetime.now(timezone.utc).date())
 
         if max_date is None:
             fetch_days = settings.BARS_BACKFILL_DAYS
