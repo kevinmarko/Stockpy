@@ -123,7 +123,10 @@ describe("mock API — /pilots/{id}/performance contract", () => {
   it("a deployable pilot returns range/metrics/curve/benchmark", async () => {
     const perf = await mockApi.getPerformance("trend-following", "1M");
     expect(perf.range).toBe("1M");
-    expectHeadline(perf.metrics);
+    // trend-following is a deployable mock pilot with a real curve, so
+    // metrics is genuinely non-null here (see the honesty-fixtures block
+    // below for the null-metrics case).
+    expectHeadline(perf.metrics!);
     expect(Array.isArray(perf.curve)).toBe(true);
     perf.curve!.forEach(expectCurvePoint);
     // benchmark is present (either a curve or null) — the field must exist.
@@ -173,7 +176,9 @@ describe("mock API — honesty fixtures (must not be loosened)", () => {
     const detail = await mockApi.getPilot("momentum-burst");
     expect(detail.headline.deployable).toBe(false);
     const perf = await mockApi.getPerformance("momentum-burst", "1Y");
-    expect(perf.metrics.deployable).toBe(false);
+    // momentum-burst has a real (failing) backtest, so metrics is non-null —
+    // distinct from value-quality below, which has no backtest at all.
+    expect(perf.metrics!.deployable).toBe(false);
   });
 
   it("value-quality has curve:null with a reason — never a fabricated line", async () => {

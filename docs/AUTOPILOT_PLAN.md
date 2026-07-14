@@ -50,7 +50,7 @@ functional build is the hardening layer — the work that's easy to skip once th
 | Gravity audit for the follow-mirror (broker quarantine, D3 floor, off/review gating, honesty) | ✅ done | `Gravity AI Review Suite.py::step_92_pilots_mirror_quarantine_audit` |
 | CI gate for `webapp/` (typecheck + build + vitest) | ✅ done | `.github/workflows/ci.yml`'s `webapp` job |
 | PWA test surface beyond the single mock-contract test (screen + live-client tests) | ✅ done | `webapp/src/screens/{Marketplace,PilotDetail,FollowModal,Portfolio}.test.tsx`, `webapp/src/api/client.test.ts` — 43 tests total |
-| Verified live cutover (run `pilots_api` + PWA against it, confirm shapes) | ⬜ open | `VITE_USE_MOCK` still defaults `true`; #254 aligned types only |
+| Verified live cutover (run `pilots_api` + PWA against it, confirm shapes) | ✅ done | see below |
 
 **Why step_92 matters most.** `pilots/mirror.py` is the only Pilot module that emits order
 *intents*, yet it had zero Gravity coverage while every other order-adjacent subsystem
@@ -59,6 +59,44 @@ functional build is the hardening layer — the work that's easy to skip once th
 `execution/queue_builder.py`), Decision D3's `FOLLOW_MIN_CONVICTION == 0.0` floor, the
 off/review `allow_place=False` gating, and the honesty/dead-letter contract
 (`build_follow_intents` → `[]` on non-positive amount/equity, never raises).
+
+### Live cutover verification (2026-07-14)
+
+Ran `uvicorn api.pilots_api:app` for real (fresh SQLite/no `output/state_snapshot.json` — the
+honest cold-start case) and the PWA with `VITE_USE_MOCK=false` against it, driving the full
+Marketplace → Pilot Detail → Follow → Portfolio flow in a real browser. `CORS_ALLOWED_ORIGINS`'s
+default already covers Vite's `5173` port (`settings.py`) — that part of #254's reconciliation
+held up. Three real mock↔live type-contract mismatches surfaced (invisible to `mock.test.ts`
+because the mock never exercised the values that differ) and were fixed in
+`webapp/src/api/types.ts` + call sites:
+
+- **`Headline.deployable` can be `null` live, not just `boolean`.** `pilots/performance.py`'s
+  `pilot_headline()` returns `deployable: None` for a Pilot with no backtest AT ALL (cold start —
+  same honesty class as `sharpe`/`dsr`/`pbo`), distinct from `false` for a backtest that ran and
+  failed a gate. The mock only ever supplied a concrete `true`/`false`. Runtime behavior was
+  already correct (`null` is falsy, so `DeployableBadge`'s ternary and the marketplace's
+  `.filter(deployable)` both did the right thing) — only the TS type was lying. Widened to
+  `boolean | null` in `types.ts`, `DeployableBadge`'s prop type, and `PerformanceResponse.metrics`
+  (same `null`-on-cold-start shape, currently unread by any screen but now type-honest for future
+  code).
+- **`Follow.status` is `"active"` live, never `"queued"`.** `pilots/follows_store.py`'s real
+  vocabulary is `STATUS_ACTIVE="active"` / `STATUS_CANCELLED="cancelled"` — the mock invented
+  `"queued"`/`"cancelled"` instead. `Portfolio.tsx`'s active-follows badge only special-cased
+  `"queued"` (`badge-warn` + "gated queue" label); a live follow would have silently rendered as a
+  plain neutral `"active"` label instead of the intended warning treatment. Fixed the mock to emit
+  `"active"` and `Portfolio.tsx` to check for it.
+- **Auth is two separate tokens, one shared origin.** `STATE_API_TOKEN` (read, fail-open when
+  unset) and `FOLLOW_API_TOKEN` (write, fail-closed) gate different endpoint families, but
+  `client.ts` sends exactly one `VITE_API_TOKEN` on every request. Verified working when both are
+  configured to the same secret (the common real deployment shape); noting as a known constraint
+  rather than a bug to fix — a deployment that deliberately wants DIFFERENT read/write secrets
+  can't do that with the current single-token client without a design change.
+
+Post-fix, the full flow (marketplace list → pilot detail → Follow modal submit → Portfolio) ran
+against the live server with zero console errors and rendered every cold-start state honestly
+(`▲ Not deployable`, "No backtest series yet" with the real persisted reason, "Nothing here yet"
+for the account-less Portfolio) — never a fabricated line. `npm run typecheck`/`test`/`build`
+stayed green throughout.
 
 ## Decisions
 

@@ -575,7 +575,10 @@ export const mockApi = {
       amount,
       created_at: prior?.created_at ?? now,
       updated_at: now,
-      status: amount <= 0 ? "cancelled" : "queued",
+      // Matches the real `pilots/follows_store.py` vocabulary ("active" |
+      // "cancelled") — the mock previously used "queued", which the real
+      // backend never emits.
+      status: amount <= 0 ? "cancelled" : "active",
     };
     const next = existing.filter((f) => f.pilot_id !== id);
     if (amount > 0) next.push(follow);

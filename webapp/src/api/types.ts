@@ -13,13 +13,20 @@ export type PilotCategory =
   | "Blend"
   | "Trend";
 
-/** Honest, PBO/DSR-gated backtest headline from reports/<id>_validation_summary.json. */
+/**
+ * Honest, PBO/DSR-gated backtest headline from reports/<id>_validation_summary.json.
+ * `deployable` is `null` (not `false`) for a Pilot with no backtest yet at all
+ * (`pilots/performance.py::pilot_headline` — cold start, same honesty class as
+ * the other four fields) — distinct from a real backtest that failed a gate
+ * (`false`). Treat both as "not deployable" for display; don't conflate them
+ * with a strict `=== false` check.
+ */
 export interface Headline {
   sharpe: number | null;
   dsr: number | null;
   pbo: number | null;
   max_drawdown: number | null; // fraction, e.g. 0.18 = 18%
-  deployable: boolean;
+  deployable: boolean | null;
   stress_gate_passed?: boolean | null;
 }
 
@@ -78,7 +85,9 @@ export interface CurvePoint {
 /** GET /pilots/{id}/performance — metrics + curve|null (never fabricated). */
 export interface PerformanceResponse {
   range: PerfRange;
-  metrics: Headline;
+  // null when the Pilot has no validation summary at all (`pilots/performance.py`
+  // — the same cold-start case that leaves `curve`/`reason` unavailable too).
+  metrics: Headline | null;
   curve: CurvePoint[] | null;
   benchmark: CurvePoint[] | null;
   // SEPARATE, explicitly-labeled SPY (broad-market) overlay — distinct from
@@ -133,7 +142,11 @@ export interface Follow {
   amount: number;
   created_at: string;
   updated_at: string;
-  status: string; // "pending" | "queued" | "cancelled"
+  // Real vocabulary per `pilots/follows_store.py` (STATUS_ACTIVE/STATUS_CANCELLED):
+  // "active" | "cancelled". GET /follows only ever returns "active" rows
+  // (FollowsStore.list_active()) — "cancelled" is retained server-side but
+  // filtered out of this list.
+  status: string; // "active" | "cancelled"
 }
 
 /** POST /pilots/{id}/follow response. */

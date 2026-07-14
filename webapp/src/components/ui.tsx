@@ -7,8 +7,13 @@ export function CategoryChip({ category }: { category: PilotCategory }) {
   return <span className="chip">{category}</span>;
 }
 
-/** Deployable / not-deployable honesty badge. Never softened. */
-export function DeployableBadge({ deployable }: { deployable: boolean }) {
+/**
+ * Deployable / not-deployable honesty badge. Never softened. `deployable` is
+ * `null` for a Pilot with no backtest yet at all (vs. `false` for one that
+ * failed a gate) — both render the same "not deployable" treatment here;
+ * `null` is falsy so the ternary already does the right thing.
+ */
+export function DeployableBadge({ deployable }: { deployable: boolean | null }) {
   return deployable ? (
     <span className="badge badge-good" title="Passes PBO/DSR/Sharpe/MaxDD gates">
       ● Deployable
