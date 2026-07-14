@@ -55,6 +55,7 @@ def test_settings_defaults(monkeypatch, tmp_path):
         "DEFAULT_TICKERS",
         "STATE_API_TOKEN",
         "CORS_ALLOWED_ORIGINS",
+        "DRY_RUN",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
@@ -64,6 +65,13 @@ def test_settings_defaults(monkeypatch, tmp_path):
     assert s.FRED_API_KEY == ""
     assert s.ALPACA_API_KEY is None
     assert s.ALPACA_PAPER is True
+    # DRY_RUN gates OrderManager._submit_with_retry (see CLAUDE.md: "Dry-run
+    # is enforced at manager level") -- a silent flip to True here would
+    # make every broker order a no-op without any other signal. Mirrors
+    # Gravity AI Review Suite.py's step_22_broker_order_manager_audit,
+    # which was found (2026-07-14 test-coverage re-audit, Phase 5) to check
+    # this default with no independent pytest assertion anywhere else.
+    assert s.DRY_RUN is False
     assert s.RISK_FREE_RATE == pytest.approx(0.045)
     assert s.MARKET_RISK_PREMIUM == pytest.approx(0.055)
     assert s.REQUIRED_RETURN_RATE == pytest.approx(0.08)

@@ -46,3 +46,53 @@ def test_tiered_cost_model_aapl():
     huge_sell_costs = model.calculate_cost(side="sell", shares=100000, price=150.0, order_type="market")
     # TAF cap should be $8.30
     assert huge_sell_costs["taf"] == 8.30
+
+
+def test_estimate_round_trip_cost_aapl():
+    """
+    ``estimate_round_trip_cost`` is a distinct method from ``calculate_cost``
+    (which the rest of this file exercises) and, before this test, was never
+    called by any test in the suite -- confirmed by a repo-wide grep during
+    the 2026-07-14 test-coverage re-audit's Phase 5 Gravity-step
+    investigation (mirrors ``Gravity AI Review Suite.py``'s STEP 11 check,
+    which asserts this exact scenario's total is ~$16.93).
+
+    Same 100 shares of AAPL @ $150 scenario as
+    ``test_tiered_cost_model_aapl`` above, but verifies the ROUND-TRIP
+    aggregation logic itself: commission/spread/slippage are summed from
+    BOTH legs (buy + sell), while sec_fee/taf come from the SELL leg ONLY
+    (regulatory fees apply only to sells -- they must not be double-counted
+    by summing both legs, since the buy leg's sec_fee/taf are always 0.0).
+    """
+    model = TieredCostModel()
+
+    buy_costs = model.calculate_cost(side="buy", shares=100, price=150.0, order_type="market")
+    sell_costs = model.calculate_cost(side="sell", shares=100, price=150.0, order_type="market")
+
+    round_trip = model.estimate_round_trip_cost("AAPL", shares=100, price=150.0, order_type="market")
+
+    assert round_trip["commission"] == pytest.approx(buy_costs["commission"] + sell_costs["commission"])
+    assert round_trip["spread"] == pytest.approx(buy_costs["spread"] + sell_costs["spread"])
+    assert round_trip["slippage"] == pytest.approx(buy_costs["slippage"] + sell_costs["slippage"])
+    # Sell-leg-only, NOT buy+sell (the buy leg's sec_fee/taf are 0.0 anyway,
+    # but this pins the aggregation rule itself, not just today's values).
+    assert round_trip["sec_fee"] == pytest.approx(sell_costs["sec_fee"])
+    assert round_trip["taf"] == pytest.approx(sell_costs["taf"])
+
+    assert round_trip["total_dollars"] == pytest.approx(16.93, abs=0.01)
+    assert round_trip["total_dollars"] == pytest.approx(
+        buy_costs["total_dollars"] + sell_costs["total_dollars"]
+    )
+
+    trade_value = 100 * 150.0
+    expected_bps = round_trip["total_dollars"] / trade_value * 10000.0
+    assert round_trip["total_bps"] == pytest.approx(expected_bps)
+
+
+def test_estimate_round_trip_cost_zero_trade_value_no_division_by_zero():
+    """total_bps must degrade to 0.0, never raise, when shares*price == 0."""
+    model = TieredCostModel()
+
+    round_trip = model.estimate_round_trip_cost("AAPL", shares=0, price=150.0, order_type="market")
+
+    assert round_trip["total_bps"] == 0.0
