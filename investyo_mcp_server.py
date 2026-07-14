@@ -543,7 +543,8 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
         plt.legend()
         plt.tight_layout()
         
-        artifact_dir = "/Users/kevinlee/.gemini/antigravity/brain/d401d6a1-6d28-4b48-a196-95e42415c9ed"
+        from settings import settings
+        artifact_dir = str(settings.OUTPUT_DIR / "artifacts")
         os.makedirs(artifact_dir, exist_ok=True)
         img_name = f"equity_curve_{symbol.lower()}.png"
         img_path = os.path.join(artifact_dir, img_name)
@@ -759,7 +760,8 @@ def plot_portfolio_equity(period: str = "1y") -> str:
         plt.legend()
         plt.tight_layout()
         
-        artifact_dir = "/Users/kevinlee/.gemini/antigravity/brain/d401d6a1-6d28-4b48-a196-95e42415c9ed"
+        from settings import settings
+        artifact_dir = str(settings.OUTPUT_DIR / "artifacts")
         os.makedirs(artifact_dir, exist_ok=True)
         img_path = os.path.join(artifact_dir, "portfolio_equity_vs_spy.png")
         plt.savefig(img_path)
@@ -1429,7 +1431,7 @@ def configure_alerts(
         pit_audit_failed: Enable/disable alerts when a PIT audit returns FAIL.
     """
     try:
-        from alerting.notifier import get_alert_config, save_alert_config
+        from alerting_mcp.notifier import get_alert_config, save_alert_config
 
         config = get_alert_config()
 
@@ -1471,7 +1473,7 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
         message: Alert message body.
     """
     try:
-        from alerting.notifier import send
+        from alerting_mcp.notifier import send
 
         results = send(title, message, priority="default")
         lines = ["# Test Alert Results\n"]

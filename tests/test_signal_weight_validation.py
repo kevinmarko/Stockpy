@@ -15,6 +15,15 @@ Covers:
     a recognized regime has no matching override and no ``_default``.
   * ``SignalAggregator.__init__`` triggers validation (memoized) without
     raising, and re-validates when ``force=True``.
+  * ``CANONICAL_REGIMES`` is cross-checked against ``dto_models.py``'s
+    ``MacroEconomicDTO.market_regime`` by actually constructing a DTO for
+    each of the four regime-triggering scenarios and asserting the
+    produced string is a ``CANONICAL_REGIMES`` member -- not just
+    comparing two hardcoded literal sets (which existing coverage
+    elsewhere effectively did, since both sides were derived from the
+    same string constants). Mirrors ``Gravity AI Review Suite.py``'s
+    step_72 check 8, found (2026-07-14 test-coverage re-audit, Phase 5)
+    to have no independent pytest equivalent.
 """
 
 import logging
@@ -22,6 +31,7 @@ import logging
 import pytest
 
 import signals.aggregator as aggregator_mod
+from dto_models import MacroEconomicDTO
 from signals.aggregator import (
     CANONICAL_REGIMES,
     MAX_SANE_SIGNAL_WEIGHT,
@@ -226,3 +236,46 @@ class TestSignalAggregatorWiring:
         assert not any(
             "validate_signal_weight_config" in rec.message for rec in caplog.records
         )
+
+
+class TestCanonicalRegimesMatchMacroEconomicDTO:
+    """Every regime string dto_models.MacroEconomicDTO.market_regime can
+    actually produce must be a CANONICAL_REGIMES member -- verified here by
+    constructing a real DTO for each triggering scenario, not by comparing
+    two hardcoded literal sets. hmm_risk_on_probability is left at its
+    default (None) throughout so market_regime equals the undamped
+    rules-based classification (see MacroEconomicDTO._rules_based_regime's
+    docstring)."""
+
+    def _dto(self, yield_curve, credit_spread, sahm=0.0):
+        return MacroEconomicDTO(
+            yield_curve_10y_2y=yield_curve,
+            high_yield_oas=credit_spread,
+            inflation_rate=2.0,
+            sahm_rule_indicator=sahm,
+        )
+
+    def test_recession_via_inverted_curve_and_wide_spread(self):
+        dto = self._dto(yield_curve=-0.5, credit_spread=7.0)
+        assert dto.market_regime == "RECESSION"
+        assert dto.market_regime in CANONICAL_REGIMES
+
+    def test_recession_via_sahm_rule(self):
+        dto = self._dto(yield_curve=0.0, credit_spread=0.0, sahm=0.6)
+        assert dto.market_regime == "RECESSION"
+        assert dto.market_regime in CANONICAL_REGIMES
+
+    def test_credit_event(self):
+        dto = self._dto(yield_curve=0.0, credit_spread=6.5)
+        assert dto.market_regime == "CREDIT EVENT"
+        assert dto.market_regime in CANONICAL_REGIMES
+
+    def test_neutral(self):
+        dto = self._dto(yield_curve=0.0, credit_spread=5.0)
+        assert dto.market_regime == "NEUTRAL"
+        assert dto.market_regime in CANONICAL_REGIMES
+
+    def test_risk_on(self):
+        dto = self._dto(yield_curve=0.5, credit_spread=2.0)
+        assert dto.market_regime == "RISK ON"
+        assert dto.market_regime in CANONICAL_REGIMES
