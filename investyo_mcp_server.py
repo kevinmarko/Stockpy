@@ -9,6 +9,63 @@ from mcp.server.fastmcp import FastMCP
 # Initialize the FastMCP server for the Investyo Platform
 mcp = FastMCP("InvestyoPlatform")
 
+
+def _active_universe() -> list:
+    """
+    Returns the active ticker universe from settings.DEFAULT_TICKERS.
+    Dead-letter safe: falls back to a small hardcoded default list only
+    if settings cannot be read for any reason.
+    """
+    try:
+        from settings import settings
+        tickers = list(settings.DEFAULT_TICKERS)
+        if not tickers:
+            return ["AAPL", "MSFT", "JNJ", "AGNC"]
+        return [str(t).upper() for t in tickers]
+    except Exception:
+        return ["AAPL", "MSFT", "JNJ", "AGNC"]
+
+
+def _db_query(sql: str, params: tuple = ()):
+    """
+    Executes a read query against the platform database, transparently
+    supporting both the local SQLite file and a configured Postgres/Supabase
+    DATABASE_URL (the dual-backend seam in db_config.py).
+
+    Returns a (columns: list[str], rows: list[tuple]) tuple.
+    Dead-letter safe: raises only if BOTH backends fail (callers already
+    wrap this in try/except per the codebase convention).
+    """
+    try:
+        from db_config import resolve_database_url
+        db_url = resolve_database_url()
+    except Exception:
+        db_url = "sqlite:///quant_platform.db"
+
+    if db_url.startswith("sqlite"):
+        # Local sqlite fast path - preserve existing raw sqlite3 behavior.
+        db_path = "quant_platform.db"
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            columns = [d[0] for d in cursor.description] if cursor.description else []
+            return columns, rows
+        finally:
+            conn.close()
+    else:
+        # Postgres/Supabase backend via SQLAlchemy.
+        from sqlalchemy import text
+        from db_config import create_db_engine
+        engine = create_db_engine(db_url)
+        with engine.connect() as conn:
+            result = conn.execute(text(sql), params)
+            columns = list(result.keys())
+            rows = [tuple(row) for row in result.fetchall()]
+        return columns, rows
+
+
 # ==========================================
 # [1] RESOURCES (Read-Only Context)
 # ==========================================
@@ -33,21 +90,39 @@ def get_database_schema() -> str:
     Reads and returns the SQLite database schema for quant_platform.db.
     Provides the AI with real-time awareness of the database structure.
     """
-    db_path = "quant_platform.db"
-    if not os.path.exists(db_path):
-        return "Error: quant_platform.db not found in the current directory."
-    
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        # Query the sqlite_master table to get all table creation schemas
-        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table';")
-        rows = cursor.fetchall()
-        schema_definitions = "\n\n".join([row[0] for row in rows if row[0]])
-        conn.close()
-        return schema_definitions if schema_definitions else "Database is currently empty."
-    except Exception as e:
-        return f"Database connection error: {str(e)}"
+        from db_config import resolve_database_url
+        db_url = resolve_database_url()
+    except Exception:
+        db_url = "sqlite:///quant_platform.db"
+
+    if db_url.startswith("sqlite"):
+        db_path = "quant_platform.db"
+        if not os.path.exists(db_path):
+            return "Error: quant_platform.db not found in the current directory."
+        try:
+            _, rows = _db_query("SELECT sql FROM sqlite_master WHERE type='table';")
+            schema_definitions = "\n\n".join([row[0] for row in rows if row[0]])
+            return schema_definitions if schema_definitions else "Database is currently empty."
+        except Exception as e:
+            return f"Database connection error: {str(e)}"
+    else:
+        try:
+            _, rows = _db_query(
+                "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = 'public' ORDER BY table_name, ordinal_position;"
+            )
+            if not rows:
+                return "Database is currently empty."
+            tables: Dict[str, List[str]] = {}
+            for table_name, column_name, data_type in rows:
+                tables.setdefault(table_name, []).append(f"{column_name} {data_type}")
+            lines = []
+            for table_name, cols in tables.items():
+                lines.append(f"TABLE {table_name} (\n  " + ",\n  ".join(cols) + "\n)")
+            return "\n\n".join(lines)
+        except Exception as e:
+            return f"Database connection error: {str(e)}"
 
 @mcp.resource("investyo://ticker/{symbol}")
 def get_ticker_context(symbol: str) -> str:
@@ -173,32 +248,34 @@ def run_platform_tests() -> str:
 @mcp.tool()
 def query_investyo_db(sql_query: str) -> str:
     """
-    Executes a SELECT query against the quant_platform.db.
-    Will reject any query that is not a SELECT statement for safety.
+    Executes a read-only SELECT (or WITH-CTE SELECT) query against the platform database.
+    Will reject any query that is not a SELECT/WITH statement for safety, and caps
+    results at 1000 rows to avoid dumping an entire table.
     """
-    if not sql_query.strip().upper().startswith("SELECT"):
-        return "Error: Only SELECT queries are permitted via this tool."
-    
-    db_path = "quant_platform.db"
-    if not os.path.exists(db_path):
-        return "Error: quant_platform.db not found."
-    
+    stripped_upper = sql_query.strip().upper()
+    if not (stripped_upper.startswith("SELECT") or stripped_upper.startswith("WITH")):
+        return "Error: Only SELECT (or WITH-CTE SELECT) queries are permitted via this tool."
+
+    MAX_ROWS = 1000
+
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute(sql_query)
-        rows = cursor.fetchall()
-        columns = [description[0] for description in cursor.description] if cursor.description else []
-        conn.close()
-        
+        columns, rows = _db_query(sql_query)
+
         if not rows:
             return "Query executed successfully, but returned 0 rows."
-        
+
+        truncated = len(rows) > MAX_ROWS
+        if truncated:
+            rows = rows[:MAX_ROWS]
+
         result_lines = [", ".join(columns)]
         for row in rows:
             result_lines.append(", ".join(str(val) for val in row))
-        
-        return "Query Results:\n" + "\n".join(result_lines)
+
+        output = "Query Results:\n" + "\n".join(result_lines)
+        if truncated:
+            output += f"\n\n[Note: results truncated to the first {MAX_ROWS} rows.]"
+        return output
     except Exception as e:
         return f"Database query failed: {str(e)}"
 
@@ -247,24 +324,22 @@ def read_platform_logs(lines: int = 50) -> str:
     logs_summary = []
     
     # 1. Query ExecutionLogs from DB
-    db_path = "quant_platform.db"
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT timestamp, status, ticker_count, execution_time_seconds, error_message FROM ExecutionLogs ORDER BY id DESC LIMIT ?", (lines,))
-            rows = cursor.fetchall()
-            conn.close()
-            
-            if rows:
-                logs_summary.append("### Database Execution Logs (Recent runs)")
-                logs_summary.append("Timestamp | Status | Tickers | Duration (s) | Error")
-                logs_summary.append("---|---|---|---|---")
-                for row in rows:
-                    err = row[4] if row[4] else "None"
-                    logs_summary.append(f"{row[0]} | {row[1]} | {row[2]} | {row[3]:.2f} | {err}")
-        except Exception as e:
-            logs_summary.append(f"Could not read ExecutionLogs from DB: {str(e)}")
+    try:
+        _, rows = _db_query(
+            "SELECT timestamp, status, ticker_count, execution_time_seconds, error_message "
+            "FROM ExecutionLogs ORDER BY id DESC LIMIT ?",
+            (lines,),
+        )
+
+        if rows:
+            logs_summary.append("### Database Execution Logs (Recent runs)")
+            logs_summary.append("Timestamp | Status | Tickers | Duration (s) | Error")
+            logs_summary.append("---|---|---|---|---")
+            for row in rows:
+                err = row[4] if row[4] else "None"
+                logs_summary.append(f"{row[0]} | {row[1]} | {row[2]} | {row[3]:.2f} | {err}")
+    except Exception as e:
+        logs_summary.append(f"Could not read ExecutionLogs from DB: {str(e)}")
             
     # 2. Check local directory for log files
     log_files = [f for f in os.listdir(".") if f.endswith(".log")]
@@ -431,34 +506,25 @@ def update_universe_tickers(action: str, symbol: str) -> str:
         symbol: The ticker symbol to modify (e.g. TSLA).
     """
     import json
-    env_path = ".env"
+    from gui import env_io
+
     symbol_upper = symbol.upper().strip()
     action_lower = action.lower().strip()
-    
-    env_vars = {}
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        env_vars[k.strip()] = v.strip()
-        except Exception as e:
-            return f"Failed to read .env file: {str(e)}"
-            
-    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
-    if "DEFAULT_TICKERS" in env_vars:
-        try:
-            val = env_vars["DEFAULT_TICKERS"]
-            current_tickers = json.loads(val)
-            if not isinstance(current_tickers, list):
-                current_tickers = [current_tickers]
-        except Exception:
-            current_tickers = [t.strip() for t in env_vars["DEFAULT_TICKERS"].split(",") if t.strip()]
-            
-    current_tickers = [t.upper() for t in current_tickers]
-    
+
+    try:
+        raw_val = env_io.get_value("DEFAULT_TICKERS", "[]")
+    except Exception as e:
+        return f"Failed to read DEFAULT_TICKERS setting: {str(e)}"
+
+    try:
+        current_tickers = json.loads(raw_val)
+        if not isinstance(current_tickers, list):
+            current_tickers = [current_tickers]
+    except Exception:
+        current_tickers = [t.strip() for t in raw_val.split(",") if t.strip()]
+
+    current_tickers = [str(t).upper() for t in current_tickers]
+
     if action_lower == "add":
         if symbol_upper in current_tickers:
             return f"{symbol_upper} is already in the trading universe."
@@ -469,16 +535,19 @@ def update_universe_tickers(action: str, symbol: str) -> str:
         current_tickers.remove(symbol_upper)
     else:
         return f"Invalid action: '{action}'. Must be one of: add, remove."
-        
-    env_vars["DEFAULT_TICKERS"] = json.dumps(current_tickers)
-    
+
+    # Dedup while preserving order
+    deduped = list(dict.fromkeys(current_tickers))
+
     try:
-        with open(env_path, "w") as f:
-            for k, v in env_vars.items():
-                f.write(f"{k}={v}\n")
-        return f"Successfully {action_lower}ed {symbol_upper} from the active universe. Current tickers: {current_tickers}"
+        env_io.write_setting("DEFAULT_TICKERS", deduped)
+        return f"Successfully {action_lower}ed {symbol_upper} from the active universe. Current tickers: {deduped}"
+    except env_io.SecretWriteError as e:
+        return f"Failed to update universe: DEFAULT_TICKERS write blocked ({str(e)})."
+    except env_io.DisallowedKeyError as e:
+        return f"Failed to update universe: DEFAULT_TICKERS is not an allowed key ({str(e)})."
     except Exception as e:
-        return f"Failed to write to .env file: {str(e)}"
+        return f"Failed to write DEFAULT_TICKERS setting: {str(e)}"
 
 @mcp.tool()
 def plot_equity_curve(symbol: str, period: str = "1y") -> str:
@@ -680,7 +749,6 @@ def plot_portfolio_equity(period: str = "1y") -> str:
     and saves the PNG plot to artifacts.
     """
     import os
-    import json
     import yfinance as yf
     import backtrader as bt
     import numpy as np
@@ -689,20 +757,9 @@ def plot_portfolio_equity(period: str = "1y") -> str:
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from simulation_engine import InstitutionalStrategy
-    
-    env_path = ".env"
-    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, "r") as f:
-                for line in f:
-                    if line.strip() and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        if k.strip() == "DEFAULT_TICKERS":
-                            current_tickers = json.loads(v.strip())
-        except Exception:
-            pass
-            
+
+    current_tickers = _active_universe()
+
     try:
         portfolio_curves = []
         
@@ -788,25 +845,12 @@ def get_universe_status() -> str:
     macro economic environment status, and database stats.
     """
     import os
-    import json
-    import sqlite3
     import yaml
-    
+
     status = ["# InvestYo Universe Status Dashboard\n"]
-    
-    env_path = ".env"
-    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, "r") as f:
-                for line in f:
-                    if line.strip() and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        if k.strip() == "DEFAULT_TICKERS":
-                            current_tickers = json.loads(v.strip())
-        except Exception:
-            pass
-            
+
+    current_tickers = _active_universe()
+
     status.append("## Active Trading Universe")
     status.append(", ".join(f"`{t}`" for t in current_tickers) + "\n")
     
@@ -829,29 +873,22 @@ def get_universe_status() -> str:
         except Exception as e:
             status.append(f"## Active Watch Rules\nFailed to parse rules: {str(e)}\n")
             
-    db_path = "quant_platform.db"
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT COUNT(*) FROM DailySignals")
-            signals_count = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM Transactions")
-            transactions_count = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM ExecutionLogs")
-            logs_count = cursor.fetchone()[0]
-            
-            conn.close()
-            
-            status.append("## Database Metrics")
-            status.append(f"- **Daily Signals Table Rows**: {signals_count}")
-            status.append(f"- **Transactions Table Rows**: {transactions_count}")
-            status.append(f"- **Execution Logs Table Rows**: {logs_count}")
-        except Exception as e:
-            status.append(f"## Database Metrics\nError querying DB stats: {str(e)}")
+    try:
+        _, signals_rows = _db_query("SELECT COUNT(*) FROM DailySignals")
+        signals_count = signals_rows[0][0] if signals_rows else 0
+
+        _, trades_rows = _db_query("SELECT COUNT(*) FROM trades")
+        trades_count = trades_rows[0][0] if trades_rows else 0
+
+        _, logs_rows = _db_query("SELECT COUNT(*) FROM ExecutionLogs")
+        logs_count = logs_rows[0][0] if logs_rows else 0
+
+        status.append("## Database Metrics")
+        status.append(f"- **Daily Signals Table Rows**: {signals_count}")
+        status.append(f"- **Trades Table Rows**: {trades_count}")
+        status.append(f"- **Execution Logs Table Rows**: {logs_count}")
+    except Exception as e:
+        status.append(f"## Database Metrics\nError querying DB stats: {str(e)}")
             
     return "\n".join(status)
 
@@ -1087,29 +1124,17 @@ def get_signal_breakdown(symbol: str) -> str:
     Args:
         symbol: Stock ticker (e.g., AAPL).
     """
-    db_path = "quant_platform.db"
-    if not os.path.exists(db_path):
-        return "Error: quant_platform.db not found."
-
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Get the most recent signal row for this symbol
-        cursor.execute(
+        columns, rows = _db_query(
             """SELECT * FROM DailySignals
                WHERE symbol = ?
                ORDER BY date DESC LIMIT 1""",
             (symbol.upper(),)
         )
-        row = cursor.fetchone()
-        if not row:
-            conn.close()
+        if not rows:
             return f"No signals found for {symbol.upper()} in the database."
 
-        columns = [desc[0] for desc in cursor.description]
-        conn.close()
-
+        row = rows[0]
         data = dict(zip(columns, row))
         lines = [f"# Signal Breakdown: {symbol.upper()} ({data.get('date', 'N/A')})\n"]
 
@@ -1270,22 +1295,14 @@ def generate_daily_signals(top_n: int = 10) -> str:
     Args:
         top_n: Number of top signals to return (default: 10).
     """
-    db_path = "quant_platform.db"
-    if not os.path.exists(db_path):
-        return "Error: quant_platform.db not found."
-
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
         # Get the latest date's signals
-        cursor.execute("SELECT MAX(date) FROM DailySignals")
-        latest_date = cursor.fetchone()[0]
+        _, date_rows = _db_query("SELECT MAX(date) FROM DailySignals")
+        latest_date = date_rows[0][0] if date_rows else None
         if not latest_date:
-            conn.close()
             return "No signals in the database. Run the full pipeline first."
 
-        cursor.execute(
+        _, rows = _db_query(
             """SELECT symbol, composite_score, action, conviction
                FROM DailySignals
                WHERE date = ?
@@ -1293,8 +1310,6 @@ def generate_daily_signals(top_n: int = 10) -> str:
                LIMIT ?""",
             (latest_date, top_n)
         )
-        rows = cursor.fetchall()
-        conn.close()
 
         if not rows:
             return f"No signals found for date {latest_date}."
