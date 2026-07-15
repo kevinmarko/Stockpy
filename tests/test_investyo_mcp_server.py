@@ -542,26 +542,52 @@ class TestUpdateWatchRules:
 
 
 class TestUpdateUniverseTickers:
-    def test_add_with_no_env_file_uses_default_universe(self, monkeypatch, tmp_path):
+    """``gui.env_io`` computes ``ENV_PATH`` from the repo root at import time,
+    NOT from the CWD -- ``monkeypatch.chdir()`` alone does not redirect it.
+    Every test here must also redirect the module symbol directly, or it will
+    silently read/write the real repo ``.env`` file instead of the fixture.
+    """
+
+    def _redirect_env(self, monkeypatch, tmp_path):
+        import gui.env_io as env_io
+
+        env_file = tmp_path / ".env"
+        monkeypatch.setattr(env_io, "ENV_PATH", env_file)
         monkeypatch.chdir(tmp_path)
+        return env_file
+
+    @staticmethod
+    def _parse_default_tickers(env_text: str) -> list:
+        """python-dotenv's ``set_key(quote_mode="auto")`` wraps a value
+        containing special characters in a single quote (e.g.
+        ``DEFAULT_TICKERS='["AAPL", "TSLA"]'``) -- strip a matching wrapping
+        quote before JSON-decoding.
+        """
+        raw = env_text.split("DEFAULT_TICKERS=", 1)[1].splitlines()[0].strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+            raw = raw[1:-1]
+        return json.loads(raw)
+
+    def test_add_with_no_env_file_uses_default_universe(self, monkeypatch, tmp_path):
+        env_file = self._redirect_env(monkeypatch, tmp_path)
 
         result = srv.update_universe_tickers("add", "tsla")
 
         assert "TSLA" in result
-        env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-        tickers = json.loads(env_text.split("DEFAULT_TICKERS=", 1)[1].strip())
-        assert "TSLA" in tickers
-        assert "AAPL" in tickers  # from the hardcoded default
+        tickers = self._parse_default_tickers(env_file.read_text(encoding="utf-8"))
+        # No .env existed, so env_io.get_value's own default ("[]") applies --
+        # NOT the tool's old hand-rolled 4-ticker hardcoded fallback.
+        assert tickers == ["TSLA"]
 
     def test_add_already_present(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text('DEFAULT_TICKERS=["AAPL"]\n', encoding="utf-8")
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text('DEFAULT_TICKERS=["AAPL"]\n', encoding="utf-8")
 
         assert "already in the trading universe" in srv.update_universe_tickers("add", "aapl")
 
     def test_remove_present_ticker(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text('DEFAULT_TICKERS=["AAPL", "MSFT"]\n', encoding="utf-8")
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text('DEFAULT_TICKERS=["AAPL", "MSFT"]\n', encoding="utf-8")
 
         result = srv.update_universe_tickers("remove", "msft")
 
@@ -569,29 +595,27 @@ class TestUpdateUniverseTickers:
         # "Successfully removeed" (double e) for action="remove" -- a
         # harmless grammar quirk, not asserted on here.
         assert "MSFT" in result and "active universe" in result
-        env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-        tickers = json.loads(env_text.split("DEFAULT_TICKERS=", 1)[1].strip())
+        tickers = self._parse_default_tickers(env_file.read_text(encoding="utf-8"))
         assert tickers == ["AAPL"]
 
     def test_remove_absent_ticker(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text('DEFAULT_TICKERS=["AAPL"]\n', encoding="utf-8")
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text('DEFAULT_TICKERS=["AAPL"]\n', encoding="utf-8")
 
         assert "is not in the trading universe" in srv.update_universe_tickers("remove", "zzzz")
 
     def test_malformed_json_falls_back_to_comma_split(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("DEFAULT_TICKERS=AAPL,MSFT\n", encoding="utf-8")
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text("DEFAULT_TICKERS=AAPL,MSFT\n", encoding="utf-8")
 
         result = srv.update_universe_tickers("add", "tsla")
 
         assert "TSLA" in result
-        env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-        tickers = json.loads(env_text.split("DEFAULT_TICKERS=", 1)[1].strip())
+        tickers = self._parse_default_tickers(env_file.read_text(encoding="utf-8"))
         assert set(tickers) == {"AAPL", "MSFT", "TSLA"}
 
     def test_invalid_action(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
+        self._redirect_env(monkeypatch, tmp_path)
         assert "Invalid action" in srv.update_universe_tickers("destroy", "AAPL")
 
     def test_add_via_env_io_preserves_comments(self, monkeypatch, tmp_path):
@@ -599,19 +623,11 @@ class TestUpdateUniverseTickers:
         ``gui.env_io.write_setting("DEFAULT_TICKERS", ...)`` (dotenv ``set_key``,
         which edits in place) instead of rewriting the whole file line-by-line.
         This means unrelated lines -- crucially a comment -- SURVIVE the edit.
-
-        ``gui.env_io`` computes ``ENV_PATH`` from the repo root at import time,
-        NOT from the CWD, so we redirect it at the module symbol and also
-        ``chdir`` so any CWD-based read the tool does resolves to the same file.
         """
-        import gui.env_io as env_io
-
-        env_file = tmp_path / ".env"
+        env_file = self._redirect_env(monkeypatch, tmp_path)
         env_file.write_text(
             "# my comment\nDEFAULT_TICKERS=[\"AAPL\"]\n", encoding="utf-8"
         )
-        monkeypatch.setattr(env_io, "ENV_PATH", env_file)
-        monkeypatch.chdir(tmp_path)
 
         result = srv.update_universe_tickers("add", "tsla")
 
@@ -620,8 +636,7 @@ class TestUpdateUniverseTickers:
         # (a) the comment line survives the rewrite.
         assert "# my comment" in text
         # (b) TSLA is present in the parsed DEFAULT_TICKERS.
-        raw = text.split("DEFAULT_TICKERS=", 1)[1].splitlines()[0].strip()
-        tickers = json.loads(raw)
+        tickers = self._parse_default_tickers(text)
         assert "TSLA" in [t.upper() for t in tickers]
         assert "AAPL" in [t.upper() for t in tickers]
 
@@ -930,8 +945,10 @@ class TestTriggerEdgarBackfillTimeoutPattern:
         monkeypatch.setattr(subprocess, "run", _fake_run)
         srv.trigger_edgar_backfill(tickers="aapl,msft")
 
+        # backfill_edgar_fundamentals.py's --tickers takes ONE comma-joined
+        # string (it does `args.tickers.split(",")` internally), not nargs='+'.
         idx = captured["cmd"].index("--tickers")
-        assert captured["cmd"][idx + 1 : idx + 3] == ["AAPL", "MSFT"]
+        assert captured["cmd"][idx + 1] == "AAPL,MSFT"
 
 
 class TestRemainingSubprocessToolsArgv:
@@ -943,13 +960,21 @@ class TestRemainingSubprocessToolsArgv:
     (``trigger_forecasting`` / ``trigger_macro_engine`` / ``trigger_full_pipeline``
     became in-process and now have their own dedicated classes below.)"""
 
-    def test_generate_html_report(self, monkeypatch):
+    def test_generate_html_report(self, monkeypatch, tmp_path):
+        from settings import settings
+
+        # Fixed contract: success is no longer trusted from the subprocess exit
+        # code alone (CONSTRAINT #4 - never fabricate) -- the tool checks that
+        # daily_report.html was actually produced under settings.OUTPUT_DIR.
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        (tmp_path / "daily_report.html").write_text("<html></html>", encoding="utf-8")
+
         captured = {}
         monkeypatch.setattr(
             subprocess, "run", _capturing_run(captured, SimpleNamespace(stdout="ok", returncode=0))
         )
         result = srv.generate_html_report("port-1")
-        assert "Report generated successfully" in result
+        assert "HTML report generated" in result
         # Fixed contract: shells `[sys.executable, "main.py"]` (the real advisory
         # orchestrator entrypoint), NOT `-m reporting.html_publisher` / a
         # nonexistent reporting_engine.py.
@@ -1257,6 +1282,25 @@ class TestGetOptionsDirective:
             "Integrity_OK": True,
         }
 
+    def _patch_bars_provider(self, monkeypatch):
+        """The generic MagicMock() provider from _patch_advisory_inputs
+        returns a MagicMock (truthy .empty) for get_intraday_bars, which
+        trips the tool's "no bar data" guard before it ever reaches
+        build_premium_directive. Provide a fake with a real, non-empty
+        bars DataFrame instead."""
+        import data.market_data as md_mod
+
+        idx = pd.bdate_range("2024-01-01", periods=30)
+        bars = pd.DataFrame(
+            {"Open": 150.0, "High": 152.0, "Low": 148.0, "Close": 150.0, "Volume": 1_000_000},
+            index=idx,
+        )
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = bars
+        fake_provider.get_latest_quote.return_value = SimpleNamespace(price=150.0, is_stale=False)
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
     def test_happy_path_renders_directive_and_json_block(self, monkeypatch):
         import technical_options_engine as toe_mod
 
@@ -1267,6 +1311,7 @@ class TestGetOptionsDirective:
             lambda *a, **k: {"ok": True, "issues": [], "checks": []},
         )
         _patch_advisory_inputs(monkeypatch)
+        self._patch_bars_provider(monkeypatch)
 
         result = srv.get_options_directive("aapl")
 
@@ -1282,6 +1327,7 @@ class TestGetOptionsDirective:
 
         monkeypatch.setattr(toe_mod, "build_premium_directive", _raise)
         _patch_advisory_inputs(monkeypatch)
+        self._patch_bars_provider(monkeypatch)
 
         result = srv.get_options_directive("AAPL")
         assert isinstance(result, str)
@@ -1336,22 +1382,27 @@ class TestGetRegimeStatus:
 
 class TestGetPortfolioCoverage:
     def _fake_report(self):
+        # data.portfolio_sync.SyncReport.symbols is Mapping[str, SymbolStatus]
+        # (a dict keyed by ticker), not a list -- match the real contract.
         sym = SimpleNamespace(
             symbol="AAPL",
             coverage="FULL",
-            coverage_status="FULL",
-            status="FULL",
             current_price=150.0,
             market_value=1500.0,
+            cost_basis_delta_per_share=5.0,
             held=True,
             forecast_available=True,
-            watchlists=[],
+            watchlists=(),
             diagnostic="",
         )
         return SimpleNamespace(
-            symbols=[sym],
-            statuses=[sym],
-            report=[sym],
+            symbols={"AAPL": sym},
+            provider_source="yfinance",
+            fundamentals_source="yahoo_computed",
+            n_total=1,
+            n_full=1,
+            n_equity_only=0,
+            n_uncovered=0,
             held_total_equity=lambda: 1500.0,
             generated_at="2026-01-01T00:00:00Z",
         )

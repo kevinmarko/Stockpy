@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import subprocess
 import sqlite3
@@ -45,6 +46,8 @@ def _db_query(sql: str, params: tuple = ()):
     if db_url.startswith("sqlite"):
         # Local sqlite fast path - preserve existing raw sqlite3 behavior.
         db_path = "quant_platform.db"
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"{db_path} not found.")
         conn = sqlite3.connect(db_path)
         try:
             cursor = conn.cursor()
@@ -288,7 +291,17 @@ def query_investyo_db(sql_query: str) -> str:
     """
     stripped_upper = sql_query.strip().upper()
     if not (stripped_upper.startswith("SELECT") or stripped_upper.startswith("WITH")):
-        return "Error: Only SELECT (or WITH-CTE SELECT) queries are permitted via this tool."
+        return "Error: Only SELECT queries are permitted via this tool (WITH-CTE SELECT statements are also allowed)."
+
+    # A leading WITH must not be a bypass for a trailing mutation smuggled in
+    # after the CTE (e.g. "WITH x AS (SELECT 1) INSERT INTO T VALUES (1)" is
+    # valid SQLite syntax). Scan the whole statement, not just the prefix.
+    _MUTATION_KEYWORDS = (
+        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER",
+        "CREATE", "REPLACE", "TRUNCATE", "ATTACH", "DETACH", "PRAGMA", "VACUUM",
+    )
+    if any(re.search(rf"\b{kw}\b", stripped_upper) for kw in _MUTATION_KEYWORDS):
+        return "Error: Only SELECT queries are permitted via this tool (WITH-CTE SELECT statements are also allowed)."
 
     MAX_ROWS = 1000
 
@@ -372,6 +385,8 @@ def read_platform_logs(lines: int = 50) -> str:
             for row in rows:
                 err = row[4] if row[4] else "None"
                 logs_summary.append(f"{row[0]} | {row[1]} | {row[2]} | {row[3]:.2f} | {err}")
+    except FileNotFoundError:
+        pass  # No local DB and no configured remote backend - nothing to report.
     except Exception as e:
         logs_summary.append(f"Could not read ExecutionLogs from DB: {str(e)}")
             
@@ -959,20 +974,27 @@ def trigger_forecasting(symbol: str) -> str:
 @mcp.tool()
 def trigger_macro_engine() -> str:
     """
-    Triggers the macro_engine.py to run the macro-economic analysis pipeline.
+    Runs the macro-economic regime pipeline in-process (macro_engine.py has no
+    CLI entrypoint, so shelling to `python macro_engine.py` used to silently
+    no-op while reporting success).
     """
     try:
-        result = subprocess.run(
-            [sys.executable, "macro_engine.py"],
-            capture_output=True,
-            text=True,
-            check=True
+        from settings import settings
+        from data_engine import DataEngine
+        from macro_engine import MacroEngine
+
+        de = DataEngine(fred_api_key=settings.FRED_API_KEY)
+        engine = MacroEngine(de)
+        macro_raw = de.fetch_macro_raw()
+        sahm_val = engine.calculate_sahm_rule()
+        macro_df = engine.run_macro_killswitch(macro_raw, sahm_val)
+        regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
+        return (
+            f"Macro engine run successful:\n"
+            f"VIX={macro_raw.get('VIXCLS')}, Sahm={sahm_val}, regime={regime}"
         )
-        return f"Macro engine run successful:\n{result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"Macro engine run failed:\n{e.stderr}"
-    except FileNotFoundError:
-        return "Error: macro_engine.py not found."
+    except Exception as e:
+        return f"Macro engine run failed: {str(e)}"
 
 # ==========================================
 # [4] PHASE 1 — DATA & INGESTION MANAGEMENT
@@ -1077,29 +1099,28 @@ def trigger_full_pipeline(tickers: str = "") -> str:
             steps.append("❌ edgar_backfill: no tickers resolved (universe and DEFAULT_TICKERS both empty)")
         else:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            steps.append(f"✅ edgar_backfill: OK" if result.returncode == 0
-                         else f"❌ edgar_backfill: {result.stderr[:200]}")
+            steps.append(
+                f"✅ edgar_backfill: OK ({', '.join(ticker_list)})" if result.returncode == 0
+                else f"❌ edgar_backfill: {result.stderr[:200]}"
+            )
     except Exception as e:
         steps.append(f"❌ edgar_backfill: {str(e)}")
 
     # Step 3: Macro engine — in-process via MacroEngine (macro_engine.py has no CLI entrypoint)
     try:
-        if not settings.FRED_API_KEY:
-            steps.append("❌ macro_engine: FRED_API_KEY not configured — cannot fetch macro data")
-        else:
-            from data_engine import DataEngine
-            from macro_engine import MacroEngine
+        from data_engine import DataEngine
+        from macro_engine import MacroEngine
 
-            de = DataEngine(fred_api_key=settings.FRED_API_KEY)
-            engine = MacroEngine(de)
-            macro_raw = de.fetch_macro_raw()
-            sahm_val = engine.calculate_sahm_rule()
-            macro_df = engine.run_macro_killswitch(macro_raw, sahm_val)
-            regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
-            steps.append(
-                f"✅ macro_engine: OK (VIX={macro_raw.get('VIXCLS')}, "
-                f"Sahm={sahm_val}, regime={regime})"
-            )
+        de = DataEngine(fred_api_key=settings.FRED_API_KEY)
+        engine = MacroEngine(de)
+        macro_raw = de.fetch_macro_raw()
+        sahm_val = engine.calculate_sahm_rule()
+        macro_df = engine.run_macro_killswitch(macro_raw, sahm_val)
+        regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
+        steps.append(
+            f"✅ macro_engine: OK (VIX={macro_raw.get('VIXCLS')}, "
+            f"Sahm={sahm_val}, regime={regime})"
+        )
     except Exception as e:
         steps.append(f"❌ macro_engine: {str(e)}")
 
