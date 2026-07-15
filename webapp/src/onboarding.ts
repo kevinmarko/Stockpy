@@ -5,7 +5,7 @@ const KEY = "stockpy.onboarding.v1";
 export interface OnboardingState {
   completed: boolean;
   pilotId?: string;
-  brokerage?: "paper" | "skip";
+  brokerage?: "paper" | "robinhood" | "skip";
   amount?: number;
   completedAt?: string;
 }

@@ -39,7 +39,8 @@ automatically.
 | — | Persist real benchmark comparison series | `validation/harness.py`, `pilots/performance.py` | #256 |
 | — | Mirror force-exit of dropped names via per-follow attribution | `pilots/mirror.py`, `pilots/follows_store.py` | #257 |
 | — | Symbol detail pages (`/symbol/:ticker`) — per-symbol snapshot view + the reverse "which Pilots hold this" cross-link; tappable holding/position rows | `pilots/symbols.py`, `api/pilots_api.py` (`GET /symbols/{ticker}`), `webapp/src/screens/SymbolDetail.tsx` | #270 |
-| — | Finish SymbolDetail data — advisory-path snapshot parity (xsec_12_1m, xsec_momentum_rank, macro_status, news_sentiment, CoVaR proxy, MFE/MAE/edge ratio/realized slippage now threaded onto `Recommendation.key_indicators` so the advisory writer matches the rich orchestrator writer) | `main.py` (`_build_context_extras`), `engine/advisory.py`, `reporting/state_snapshot.py` | this PR |
+| — | Finish SymbolDetail data — advisory-path snapshot parity (xsec_12_1m, xsec_momentum_rank, macro_status, news_sentiment, CoVaR proxy, MFE/MAE/edge ratio/realized slippage now threaded onto `Recommendation.key_indicators` so the advisory writer matches the rich orchestrator writer) | `main.py` (`_build_context_extras`), `engine/advisory.py`, `reporting/state_snapshot.py` | #271 |
+| — | Onboarding "Connect Robinhood" — local, single-operator credential intake (verify-before-persist, three independent gates: `BROKERAGE_CONNECT_ENABLED`, `FOLLOW_API_TOKEN`, loopback-only) | `data/brokerage_credentials.py`, `data/robinhood_portfolio.py` (`verify_credentials`), `api/pilots_api.py` (`/brokerage/status`, `/brokerage/connect`, `/brokerage/disconnect`), `webapp/src/screens/Onboarding.tsx` | this PR |
 
 > **Full parity achieved.** Every SymbolDetail field the rich orchestrator writer
 > emits now has a real source on the advisory path too — including `risk.realized_slippage`,
@@ -134,6 +135,21 @@ stayed green throughout.
   single-operator deployment hitting their own local backend the risk is low. Decision: leave as
   one token; revisit only if the frontend is ever exposed more broadly or a second consumer needs
   scoped read-only access.
+- **D5 — brokerage-connect credential intake is local, single-operator, verify-before-persist
+  (2026-07-15).** Onboarding's "Connect brokerage" step was a client-side-only stub (no intake,
+  no endpoint) while the read/serialize half (`data/robinhood_portfolio.py`,
+  `GET /portfolio`) already existed — this was the actual gap AGENTS.md's safety posture warns
+  about ("never log or persist secrets", single-operator/local-first). Scoped narrowly rather
+  than building a multi-user encrypted vault: `POST /brokerage/connect` reuses `FOLLOW_API_TOKEN`
+  (not a new token — same single-token-client tradeoff as D4) and adds two MORE independent
+  gates on top — `settings.BROKERAGE_CONNECT_ENABLED` (new, default `False`, deliberately NOT in
+  `gui/env_io.py`'s `ALLOWED_KEYS` so a GUI bug can't enable it) and a loopback-only
+  (`127.0.0.1`/`::1`) request check. Credentials are verified with a real read-only Robinhood
+  login (`data.robinhood_portfolio.verify_credentials`, never falls back to interactive MFA
+  prompting — a headless HTTP request must not block on stdin) BEFORE being written, via a
+  dedicated hard-scoped writer (`data/brokerage_credentials.py`, NOT `gui/env_io.py`, which
+  exists specifically to refuse secret writes) to the ONE local `.env` file. Never a vault, never
+  multi-tenant, never echoed back in any response.
 
 ## Running it
 

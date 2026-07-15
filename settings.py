@@ -917,6 +917,23 @@ class Settings(BaseSettings):
             "Follow modal. Not a broker constraint."
         ),
     )
+    # Master switch for the Pilots API's brokerage-credential intake endpoints
+    # (api/pilots_api.py POST /brokerage/connect, /brokerage/disconnect —
+    # see data/brokerage_credentials.py). Default False: credential intake over
+    # HTTP is a deliberate departure from this project's normal hand-edit-.env
+    # posture, so it must be explicitly opted into. Deliberately NOT in
+    # gui/env_io.py's ALLOWED_KEYS — a GUI bug must never be able to flip this
+    # on; set it by hand in .env. The endpoints are ALSO gated by
+    # FOLLOW_API_TOKEN (fail-closed command token, reused from the follow
+    # write-path) and a loopback-only check — three independent gates, not one.
+    BROKERAGE_CONNECT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables the Pilots API's brokerage-credential connect/disconnect "
+            "endpoints. Off by default; also requires FOLLOW_API_TOKEN and a "
+            "loopback (127.0.0.1) request. Never GUI-writable."
+        ),
+    )
 
     # --- Multifactor signal (signals/multifactor.py) ---
     MULTIFACTOR_MICROCAP_THRESHOLD: float = Field(
