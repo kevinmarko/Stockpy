@@ -118,9 +118,10 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 # garch_vol IS present in engine.advisory key_indicators — this
                 # fixes the Strategy Matrix "GARCH Vol" column that blanked on the
                 # advisory path. hmm_risk_on is the macro-wide value above.
-                # The multifactor Z-scores are NOT currently in the advisory
-                # key_indicators (see report note): emitted as None (JSON null)
-                # for a consistent schema — never a fabricated 0.0 (CONSTRAINT #4).
+                # The multifactor Z-scores ARE threaded onto the advisory
+                # key_indicators (engine.advisory.evaluate() populates them from
+                # context_extras["multifactor_scores"]); None only when unavailable
+                # for this symbol/cycle — never a fabricated 0.0 (CONSTRAINT #4).
                 "garch_vol": _safe_float_or_none(ki.get("garch_vol")),
                 "hmm_risk_on": hmm_risk_on_val,
                 "value_z": _safe_float_or_none(ki.get("value_z")),
@@ -128,15 +129,35 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 "lowvol_z": _safe_float_or_none(ki.get("lowvol_z")),
                 "size_z": _safe_float_or_none(ki.get("size_z")),
                 "multifactor_composite": _safe_float_or_none(ki.get("multifactor_composite")),
-                # PR2 Agent A — schema parity with main_orchestrator._write_state_snapshot.
-                # These three metrics (FinBERT news sentiment, realized slippage,
-                # CoVaR tail-dependency proxy) are NOT currently threaded onto
-                # engine.advisory.Recommendation.key_indicators, so they serialize
-                # as None (JSON null) on the advisory path until a future PR
-                # populates them — never a fabricated 0.0 (CONSTRAINT #4). Mirrors
-                # how the multifactor-Z keys above are handled.
-                "news_sentiment": _safe_float_or_none(ki.get("news_sentiment")),
+                # Snapshot-writer parity with main_orchestrator._write_state_snapshot
+                # (consumed by pilots/symbols.py's SymbolDetail page). All threaded
+                # onto engine.advisory.Recommendation.key_indicators from the
+                # universe-wide context_extras pre-compute (main._build_context_extras);
+                # None when unavailable for this symbol/cycle — never a fabricated 0.0.
+                "xsec_12_1m": _safe_float_or_none(ki.get("xsec_12_1m")),
+                "xsec_momentum_rank": _safe_float_or_none(ki.get("xsec_momentum_rank")),
+                # macro_status is the (string) market regime for this cycle, carried
+                # per-recommendation on Recommendation.macro_regime; "" → null via
+                # the SymbolDetail reader (never fabricated).
+                "macro_status": getattr(rec, "macro_regime", "") or "",
+                # Post-trade excursion (MFE/MAE/Edge Ratio/Realized Slippage) —
+                # populated when the symbol has closed-trade history, else null
+                # (honest on a fresh DB). realized_slippage is
+                # evaluation_engine.EvaluationEngine's per-symbol implementation
+                # shortfall (entry vs. arrival price) — the SAME source
+                # evaluate_portfolio() uses for dashboard_df's 'Realized Slippage'
+                # column on the rich orchestrator path — NOT the portfolio-wide bps
+                # scalar from research_engine's calculate_realized_slippage
+                # (transactions_df), which neither path threads into the dashboard.
+                "mfe": _safe_float_or_none(ki.get("mfe")),
+                "mae": _safe_float_or_none(ki.get("mae")),
+                "edge_ratio": _safe_float_or_none(ki.get("edge_ratio")),
                 "realized_slippage": _safe_float_or_none(ki.get("realized_slippage")),
+                # FinBERT news sentiment + CoVaR proxy are threaded onto
+                # key_indicators (news via signals/news_catalyst pre_compute, CoVaR
+                # via research_engine over the universe returns matrix); None when
+                # their inputs were unavailable this cycle.
+                "news_sentiment": _safe_float_or_none(ki.get("news_sentiment")),
                 "covar_proxy": _safe_float_or_none(ki.get("covar_proxy")),
             })
 

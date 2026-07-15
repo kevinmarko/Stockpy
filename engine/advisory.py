@@ -1198,6 +1198,20 @@ def evaluate(
     # NaN for every key, exactly like every other unavailable indicator here.
     _mf_scores: Dict[str, Any] = (context_extras or {}).get("multifactor_scores", {}).get(symbol, {})
 
+    # Additional universe-wide values pre-computed once per cycle by
+    # main._build_context_extras() and threaded through context_extras (same pipe
+    # as _mf_scores above). Each degrades to NaN (never a fabricated 0.0 —
+    # CONSTRAINT #4) when the value is unavailable for this symbol/cycle: the raw
+    # 12-1m return, the cross-sectional momentum percentile rank (already passed in
+    # for scoring), per-symbol news sentiment, the portfolio-wide CoVaR proxy, and
+    # the per-symbol post-trade excursion (MFE/MAE/Edge Ratio). This closes the
+    # advisory-vs-rich snapshot-writer gap that left these null on the advisory path.
+    _ce: Dict[str, Any] = context_extras or {}
+    _xsec_12_1m_map: Dict[str, Any] = _ce.get("xsec_12_1m") or {}
+    _xsec_rank_map: Dict[str, Any] = _ce.get("xsec_percentile_ranks") or {}
+    _news_map: Dict[str, Any] = _ce.get("news_sentiment") or {}
+    _excursion_sym: Dict[str, Any] = (_ce.get("excursion") or {}).get(symbol, {})
+
     key_indicators: Dict[str, float] = {
         "score": float(score),
         "rsi": _safe_float(tech.get("RSI"), nan),
@@ -1234,13 +1248,43 @@ def evaluate(
         "lowvol_z": _safe_float(_mf_scores.get("LowVol_Z"), nan),
         "size_z": _safe_float(_mf_scores.get("Size_Z"), nan),
         "multifactor_composite": _safe_float(_mf_scores.get("Multifactor_Composite"), nan),
+        # Cross-sectional momentum (signals/cross_sectional_momentum.py) — raw
+        # 12-1m return + percentile rank, from context_extras. NaN when this
+        # symbol lacked enough history in the pre-compute pass.
+        "xsec_12_1m": _safe_float(_xsec_12_1m_map.get(symbol), nan),
+        "xsec_momentum_rank": _safe_float(_xsec_rank_map.get(symbol), nan),
+        # Per-symbol news sentiment (signals/news_catalyst.py FinBERT). NaN when
+        # the module didn't run (no FINNHUB_API_KEY) — never fabricated.
+        "news_sentiment": _safe_float(_news_map.get(symbol), nan),
+        # Portfolio-wide CoVaR tail-dependency proxy (research_engine Topic 30),
+        # broadcast to every symbol. NaN when <2 symbols had returns this cycle.
+        "covar_proxy": _safe_float(_ce.get("covar_proxy"), nan),
+        # Post-trade excursion (evaluation_engine Topic — MFE/MAE and the derived
+        # Edge Ratio, distinct from the RS-MACD "edge_ratio" fed into the strategy
+        # engine at Step 8). NaN when this symbol has no closed trade history.
+        "mfe": _safe_float(_excursion_sym.get("MFE"), nan),
+        "mae": _safe_float(_excursion_sym.get("MAE"), nan),
+        "edge_ratio": _safe_float(_excursion_sym.get("Edge Ratio"), nan),
+        # Per-symbol Realized Slippage (implementation shortfall: entry price vs.
+        # arrival/current price) — evaluation_engine.EvaluationEngine's two-argument
+        # calculate_realized_slippage(entry_price, arrival_price), the SAME method
+        # (and the SAME closed-trade record) evaluate_portfolio() uses to populate
+        # dashboard_df's 'Realized Slippage' column on the rich orchestrator path.
+        # NOT the portfolio-wide bps scalar from research_engine's
+        # calculate_realized_slippage(transactions_df) — that needs a Trans-Code/
+        # Amount/Commission transactions sheet neither path actually threads into
+        # the dashboard. NaN when this symbol has no closed trade history.
+        "realized_slippage": _safe_float(_excursion_sym.get("Realized Slippage"), nan),
     }
 
     # A2 — bar-derived technicals are meaningless on a synthetic flat bar; report
     # them as NaN rather than a fabricated number so consumers can't be misled.
     if synthetic_inputs:
         for _tk in ("rsi", "rsi_2", "macd_line", "atr", "aroon_osc",
-                    "sortino", "max_drawdown", "rs_vs_spy"):
+                    "sortino", "max_drawdown", "rs_vs_spy",
+                    # excursion is symbol-specific + bar-derived; the universe-wide
+                    # xsec/news/covar values stay valid and are deliberately not nulled.
+                    "mfe", "mae", "edge_ratio", "realized_slippage"):
             key_indicators[_tk] = nan
 
     # ──────────────────────────────────────────────────────────────────────────
