@@ -133,10 +133,9 @@ def test_xsec_momentum_adapter_is_lookahead_free(price_history):
     common = common[common <= closes.index[mid]]
     assert len(common) > 100
 
-    pd.testing.assert_series_equal(
-        baseline_X.loc[common, "Momentum_12_1_Composite"],
-        perturbed_X.loc[common, "Momentum_12_1_Composite"],
-        check_names=False,
+    pd.testing.assert_frame_equal(
+        baseline_X.loc[common],
+        perturbed_X.loc[common],
     )
     pd.testing.assert_series_equal(
         baseline_precomputed["XSecMom_TopHalf"].loc[common],
