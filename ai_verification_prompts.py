@@ -1,3 +1,5 @@
+"""Gravity AI Auditor: a 6-step static-analysis + simulation-sandbox review suite (backed by OpenAI/Anthropic LLM calls) that a trading strategy must pass before deployment. Defines the ValidationCriterion / StepPromptTemplate dataclasses, the per-step prompt templates, and the keyword-based validation logic that grades each step's LLM response."""
+
 import os
 import json
 import logging

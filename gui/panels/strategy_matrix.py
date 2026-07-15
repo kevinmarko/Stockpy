@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Strategy Matrix & Risk Gating tab. Enumerates the registered signal modules, edits their weights, toggles modules on/off (DISABLED_SIGNAL_MODULES), and controls the global kill switch, all via the allowlist-bounded gui.env_io writer."""
+
 from __future__ import annotations
 
 from __future__ import annotations

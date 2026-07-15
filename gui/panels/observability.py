@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Observability / Mission Control tab. Renders the system-health bar (kill switch / regime / VIX / HMM), the Macro Regime Gate toggle, recession-indicator telemetry, strategy P&L, and a read-only Forecast Skill sub-section, all sourced from the file-backed state snapshot."""
+
 from __future__ import annotations
 
 from __future__ import annotations

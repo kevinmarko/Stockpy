@@ -1,3 +1,5 @@
+"""Implied-volatility engine: extracts ATM option IVs, performs calendar-30-day linear interpolation, and computes lookahead-free true IV rank and the Volatility Risk Premium (VRP) used to gate premium-selling strategies."""
+
 import os
 import logging
 import math

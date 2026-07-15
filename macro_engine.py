@@ -1,3 +1,5 @@
+"""Macroeconomic regime detection and gating. Builds the current-snapshot MacroEconomicDTO for the kill switch and computes an HMM risk-on-probability second opinion (via regime/hmm_regime.py) from historical VIX / yield-curve series, degrading to None (never fabricated) when history is insufficient so the statistical second opinion can never crash the primary rules-based pipeline."""
+
 # ==============================================================================
 # MODULE: SYSTEMIC MACROECONOMIC & QUANTITATIVE RESEARCH ENGINE
 # File: macro_engine.py

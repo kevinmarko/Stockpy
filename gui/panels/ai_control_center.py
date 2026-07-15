@@ -1,3 +1,5 @@
+"""InvestYo Command Center — AI Control Center tab. Renders master on/off switches and provider/model selectors for the platform's LLM capabilities, writing the chosen settings through the allowlist-bounded gui.env_io writer (effective on the next launch)."""
+
 from __future__ import annotations
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+"""Multi-horizon price forecasting: ARIMA, Monte Carlo, Holt-Winters, Prophet, and a direct multi-step CNN-LSTM, blended (optionally skill-weighted by realized RMSE). Monte Carlo sigma is sourced from the GJR-GARCH estimator and models are fit once per ticker with strict train-only scaler fitting to eliminate lookahead bias; several optimizations (GARCH reuse, model persistence) are opt-in flags."""
+
 # =============================================================================
 # MODULE: FORECASTING ENGINE
 # File: forecasting_engine.py

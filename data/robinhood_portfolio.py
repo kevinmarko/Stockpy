@@ -1,3 +1,5 @@
+"""ADVISORY ONLY — NO ORDER CODE. Read-only Robinhood account-snapshot provider using TOTP MFA. Follows a three-tier read order (HistoricalStore DB -> JSON cache -> live fetch), exposes fetch_account_snapshot / logout / verify_credentials, and never writes secrets into any cache payload."""
+
 # =============================================================================
 # MODULE: ROBINHOOD PORTFOLIO SNAPSHOT  (READ-ONLY, ADVISORY ONLY)
 # File: data/robinhood_portfolio.py

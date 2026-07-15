@@ -1,3 +1,5 @@
+"""RobinhoodClient API wrapper around robin_stocks: logs in (falling back to interactive MFA input when required), fetches positions with average costs and shares, and exposes watchlist/universe discovery helpers (discover_watchlists / discover_universe) with stdout-noise suppression."""
+
 # =============================================================================
 # MODULE: ROBINHOOD CLIENT
 # File: data/robinhood_client.py

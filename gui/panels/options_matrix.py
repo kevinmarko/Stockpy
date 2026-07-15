@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Technical Options Matrix tab. Builds a hydrated premium-selling directive per symbol via technical_options_engine.build_premium_directive across held + watchlist + signal symbols, rendering GARCH sigma, IVR proxy, trend bias, strategy/action, strike/delta legs, Greeks, and a per-symbol integrity verdict."""
+
 from __future__ import annotations
 
 from __future__ import annotations

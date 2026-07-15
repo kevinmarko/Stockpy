@@ -1,3 +1,5 @@
+"""Gated, dry-run flatten-on-kill proposal builder inside the sanctioned execution/ zone. When the kill switch activates with FLATTEN_ON_KILL=True it writes a human-reviewable JSON of position-closing intents (each dry_run=True, pre-screened through PreTradeRiskGate for annotation only). It never contacts a broker; allow_place is structurally False on every intent."""
+
 # =============================================================================
 # MODULE: FLATTEN-ON-KILL PROPOSAL  (gated, dry-run — placement-INCAPABLE)
 # File: execution/flatten_proposal.py

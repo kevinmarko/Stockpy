@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Prompt Registry tab. Version control for AI-facing prompts: shows each prompt ID's resolved version + source, a Sync button, a per-ID diff viewer, and a rollback action that pins the chosen version via gui.env_io (effective on next launch)."""
+
 from __future__ import annotations
 
 from __future__ import annotations

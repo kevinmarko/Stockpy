@@ -1,3 +1,5 @@
+"""Event-driven Backtrader backtest runner for pairs-trading strategies, used to prove pairs signals before any live wiring."""
+
 import pandas as pd
 import numpy as np
 import logging
@@ -17,13 +19,13 @@ class PairsTradingBTStrategy(bt.Strategy):
         ('signals_df', None),  # DataFrame containing 'position' and 'beta' indexed by date
     )
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.y_data = self.datas[0]
         self.x_data = self.datas[1]
         self.order_y = None
         self.order_x = None
 
-    def notify_order(self, order):
+    def notify_order(self, order) -> None:
         if order.status in [order.Submitted, order.Accepted]:
             return
         if order.status in [order.Completed]:
@@ -37,7 +39,7 @@ class PairsTradingBTStrategy(bt.Strategy):
         elif order.data == self.x_data:
             self.order_x = None
 
-    def next(self):
+    def next(self) -> None:
         # Get the current datetime from the first data feed
         dt = self.y_data.datetime.date(0)
         ts = pd.Timestamp(dt)

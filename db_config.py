@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
+from typing import Any, Iterator
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine, make_url
@@ -91,7 +92,7 @@ def create_db_engine(db_url: str | None = None) -> Engine:
 
 
 @contextmanager
-def session_scope(session_factory):
+def session_scope(session_factory: Any) -> Iterator[Any]:
     """Provide a transactional scope around a series of operations."""
     session = session_factory()
     try:
@@ -104,7 +105,7 @@ def session_scope(session_factory):
         session.close()
 
 
-def get_dbapi_connection(raw_conn):
+def get_dbapi_connection(raw_conn: Any) -> Any:
     """Retrieve the raw DBAPI connection from SQLAlchemy connection fairy/proxy
     without triggering SADeprecationWarning for accessing connection directly.
     """

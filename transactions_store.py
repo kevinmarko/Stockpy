@@ -1,3 +1,5 @@
+"""SQLAlchemy-backed transactions database for tracking active and closed trades. The backend is resolved through db_config.py (SQLite by default, Postgres/Supabase when DATABASE_URL is set). On a DB-outage it substitutes a read-only offline stub so a connectivity failure can't dead-letter the advisory pipeline."""
+
 import logging
 import os
 import pandas as pd

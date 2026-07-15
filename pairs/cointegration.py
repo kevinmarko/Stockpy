@@ -1,3 +1,5 @@
+"""Pairs-trading cointegration utilities: Engle-Granger ADF cointegration testing, AR(1) mean-reversion half-life estimation, and rolling ADF p-value checks used to detect cointegration breaks."""
+
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm

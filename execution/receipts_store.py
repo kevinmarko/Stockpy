@@ -1,3 +1,5 @@
+"""Tier 8 execution-receipts store: the 'what actually happened' layer for the Robinhood human-in-loop path. Reads the receipts JSONL the robinhood-execution skill appends, owns an append-only placed-intent ledger, and reconciles that ledger against actual FILLED Robinhood orders (reusing the FIFO reconstruction in data/robinhood_orders.py). Contains no order-submission code and is fully dead-letter resilient."""
+
 # =============================================================================
 # MODULE: EXECUTION RECEIPTS STORE  (Tier 8 — Robinhood human-in-loop bridge)
 # File: execution/receipts_store.py

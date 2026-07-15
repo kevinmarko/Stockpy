@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Settings Manager tab. Edits the allowlisted non-secret tunables through gui.env_io (secrets are masked and never writable); changes take effect on the next launch."""
+
 from __future__ import annotations
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+"""ADVISORY ONLY — NO ORDER CODE. Read-only realized-P&L engine (Tier 7): fetches FILLED equity orders, reconstructs closed round-trip trades via pure FIFO lot-matching, and summarizes realized P&L, win rate, profit factor, and holding statistics with a daily on-disk cache and dead-letter resilience."""
+
 # =============================================================================
 # MODULE: ROBINHOOD ORDER HISTORY → REALIZED P&L  (READ-ONLY, ADVISORY ONLY)
 # File: data/robinhood_orders.py

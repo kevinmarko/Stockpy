@@ -1,3 +1,5 @@
+"""Concrete PipelineStep implementations for the production async orchestrator: data fetch, run_pipeline, options/GARCH analysis, indicator processing, multi-horizon forecasting, strategy + advisory overlay, gated broker execution, and state-snapshot / report rendering. Each step reads and writes the shared RunContext."""
+
 import asyncio
 import logging
 import os
@@ -23,6 +25,7 @@ class AsyncDataFetchStep(PipelineStep):
     name = "data"
     
     async def run(self, ctx: RunContext) -> None:
+        """Fetch macro, fundamentals, and technicals concurrently into the RunContext."""
         import main_orchestrator
         from data_engine import DataEngine, MockDataEngine
         from dto_models import RobinhoodPositionDTO
@@ -99,6 +102,7 @@ class RunPipelineStep(PipelineStep):
     name = "run_pipeline"
 
     def run(self, ctx: RunContext) -> None:
+        """Execute the synchronous run_pipeline stage over the fetched data."""
         import main_orchestrator
         try:
             final_df, macro_dto, shared_context = main_orchestrator.run_pipeline(
@@ -124,6 +128,7 @@ class OptionsAnalysisStep(PipelineStep):
     name = "macro_options"
     
     def run(self, ctx: RunContext) -> None:
+        """Compute per-ticker options metrics and GJR-GARCH volatility."""
         from main_orchestrator import MacroEngine, TechnicalOptionsEngine, IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp, MacroEconomicDTO
         from concurrent.futures import ThreadPoolExecutor
 
@@ -238,6 +243,7 @@ class ProcessingStep(PipelineStep):
     name = "processing"
     
     def run(self, ctx: RunContext) -> None:
+        """Process indicators and build the dashboard DataFrame."""
         from main_orchestrator import ProcessingEngine, FundamentalDataDTO
 
         telemetry.info("Routing data through Computational Core (Processing)...")
@@ -292,6 +298,7 @@ class ForecastingStep(PipelineStep):
     name = "forecasting"
     
     def run(self, ctx: RunContext) -> None:
+        """Run multi-horizon forecasting for each ticker."""
         from main_orchestrator import ForecastingEngine, ForecastTracker
         from concurrent.futures import ThreadPoolExecutor
 
@@ -375,6 +382,7 @@ class StrategyEvalStep(PipelineStep):
     name = "strategy"
     
     def run(self, ctx: RunContext) -> None:
+        """Evaluate the strategy and apply the holding-aware advisory overlay."""
         from main_orchestrator import StrategyEngine, EvaluationEngine, MarketBarDTO, FundamentalDataDTO, compute_xsec_momentum_ranks, global_registry, SignalContext, DualMomentumAllocator
 
         telemetry.info("Routing data through Strategy and Evaluation Engines...")
@@ -833,6 +841,7 @@ class BrokerExecutionStep(PipelineStep):
     name = "execution"
     
     async def run(self, ctx: RunContext) -> None:
+        """Execute gated BUY/SELL orders through the broker (skipped without credentials)."""
         import main_orchestrator
         from data.market_data import get_provider as _get_market_provider
         from data.robinhood_portfolio import fetch_account_snapshot as _fetch_rh_snapshot
@@ -967,6 +976,7 @@ class StateSnapshotStep(PipelineStep):
     name = "snapshot"
     
     def run(self, ctx: RunContext) -> None:
+        """Write state snapshots for telemetry/UI and render the Jinja HTML report."""
         from main_orchestrator import _write_state_snapshot, generate_plotly_volatility_bands, generate_html_report, json
         
         out_dir = str(settings.OUTPUT_DIR)

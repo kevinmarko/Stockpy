@@ -1,3 +1,5 @@
+"""Dynamic hedge-ratio estimation for pairs trading using a Kalman filter (pykalman): both a batch filter over a full history and a step-by-step online tracker that updates the time-varying hedge ratio bar by bar."""
+
 import numpy as np
 import pandas as pd
 from pykalman import KalmanFilter

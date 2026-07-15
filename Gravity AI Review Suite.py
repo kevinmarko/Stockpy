@@ -233,7 +233,7 @@ class GravityAIAuditor:
         self.data_engine = GravityTestEngine()
         self.test_df = self.data_engine.fetch_historical_prices()
 
-    def run_schema_audit(self):
+    def run_schema_audit(self) -> None:
         """Validates that the digital schema strictly rejects malformed data."""
         try:
             MarketDataSchema.validate(self.test_df)
@@ -276,7 +276,7 @@ class GravityAIAuditor:
             self.report["step_1_schema_validation"]["status"] = "FAILED"
             self.report["step_1_schema_validation"]["error"] = str(e)
 
-    def run_dto_audit(self):
+    def run_dto_audit(self) -> None:
         """Verifies Graham Number, Macro Regime logic transitions, and NaN handling operate correctly."""
         fund_dto = FundamentalDataDTO(ticker="AAPL", eps=5.0, book_value=20.0, dividend=1.0)
         macro_dto = MacroEconomicDTO(yield_curve=-0.2, credit_spread=6.0, sahm_rule=0.6)
@@ -307,7 +307,7 @@ class GravityAIAuditor:
             "nan_handling_validated": nan_validation_passed
         }
 
-    def run_discrepancy_analysis(self):
+    def run_discrepancy_analysis(self) -> None:
         """
         CRITICAL TEST: Calculates RSI using an old, slow "For Loop" and compares it 
         to our new lightning-fast "Vectorized" method. 
@@ -352,7 +352,7 @@ class GravityAIAuditor:
             "conclusion": "Perfect Alignment" if len(drift_errors) == 0 else "Mathematical Drift Detected"
         }
 
-    def run_simulation_foundation(self):
+    def run_simulation_foundation(self) -> None:
         """
         Step 7: Validates the technical foundation for Gravity AI to simulate impact.
         Runs Backtrader and VectorBT to backtest trading rules against historical data.
@@ -380,7 +380,7 @@ class GravityAIAuditor:
             try:
                 class TestStrategy(bt.Strategy):
                     """A simple mock strategy for the Backtrader engine to execute."""
-                    def __init__(self):
+                    def __init__(self) -> None:
                         self.sma = bt.indicators.SMA(self.data.close, period=15)
                     def next(self):
                         # Buy if price crosses above SMA, Sell if price crosses below SMA
@@ -543,7 +543,7 @@ class GravityAIAuditor:
             )
         }
 
-    def run_universe_loader_audit(self):
+    def run_universe_loader_audit(self) -> None:
         """
         STEP 9: S&P 500 UNIVERSE LOADER AUDIT
         Verifies the S&P 500 universe loader functionality and survivorship bias reporting.
@@ -614,7 +614,7 @@ class GravityAIAuditor:
             
         self.report["step_10_cpcv_overfitting_audit"] = cpcv_report
 
-    def run_execution_cost_model_audit(self):
+    def run_execution_cost_model_audit(self) -> None:
         """
         STEP 11: EXECUTION COST MODEL AUDIT
         Verifies the tiered execution cost model is integrated and can compute costs accurately.
@@ -804,7 +804,7 @@ class GravityAIAuditor:
             
         self.report["step_13_signal_registry_audit"] = audit_report
 
-    def run_xsec_momentum_audit(self):
+    def run_xsec_momentum_audit(self) -> None:
         """
         STEP 14: CROSS-SECTIONAL MOMENTUM PRE_COMPUTE AUDIT
         Verifies that CrossSectionalMomentumSignal correctly:
@@ -891,7 +891,7 @@ class GravityAIAuditor:
 
         self.report["step_14_xsec_momentum_audit"] = xsec_report
 
-    def run_rsi2_mean_reversion_audit(self):
+    def run_rsi2_mean_reversion_audit(self) -> None:
         """
         STEP 15: RSI(2) MEAN REVERSION REGIME-GATE AUDIT
         Verifies that RSI2MeanReversionSignal:
@@ -1294,7 +1294,7 @@ class GravityAIAuditor:
 
         self.report["step_16_kelly_vol_target_sizing_audit"] = kelly_report
 
-    def run_multifactor_audit(self):
+    def run_multifactor_audit(self) -> None:
         """
         STEP 17: FAMA-FRENCH-STYLE MULTIFACTOR SIGNAL AUDIT
         Verifies that MultifactorSignal:
@@ -1431,7 +1431,7 @@ class GravityAIAuditor:
 
         self.report["step_17_multifactor_audit"] = mf_report
 
-    def run_hmm_regime_audit(self):
+    def run_hmm_regime_audit(self) -> None:
         """
         STEP 18: GAUSSIAN HMM REGIME DETECTOR AND POSITION-SIZING MULTIPLIER AUDIT
         Verifies that the Hamilton (1989) regime-switching second opinion is
@@ -1590,7 +1590,7 @@ class GravityAIAuditor:
 
         self.report["step_18_hmm_regime_audit"] = hmm_report
 
-    def run_ivr_vrp_audit(self):
+    def run_ivr_vrp_audit(self) -> None:
         """
         STEP 19: OPTIONS TRUE IVR AND VRP REGIME GATE AUDIT
         """
@@ -1654,7 +1654,7 @@ class GravityAIAuditor:
             
         self.report["step_19_ivr_vrp_audit"] = ivr_report
 
-    def run_pairs_trading_audit(self):
+    def run_pairs_trading_audit(self) -> None:
         """
         STEP 20: ENGLE-GRANGER AND KALMAN PAIRS TRADING VALIDATION AUDIT
         """
@@ -2006,7 +2006,7 @@ class GravityAIAuditor:
     # =========================================================================
     # STEP 23 — Sell-Side Range Audit
     # =========================================================================
-    def run_sell_side_range_audit(self):
+    def run_sell_side_range_audit(self) -> None:
         """
         STEP 23 — Dedicated Sell-Side Range Audit
         (strategy_engine.apply_sell_side_range; config.COLUMN_SCHEMA["sellRange"])
@@ -2233,7 +2233,7 @@ class GravityAIAuditor:
     # =========================================================================
     # STEP 22: TRIPLE-BARRIER LABELING AND META-LABELING AUDIT
     # =========================================================================
-    def run_triple_barrier_meta_label_audit(self):
+    def run_triple_barrier_meta_label_audit(self) -> None:
         """
         Validates ml/triple_barrier.py and ml/meta_labeling.py.
 
@@ -2378,7 +2378,7 @@ class GravityAIAuditor:
     # =========================================================================
     # STEP 23: QLIB-STYLE ML ARCHITECTURE AUDIT
     # =========================================================================
-    def run_qlib_arch_model_registry_audit(self):
+    def run_qlib_arch_model_registry_audit(self) -> None:
         """
         Validates the qlib-style three-layer ML architecture (Prompt 4.3).
 
@@ -2483,7 +2483,7 @@ class GravityAIAuditor:
             audit["error"] = str(e)
         self.report["step_23_qlib_arch_model_registry_audit"] = audit
 
-    def run_robinhood_integration_audit(self):
+    def run_robinhood_integration_audit(self) -> None:
         """Validates Robinhood schema columns and DTO exist."""
         audit = {"status": "PENDING", "checks": {}}
         try:
@@ -5346,7 +5346,7 @@ class GravityAIAuditor:
             )
 
             class _MacroProxy:
-                def __init__(self, vix=15.0, regime="RISK ON"):
+                def __init__(self, vix=15.0, regime="RISK ON") -> None:
                     self.vix = vix
                     self.market_regime = regime
 
@@ -5718,9 +5718,9 @@ class GravityAIAuditor:
             original_popen = runner.subprocess.Popen
 
             class _Stub:
-                def __init__(self, *a, **kw):
+                def __init__(self, *a, **kw) -> None:
                     self.pid = 9999
-                def poll(self):
+                def poll(self) -> None:
                     return None
 
             runner.subprocess.Popen = _Stub  # type: ignore[assignment]
@@ -6245,7 +6245,7 @@ class GravityAIAuditor:
             real_settings = _settings.settings
 
             class _Fake:
-                def __init__(self, ap, dr):
+                def __init__(self, ap, dr) -> None:
                     self.ALPACA_PAPER = ap
                     self.DRY_RUN = dr
 
@@ -6767,10 +6767,10 @@ class GravityAIAuditor:
             safety_src = inspect.getsource(_panels_mod._render_launcher_safety_controls)
             tree = ast.parse(safety_src)
             class _SafeModeVisitor(ast.NodeVisitor):
-                def __init__(self):
+                def __init__(self) -> None:
                     self.found_dry_run = False
                     self.found_ks = False
-                def visit_FunctionDef(self, node):
+                def visit_FunctionDef(self, node) -> None:
                     if "_render_launcher_safety_controls" in node.name:
                         s = ast.unparse(node)
                         self.found_dry_run = "DRY_RUN" in s
@@ -6887,9 +6887,9 @@ class GravityAIAuditor:
             # Check it's referenced in render_launcher
             tree = ast.parse(launcher_src)
             class _LauncherVisitor(ast.NodeVisitor):
-                def __init__(self):
+                def __init__(self) -> None:
                     self.preflight_called = False
-                def visit_FunctionDef(self, node):
+                def visit_FunctionDef(self, node) -> None:
                     if node.name == "render_launcher":
                         s = ast.unparse(node)
                         self.preflight_called = "_render_preflight_panel" in s
@@ -7391,7 +7391,7 @@ class GravityAIAuditor:
             def _mem_store():
                 return TransactionsStore(db_url="sqlite:///:memory:")
 
-            def _add_closed(store, *, side="long", entry=100.0, exit_p=110.0, conv=0.75):
+            def _add_closed(store, *, side="long", entry=100.0, exit_p=110.0, conv=0.75) -> None:
                 now = datetime.now(timezone.utc)
                 tid = store.record_trade(
                     symbol="TST", side=side,
@@ -7456,7 +7456,7 @@ class GravityAIAuditor:
 
             # ── 9. Store read failure → empty (dead-letter) ──────────────────
             class _FailStore:
-                def closed_trades_df(self):
+                def closed_trades_df(self) -> None:
                     raise RuntimeError("DB down")
 
             result9 = calibration_curve(_FailStore())
@@ -8179,9 +8179,9 @@ class GravityAIAuditor:
             tree = ast.parse(launcher_src)
 
             class _LauncherKSVisitor(ast.NodeVisitor):
-                def __init__(self):
+                def __init__(self) -> None:
                     self.found = False
-                def visit_FunctionDef(self, node):
+                def visit_FunctionDef(self, node) -> None:
                     if node.name == "render_launcher":
                         s = ast.unparse(node)
                         self.found = "_render_launcher_safety_controls" in s
@@ -9241,7 +9241,7 @@ class GravityAIAuditor:
             "status": "PENDING",
         }
 
-        def _chk(name, passed, detail=""):
+        def _chk(name, passed, detail="") -> None:
             audit["checks"].append({"check": name, "passed": passed, "detail": detail})
 
         try:
@@ -10032,7 +10032,7 @@ class GravityAIAuditor:
                     log_path.write_text(_json.dumps(entry) + "\n")
 
                     class _BrokenStore:
-                        def get_bars(self, *a, **kw):
+                        def get_bars(self, *a, **kw) -> None:
                             raise RuntimeError("DB crash")
 
                     result = recommendation_tracking_report(
@@ -11851,7 +11851,7 @@ class GravityAIAuditor:
             try:
                 import engine.advisory as _adv
 
-                def _boom(*a, **k):
+                def _boom(*a, **k) -> None:
                     raise ConnectionError("could not translate host name to address")
 
                 with mock.patch.object(_adv, "TransactionsStore", _boom), \
@@ -11870,7 +11870,7 @@ class GravityAIAuditor:
             try:
                 import strategy_engine as _se
 
-                def _boom2(*a, **k):
+                def _boom2(*a, **k) -> None:
                     raise ConnectionError("could not translate host name to address")
 
                 with mock.patch("transactions_store.TransactionsStore", _boom2):
@@ -11887,7 +11887,7 @@ class GravityAIAuditor:
             try:
                 import math
 
-                def _boom3(*a, **k):
+                def _boom3(*a, **k) -> None:
                     raise ConnectionError("could not translate host name to address")
 
                 with mock.patch("transactions_store.TransactionsStore", _boom3):
@@ -12809,7 +12809,7 @@ class GravityAIAuditor:
             })
 
             # ── 9: fetch dead-letter resilience ──────────────────────────
-            def _boom():
+            def _boom() -> None:
                 raise RuntimeError("network down")
             # Point the cache at a guaranteed-missing path so no stale cache hides the failure.
             import tempfile
@@ -13423,7 +13423,7 @@ class GravityAIAuditor:
             class _FakeProv:
                 name = "fake"
 
-                def __init__(self, status):
+                def __init__(self, status) -> None:
                     self._status = status
 
                 def call_structured(self, system, user, schema_model):
@@ -13450,7 +13450,7 @@ class GravityAIAuditor:
             class _Raises:
                 name = "raises"
 
-                def call_structured(self, system, user, schema_model):
+                def call_structured(self, system, user, schema_model) -> None:
                     raise RuntimeError("synthetic")
 
             res2 = _runner.run_step(
@@ -14268,7 +14268,7 @@ class GravityAIAuditor:
                     import tempfile as _tempfile87
 
                     class _NeverCalledProvider:
-                        def get_fundamentals(self, symbol):
+                        def get_fundamentals(self, symbol) -> None:
                             raise AssertionError(
                                 "provider.get_fundamentals should NOT be called on a fresh cache hit"
                             )
@@ -14305,10 +14305,10 @@ class GravityAIAuditor:
                         broken_store = HistoricalStore(db_path=f"{td2}/gravity_step87_fail.db")
 
                         class _FailingProvider:
-                            def get_fundamentals(self, symbol):
+                            def get_fundamentals(self, symbol) -> None:
                                 raise RuntimeError("simulated provider failure")
 
-                        def _broken_conn(*a, **kw):
+                        def _broken_conn(*a, **kw) -> None:
                             raise RuntimeError("simulated DB failure")
 
                         broken_store._get_conn = _broken_conn  # type: ignore[assignment]
@@ -14718,7 +14718,7 @@ class GravityAIAuditor:
                     with _tempfile90.TemporaryDirectory() as td3:
                         tracker3 = ForecastTracker(db_path=f"{td3}/gravity_step90_err.db")
 
-                        def _broken_conn90(*a, **kw):
+                        def _broken_conn90(*a, **kw) -> None:
                             raise RuntimeError("simulated DB failure")
 
                         tracker3._get_conn = _broken_conn90  # type: ignore[assignment]

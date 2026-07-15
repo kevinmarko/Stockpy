@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Live Inventory tab (Task 1.4). Renders the portfolio-sync view (holdings + Robinhood watchlists + file watchlists) with per-symbol coverage status, cost-basis delta, and forecast availability, plus a Sync Now button that refreshes and persists the tracked universe."""
+
 from __future__ import annotations
 
 from __future__ import annotations

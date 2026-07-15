@@ -1,3 +1,5 @@
+"""LOCAL, SINGLE-OPERATOR ONLY hard-scoped .env writer for Robinhood portfolio-snapshot credentials (RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET). Used only by the Pilots API brokerage-connect flow, never by the GUI. Writes and clears exactly those three keys (in both .env and os.environ) and reports presence, never returning or logging the credential values themselves."""
+
 # =============================================================================
 # MODULE: BROKERAGE CREDENTIAL WRITER  (LOCAL, SINGLE-OPERATOR ONLY)
 # File: data/brokerage_credentials.py

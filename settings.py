@@ -1,3 +1,5 @@
+"""Centralized, environment-driven runtime configuration for the InvestYo Quant Platform. All secrets, financial constants, feature flags, and machine-specific paths are sourced here via pydantic-settings (environment / .env) instead of being hardcoded across the engines and orchestrators."""
+
 # =============================================================================
 # MODULE: RUNTIME CONFIGURATION
 # File: settings.py

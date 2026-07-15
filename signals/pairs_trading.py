@@ -1,3 +1,5 @@
+"""Pairs-trading signal generator: combines the cointegration test, half-life filter, Kalman dynamic hedge ratio, and rolling spread z-score into entry/exit/stop signals (entry |Z|>2, exit on 0-cross or cointegration break, stop |Z|>4). Advisory analytics only — not wired into the per-ticker SignalAggregator."""
+
 import numpy as np
 import pandas as pd
 from pairs.kalman_hedge import KalmanHedgeRatio

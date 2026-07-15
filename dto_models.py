@@ -1,3 +1,5 @@
+"""Data-transfer objects (MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO, RobinhoodPositionDTO) that all market / fundamental / macro data must be coerced into before entering calculation code. The parsers also normalize messy upstream strings (currency symbols, %, 'N/A', padding); MacroEconomicDTO also encodes the rules-based regime and HMM-agreement kill-switch logic."""
+
 # =============================================================================
 # MODULE: DATA TRANSFER OBJECTS (DTO) REGISTRY
 # File: dto_models.py
