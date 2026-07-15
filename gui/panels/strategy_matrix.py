@@ -119,10 +119,7 @@ def _render_strategy_mode_toggle() -> None:
                 except Exception as exc:
                     st.error(f"Failed to persist mode: {exc}")
         with col_cancel:
-            st.caption(
-                "ALPACA_PAPER and DRY_RUN are written together so the mode is "
-                "fully consistent — no half-flips."
-            )
+            help_widgets.section_caption("strategy_matrix.mode_consistency")
 
 
 
@@ -136,10 +133,7 @@ def _render_strategy_version_registry() -> None:
     from gui.strategy_registry import list_strategy_versions
 
     st.markdown("### 📜 Strategy Version Registry")
-    st.caption(
-        "Each module's deployment fingerprint — sha256 prefix + file mtime — "
-        "joined with live enable/weight state from `settings`."
-    )
+    help_widgets.section_caption("strategy_matrix.version_registry")
     records = list_strategy_versions()
     if not records:
         st.info("No registered signal modules detected.")
@@ -395,10 +389,7 @@ def _render_symbol_comparison() -> None:
     has a direct answer in the UI.
     """
     st.markdown("### ⚖️ Symbol Comparison")
-    st.caption(
-        "Compare final score, sizing, and signal-module drivers across 2-3 "
-        "symbols side by side."
-    )
+    help_widgets.section_caption("strategy_matrix.symbol_comparison")
 
     snap = load_state_snapshot()
     lookup = _signal_lookup(snap)
@@ -531,7 +522,8 @@ def render_strategy_matrix() -> None:
     disabled_now = set(settings.DISABLED_SIGNAL_MODULES)
     weights_now = dict(settings.SIGNAL_WEIGHTS)
 
-    with st.form("strategy_matrix_form"):
+    with st.container():
+        st.caption("Module state updates in real-time, but click Save below to persist to `.env` for the orchestrator.")
         new_disabled: List[str] = []
         new_weights: Dict[str, float] = {}
         header = st.columns([3, 1, 2])
@@ -553,7 +545,7 @@ def render_strategy_matrix() -> None:
                 new_disabled.append(name)
             new_weights[name] = float(wt)
 
-        saved = st.form_submit_button("💾 Save module config", type="primary")
+        saved = st.button("💾 Save module config", type="primary")
 
     if saved:
         try:

@@ -10,14 +10,15 @@ import sys
 import os
 import subprocess
 
-# Auto-re-route to virtual environment interpreter if not already running in it
-venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "bin")
-venv_python = os.path.join(venv_dir, "python3")
-if not os.path.exists(venv_python):
-    venv_python = os.path.join(venv_dir, "python")
+if __name__ == "__main__":
+    # Auto-re-route to virtual environment interpreter if not already running in it
+    venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "bin")
+    venv_python = os.path.join(venv_dir, "python3")
+    if not os.path.exists(venv_python):
+        venv_python = os.path.join(venv_dir, "python")
 
-if os.path.exists(venv_python) and os.path.realpath(sys.executable) != os.path.realpath(venv_python):
-    sys.exit(subprocess.call([venv_python] + sys.argv))
+    if os.path.exists(venv_python) and os.path.realpath(sys.executable) != os.path.realpath(venv_python):
+        sys.exit(subprocess.call([venv_python] + sys.argv))
 
 
 import contextlib

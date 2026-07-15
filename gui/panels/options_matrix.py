@@ -29,6 +29,7 @@ from gui.panels._shared import (  # noqa: E402
 )
 from gui.panels import load_state_snapshot
 from gui.help_content import metric_help
+from gui.progress_ui import tracked_progress
 
 
 # ---------------------------------------------------------------------------
@@ -175,12 +176,11 @@ def render_options_matrix() -> None:
         )
 
     # ── Directive controls (session-scoped — never written to .env) ──────────
-    # Mirrors the dynamic-editing form pattern in strategy_matrix.py: an
-    # ``st.form`` groups the tunables so they are applied atomically on submit.
-    # Every default equals the engine constant, so an untouched form reproduces
+    # Session-scoped controls applied in real-time.
+    # Every default equals the engine constant, so untouched controls reproduce
     # the pre-controls behaviour byte-for-byte (CONSTRAINT: no change at defaults).
-    with st.form("options_matrix_controls_form"):
-        st.caption("Directive controls — session-scoped (not saved to .env). Defaults = engine constants.")
+    with st.container():
+        help_widgets.section_caption("options.directive_controls")
         fc1, fc2, fc3 = st.columns(3)
         target_delta_scale = fc1.number_input(
             "Target delta ×", min_value=0.25, max_value=2.0, value=1.0, step=0.05,
@@ -209,7 +209,6 @@ def render_options_matrix() -> None:
             "Delta tolerance", min_value=0.01, max_value=0.25, value=0.05, step=0.01,
             help="Integrity check: |resolved delta − (scaled) target| must be ≤ this (engine default 0.05).",
         )
-        st.form_submit_button("Apply controls")
 
     symbols = [s.strip().upper() for s in sym_text.split(",") if s.strip()]
     if not symbols:
@@ -230,8 +229,7 @@ def render_options_matrix() -> None:
     errors: List[str] = []
 
     risk_free_rate = float(rfr_pct) / 100.0
-    progress = st.progress(0.0, text="Computing premium directives…")
-    for i, sym in enumerate(symbols):
+    for sym in tracked_progress(symbols, text="Computing premium directives…"):
         result = _compute_directive_row(
             sym, int(target_dte), vix, market_regime, risk_free_rate,
             ivr_sell_threshold=float(ivr_sell_threshold_w),
@@ -243,9 +241,6 @@ def render_options_matrix() -> None:
         rows.append(result["row"])
         if result["error"]:
             errors.append(result["error"])
-        progress.progress((i + 1) / len(symbols),
-                          text=f"Computing premium directives… ({i + 1}/{len(symbols)})")
-    progress.empty()
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -402,13 +397,7 @@ def _render_portfolio_greeks_rollup(df: pd.DataFrame) -> None:
         help=metric_help("Theta Carry Projection")
         or "Cumulative theta decay if held 30 days with no price/vol movement.",
     )
-    st.caption(
-        "⚠️ **This is NOT a forecast.** It is a mechanical projection of "
-        "today's theta held flat for 30 days, assuming zero price movement, "
-        "zero IV change, and no gamma/vega repricing — none of which is "
-        "realistic over a full month. Treat it only as a rough 'time decay "
-        "floor' reference, not an expected P&L."
-    )
+    help_widgets.section_caption("options.theta_forecast_warning")
 
     st.dataframe(
         actionable[["Symbol", "Strategy"] + greek_cols],

@@ -138,3 +138,58 @@ def busy(label: str, *, done: Optional[str] = None, spinner: bool = True) -> Ite
                 status.update(label=done or f"✅ {label}", state="complete")
             except Exception as update_exc:  # noqa: BLE001 - cosmetic only
                 logger.debug("status.update(complete) failed: %s", update_exc)
+
+
+def tracked_progress(iterable, text: str = "Working…") -> Iterator[Any]:
+    """A determinate progress bar wrapper for iterables.
+    
+    Usage::
+    
+        for item in tracked_progress(items, text="Processing…"):
+            # work on item
+            pass
+    
+    Yields each item from the iterable while updating an `st.progress` bar with a 
+    completion percentage. The progress bar is automatically removed when the 
+    loop finishes or raises an exception.
+    """
+    st = _try_import_streamlit()
+    if st is None or not _has_script_run_ctx():
+        yield from iterable
+        return
+
+    try:
+        # Convert to list if it's an iterator so we know the length, 
+        # but typical usage is with a list/tuple.
+        items = list(iterable)
+        total = len(items)
+    except TypeError:
+        # Fallback if we somehow can't get a list
+        yield from iterable
+        return
+        
+    if total == 0:
+        return
+
+    try:
+        progress_bar = st.progress(0.0, text=text)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("st.progress() unavailable, degrading: %s", exc)
+        yield from items
+        return
+
+    try:
+        for i, item in enumerate(items):
+            # Yield before updating progress so 0% represents start of first item
+            yield item
+            try:
+                pct = (i + 1) / total
+                pct_text = f"{int(pct * 100)}%"
+                progress_bar.progress(pct, text=f"{text} ({i + 1}/{total} - {pct_text})")
+            except Exception as update_exc:  # noqa: BLE001
+                logger.debug("progress_bar.progress() failed: %s", update_exc)
+    finally:
+        try:
+            progress_bar.empty()
+        except Exception:  # noqa: BLE001
+            pass

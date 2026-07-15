@@ -1086,6 +1086,28 @@ TAB_HELP: Dict[str, TabHelp] = {
 # ---------------------------------------------------------------------------
 
 SECTION_HELP: Dict[str, str] = {
+    "strategy_matrix.mode_consistency": (
+        "ALPACA_PAPER and DRY_RUN are written together so the mode is "
+        "fully consistent — no half-flips."
+    ),
+    "strategy_matrix.version_registry": (
+        "Each module's deployment fingerprint — sha256 prefix + file mtime — "
+        "joined with live enable/weight state from `settings`."
+    ),
+    "strategy_matrix.symbol_comparison": (
+        "Compare final score, sizing, and signal-module drivers across 2-3 "
+        "symbols side by side."
+    ),
+    "options.directive_controls": (
+        "Directive controls — session-scoped (not saved to .env). Defaults = engine constants."
+    ),
+    "options.theta_forecast_warning": (
+        "⚠️ **This is NOT a forecast.** It is a mechanical projection of "
+        "today's theta held flat for 30 days, assuming zero price movement, "
+        "zero IV change, and no gamma/vega repricing — none of which is "
+        "realistic over a full month. Treat it only as a rough 'time decay "
+        "floor' reference, not an expected P&L."
+    ),
     "brinson_fachler": (
         "Brinson-Fachler decomposes your portfolio return vs a benchmark into "
         "Allocation, Selection, and Interaction effects.  "
