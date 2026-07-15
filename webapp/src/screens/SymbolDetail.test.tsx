@@ -44,4 +44,11 @@ describe("SymbolDetail screen (real mock API)", () => {
     renderSymbol("ZZZZ");
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
   });
+
+  it("renders the Forecast skill and Options premium sections", async () => {
+    renderSymbol("AAPL");
+    await screen.findByRole("heading", { name: "AAPL" });
+    expect(await screen.findByRole("heading", { name: "Forecast skill" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Options premium" })).toBeInTheDocument();
+  });
 });

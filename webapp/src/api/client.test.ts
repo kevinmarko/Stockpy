@@ -159,6 +159,26 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(result).toBeUndefined();
   });
 
+  it("the new analytics endpoints build the expected GET URLs", async () => {
+    const mod = await importLiveClient({ VITE_API_BASE_URL: "http://example.test:9000" });
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const cases: [() => Promise<unknown>, string][] = [
+      [() => mod.api.getRealized(), "http://example.test:9000/portfolio/realized"],
+      [() => mod.api.getAlerts(25), "http://example.test:9000/alerts?limit=25"],
+      [() => mod.api.getForecast("aapl", 30), "http://example.test:9000/symbols/aapl/forecast?horizon=30"],
+      [() => mod.api.getModels(), "http://example.test:9000/models"],
+      [() => mod.api.getOptions(), "http://example.test:9000/options"],
+      [() => mod.api.getSymbolOptions("nvda"), "http://example.test:9000/symbols/nvda/options"],
+      [() => mod.api.getPairs(), "http://example.test:9000/pairs"],
+    ];
+    for (const [call, expectedUrl] of cases) {
+      fetchMock.mockResolvedValueOnce(jsonResponse({}));
+      await call();
+      const [url] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
+      expect(url).toBe(expectedUrl);
+    }
+  });
+
   it("useMock=true (default) never touches fetch — mock and live are mutually exclusive", async () => {
     vi.resetModules();
     vi.unstubAllEnvs();

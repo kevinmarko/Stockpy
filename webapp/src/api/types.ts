@@ -250,6 +250,152 @@ export interface BrokerageDisconnectResult {
   connected: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Backend analytics surfaces (zero-PWA-presence gap) — one interface per
+// api/pilots_api.py endpoint added in this effort. Every leaf the backend
+// cannot compute is `null` (NEVER 0) so the UI renders "—".
+// ---------------------------------------------------------------------------
+
+/** GET /portfolio/realized — realized broker P&L (FIFO round-trips). */
+export interface RealizedSummary {
+  n_trades: number;
+  total_realized_pnl: number; // genuine sum (0 over zero trades)
+  win_rate: number | null; // fraction, null when no trades
+  avg_win: number | null;
+  avg_loss: number | null;
+  profit_factor: number | null; // null when no losing trades
+  avg_return_pct: number | null;
+  avg_holding_days: number | null;
+  best_trade_pnl: number | null;
+  worst_trade_pnl: number | null;
+  gross_profit: number;
+  gross_loss: number;
+}
+
+export interface RealizedTrade {
+  symbol: string;
+  quantity: number | null;
+  entry_ts: string | null;
+  exit_ts: string | null;
+  entry_price: number | null;
+  exit_price: number | null;
+  realized_pnl: number | null;
+  return_pct: number | null;
+  holding_days: number | null;
+}
+
+export interface RealizedPerformance {
+  summary: RealizedSummary;
+  trades: RealizedTrade[];
+  n_fills: number;
+  available: boolean; // false when nothing is cached yet (honest cold-start)
+}
+
+/** GET /alerts — tail of the structured alert JSONL. */
+export interface AlertEntry {
+  timestamp: string | null;
+  level: string | null; // INFO | WARNING | CRITICAL | ...
+  message: string | null;
+  extra: Record<string, unknown> | null;
+}
+
+export interface AlertsFeed {
+  entries: AlertEntry[];
+  reason: string | null; // present when entries is empty (honest why)
+}
+
+/** GET /symbols/{ticker}/forecast — forecast reliability + skill weights. */
+export interface ReliabilityBin {
+  model_name: string;
+  horizon_days: number;
+  bin_center: number | null;
+  mean_pct_error: number | null; // null when too few samples in the bin
+  count: number;
+}
+
+export interface ForecastSkill {
+  symbol: string;
+  horizon_days: number;
+  reliability_curve: ReliabilityBin[];
+  skill_weights: Record<string, number>; // {model: normalized inverse-RMSE weight}
+  pending: number;
+  completed: number;
+  reason: string | null;
+}
+
+/** GET /models — ML model registry row (ml/registry.yaml). */
+export interface ModelRow {
+  name: string;
+  role: string | null;
+  trained_date: string | null;
+  cpcv_dsr: number | null; // null for an un-validated model
+  pbo: number | null;
+  n_train: number | null;
+  deployable: boolean | null;
+  notes: string | null;
+}
+
+/**
+ * One options premium-selling directive (technical_options_engine.build_premium_directive,
+ * persisted to output/options_matrix.json). Loosely typed — only the fields the
+ * UI renders are named; uncomputable numeric legs are `null`, never 0.
+ */
+export interface OptionsDirective {
+  Symbol: string;
+  Price?: number | null;
+  Strategy?: string | null;
+  Action?: string | null;
+  Trend_Bias?: string | null;
+  Sigma_GARCH?: number | null;
+  IVR_Proxy?: number | null;
+  Net_Premium?: number | null;
+  Realizable_Daily_Theta?: number | null;
+  Short_Strike?: number | null;
+  Long_Strike?: number | null;
+  Short_Delta?: number | null;
+  Long_Delta?: number | null;
+  Integrity_OK?: boolean | null;
+  Integrity_Issues?: string[] | null;
+  [key: string]: unknown;
+}
+
+/** GET /options — the full persisted options matrix. */
+export interface OptionsMatrix {
+  as_of: string | null;
+  target_dte?: number | null;
+  vix?: number | null;
+  market_regime?: string | null;
+  directives: OptionsDirective[];
+  reason: string | null;
+}
+
+/** GET /symbols/{ticker}/options — one directive (or null) for a symbol. */
+export interface SymbolOptions {
+  symbol: string;
+  directive: OptionsDirective | null;
+  reason: string | null;
+}
+
+/** GET /pairs — one cointegrated pair row + current spread state. */
+export interface PairRow {
+  ticker1: string;
+  ticker2: string;
+  p_value: number | null;
+  half_life: number | null;
+  z_score: number | null;
+  beta: number | null;
+  rolling_p: number | null;
+  position: number | null;
+  signal: string; // advisory display label
+}
+
+export interface PairsRadar {
+  as_of: string | null;
+  universe: string[];
+  pairs: PairRow[];
+  reason: string | null;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

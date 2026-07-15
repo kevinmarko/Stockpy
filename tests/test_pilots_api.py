@@ -630,6 +630,169 @@ class TestFollowAuthorized:
 
 
 # ---------------------------------------------------------------------------
+# Backend analytics surfaces (zero-PWA-gap): realized P&L, alerts, forecast
+# skill, ML registry, options matrix, pairs radar
+# ---------------------------------------------------------------------------
+
+
+class TestRealizedPerformance:
+    def test_shape_and_cold_start_honesty(self, tmp_path, monkeypatch):
+        # Force a cache-miss so the cache-only reader returns the honest empty
+        # view (available=False) — no network, no fabricated win rate.
+        import data.robinhood_orders as rho
+
+        monkeypatch.setattr(rho, "_CACHE_PATH", tmp_path / "no_such_cache.json")
+        resp = client.get("/portfolio/realized")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {"summary", "trades", "n_fills", "available"}
+        assert body["available"] is False
+        assert body["trades"] == []
+        s = body["summary"]
+        assert s["n_trades"] == 0
+        # NaN summary fields serialize as null, never a fabricated 0.0.
+        assert s["win_rate"] is None
+        assert s["profit_factor"] is None
+
+
+class TestAlertsFeed:
+    def test_unconfigured_is_honest_empty(self, monkeypatch):
+        monkeypatch.setattr(settings, "ALERT_FILE_PATH", None, raising=False)
+        resp = client.get("/alerts")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["entries"] == []
+        assert body["reason"] and "not configured" in body["reason"]
+
+    def test_tails_jsonl_newest_first(self, tmp_path, monkeypatch):
+        import json as _json
+
+        path = tmp_path / "alerts.jsonl"
+        path.write_text(
+            "\n".join(
+                _json.dumps({"timestamp": f"2026-07-1{i}T00:00:00+00:00",
+                             "level": "INFO", "message": f"m{i}", "x": i})
+                for i in range(1, 4)
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(settings, "ALERT_FILE_PATH", str(path), raising=False)
+        resp = client.get("/alerts?limit=10")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["reason"] is None
+        # Newest-first.
+        assert [e["message"] for e in body["entries"]] == ["m3", "m2", "m1"]
+        # Extra keys fold into `extra`, first-class fields stay separate.
+        assert body["entries"][0]["extra"] == {"x": 3}
+
+
+class TestForecastSkill:
+    def test_shape_stable(self):
+        resp = client.get("/symbols/AAPL/forecast?horizon=30")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {
+            "symbol", "horizon_days", "reliability_curve",
+            "skill_weights", "pending", "completed", "reason",
+        }
+        assert body["symbol"] == "AAPL"
+        assert body["horizon_days"] == 30
+        assert isinstance(body["reliability_curve"], list)
+        assert isinstance(body["skill_weights"], dict)
+
+
+class TestModelsRegistry:
+    def test_reads_registry_rows(self):
+        resp = client.get("/models")
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert isinstance(rows, list) and rows  # ml/registry.yaml is checked in
+        row = rows[0]
+        assert set(row) >= {
+            "name", "role", "trained_date", "cpcv_dsr", "pbo",
+            "n_train", "deployable", "notes",
+        }
+        # Un-validated models keep null metrics, never a fabricated 0.
+        assert any(r["cpcv_dsr"] is None for r in rows) or all(
+            r["cpcv_dsr"] is not None for r in rows
+        )
+
+
+class TestOptionsMatrix:
+    def test_disabled_is_honest_empty(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/options")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["directives"] == []
+        assert body["reason"] and "not generated" in body["reason"]
+
+    def test_reads_persisted_matrix(self, tmp_path):
+        import json as _json
+
+        (tmp_path / "options_matrix.json").write_text(
+            _json.dumps(
+                {
+                    "timestamp": "2026-07-15T00:00:00+00:00",
+                    "target_dte": 30,
+                    "directives": [
+                        {"Symbol": "AAPL", "Strategy": "Put Credit Spread",
+                         "Net_Premium": 1.2, "Integrity_OK": True}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/options")
+            sym = client.get("/symbols/AAPL/options")
+            miss = client.get("/symbols/ZZZ/options")
+        assert resp.json()["directives"][0]["Symbol"] == "AAPL"
+        assert resp.json()["as_of"] == "2026-07-15T00:00:00+00:00"
+        assert sym.json()["directive"]["Strategy"] == "Put Credit Spread"
+        # Honest: a symbol not in the matrix returns directive=null + reason (200).
+        assert miss.status_code == 200
+        assert miss.json()["directive"] is None
+        assert miss.json()["reason"]
+
+
+class TestPairsRadar:
+    def test_disabled_is_honest_empty(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/pairs")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pairs"] == []
+        assert body["reason"] and "not generated" in body["reason"]
+
+    def test_reads_persisted_radar(self, tmp_path):
+        import json as _json
+
+        (tmp_path / "pairs.json").write_text(
+            _json.dumps(
+                {
+                    "timestamp": "2026-07-15T00:00:00+00:00",
+                    "universe": ["XOM", "CVX"],
+                    "pairs": [
+                        {"ticker1": "XOM", "ticker2": "CVX", "p_value": 0.01,
+                         "half_life": 12.0, "z_score": 2.4, "beta": 0.9,
+                         "rolling_p": 0.02, "position": -1.0,
+                         "signal": "ENTER SHORT spread"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/pairs")
+        body = resp.json()
+        assert body["pairs"][0]["ticker1"] == "XOM"
+        assert body["pairs"][0]["signal"] == "ENTER SHORT spread"
+        assert body["universe"] == ["XOM", "CVX"]
+
+
+# ---------------------------------------------------------------------------
 # Architectural guard: no heavy-engine imports in api/pilots_api.py
 # ---------------------------------------------------------------------------
 

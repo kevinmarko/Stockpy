@@ -10,20 +10,27 @@
 import { mockApi, MOCK_META } from "./mock";
 import { ApiError } from "./types";
 import type {
+  AlertsFeed,
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
   BrokerageStatus,
   Follow,
   FollowResult,
+  ForecastSkill,
   Holding,
+  ModelRow,
+  OptionsMatrix,
+  PairsRadar,
   PerfRange,
   PerformanceResponse,
   PilotDetail,
   PilotSummary,
   Portfolio,
   CurvePoint,
+  RealizedPerformance,
   SymbolDetail,
+  SymbolOptions,
 } from "./types";
 
 const BASE_URL = (
@@ -90,6 +97,17 @@ const liveApi = {
     http<{ range: PerfRange; curve: CurvePoint[] | null }>(
       `/portfolio/equity-curve?range=${range}`
     ),
+  getRealized: () => http<RealizedPerformance>("/portfolio/realized"),
+  getAlerts: (limit = 50) => http<AlertsFeed>(`/alerts?limit=${limit}`),
+  getForecast: (ticker: string, horizon = 30) =>
+    http<ForecastSkill>(
+      `/symbols/${encodeURIComponent(ticker)}/forecast?horizon=${horizon}`
+    ),
+  getModels: () => http<ModelRow[]>("/models"),
+  getOptions: () => http<OptionsMatrix>("/options"),
+  getSymbolOptions: (ticker: string) =>
+    http<SymbolOptions>(`/symbols/${encodeURIComponent(ticker)}/options`),
+  getPairs: () => http<PairsRadar>("/pairs"),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>
     http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {
