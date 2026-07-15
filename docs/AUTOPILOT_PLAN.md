@@ -38,7 +38,8 @@ automatically.
 | — | Reconcile PWA ↔ `pilots_api` response shapes for live cutover | `webapp/src/api/types.ts`, `api/pilots_api.py` | #254 |
 | — | Persist real benchmark comparison series | `validation/harness.py`, `pilots/performance.py` | #256 |
 | — | Mirror force-exit of dropped names via per-follow attribution | `pilots/mirror.py`, `pilots/follows_store.py` | #257 |
-| — | Symbol detail pages (`/symbol/:ticker`) — per-symbol snapshot view + the reverse "which Pilots hold this" cross-link; tappable holding/position rows | `pilots/symbols.py`, `api/pilots_api.py` (`GET /symbols/{ticker}`), `webapp/src/screens/SymbolDetail.tsx` | this PR |
+| — | Symbol detail pages (`/symbol/:ticker`) — per-symbol snapshot view + the reverse "which Pilots hold this" cross-link; tappable holding/position rows | `pilots/symbols.py`, `api/pilots_api.py` (`GET /symbols/{ticker}`), `webapp/src/screens/SymbolDetail.tsx` | #270 |
+| — | Catalog coverage — 7 new dedicated Pilots for the previously-uncovered signal modules (`macro_regime`, `edge_garch`, `rsi_extremes`, `relative_strength`, `news_catalyst`, `forecast_alignment`, `sortino_drawdown`), 4 new price-only backtest adapters (`garch_vol_target`, `cross_sectional_momentum`, `relative_strength_xsec`, `rsi14_extremes`) so every honestly-backtestable module gets a real curve (real curves 4→8 of 16 Pilots), 4 new categories (Macro/Risk/Sentiment/Forecast), PWA `mock.ts` resynced to the real catalog | `pilots/catalog.py`, `scripts/refresh_validations.py`, `webapp/src/api/{mock,types}.ts` | this PR |
 
 ## Hardening (post-Phase-3) — the core ships; this is the "declared done too early" layer
 

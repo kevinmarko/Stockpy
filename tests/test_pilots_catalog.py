@@ -51,7 +51,10 @@ def test_validation_ids_are_real_or_none():
 
 
 def test_categories_are_known():
-    allowed = {"Momentum", "Mean Reversion", "Factor", "Blend"}
+    allowed = {
+        "Momentum", "Mean Reversion", "Factor", "Blend",
+        "Macro", "Risk", "Sentiment", "Forecast",
+    }
     for p in list_pilots():
         assert p.category in allowed, f"{p.id!r} has unknown category {p.category!r}"
 

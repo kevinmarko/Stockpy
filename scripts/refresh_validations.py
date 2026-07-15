@@ -368,6 +368,237 @@ def _build_lowvol_size_adapter(
     return X, y, precomputed
 
 
+def _wilder_rsi(s: pd.Series, length: int = 14, fill: float = 50.0) -> pd.Series:
+    """Wilder's RSI, causal (``ewm(alpha=1/length, adjust=False)``).
+
+    Value at t uses only ``s[≤t]`` (no lookahead).  Undefined rows (leading
+    warm-up, or a flat all-gains/all-losses window) degrade to ``fill`` — a
+    neutral 50.0 by default (never a fabricated overbought/oversold reading).
+    Mirrors the nested ``_rsi2`` helper in ``_build_rsi2_adapter`` but is
+    module-level so more than one adapter can share Wilder smoothing.
+    """
+    delta = s.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / length, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    return (100.0 - (100.0 / (1.0 + rs))).fillna(fill)
+
+
+def _build_garch_voltarget_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """GARCH-edge vol-timing on SPY via a RiskMetrics EWMA vol forecast.
+
+    HONEST PROXY (CONSTRAINT #4): the live ``edge_garch`` signal penalizes
+    extreme GJR-GARCH tail volatility, but a per-day GJR-GARCH MLE across ~20
+    years is prohibitively slow (~5000 ``arch_model.fit()`` calls) AND lookahead-
+    risky unless refit on an expanding window.  We use a RiskMetrics EWMA
+    realized-vol forecast (λ=0.94 → ``alpha=0.06``) as the cheap, causal proxy —
+    it captures the identical vol-timing edge (de-lever when forecast vol is
+    high).  Caveat: EWMA is symmetric, so it approximates but does not reproduce
+    GJR's asymmetric leverage term; the ``GJR_Downside12`` variant weights
+    negative returns extra to partially recover that asymmetry.
+
+    All exposures are long-only, capped at 1.0 (no leverage), and ``.shift(1)``-ed
+    before multiplying by the realized daily return.  Four honest variants
+    (near-duplicate vol-timing books → low trial multiplicity).
+    """
+    daily_ret = spy_close.pct_change()
+
+    # RiskMetrics EWMA variance (causal; var at t uses ret[≤t]).
+    ewma_var = daily_ret.pow(2).ewm(alpha=0.06, adjust=False).mean()
+    ewma_vol_ann = np.sqrt(ewma_var * 252.0)
+
+    # Downside-weighted EWMA (GJR asymmetry proxy): negative returns count 2×.
+    neg = daily_ret.where(daily_ret < 0, 0.0)
+    dvar = (daily_ret.pow(2) + neg.pow(2)).ewm(alpha=0.06, adjust=False).mean()
+    dvol_ann = np.sqrt(dvar * 252.0)
+
+    valid_idx = ewma_vol_ann.dropna().index[60:]  # trim EWMA spin-up
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[valid_idx].fillna(0.0)
+    X = pd.DataFrame(
+        {"EWMA_Vol": ewma_vol_ann.loc[valid_idx],
+         "Downside_Vol": dvol_ann.loc[valid_idx]},
+        index=valid_idx,
+    )
+
+    def _voltarget(vol: pd.Series, target: float) -> pd.Series:
+        # Long-only, no leverage: exposure = min(1, target/vol).
+        return (target / vol.replace(0.0, np.nan)).clip(upper=1.0).fillna(0.0)
+
+    expo_10 = _voltarget(ewma_vol_ann, 0.10)
+    expo_15 = _voltarget(ewma_vol_ann, 0.15)
+    # Inverse-vol, normalized by its trailing-year mean (causal) so average
+    # exposure sits near 1.0 rather than at an arbitrary scale.
+    inv = 1.0 / ewma_vol_ann.replace(0.0, np.nan)
+    expo_inv = (inv / inv.rolling(252).mean()).clip(0.0, 1.5).fillna(0.0)
+    expo_gjr = _voltarget(dvol_ann, 0.12)
+
+    precomputed = {
+        "GARCH_VolTarget_10pct": (expo_10.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+        "GARCH_VolTarget_15pct": (expo_15.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+        "GARCH_InvVol": (expo_inv.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+        "GARCH_GJR_Downside12": (expo_gjr.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+    }
+    return X, y, precomputed
+
+
+def _build_xsec_momentum_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Jegadeesh-Titman 12-1 cross-sectional momentum over a multi-name universe.
+
+    For each ticker the 12-1 formation return is ``close.shift(22)/close.shift(252)
+    - 1`` (skip the most-recent month to avoid short-term reversal; 12-month
+    look-back).  Names are ranked cross-sectionally each day and the long-only
+    book holds the top half / top tertile, equal-weighted, ``.shift(1)``-ed so a
+    day's return uses only the prior day's membership.
+
+    HONEST SCOPE (CONSTRAINT #4): a ~16-name mega-cap cross-section produces coarse
+    ranks (a top tertile is only ~5 names); long-only per the module's documented
+    scope.  ``shares`` is accepted only to satisfy the multi-ticker adapter
+    signature and is unused.  The 252-day formation warm-up is trimmed.
+    """
+    common_index = closes.dropna(how="all").index
+    mom_cols: Dict[str, pd.Series] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    for ticker in closes.columns:
+        close = closes[ticker].reindex(common_index)
+        mom_cols[ticker] = close.shift(22) / close.shift(252) - 1.0
+        ret_cols[ticker] = close.pct_change()
+
+    mom_df = pd.DataFrame(mom_cols)
+    rets_df = pd.DataFrame(ret_cols)
+
+    ranks = mom_df.rank(axis=1, pct=True)  # per-day cross-sectional rank
+
+    def _book(threshold: float) -> pd.Series:
+        w = ranks.ge(threshold).astype(float)
+        w = w.div(w.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+        return (w.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["XSecMom_Dispersion"] = mom_df.std(axis=1)
+    X["XSecMom_Mean"] = mom_df.mean(axis=1)
+    y = rets_df.mean(axis=1).fillna(0.0)  # equal-weight universe = honest B&H
+
+    valid_idx = X.index[252:]  # trim 12-month formation warm-up
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+    precomputed = {
+        "XSecMom_TopHalf": _book(0.50).loc[valid_idx],
+        "XSecMom_TopTertile": _book(0.667).loc[valid_idx],
+    }
+    return X.loc[valid_idx], y.loc[valid_idx], precomputed
+
+
+def _build_relative_strength_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Cross-sectional relative strength vs the S&P 500 over a multi-name universe.
+
+    RS-of-SPY-vs-SPY is degenerate, so the honest analogue is a cross-sectional
+    book long the names whose 63-day (3-month) trailing return BEATS SPY's.  SPY
+    enters via the ``universe`` list (downloaded in the union) and is split out
+    here as the benchmark: it is excluded from the tradeable book and from ``y``
+    (the benchmark is not tradeable inventory).  Every position is ``.shift(1)``-ed
+    before multiplying by the realized return.
+
+    Raises cleanly if SPY is missing from ``closes`` (download failure) rather
+    than fabricate a benchmark (CONSTRAINT #4).  ``shares`` is unused.
+    """
+    if "SPY" not in closes.columns:
+        raise RuntimeError(
+            "relative_strength_xsec requires SPY as benchmark; SPY missing from download."
+        )
+    common_index = closes.dropna(how="all").index
+    spy = closes["SPY"].reindex(common_index)
+    spy_ret_63 = spy / spy.shift(63) - 1.0
+
+    tickers = [c for c in closes.columns if c != "SPY"]
+    rs_cols: Dict[str, pd.Series] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    for ticker in tickers:
+        close = closes[ticker].reindex(common_index)
+        own_ret_63 = close / close.shift(63) - 1.0
+        rs_cols[ticker] = own_ret_63 - spy_ret_63  # relative strength vs S&P 500
+        ret_cols[ticker] = close.pct_change()
+
+    rs_df = pd.DataFrame(rs_cols)
+    rets_df = pd.DataFrame(ret_cols)
+
+    # Variant A: long every name beating SPY (positive absolute RS), equal weight.
+    pos = (rs_df > 0.0).astype(float)
+    w_a = pos.div(pos.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    # Variant B: long the top-half RS names cross-sectionally.
+    w_b = rs_df.rank(axis=1, pct=True).ge(0.5).astype(float)
+    w_b = w_b.div(w_b.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["RS_Breadth"] = pos.mean(axis=1)  # fraction beating SPY (illustrative)
+    X["RS_Mean"] = rs_df.mean(axis=1)
+    y = rets_df.mean(axis=1).fillna(0.0)  # equal-weight TRADEABLE universe (excl SPY)
+
+    valid_idx = X.index[70:]  # trim 63-day RS warm-up
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+    precomputed = {
+        "RS_BeatSPY_Absolute": (w_a.shift(1) * rets_df).sum(axis=1).fillna(0.0).loc[valid_idx],
+        "RS_TopHalf": (w_b.shift(1) * rets_df).sum(axis=1).fillna(0.0).loc[valid_idx],
+    }
+    return X.loc[valid_idx], y.loc[valid_idx], precomputed
+
+
+def _build_rsi14_extremes_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """RSI(14) 30/70 mean-reversion on SPY — the ``rsi_extremes`` analogue.
+
+    Distinct from ``rsi2_mean_reversion`` (RSI(2)); this is the classic RSI(14)
+    overbought(>70)/oversold(<30) rule.  Two honest variants:
+      * ``RSI14_OversoldLong`` — enter long on oversold (<30), hold until RSI
+        recovers above 50, else flat (long-only).
+      * ``RSI14_LongShort``    — +1 oversold / −1 overbought (>70), each held to
+        the 45-55 neutral band.
+
+    The stateful ``ffill`` regime fill is computed only from ``rsi[≤t]`` and the
+    position is ``.shift(1)``-ed, so there is no lookahead.
+    """
+    rsi = _wilder_rsi(spy_close, length=14, fill=50.0)
+    daily_ret = spy_close.pct_change()
+
+    # Long-only: enter on oversold, exit above 50, forward-fill the regime.
+    long_raw = pd.Series(np.nan, index=rsi.index)
+    long_raw[rsi < 30.0] = 1.0
+    long_raw[rsi > 50.0] = 0.0
+    pos_long = long_raw.ffill().fillna(0.0)
+
+    # Long/short: +1 oversold, −1 overbought, flat in the 45-55 band.
+    ls_raw = pd.Series(np.nan, index=rsi.index)
+    ls_raw[rsi < 30.0] = 1.0
+    ls_raw[rsi > 70.0] = -1.0
+    ls_raw[(rsi >= 45.0) & (rsi <= 55.0)] = 0.0
+    pos_ls = ls_raw.ffill().fillna(0.0)
+
+    valid_idx = rsi.index[30:]  # small RSI warm-up
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+    y = daily_ret.loc[valid_idx].fillna(0.0)
+    X = pd.DataFrame({"RSI_14": rsi.loc[valid_idx]}, index=valid_idx)
+    precomputed = {
+        "RSI14_OversoldLong": (pos_long.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+        "RSI14_LongShort": (pos_ls.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+    }
+    return X, y, precomputed
+
+
 def _make_strategy_fn(
     precomputed: Dict[str, pd.Series],
     turnover: float = 0.01,
@@ -427,6 +658,20 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
         0.05,
         ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"],
     ),
+    "garch_vol_target": (_build_garch_voltarget_adapter, 0.02, ["SPY"]),
+    "cross_sectional_momentum": (
+        _build_xsec_momentum_adapter,
+        0.03,
+        ["AAPL", "MSFT", "JNJ", "XOM", "KO", "JPM", "PG", "INTC",
+         "T", "WMT", "CVX", "HD", "MCD", "IBM", "PFE", "CSCO"],
+    ),
+    "relative_strength_xsec": (
+        _build_relative_strength_adapter,
+        0.03,
+        ["SPY", "AAPL", "MSFT", "JNJ", "XOM", "KO", "JPM", "PG", "INTC",
+         "T", "WMT", "CVX", "HD", "MCD", "IBM", "PFE", "CSCO"],
+    ),
+    "rsi14_extremes": (_build_rsi14_extremes_adapter, 0.04, ["SPY"]),
 }
 
 

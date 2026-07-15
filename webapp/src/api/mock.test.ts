@@ -30,7 +30,10 @@ const CATEGORIES = [
   "Mean Reversion",
   "Factor",
   "Blend",
-  "Trend",
+  "Macro",
+  "Risk",
+  "Sentiment",
+  "Forecast",
 ];
 
 const RANGES: PerfRange[] = ["1W", "1M", "3M", "6M", "1Y", "2Y"];

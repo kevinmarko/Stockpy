@@ -33,9 +33,22 @@ honest caveats baked into the catalog below:
   the ``multifactor_lowvol_size`` backtest, which validates only the Low-Vol +
   Size factors (Value/Quality have no free point-in-time fundamentals). The
   headline Sharpe therefore reflects the honest, narrower proxy.
-* ``cross-sectional-momentum``, the income/value single-factor Pilots, and both
-  curated blends have **no** matching validated backtest, so
-  ``validation_strategy_id=None`` (the UI shows "no backtest series yet").
+* The income/value single-factor Pilots (``dividend-income``, ``deep-value``),
+  the ``value-quality`` blend, and ``balanced-blend`` have **no** matching
+  validated backtest, so ``validation_strategy_id=None`` (the UI shows "no
+  backtest series yet"). Their signals need point-in-time fundamentals no free
+  vendor supplies, or (``balanced-blend``) are an ensemble no single backtest
+  honestly represents.
+* Likewise the ``regime-navigator`` (macro DTO), ``news-catalyst`` (point-in-time
+  news), ``forecast-aligned`` (external forecast target), and ``risk-adjusted``
+  Pilots stay ``validation_strategy_id=None`` — their signals can't be honestly
+  reconstructed from price/volume alone.
+* Every module that CAN be honestly backtested price-only IS joined to a real
+  ``STRATEGY_REGISTRY`` adapter: ``cross-sectional-momentum`` →
+  ``cross_sectional_momentum``, ``volatility-edge`` → ``garch_vol_target``,
+  ``rsi-reversal`` → ``rsi14_extremes``, ``relative-strength`` →
+  ``relative_strength_xsec`` (plus the pre-existing ``trend-following`` /
+  ``dip-buyer`` / ``macd-trend`` / ``multifactor`` joins).
 * ``coppock_momentum`` exists in ``STRATEGY_REGISTRY`` but has no corresponding
   signal module in ``SIGNAL_WEIGHTS``, so it is deliberately NOT surfaced as a
   Pilot (a Pilot's weights must be real signal-module ids).
@@ -128,9 +141,9 @@ PILOTS: List[Pilot] = [
         ),
         weights={"cross_sectional_momentum": 1.0},
         long_only=False,
-        # No cross-sectional-momentum backtest in STRATEGY_REGISTRY (the two
-        # momentum entries there are time-series / Coppock, not this factor).
-        validation_strategy_id=None,
+        # Honest price-only Jegadeesh-Titman 12-1 cross-sectional backtest over a
+        # liquid mega-cap universe (scripts.refresh_validations).
+        validation_strategy_id="cross_sectional_momentum",
     ),
     Pilot(
         id="dip-buyer",
@@ -223,6 +236,102 @@ PILOTS: List[Pilot] = [
         weights=_full_blend_weights(),
         long_only=False,
         # An ensemble of all modules; no single backtest honestly represents it.
+        validation_strategy_id=None,
+    ),
+    # ── Dedicated Pilots for the previously catalog-uncovered signal modules ──
+    # Every ``weights`` key is a real signal module; the four price-only
+    # backtestable ones carry a real ``validation_strategy_id``, the rest stay
+    # honestly curveless (their signals need macro / news / forecast / fundamental
+    # inputs that can't be reconstructed from price alone).
+    Pilot(
+        id="regime-navigator",
+        name="Regime Navigator",
+        category="Macro",
+        description=(
+            "Top-down macro regime read — leans defensive in Recession/Credit-Event "
+            "regimes and rotates toward risk-on sectors when the systemic backdrop clears."
+        ),
+        weights={"macro_regime": 1.0},
+        long_only=False,
+        # Macro-DTO driven (yield curve, HY spreads, VIX, Sahm) — not price-only.
+        validation_strategy_id=None,
+    ),
+    Pilot(
+        id="volatility-edge",
+        name="Volatility Edge",
+        category="Risk",
+        description=(
+            "Times market exposure off a forward volatility forecast — leans in when "
+            "risk is cheap and de-risks hard into turbulent, fat-tailed regimes."
+        ),
+        weights={"edge_garch": 1.0},
+        long_only=False,
+        # Honest price-only GARCH/EWMA vol-timing backtest on SPY.
+        validation_strategy_id="garch_vol_target",
+    ),
+    Pilot(
+        id="rsi-reversal",
+        name="RSI Reversal",
+        category="Mean Reversion",
+        description=(
+            "Fades short-term extremes with the classic RSI(14) rule — buys oversold "
+            "washouts and trims overbought spikes back toward the mean."
+        ),
+        weights={"rsi_extremes": 1.0},
+        long_only=False,
+        # Honest price-only RSI(14) 30/70 backtest on SPY.
+        validation_strategy_id="rsi14_extremes",
+    ),
+    Pilot(
+        id="relative-strength",
+        name="Relative Strength",
+        category="Momentum",
+        description=(
+            "Favors the names outrunning the S&P 500 — a relative-strength tilt that "
+            "holds the market's leaders and sidesteps the laggards."
+        ),
+        weights={"relative_strength": 1.0},
+        long_only=False,
+        # Honest price-only cross-sectional relative-strength-vs-SPY backtest.
+        validation_strategy_id="relative_strength_xsec",
+    ),
+    Pilot(
+        id="news-catalyst",
+        name="News Catalyst",
+        category="Sentiment",
+        description=(
+            "Reacts to fresh headline sentiment and earnings catalysts, dampening "
+            "signals right around scheduled events where the reaction is unpredictable."
+        ),
+        weights={"news_catalyst": 1.0},
+        long_only=False,
+        # Point-in-time news/sentiment history isn't available to backtest honestly.
+        validation_strategy_id=None,
+    ),
+    Pilot(
+        id="forecast-aligned",
+        name="Forecast Aligned",
+        category="Forecast",
+        description=(
+            "Tilts toward names whose projected multi-horizon forecast points to "
+            "meaningful upside, and away from those forecast to decline."
+        ),
+        weights={"forecast_alignment": 1.0},
+        long_only=False,
+        # Needs the external multi-model forecast target — not a price-only signal.
+        validation_strategy_id=None,
+    ),
+    Pilot(
+        id="risk-adjusted",
+        name="Risk-Adjusted",
+        category="Risk",
+        description=(
+            "Rewards durable risk-adjusted performance — favoring high Sortino names "
+            "while penalizing deep, painful drawdowns."
+        ),
+        weights={"sortino_drawdown": 1.0},
+        long_only=False,
+        # A standalone Sortino/drawdown backtest adapter is out of scope for now.
         validation_strategy_id=None,
     ),
 ]

@@ -187,6 +187,10 @@ class TestHeldByPilots:
         assert self._ids("AAPL", snapshot) == {
             "cross-sectional-momentum", "macd-trend", "trend-following",
             "balanced-blend", "multifactor", "dividend-income", "value-quality",
+            # Single-module Pilots for the newly-covered modules; the fixture
+            # scores each of these positively for AAPL.
+            "forecast-aligned", "news-catalyst", "regime-navigator",
+            "relative-strength", "risk-adjusted", "volatility-edge",
         }
         # deep-value (graham_value −3.0) and dip-buyer (holds nothing) excluded.
         assert "deep-value" not in self._ids("AAPL", snapshot)
@@ -198,12 +202,20 @@ class TestHeldByPilots:
         assert ids == {
             "cross-sectional-momentum", "macd-trend", "trend-following",
             "balanced-blend", "multifactor",
+            # Newly-covered single-module Pilots that score NVDA positively.
+            "forecast-aligned", "news-catalyst", "regime-navigator",
+            "relative-strength", "risk-adjusted", "volatility-edge",
         }
         assert "dividend-income" not in ids
 
     def test_membership_t_excludes_momentum_and_blend(self, snapshot):
         ids = self._ids("T", snapshot)
-        assert ids == {"deep-value", "dividend-income", "value-quality", "multifactor"}
+        assert ids == {
+            "deep-value", "dividend-income", "value-quality", "multifactor",
+            # macro_regime scores T (a Communication-sector defensive name)
+            # positively in the fixture.
+            "regime-navigator",
+        }
         assert "balanced-blend" not in ids
         assert "trend-following" not in ids
 
