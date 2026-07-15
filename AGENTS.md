@@ -115,6 +115,7 @@ duplicate that detail here; this file is the map, not the territory.
 | Need | Look here |
 |---|---|
 | Full module-by-module architecture reference | `CLAUDE.md` |
+| AI-facing MCP server surface (tools/resources/prompts) | `investyo_mcp_server.py` + CLAUDE.md "InvestYo MCP Server" section |
 | Data-flow diagram | `docs/architecture.md` |
 | Every signal module's logic + academic reference | `docs/signals/README.md`, `docs/signals/<name>.md` |
 | Dated changelog of every feature tier ever shipped | `docs/FEATURE_TIER_HISTORY.md` |
