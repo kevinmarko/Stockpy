@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import subprocess
 import sqlite3
@@ -8,6 +9,65 @@ from mcp.server.fastmcp import FastMCP
 
 # Initialize the FastMCP server for the Investyo Platform
 mcp = FastMCP("InvestyoPlatform")
+
+
+def _active_universe() -> list:
+    """
+    Returns the active ticker universe from settings.DEFAULT_TICKERS.
+    Dead-letter safe: falls back to a small hardcoded default list only
+    if settings cannot be read for any reason.
+    """
+    try:
+        from settings import settings
+        tickers = list(settings.DEFAULT_TICKERS)
+        if not tickers:
+            return ["AAPL", "MSFT", "JNJ", "AGNC"]
+        return [str(t).upper() for t in tickers]
+    except Exception:
+        return ["AAPL", "MSFT", "JNJ", "AGNC"]
+
+
+def _db_query(sql: str, params: tuple = ()):
+    """
+    Executes a read query against the platform database, transparently
+    supporting both the local SQLite file and a configured Postgres/Supabase
+    DATABASE_URL (the dual-backend seam in db_config.py).
+
+    Returns a (columns: list[str], rows: list[tuple]) tuple.
+    Dead-letter safe: raises only if BOTH backends fail (callers already
+    wrap this in try/except per the codebase convention).
+    """
+    try:
+        from db_config import resolve_database_url
+        db_url = resolve_database_url()
+    except Exception:
+        db_url = "sqlite:///quant_platform.db"
+
+    if db_url.startswith("sqlite"):
+        # Local sqlite fast path - preserve existing raw sqlite3 behavior.
+        db_path = "quant_platform.db"
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"{db_path} not found.")
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            columns = [d[0] for d in cursor.description] if cursor.description else []
+            return columns, rows
+        finally:
+            conn.close()
+    else:
+        # Postgres/Supabase backend via SQLAlchemy.
+        from sqlalchemy import text
+        from db_config import create_db_engine
+        engine = create_db_engine(db_url)
+        with engine.connect() as conn:
+            result = conn.execute(text(sql), params)
+            columns = list(result.keys())
+            rows = [tuple(row) for row in result.fetchall()]
+        return columns, rows
+
 
 # ==========================================
 # [1] RESOURCES (Read-Only Context)
@@ -33,21 +93,39 @@ def get_database_schema() -> str:
     Reads and returns the SQLite database schema for quant_platform.db.
     Provides the AI with real-time awareness of the database structure.
     """
-    db_path = "quant_platform.db"
-    if not os.path.exists(db_path):
-        return "Error: quant_platform.db not found in the current directory."
-    
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        # Query the sqlite_master table to get all table creation schemas
-        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table';")
-        rows = cursor.fetchall()
-        schema_definitions = "\n\n".join([row[0] for row in rows if row[0]])
-        conn.close()
-        return schema_definitions if schema_definitions else "Database is currently empty."
-    except Exception as e:
-        return f"Database connection error: {str(e)}"
+        from db_config import resolve_database_url
+        db_url = resolve_database_url()
+    except Exception:
+        db_url = "sqlite:///quant_platform.db"
+
+    if db_url.startswith("sqlite"):
+        db_path = "quant_platform.db"
+        if not os.path.exists(db_path):
+            return "Error: quant_platform.db not found in the current directory."
+        try:
+            _, rows = _db_query("SELECT sql FROM sqlite_master WHERE type='table';")
+            schema_definitions = "\n\n".join([row[0] for row in rows if row[0]])
+            return schema_definitions if schema_definitions else "Database is currently empty."
+        except Exception as e:
+            return f"Database connection error: {str(e)}"
+    else:
+        try:
+            _, rows = _db_query(
+                "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = 'public' ORDER BY table_name, ordinal_position;"
+            )
+            if not rows:
+                return "Database is currently empty."
+            tables: Dict[str, List[str]] = {}
+            for table_name, column_name, data_type in rows:
+                tables.setdefault(table_name, []).append(f"{column_name} {data_type}")
+            lines = []
+            for table_name, cols in tables.items():
+                lines.append(f"TABLE {table_name} (\n  " + ",\n  ".join(cols) + "\n)")
+            return "\n\n".join(lines)
+        except Exception as e:
+            return f"Database connection error: {str(e)}"
 
 @mcp.resource("investyo://ticker/{symbol}")
 def get_ticker_context(symbol: str) -> str:
@@ -110,47 +188,81 @@ def list_registry_prompts() -> str:
 @mcp.tool()
 def trigger_data_engine(symbol: str, timeframe: str = "1D") -> str:
     """
-    Triggers the data_engine.py module to fetch market data.
-    (Replaces the deprecated data_ingestion.py module).
-    
+    Refreshes persisted OHLCV bars for a symbol IN-PROCESS via the platform's
+    HistoricalStore (DB-cached, incremental fetch through the market-data provider).
+    No subprocess: data_engine.py has no CLI entrypoint.
+
     Args:
         symbol: The ticker symbol to fetch (e.g., AAPL).
-        timeframe: The timeframe resolution (default: 1D).
+        timeframe: Cosmetic only — HistoricalStore bars are DAILY resolution (default: 1D).
     """
     try:
-        # Execute the data engine script via subprocess using current virtual environment python
-        result = subprocess.run(
-            [sys.executable, "data_engine.py", "--symbol", symbol, "--timeframe", timeframe],
-            capture_output=True,
-            text=True,
-            check=True
+        from data.historical_store import HistoricalStore
+        from data.market_data import get_provider
+        from settings import settings
+
+        sym = symbol.upper().strip()
+        df = HistoricalStore().get_bars(
+            sym, lookback_days=settings.BARS_BACKFILL_DAYS, provider=get_provider()
         )
-        return f"Data ingestion successful for {symbol}:\n{result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"Data ingestion failed. Exit code {e.returncode}:\n{e.stderr}"
-    except FileNotFoundError:
-        return "Error: data_engine.py not found. Ensure you are running the server from the project root."
+        if df is None or df.empty:
+            return (
+                f"Bar refresh for {sym} returned no rows (provider unavailable or "
+                f"unknown symbol). No data was fabricated."
+            )
+        last_date = df.index[-1]
+        last_str = last_date.strftime("%Y-%m-%d") if hasattr(last_date, "strftime") else str(last_date)
+        return (
+            f"Bar refresh successful for {sym} (daily bars): {len(df)} rows persisted, "
+            f"last bar date {last_str}."
+        )
+    except Exception as e:
+        return f"Data ingestion failed for {symbol}: {str(e)}"
 
 @mcp.tool()
 def generate_html_report(portfolio_id: str) -> str:
     """
-    Triggers reporting_engine.py to generate an HTML summary via the reporting package.
-    
+    Runs the advisory orchestrator (main.py) end-to-end, which internally calls
+    reporting/html_publisher.py::write_html_report -> diagnostics_and_visuals.generate_html_report
+    to produce the daily HTML report. (The old reporting_engine.py this tool used to
+    reference was deleted 2026-07-09; there is no standalone reporting-only entrypoint —
+    the report is a side effect of a full advisory run.)
+
     Args:
-        portfolio_id: The ID of the portfolio to generate the report for.
+        portfolio_id: Currently ignored — main.py's advisory report always covers the
+            full active universe/held account, not a specific portfolio_id.
     """
     try:
+        from settings import settings
+
         result = subprocess.run(
-            [sys.executable, "-m", "reporting.html_publisher", "--portfolio", portfolio_id],
+            [sys.executable, "main.py"],
             capture_output=True,
             text=True,
-            check=True
+            timeout=900,
         )
-        return f"Report generated successfully:\n{result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"Report generation failed:\n{e.stderr}"
-    except FileNotFoundError:
-        return "Error: reporting/html_publisher.py module not found."
+        report_path = settings.OUTPUT_DIR / "daily_report.html"
+        report_exists = report_path.exists()
+
+        if result.returncode != 0:
+            return (
+                f"Advisory run failed (exit {result.returncode}); HTML report was "
+                f"{'still' if report_exists else 'NOT'} found at {report_path}.\n"
+                f"stderr:\n{result.stderr[-2000:]}"
+            )
+        if report_exists:
+            return (
+                f"Advisory run completed and HTML report generated at: {report_path}\n"
+                f"(portfolio_id '{portfolio_id}' is currently ignored by this pipeline.)"
+            )
+        return (
+            "Advisory run completed (exit 0) but no daily_report.html was found at "
+            f"{report_path} — report generation may have failed non-fatally. Check logs."
+        )
+    except subprocess.TimeoutExpired:
+        return "Report generation timed out after 15 minutes."
+    except Exception as e:
+        return f"Report generation failed: {str(e)}"
 
 @mcp.tool()
 def run_platform_tests() -> str:
@@ -173,32 +285,44 @@ def run_platform_tests() -> str:
 @mcp.tool()
 def query_investyo_db(sql_query: str) -> str:
     """
-    Executes a SELECT query against the quant_platform.db.
-    Will reject any query that is not a SELECT statement for safety.
+    Executes a read-only SELECT (or WITH-CTE SELECT) query against the platform database.
+    Will reject any query that is not a SELECT/WITH statement for safety, and caps
+    results at 1000 rows to avoid dumping an entire table.
     """
-    if not sql_query.strip().upper().startswith("SELECT"):
-        return "Error: Only SELECT queries are permitted via this tool."
-    
-    db_path = "quant_platform.db"
-    if not os.path.exists(db_path):
-        return "Error: quant_platform.db not found."
-    
+    stripped_upper = sql_query.strip().upper()
+    if not (stripped_upper.startswith("SELECT") or stripped_upper.startswith("WITH")):
+        return "Error: Only SELECT queries are permitted via this tool (WITH-CTE SELECT statements are also allowed)."
+
+    # A leading WITH must not be a bypass for a trailing mutation smuggled in
+    # after the CTE (e.g. "WITH x AS (SELECT 1) INSERT INTO T VALUES (1)" is
+    # valid SQLite syntax). Scan the whole statement, not just the prefix.
+    _MUTATION_KEYWORDS = (
+        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER",
+        "CREATE", "REPLACE", "TRUNCATE", "ATTACH", "DETACH", "PRAGMA", "VACUUM",
+    )
+    if any(re.search(rf"\b{kw}\b", stripped_upper) for kw in _MUTATION_KEYWORDS):
+        return "Error: Only SELECT queries are permitted via this tool (WITH-CTE SELECT statements are also allowed)."
+
+    MAX_ROWS = 1000
+
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute(sql_query)
-        rows = cursor.fetchall()
-        columns = [description[0] for description in cursor.description] if cursor.description else []
-        conn.close()
-        
+        columns, rows = _db_query(sql_query)
+
         if not rows:
             return "Query executed successfully, but returned 0 rows."
-        
+
+        truncated = len(rows) > MAX_ROWS
+        if truncated:
+            rows = rows[:MAX_ROWS]
+
         result_lines = [", ".join(columns)]
         for row in rows:
             result_lines.append(", ".join(str(val) for val in row))
-        
-        return "Query Results:\n" + "\n".join(result_lines)
+
+        output = "Query Results:\n" + "\n".join(result_lines)
+        if truncated:
+            output += f"\n\n[Note: results truncated to the first {MAX_ROWS} rows.]"
+        return output
     except Exception as e:
         return f"Database query failed: {str(e)}"
 
@@ -247,24 +371,24 @@ def read_platform_logs(lines: int = 50) -> str:
     logs_summary = []
     
     # 1. Query ExecutionLogs from DB
-    db_path = "quant_platform.db"
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT timestamp, status, ticker_count, execution_time_seconds, error_message FROM ExecutionLogs ORDER BY id DESC LIMIT ?", (lines,))
-            rows = cursor.fetchall()
-            conn.close()
-            
-            if rows:
-                logs_summary.append("### Database Execution Logs (Recent runs)")
-                logs_summary.append("Timestamp | Status | Tickers | Duration (s) | Error")
-                logs_summary.append("---|---|---|---|---")
-                for row in rows:
-                    err = row[4] if row[4] else "None"
-                    logs_summary.append(f"{row[0]} | {row[1]} | {row[2]} | {row[3]:.2f} | {err}")
-        except Exception as e:
-            logs_summary.append(f"Could not read ExecutionLogs from DB: {str(e)}")
+    try:
+        _, rows = _db_query(
+            "SELECT timestamp, status, ticker_count, execution_time_seconds, error_message "
+            "FROM ExecutionLogs ORDER BY id DESC LIMIT ?",
+            (lines,),
+        )
+
+        if rows:
+            logs_summary.append("### Database Execution Logs (Recent runs)")
+            logs_summary.append("Timestamp | Status | Tickers | Duration (s) | Error")
+            logs_summary.append("---|---|---|---|---")
+            for row in rows:
+                err = row[4] if row[4] else "None"
+                logs_summary.append(f"{row[0]} | {row[1]} | {row[2]} | {row[3]:.2f} | {err}")
+    except FileNotFoundError:
+        pass  # No local DB and no configured remote backend - nothing to report.
+    except Exception as e:
+        logs_summary.append(f"Could not read ExecutionLogs from DB: {str(e)}")
             
     # 2. Check local directory for log files
     log_files = [f for f in os.listdir(".") if f.endswith(".log")]
@@ -431,34 +555,25 @@ def update_universe_tickers(action: str, symbol: str) -> str:
         symbol: The ticker symbol to modify (e.g. TSLA).
     """
     import json
-    env_path = ".env"
+    from gui import env_io
+
     symbol_upper = symbol.upper().strip()
     action_lower = action.lower().strip()
-    
-    env_vars = {}
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        env_vars[k.strip()] = v.strip()
-        except Exception as e:
-            return f"Failed to read .env file: {str(e)}"
-            
-    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
-    if "DEFAULT_TICKERS" in env_vars:
-        try:
-            val = env_vars["DEFAULT_TICKERS"]
-            current_tickers = json.loads(val)
-            if not isinstance(current_tickers, list):
-                current_tickers = [current_tickers]
-        except Exception:
-            current_tickers = [t.strip() for t in env_vars["DEFAULT_TICKERS"].split(",") if t.strip()]
-            
-    current_tickers = [t.upper() for t in current_tickers]
-    
+
+    try:
+        raw_val = env_io.get_value("DEFAULT_TICKERS", "[]")
+    except Exception as e:
+        return f"Failed to read DEFAULT_TICKERS setting: {str(e)}"
+
+    try:
+        current_tickers = json.loads(raw_val)
+        if not isinstance(current_tickers, list):
+            current_tickers = [current_tickers]
+    except Exception:
+        current_tickers = [t.strip() for t in raw_val.split(",") if t.strip()]
+
+    current_tickers = [str(t).upper() for t in current_tickers]
+
     if action_lower == "add":
         if symbol_upper in current_tickers:
             return f"{symbol_upper} is already in the trading universe."
@@ -469,16 +584,19 @@ def update_universe_tickers(action: str, symbol: str) -> str:
         current_tickers.remove(symbol_upper)
     else:
         return f"Invalid action: '{action}'. Must be one of: add, remove."
-        
-    env_vars["DEFAULT_TICKERS"] = json.dumps(current_tickers)
-    
+
+    # Dedup while preserving order
+    deduped = list(dict.fromkeys(current_tickers))
+
     try:
-        with open(env_path, "w") as f:
-            for k, v in env_vars.items():
-                f.write(f"{k}={v}\n")
-        return f"Successfully {action_lower}ed {symbol_upper} from the active universe. Current tickers: {current_tickers}"
+        env_io.write_setting("DEFAULT_TICKERS", deduped)
+        return f"Successfully {action_lower}ed {symbol_upper} from the active universe. Current tickers: {deduped}"
+    except env_io.SecretWriteError as e:
+        return f"Failed to update universe: DEFAULT_TICKERS write blocked ({str(e)})."
+    except env_io.DisallowedKeyError as e:
+        return f"Failed to update universe: DEFAULT_TICKERS is not an allowed key ({str(e)})."
     except Exception as e:
-        return f"Failed to write to .env file: {str(e)}"
+        return f"Failed to write DEFAULT_TICKERS setting: {str(e)}"
 
 @mcp.tool()
 def plot_equity_curve(symbol: str, period: str = "1y") -> str:
@@ -680,7 +798,6 @@ def plot_portfolio_equity(period: str = "1y") -> str:
     and saves the PNG plot to artifacts.
     """
     import os
-    import json
     import yfinance as yf
     import backtrader as bt
     import numpy as np
@@ -689,20 +806,9 @@ def plot_portfolio_equity(period: str = "1y") -> str:
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from simulation_engine import InstitutionalStrategy
-    
-    env_path = ".env"
-    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, "r") as f:
-                for line in f:
-                    if line.strip() and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        if k.strip() == "DEFAULT_TICKERS":
-                            current_tickers = json.loads(v.strip())
-        except Exception:
-            pass
-            
+
+    current_tickers = _active_universe()
+
     try:
         portfolio_curves = []
         
@@ -788,25 +894,12 @@ def get_universe_status() -> str:
     macro economic environment status, and database stats.
     """
     import os
-    import json
-    import sqlite3
     import yaml
-    
+
     status = ["# InvestYo Universe Status Dashboard\n"]
-    
-    env_path = ".env"
-    current_tickers = ["AAPL", "MSFT", "JNJ", "AGNC"]
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, "r") as f:
-                for line in f:
-                    if line.strip() and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        if k.strip() == "DEFAULT_TICKERS":
-                            current_tickers = json.loads(v.strip())
-        except Exception:
-            pass
-            
+
+    current_tickers = _active_universe()
+
     status.append("## Active Trading Universe")
     status.append(", ".join(f"`{t}`" for t in current_tickers) + "\n")
     
@@ -829,67 +922,79 @@ def get_universe_status() -> str:
         except Exception as e:
             status.append(f"## Active Watch Rules\nFailed to parse rules: {str(e)}\n")
             
-    db_path = "quant_platform.db"
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT COUNT(*) FROM DailySignals")
-            signals_count = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM Transactions")
-            transactions_count = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM ExecutionLogs")
-            logs_count = cursor.fetchone()[0]
-            
-            conn.close()
-            
-            status.append("## Database Metrics")
-            status.append(f"- **Daily Signals Table Rows**: {signals_count}")
-            status.append(f"- **Transactions Table Rows**: {transactions_count}")
-            status.append(f"- **Execution Logs Table Rows**: {logs_count}")
-        except Exception as e:
-            status.append(f"## Database Metrics\nError querying DB stats: {str(e)}")
+    try:
+        _, signals_rows = _db_query("SELECT COUNT(*) FROM DailySignals")
+        signals_count = signals_rows[0][0] if signals_rows else 0
+
+        _, trades_rows = _db_query("SELECT COUNT(*) FROM trades")
+        trades_count = trades_rows[0][0] if trades_rows else 0
+
+        _, logs_rows = _db_query("SELECT COUNT(*) FROM ExecutionLogs")
+        logs_count = logs_rows[0][0] if logs_rows else 0
+
+        status.append("## Database Metrics")
+        status.append(f"- **Daily Signals Table Rows**: {signals_count}")
+        status.append(f"- **Trades Table Rows**: {trades_count}")
+        status.append(f"- **Execution Logs Table Rows**: {logs_count}")
+    except Exception as e:
+        status.append(f"## Database Metrics\nError querying DB stats: {str(e)}")
             
     return "\n".join(status)
 
 @mcp.tool()
 def trigger_forecasting(symbol: str) -> str:
     """
-    Triggers the forecasting_engine.py for a specific symbol.
+    Runs the platform's real per-symbol forecast IN-PROCESS via the advisory engine
+    (engine.advisory.evaluate), which internally runs the full ARIMA/Monte-Carlo/
+    Holt-Winters/CNN-LSTM blended ensemble. There is no forecasting_engine.py CLI entrypoint.
+
+    Args:
+        symbol: The ticker symbol to forecast (e.g., AAPL).
     """
     try:
-        result = subprocess.run(
-            [sys.executable, "forecasting_engine.py", "--symbol", symbol],
-            capture_output=True,
-            text=True,
-            check=True
+        from engine.advisory import evaluate
+        from data.market_data import get_provider
+
+        sym = symbol.upper().strip()
+        rec = evaluate(sym, position=None, market=get_provider(), snapshot=None)
+
+        forecast_str = f"${rec.forecast:,.2f}" if rec.forecast is not None else "unavailable"
+        return (
+            f"# Forecast: {sym}\n\n"
+            f"- **30-day blended forecast**: {forecast_str}\n"
+            f"- **Action**: {rec.action}\n"
+            f"- **Conviction**: {rec.conviction:.2f}\n"
+            f"- **Strategy**: {rec.strategy}\n"
+            f"- **Data quality**: {rec.data_quality}\n"
+            f"- **Rationale**: {rec.rationale}\n"
         )
-        return f"Forecasting successful for {symbol}:\n{result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"Forecasting failed. Exit code {e.returncode}:\n{e.stderr}"
-    except FileNotFoundError:
-        return "Error: forecasting_engine.py not found."
+    except Exception as e:
+        return f"Forecasting failed for {symbol}: {str(e)}"
 
 @mcp.tool()
 def trigger_macro_engine() -> str:
     """
-    Triggers the macro_engine.py to run the macro-economic analysis pipeline.
+    Runs the macro-economic regime pipeline in-process (macro_engine.py has no
+    CLI entrypoint, so shelling to `python macro_engine.py` used to silently
+    no-op while reporting success).
     """
     try:
-        result = subprocess.run(
-            [sys.executable, "macro_engine.py"],
-            capture_output=True,
-            text=True,
-            check=True
+        from settings import settings
+        from data_engine import DataEngine
+        from macro_engine import MacroEngine
+
+        de = DataEngine(fred_api_key=settings.FRED_API_KEY)
+        engine = MacroEngine(de)
+        macro_raw = de.fetch_macro_raw()
+        sahm_val = engine.calculate_sahm_rule()
+        macro_df = engine.run_macro_killswitch(macro_raw, sahm_val)
+        regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
+        return (
+            f"Macro engine run successful:\n"
+            f"VIX={macro_raw.get('VIXCLS')}, Sahm={sahm_val}, regime={regime}"
         )
-        return f"Macro engine run successful:\n{result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"Macro engine run failed:\n{e.stderr}"
-    except FileNotFoundError:
-        return "Error: macro_engine.py not found."
+    except Exception as e:
+        return f"Macro engine run failed: {str(e)}"
 
 # ==========================================
 # [4] PHASE 1 — DATA & INGESTION MANAGEMENT
@@ -905,9 +1010,25 @@ def trigger_edgar_backfill(tickers: str = "all", since: str = "2015-01-01") -> s
         since: Earliest filing date to backfill from (default: 2015-01-01).
     """
     try:
-        cmd = [sys.executable, "scripts/backfill_edgar_fundamentals.py", "--since", since]
-        if tickers.strip().lower() != "all":
-            cmd.extend(["--tickers"] + [t.strip().upper() for t in tickers.split(",")])
+        from settings import settings
+
+        tickers_stripped = tickers.strip().lower()
+        if tickers_stripped in ("", "all"):
+            ticker_list = [t.upper() for t in settings.DEFAULT_TICKERS]
+            if not ticker_list:
+                return (
+                    "EDGAR backfill aborted: tickers='all' was requested but "
+                    "settings.DEFAULT_TICKERS is empty — no universe to resolve. "
+                    "Pass explicit tickers or configure DEFAULT_TICKERS."
+                )
+        else:
+            ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+
+        cmd = [
+            sys.executable, "scripts/backfill_edgar_fundamentals.py",
+            "--since", since,
+            "--tickers", ",".join(ticker_list),
+        ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         output = result.stdout + result.stderr
@@ -929,48 +1050,77 @@ def trigger_full_pipeline(tickers: str = "") -> str:
     Args:
         tickers: Comma-separated ticker list. If empty, uses the active universe.
     """
+    from settings import settings
+
     steps = []
     ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()] if tickers else None
+    if not ticker_list:
+        ticker_list = [t.upper() for t in settings.DEFAULT_TICKERS]
 
-    # Step 1: Price bars
+    # Step 1: Price bars — in-process via HistoricalStore (data_engine.py has no CLI entrypoint)
     try:
-        if ticker_list:
-            for sym in ticker_list:
-                result = subprocess.run(
-                    [sys.executable, "data_engine.py", "--symbol", sym],
-                    capture_output=True, text=True, timeout=120
-                )
-                steps.append(f"✅ data_engine({sym}): OK" if result.returncode == 0
-                             else f"❌ data_engine({sym}): {result.stderr[:200]}")
+        if not ticker_list:
+            steps.append("❌ bar_refresh: no tickers resolved (universe and DEFAULT_TICKERS both empty)")
         else:
-            result = subprocess.run(
-                [sys.executable, "data_engine.py"],
-                capture_output=True, text=True, timeout=300
-            )
-            steps.append(f"✅ data_engine(universe): OK" if result.returncode == 0
-                         else f"❌ data_engine(universe): {result.stderr[:200]}")
-    except Exception as e:
-        steps.append(f"❌ data_engine: {str(e)}")
+            from data.historical_store import HistoricalStore
+            from data.market_data import get_provider
 
-    # Step 2: EDGAR fundamentals
+            provider = get_provider()
+            store = HistoricalStore()
+            ok_count = 0
+            fail_syms = []
+            for sym in ticker_list:
+                try:
+                    df = store.get_bars(sym, lookback_days=settings.BARS_BACKFILL_DAYS, provider=provider)
+                    if df is not None and not df.empty:
+                        ok_count += 1
+                    else:
+                        fail_syms.append(sym)
+                except Exception:
+                    fail_syms.append(sym)
+            if ok_count > 0:
+                msg = f"✅ bar_refresh: {ok_count}/{len(ticker_list)} symbols OK"
+                if fail_syms:
+                    msg += f" (no data for: {', '.join(fail_syms)})"
+                steps.append(msg)
+            else:
+                steps.append(f"❌ bar_refresh: no bars fetched for any of {ticker_list}")
+    except Exception as e:
+        steps.append(f"❌ bar_refresh: {str(e)}")
+
+    # Step 2: EDGAR fundamentals — --tickers is required by the real script
     try:
-        cmd = [sys.executable, "scripts/backfill_edgar_fundamentals.py", "--since", "2020-01-01"]
-        if ticker_list:
-            cmd.extend(["--tickers"] + ticker_list)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        steps.append(f"✅ edgar_backfill: OK" if result.returncode == 0
-                     else f"❌ edgar_backfill: {result.stderr[:200]}")
+        cmd = [
+            sys.executable, "scripts/backfill_edgar_fundamentals.py",
+            "--since", "2020-01-01",
+            "--tickers", ",".join(ticker_list) if ticker_list else "",
+        ]
+        if not ticker_list:
+            steps.append("❌ edgar_backfill: no tickers resolved (universe and DEFAULT_TICKERS both empty)")
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            steps.append(
+                f"✅ edgar_backfill: OK ({', '.join(ticker_list)})" if result.returncode == 0
+                else f"❌ edgar_backfill: {result.stderr[:200]}"
+            )
     except Exception as e:
         steps.append(f"❌ edgar_backfill: {str(e)}")
 
-    # Step 3: Macro engine
+    # Step 3: Macro engine — in-process via MacroEngine (macro_engine.py has no CLI entrypoint)
     try:
-        result = subprocess.run(
-            [sys.executable, "macro_engine.py"],
-            capture_output=True, text=True, timeout=120
+        from data_engine import DataEngine
+        from macro_engine import MacroEngine
+
+        de = DataEngine(fred_api_key=settings.FRED_API_KEY)
+        engine = MacroEngine(de)
+        macro_raw = de.fetch_macro_raw()
+        sahm_val = engine.calculate_sahm_rule()
+        macro_df = engine.run_macro_killswitch(macro_raw, sahm_val)
+        regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
+        steps.append(
+            f"✅ macro_engine: OK (VIX={macro_raw.get('VIXCLS')}, "
+            f"Sahm={sahm_val}, regime={regime})"
         )
-        steps.append(f"✅ macro_engine: OK" if result.returncode == 0
-                     else f"❌ macro_engine: {result.stderr[:200]}")
     except Exception as e:
         steps.append(f"❌ macro_engine: {str(e)}")
 
@@ -1001,27 +1151,38 @@ def get_pit_coverage_report() -> str:
 # ==========================================
 
 @mcp.tool()
-def run_validation_harness(strategy_name: str = "default", start_date: str = "2020-01-01", end_date: str = "2024-12-31") -> str:
+def run_validation_harness(strategy_name: str = "", start_date: str = "2020-01-01", end_date: str = "2024-12-31") -> str:
     """
-    Triggers the StrategyValidationHarness and returns structured results
-    including Sharpe ratio, max drawdown, DSR, PBO, and deployability.
+    Triggers the StrategyValidationHarness (scripts/refresh_validations.py) and returns
+    structured results including Sharpe ratio, max drawdown, DSR, PBO, and deployability.
 
     Args:
-        strategy_name: Name tag for the strategy run.
+        strategy_name: Comma-separated strategy name(s) registered in STRATEGY_REGISTRY
+            (e.g. "rsi2_mean_reversion" or "rsi2_mean_reversion,macd_trend"). Leave empty,
+            or pass "default"/"all", to validate EVERY registered strategy.
         start_date: Backtest start date (YYYY-MM-DD).
         end_date: Backtest end date (YYYY-MM-DD).
     """
     try:
-        result = subprocess.run(
-            [sys.executable, "scripts/refresh_validations.py",
-             "--strategy", strategy_name,
-             "--start", start_date,
-             "--end", end_date],
-            capture_output=True, text=True, timeout=600
-        )
+        name_stripped = strategy_name.strip().lower()
+        cmd = [
+            sys.executable, "-m", "scripts.refresh_validations",
+            "--start", start_date,
+            "--end", end_date,
+            "--json",
+        ]
+        if name_stripped not in ("", "default", "all"):
+            cmd.extend(["--strategies", strategy_name.strip()])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        label = strategy_name.strip() if name_stripped not in ("", "default", "all") else "ALL REGISTERED STRATEGIES"
+
         if result.returncode == 0:
-            return f"# Validation Harness Results: {strategy_name}\n\n{result.stdout}"
-        return f"Validation harness failed (exit {result.returncode}):\n{result.stderr}"
+            return f"# Validation Harness Results: {label}\n\n{result.stdout}"
+        return (
+            f"Validation harness failed (exit {result.returncode}) for {label}:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
     except subprocess.TimeoutExpired:
         return "Validation harness timed out after 10 minutes."
     except Exception as e:
@@ -1087,29 +1248,17 @@ def get_signal_breakdown(symbol: str) -> str:
     Args:
         symbol: Stock ticker (e.g., AAPL).
     """
-    db_path = "quant_platform.db"
-    if not os.path.exists(db_path):
-        return "Error: quant_platform.db not found."
-
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Get the most recent signal row for this symbol
-        cursor.execute(
+        columns, rows = _db_query(
             """SELECT * FROM DailySignals
                WHERE symbol = ?
                ORDER BY date DESC LIMIT 1""",
             (symbol.upper(),)
         )
-        row = cursor.fetchone()
-        if not row:
-            conn.close()
+        if not rows:
             return f"No signals found for {symbol.upper()} in the database."
 
-        columns = [desc[0] for desc in cursor.description]
-        conn.close()
-
+        row = rows[0]
         data = dict(zip(columns, row))
         lines = [f"# Signal Breakdown: {symbol.upper()} ({data.get('date', 'N/A')})\n"]
 
@@ -1143,9 +1292,9 @@ def compare_strategies(strategy_a: str, strategy_b: str, start_date: str = "2020
     for name in [strategy_a, strategy_b]:
         try:
             result = subprocess.run(
-                [sys.executable, "scripts/refresh_validations.py",
-                 "--strategy", name, "--start", start_date, "--end", end_date,
-                 "--json-output"],
+                [sys.executable, "-m", "scripts.refresh_validations",
+                 "--strategies", name, "--start", start_date, "--end", end_date,
+                 "--json"],
                 capture_output=True, text=True, timeout=600
             )
             if result.returncode == 0:
@@ -1270,22 +1419,14 @@ def generate_daily_signals(top_n: int = 10) -> str:
     Args:
         top_n: Number of top signals to return (default: 10).
     """
-    db_path = "quant_platform.db"
-    if not os.path.exists(db_path):
-        return "Error: quant_platform.db not found."
-
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
         # Get the latest date's signals
-        cursor.execute("SELECT MAX(date) FROM DailySignals")
-        latest_date = cursor.fetchone()[0]
+        _, date_rows = _db_query("SELECT MAX(date) FROM DailySignals")
+        latest_date = date_rows[0][0] if date_rows else None
         if not latest_date:
-            conn.close()
             return "No signals in the database. Run the full pipeline first."
 
-        cursor.execute(
+        _, rows = _db_query(
             """SELECT symbol, composite_score, action, conviction
                FROM DailySignals
                WHERE date = ?
@@ -1293,8 +1434,6 @@ def generate_daily_signals(top_n: int = 10) -> str:
                LIMIT ?""",
             (latest_date, top_n)
         )
-        rows = cursor.fetchall()
-        conn.close()
 
         if not rows:
             return f"No signals found for date {latest_date}."
@@ -1484,6 +1623,474 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
         return "\n".join(lines)
     except Exception as e:
         return f"Test alert failed: {str(e)}"
+
+
+# ==========================================
+# [8] ADVISORY & MARKET INTELLIGENCE (READ-ONLY)
+# ==========================================
+# All tools in this section are strictly READ-ONLY analytics wrappers over the
+# platform's advisory / options / regime / coverage engines. They NEVER place,
+# submit, or simulate any broker order (advisory-only platform). Each is
+# dead-letter safe (try/except -> error string, never raises) and returns human
+# markdown plus a compact machine-readable JSON block (real values only; NaN/None
+# serialized as null, never fabricated).
+
+
+@mcp.tool()
+def get_recommendation(symbol: str) -> str:
+    """
+    Runs the platform's PRIMARY output — the holding-aware advisory engine — for
+    one symbol and returns its BUY/SELL/HOLD recommendation, conviction, strategy,
+    suggested position %, 30-day forecast, data quality, key indicators, and the
+    full plain-English rationale. READ-ONLY: no Robinhood login, no order code.
+    """
+    import json
+    import math
+
+    try:
+        from engine.advisory import evaluate
+        from data.market_data import get_provider
+
+        sym = symbol.upper().strip()
+        # position=None, snapshot=None -> clean read-only non-held recommendation.
+        rec = evaluate(sym, position=None, market=get_provider(), snapshot=None)
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        forecast = _num(getattr(rec, "forecast", None))
+        conviction = _num(getattr(rec, "conviction", None))
+        pct = _num(getattr(rec, "suggested_position_pct", None))
+
+        lines = [f"# Advisory Recommendation — {rec.symbol}\n"]
+        lines.append(f"- **Action**: {rec.action}")
+        lines.append(f"- **Strategy**: {rec.strategy}")
+        lines.append(
+            f"- **Conviction**: {conviction:.3f}" if conviction is not None else "- **Conviction**: N/A"
+        )
+        lines.append(
+            f"- **Suggested Position %**: {pct * 100:.2f}%" if pct is not None else "- **Suggested Position %**: N/A"
+        )
+        lines.append(
+            f"- **30-Day Forecast**: ${forecast:,.2f}" if forecast is not None else "- **30-Day Forecast**: unavailable"
+        )
+        lines.append(f"- **Data Quality**: {rec.data_quality}")
+
+        ki = getattr(rec, "key_indicators", {}) or {}
+        ki_clean = {}
+        if isinstance(ki, dict) and ki:
+            lines.append("\n## Key Indicators")
+            for k, v in ki.items():
+                nv = _num(v)
+                ki_clean[k] = nv
+                lines.append(f"- **{k}**: {nv:.4f}" if nv is not None else f"- **{k}**: N/A")
+
+        lines.append("\n## Rationale")
+        lines.append(getattr(rec, "rationale", "") or "(no rationale provided)")
+
+        payload = {
+            "symbol": rec.symbol,
+            "action": rec.action,
+            "strategy": rec.strategy,
+            "conviction": conviction,
+            "suggested_position_pct": pct,
+            "forecast_30d": forecast,
+            "data_quality": rec.data_quality,
+            "key_indicators": ki_clean,
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to compute recommendation for {symbol}: {str(e)}"
+
+
+@mcp.tool()
+def get_options_directive(symbol: str) -> str:
+    """
+    Runs the premium-selling directive engine (build_premium_directive) for one
+    symbol and returns the hydrated directive — Strategy/Action, Net Premium,
+    GARCH sigma, IVR proxy, trend bias, short/long strikes + deltas, ATM Greeks —
+    plus the integrity-validator verdict. If a regime gates it to Cash/Wait, that
+    is shown honestly. READ-ONLY analytics; NaN values render as N/A. No order code.
+    """
+    import json
+    import math
+
+    try:
+        from technical_options_engine import build_premium_directive, validate_directive_integrity
+        from data.market_data import get_provider
+
+        sym = symbol.upper().strip()
+        provider = get_provider()
+
+        bars = provider.get_intraday_bars(sym)
+        if bars is None or bars.empty:
+            return f"No bar data available for {sym}; cannot build options directive."
+
+        # Spot price + staleness from the latest quote, falling back to the last
+        # bar Close when the quote is unavailable (bars still let us build sigma).
+        spot_price = None
+        is_stale = True
+        try:
+            q = provider.get_latest_quote(sym)
+            if q is not None and q.price is not None and float(q.price) > 0:
+                spot_price = float(q.price)
+                is_stale = bool(getattr(q, "is_stale", True))
+        except Exception:
+            spot_price = None
+        if spot_price is None:
+            spot_price = float(bars["Close"].iloc[-1])
+            is_stale = True
+
+        directive = build_premium_directive(
+            sym, bars, spot_price=spot_price, is_stale=is_stale
+        )
+        if not isinstance(directive, dict) or not directive:
+            return f"Options directive engine returned no result for {sym}."
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        def _fmt(key, money=False, pct=False):
+            nv = _num(directive.get(key))
+            if nv is None:
+                # Non-numeric fields (Strategy, Action, Trend_Bias) pass through raw.
+                raw = directive.get(key)
+                return str(raw) if raw not in (None, "") else "N/A"
+            if money:
+                return f"${nv:,.2f}"
+            if pct:
+                return f"{nv:.4f}"
+            return f"{nv:.4f}"
+
+        lines = [f"# Options Premium Directive — {sym}\n"]
+        lines.append(f"- **Strategy**: {directive.get('Strategy', 'N/A')}")
+        lines.append(f"- **Action**: {directive.get('Action', 'N/A')}")
+        lines.append(f"- **Trend Bias**: {directive.get('Trend_Bias', 'N/A')}")
+        lines.append(f"- **Price**: {_fmt('Price', money=True)}")
+        lines.append(f"- **Stale Quote**: {directive.get('Stale', is_stale)}")
+        lines.append(f"- **Net Premium**: {_fmt('Net_Premium', money=True)}")
+        lines.append(f"- **Realizable Daily Theta**: {_fmt('Realizable_Daily_Theta', money=True)}")
+        lines.append(f"- **Sigma (GJR-GARCH, annualized)**: {_fmt('Sigma_GARCH')}")
+        lines.append(f"- **IVR Proxy**: {_fmt('IVR_Proxy')}")
+        lines.append(f"- **Aroon Oscillator**: {_fmt('Aroon_Oscillator')}")
+        lines.append(f"- **Coppock Curve**: {_fmt('Coppock_Curve')}")
+
+        lines.append("\n## Legs")
+        lines.append(f"- **Short Strike / Delta**: {_fmt('Short_Strike', money=True)} / {_fmt('Short_Delta')}")
+        lines.append(f"- **Long Strike / Delta**: {_fmt('Long_Strike', money=True)} / {_fmt('Long_Delta')}")
+
+        lines.append("\n## ATM Greeks")
+        lines.append(f"- **Delta**: {_fmt('ATM_Delta')}")
+        lines.append(f"- **Gamma**: {_fmt('ATM_Gamma')}")
+        lines.append(f"- **Vega**: {_fmt('ATM_Vega')}")
+        lines.append(f"- **Theta (daily)**: {_fmt('ATM_Theta_Daily')}")
+
+        # Integrity validation
+        integrity = {}
+        try:
+            integrity = validate_directive_integrity(directive) or {}
+        except Exception as ie:
+            integrity = {"ok": None, "issues": [f"validator error: {ie}"]}
+        ok = integrity.get("ok")
+        issues = integrity.get("issues", []) or []
+        lines.append("\n## Integrity")
+        lines.append(f"- **OK**: {ok}")
+        if issues:
+            for iss in issues:
+                lines.append(f"  - {iss}")
+        else:
+            lines.append("  - (no issues)")
+
+        payload = {
+            "symbol": sym,
+            "strategy": directive.get("Strategy"),
+            "action": directive.get("Action"),
+            "trend_bias": directive.get("Trend_Bias"),
+            "price": _num(directive.get("Price")),
+            "net_premium": _num(directive.get("Net_Premium")),
+            "realizable_daily_theta": _num(directive.get("Realizable_Daily_Theta")),
+            "sigma_garch": _num(directive.get("Sigma_GARCH")),
+            "ivr_proxy": _num(directive.get("IVR_Proxy")),
+            "short_strike": _num(directive.get("Short_Strike")),
+            "short_delta": _num(directive.get("Short_Delta")),
+            "long_strike": _num(directive.get("Long_Strike")),
+            "long_delta": _num(directive.get("Long_Delta")),
+            "atm_delta": _num(directive.get("ATM_Delta")),
+            "atm_gamma": _num(directive.get("ATM_Gamma")),
+            "atm_vega": _num(directive.get("ATM_Vega")),
+            "atm_theta_daily": _num(directive.get("ATM_Theta_Daily")),
+            "integrity_ok": ok,
+            "integrity_issues": list(issues),
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to build options directive for {symbol}: {str(e)}"
+
+
+@mcp.tool()
+def get_regime_status() -> str:
+    """
+    Reports the current macro regime, VIX, recession telemetry (Sahm Rule, HY OAS,
+    yield curve), HMM risk-on probability, macro-regime-gate state, and the global
+    kill-switch state — WITHOUT a live FRED call, by reading the persisted
+    output/state_snapshot.json. Missing values render as "unavailable" and are
+    never fabricated. READ-ONLY.
+    """
+    import json
+    import math
+    import os
+
+    try:
+        # Resolve the snapshot path via settings.OUTPUT_DIR when possible.
+        snap_path = None
+        try:
+            from settings import settings as _settings
+            snap_path = os.path.join(str(_settings.OUTPUT_DIR), "state_snapshot.json")
+        except Exception:
+            snap_path = os.path.join("output", "state_snapshot.json")
+
+        snap = None
+        if snap_path and os.path.exists(snap_path):
+            try:
+                with open(snap_path, "r", encoding="utf-8") as fh:
+                    snap = json.load(fh)
+            except Exception:
+                snap = None
+
+        # Kill switch — checked live (cheap file-existence probe, no engine work).
+        kill_active = None
+        try:
+            from execution.kill_switch import GlobalKillSwitch
+            kill_active = bool(GlobalKillSwitch().is_active())
+        except Exception:
+            kill_active = None
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        def _badge_vix(v):
+            if v is None:
+                return "unavailable"
+            if v > 30:
+                return f"🔴 {v:.2f} (elevated)"
+            if v > 20:
+                return f"🟡 {v:.2f}"
+            return f"🟢 {v:.2f}"
+
+        def _badge_sahm(v):
+            if v is None:
+                return "unavailable"
+            if v >= 0.5:
+                return f"🔴 {v:.2f} (recession trigger)"
+            if v >= 0.3:
+                return f"🟡 {v:.2f}"
+            return f"🟢 {v:.2f}"
+
+        def _badge_oas(v):
+            if v is None:
+                return "unavailable"
+            if v > 6:
+                return f"🔴 {v:.2f}% (credit stress)"
+            if v > 4:
+                return f"🟡 {v:.2f}%"
+            return f"🟢 {v:.2f}%"
+
+        def _badge_hmm(v):
+            if v is None:
+                return "unavailable (HMM did not run)"
+            if v < 0.3:
+                return f"🔴 {v * 100:.1f}% risk-on"
+            if v < 0.6:
+                return f"🟡 {v * 100:.1f}% risk-on"
+            return f"🟢 {v * 100:.1f}% risk-on"
+
+        lines = ["# Macro Regime & Risk Status\n"]
+
+        if snap is None:
+            lines.append(
+                "_State snapshot unavailable — run the pipeline (`main.py` / "
+                "`main_orchestrator.py`) to generate `output/state_snapshot.json`._\n"
+            )
+            regime = None
+            vix = sahm = oas = ycurve = hmm = None
+            gate = None
+        else:
+            regime = snap.get("market_regime") or snap.get("regime")
+            vix = _num(snap.get("vix"))
+            sahm = _num(snap.get("sahm_rule"))
+            oas = _num(snap.get("high_yield_oas"))
+            ycurve = _num(snap.get("yield_curve"))
+            hmm = _num(snap.get("hmm_risk_on_probability"))
+            gate = snap.get("macro_regime_gate_enabled")
+            ts = snap.get("timestamp", "unknown")
+            lines.append(f"_Snapshot timestamp: {ts}_\n")
+            lines.append(f"- **Market Regime**: {regime or 'unavailable'}")
+            lines.append(f"- **VIX**: {_badge_vix(vix)}")
+            lines.append(f"- **Sahm Rule**: {_badge_sahm(sahm)}")
+            lines.append(f"- **High-Yield OAS**: {_badge_oas(oas)}")
+            lines.append(
+                f"- **Yield Curve (10Y-2Y)**: {ycurve:.2f}" if ycurve is not None else "- **Yield Curve (10Y-2Y)**: unavailable"
+            )
+            lines.append(f"- **HMM Risk-On Probability**: {_badge_hmm(hmm)}")
+            lines.append(
+                f"- **Macro Regime Gate**: {'🟢 ENABLED' if gate else '🔴 DISABLED' if gate is not None else 'unavailable'}"
+            )
+
+        lines.append(
+            f"- **Global Kill Switch**: "
+            + ("🔴 ACTIVE" if kill_active else "🟢 inactive" if kill_active is not None else "unavailable")
+        )
+
+        payload = {
+            "snapshot_available": snap is not None,
+            "market_regime": (snap.get("market_regime") or snap.get("regime")) if snap else None,
+            "vix": _num(snap.get("vix")) if snap else None,
+            "sahm_rule": _num(snap.get("sahm_rule")) if snap else None,
+            "high_yield_oas": _num(snap.get("high_yield_oas")) if snap else None,
+            "yield_curve": _num(snap.get("yield_curve")) if snap else None,
+            "hmm_risk_on_probability": _num(snap.get("hmm_risk_on_probability")) if snap else None,
+            "macro_regime_gate_enabled": snap.get("macro_regime_gate_enabled") if snap else None,
+            "kill_switch_active": kill_active,
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to read regime status: {str(e)}"
+
+
+@mcp.tool()
+def get_portfolio_coverage() -> str:
+    """
+    Reports the portfolio/watchlist coverage report (holdings ∪ watchlists) with
+    each symbol's CoverageStatus (FULL/STALE/QUOTES_ONLY/EQUITY_ONLY/UNCOVERED),
+    cost-basis delta, and forecast availability. Tries a cached Robinhood account
+    snapshot first (no forced login); degrades to snapshot=None when unavailable.
+    READ-ONLY analytics; no order code; dead-letter safe.
+    """
+    import json
+    import math
+
+    try:
+        from data.portfolio_sync import build_sync_report, CoverageStatus  # noqa: F401
+
+        # Try a cached account snapshot WITHOUT forcing a live Robinhood login.
+        snapshot = None
+        snapshot_note = "no account snapshot (holdings excluded)"
+        try:
+            from data.robinhood_portfolio import fetch_account_snapshot
+            snapshot = fetch_account_snapshot()
+            snapshot_note = "account snapshot loaded"
+        except Exception as se:
+            snapshot = None
+            snapshot_note = f"account snapshot unavailable ({type(se).__name__})"
+
+        report = build_sync_report(snapshot, probe_market=True)
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        symbols = getattr(report, "symbols", {}) or {}
+        lines = ["# Portfolio & Watchlist Coverage\n"]
+        lines.append(f"_{snapshot_note}._\n")
+        lines.append(f"- **Provider Source**: {getattr(report, 'provider_source', 'N/A')}")
+        lines.append(f"- **Fundamentals Source**: {getattr(report, 'fundamentals_source', 'N/A')}")
+        lines.append(f"- **Total Symbols**: {getattr(report, 'n_total', len(symbols))}")
+        lines.append(f"- **Full**: {getattr(report, 'n_full', 0)}  |  "
+                     f"**Equity-Only**: {getattr(report, 'n_equity_only', 0)}  |  "
+                     f"**Uncovered**: {getattr(report, 'n_uncovered', 0)}\n")
+
+        rows = []
+        json_symbols = []
+        for sym in sorted(symbols.keys()):
+            st = symbols[sym]
+            coverage = getattr(getattr(st, "coverage", None), "value", None) or str(getattr(st, "coverage", ""))
+            delta = _num(getattr(st, "cost_basis_delta_per_share", None))
+            price = _num(getattr(st, "current_price", None))
+            held = bool(getattr(st, "held", False))
+            fc = bool(getattr(st, "forecast_available", False))
+            rows.append(
+                "| {sym} | {cov} | {held} | {price} | {delta} | {fc} |".format(
+                    sym=sym,
+                    cov=coverage,
+                    held="✅" if held else "",
+                    price=f"${price:,.2f}" if price is not None else "N/A",
+                    delta=f"{delta:+,.2f}" if delta is not None else "N/A",
+                    fc="✅" if fc else "",
+                )
+            )
+            json_symbols.append({
+                "symbol": sym,
+                "coverage": coverage,
+                "held": held,
+                "current_price": price,
+                "cost_basis_delta_per_share": delta,
+                "forecast_available": fc,
+                "diagnostic": getattr(st, "diagnostic", "") or "",
+            })
+
+        if rows:
+            lines.append("| Symbol | Coverage | Held | Price | Δ/Share | Forecast |")
+            lines.append("|--------|----------|------|-------|---------|----------|")
+            lines.extend(rows)
+        else:
+            lines.append("_No symbols in the tracked universe (no holdings or watchlists found)._")
+
+        # Coverage-gap callout
+        gaps = [s for s in json_symbols if s["coverage"] in ("uncovered", "equity_only")]
+        if gaps:
+            lines.append("\n## Coverage Gaps")
+            for g in gaps:
+                note = f" — {g['diagnostic']}" if g["diagnostic"] else ""
+                lines.append(f"- **{g['symbol']}** ({g['coverage']}){note}")
+
+        payload = {
+            "snapshot_loaded": snapshot is not None,
+            "provider_source": getattr(report, "provider_source", None),
+            "fundamentals_source": getattr(report, "fundamentals_source", None),
+            "n_total": getattr(report, "n_total", len(symbols)),
+            "n_full": getattr(report, "n_full", 0),
+            "n_equity_only": getattr(report, "n_equity_only", 0),
+            "n_uncovered": getattr(report, "n_uncovered", 0),
+            "symbols": json_symbols,
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to build portfolio coverage report: {str(e)}"
 
 
 # ==========================================

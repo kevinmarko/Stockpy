@@ -95,3 +95,6 @@ webapp/.vite/
 # rule (above) would otherwise swallow, breaking `npm run dev`/`build` on a
 # fresh checkout. Negation must come after `*.html` (last-match-wins).
 !webapp/index.html
+
+# Claude Code transient agent worktrees (scratch, never commit)
+.claude/worktrees/

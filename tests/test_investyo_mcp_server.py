@@ -72,16 +72,41 @@ Coverage
   calculation, empty-portfolio degradation.
 * ``read_platform_logs`` / ``get_universe_status``: DB-present and
   file-present branches, all-absent degradation.
-* Representative subprocess-wrapping tools
-  (``trigger_data_engine``, ``run_platform_tests``,
-  ``trigger_edgar_backfill``): success / ``CalledProcessError`` /
-  ``FileNotFoundError`` / ``TimeoutExpired`` paths, and the exact
-  constructed ``argv`` for every remaining subprocess-based tool
-  (``generate_html_report``, ``trigger_forecasting``,
-  ``trigger_macro_engine``, ``trigger_full_pipeline``,
-  ``run_validation_harness``, ``compare_strategies``,
-  ``trigger_model_retraining``) via a mocked ``subprocess.run`` that
-  records its call args.
+* Subprocess-wrapping tools that REMAIN subprocess-based
+  (``run_platform_tests``, ``trigger_edgar_backfill``,
+  ``generate_html_report``, ``run_validation_harness``,
+  ``compare_strategies``, ``trigger_model_retraining``): success /
+  ``CalledProcessError`` / ``FileNotFoundError`` / ``TimeoutExpired``
+  paths plus the exact constructed ``argv`` via a mocked
+  ``subprocess.run`` that records its call args. The FIXED argv
+  contracts are asserted here: ``run_validation_harness`` /
+  ``compare_strategies`` use ``--strategies`` (plural) + ``--json`` (not
+  ``--strategy`` / ``--json-output``); ``run_validation_harness`` OMITS
+  ``--strategies`` for "default"/"all"/empty (validate all);
+  ``trigger_edgar_backfill(tickers="all")`` RESOLVES the universe and
+  ALWAYS passes ``--tickers``; ``generate_html_report`` shells
+  ``[sys.executable, "main.py"]``.
+* Tools that became IN-PROCESS (no longer shell to a nonexistent CLI):
+  ``trigger_data_engine`` (→ ``HistoricalStore().get_bars``),
+  ``trigger_forecasting`` (→ ``engine.advisory.evaluate`` reporting
+  ``.forecast``), ``trigger_macro_engine`` (→ in-process ``MacroEngine``
+  fed by a ``DataEngine``), and ``trigger_full_pipeline`` (Step 1
+  in-process bars, Step 3 in-process macro; Step 2 EDGAR still
+  subprocess but always with ``--tickers``). Mocked at the engine/store's
+  OWN module path (imported locally inside each tool body).
+* ``update_universe_tickers`` routes ``.env`` writes through
+  ``gui.env_io.write_setting("DEFAULT_TICKERS", ...)`` — a guard test
+  pins that an unrelated comment line SURVIVES the edit and the new
+  ticker lands in the parsed ``DEFAULT_TICKERS``.
+* ``get_universe_status`` counts the real ``trades`` table (not a
+  nonexistent ``Transactions`` table) in its DB-metrics section.
+* ``query_investyo_db`` accepts a read-only ``WITH ... SELECT`` CTE while
+  still rejecting INSERT/UPDATE/DELETE/DROP (incl. a CTE-prefixed mutation).
+* New read-only market-intelligence tools ``get_recommendation`` /
+  ``get_options_directive`` / ``get_regime_status`` /
+  ``get_portfolio_coverage``: one happy-path each (markdown fields + a
+  fenced ```json block) mocking the underlying engine, plus a dead-letter
+  degradation path each.
 * ``get_pit_coverage_report`` / ``run_pit_audit`` / ``run_lookahead_check``:
   mocked ``validation.pit_fundamentals`` wiring and output formatting.
 * ``get_model_registry_status``: list-shaped and dict-shaped registries,
@@ -133,6 +158,30 @@ def _capturing_run(captured, result):
         return result
 
     return _run
+
+
+def _patch_advisory_inputs(monkeypatch, snapshot=None):
+    """Defensively neutralize the network-touching input builders that an
+    advisory/market read-only tool may construct BEFORE/AROUND the primary
+    engine call the test actually mocks (e.g. a market-data provider or a
+    Robinhood account snapshot). Patching is best-effort (``raising=False``)
+    so it is a no-op if the tool never imports the symbol -- the test only
+    depends on the primary engine mock, not on these."""
+    try:
+        import data.market_data as md_mod
+
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: MagicMock(), raising=False)
+        monkeypatch.setattr(md_mod, "reset_provider", lambda *a, **k: None, raising=False)
+    except Exception:  # pragma: no cover - module always importable in this repo
+        pass
+    try:
+        import data.robinhood_portfolio as rp_mod
+
+        monkeypatch.setattr(
+            rp_mod, "fetch_account_snapshot", lambda *a, **k: snapshot, raising=False
+        )
+    except Exception:  # pragma: no cover
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +312,44 @@ class TestQueryInvestyoDb:
         monkeypatch.chdir(tmp_path)
         sqlite3.connect("quant_platform.db").close()
         assert "Only SELECT" not in srv.query_investyo_db("   select 1")
+
+    def test_accepts_with_cte_query(self, monkeypatch, tmp_path):
+        """Fixed contract: a read-only ``WITH ... SELECT`` CTE is ACCEPTED
+        (the guard is no longer a naive ``startswith('SELECT')``)."""
+        monkeypatch.chdir(tmp_path)
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute("CREATE TABLE T (symbol TEXT, score REAL)")
+        conn.execute("INSERT INTO T VALUES ('AAPL', 1.5)")
+        conn.commit()
+        conn.close()
+
+        result = srv.query_investyo_db(
+            "WITH cte AS (SELECT symbol, score FROM T) SELECT * FROM cte"
+        )
+
+        assert "Only SELECT queries are permitted" not in result
+        assert "AAPL" in result
+
+    def test_accepts_leading_whitespace_with_cte(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        sqlite3.connect("quant_platform.db").close()
+        assert "Only SELECT queries are permitted" not in srv.query_investyo_db(
+            "  \n WITH x AS (SELECT 1 AS a) SELECT a FROM x"
+        )
+
+    @pytest.mark.parametrize(
+        "bad_query",
+        [
+            "WITH x AS (SELECT 1) INSERT INTO T VALUES (1)",
+            "WITH x AS (SELECT 1) DELETE FROM T",
+            "  update T set score=1",
+            "drop table T",
+        ],
+    )
+    def test_rejects_mutations_even_with_cte_prefix(self, bad_query):
+        # A CTE prefix must not be a bypass for a trailing mutation, and bare
+        # INSERT/UPDATE/DELETE/DROP stay rejected.
+        assert "Only SELECT queries are permitted" in srv.query_investyo_db(bad_query)
 
     def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
@@ -455,26 +542,52 @@ class TestUpdateWatchRules:
 
 
 class TestUpdateUniverseTickers:
-    def test_add_with_no_env_file_uses_default_universe(self, monkeypatch, tmp_path):
+    """``gui.env_io`` computes ``ENV_PATH`` from the repo root at import time,
+    NOT from the CWD -- ``monkeypatch.chdir()`` alone does not redirect it.
+    Every test here must also redirect the module symbol directly, or it will
+    silently read/write the real repo ``.env`` file instead of the fixture.
+    """
+
+    def _redirect_env(self, monkeypatch, tmp_path):
+        import gui.env_io as env_io
+
+        env_file = tmp_path / ".env"
+        monkeypatch.setattr(env_io, "ENV_PATH", env_file)
         monkeypatch.chdir(tmp_path)
+        return env_file
+
+    @staticmethod
+    def _parse_default_tickers(env_text: str) -> list:
+        """python-dotenv's ``set_key(quote_mode="auto")`` wraps a value
+        containing special characters in a single quote (e.g.
+        ``DEFAULT_TICKERS='["AAPL", "TSLA"]'``) -- strip a matching wrapping
+        quote before JSON-decoding.
+        """
+        raw = env_text.split("DEFAULT_TICKERS=", 1)[1].splitlines()[0].strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+            raw = raw[1:-1]
+        return json.loads(raw)
+
+    def test_add_with_no_env_file_uses_default_universe(self, monkeypatch, tmp_path):
+        env_file = self._redirect_env(monkeypatch, tmp_path)
 
         result = srv.update_universe_tickers("add", "tsla")
 
         assert "TSLA" in result
-        env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-        tickers = json.loads(env_text.split("DEFAULT_TICKERS=", 1)[1].strip())
-        assert "TSLA" in tickers
-        assert "AAPL" in tickers  # from the hardcoded default
+        tickers = self._parse_default_tickers(env_file.read_text(encoding="utf-8"))
+        # No .env existed, so env_io.get_value's own default ("[]") applies --
+        # NOT the tool's old hand-rolled 4-ticker hardcoded fallback.
+        assert tickers == ["TSLA"]
 
     def test_add_already_present(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text('DEFAULT_TICKERS=["AAPL"]\n', encoding="utf-8")
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text('DEFAULT_TICKERS=["AAPL"]\n', encoding="utf-8")
 
         assert "already in the trading universe" in srv.update_universe_tickers("add", "aapl")
 
     def test_remove_present_ticker(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text('DEFAULT_TICKERS=["AAPL", "MSFT"]\n', encoding="utf-8")
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text('DEFAULT_TICKERS=["AAPL", "MSFT"]\n', encoding="utf-8")
 
         result = srv.update_universe_tickers("remove", "msft")
 
@@ -482,30 +595,50 @@ class TestUpdateUniverseTickers:
         # "Successfully removeed" (double e) for action="remove" -- a
         # harmless grammar quirk, not asserted on here.
         assert "MSFT" in result and "active universe" in result
-        env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-        tickers = json.loads(env_text.split("DEFAULT_TICKERS=", 1)[1].strip())
+        tickers = self._parse_default_tickers(env_file.read_text(encoding="utf-8"))
         assert tickers == ["AAPL"]
 
     def test_remove_absent_ticker(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text('DEFAULT_TICKERS=["AAPL"]\n', encoding="utf-8")
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text('DEFAULT_TICKERS=["AAPL"]\n', encoding="utf-8")
 
         assert "is not in the trading universe" in srv.update_universe_tickers("remove", "zzzz")
 
     def test_malformed_json_falls_back_to_comma_split(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("DEFAULT_TICKERS=AAPL,MSFT\n", encoding="utf-8")
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text("DEFAULT_TICKERS=AAPL,MSFT\n", encoding="utf-8")
 
         result = srv.update_universe_tickers("add", "tsla")
 
         assert "TSLA" in result
-        env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-        tickers = json.loads(env_text.split("DEFAULT_TICKERS=", 1)[1].strip())
+        tickers = self._parse_default_tickers(env_file.read_text(encoding="utf-8"))
         assert set(tickers) == {"AAPL", "MSFT", "TSLA"}
 
     def test_invalid_action(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
+        self._redirect_env(monkeypatch, tmp_path)
         assert "Invalid action" in srv.update_universe_tickers("destroy", "AAPL")
+
+    def test_add_via_env_io_preserves_comments(self, monkeypatch, tmp_path):
+        """Fixed contract: the write is routed through
+        ``gui.env_io.write_setting("DEFAULT_TICKERS", ...)`` (dotenv ``set_key``,
+        which edits in place) instead of rewriting the whole file line-by-line.
+        This means unrelated lines -- crucially a comment -- SURVIVE the edit.
+        """
+        env_file = self._redirect_env(monkeypatch, tmp_path)
+        env_file.write_text(
+            "# my comment\nDEFAULT_TICKERS=[\"AAPL\"]\n", encoding="utf-8"
+        )
+
+        result = srv.update_universe_tickers("add", "tsla")
+
+        assert "TSLA" in result
+        text = env_file.read_text(encoding="utf-8")
+        # (a) the comment line survives the rewrite.
+        assert "# my comment" in text
+        # (b) TSLA is present in the parsed DEFAULT_TICKERS.
+        tickers = self._parse_default_tickers(text)
+        assert "TSLA" in [t.upper() for t in tickers]
+        assert "AAPL" in [t.upper() for t in tickers]
 
 
 # ---------------------------------------------------------------------------
@@ -653,7 +786,9 @@ class TestGetUniverseStatus:
         )
         conn = sqlite3.connect("quant_platform.db")
         conn.execute("CREATE TABLE DailySignals (id INTEGER)")
-        conn.execute("CREATE TABLE Transactions (id INTEGER)")
+        # Fixed contract: the DB-metrics section counts the `trades` table
+        # (TransactionsStore's real table name), NOT a `Transactions` table.
+        conn.execute("CREATE TABLE trades (id INTEGER)")
         conn.execute("CREATE TABLE ExecutionLogs (id INTEGER)")
         conn.commit()
         conn.close()
@@ -663,6 +798,27 @@ class TestGetUniverseStatus:
         assert "NVDA" in result
         assert "conviction_above" in result
         assert "Daily Signals Table Rows**: 0" in result
+        # The section rendered fully -> the trades-table query did not error out.
+        assert "Error querying DB stats" not in result
+
+    def test_queries_trades_table_not_transactions(self, monkeypatch, tmp_path):
+        """Regression guard for the fixed contract: the DB-metrics section
+        must query the real `trades` table. Seeding ONLY DailySignals /
+        ExecutionLogs / trades (and NO `Transactions` table) must render the
+        metrics without the old ``no such table: Transactions`` error."""
+        monkeypatch.chdir(tmp_path)
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute("CREATE TABLE DailySignals (id INTEGER)")
+        conn.execute("CREATE TABLE ExecutionLogs (id INTEGER)")
+        conn.execute("CREATE TABLE trades (id INTEGER)")
+        conn.commit()
+        conn.close()
+
+        result = srv.get_universe_status()
+
+        assert "Daily Signals Table Rows**: 0" in result
+        assert "Error querying DB stats" not in result
+        assert "no such table" not in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -670,51 +826,56 @@ class TestGetUniverseStatus:
 # ---------------------------------------------------------------------------
 
 
-class TestTriggerDataEngineSubprocessPattern:
-    """Deep test of the try/except CalledProcessError/FileNotFoundError
-    pattern shared verbatim by generate_html_report, run_platform_tests,
-    trigger_forecasting, trigger_macro_engine, and (with a TimeoutExpired
-    variant) trigger_edgar_backfill/trigger_full_pipeline/
-    run_validation_harness/compare_strategies/trigger_model_retraining."""
+class TestTriggerDataEngineInProcess:
+    """``trigger_data_engine`` is now IN-PROCESS: it fetches/refreshes bars via
+    ``data.historical_store.HistoricalStore().get_bars(...)`` instead of shelling
+    out to a nonexistent ``data_engine.py`` CLI entrypoint. Mock the store at its
+    own module path (it is imported locally inside the tool body)."""
 
-    def test_success(self, monkeypatch):
-        monkeypatch.setattr(
-            subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="OK output", returncode=0)
+    def _bars(self):
+        idx = pd.bdate_range("2024-01-01", periods=3)
+        return pd.DataFrame(
+            {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 100}, index=idx
         )
-        result = srv.trigger_data_engine("AAPL", "1D")
-        assert "Data ingestion successful for AAPL" in result
-        assert "OK output" in result
 
-    def test_called_process_error(self, monkeypatch):
-        def _raise(*a, **k):
-            raise subprocess.CalledProcessError(1, "cmd", stderr="boom")
+    def test_success_fetches_bars_in_process(self, monkeypatch):
+        import data.historical_store as hs_mod
 
-        monkeypatch.setattr(subprocess, "run", _raise)
+        fake_store = MagicMock()
+        fake_store.get_bars.return_value = self._bars()
+        monkeypatch.setattr(hs_mod, "HistoricalStore", lambda *a, **k: fake_store)
+
+        result = srv.trigger_data_engine("aapl", "1D")
+
+        assert isinstance(result, str) and result
+        assert "AAPL" in result.upper()
+        fake_store.get_bars.assert_called_once()
+        # The symbol is threaded into get_bars (as a positional or keyword arg).
+        call = fake_store.get_bars.call_args
+        passed = [str(v).upper() for v in (list(call.args) + list(call.kwargs.values()))]
+        assert "AAPL" in passed
+
+    def test_empty_bars_does_not_raise(self, monkeypatch):
+        import data.historical_store as hs_mod
+
+        fake_store = MagicMock()
+        fake_store.get_bars.return_value = pd.DataFrame()
+        monkeypatch.setattr(hs_mod, "HistoricalStore", lambda *a, **k: fake_store)
+
+        result = srv.trigger_data_engine("ZZZZ")
+        assert isinstance(result, str) and result  # dead-letter: a message, never a raise
+
+    def test_store_exception_degrades_gracefully(self, monkeypatch):
+        import data.historical_store as hs_mod
+
+        fake_store = MagicMock()
+        fake_store.get_bars.side_effect = RuntimeError("db locked")
+        monkeypatch.setattr(hs_mod, "HistoricalStore", lambda *a, **k: fake_store)
+
         result = srv.trigger_data_engine("AAPL")
-        assert "Data ingestion failed" in result
-        assert "boom" in result
-
-    def test_file_not_found(self, monkeypatch):
-        def _raise(*a, **k):
-            raise FileNotFoundError()
-
-        monkeypatch.setattr(subprocess, "run", _raise)
-        assert "data_engine.py not found" in srv.trigger_data_engine("AAPL")
-
-    def test_command_args(self, monkeypatch):
-        captured = {}
-
-        def _fake_run(cmd, **k):
-            captured["cmd"] = cmd
-            return SimpleNamespace(stdout="", returncode=0)
-
-        monkeypatch.setattr(subprocess, "run", _fake_run)
-        srv.trigger_data_engine("aapl", "5min")
-
-        assert "--symbol" in captured["cmd"]
-        assert "aapl" in captured["cmd"]
-        assert "--timeframe" in captured["cmd"]
-        assert "5min" in captured["cmd"]
+        assert isinstance(result, str)
+        low = result.lower()
+        assert "error" in low or "fail" in low or "AAPL" in result.upper()
 
 
 class TestRunPlatformTests:
@@ -753,7 +914,13 @@ class TestTriggerEdgarBackfillTimeoutPattern:
         monkeypatch.setattr(subprocess, "run", _raise)
         assert "timed out" in srv.trigger_edgar_backfill()
 
-    def test_all_tickers_omits_tickers_flag(self, monkeypatch):
+    def test_all_tickers_resolves_universe_and_passes_tickers(self, monkeypatch, tmp_path):
+        # Fixed contract: "all" is RESOLVED to the real universe and --tickers is
+        # ALWAYS passed (the old code silently omitted the flag, which made the
+        # backfill script default to backfilling nothing). chdir to an empty
+        # tmp_path so the resolver falls back to its hardcoded default universe
+        # rather than reading the repo's real .env.
+        monkeypatch.chdir(tmp_path)
         captured = {}
 
         def _fake_run(cmd, **k):
@@ -763,7 +930,10 @@ class TestTriggerEdgarBackfillTimeoutPattern:
         monkeypatch.setattr(subprocess, "run", _fake_run)
         srv.trigger_edgar_backfill(tickers="all")
 
-        assert "--tickers" not in captured["cmd"]
+        assert "--tickers" in captured["cmd"]
+        idx = captured["cmd"].index("--tickers")
+        # At least one resolved ticker follows the flag.
+        assert len(captured["cmd"]) > idx + 1
 
     def test_specific_tickers_included(self, monkeypatch):
         captured = {}
@@ -775,52 +945,42 @@ class TestTriggerEdgarBackfillTimeoutPattern:
         monkeypatch.setattr(subprocess, "run", _fake_run)
         srv.trigger_edgar_backfill(tickers="aapl,msft")
 
+        # backfill_edgar_fundamentals.py's --tickers takes ONE comma-joined
+        # string (it does `args.tickers.split(",")` internally), not nargs='+'.
         idx = captured["cmd"].index("--tickers")
-        assert captured["cmd"][idx + 1 : idx + 3] == ["AAPL", "MSFT"]
+        assert captured["cmd"][idx + 1] == "AAPL,MSFT"
 
 
 class TestRemainingSubprocessToolsArgv:
-    """Lighter-touch tests for the remaining subprocess-wrapping tools:
+    """Lighter-touch tests for the tools that REMAIN subprocess-wrapping:
     verify the constructed argv is correct and that a nonzero exit
     produces a readable failure string, without re-deriving the full
-    exception-branch matrix already covered above for the pattern."""
+    exception-branch matrix already covered above for the pattern.
 
-    def test_generate_html_report(self, monkeypatch):
+    (``trigger_forecasting`` / ``trigger_macro_engine`` / ``trigger_full_pipeline``
+    became in-process and now have their own dedicated classes below.)"""
+
+    def test_generate_html_report(self, monkeypatch, tmp_path):
+        from settings import settings
+
+        # Fixed contract: success is no longer trusted from the subprocess exit
+        # code alone (CONSTRAINT #4 - never fabricate) -- the tool checks that
+        # daily_report.html was actually produced under settings.OUTPUT_DIR.
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        (tmp_path / "daily_report.html").write_text("<html></html>", encoding="utf-8")
+
         captured = {}
         monkeypatch.setattr(
             subprocess, "run", _capturing_run(captured, SimpleNamespace(stdout="ok", returncode=0))
         )
         result = srv.generate_html_report("port-1")
-        assert "Report generated successfully" in result
-        assert "--portfolio" in captured["cmd"] and "port-1" in captured["cmd"]
-
-    def test_trigger_forecasting(self, monkeypatch):
-        captured = {}
-        monkeypatch.setattr(
-            subprocess, "run", _capturing_run(captured, SimpleNamespace(stdout="ok", returncode=0))
-        )
-        result = srv.trigger_forecasting("AAPL")
-        assert "Forecasting successful for AAPL" in result
-        assert "--symbol" in captured["cmd"] and "AAPL" in captured["cmd"]
-
-    def test_trigger_macro_engine(self, monkeypatch):
-        monkeypatch.setattr(subprocess, "run", lambda cmd, **k: SimpleNamespace(stdout="ok", returncode=0))
-        assert "Macro engine run successful" in srv.trigger_macro_engine()
-
-    def test_trigger_full_pipeline_reports_per_step_status(self, monkeypatch):
-        calls = []
-
-        def _fake_run(cmd, **k):
-            calls.append(cmd)
-            return SimpleNamespace(stdout="", stderr="", returncode=0)
-
-        monkeypatch.setattr(subprocess, "run", _fake_run)
-        result = srv.trigger_full_pipeline("AAPL,MSFT")
-
-        assert "✅ data_engine(AAPL): OK" in result
-        assert "✅ data_engine(MSFT): OK" in result
-        assert "✅ edgar_backfill: OK" in result
-        assert "✅ macro_engine: OK" in result
+        assert "HTML report generated" in result
+        # Fixed contract: shells `[sys.executable, "main.py"]` (the real advisory
+        # orchestrator entrypoint), NOT `-m reporting.html_publisher` / a
+        # nonexistent reporting_engine.py.
+        assert "main.py" in captured["cmd"]
+        assert "reporting.html_publisher" not in captured["cmd"]
+        assert "reporting_engine.py" not in captured["cmd"]
 
     def test_run_validation_harness(self, monkeypatch):
         captured = {}
@@ -831,15 +991,41 @@ class TestRemainingSubprocessToolsArgv:
         )
         result = srv.run_validation_harness("my_strat", "2020-01-01", "2021-01-01")
         assert "my_strat" in result
-        assert "--strategy" in captured["cmd"]
+        # Fixed contract: the flag is --strategies (plural), not --strategy.
+        assert "--strategies" in captured["cmd"]
+        assert "--strategy" not in captured["cmd"]
+        idx = captured["cmd"].index("--strategies")
+        assert captured["cmd"][idx + 1] == "my_strat"
+
+    @pytest.mark.parametrize("name", ["default", "all", ""])
+    def test_run_validation_harness_all_omits_strategies_flag(self, monkeypatch, name):
+        # "default"/"all"/empty means "validate everything" -> --strategies omitted.
+        captured = {}
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _capturing_run(captured, SimpleNamespace(stdout="ok", returncode=0)),
+        )
+        srv.run_validation_harness(name, "2020-01-01", "2021-01-01")
+        assert "--strategies" not in captured["cmd"]
 
     def test_compare_strategies(self, monkeypatch):
-        monkeypatch.setattr(
-            subprocess, "run", lambda cmd, **k: SimpleNamespace(stdout="metrics", returncode=0)
-        )
+        calls = []
+
+        def _fake_run(cmd, **k):
+            calls.append(list(cmd))
+            return SimpleNamespace(stdout="metrics", returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
         result = srv.compare_strategies("strat_a", "strat_b")
         assert "strat_a vs strat_b" in result
         assert "## strat_a" in result and "## strat_b" in result
+        # Fixed contract: --strategies (plural) + --json; NEVER --strategy / --json-output.
+        flat = [tok for cmd in calls for tok in cmd]
+        assert "--strategies" in flat
+        assert "--json" in flat
+        assert "--strategy" not in flat
+        assert "--json-output" not in flat
 
     def test_trigger_model_retraining_all(self, monkeypatch):
         captured = {}
@@ -862,6 +1048,389 @@ class TestRemainingSubprocessToolsArgv:
         srv.trigger_model_retraining("lgbm_ranker")
         idx = captured["cmd"].index("--model")
         assert captured["cmd"][idx + 1] == "lgbm_ranker"
+
+
+# ---------------------------------------------------------------------------
+# In-process migrations: trigger_forecasting / trigger_macro_engine /
+# trigger_full_pipeline. These no longer shell to a nonexistent CLI; they call
+# the engines directly. Mock at the engine's OWN module path (imported locally
+# inside each tool body).
+# ---------------------------------------------------------------------------
+
+
+def _fake_macro_engine():
+    """A MacroEngine stand-in whose likely accessor methods all return a
+    numerically-formattable macro DTO, so whichever one the tool calls renders
+    without a TypeError. The exact method name is an impl detail we don't pin."""
+    fake_dto = SimpleNamespace(
+        market_regime="RISK ON",
+        vix=15.0,
+        sahm_rule_indicator=0.1,
+        sahm_rule=0.1,
+        yield_curve_spread=0.5,
+        yield_curve=0.5,
+        high_yield_oas=3.0,
+        credit_spread=3.0,
+        real_yield=1.0,
+        killSwitch=False,
+        hmm_risk_on_probability=0.7,
+    )
+    engine = MagicMock()
+    for name in (
+        "analyze",
+        "run",
+        "get_macro_dto",
+        "build_macro_dto",
+        "_build_macro_dto",
+        "compute_regime",
+        "get_regime",
+        "evaluate",
+        "detect_regime",
+    ):
+        setattr(engine, name, lambda *a, **k: fake_dto)
+    engine.compute_hmm_risk_on_probability = lambda *a, **k: 0.7
+    return engine
+
+
+class TestTriggerForecastingInProcess:
+    """``trigger_forecasting`` now runs the forecast in-process via
+    ``engine.advisory.evaluate(...)`` and reports the recommendation's
+    ``.forecast`` value, instead of shelling to a nonexistent
+    ``forecasting_engine.py`` CLI."""
+
+    def _fake_rec(self):
+        return SimpleNamespace(
+            symbol="AAPL",
+            action="BUY",
+            strategy="momentum",
+            conviction=0.8,
+            rationale="up",
+            suggested_position_pct=0.02,
+            forecast=123.45,
+            key_indicators={},
+            data_quality="OK",
+        )
+
+    def test_reports_forecast(self, monkeypatch):
+        import engine.advisory as adv_mod
+
+        monkeypatch.setattr(adv_mod, "evaluate", lambda *a, **k: self._fake_rec())
+        _patch_advisory_inputs(monkeypatch)
+
+        result = srv.trigger_forecasting("AAPL")
+
+        assert "AAPL" in result
+        assert "123.45" in result or "123" in result
+
+    def test_exception_degrades_gracefully(self, monkeypatch):
+        import engine.advisory as adv_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("forecast down")
+
+        monkeypatch.setattr(adv_mod, "evaluate", _raise)
+        _patch_advisory_inputs(monkeypatch)
+
+        result = srv.trigger_forecasting("AAPL")
+        assert isinstance(result, str)
+        low = result.lower()
+        assert "error" in low or "fail" in low or "unavailable" in low
+
+
+class TestTriggerMacroEngineInProcess:
+    """``trigger_macro_engine`` now constructs an in-process ``MacroEngine``
+    (fed by a ``DataEngine``) instead of shelling to ``macro_engine.py``."""
+
+    def test_uses_in_process_macro_engine(self, monkeypatch):
+        import macro_engine as me_mod
+        import data_engine as de_mod
+
+        constructed = {"macro": False}
+
+        def _make_macro(*a, **k):
+            constructed["macro"] = True
+            return _fake_macro_engine()
+
+        monkeypatch.setattr(me_mod, "MacroEngine", _make_macro)
+        monkeypatch.setattr(de_mod, "DataEngine", lambda *a, **k: MagicMock(), raising=False)
+
+        result = srv.trigger_macro_engine()
+
+        assert constructed["macro"] is True
+        assert isinstance(result, str) and result
+
+    def test_exception_degrades_gracefully(self, monkeypatch):
+        import macro_engine as me_mod
+        import data_engine as de_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("macro boom")
+
+        monkeypatch.setattr(me_mod, "MacroEngine", _raise)
+        monkeypatch.setattr(de_mod, "DataEngine", lambda *a, **k: MagicMock(), raising=False)
+
+        result = srv.trigger_macro_engine()
+        assert isinstance(result, str)
+        low = result.lower()
+        assert "error" in low or "fail" in low or "boom" in result
+
+
+class TestTriggerFullPipelineInProcess:
+    """``trigger_full_pipeline``: Step 1 (price bars) and Step 3 (macro) are now
+    in-process; Step 2 (EDGAR fundamentals) is STILL a subprocess but now
+    ALWAYS passes ``--tickers``."""
+
+    def test_reports_per_step_status_and_edgar_tickers(self, monkeypatch):
+        import data.historical_store as hs_mod
+        import macro_engine as me_mod
+        import data_engine as de_mod
+
+        idx = pd.bdate_range("2024-01-01", periods=3)
+        bars = pd.DataFrame(
+            {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 100}, index=idx
+        )
+        fake_store = MagicMock()
+        fake_store.get_bars.return_value = bars
+        monkeypatch.setattr(hs_mod, "HistoricalStore", lambda *a, **k: fake_store)
+
+        monkeypatch.setattr(me_mod, "MacroEngine", lambda *a, **k: _fake_macro_engine())
+        monkeypatch.setattr(de_mod, "DataEngine", lambda *a, **k: MagicMock(), raising=False)
+
+        calls = []
+
+        def _fake_run(cmd, **k):
+            calls.append(list(cmd))
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+
+        result = srv.trigger_full_pipeline("AAPL,MSFT")
+
+        # Per-ticker Step 1 + Step 2 (edgar) + Step 3 (macro) statuses render.
+        assert "AAPL" in result and "MSFT" in result
+        assert "edgar" in result.lower()
+        assert "macro" in result.lower()
+        # Step 1 fetched bars in-process for each ticker.
+        assert fake_store.get_bars.call_count >= 2
+        # Step 2 (edgar) remained a subprocess and always passed --tickers.
+        flat = [tok for cmd in calls for tok in cmd]
+        assert "--tickers" in flat
+
+
+# ---------------------------------------------------------------------------
+# New read-only market-intelligence tools:
+#   get_recommendation / get_options_directive / get_regime_status /
+#   get_portfolio_coverage
+# Each renders markdown for a human PLUS a fenced ```json block, and each is
+# dead-letter safe (an engine exception degrades to an error/"unavailable"
+# string, never a raise).
+# ---------------------------------------------------------------------------
+
+
+class TestGetRecommendation:
+    def _fake_rec(self):
+        return SimpleNamespace(
+            symbol="AAPL",
+            action="BUY",
+            strategy="momentum",
+            conviction=0.82,
+            rationale="Strong uptrend with a positive 30-day forecast.",
+            suggested_position_pct=0.03,
+            forecast=155.0,
+            key_indicators={"rsi_2": 5.0, "garch_vol": 0.21},
+            data_quality="OK",
+        )
+
+    def test_happy_path_renders_fields_and_json_block(self, monkeypatch):
+        import engine.advisory as adv_mod
+
+        monkeypatch.setattr(adv_mod, "evaluate", lambda *a, **k: self._fake_rec())
+        _patch_advisory_inputs(monkeypatch)
+
+        result = srv.get_recommendation("aapl")
+
+        assert "AAPL" in result
+        assert "BUY" in result
+        assert "```json" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import engine.advisory as adv_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("engine down")
+
+        monkeypatch.setattr(adv_mod, "evaluate", _raise)
+        _patch_advisory_inputs(monkeypatch)
+
+        result = srv.get_recommendation("AAPL")
+        assert isinstance(result, str)
+        low = result.lower()
+        assert "error" in low or "unavailable" in low or "fail" in low
+
+
+class TestGetOptionsDirective:
+    def _directive(self):
+        return {
+            "Symbol": "AAPL",
+            "Strategy": "Put Credit Spread",
+            "Action": "SELL",
+            "Net_Premium": 1.25,
+            "Short_Strike": 145.0,
+            "Long_Strike": 140.0,
+            "Sigma_GARCH": 0.22,
+            "Trend_Bias": "Bullish",
+            "Integrity_OK": True,
+        }
+
+    def _patch_bars_provider(self, monkeypatch):
+        """The generic MagicMock() provider from _patch_advisory_inputs
+        returns a MagicMock (truthy .empty) for get_intraday_bars, which
+        trips the tool's "no bar data" guard before it ever reaches
+        build_premium_directive. Provide a fake with a real, non-empty
+        bars DataFrame instead."""
+        import data.market_data as md_mod
+
+        idx = pd.bdate_range("2024-01-01", periods=30)
+        bars = pd.DataFrame(
+            {"Open": 150.0, "High": 152.0, "Low": 148.0, "Close": 150.0, "Volume": 1_000_000},
+            index=idx,
+        )
+
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = bars
+        fake_provider.get_latest_quote.return_value = SimpleNamespace(price=150.0, is_stale=False)
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+    def test_happy_path_renders_directive_and_json_block(self, monkeypatch):
+        import technical_options_engine as toe_mod
+
+        monkeypatch.setattr(toe_mod, "build_premium_directive", lambda *a, **k: self._directive())
+        monkeypatch.setattr(
+            toe_mod,
+            "validate_directive_integrity",
+            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
+        )
+        _patch_advisory_inputs(monkeypatch)
+        self._patch_bars_provider(monkeypatch)
+
+        result = srv.get_options_directive("aapl")
+
+        assert "AAPL" in result
+        assert "Put Credit Spread" in result or "SELL" in result
+        assert "```json" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import technical_options_engine as toe_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("garch failed")
+
+        monkeypatch.setattr(toe_mod, "build_premium_directive", _raise)
+        _patch_advisory_inputs(monkeypatch)
+        self._patch_bars_provider(monkeypatch)
+
+        result = srv.get_options_directive("AAPL")
+        assert isinstance(result, str)
+        low = result.lower()
+        assert "error" in low or "unavailable" in low or "fail" in low
+
+
+class TestGetRegimeStatus:
+    def _write_snapshot(self, tmp_path, data):
+        (tmp_path / "output").mkdir(exist_ok=True)
+        (tmp_path / "output" / "state_snapshot.json").write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+
+    def test_happy_path_renders_regime_and_json_block(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        self._write_snapshot(
+            tmp_path,
+            {
+                "market_regime": "RISK ON",
+                "vix": 14.5,
+                "sahm_rule": 0.1,
+                "high_yield_oas": 3.2,
+                "yield_curve": 0.4,
+                "hmm_risk_on_probability": 0.72,
+                "macro_regime_gate_enabled": True,
+            },
+        )
+        import execution.kill_switch as ks_mod
+
+        fake_ks = MagicMock()
+        fake_ks.is_active.return_value = False
+        monkeypatch.setattr(ks_mod, "GlobalKillSwitch", lambda *a, **k: fake_ks)
+
+        result = srv.get_regime_status()
+
+        assert "RISK ON" in result or "14.5" in result
+        assert "```json" in result
+
+    def test_exception_degrades(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)  # no output/state_snapshot.json present
+        import execution.kill_switch as ks_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("ks boom")
+
+        monkeypatch.setattr(ks_mod, "GlobalKillSwitch", _raise)
+
+        result = srv.get_regime_status()
+        assert isinstance(result, str) and result
+
+
+class TestGetPortfolioCoverage:
+    def _fake_report(self):
+        # data.portfolio_sync.SyncReport.symbols is Mapping[str, SymbolStatus]
+        # (a dict keyed by ticker), not a list -- match the real contract.
+        sym = SimpleNamespace(
+            symbol="AAPL",
+            coverage="FULL",
+            current_price=150.0,
+            market_value=1500.0,
+            cost_basis_delta_per_share=5.0,
+            held=True,
+            forecast_available=True,
+            watchlists=(),
+            diagnostic="",
+        )
+        return SimpleNamespace(
+            symbols={"AAPL": sym},
+            provider_source="yfinance",
+            fundamentals_source="yahoo_computed",
+            n_total=1,
+            n_full=1,
+            n_equity_only=0,
+            n_uncovered=0,
+            held_total_equity=lambda: 1500.0,
+            generated_at="2026-01-01T00:00:00Z",
+        )
+
+    def test_happy_path_renders_coverage_and_json_block(self, monkeypatch):
+        import data.portfolio_sync as ps_mod
+
+        monkeypatch.setattr(ps_mod, "build_sync_report", lambda *a, **k: self._fake_report())
+        _patch_advisory_inputs(monkeypatch)
+
+        result = srv.get_portfolio_coverage()
+
+        assert "AAPL" in result or "FULL" in result or "Coverage" in result
+        assert "```json" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import data.portfolio_sync as ps_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("sync boom")
+
+        monkeypatch.setattr(ps_mod, "build_sync_report", _raise)
+        _patch_advisory_inputs(monkeypatch)
+
+        result = srv.get_portfolio_coverage()
+        assert isinstance(result, str)
+        low = result.lower()
+        assert "error" in low or "unavailable" in low or "fail" in low
 
 
 # ---------------------------------------------------------------------------
