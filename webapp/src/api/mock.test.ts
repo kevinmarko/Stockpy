@@ -239,3 +239,71 @@ describe("mock API — /portfolio/equity-curve contract", () => {
     res.curve!.forEach(expectCurvePoint);
   });
 });
+
+describe("mock API — /symbols/{ticker} contract", () => {
+  it("returns the grouped SymbolDetail shape for a known symbol", async () => {
+    const d = await mockApi.getSymbol("NVDA");
+    // Top-level keys mirror the backend §2 canonical contract.
+    expect(Object.keys(d).sort()).toEqual(
+      [
+        "advisory",
+        "as_of",
+        "factors",
+        "held_by_pilots",
+        "identity",
+        "ranges",
+        "reason",
+        "risk",
+        "symbol",
+      ].sort()
+    );
+    expect(d.identity).toHaveProperty("sector");
+    expect(d.identity).toHaveProperty("price");
+    expect(d.advisory).toHaveProperty("score");
+    expect(d.factors).toHaveProperty("score_components");
+    expect(d.ranges).toHaveProperty("buy_range");
+    expect(d.risk).toHaveProperty("hmm_risk_on");
+  });
+
+  it("normalizes the ticker to uppercase", async () => {
+    const d = await mockApi.getSymbol("nvda");
+    expect(d.symbol).toBe("NVDA");
+  });
+
+  it("ranges are pre-formatted strings, not tuples", async () => {
+    const d = await mockApi.getSymbol("NVDA");
+    expect(typeof d.ranges.buy_range).toBe("string");
+    expect(typeof d.ranges.sell_range).toBe("string");
+    expect(d.ranges.buy_range).toContain("$");
+  });
+
+  it("held_by_pilots is a weight-desc array of {pilot_id, name, weight}", async () => {
+    const d = await mockApi.getSymbol("NVDA");
+    expect(Array.isArray(d.held_by_pilots)).toBe(true);
+    expect(d.held_by_pilots.length).toBeGreaterThan(0);
+    for (const hp of d.held_by_pilots) {
+      expect(Object.keys(hp).sort()).toEqual(["name", "pilot_id", "weight"]);
+      expect(typeof hp.pilot_id).toBe("string");
+      expect(typeof hp.name).toBe("string");
+      expect(typeof hp.weight).toBe("number");
+    }
+    const w = d.held_by_pilots.map((x) => x.weight);
+    expect(w).toEqual([...w].sort((a, b) => b - a));
+  });
+
+  it("honesty (CONSTRAINT #4): unavailable factor/risk leaves are null, never 0", async () => {
+    const d = await mockApi.getSymbol("NVDA");
+    // The advisory snapshot writer genuinely lacks these — must be null.
+    for (const k of ["value_z", "quality_z", "xsec_12_1m", "xsec_momentum_rank"] as const) {
+      expect(d.factors[k]).toBeNull();
+    }
+    for (const k of ["news_sentiment", "realized_slippage", "mfe", "mae", "edge_ratio", "macro_status"] as const) {
+      expect(d.risk[k]).toBeNull();
+    }
+  });
+
+  it("throws an ApiError(404) for an unknown ticker", async () => {
+    await expect(mockApi.getSymbol("ZZZZ")).rejects.toBeInstanceOf(ApiError);
+    await expect(mockApi.getSymbol("ZZZZ")).rejects.toMatchObject({ status: 404 });
+  });
+});

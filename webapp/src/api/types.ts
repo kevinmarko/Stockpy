@@ -160,6 +160,66 @@ export interface FollowResult {
   notice: string; // human-readable gating notice
 }
 
+/** GET /symbols/{ticker} — one row of the reverse cross-link "which Pilots hold this symbol." */
+export interface SymbolHeldBy {
+  pilot_id: string;
+  name: string;
+  weight: number; // this symbol's normalized target weight within that Pilot (fraction)
+}
+
+/**
+ * GET /symbols/{ticker} — grouped per-symbol data from the persisted state
+ * snapshot, plus the reverse cross-link. Every factor/risk leaf the active
+ * snapshot writer could not compute is `null` (NEVER a fabricated 0) so the UI
+ * renders "—". `ranges.*` are pre-formatted display strings (e.g.
+ * "Buy Zone: $210.00 - $222.00"), not tuples. `score_components` is nested in
+ * `factors`. Single point of reconciliation against the live JSON.
+ */
+export interface SymbolDetail {
+  symbol: string;
+  as_of: string | null;
+  reason: string | null;
+  identity: {
+    sector: string | null;
+    price: number | null;
+    action: string | null;
+    shares: number | null;
+  };
+  advisory: {
+    action: string | null;
+    conviction: number | null;
+    position_pct: number | null;
+    rationale: string | null;
+    kelly_target: number | null;
+    score: number | null;
+  };
+  factors: {
+    value_z: number | null;
+    quality_z: number | null;
+    lowvol_z: number | null;
+    size_z: number | null;
+    multifactor_composite: number | null;
+    xsec_12_1m: number | null;
+    xsec_momentum_rank: number | null;
+    score_components: Record<string, number> | null;
+  };
+  ranges: {
+    buy_range: string | null;
+    sell_range: string | null;
+  };
+  risk: {
+    news_sentiment: number | null;
+    covar_proxy: number | null;
+    realized_slippage: number | null;
+    mfe: number | null;
+    mae: number | null;
+    edge_ratio: number | null;
+    hmm_risk_on: number | null;
+    macro_status: string | null;
+  };
+  held_by_pilots: SymbolHeldBy[];
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

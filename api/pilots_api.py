@@ -65,7 +65,7 @@ from pydantic import BaseModel, Field
 from settings import settings
 
 # Pilot layer (pure, persisted-state readers) + the gated follow write-path.
-from pilots import catalog, performance, scoring
+from pilots import catalog, performance, scoring, symbols
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
 
@@ -117,6 +117,7 @@ _RANGE_DAYS: Dict[str, int] = {
 _MISSING_SNAPSHOT_DETAIL = "No state snapshot yet — run the pipeline first."
 _MISSING_PORTFOLIO_DETAIL = "No account snapshot yet — run the pipeline first."
 _UNKNOWN_PILOT_DETAIL = "No such pilot."
+_UNKNOWN_SYMBOL_DETAIL = "No such symbol in the latest snapshot."
 _DEFAULT_TRADES_LIMIT = 20
 _DETAIL_TRADES_LIMIT = 10
 
@@ -407,6 +408,27 @@ def get_pilot_trades(
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
     trades = scoring.pilot_trades(pilot, history_dir=_history_dir())
     return trades[-limit:]
+
+
+@app.get("/symbols/{ticker}", dependencies=[Depends(require_read_token)])
+def get_symbol_detail(ticker: str) -> Any:
+    """Per-symbol detail for one ticker from the latest persisted snapshot, plus
+    the reverse cross-link of which Pilots hold it and at what weight.
+
+    Reads only persisted state — never calls an engine. Two honest 404s, checked
+    in this order: cold start (no snapshot yet → ``_MISSING_SNAPSHOT_DETAIL``)
+    and unknown ticker (not in the snapshot's ``signals[]`` →
+    ``_UNKNOWN_SYMBOL_DETAIL``). An absent per-symbol field is ``null``, never
+    ``0.0`` (CONSTRAINT #4); a non-positive price is nulled. "Held by" means the
+    symbol survives a Pilot's blend into its advertised top-N. Case-insensitive
+    ticker. Never 500s (CONSTRAINT #6)."""
+    snapshot = _load_snapshot()
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=_MISSING_SNAPSHOT_DETAIL)
+    detail = symbols.symbol_detail(snapshot, ticker)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=_UNKNOWN_SYMBOL_DETAIL)
+    return detail
 
 
 @app.get("/portfolio", dependencies=[Depends(require_read_token)])

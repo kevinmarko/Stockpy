@@ -150,7 +150,7 @@ export function PilotDetail() {
         </h2>
         <div className="list">
           {pilot.holdings.map((hd) => (
-            <div className="row" key={hd.symbol}>
+            <Link className="row" key={hd.symbol} to={`/symbol/${hd.symbol}`}>
               <div className="row-main">
                 <span className="row-title">{hd.symbol}</span>
                 <span className="row-sub">
@@ -165,7 +165,7 @@ export function PilotDetail() {
                   {hd.price == null ? "no quote" : fmtUsd(hd.price)}
                 </div>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       </section>

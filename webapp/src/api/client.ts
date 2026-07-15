@@ -19,6 +19,7 @@ import type {
   PilotSummary,
   Portfolio,
   CurvePoint,
+  SymbolDetail,
 } from "./types";
 
 const BASE_URL = (
@@ -78,6 +79,8 @@ const liveApi = {
     http<Holding[]>(`/pilots/${encodeURIComponent(id)}/holdings`),
   getTrades: (id: string, limit = 20) =>
     http(`/pilots/${encodeURIComponent(id)}/trades?limit=${limit}`),
+  getSymbol: (ticker: string) =>
+    http<SymbolDetail>(`/symbols/${encodeURIComponent(ticker)}`),
   getPortfolio: () => http<Portfolio>("/portfolio"),
   getEquityCurve: (range: PerfRange) =>
     http<{ range: PerfRange; curve: CurvePoint[] | null }>(
