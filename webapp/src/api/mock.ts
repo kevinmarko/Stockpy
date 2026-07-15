@@ -510,13 +510,14 @@ const RAW: Array<{
     category: "Risk",
     description:
       "Rewards durable risk-adjusted performance — favoring high-Sortino names while penalizing deep, painful drawdowns.",
-    headline: h(null, null, null, null, false, false),
+    headline: h(0.71, 0.953, 0.39, 0.11, true),
     long_only: false,
     aum: 36400,
     followers: 17,
-    hasCurve: false,
-    drift: 0,
-    vol: 0,
+    hasCurve: true,
+    drift: 0.08,
+    vol: 0.08,
+    macroBenchmark: false,
     syms: [
       ["PG", 24, 0.46],
       ["COST", 22, 0.44],

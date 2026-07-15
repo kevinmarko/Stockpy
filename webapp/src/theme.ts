@@ -12,7 +12,20 @@
  *    validate_palette.js against the dark surface #12161c:
  *    all 8 slots pass lightness band, chroma floor, CVD separation (worst
  *    adjacent ΔE 23.7), and >=3:1 contrast. Do not reorder without re-validating.
+ *  - The categorical `Pilot category` ramp (below) is a SEPARATE 8-hue set —
+ *    deliberately distinct from SECTOR_PALETTE so a category chip is never
+ *    mistaken for a sector-donut slice on the same Pilot Detail page — also
+ *    validated with validate_palette.js against #12161c: all 8 slots pass
+ *    lightness band, chroma floor, and >=3:1 contrast; worst *adjacent* CVD ΔE
+ *    10.2 (deutan)/7.8 (tritan), worst adjacent normal-vision ΔE 23.3 (>=15
+ *    floor). Like the default reference palette, no ordering of the full eight
+ *    clears the stricter *all-pairs* check (a hard cap the validator documents
+ *    for any 8-hue categorical set) — acceptable here because every category
+ *    chip always renders its name as visible text (CategoryChip), so identity
+ *    is never color-alone (the required secondary-encoding mitigation).
  */
+
+import type { PilotCategory } from "./api/types";
 
 export const theme = {
   // Surfaces (dark fintech base)
@@ -60,6 +73,28 @@ export function sectorColor(index: number): string {
   if (index < SECTOR_PALETTE.length) return SECTOR_PALETTE[index];
   // 9th+ category folds into a neutral "Other" tone rather than a generated hue.
   return theme.textMuted;
+}
+
+/**
+ * Categorical palette for Pilot-category chips (Marketplace cards, Pilot Detail
+ * header) — fixed hue-name assignment, in the SAME order as the `PilotCategory`
+ * union in `api/types.ts`; never reorder without re-running validate_palette.js
+ * (see the module docstring above for the validation result).
+ */
+export const CATEGORY_PALETTE: Record<PilotCategory, string> = {
+  Momentum: "#6366f1", // indigo
+  "Mean Reversion": "#c2410c", // copper
+  Factor: "#0d9488", // teal
+  Blend: "#e11d48", // rose
+  Macro: "#0891b2", // ocean
+  Risk: "#a16207", // amber
+  Sentiment: "#c026d3", // fuchsia
+  Forecast: "#65a30d", // lime
+};
+
+/** Deterministic color for a Pilot category (fixed name-keyed slot, never cycled). */
+export function categoryColor(category: PilotCategory): string {
+  return CATEGORY_PALETTE[category] ?? theme.textMuted;
 }
 
 /** Green for gains, red for losses, muted for flat. */

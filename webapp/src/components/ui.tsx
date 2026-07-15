@@ -1,10 +1,29 @@
 import type { ReactNode } from "react";
 import type { Headline, PilotCategory } from "../api/types";
 import { fmtNum, fmtPct } from "../format";
+import { categoryColor } from "../theme";
 
-/** Category chip. */
+/**
+ * Category chip — a colored dot (validated categorical palette, see theme.ts)
+ * plus the category name, which is ALWAYS rendered as visible text so identity
+ * is never color-alone (mirrors SectorDonut's dot+label legend pattern).
+ */
 export function CategoryChip({ category }: { category: PilotCategory }) {
-  return <span className="chip">{category}</span>;
+  return (
+    <span className="chip">
+      <span
+        aria-hidden
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          background: categoryColor(category),
+          flex: "0 0 auto",
+        }}
+      />
+      {category}
+    </span>
+  );
 }
 
 /**

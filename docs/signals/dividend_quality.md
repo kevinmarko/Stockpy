@@ -1,9 +1,12 @@
 # Signal: `dividend_quality`
 
-**File:** `signals/dividend_quality.md`  
+**File:** `signals/dividend_quality.py`  
 **Default weight:** 25.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active
+**Regime gate:** Always active  
+**Pilot:** Dividend Income (`dividend-income`, `pilots/catalog.py`) — no backtest curve
+(`validation_strategy_id=None`); the module needs point-in-time dividend-yield/payout-ratio
+history that no free vendor supplies (same honesty constraint as `graham_value`).
 
 ---
 

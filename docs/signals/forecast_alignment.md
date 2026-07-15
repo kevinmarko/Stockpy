@@ -1,9 +1,13 @@
 # Signal: `forecast_alignment`
 
-**File:** `signals/forecast_alignment.md`  
+**File:** `signals/forecast_alignment.py`  
 **Default weight:** 10.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active
+**Regime gate:** Always active  
+**Pilot:** Forecast Aligned (`forecast-aligned`, `pilots/catalog.py`) — no backtest curve
+(`validation_strategy_id=None`); the module scores against an external multi-model
+forecast target (ARIMA/MC/HW/CNN-LSTM ensemble), not a price-only signal, so it can't be
+honestly reconstructed inside a price-series-only backtest adapter.
 
 ---
 

@@ -460,10 +460,12 @@ def _build_xsec_momentum_adapter(
     book holds the top half / top tertile, equal-weighted, ``.shift(1)``-ed so a
     day's return uses only the prior day's membership.
 
-    HONEST SCOPE (CONSTRAINT #4): a ~16-name mega-cap cross-section produces coarse
-    ranks (a top tertile is only ~5 names); long-only per the module's documented
-    scope.  ``shares`` is accepted only to satisfy the multi-ticker adapter
-    signature and is unused.  The 252-day formation warm-up is trimmed.
+    HONEST SCOPE (CONSTRAINT #4): the 30-name universe (``_XSEC_UNIVERSE_30``) gives
+    a top tertile ~10 names — finer-grained than an 8-16 name cross-section without
+    fabricating any data (still real, liquid, long-history large caps); long-only per
+    the module's documented scope.  ``shares`` is accepted only to satisfy the
+    multi-ticker adapter signature and is unused.  The 252-day formation warm-up is
+    trimmed.
     """
     common_index = closes.dropna(how="all").index
     mom_cols: Dict[str, pd.Series] = {}
@@ -562,17 +564,25 @@ def _build_rsi14_extremes_adapter(
     """RSI(14) 30/70 mean-reversion on SPY — the ``rsi_extremes`` analogue.
 
     Distinct from ``rsi2_mean_reversion`` (RSI(2)); this is the classic RSI(14)
-    overbought(>70)/oversold(<30) rule.  Two honest variants:
-      * ``RSI14_OversoldLong`` — enter long on oversold (<30), hold until RSI
-        recovers above 50, else flat (long-only).
-      * ``RSI14_LongShort``    — +1 oversold / −1 overbought (>70), each held to
-        the 45-55 neutral band.
+    overbought(>70)/oversold(<30) rule.  Three honest variants:
+      * ``RSI14_OversoldLong``       — enter long on oversold (<30), hold until
+        RSI recovers above 50, else flat (long-only).
+      * ``RSI14_LongShort``          — +1 oversold / −1 overbought (>70), each
+        held to the 45-55 neutral band.
+      * ``RSI14_TrendFilteredLong``  — the oversold-long rule gated by the SAME
+        SMA(200) uptrend filter ``_build_rsi2_adapter`` already uses (a
+        principled, established convention in this codebase for RSI mean
+        reversion, not a threshold tuned to force a gate pass): only takes the
+        oversold entry when ``spy_close > SMA_200``.
 
-    The stateful ``ffill`` regime fill is computed only from ``rsi[≤t]`` and the
-    position is ``.shift(1)``-ed, so there is no lookahead.
+    The stateful ``ffill`` regime fill is computed only from ``rsi[≤t]``/
+    ``sma_200[≤t]`` and every position is ``.shift(1)``-ed, so there is no
+    lookahead.
     """
     rsi = _wilder_rsi(spy_close, length=14, fill=50.0)
     daily_ret = spy_close.pct_change()
+    sma_200 = spy_close.rolling(200).mean()
+    uptrend = spy_close > sma_200
 
     # Long-only: enter on oversold, exit above 50, forward-fill the regime.
     long_raw = pd.Series(np.nan, index=rsi.index)
@@ -587,14 +597,88 @@ def _build_rsi14_extremes_adapter(
     ls_raw[(rsi >= 45.0) & (rsi <= 55.0)] = 0.0
     pos_ls = ls_raw.ffill().fillna(0.0)
 
-    valid_idx = rsi.index[30:]  # small RSI warm-up
+    # Trend-filtered long: the oversold-long regime, zeroed outside an uptrend.
+    pos_trend = pos_long.where(uptrend, 0.0)
+
+    valid_idx = sma_200.dropna().index[30:]  # RSI warm-up + SMA(200) warm-up
     if len(valid_idx) == 0:
         return pd.DataFrame(), pd.Series(dtype=float), {}
     y = daily_ret.loc[valid_idx].fillna(0.0)
-    X = pd.DataFrame({"RSI_14": rsi.loc[valid_idx]}, index=valid_idx)
+    X = pd.DataFrame(
+        {"RSI_14": rsi.loc[valid_idx], "SMA_200": sma_200.loc[valid_idx]},
+        index=valid_idx,
+    )
     precomputed = {
         "RSI14_OversoldLong": (pos_long.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
         "RSI14_LongShort": (pos_ls.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+        "RSI14_TrendFilteredLong": (pos_trend.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+    }
+    return X, y, precomputed
+
+
+def _build_sortino_drawdown_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Trailing Sortino-ratio reward / drawdown-penalty gating on SPY — the
+    ``sortino_drawdown`` analogue.
+
+    Mirrors the live signal's exact thresholds (``signals/sortino_drawdown.py``:
+    Sortino > 2.0 rewarded, drawdown < -25% penalized) over a ROLLING 504-trading-
+    day (2-year) window — the same lookback ``data_engine.py``'s
+    ``ticker.history(period="2y")`` feeds into ``processing_engine.py``'s live
+    Sortino/Max-Drawdown computation, made rolling here since a backtest needs a
+    moving snapshot at every historical date rather than one fixed value.
+
+    Three honest, long-only (no short leg — the live module only rewards/penalizes,
+    it never signals short) variants:
+      * ``SortinoDD_HighSortino``  — long only while trailing 504d annualized
+        Sortino > 2.0, else flat.
+      * ``SortinoDD_DrawdownGate`` — long unless trailing 504d max drawdown from a
+        rolling peak is worse than -25%, else flat.
+      * ``SortinoDD_Combined``     — long only when BOTH conditions hold (the
+        two-sided analogue of the live signal's reward+penalty framing).
+
+    All quantities are computed from strictly trailing rolling windows (causal by
+    construction — `.rolling(w)`/`.cummax()`-style peak tracking at row t use only
+    data at or before t) and every position is ``.shift(1)``-ed before multiplying
+    by the realized return, so there is no lookahead.
+    """
+    window = 504
+    daily_ret = spy_close.pct_change()
+
+    avg_return = daily_ret.rolling(window).mean()
+    # Only ~half the values in each 504-row window survive the < 0 mask, so the
+    # default min_periods=window (504 NON-NaN values required) would never be met
+    # and every row would be NaN. min_periods=60 mirrors this codebase's existing
+    # "≥60-obs guard" convention (data/yahoo_fundamentals.py's Beta estimator) —
+    # enough downside observations for a meaningful deviation estimate.
+    downside_std = daily_ret.where(daily_ret < 0).rolling(window, min_periods=60).std()
+    # NaN (never a fabricated 0.0) when downside deviation is zero/undefined —
+    # mirrors signals/sortino_drawdown.py's "abstain on NaN" contract.
+    sortino = (avg_return * 252.0) / (downside_std * np.sqrt(252.0))
+    sortino = sortino.where(downside_std > 0)
+
+    rolling_peak = spy_close.rolling(window, min_periods=1).max()
+    drawdown = (spy_close - rolling_peak) / rolling_peak
+
+    valid_idx = sortino.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[valid_idx].fillna(0.0)
+    X = pd.DataFrame(
+        {"Sortino_504D": sortino.loc[valid_idx], "Drawdown_504D": drawdown.loc[valid_idx]},
+        index=valid_idx,
+    )
+
+    pos_sortino = (sortino > 2.0).astype(float)
+    pos_dd = (drawdown >= -0.25).astype(float)
+    pos_combined = pos_sortino * pos_dd
+
+    precomputed = {
+        "SortinoDD_HighSortino": (pos_sortino.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+        "SortinoDD_DrawdownGate": (pos_dd.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
+        "SortinoDD_Combined": (pos_combined.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
     }
     return X, y, precomputed
 
@@ -648,6 +732,19 @@ def _make_strategy_fn(
 # reads via ``STRATEGY_REGISTRY.keys()`` — do not rename them casually.
 # New strategies: add an entry here and implement the adapter above.
 # ---------------------------------------------------------------------------
+
+# 30 liquid, large-cap tickers with full pre-2005 trading history under their
+# current symbol — a wide enough cross-section for cross_sectional_momentum /
+# relative_strength_xsec to produce meaningfully fine-grained ranks (a 16-name
+# cross-section made "top tertile" only ~5 names). Diversified across sectors
+# so no single industry dominates the cross-sectional z-score.
+_XSEC_UNIVERSE_30: List[str] = [
+    "AAPL", "MSFT", "JNJ", "XOM", "KO", "JPM", "PG", "INTC",
+    "T", "WMT", "CVX", "HD", "MCD", "IBM", "PFE", "CSCO",
+    "MRK", "DIS", "GE", "VZ", "BA", "CAT", "MMM", "AXP",
+    "TXN", "ORCL", "ABT", "MO", "COST", "NKE",
+]
+
 STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     "rsi2_mean_reversion": (_build_rsi2_adapter, 0.02, ["SPY"]),
     "timeseries_momentum": (_build_tsmom_adapter, 0.005, ["SPY"]),
@@ -662,16 +759,15 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     "cross_sectional_momentum": (
         _build_xsec_momentum_adapter,
         0.03,
-        ["AAPL", "MSFT", "JNJ", "XOM", "KO", "JPM", "PG", "INTC",
-         "T", "WMT", "CVX", "HD", "MCD", "IBM", "PFE", "CSCO"],
+        _XSEC_UNIVERSE_30,
     ),
     "relative_strength_xsec": (
         _build_relative_strength_adapter,
         0.03,
-        ["SPY", "AAPL", "MSFT", "JNJ", "XOM", "KO", "JPM", "PG", "INTC",
-         "T", "WMT", "CVX", "HD", "MCD", "IBM", "PFE", "CSCO"],
+        ["SPY", *_XSEC_UNIVERSE_30],
     ),
     "rsi14_extremes": (_build_rsi14_extremes_adapter, 0.04, ["SPY"]),
+    "sortino_drawdown": (_build_sortino_drawdown_adapter, 0.01, ["SPY"]),
 }
 
 

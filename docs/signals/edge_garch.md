@@ -3,7 +3,11 @@
 **File:** `signals/edge_garch.py`  
 **Default weight:** 35.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active
+**Regime gate:** Always active  
+**Pilot:** Volatility Edge (`volatility-edge`, `pilots/catalog.py`) — backed by a real,
+PBO/DSR-gated backtest (`garch_vol_target` in `scripts/refresh_validations.py`): a
+RiskMetrics EWMA vol-timing proxy on SPY (a full per-day GJR-GARCH MLE refit across 20
+years of history is prohibitively slow and lookahead-risky — see the adapter's docstring).
 
 ---
 

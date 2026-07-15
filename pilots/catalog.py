@@ -40,15 +40,16 @@ honest caveats baked into the catalog below:
   vendor supplies, or (``balanced-blend``) are an ensemble no single backtest
   honestly represents.
 * Likewise the ``regime-navigator`` (macro DTO), ``news-catalyst`` (point-in-time
-  news), ``forecast-aligned`` (external forecast target), and ``risk-adjusted``
-  Pilots stay ``validation_strategy_id=None`` — their signals can't be honestly
-  reconstructed from price/volume alone.
+  news), and ``forecast-aligned`` (external forecast target) Pilots stay
+  ``validation_strategy_id=None`` — their signals can't be honestly reconstructed
+  from price/volume alone.
 * Every module that CAN be honestly backtested price-only IS joined to a real
   ``STRATEGY_REGISTRY`` adapter: ``cross-sectional-momentum`` →
   ``cross_sectional_momentum``, ``volatility-edge`` → ``garch_vol_target``,
   ``rsi-reversal`` → ``rsi14_extremes``, ``relative-strength`` →
-  ``relative_strength_xsec`` (plus the pre-existing ``trend-following`` /
-  ``dip-buyer`` / ``macd-trend`` / ``multifactor`` joins).
+  ``relative_strength_xsec``, ``risk-adjusted`` → ``sortino_drawdown`` (plus the
+  pre-existing ``trend-following`` / ``dip-buyer`` / ``macd-trend`` /
+  ``multifactor`` joins).
 * ``coppock_momentum`` exists in ``STRATEGY_REGISTRY`` but has no corresponding
   signal module in ``SIGNAL_WEIGHTS``, so it is deliberately NOT surfaced as a
   Pilot (a Pilot's weights must be real signal-module ids).
@@ -331,8 +332,8 @@ PILOTS: List[Pilot] = [
         ),
         weights={"sortino_drawdown": 1.0},
         long_only=False,
-        # A standalone Sortino/drawdown backtest adapter is out of scope for now.
-        validation_strategy_id=None,
+        # Honest price-only rolling-Sortino/drawdown-gate backtest on SPY.
+        validation_strategy_id="sortino_drawdown",
     ),
 ]
 

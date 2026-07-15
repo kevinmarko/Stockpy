@@ -3,7 +3,9 @@
 **File:** `signals/macd_momentum.py`  
 **Default weight:** 15.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active, but suppressed when `aroon_osc` is absent
+**Regime gate:** Always active, but suppressed when `aroon_osc` is absent  
+**Pilot:** MACD Trend (`macd-trend`, `pilots/catalog.py`, blended with `aroon_trend`) —
+backed by a real, PBO/DSR-gated backtest (`macd_trend` in `scripts/refresh_validations.py`).
 
 ---
 

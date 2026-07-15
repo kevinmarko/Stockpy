@@ -14,25 +14,43 @@ See [`docs/architecture.md`](../architecture.md) for the full data-flow context.
 
 ## Module Index
 
-| Module | Weight | File | Description |
-|--------|--------|------|-------------|
-| [`macro_regime`](macro_regime.md) | 45.0 | `signals/macro_regime.py` | Rules-based macro regime gate (RISK ON / NEUTRAL / RECESSION / CREDIT EVENT) + sector rotation |
-| [`edge_garch`](edge_garch.md) | 35.0 | `signals/edge_garch.py` | Mathematical edge ratio × GJR-GARCH tail-risk vol |
-| [`dividend_quality`](dividend_quality.md) | 25.0 | `signals/dividend_quality.py` | Dividend sustainability (payout ratio gate) |
-| [`rsi_extremes`](rsi_extremes.md) | 20.0 | `signals/rsi_extremes.py` | RSI-14 overbought / oversold |
-| [`graham_value`](graham_value.md) | 15.0 | `signals/graham_value.py` | Graham Number intrinsic value vs current price |
-| [`macd_momentum`](macd_momentum.md) | 15.0 | `signals/macd_momentum.py` | MACD crossover, gated by Aroon chop filter |
-| [`aroon_trend`](aroon_trend.md) | 15.0 | `signals/aroon_trend.py` | Aroon Oscillator trend direction + chop filter |
-| [`timeseries_momentum`](timeseries_momentum.md) | 15.0 | `signals/timeseries_momentum.py` | Moskowitz/Ooi/Pedersen 12-month TSMOM with vol scaling |
-| [`cross_sectional_momentum`](cross_sectional_momentum.md) | 15.0 | `signals/cross_sectional_momentum.py` | Jegadeesh-Titman 12−1M cross-sectional rank |
-| [`multifactor`](multifactor.md) | 15.0 | `signals/multifactor.py` | Fama-French Value + Quality + Low-Vol + Size composite |
-| [`forecast_alignment`](forecast_alignment.md) | 10.0 | `signals/forecast_alignment.py` | ARIMA/MC/HW/CNN-LSTM ensemble directional consensus |
-| [`relative_strength`](relative_strength.md) | 10.0 | `signals/relative_strength.py` | Stock return vs SPY 12-month excess return |
-| [`sortino_drawdown`](sortino_drawdown.md) | 10.0 | `signals/sortino_drawdown.py` | Sortino Ratio quality reward + max drawdown penalty |
-| [`rsi2_mean_reversion`](rsi2_mean_reversion.md) | 10.0 | `signals/rsi2_mean_reversion.py` | Connors RSI(2) long-only mean reversion (regime-gated) |
-| [`news_catalyst`](news_catalyst.md) | 10.0 | `signals/news_catalyst.py` | FinBERT / lexicon headline sentiment (earnings-proximity gated) |
-| [`lgbm_ranker`](lgbm_ranker.md) | 0.10 | `signals/lgbm_ranker.py` | LightGBM cross-sectional rank (dormant — contributes 0.0 until a model is trained) |
-| [`regime_multiplier`](regime_multiplier.md) | **0.0** | `signals/regime_multiplier.py` | HMM risk-on probability carried as Kelly-size scalar only |
+The **Pilot** column cross-links to the `pilots/catalog.py` Pilot that packages this
+module as a standalone, copyable strategy in the Pilots PWA (`webapp/`) — see
+[`docs/AUTOPILOT_PLAN.md`](../AUTOPILOT_PLAN.md). **Backtest** is the honest join to a
+`STRATEGY_REGISTRY` adapter (`scripts/refresh_validations.py`) that gives that Pilot a
+real, PBO/DSR-gated performance curve; `—` means the module's inputs (macro DTO,
+point-in-time fundamentals, point-in-time news, an external forecast target) can't be
+honestly reconstructed from price/volume alone, so the Pilot stays curveless
+(`validation_strategy_id=None`) rather than borrowing a fabricated backtest
+(CONSTRAINT #4). A backtest existing does not guarantee `deployable=True` — several of
+these honestly fail the PBO/DSR/Sharpe/MaxDD gate on real data; the gate is never
+loosened to force a green check.
+
+| Module | Weight | File | Description | Pilot | Backtest |
+|--------|--------|------|--------------|-------|----------|
+| [`macro_regime`](macro_regime.md) | 45.0 | `signals/macro_regime.py` | Rules-based macro regime gate (RISK ON / NEUTRAL / RECESSION / CREDIT EVENT) + sector rotation | Regime Navigator (`regime-navigator`) | — (macro DTO, not price-only) |
+| [`edge_garch`](edge_garch.md) | 35.0 | `signals/edge_garch.py` | Mathematical edge ratio × GJR-GARCH tail-risk vol | Volatility Edge (`volatility-edge`) | `garch_vol_target` |
+| [`dividend_quality`](dividend_quality.md) | 25.0 | `signals/dividend_quality.py` | Dividend sustainability (payout ratio gate) | Dividend Income (`dividend-income`) | — (point-in-time fundamentals) |
+| [`rsi_extremes`](rsi_extremes.md) | 20.0 | `signals/rsi_extremes.py` | RSI-14 overbought / oversold | RSI Reversal (`rsi-reversal`) | `rsi14_extremes` |
+| [`graham_value`](graham_value.md) | 15.0 | `signals/graham_value.py` | Graham Number intrinsic value vs current price | Deep Value (`deep-value`) | — (point-in-time fundamentals) |
+| [`macd_momentum`](macd_momentum.md) | 15.0 | `signals/macd_momentum.py` | MACD crossover, gated by Aroon chop filter | MACD Trend (`macd-trend`, shared with `aroon_trend`) | `macd_trend` |
+| [`aroon_trend`](aroon_trend.md) | 15.0 | `signals/aroon_trend.py` | Aroon Oscillator trend direction + chop filter | MACD Trend (`macd-trend`, shared with `macd_momentum`) | `macd_trend` |
+| [`timeseries_momentum`](timeseries_momentum.md) | 15.0 | `signals/timeseries_momentum.py` | Moskowitz/Ooi/Pedersen 12-month TSMOM with vol scaling | Trend Follower (`trend-following`) | `timeseries_momentum` |
+| [`cross_sectional_momentum`](cross_sectional_momentum.md) | 15.0 | `signals/cross_sectional_momentum.py` | Jegadeesh-Titman 12−1M cross-sectional rank | Momentum Leaders (`cross-sectional-momentum`) | `cross_sectional_momentum` |
+| [`multifactor`](multifactor.md) | 15.0 | `signals/multifactor.py` | Fama-French Value + Quality + Low-Vol + Size composite | Multifactor (`multifactor`) | `multifactor_lowvol_size` (Low-Vol + Size sleeve only — see `docs/signals/multifactor.md`) |
+| [`forecast_alignment`](forecast_alignment.md) | 10.0 | `signals/forecast_alignment.py` | ARIMA/MC/HW/CNN-LSTM ensemble directional consensus | Forecast Aligned (`forecast-aligned`) | — (external forecast target, not price-only) |
+| [`relative_strength`](relative_strength.md) | 10.0 | `signals/relative_strength.py` | Stock return vs SPY 12-month excess return | Relative Strength (`relative-strength`) | `relative_strength_xsec` |
+| [`sortino_drawdown`](sortino_drawdown.md) | 10.0 | `signals/sortino_drawdown.py` | Sortino Ratio quality reward + max drawdown penalty | Risk-Adjusted (`risk-adjusted`) | `sortino_drawdown` |
+| [`rsi2_mean_reversion`](rsi2_mean_reversion.md) | 10.0 | `signals/rsi2_mean_reversion.py` | Connors RSI(2) long-only mean reversion (regime-gated) | Dip Buyer (`dip-buyer`) | `rsi2_mean_reversion` |
+| [`news_catalyst`](news_catalyst.md) | 10.0 | `signals/news_catalyst.py` | FinBERT / lexicon headline sentiment (earnings-proximity gated) | News Catalyst (`news-catalyst`) | — (point-in-time news, not price-only) |
+| [`lgbm_ranker`](lgbm_ranker.md) | 0.10 | `signals/lgbm_ranker.py` | LightGBM cross-sectional rank (dormant — contributes 0.0 until a model is trained) | — (dormant; no Pilot until it passes the model DSR gate) | — |
+| [`regime_multiplier`](regime_multiplier.md) | **0.0** | `signals/regime_multiplier.py` | HMM risk-on probability carried as Kelly-size scalar only | — (a sizing multiplier, not alpha — structurally can't back a Pilot) | — |
+
+Also see the ensemble/blend Pilots, which combine several modules rather than joining
+one: `Multifactor` above is single-module; `Balanced Blend` (`balanced-blend`, every
+module at its default weight) and `Value & Quality` (`value-quality`, `graham_value` +
+`dividend_quality` + `multifactor`) are curated multi-module blends with no
+single-module row here — see `pilots/catalog.py`.
 
 ---
 
