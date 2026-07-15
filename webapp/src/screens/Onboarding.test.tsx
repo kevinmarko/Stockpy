@@ -20,6 +20,8 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Onboarding } from "./Onboarding";
 import { readOnboarding } from "../onboarding";
+import { api } from "../api/client";
+import { ApiError } from "../api/types";
 
 function renderOnboarding(onDone = vi.fn()) {
   const utils = render(
@@ -140,6 +142,95 @@ describe("Onboarding — step 1 (connect brokerage)", () => {
     renderOnboarding();
     await goToStep2();
     expect(screen.getByText("Set amount")).toBeInTheDocument();
+  });
+});
+
+describe("Onboarding — step 1 (connect Robinhood)", () => {
+  it("selecting Connect Robinhood reveals the credential form and hides it once connected", async () => {
+    renderOnboarding();
+    await goToStep1();
+
+    fireEvent.click(screen.getByText(/connect robinhood/i));
+
+    expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/totp secret/i)).toBeInTheDocument();
+  });
+
+  it("the Connect button stays disabled until all three fields are filled", async () => {
+    renderOnboarding();
+    await goToStep1();
+    fireEvent.click(screen.getByText(/connect robinhood/i));
+
+    const connectBtn = screen.getByRole("button", { name: /connect$/i });
+    expect(connectBtn).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/robinhood email/i), {
+      target: { value: "user@example.com" },
+    });
+    expect(connectBtn).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/^password$/i), {
+      target: { value: "hunter2" },
+    });
+    expect(connectBtn).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/totp secret/i), {
+      target: { value: "JBSWY3DPEHPK3PXP" },
+    });
+    expect(connectBtn).toBeEnabled();
+  });
+
+  it("a successful connect enables Continue and never displays the submitted password", async () => {
+    renderOnboarding();
+    await goToStep1();
+    fireEvent.click(screen.getByText(/connect robinhood/i));
+
+    fireEvent.change(screen.getByLabelText(/robinhood email/i), {
+      target: { value: "user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/^password$/i), {
+      target: { value: "sUp3rS3cr3tPassw0rd!!" },
+    });
+    fireEvent.change(screen.getByLabelText(/totp secret/i), {
+      target: { value: "JBSWY3DPEHPK3PXP" },
+    });
+
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /connect$/i }));
+
+    await screen.findByText(/connect robinhood — connected/i);
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    // The credential form unmounts once connected — password never lingers on screen.
+    expect(screen.queryByLabelText(/^password$/i)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("sUp3rS3cr3tPassw0rd!!");
+  });
+
+  it("a failed verification shows an inline error and keeps Continue disabled", async () => {
+    const spy = vi
+      .spyOn(api, "connectBrokerage")
+      .mockRejectedValueOnce(
+        new ApiError("Could not verify Robinhood credentials.", 401)
+      );
+
+    renderOnboarding();
+    await goToStep1();
+    fireEvent.click(screen.getByText(/connect robinhood/i));
+
+    fireEvent.change(screen.getByLabelText(/robinhood email/i), {
+      target: { value: "user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/^password$/i), {
+      target: { value: "wrongpassword" },
+    });
+    fireEvent.change(screen.getByLabelText(/totp secret/i), {
+      target: { value: "JBSWY3DPEHPK3PXP" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /connect$/i }));
+
+    await screen.findByText(/could not verify robinhood credentials/i);
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    spy.mockRestore();
   });
 });
 

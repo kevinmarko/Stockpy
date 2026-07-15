@@ -220,6 +220,36 @@ export interface SymbolDetail {
   held_by_pilots: SymbolHeldBy[];
 }
 
+/** GET /brokerage/status — whether local RH credentials are configured. */
+export interface BrokerageStatus {
+  connected: boolean;
+  has_account_snapshot: boolean;
+}
+
+/**
+ * POST /brokerage/connect body. Sent only over a loopback connection to the
+ * operator's own local backend — see api/pilots_api.py's module docstring for
+ * the three independent server-side gates (BROKERAGE_CONNECT_ENABLED,
+ * FOLLOW_API_TOKEN, loopback-only). Never persisted client-side.
+ */
+export interface BrokerageConnectRequest {
+  username: string;
+  password: string;
+  mfa_secret: string;
+}
+
+/** POST /brokerage/connect response. Never echoes credential values. */
+export interface BrokerageConnectResult {
+  connected: boolean;
+  verified: boolean;
+  has_account_snapshot: boolean;
+}
+
+/** POST /brokerage/disconnect response. */
+export interface BrokerageDisconnectResult {
+  connected: boolean;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

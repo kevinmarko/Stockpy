@@ -1,12 +1,15 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, apiMeta } from "../api/client";
+import { ApiError } from "../api/types";
 import type { PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { completeOnboarding } from "../onboarding";
 import { CategoryChip, DeployableBadge, Loading } from "../components/ui";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
+
+type RobinhoodConnectStatus = "idle" | "connecting" | "connected" | "error";
 
 /**
  * 3-step onboarding: Choose a Pilot -> Connect brokerage (paper-first) -> Set amount.
@@ -16,8 +19,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const nav = useNavigate();
   const [step, setStep] = useState(0);
   const [pilotId, setPilotId] = useState<string | null>(null);
-  const [brokerage, setBrokerage] = useState<"paper" | "skip" | null>(null);
+  const [brokerage, setBrokerage] = useState<"paper" | "robinhood" | "skip" | null>(
+    null
+  );
   const [amount, setAmount] = useState<number>(500);
+
+  const [rhUsername, setRhUsername] = useState("");
+  const [rhPassword, setRhPassword] = useState("");
+  const [rhMfaSecret, setRhMfaSecret] = useState("");
+  const [rhStatus, setRhStatus] = useState<RobinhoodConnectStatus>("idle");
+  const [rhError, setRhError] = useState<string | null>(null);
 
   const { data: pilots, loading } = useApi<PilotSummary[]>(
     () => api.listPilots(),
@@ -28,6 +39,30 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     () => (pilots ?? []).filter((p) => p.headline.deployable),
     [pilots]
   );
+
+  const canContinueStep1 =
+    brokerage === "paper" || brokerage === "skip" ||
+    (brokerage === "robinhood" && rhStatus === "connected");
+
+  const connectRobinhood = async () => {
+    setRhStatus("connecting");
+    setRhError(null);
+    try {
+      await api.connectBrokerage({
+        username: rhUsername,
+        password: rhPassword,
+        mfa_secret: rhMfaSecret,
+      });
+      setRhStatus("connected");
+    } catch (e) {
+      setRhStatus("error");
+      setRhError(
+        e instanceof ApiError
+          ? e.message
+          : "Could not reach the backend to verify credentials."
+      );
+    }
+  };
 
   const finish = () => {
     completeOnboarding({
@@ -158,6 +193,94 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           </button>
 
           <button
+            onClick={() => {
+              setBrokerage("robinhood");
+              setRhStatus((s) => (s === "connected" ? s : "idle"));
+              setRhError(null);
+            }}
+            className="card card-pad"
+            style={{
+              textAlign: "left",
+              width: "100%",
+              marginBottom: 10,
+              border:
+                brokerage === "robinhood"
+                  ? `1.5px solid ${theme.growth}`
+                  : "1px solid var(--border)",
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: 16 }}>
+              🔗 Connect Robinhood{rhStatus === "connected" ? " — connected" : ""}
+            </div>
+            <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 4 }}>
+              Credentials go only to your local backend and are verified with a
+              read-only login before anything is saved — never sent anywhere else.
+            </div>
+          </button>
+
+          {brokerage === "robinhood" && rhStatus !== "connected" && (
+            <div className="card card-pad" style={{ marginBottom: 10 }}>
+              <label className="tile-label" htmlFor="rh-username">
+                Robinhood email
+              </label>
+              <input
+                id="rh-username"
+                className="field"
+                type="email"
+                autoComplete="username"
+                value={rhUsername}
+                onChange={(e) => setRhUsername(e.target.value)}
+              />
+              <label className="tile-label" htmlFor="rh-password" style={{ marginTop: 10 }}>
+                Password
+              </label>
+              <input
+                id="rh-password"
+                className="field"
+                type="password"
+                autoComplete="current-password"
+                value={rhPassword}
+                onChange={(e) => setRhPassword(e.target.value)}
+              />
+              <label className="tile-label" htmlFor="rh-mfa" style={{ marginTop: 10 }}>
+                Authenticator app TOTP secret
+              </label>
+              <input
+                id="rh-mfa"
+                className="field"
+                type="password"
+                autoComplete="off"
+                value={rhMfaSecret}
+                onChange={(e) => setRhMfaSecret(e.target.value)}
+              />
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 6 }}>
+                From Robinhood: Settings → Security → Two-Factor Authentication →
+                Authenticator App → the 32-character setup code.
+              </div>
+
+              {rhStatus === "error" && rhError && (
+                <p style={{ color: theme.decline, fontSize: 13, marginTop: 10 }}>
+                  {rhError}
+                </p>
+              )}
+
+              <button
+                className="btn btn-primary btn-block"
+                style={{ marginTop: 12 }}
+                disabled={
+                  rhStatus === "connecting" ||
+                  !rhUsername.trim() ||
+                  !rhPassword.trim() ||
+                  !rhMfaSecret.trim()
+                }
+                onClick={connectRobinhood}
+              >
+                {rhStatus === "connecting" ? "Verifying…" : "Connect"}
+              </button>
+            </div>
+          )}
+
+          <button
             onClick={() => setBrokerage("skip")}
             className="card card-pad"
             style={{
@@ -190,7 +313,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <button
               className="btn btn-primary"
               style={{ flex: 2 }}
-              disabled={!brokerage}
+              disabled={!canContinueStep1}
               onClick={() => setStep(2)}
             >
               Continue

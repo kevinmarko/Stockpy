@@ -168,4 +168,72 @@ describe("client.ts — live client (mocked fetch)", () => {
     await mod.api.listPilots();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("getBrokerageStatus() calls GET /brokerage/status", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ connected: false, has_account_snapshot: false })
+    );
+
+    const result = await mod.api.getBrokerageStatus();
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/status");
+    expect(result).toEqual({ connected: false, has_account_snapshot: false });
+  });
+
+  it("connectBrokerage() POSTs credentials as JSON to /brokerage/connect", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ connected: true, verified: true, has_account_snapshot: false })
+    );
+
+    await mod.api.connectBrokerage({
+      username: "user@example.com",
+      password: "hunter2",
+      mfa_secret: "SECRET",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/connect");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      username: "user@example.com",
+      password: "hunter2",
+      mfa_secret: "SECRET",
+    });
+  });
+
+  it("connectBrokerage() surfaces a 401 verification failure as an ApiError", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { detail: "Could not verify Robinhood credentials." },
+        { status: 401, ok: false }
+      )
+    );
+
+    await expect(
+      mod.api.connectBrokerage({ username: "u", password: "wrong", mfa_secret: "s" })
+    ).rejects.toMatchObject({
+      status: 401,
+      message: "Could not verify Robinhood credentials.",
+    });
+  });
+
+  it("disconnectBrokerage() POSTs to /brokerage/disconnect", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(jsonResponse({ connected: false }));
+
+    const result = await mod.api.disconnectBrokerage();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/disconnect");
+    expect(init.method).toBe("POST");
+    expect(result).toEqual({ connected: false });
+  });
 });

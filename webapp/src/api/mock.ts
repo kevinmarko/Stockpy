@@ -9,6 +9,10 @@
 
 import { ApiError } from "./types";
 import type {
+  BrokerageConnectRequest,
+  BrokerageConnectResult,
+  BrokerageDisconnectResult,
+  BrokerageStatus,
   Follow,
   FollowResult,
   Headline,
@@ -491,6 +495,27 @@ const MOCK_MODE = "review" as const; // paper-first: nothing is ever placed
 const NOTIONAL_CAP = 2500;
 const MIN_AMOUNT = 100;
 
+// ---- Local brokerage-connect simulation (localStorage; never stores the
+// actual credential strings — only a boolean "connected" marker, matching the
+// real backend's honesty posture of never echoing/persisting secrets client-side) ----
+const BROKERAGE_KEY = "stockpy.mock.brokerage";
+
+function readBrokerageConnected(): boolean {
+  try {
+    return localStorage.getItem(BROKERAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeBrokerageConnected(connected: boolean) {
+  try {
+    if (connected) localStorage.setItem(BROKERAGE_KEY, "1");
+    else localStorage.removeItem(BROKERAGE_KEY);
+  } catch {
+    /* ignore quota */
+  }
+}
+
 async function delay<T>(v: T, ms = 260): Promise<T> {
   return new Promise((res) => setTimeout(() => res(v), ms));
 }
@@ -700,6 +725,36 @@ export const mockApi = {
       notice:
         "This creates a gated, paper-first order queue that you must confirm. No order is placed automatically.",
     });
+  },
+
+  async getBrokerageStatus(): Promise<BrokerageStatus> {
+    return delay(
+      {
+        connected: readBrokerageConnected(),
+        has_account_snapshot: readBrokerageConnected(),
+      },
+      80
+    );
+  },
+
+  async connectBrokerage(
+    creds: BrokerageConnectRequest
+  ): Promise<BrokerageConnectResult> {
+    // Simulated verification only — the mock never contacts a real broker and
+    // never persists the credential strings themselves, only a boolean marker.
+    const verified = Boolean(
+      creds.username.trim() && creds.password.trim() && creds.mfa_secret.trim()
+    );
+    if (!verified) {
+      throw new ApiError("Could not verify Robinhood credentials.", 401);
+    }
+    writeBrokerageConnected(true);
+    return delay({ connected: true, verified: true, has_account_snapshot: false }, 500);
+  },
+
+  async disconnectBrokerage(): Promise<BrokerageDisconnectResult> {
+    writeBrokerageConnected(false);
+    return delay({ connected: false }, 150);
   },
 };
 

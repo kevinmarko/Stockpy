@@ -10,6 +10,10 @@
 import { mockApi, MOCK_META } from "./mock";
 import { ApiError } from "./types";
 import type {
+  BrokerageConnectRequest,
+  BrokerageConnectResult,
+  BrokerageDisconnectResult,
+  BrokerageStatus,
   Follow,
   FollowResult,
   Holding,
@@ -91,6 +95,17 @@ const liveApi = {
     http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {
       method: "POST",
       body: JSON.stringify({ amount }),
+    }),
+  getBrokerageStatus: () => http<BrokerageStatus>("/brokerage/status"),
+  connectBrokerage: (creds: BrokerageConnectRequest) =>
+    http<BrokerageConnectResult>("/brokerage/connect", {
+      method: "POST",
+      body: JSON.stringify(creds),
+    }),
+  disconnectBrokerage: () =>
+    http<BrokerageDisconnectResult>("/brokerage/disconnect", {
+      method: "POST",
+      body: JSON.stringify({}),
     }),
 };
 
