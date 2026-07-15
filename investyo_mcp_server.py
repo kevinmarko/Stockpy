@@ -185,47 +185,81 @@ def list_registry_prompts() -> str:
 @mcp.tool()
 def trigger_data_engine(symbol: str, timeframe: str = "1D") -> str:
     """
-    Triggers the data_engine.py module to fetch market data.
-    (Replaces the deprecated data_ingestion.py module).
-    
+    Refreshes persisted OHLCV bars for a symbol IN-PROCESS via the platform's
+    HistoricalStore (DB-cached, incremental fetch through the market-data provider).
+    No subprocess: data_engine.py has no CLI entrypoint.
+
     Args:
         symbol: The ticker symbol to fetch (e.g., AAPL).
-        timeframe: The timeframe resolution (default: 1D).
+        timeframe: Cosmetic only — HistoricalStore bars are DAILY resolution (default: 1D).
     """
     try:
-        # Execute the data engine script via subprocess using current virtual environment python
-        result = subprocess.run(
-            [sys.executable, "data_engine.py", "--symbol", symbol, "--timeframe", timeframe],
-            capture_output=True,
-            text=True,
-            check=True
+        from data.historical_store import HistoricalStore
+        from data.market_data import get_provider
+        from settings import settings
+
+        sym = symbol.upper().strip()
+        df = HistoricalStore().get_bars(
+            sym, lookback_days=settings.BARS_BACKFILL_DAYS, provider=get_provider()
         )
-        return f"Data ingestion successful for {symbol}:\n{result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"Data ingestion failed. Exit code {e.returncode}:\n{e.stderr}"
-    except FileNotFoundError:
-        return "Error: data_engine.py not found. Ensure you are running the server from the project root."
+        if df is None or df.empty:
+            return (
+                f"Bar refresh for {sym} returned no rows (provider unavailable or "
+                f"unknown symbol). No data was fabricated."
+            )
+        last_date = df.index[-1]
+        last_str = last_date.strftime("%Y-%m-%d") if hasattr(last_date, "strftime") else str(last_date)
+        return (
+            f"Bar refresh successful for {sym} (daily bars): {len(df)} rows persisted, "
+            f"last bar date {last_str}."
+        )
+    except Exception as e:
+        return f"Data ingestion failed for {symbol}: {str(e)}"
 
 @mcp.tool()
 def generate_html_report(portfolio_id: str) -> str:
     """
-    Triggers reporting_engine.py to generate an HTML summary via the reporting package.
-    
+    Runs the advisory orchestrator (main.py) end-to-end, which internally calls
+    reporting/html_publisher.py::write_html_report -> diagnostics_and_visuals.generate_html_report
+    to produce the daily HTML report. (The old reporting_engine.py this tool used to
+    reference was deleted 2026-07-09; there is no standalone reporting-only entrypoint —
+    the report is a side effect of a full advisory run.)
+
     Args:
-        portfolio_id: The ID of the portfolio to generate the report for.
+        portfolio_id: Currently ignored — main.py's advisory report always covers the
+            full active universe/held account, not a specific portfolio_id.
     """
     try:
+        from settings import settings
+
         result = subprocess.run(
-            [sys.executable, "-m", "reporting.html_publisher", "--portfolio", portfolio_id],
+            [sys.executable, "main.py"],
             capture_output=True,
             text=True,
-            check=True
+            timeout=900,
         )
-        return f"Report generated successfully:\n{result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"Report generation failed:\n{e.stderr}"
-    except FileNotFoundError:
-        return "Error: reporting/html_publisher.py module not found."
+        report_path = settings.OUTPUT_DIR / "daily_report.html"
+        report_exists = report_path.exists()
+
+        if result.returncode != 0:
+            return (
+                f"Advisory run failed (exit {result.returncode}); HTML report was "
+                f"{'still' if report_exists else 'NOT'} found at {report_path}.\n"
+                f"stderr:\n{result.stderr[-2000:]}"
+            )
+        if report_exists:
+            return (
+                f"Advisory run completed and HTML report generated at: {report_path}\n"
+                f"(portfolio_id '{portfolio_id}' is currently ignored by this pipeline.)"
+            )
+        return (
+            "Advisory run completed (exit 0) but no daily_report.html was found at "
+            f"{report_path} — report generation may have failed non-fatally. Check logs."
+        )
+    except subprocess.TimeoutExpired:
+        return "Report generation timed out after 15 minutes."
+    except Exception as e:
+        return f"Report generation failed: {str(e)}"
 
 @mcp.tool()
 def run_platform_tests() -> str:
@@ -895,20 +929,32 @@ def get_universe_status() -> str:
 @mcp.tool()
 def trigger_forecasting(symbol: str) -> str:
     """
-    Triggers the forecasting_engine.py for a specific symbol.
+    Runs the platform's real per-symbol forecast IN-PROCESS via the advisory engine
+    (engine.advisory.evaluate), which internally runs the full ARIMA/Monte-Carlo/
+    Holt-Winters/CNN-LSTM blended ensemble. There is no forecasting_engine.py CLI entrypoint.
+
+    Args:
+        symbol: The ticker symbol to forecast (e.g., AAPL).
     """
     try:
-        result = subprocess.run(
-            [sys.executable, "forecasting_engine.py", "--symbol", symbol],
-            capture_output=True,
-            text=True,
-            check=True
+        from engine.advisory import evaluate
+        from data.market_data import get_provider
+
+        sym = symbol.upper().strip()
+        rec = evaluate(sym, position=None, market=get_provider(), snapshot=None)
+
+        forecast_str = f"${rec.forecast:,.2f}" if rec.forecast is not None else "unavailable"
+        return (
+            f"# Forecast: {sym}\n\n"
+            f"- **30-day blended forecast**: {forecast_str}\n"
+            f"- **Action**: {rec.action}\n"
+            f"- **Conviction**: {rec.conviction:.2f}\n"
+            f"- **Strategy**: {rec.strategy}\n"
+            f"- **Data quality**: {rec.data_quality}\n"
+            f"- **Rationale**: {rec.rationale}\n"
         )
-        return f"Forecasting successful for {symbol}:\n{result.stdout}"
-    except subprocess.CalledProcessError as e:
-        return f"Forecasting failed. Exit code {e.returncode}:\n{e.stderr}"
-    except FileNotFoundError:
-        return "Error: forecasting_engine.py not found."
+    except Exception as e:
+        return f"Forecasting failed for {symbol}: {str(e)}"
 
 @mcp.tool()
 def trigger_macro_engine() -> str:
@@ -942,9 +988,25 @@ def trigger_edgar_backfill(tickers: str = "all", since: str = "2015-01-01") -> s
         since: Earliest filing date to backfill from (default: 2015-01-01).
     """
     try:
-        cmd = [sys.executable, "scripts/backfill_edgar_fundamentals.py", "--since", since]
-        if tickers.strip().lower() != "all":
-            cmd.extend(["--tickers"] + [t.strip().upper() for t in tickers.split(",")])
+        from settings import settings
+
+        tickers_stripped = tickers.strip().lower()
+        if tickers_stripped in ("", "all"):
+            ticker_list = [t.upper() for t in settings.DEFAULT_TICKERS]
+            if not ticker_list:
+                return (
+                    "EDGAR backfill aborted: tickers='all' was requested but "
+                    "settings.DEFAULT_TICKERS is empty — no universe to resolve. "
+                    "Pass explicit tickers or configure DEFAULT_TICKERS."
+                )
+        else:
+            ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+
+        cmd = [
+            sys.executable, "scripts/backfill_edgar_fundamentals.py",
+            "--since", since,
+            "--tickers", ",".join(ticker_list),
+        ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         output = result.stdout + result.stderr
@@ -966,48 +1028,78 @@ def trigger_full_pipeline(tickers: str = "") -> str:
     Args:
         tickers: Comma-separated ticker list. If empty, uses the active universe.
     """
+    from settings import settings
+
     steps = []
     ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()] if tickers else None
+    if not ticker_list:
+        ticker_list = [t.upper() for t in settings.DEFAULT_TICKERS]
 
-    # Step 1: Price bars
+    # Step 1: Price bars — in-process via HistoricalStore (data_engine.py has no CLI entrypoint)
     try:
-        if ticker_list:
-            for sym in ticker_list:
-                result = subprocess.run(
-                    [sys.executable, "data_engine.py", "--symbol", sym],
-                    capture_output=True, text=True, timeout=120
-                )
-                steps.append(f"✅ data_engine({sym}): OK" if result.returncode == 0
-                             else f"❌ data_engine({sym}): {result.stderr[:200]}")
+        if not ticker_list:
+            steps.append("❌ bar_refresh: no tickers resolved (universe and DEFAULT_TICKERS both empty)")
         else:
-            result = subprocess.run(
-                [sys.executable, "data_engine.py"],
-                capture_output=True, text=True, timeout=300
-            )
-            steps.append(f"✅ data_engine(universe): OK" if result.returncode == 0
-                         else f"❌ data_engine(universe): {result.stderr[:200]}")
-    except Exception as e:
-        steps.append(f"❌ data_engine: {str(e)}")
+            from data.historical_store import HistoricalStore
+            from data.market_data import get_provider
 
-    # Step 2: EDGAR fundamentals
+            provider = get_provider()
+            store = HistoricalStore()
+            ok_count = 0
+            fail_syms = []
+            for sym in ticker_list:
+                try:
+                    df = store.get_bars(sym, lookback_days=settings.BARS_BACKFILL_DAYS, provider=provider)
+                    if df is not None and not df.empty:
+                        ok_count += 1
+                    else:
+                        fail_syms.append(sym)
+                except Exception:
+                    fail_syms.append(sym)
+            if ok_count > 0:
+                msg = f"✅ bar_refresh: {ok_count}/{len(ticker_list)} symbols OK"
+                if fail_syms:
+                    msg += f" (no data for: {', '.join(fail_syms)})"
+                steps.append(msg)
+            else:
+                steps.append(f"❌ bar_refresh: no bars fetched for any of {ticker_list}")
+    except Exception as e:
+        steps.append(f"❌ bar_refresh: {str(e)}")
+
+    # Step 2: EDGAR fundamentals — --tickers is required by the real script
     try:
-        cmd = [sys.executable, "scripts/backfill_edgar_fundamentals.py", "--since", "2020-01-01"]
-        if ticker_list:
-            cmd.extend(["--tickers"] + ticker_list)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        steps.append(f"✅ edgar_backfill: OK" if result.returncode == 0
-                     else f"❌ edgar_backfill: {result.stderr[:200]}")
+        cmd = [
+            sys.executable, "scripts/backfill_edgar_fundamentals.py",
+            "--since", "2020-01-01",
+            "--tickers", ",".join(ticker_list) if ticker_list else "",
+        ]
+        if not ticker_list:
+            steps.append("❌ edgar_backfill: no tickers resolved (universe and DEFAULT_TICKERS both empty)")
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            steps.append(f"✅ edgar_backfill: OK" if result.returncode == 0
+                         else f"❌ edgar_backfill: {result.stderr[:200]}")
     except Exception as e:
         steps.append(f"❌ edgar_backfill: {str(e)}")
 
-    # Step 3: Macro engine
+    # Step 3: Macro engine — in-process via MacroEngine (macro_engine.py has no CLI entrypoint)
     try:
-        result = subprocess.run(
-            [sys.executable, "macro_engine.py"],
-            capture_output=True, text=True, timeout=120
-        )
-        steps.append(f"✅ macro_engine: OK" if result.returncode == 0
-                     else f"❌ macro_engine: {result.stderr[:200]}")
+        if not settings.FRED_API_KEY:
+            steps.append("❌ macro_engine: FRED_API_KEY not configured — cannot fetch macro data")
+        else:
+            from data_engine import DataEngine
+            from macro_engine import MacroEngine
+
+            de = DataEngine(fred_api_key=settings.FRED_API_KEY)
+            engine = MacroEngine(de)
+            macro_raw = de.fetch_macro_raw()
+            sahm_val = engine.calculate_sahm_rule()
+            macro_df = engine.run_macro_killswitch(macro_raw, sahm_val)
+            regime = macro_df["market_regime"].iloc[0] if not macro_df.empty else "UNKNOWN"
+            steps.append(
+                f"✅ macro_engine: OK (VIX={macro_raw.get('VIXCLS')}, "
+                f"Sahm={sahm_val}, regime={regime})"
+            )
     except Exception as e:
         steps.append(f"❌ macro_engine: {str(e)}")
 
@@ -1038,27 +1130,38 @@ def get_pit_coverage_report() -> str:
 # ==========================================
 
 @mcp.tool()
-def run_validation_harness(strategy_name: str = "default", start_date: str = "2020-01-01", end_date: str = "2024-12-31") -> str:
+def run_validation_harness(strategy_name: str = "", start_date: str = "2020-01-01", end_date: str = "2024-12-31") -> str:
     """
-    Triggers the StrategyValidationHarness and returns structured results
-    including Sharpe ratio, max drawdown, DSR, PBO, and deployability.
+    Triggers the StrategyValidationHarness (scripts/refresh_validations.py) and returns
+    structured results including Sharpe ratio, max drawdown, DSR, PBO, and deployability.
 
     Args:
-        strategy_name: Name tag for the strategy run.
+        strategy_name: Comma-separated strategy name(s) registered in STRATEGY_REGISTRY
+            (e.g. "rsi2_mean_reversion" or "rsi2_mean_reversion,macd_trend"). Leave empty,
+            or pass "default"/"all", to validate EVERY registered strategy.
         start_date: Backtest start date (YYYY-MM-DD).
         end_date: Backtest end date (YYYY-MM-DD).
     """
     try:
-        result = subprocess.run(
-            [sys.executable, "scripts/refresh_validations.py",
-             "--strategy", strategy_name,
-             "--start", start_date,
-             "--end", end_date],
-            capture_output=True, text=True, timeout=600
-        )
+        name_stripped = strategy_name.strip().lower()
+        cmd = [
+            sys.executable, "-m", "scripts.refresh_validations",
+            "--start", start_date,
+            "--end", end_date,
+            "--json",
+        ]
+        if name_stripped not in ("", "default", "all"):
+            cmd.extend(["--strategies", strategy_name.strip()])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        label = strategy_name.strip() if name_stripped not in ("", "default", "all") else "ALL REGISTERED STRATEGIES"
+
         if result.returncode == 0:
-            return f"# Validation Harness Results: {strategy_name}\n\n{result.stdout}"
-        return f"Validation harness failed (exit {result.returncode}):\n{result.stderr}"
+            return f"# Validation Harness Results: {label}\n\n{result.stdout}"
+        return (
+            f"Validation harness failed (exit {result.returncode}) for {label}:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
     except subprocess.TimeoutExpired:
         return "Validation harness timed out after 10 minutes."
     except Exception as e:
@@ -1168,9 +1271,9 @@ def compare_strategies(strategy_a: str, strategy_b: str, start_date: str = "2020
     for name in [strategy_a, strategy_b]:
         try:
             result = subprocess.run(
-                [sys.executable, "scripts/refresh_validations.py",
-                 "--strategy", name, "--start", start_date, "--end", end_date,
-                 "--json-output"],
+                [sys.executable, "-m", "scripts.refresh_validations",
+                 "--strategies", name, "--start", start_date, "--end", end_date,
+                 "--json"],
                 capture_output=True, text=True, timeout=600
             )
             if result.returncode == 0:
