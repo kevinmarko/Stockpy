@@ -669,16 +669,27 @@ def _build_context_extras(
         except Exception as _cov_exc:
             logger.debug("CoVaR proxy pre-compute skipped: %s", _cov_exc)
 
-        # Per-symbol post-trade excursion (MFE / MAE / Edge Ratio) from the latest
-        # CLOSED trade in the shared TransactionsStore + the already-fetched bars.
-        # Reuses evaluation_engine.EvaluationEngine.calculate_edge_ratio (same math
-        # the rich path's evaluate_portfolio uses). A symbol with no closed trade is
-        # omitted → NaN/null downstream (honest by construction on a fresh install,
-        # lighting up as record_trade()/Robinhood reconstruction accrue history).
-        # NOTE: risk.realized_slippage is deliberately NOT wired here — its producer
-        # needs a Trans-Code/Amount/Commission transactions sheet that the advisory
-        # path does not load, so it stays honest-null rather than being fed a
-        # wrong-shaped frame that would return a fabricated 0.0 (CONSTRAINT #4).
+        # Per-symbol post-trade excursion (MFE / MAE / Edge Ratio / Realized
+        # Slippage) from the latest CLOSED trade in the shared TransactionsStore +
+        # the already-fetched bars. Reuses evaluation_engine.EvaluationEngine's
+        # calculate_edge_ratio and calculate_realized_slippage — the SAME two
+        # methods evaluate_portfolio() calls to populate dashboard_df's
+        # 'MFE'/'MAE'/'Edge Ratio'/'Realized Slippage' columns on the rich
+        # orchestrator path (pipeline/production_steps.py's evaluate_portfolio()
+        # call), so this is a genuine parity fix, not a different metric under the
+        # same name. NOTE: this is distinct from
+        # research_engine.AdvancedResearchEngine.calculate_realized_slippage(
+        # transactions_df) — a portfolio-wide bps scalar over a Trans-Code/Amount/
+        # Commission transactions SHEET that neither path actually threads into the
+        # dashboard's 'Realized Slippage' column (that column is overwritten by
+        # evaluate_portfolio() later in the rich pipeline) — EvaluationEngine's
+        # two-argument, per-symbol calculate_realized_slippage(entry_price,
+        # arrival_price) is the real source, and needs only entry price (from the
+        # trade record) + current price (the latest close, mirroring the rich
+        # path's `row['Price']`), both already available here.
+        # A symbol with no closed trade is omitted → NaN/null downstream (honest
+        # by construction on a fresh install, lighting up as record_trade()/
+        # Robinhood reconstruction accrue history).
         try:
             from engine.advisory import _get_transactions_store
             from evaluation_engine import EvaluationEngine
@@ -702,13 +713,21 @@ def _build_context_extras(
                 _exit_ts = _latest.get("exit_ts")
                 if _exit_ts is None or pd.isna(_exit_ts):
                     continue  # only a CLOSED trade has a defined hold window
+                _entry_price = float(_latest["entry_price"])
                 _res = _ee.calculate_edge_ratio(
-                    _d, float(_latest["entry_price"]), _latest["entry_ts"], _exit_ts
+                    _d, _entry_price, _latest["entry_ts"], _exit_ts
+                )
+                _arrival_price = float(_d["Close"].iloc[-1])
+                _slippage = (
+                    _ee.calculate_realized_slippage(_entry_price, _arrival_price)
+                    if (_entry_price > 0 and _arrival_price > 0)
+                    else float("nan")
                 )
                 _excursion[_s] = {
                     "MFE": _res.get("MFE", float("nan")),
                     "MAE": _res.get("MAE", float("nan")),
                     "Edge Ratio": _res.get("Edge Ratio", float("nan")),
+                    "Realized Slippage": _slippage,
                 }
             if _excursion:
                 extras["excursion"] = _excursion

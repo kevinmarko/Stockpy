@@ -23,10 +23,13 @@ Every per-signal metric must:
 
   * be present as a key in every record from BOTH writers (stable schema), and
   * serialize as JSON ``null`` — never a fabricated ``0.0`` (CONSTRAINT #4) —
-    when the underlying value is genuinely unavailable. On the advisory path
-    ``realized_slippage`` is ALWAYS null (its Trans-Code/Amount/Commission
-    transactions-sheet input is not loaded there); the rest are null only when
-    their pre-compute inputs were absent for that symbol/cycle.
+    when the underlying value is genuinely unavailable (its pre-compute inputs
+    were absent for that symbol/cycle). ``realized_slippage`` is
+    ``evaluation_engine.EvaluationEngine``'s per-symbol implementation-shortfall
+    figure (entry vs. arrival price) — the SAME source ``evaluate_portfolio()``
+    uses for ``dashboard_df``'s column on the rich path — sourced from the
+    per-symbol closed-trade excursion pre-compute, so it is null only when the
+    symbol has no closed trade yet.
 """
 
 from __future__ import annotations

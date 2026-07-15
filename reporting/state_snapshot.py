@@ -140,21 +140,24 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 # per-recommendation on Recommendation.macro_regime; "" → null via
                 # the SymbolDetail reader (never fabricated).
                 "macro_status": getattr(rec, "macro_regime", "") or "",
-                # Post-trade excursion (MFE/MAE/Edge Ratio) — populated when the
-                # symbol has closed-trade history, else null (honest on a fresh DB).
+                # Post-trade excursion (MFE/MAE/Edge Ratio/Realized Slippage) —
+                # populated when the symbol has closed-trade history, else null
+                # (honest on a fresh DB). realized_slippage is
+                # evaluation_engine.EvaluationEngine's per-symbol implementation
+                # shortfall (entry vs. arrival price) — the SAME source
+                # evaluate_portfolio() uses for dashboard_df's 'Realized Slippage'
+                # column on the rich orchestrator path — NOT the portfolio-wide bps
+                # scalar from research_engine's calculate_realized_slippage
+                # (transactions_df), which neither path threads into the dashboard.
                 "mfe": _safe_float_or_none(ki.get("mfe")),
                 "mae": _safe_float_or_none(ki.get("mae")),
                 "edge_ratio": _safe_float_or_none(ki.get("edge_ratio")),
-                # FinBERT news sentiment + CoVaR proxy are now threaded onto
+                "realized_slippage": _safe_float_or_none(ki.get("realized_slippage")),
+                # FinBERT news sentiment + CoVaR proxy are threaded onto
                 # key_indicators (news via signals/news_catalyst pre_compute, CoVaR
                 # via research_engine over the universe returns matrix); None when
-                # their inputs were unavailable this cycle. realized_slippage stays
-                # null on the advisory path — its producer needs a Trans-Code/Amount/
-                # Commission transactions sheet that this path does not load, so it
-                # is left honest-null rather than fed a wrong-shaped frame that would
-                # return a fabricated 0.0 (CONSTRAINT #4).
+                # their inputs were unavailable this cycle.
                 "news_sentiment": _safe_float_or_none(ki.get("news_sentiment")),
-                "realized_slippage": _safe_float_or_none(ki.get("realized_slippage")),
                 "covar_proxy": _safe_float_or_none(ki.get("covar_proxy")),
             })
 

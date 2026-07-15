@@ -1265,6 +1265,16 @@ def evaluate(
         "mfe": _safe_float(_excursion_sym.get("MFE"), nan),
         "mae": _safe_float(_excursion_sym.get("MAE"), nan),
         "edge_ratio": _safe_float(_excursion_sym.get("Edge Ratio"), nan),
+        # Per-symbol Realized Slippage (implementation shortfall: entry price vs.
+        # arrival/current price) — evaluation_engine.EvaluationEngine's two-argument
+        # calculate_realized_slippage(entry_price, arrival_price), the SAME method
+        # (and the SAME closed-trade record) evaluate_portfolio() uses to populate
+        # dashboard_df's 'Realized Slippage' column on the rich orchestrator path.
+        # NOT the portfolio-wide bps scalar from research_engine's
+        # calculate_realized_slippage(transactions_df) — that needs a Trans-Code/
+        # Amount/Commission transactions sheet neither path actually threads into
+        # the dashboard. NaN when this symbol has no closed trade history.
+        "realized_slippage": _safe_float(_excursion_sym.get("Realized Slippage"), nan),
     }
 
     # A2 — bar-derived technicals are meaningless on a synthetic flat bar; report
@@ -1274,7 +1284,7 @@ def evaluate(
                     "sortino", "max_drawdown", "rs_vs_spy",
                     # excursion is symbol-specific + bar-derived; the universe-wide
                     # xsec/news/covar values stay valid and are deliberately not nulled.
-                    "mfe", "mae", "edge_ratio"):
+                    "mfe", "mae", "edge_ratio", "realized_slippage"):
             key_indicators[_tk] = nan
 
     # ──────────────────────────────────────────────────────────────────────────

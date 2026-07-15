@@ -949,7 +949,7 @@ class TestContextExtrasThreading:
     def test_symboldetail_fields_populate_key_indicators(self):
         """The SymbolDetail parity fields threaded through context_extras
         (xsec 12-1m return + rank, news sentiment, portfolio CoVaR proxy, and the
-        per-symbol excursion MFE/MAE/Edge Ratio) must surface on
+        per-symbol excursion MFE/MAE/Edge Ratio/Realized Slippage) must surface on
         Recommendation.key_indicators under the snake_case keys the advisory
         writer (reporting/state_snapshot.py) reads."""
         import unittest.mock as mock
@@ -964,7 +964,12 @@ class TestContextExtrasThreading:
             "xsec_percentile_ranks": {"TEST": 0.9},
             "news_sentiment": {"TEST": 0.28},
             "covar_proxy": 0.34,
-            "excursion": {"TEST": {"MFE": 0.12, "MAE": 0.04, "Edge Ratio": 3.0}},
+            "excursion": {
+                "TEST": {
+                    "MFE": 0.12, "MAE": 0.04, "Edge Ratio": 3.0,
+                    "Realized Slippage": 0.0042,
+                }
+            },
         }
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
@@ -994,6 +999,7 @@ class TestContextExtrasThreading:
             assert ki["mfe"] == pytest.approx(0.12)
             assert ki["mae"] == pytest.approx(0.04)
             assert ki["edge_ratio"] == pytest.approx(3.0)
+            assert ki["realized_slippage"] == pytest.approx(0.0042)
 
     def test_symboldetail_fields_absent_degrade_to_nan(self):
         """CONSTRAINT #4: with no context_extras, every SymbolDetail parity field
@@ -1022,7 +1028,7 @@ class TestContextExtrasThreading:
 
             ki = evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts).key_indicators
             for key in ("xsec_12_1m", "xsec_momentum_rank", "news_sentiment",
-                        "covar_proxy", "mfe", "mae", "edge_ratio"):
+                        "covar_proxy", "mfe", "mae", "edge_ratio", "realized_slippage"):
                 assert math.isnan(ki[key]), f"{key} should be NaN, got {ki[key]}"
 
 

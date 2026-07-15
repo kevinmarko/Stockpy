@@ -39,15 +39,21 @@ automatically.
 | — | Persist real benchmark comparison series | `validation/harness.py`, `pilots/performance.py` | #256 |
 | — | Mirror force-exit of dropped names via per-follow attribution | `pilots/mirror.py`, `pilots/follows_store.py` | #257 |
 | — | Symbol detail pages (`/symbol/:ticker`) — per-symbol snapshot view + the reverse "which Pilots hold this" cross-link; tappable holding/position rows | `pilots/symbols.py`, `api/pilots_api.py` (`GET /symbols/{ticker}`), `webapp/src/screens/SymbolDetail.tsx` | #270 |
-| — | Finish SymbolDetail data — advisory-path snapshot parity (xsec_12_1m, xsec_momentum_rank, macro_status, news_sentiment, CoVaR proxy, MFE/MAE/edge ratio now threaded onto `Recommendation.key_indicators` so the advisory writer matches the rich orchestrator writer) | `main.py` (`_build_context_extras`), `engine/advisory.py`, `reporting/state_snapshot.py` | this PR |
+| — | Finish SymbolDetail data — advisory-path snapshot parity (xsec_12_1m, xsec_momentum_rank, macro_status, news_sentiment, CoVaR proxy, MFE/MAE/edge ratio/realized slippage now threaded onto `Recommendation.key_indicators` so the advisory writer matches the rich orchestrator writer) | `main.py` (`_build_context_extras`), `engine/advisory.py`, `reporting/state_snapshot.py` | this PR |
 
-> **Honest gap that remains after the parity PR:** `risk.realized_slippage` stays
-> `null` on the advisory path. Its producer (`research_engine.calculate_realized_slippage`)
-> needs a `Trans Code`/`Amount`/`Commission` transactions sheet the advisory pipeline
-> does not load; feeding a wrong-shaped frame would return a fabricated `0.0`, so it is
-> left honest-null (CONSTRAINT #4) until a real transactions source is threaded in. Every
-> other previously-null SymbolDetail field now carries real data when its inputs exist
-> (MFE/MAE/edge ratio light up as closed-trade history accrues; news needs `FINNHUB_API_KEY`).
+> **Full parity achieved.** Every SymbolDetail field the rich orchestrator writer
+> emits now has a real source on the advisory path too — including `risk.realized_slippage`,
+> which turned out to have TWO producers under the same name in this codebase:
+> `research_engine.calculate_realized_slippage(transactions_df)` (a portfolio-wide bps
+> scalar over a `Trans Code`/`Amount`/`Commission` sheet neither path actually threads
+> into the dashboard) and `evaluation_engine.EvaluationEngine.calculate_realized_slippage
+> (entry_price, arrival_price)` (the REAL, per-symbol implementation-shortfall figure
+> `evaluate_portfolio()` uses to populate `dashboard_df`'s `'Realized Slippage'` column on
+> the rich path). The second one needs only a closed trade's entry price + the current
+> close — both already fetched for the MFE/MAE/Edge Ratio excursion pre-compute — so it's
+> wired from the SAME per-symbol closed-trade lookup, null until that symbol has a closed
+> trade (honest by construction). MFE/MAE/Edge Ratio/Realized Slippage light up as trade
+> history accrues; news_sentiment needs `FINNHUB_API_KEY`.
 
 ## Hardening (post-Phase-3) — the core ships; this is the "declared done too early" layer
 
