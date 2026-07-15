@@ -320,9 +320,15 @@ class TestGeminiProvider:
         assert out is None
 
     def test_missing_sdk_returns_none(self):
-        # Remove the fake SDK + cached llm.providers, then re-import provider.
-        sys.modules.pop("google.genai", None)
-        sys.modules.pop("google", None)
+        # Force ImportError for `from google import genai` regardless of
+        # whether the real google-genai package is actually installed
+        # (requirements.txt now requires it unconditionally): setting a
+        # sys.modules entry to None — not just popping it — makes Python's
+        # import system raise ModuleNotFoundError immediately rather than
+        # falling through to a real on-disk package. The autouse fixture's
+        # teardown restores whatever was there before regardless.
+        sys.modules["google.genai"] = None
+        sys.modules["google"] = None
         sys.modules.pop("llm.providers", None)
         from llm.providers import GeminiProvider
 

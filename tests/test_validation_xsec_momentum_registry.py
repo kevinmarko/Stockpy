@@ -139,7 +139,7 @@ def test_xsec_momentum_adapter_is_lookahead_free(price_history):
         check_names=False,
     )
     pd.testing.assert_series_equal(
-        baseline_precomputed["XSec_Momentum_TopHalf"].loc[common],
-        perturbed_precomputed["XSec_Momentum_TopHalf"].loc[common],
+        baseline_precomputed["XSecMom_TopHalf"].loc[common],
+        perturbed_precomputed["XSecMom_TopHalf"].loc[common],
         check_names=False,
     )

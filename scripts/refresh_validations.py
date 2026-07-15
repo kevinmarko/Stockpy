@@ -513,6 +513,12 @@ def _build_xsec_momentum_adapter(
     X = pd.DataFrame(index=common_index)
     X["XSecMom_Dispersion"] = mom_df.std(axis=1)
     X["XSecMom_Mean"] = mom_df.mean(axis=1)
+    # Same "<Factor>_Composite" convention as the other adapters in this file
+    # (_build_lowvol_size_adapter / _build_value_quality_adapter / etc.): the
+    # cross-sectional z-score of the causal 12-1 momentum values, averaged
+    # across the universe per day. Built purely from mom_df (already
+    # shift(SKIP_DAYS)/shift(LOOKBACK_DAYS)-causal), so it stays lookahead-free.
+    X["Momentum_12_1_Composite"] = _xsec_zscore(mom_df).mean(axis=1).fillna(0.0)
     y = rets_df.mean(axis=1).fillna(0.0)  # equal-weight universe = honest B&H
 
     valid_idx = X.index[252:]  # trim 12-month formation warm-up
