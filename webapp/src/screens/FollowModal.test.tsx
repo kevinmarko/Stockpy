@@ -14,7 +14,7 @@ import type { PilotSummary } from "../api/types";
 const PILOT: PilotSummary = {
   id: "trend-following",
   name: "Trend Follower",
-  category: "Trend",
+  category: "Momentum",
   description: "test pilot",
   headline: { sharpe: 1.1, dsr: 0.97, pbo: 0.2, max_drawdown: 0.18, deployable: true },
   holdings_count: 5,

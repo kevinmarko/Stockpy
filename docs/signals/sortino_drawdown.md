@@ -1,9 +1,13 @@
 # Signal: `sortino_drawdown`
 
-**File:** `signals/sortino_drawdown.md`  
+**File:** `signals/sortino_drawdown.py`  
 **Default weight:** 10.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active
+**Regime gate:** Always active  
+**Pilot:** Risk-Adjusted (`risk-adjusted`, `pilots/catalog.py`) — backed by a real,
+PBO/DSR-gated backtest (`sortino_drawdown` in `scripts/refresh_validations.py`): a rolling
+504-day (2-year) trailing Sortino/drawdown gate on SPY mirroring this module's exact
+thresholds (Sortino > 2.0, drawdown < -25%).
 
 ---
 

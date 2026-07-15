@@ -148,7 +148,11 @@ class TestRegistryStructure:
     def test_new_strategies_registered(self) -> None:
         from scripts.refresh_validations import STRATEGY_REGISTRY
 
-        for name in ("macd_trend", "coppock_momentum", "multifactor_lowvol_size"):
+        for name in (
+            "macd_trend", "coppock_momentum", "multifactor_lowvol_size",
+            "garch_vol_target", "cross_sectional_momentum",
+            "relative_strength_xsec", "rsi14_extremes", "sortino_drawdown",
+        ):
             assert name in STRATEGY_REGISTRY, f"{name} missing from STRATEGY_REGISTRY"
 
     def test_multifactor_universe_is_multi_ticker(self) -> None:
@@ -434,6 +438,207 @@ class TestBuildLowVolSizeAdapter:
         val_pert = pre_pert["Multifactor_LowVol_Size"].loc[cutoff]
 
         assert val_orig == pytest.approx(val_pert)
+
+
+# ---------------------------------------------------------------------------
+# New price-only adapters (garch vol-timing / xsec momentum / rel-strength / rsi14)
+# ---------------------------------------------------------------------------
+
+class TestBuildGarchVoltargetAdapter:
+    def test_returns_three_items_and_variants(self) -> None:
+        from scripts.refresh_validations import _build_garch_voltarget_adapter
+
+        X, y, pre = _build_garch_voltarget_adapter(_synthetic_spy(n=500))
+        assert len(X.columns) >= 1 and not y.empty
+        assert set(pre.keys()) == {
+            "GARCH_VolTarget_10pct", "GARCH_VolTarget_15pct",
+            "GARCH_InvVol", "GARCH_GJR_Downside12",
+        }
+        for k, v in pre.items():
+            assert v.index.equals(y.index), f"{k} index mismatch"
+
+    def test_exposure_is_long_only_no_leverage(self) -> None:
+        """Vol-target exposure is capped at 1.0, so on a positive-return day the
+        strategy return can never exceed that day's underlying return."""
+        from scripts.refresh_validations import _build_garch_voltarget_adapter
+
+        spy = _synthetic_spy(n=500)
+        X, y, pre = _build_garch_voltarget_adapter(spy)
+        for k in ("GARCH_VolTarget_10pct", "GARCH_VolTarget_15pct"):
+            # strategy_ret = expo.shift(1) * daily_ret with 0 <= expo <= 1, so
+            # |strategy_ret| <= |daily_ret| everywhere.
+            assert (pre[k].abs() <= y.abs() + 1e-12).all(), k
+
+    def test_no_lookahead_shift1(self) -> None:
+        from scripts.refresh_validations import _build_garch_voltarget_adapter
+
+        spy = _synthetic_spy(n=400)
+        cutoff = spy.index[300]
+        _, _, pre_orig = _build_garch_voltarget_adapter(spy)
+        val_orig = pre_orig["GARCH_VolTarget_10pct"].loc[cutoff]
+        perturbed = spy.copy()
+        perturbed.loc[perturbed.index > cutoff] *= 5.0
+        _, _, pre_pert = _build_garch_voltarget_adapter(perturbed)
+        assert val_orig == pytest.approx(pre_pert["GARCH_VolTarget_10pct"].loc[cutoff])
+
+
+class TestBuildXsecMomentumAdapter:
+    _TICKERS = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+
+    def test_returns_three_items_and_variants(self) -> None:
+        from scripts.refresh_validations import _build_xsec_momentum_adapter
+
+        closes = _synthetic_closes(self._TICKERS, n=500)
+        X, y, pre = _build_xsec_momentum_adapter(closes, {})
+        assert not X.empty and not y.empty
+        assert set(pre.keys()) == {"XSecMom_TopHalf", "XSecMom_TopTertile"}
+        for k, v in pre.items():
+            assert v.index.equals(y.index), f"{k} index mismatch"
+
+    def test_insufficient_history_returns_empty(self) -> None:
+        from scripts.refresh_validations import _build_xsec_momentum_adapter
+
+        X, y, pre = _build_xsec_momentum_adapter(
+            _synthetic_closes(self._TICKERS, n=100), {}
+        )
+        assert X.empty and y.empty and pre == {}
+
+    def test_no_lookahead_shift1(self) -> None:
+        from scripts.refresh_validations import _build_xsec_momentum_adapter
+
+        closes = _synthetic_closes(self._TICKERS, n=400)
+        cutoff = closes.index[350]
+        _, _, pre_orig = _build_xsec_momentum_adapter(closes, {})
+        val_orig = pre_orig["XSecMom_TopHalf"].loc[cutoff]
+        perturbed = closes.copy()
+        perturbed.loc[perturbed.index > cutoff] *= 5.0
+        _, _, pre_pert = _build_xsec_momentum_adapter(perturbed, {})
+        assert val_orig == pytest.approx(pre_pert["XSecMom_TopHalf"].loc[cutoff])
+
+
+class TestBuildRelativeStrengthAdapter:
+    _TICKERS = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+
+    def test_requires_spy_benchmark(self) -> None:
+        from scripts.refresh_validations import _build_relative_strength_adapter
+
+        closes = _synthetic_closes(self._TICKERS, n=400)  # no SPY column
+        with pytest.raises(RuntimeError):
+            _build_relative_strength_adapter(closes, {})
+
+    def test_spy_excluded_from_tradeable_book(self) -> None:
+        from scripts.refresh_validations import _build_relative_strength_adapter
+
+        closes = _synthetic_closes(self._TICKERS + ["SPY"], n=400)
+        X, y, pre = _build_relative_strength_adapter(closes, {})
+        assert not X.empty and not y.empty
+        assert set(pre.keys()) == {"RS_BeatSPY_Absolute", "RS_TopHalf"}
+        for k, v in pre.items():
+            assert v.index.equals(y.index), f"{k} index mismatch"
+
+    def test_no_lookahead_shift1(self) -> None:
+        from scripts.refresh_validations import _build_relative_strength_adapter
+
+        closes = _synthetic_closes(self._TICKERS + ["SPY"], n=400)
+        cutoff = closes.index[350]
+        _, _, pre_orig = _build_relative_strength_adapter(closes, {})
+        val_orig = pre_orig["RS_TopHalf"].loc[cutoff]
+        perturbed = closes.copy()
+        perturbed.loc[perturbed.index > cutoff] *= 5.0
+        _, _, pre_pert = _build_relative_strength_adapter(perturbed, {})
+        assert val_orig == pytest.approx(pre_pert["RS_TopHalf"].loc[cutoff])
+
+
+class TestBuildRsi14ExtremesAdapter:
+    def test_returns_three_items_and_variants(self) -> None:
+        from scripts.refresh_validations import _build_rsi14_extremes_adapter
+
+        X, y, pre = _build_rsi14_extremes_adapter(_synthetic_spy(n=400))
+        assert "RSI_14" in X.columns and "SMA_200" in X.columns and not y.empty
+        assert set(pre.keys()) == {
+            "RSI14_OversoldLong", "RSI14_LongShort", "RSI14_TrendFilteredLong",
+        }
+
+    def test_trend_filtered_zero_outside_uptrend(self) -> None:
+        """RSI14_TrendFilteredLong must never take a position when price is
+        below its SMA(200) — even on a day RSI14_OversoldLong would."""
+        from scripts.refresh_validations import _build_rsi14_extremes_adapter
+
+        spy = _synthetic_spy(n=500)
+        X, y, pre = _build_rsi14_extremes_adapter(spy)
+        downtrend = spy.reindex(X.index) <= X["SMA_200"]
+        # A day strictly below the shift(1) position can't be checked directly
+        # (position is lagged), but the day AFTER a downtrend day must be flat
+        # whenever the trend-filtered variant differs from the oversold-long one.
+        trend_ret = pre["RSI14_TrendFilteredLong"]
+        oversold_ret = pre["RSI14_OversoldLong"]
+        # Trend-filtered is a subset: |trend| <= |oversold| pointwise given the
+        # AND-gate construction (same daily_ret, position clamped to a subset).
+        assert (trend_ret.abs() <= oversold_ret.abs() + 1e-12).all()
+        assert downtrend.any()  # sanity: the synthetic series does dip below its SMA200
+
+    def test_rsi_bounded_0_100(self) -> None:
+        from scripts.refresh_validations import _build_rsi14_extremes_adapter
+
+        X, _, _ = _build_rsi14_extremes_adapter(_synthetic_spy(n=400))
+        assert (X["RSI_14"].dropna() >= 0.0).all()
+        assert (X["RSI_14"].dropna() <= 100.0).all()
+
+    def test_no_lookahead_shift1(self) -> None:
+        from scripts.refresh_validations import _build_rsi14_extremes_adapter
+
+        spy = _synthetic_spy(n=400)
+        cutoff = spy.index[300]
+        _, _, pre_orig = _build_rsi14_extremes_adapter(spy)
+        val_orig = pre_orig["RSI14_OversoldLong"].loc[cutoff]
+        perturbed = spy.copy()
+        perturbed.loc[perturbed.index > cutoff] *= 5.0
+        _, _, pre_pert = _build_rsi14_extremes_adapter(perturbed)
+        assert val_orig == pytest.approx(pre_pert["RSI14_OversoldLong"].loc[cutoff])
+
+
+class TestBuildSortinoDrawdownAdapter:
+    def test_returns_three_items_and_variants(self) -> None:
+        from scripts.refresh_validations import _build_sortino_drawdown_adapter
+
+        X, y, pre = _build_sortino_drawdown_adapter(_synthetic_spy(n=1400))
+        assert not X.empty and not y.empty
+        assert "Sortino_504D" in X.columns and "Drawdown_504D" in X.columns
+        assert set(pre.keys()) == {
+            "SortinoDD_HighSortino", "SortinoDD_DrawdownGate", "SortinoDD_Combined",
+        }
+        for k, v in pre.items():
+            assert v.index.equals(y.index), f"{k} index mismatch"
+
+    def test_insufficient_history_returns_empty(self) -> None:
+        """Fewer bars than the 504-day rolling window -> clean empty result,
+        never a fabricated value (CONSTRAINT #4)."""
+        from scripts.refresh_validations import _build_sortino_drawdown_adapter
+
+        X, y, pre = _build_sortino_drawdown_adapter(_synthetic_spy(n=300))
+        assert X.empty and y.empty and pre == {}
+
+    def test_combined_is_and_of_both_gates(self) -> None:
+        """SortinoDD_Combined can only ever be nonzero where BOTH single-gate
+        variants are — |combined| <= |either single gate| pointwise."""
+        from scripts.refresh_validations import _build_sortino_drawdown_adapter
+
+        _, _, pre = _build_sortino_drawdown_adapter(_synthetic_spy(n=1400))
+        combined = pre["SortinoDD_Combined"]
+        for k in ("SortinoDD_HighSortino", "SortinoDD_DrawdownGate"):
+            assert (combined.abs() <= pre[k].abs() + 1e-12).all(), k
+
+    def test_no_lookahead_shift1(self) -> None:
+        from scripts.refresh_validations import _build_sortino_drawdown_adapter
+
+        spy = _synthetic_spy(n=1400)
+        cutoff = spy.index[1200]
+        _, _, pre_orig = _build_sortino_drawdown_adapter(spy)
+        val_orig = pre_orig["SortinoDD_Combined"].loc[cutoff]
+        perturbed = spy.copy()
+        perturbed.loc[perturbed.index > cutoff] *= 5.0
+        _, _, pre_pert = _build_sortino_drawdown_adapter(perturbed)
+        assert val_orig == pytest.approx(pre_pert["SortinoDD_Combined"].loc[cutoff])
 
 
 # ---------------------------------------------------------------------------

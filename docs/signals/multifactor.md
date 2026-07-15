@@ -5,7 +5,12 @@
 **Score range:** `[-1.0, +1.0]`  
 **Regime gate:** Always active  
 **Hook pattern:** Two-phase `pre_compute` / `compute`  
-**Microcap exclusion threshold:** $300M (configurable via `MULTIFACTOR_MICROCAP_THRESHOLD`)
+**Microcap exclusion threshold:** $300M (configurable via `MULTIFACTOR_MICROCAP_THRESHOLD`)  
+**Pilot:** Multifactor (`multifactor`, `pilots/catalog.py`) — backed by a real,
+PBO/DSR-gated backtest (`multifactor_lowvol_size` in `scripts/refresh_validations.py`),
+but the backtest validates only the Low-Vol + Size sleeve; Value/Quality need
+point-in-time fundamentals no free vendor supplies, so the headline Sharpe reflects the
+honest, narrower proxy — not the full 4-factor blend.
 
 ---
 

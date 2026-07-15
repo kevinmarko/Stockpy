@@ -1,10 +1,14 @@
 # Signal: `regime_multiplier`
 
-**File:** `signals/regime_multiplier.md`  
+**File:** `signals/regime_multiplier.py`  
 **Default weight:** 0.0 (intentionally zero — this module does NOT contribute to the score)  
 **Score range:** Always 0.0  
 **Regime gate:** Always active  
-**Special role:** HMM Kelly-size scalar — affects position sizing only, not signal direction
+**Special role:** HMM Kelly-size scalar — affects position sizing only, not signal direction  
+**Pilot:** None — a Pilot's holdings come from strictly-positive blended scores
+(`pilots/scoring.py`); a module whose `SIGNAL_WEIGHTS` weight is `0.0` is structurally
+un-backoutable and can never produce a nonzero score for any Pilot, including one that
+weighted only this module.
 
 ---
 

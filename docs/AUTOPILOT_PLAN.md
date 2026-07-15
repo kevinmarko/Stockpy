@@ -43,6 +43,7 @@ automatically.
 | — | Onboarding "Connect Robinhood" — local, single-operator credential intake (verify-before-persist, three independent gates: `BROKERAGE_CONNECT_ENABLED`, `FOLLOW_API_TOKEN`, loopback-only) | `data/brokerage_credentials.py`, `data/robinhood_portfolio.py` (`verify_credentials`), `api/pilots_api.py` (`/brokerage/status`, `/brokerage/connect`, `/brokerage/disconnect`), `webapp/src/screens/Onboarding.tsx` | #272 |
 | — | Expand the catalog — new `edge-garch` Pilot (the highest-weighted genuinely per-symbol orphan signal not already covered by a Pilot) + honest backtests for 4 previously curve-less Pilots (`cross-sectional-momentum` price-only; `dividend-income`/`deep-value`/`value-quality` via a first-time production wiring of the existing SEC EDGAR point-in-time fundamentals mechanism). 8/10 Pilots now backed by a real validation report, up from 4/9. | `pilots/catalog.py`, `scripts/refresh_validations.py` (4 new adapters + `_pit_asof_frame` helper) | #275 |
 | — | Backend analytics surfaces with zero PWA presence — realized broker P&L (Portfolio section), alerts feed (new "Activity" tab), forecast skill/reliability + news-sentiment polish + options premium (SymbolDetail sections), ML registry ("The models" sub-page), pairs radar ("Pairs radar" sub-page). Read-path surfaces served from persisted state; options matrix + pairs are persisted upstream first (opt-in, `OPTIONS_MATRIX_ENABLED`/`PAIRS_SNAPSHOT_ENABLED`) since `technical_options_engine`/`statsmodels` are off the AST-guarded read path | `pilots/{realized,alerts_feed,forecast_skill,models,options,pairs}.py`, `reporting/{options,pairs}_snapshot.py`, `api/pilots_api.py`, `webapp/src/screens/{Activity,Models,PairsRadar}.tsx` | #274 |
+| — | Catalog coverage completion — 6 more dedicated Pilots for previously-uncovered signal modules (`macro_regime`→`regime-navigator`, `rsi_extremes`→`rsi-reversal`, `relative_strength`→`relative-strength`, `news_catalyst`→`news-catalyst`, `forecast_alignment`→`forecast-aligned`, `sortino_drawdown`→`risk-adjusted`), real price-only backtests for 3 of them (`rsi14_extremes`, `relative_strength_xsec`, `sortino_drawdown`), and an upgrade of the existing `edge-garch` Pilot from curve-less to backed (`garch_vol_target`, a RiskMetrics EWMA vol-timing proxy covering the GARCH-veto half of that signal — the `edge_ratio` half still isn't backtested standalone). `cross-sectional-momentum`'s existing backtest was widened from an 8-name to a 30-name universe for finer-grained ranks. 4 new categories (Macro/Risk/Sentiment/Forecast) with a dataviz-skill-validated categorical palette for the chip color; `docs/signals/*.md` cross-linked to their Pilot (or an honest reason for having none). Final tally: 16 total Pilots, 12 backed by a real validation report, 4 honestly curve-less. | `pilots/catalog.py`, `scripts/refresh_validations.py`, `webapp/src/{api/{mock,types}.ts,theme.ts,components/ui.tsx}`, `docs/signals/*.md` | #273 |
 
 > **Full parity achieved.** Every SymbolDetail field the rich orchestrator writer
 > emits now has a real source on the advisory path too — including `risk.realized_slippage`,
@@ -67,6 +68,14 @@ automatically.
 > "why this stock" (against the spirit of honesty — CONSTRAINT #4). `edge_garch` IS genuinely
 > per-symbol (real `edge_ratio` + `garch_vol` per ticker).
 >
+> **Follow-up (#273) — shipped `regime-navigator` anyway, with an honest caveat.** A
+> later PR revisited this and shipped the Pilot despite the objection above. The
+> sector-homogeneity property is real and not disputed, but it's a UX/framing concern,
+> not a CONSTRAINT #4 violation: the Pilot's `weights={"macro_regime": 1.0}` and its
+> "Top-down macro regime read" description accurately represent what it does — nothing
+> about it is fabricated. `pilots/catalog.py`'s comment on the Pilot now states the
+> sector-homogeneity caveat explicitly rather than silently overriding this note.
+>
 > **EDGAR PIT production wiring.** `dividend-income`/`deep-value`/`value-quality`'s backtests
 > read real SEC EDGAR point-in-time fundamentals via `data.historical_store.HistoricalStore
 > .get_fundamentals_history()` — read-only, never touching `data/edgar_fundamentals.py`,
@@ -79,9 +88,11 @@ automatically.
 > fabricated, never crash (tested explicitly against a genuinely empty store).
 >
 > **What stays curve-less, on purpose.** `balanced-blend` (17 signals, several needing
-> FRED/Finnhub/a trained-ML walk-forward — out of scope per CONSTRAINT #7) and the new
-> `edge-garch` (its live `edge_ratio` input depends on real closed-trade history — circular
-> for a pure-price backtest, no honest proxy designed yet).
+> FRED/Finnhub/a trained-ML walk-forward — out of scope per CONSTRAINT #7),
+> `regime-navigator` (macro DTO, not price-only), `news-catalyst` (point-in-time news),
+> and `forecast-aligned` (external forecast target) have no honest single-series
+> backtest, so `validation_strategy_id=None`. `edge-garch` is no longer in this list —
+> #273 gave it a real, narrower-scope backtest (`garch_vol_target`, see the row above).
 
 ## Hardening (post-Phase-3) — the core ships; this is the "declared done too early" layer
 

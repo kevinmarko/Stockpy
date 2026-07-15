@@ -3,7 +3,11 @@
 **File:** `signals/macro_regime.py`  
 **Default weight:** 45.0 (highest of all modules)  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active (this module *defines* the regime context for all others)
+**Regime gate:** Always active (this module *defines* the regime context for all others)  
+**Pilot:** Regime Navigator (`regime-navigator`, `pilots/catalog.py`) — no backtest curve
+(`validation_strategy_id=None`); the module's inputs (yield curve, HY spreads, VIX, Sahm
+Rule) aren't price/volume-only, so an honest backtest would require fabricating a macro-DTO
+history (CONSTRAINT #4). See `docs/AUTOPILOT_PLAN.md`.
 
 ---
 

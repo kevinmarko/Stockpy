@@ -1,9 +1,12 @@
 # Signal: `graham_value`
 
-**File:** `signals/graham_value.md`  
+**File:** `signals/graham_value.py`  
 **Default weight:** 15.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active
+**Regime gate:** Always active  
+**Pilot:** Deep Value (`deep-value`, `pilots/catalog.py`) — no backtest curve
+(`validation_strategy_id=None`); Graham Number intrinsic value needs point-in-time EPS/book
+value history that no free vendor supplies (same honesty constraint as `dividend_quality`).
 
 ---
 

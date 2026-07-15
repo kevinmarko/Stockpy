@@ -5,6 +5,9 @@
 **Score range:** `[-1.0, +1.0]`
 **Regime gate:** Always active
 **Status:** **Dormant by default** — contributes a neutral `0.0` until a model is trained and deployed.
+**Pilot:** None — no Pilot packages this module until it passes the model's own DSR gate;
+surfacing it as a copyable strategy before then would advertise a dormant no-op as a
+live signal.
 
 ---
 

@@ -11,7 +11,10 @@ export type PilotCategory =
   | "Mean Reversion"
   | "Factor"
   | "Blend"
-  | "Trend";
+  | "Macro"
+  | "Risk"
+  | "Sentiment"
+  | "Forecast";
 
 /**
  * Honest, PBO/DSR-gated backtest headline from reports/<id>_validation_summary.json.

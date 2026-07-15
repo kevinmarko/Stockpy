@@ -3,7 +3,10 @@
 **File:** `signals/rsi_extremes.py`  
 **Default weight:** 20.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active (but see `rsi2_mean_reversion` for the regime-gated complement)
+**Regime gate:** Always active (but see `rsi2_mean_reversion` for the regime-gated complement)  
+**Pilot:** RSI Reversal (`rsi-reversal`, `pilots/catalog.py`) — backed by a real,
+PBO/DSR-gated backtest (`rsi14_extremes` in `scripts/refresh_validations.py`): classic
+RSI(14) 30/70 mean reversion on SPY, including a trend-filtered variant.
 
 ---
 

@@ -4,7 +4,10 @@
 **Default weight:** 15.0  
 **Score range:** `[-1.0, +1.0]`  
 **Regime gate:** Always active  
-**Hook pattern:** Two-phase `pre_compute` / `compute`
+**Hook pattern:** Two-phase `pre_compute` / `compute`  
+**Pilot:** Momentum Leaders (`cross-sectional-momentum`, `pilots/catalog.py`) — backed by a
+real, PBO/DSR-gated backtest (`cross_sectional_momentum` in
+`scripts/refresh_validations.py`, a 30-name liquid large-cap cross-section).
 
 ---
 

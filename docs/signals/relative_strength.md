@@ -3,7 +3,10 @@
 **File:** `signals/relative_strength.py`  
 **Default weight:** 10.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active
+**Regime gate:** Always active  
+**Pilot:** Relative Strength (`relative-strength`, `pilots/catalog.py`) — backed by a real,
+PBO/DSR-gated backtest (`relative_strength_xsec` in `scripts/refresh_validations.py`, a
+cross-sectional book long the names outrunning SPY).
 
 ---
 

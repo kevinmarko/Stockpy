@@ -3,7 +3,9 @@
 **File:** `signals/timeseries_momentum.py`  
 **Default weight:** 15.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active
+**Regime gate:** Always active  
+**Pilot:** Trend Follower (`trend-following`, `pilots/catalog.py`) — backed by a real,
+PBO/DSR-gated backtest (`timeseries_momentum` in `scripts/refresh_validations.py`).
 
 ---
 

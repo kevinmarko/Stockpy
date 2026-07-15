@@ -4,7 +4,11 @@
 **Default weight:** 10.0  
 **Score range:** `[-1.0, +1.0]`  
 **Regime gate:** Always active (but scoring degrades gracefully when FINNHUB_API_KEY is absent)  
-**Hook pattern:** Two-phase `pre_compute` / `compute`
+**Hook pattern:** Two-phase `pre_compute` / `compute`  
+**Pilot:** News Catalyst (`news-catalyst`, `pilots/catalog.py`) — no backtest curve
+(`validation_strategy_id=None`); backtesting headline sentiment needs point-in-time news
+history no free vendor supplies historically — fabricating a headline archive would
+violate CONSTRAINT #4.
 
 ---
 

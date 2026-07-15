@@ -3,7 +3,9 @@
 **File:** `signals/rsi2_mean_reversion.py`  
 **Default weight:** 10.0  
 **Score range:** `[0.0, +1.0]` (long-only — no negative scores)  
-**Regime gate:** `is_active_in_regime()` returns `False` in RECESSION, CREDIT EVENT, or VIX > 30
+**Regime gate:** `is_active_in_regime()` returns `False` in RECESSION, CREDIT EVENT, or VIX > 30  
+**Pilot:** Dip Buyer (`dip-buyer`, `pilots/catalog.py`) — backed by a real, PBO/DSR-gated
+backtest (`rsi2_mean_reversion` in `scripts/refresh_validations.py`).
 
 ---
 

@@ -3,7 +3,9 @@
 **File:** `signals/aroon_trend.py`  
 **Default weight:** 15.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active
+**Regime gate:** Always active  
+**Pilot:** MACD Trend (`macd-trend`, `pilots/catalog.py`, blended with `macd_momentum`) —
+backed by a real, PBO/DSR-gated backtest (`macd_trend` in `scripts/refresh_validations.py`).
 
 ---
 
