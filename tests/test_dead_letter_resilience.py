@@ -154,7 +154,9 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
     partial_flags is non-empty (line 778), independent of which stage(s)
     failed."""
 
-    def test_fundamentals_fetch_failure_falls_back_to_default_dto(self):
+    def test_fundamentals_fetch_failure_falls_back_to_default_dto(self, monkeypatch):
+        from settings import settings
+        monkeypatch.setattr(settings, "HISTORICAL_STORE_ENABLED", False)
         market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
         market.get_fundamentals.side_effect = Exception("fundamentals_network_error")
 
