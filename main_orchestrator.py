@@ -844,6 +844,12 @@ async def main(dry_run: bool = False, strict: bool = False):  # CLI flags propag
     effective_dry_run = dry_run or settings.DRY_RUN
     if effective_dry_run:
         telemetry.info("DRY-RUN mode active: orders will be logged but NOT submitted.")
+    else:
+        # Preflight Check: Exit gracefully if live execution is requested but broker keys are missing.
+        if not getattr(settings, "ADVISORY_ONLY", True):
+            if not getattr(settings, "ALPACA_API_KEY", None) or not getattr(settings, "ALPACA_SECRET_KEY", None):
+                telemetry.critical("Fatal preflight check: Live broker execution requested but Alpaca API keys are missing.")
+                raise PipelineFatalError("Alpaca API keys are missing for live execution")
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
     try:

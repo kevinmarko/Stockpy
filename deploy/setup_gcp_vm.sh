@@ -89,9 +89,30 @@ echo "      --description='InvestYo HTTPS + MCP SSE'"
 
 # ─── 6. Caddy Reverse Proxy ──────────────────────────────────────────────────
 echo "[6/8] Configuring Caddy reverse proxy..."
-cat > /etc/caddy/Caddyfile << 'CADDY_EOF'
-# If you have a domain, replace :443 with your domain name
-# e.g., dashboard.investyo.com
+DOMAIN_NAME="${DOMAIN_NAME:-}"
+if [ -n "$DOMAIN_NAME" ]; then
+    echo "Configuring Caddy for domain: ${DOMAIN_NAME}"
+    cat > /etc/caddy/Caddyfile << CADDY_EOF
+${DOMAIN_NAME} {
+    # Streamlit dashboard
+    handle /streamlit/* {
+        reverse_proxy localhost:8501
+    }
+
+    # MCP SSE endpoint
+    handle /mcp/* {
+        reverse_proxy localhost:8080
+    }
+
+    # Default: Streamlit
+    handle {
+        reverse_proxy localhost:8501
+    }
+}
+CADDY_EOF
+else
+    echo "No DOMAIN_NAME set. Configuring Caddy with self-signed certificate (internal TLS)."
+    cat > /etc/caddy/Caddyfile << 'CADDY_EOF'
 :443 {
     # Streamlit dashboard
     handle /streamlit/* {
@@ -111,6 +132,7 @@ cat > /etc/caddy/Caddyfile << 'CADDY_EOF'
     tls internal
 }
 CADDY_EOF
+fi
 
 systemctl restart caddy
 systemctl enable caddy

@@ -238,6 +238,10 @@ def pilot_performance(
         else None
     )
 
+    # Fallback to macro benchmark (SPY) if strategy-specific benchmark is missing
+    if benchmark is None and macro_benchmark is not None:
+        benchmark = macro_benchmark
+
     # Metrics exist. Surface the persisted equity curve when present, tail-sliced
     # to the requested range; a missing/empty curve stays None with an honest
     # reason (older summary, or no meaningful returns) — never fabricated.

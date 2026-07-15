@@ -177,3 +177,7 @@ convention — it is very likely intentional and load-bearing.
 
 ## Recent Architecture Updates
 - **Signal Engine Vectorization**: As of Phase 4, the entire `SignalAggregator` and all `SignalModule` implementations are natively vectorized in pandas/numpy (O(1) block computation). Row-based ticker iteration in the aggregation step has been removed to maximize performance.
+- **Market Holiday Defense**: `HistoricalStore` uses `USFederalHolidayCalendar` to detect and skip redundant bar fetches on weekends and market holidays.
+- **Benchmark Fallbacks**: `pilot_performance` in `pilots/performance.py` automatically falls back to SPY (`macro_benchmark_curve`) if the strategy-specific benchmark is missing.
+- **Live Execution Preflight Check**: `main_orchestrator.py` validates that Alpaca API keys are present when running live (`dry_run=False` and `ADVISORY_ONLY=False`), raising a fatal error to exit gracefully if keys are missing.
+- **Caddy Auto-HTTPS Support**: `deploy/setup_gcp_vm.sh` supports dynamic configuration of Caddy with Let's Encrypt for a custom domain via `$DOMAIN_NAME`.

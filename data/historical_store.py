@@ -1389,9 +1389,27 @@ class HistoricalStore:
                 fetch_days, symbol,
             )
         else:
-            delta_cal = (today - max_date).days
-            if delta_cal <= 0:
+            # Defense check: Use US Federal Holiday calendar to see if any valid trading
+            # days have elapsed since max_date.
+            try:
+                from pandas.tseries.holiday import USFederalHolidayCalendar
+                from pandas.tseries.offsets import CustomBusinessDay
+                us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+                trading_days = pd.bdate_range(start=max_date, end=today, freq=us_bd)
+                # Exclude the start date (max_date) itself
+                elapsed_trading_days = len(trading_days) - 1 if max_date in trading_days else len(trading_days)
+            except Exception as e:
+                logger.warning("Failed to compute trading days using USFederalHolidayCalendar: %s. Falling back to calendar days.", e)
+                elapsed_trading_days = (today - max_date).days
+
+            if elapsed_trading_days <= 0:
+                logger.debug(
+                    "HistoricalStore: skipping incremental top-up for %s. No trading days elapsed since %s.",
+                    symbol, max_date.date()
+                )
                 return self._read_from_db(symbol, lookback_days)
+
+            delta_cal = (today - max_date).days
             fetch_days = max(delta_cal + 5, 7)
             logger.info(
                 "HistoricalStore: incremental top-up %d days for %s (last bar: %s).",
