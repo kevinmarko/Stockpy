@@ -625,10 +625,97 @@ def _build_context_extras(
             len(shared_ctx.xsec_percentile_ranks),
             len(shared_ctx.multifactor_scores),
         )
-        return {
+        extras: Dict[str, Any] = {
             "xsec_percentile_ranks": shared_ctx.xsec_percentile_ranks,
             "multifactor_scores": shared_ctx.multifactor_scores,
+            # Raw 12-1m cross-sectional return per symbol (already computed above
+            # as `xsec_return`); surfaced so the advisory path reaches parity with
+            # main_orchestrator's rich snapshot for factors.xsec_12_1m. {} when no
+            # symbol had enough history — a missing symbol degrades to NaN/null
+            # downstream, never a fabricated 0.0 (CONSTRAINT #4).
+            "xsec_12_1m": dict(xsec_return),
         }
+
+        # news_catalyst.pre_compute() (run inside run_pre_compute above) wrote
+        # per-symbol FinBERT scores onto shared_ctx.news_sentiment_scores. Empty /
+        # absent when the module didn't run (no FINNHUB_API_KEY, unregistered) — a
+        # symbol absent then degrades to null downstream, never fabricated.
+        _news = getattr(shared_ctx, "news_sentiment_scores", None)
+        if isinstance(_news, dict) and _news:
+            extras["news_sentiment"] = dict(_news)
+
+        # CoVaR proxy (portfolio-wide max pairwise |corr|). Mirrors
+        # processing_engine.calculate_technical_metrics()'s Topic-30 computation
+        # over the universe returns matrix, so the advisory path reaches parity for
+        # risk.covar_proxy. Portfolio-wide scalar (the advisory writer broadcasts it
+        # to every symbol, same as the rich path). Emitted only when ≥2 symbols have
+        # real returns AND the engine returns a non-zero value — its 0.0 no-data /
+        # error sentinel is treated as "unavailable" (null), never a fabricated 0.0
+        # (CONSTRAINT #4).
+        try:
+            from research_engine import AdvancedResearchEngine
+
+            _returns = {
+                _s: _d["Close"].pct_change(fill_method=None)
+                for _s, _d in bars_dict.items()
+                if _d is not None and not _d.empty and len(_d) >= 2
+            }
+            if len(_returns) >= 2:
+                _covar = AdvancedResearchEngine().calculate_portfolio_covar_dependency(
+                    pd.DataFrame(_returns)
+                )
+                if _covar and _covar != 0.0:
+                    extras["covar_proxy"] = float(_covar)
+        except Exception as _cov_exc:
+            logger.debug("CoVaR proxy pre-compute skipped: %s", _cov_exc)
+
+        # Per-symbol post-trade excursion (MFE / MAE / Edge Ratio) from the latest
+        # CLOSED trade in the shared TransactionsStore + the already-fetched bars.
+        # Reuses evaluation_engine.EvaluationEngine.calculate_edge_ratio (same math
+        # the rich path's evaluate_portfolio uses). A symbol with no closed trade is
+        # omitted → NaN/null downstream (honest by construction on a fresh install,
+        # lighting up as record_trade()/Robinhood reconstruction accrue history).
+        # NOTE: risk.realized_slippage is deliberately NOT wired here — its producer
+        # needs a Trans-Code/Amount/Commission transactions sheet that the advisory
+        # path does not load, so it stays honest-null rather than being fed a
+        # wrong-shaped frame that would return a fabricated 0.0 (CONSTRAINT #4).
+        try:
+            from engine.advisory import _get_transactions_store
+            from evaluation_engine import EvaluationEngine
+
+            _store = _get_transactions_store()
+            _ee = EvaluationEngine()
+            _excursion: Dict[str, Dict[str, float]] = {}
+            for _s, _d in bars_dict.items():
+                if _d is None or _d.empty:
+                    continue
+                try:
+                    _th = _store.get_trade_history(_s)
+                except Exception:
+                    continue
+                if _th is None or _th.empty:
+                    continue
+                _th = _th.copy()
+                _th["entry_ts"] = pd.to_datetime(_th["entry_ts"])
+                _th = _th.sort_values("entry_ts", ascending=False)
+                _latest = _th.iloc[0]
+                _exit_ts = _latest.get("exit_ts")
+                if _exit_ts is None or pd.isna(_exit_ts):
+                    continue  # only a CLOSED trade has a defined hold window
+                _res = _ee.calculate_edge_ratio(
+                    _d, float(_latest["entry_price"]), _latest["entry_ts"], _exit_ts
+                )
+                _excursion[_s] = {
+                    "MFE": _res.get("MFE", float("nan")),
+                    "MAE": _res.get("MAE", float("nan")),
+                    "Edge Ratio": _res.get("Edge Ratio", float("nan")),
+                }
+            if _excursion:
+                extras["excursion"] = _excursion
+        except Exception as _exc_exc:
+            logger.debug("Excursion pre-compute skipped: %s", _exc_exc)
+
+        return extras
 
     except Exception as exc:
         logger.warning(

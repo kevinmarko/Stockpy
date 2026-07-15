@@ -144,3 +144,45 @@ class TestPerSignalTelemetry:
         sig = _signal(written_snapshot, "MSFT")
         assert "sector" in sig
         assert sig["sector"] == ""
+
+
+class TestSymbolDetailParityFields:
+    """The advisory writer emits the SymbolDetail parity fields
+    (xsec_12_1m/xsec_momentum_rank + excursion mfe/mae/edge_ratio from
+    key_indicators, macro_status from Recommendation.macro_regime) so the Pilots
+    /symbol/{ticker} page matches the orchestrator writer's per-signal schema."""
+
+    def test_new_numeric_fields_present_and_null_when_absent(self, written_snapshot):
+        # The base fixture recs carry no xsec/excursion in key_indicators → null,
+        # never a fabricated 0.0.
+        for symbol in ("AAPL", "MSFT"):
+            sig = _signal(written_snapshot, symbol)
+            for key in ("xsec_12_1m", "xsec_momentum_rank", "mfe", "mae", "edge_ratio"):
+                assert key in sig, f"{key} missing for {symbol}"
+                assert sig[key] is None, f"{key} must be null when absent"
+                assert sig[key] != 0.0
+
+    def test_macro_status_defaults_empty_when_recommendation_has_none(self, written_snapshot):
+        # Fixture recs don't set macro_regime → "" (schema key always present).
+        assert _signal(written_snapshot, "AAPL")["macro_status"] == ""
+
+    def test_new_numeric_fields_round_trip_from_key_indicators(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        rec = _recommendation(
+            "AAPL", xsec_12_1m=0.185, xsec_momentum_rank=0.9,
+            mfe=0.12, mae=0.04, edge_ratio=3.0,
+        )
+        rec.macro_regime = "RISK ON"
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}), recommendations=[rec]
+        )
+        ss.write_state_snapshot(result, _macro())
+        sig = json.loads(
+            (tmp_path / "state_snapshot.json").read_text(encoding="utf-8")
+        )["signals"][0]
+        assert sig["xsec_12_1m"] == pytest.approx(0.185)
+        assert sig["xsec_momentum_rank"] == pytest.approx(0.9)
+        assert sig["mfe"] == pytest.approx(0.12)
+        assert sig["mae"] == pytest.approx(0.04)
+        assert sig["edge_ratio"] == pytest.approx(3.0)
+        assert sig["macro_status"] == "RISK ON"

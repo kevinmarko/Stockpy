@@ -38,7 +38,16 @@ automatically.
 | — | Reconcile PWA ↔ `pilots_api` response shapes for live cutover | `webapp/src/api/types.ts`, `api/pilots_api.py` | #254 |
 | — | Persist real benchmark comparison series | `validation/harness.py`, `pilots/performance.py` | #256 |
 | — | Mirror force-exit of dropped names via per-follow attribution | `pilots/mirror.py`, `pilots/follows_store.py` | #257 |
-| — | Symbol detail pages (`/symbol/:ticker`) — per-symbol snapshot view + the reverse "which Pilots hold this" cross-link; tappable holding/position rows | `pilots/symbols.py`, `api/pilots_api.py` (`GET /symbols/{ticker}`), `webapp/src/screens/SymbolDetail.tsx` | this PR |
+| — | Symbol detail pages (`/symbol/:ticker`) — per-symbol snapshot view + the reverse "which Pilots hold this" cross-link; tappable holding/position rows | `pilots/symbols.py`, `api/pilots_api.py` (`GET /symbols/{ticker}`), `webapp/src/screens/SymbolDetail.tsx` | #270 |
+| — | Finish SymbolDetail data — advisory-path snapshot parity (xsec_12_1m, xsec_momentum_rank, macro_status, news_sentiment, CoVaR proxy, MFE/MAE/edge ratio now threaded onto `Recommendation.key_indicators` so the advisory writer matches the rich orchestrator writer) | `main.py` (`_build_context_extras`), `engine/advisory.py`, `reporting/state_snapshot.py` | this PR |
+
+> **Honest gap that remains after the parity PR:** `risk.realized_slippage` stays
+> `null` on the advisory path. Its producer (`research_engine.calculate_realized_slippage`)
+> needs a `Trans Code`/`Amount`/`Commission` transactions sheet the advisory pipeline
+> does not load; feeding a wrong-shaped frame would return a fabricated `0.0`, so it is
+> left honest-null (CONSTRAINT #4) until a real transactions source is threaded in. Every
+> other previously-null SymbolDetail field now carries real data when its inputs exist
+> (MFE/MAE/edge ratio light up as closed-trade history accrues; news needs `FINNHUB_API_KEY`).
 
 ## Hardening (post-Phase-3) — the core ships; this is the "declared done too early" layer
 
