@@ -187,10 +187,11 @@ class TestHeldByPilots:
         assert self._ids("AAPL", snapshot) == {
             "cross-sectional-momentum", "macd-trend", "trend-following",
             "balanced-blend", "multifactor", "dividend-income", "value-quality",
+            "edge-garch",
             # Single-module Pilots for the newly-covered modules; the fixture
             # scores each of these positively for AAPL.
             "forecast-aligned", "news-catalyst", "regime-navigator",
-            "relative-strength", "risk-adjusted", "volatility-edge",
+            "relative-strength", "risk-adjusted",
         }
         # deep-value (graham_value −3.0) and dip-buyer (holds nothing) excluded.
         assert "deep-value" not in self._ids("AAPL", snapshot)
@@ -201,10 +202,10 @@ class TestHeldByPilots:
         ids = self._ids("NVDA", snapshot)
         assert ids == {
             "cross-sectional-momentum", "macd-trend", "trend-following",
-            "balanced-blend", "multifactor",
+            "balanced-blend", "multifactor", "edge-garch",
             # Newly-covered single-module Pilots that score NVDA positively.
             "forecast-aligned", "news-catalyst", "regime-navigator",
-            "relative-strength", "risk-adjusted", "volatility-edge",
+            "relative-strength", "risk-adjusted",
         }
         assert "dividend-income" not in ids
 

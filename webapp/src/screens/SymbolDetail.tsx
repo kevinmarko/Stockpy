@@ -1,11 +1,30 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { SymbolDetail as SymbolDetailT } from "../api/types";
+import type {
+  ForecastSkill,
+  OptionsDirective,
+  SymbolDetail as SymbolDetailT,
+  SymbolOptions,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, MetricBadge } from "../components/ui";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
+
+/** News sentiment (FinBERT, ~[-1,1]) → colored bullish/neutral/bearish badge. */
+function NewsBadge({ value }: { value: number | null }) {
+  if (value == null) return <span style={{ color: theme.textMuted }}>—</span>;
+  const bullish = value > 0.15;
+  const bearish = value < -0.15;
+  const color = bullish ? theme.growth : bearish ? theme.decline : theme.textMuted;
+  const label = bullish ? "Bullish" : bearish ? "Bearish" : "Neutral";
+  return (
+    <span style={{ color, fontWeight: 700 }}>
+      {label} <span className="num">{fmtNum(value, 2)}</span>
+    </span>
+  );
+}
 
 const ACTION_STYLE: Record<string, string> = {
   BUY: "badge-good",
@@ -49,6 +68,8 @@ export function SymbolDetail() {
     () => api.getSymbol(ticker),
     [ticker]
   );
+  const forecast = useApi<ForecastSkill>(() => api.getForecast(ticker, 30), [ticker]);
+  const options = useApi<SymbolOptions>(() => api.getSymbolOptions(ticker), [ticker]);
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
@@ -200,13 +221,62 @@ export function SymbolDetail() {
             }
           />
           <StatRow label="Macro status" value={risk.macro_status ?? "—"} />
-          <StatRow label="News sentiment" value={fmtNum(risk.news_sentiment, 2)} />
+          <StatRow label="News sentiment" value={<NewsBadge value={risk.news_sentiment} />} />
           <StatRow label="CoVaR proxy" value={fmtNum(risk.covar_proxy, 2)} />
           <StatRow label="Realized slippage" value={fmtNum(risk.realized_slippage, 4)} />
           <StatRow label="MFE" value={fmtNum(risk.mfe, 2)} />
           <StatRow label="MAE" value={fmtNum(risk.mae, 2)} />
           <StatRow label="Edge ratio" value={fmtNum(risk.edge_ratio, 2)} />
         </div>
+      </section>
+
+      {/* Forecast reliability + model skill weights */}
+      <section className="card card-pad" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Forecast skill</h2>
+        {forecast.loading ? (
+          <Loading lines={1} />
+        ) : !forecast.data || forecast.data.reason ? (
+          <div className="empty" style={{ padding: 18 }}>
+            {forecast.data?.reason ?? "No forecast history yet."}
+          </div>
+        ) : (
+          <>
+            <div className="list">
+              <StatRow label="Completed forecasts" value={forecast.data.completed} />
+              <StatRow label="Pending" value={forecast.data.pending} />
+            </div>
+            {Object.keys(forecast.data.skill_weights).length > 0 && (
+              <>
+                <div style={{ color: theme.textMuted, fontSize: 12, margin: "12px 0 6px" }}>
+                  Model skill weights (inverse-RMSE)
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {Object.entries(forecast.data.skill_weights).map(([m, w]) => (
+                    <MetricBadge
+                      key={m}
+                      label={m}
+                      value={fmtPct(w, 0, { fromFraction: true })}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </section>
+
+      {/* Options premium directive (persisted matrix; advisory) */}
+      <section className="card card-pad" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Options premium</h2>
+        {options.loading ? (
+          <Loading lines={1} />
+        ) : !options.data || !options.data.directive ? (
+          <div className="empty" style={{ padding: 18 }}>
+            {options.data?.reason ?? "No options directive for this symbol yet."}
+          </div>
+        ) : (
+          <OptionsDirectiveView d={options.data.directive} />
+        )}
       </section>
 
       {/* Held by Pilots — the Stockpy reverse cross-link */}
@@ -238,6 +308,36 @@ export function SymbolDetail() {
         )}
       </section>
     </div>
+  );
+}
+
+/** Renders one persisted options premium directive (advisory, read-only). */
+function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
+  const legOk = d.Integrity_OK === true;
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontWeight: 700 }}>{d.Strategy ?? "—"}</div>
+        <span className={`badge ${legOk ? "badge-good" : "badge-bad"}`}>
+          {legOk ? "Integrity ✓" : "Integrity ✗"}
+        </span>
+      </div>
+      <div className="list">
+        <StatRow label="Action" value={d.Action ?? "—"} />
+        <StatRow label="Trend bias" value={d.Trend_Bias ?? "—"} />
+        <StatRow label="Net premium" value={fmtUsd(d.Net_Premium ?? null)} />
+        <StatRow
+          label="Short strike / Δ"
+          value={`${fmtUsd(d.Short_Strike ?? null)} / ${fmtNum(d.Short_Delta ?? null, 2)}`}
+        />
+        <StatRow
+          label="Long strike / Δ"
+          value={`${fmtUsd(d.Long_Strike ?? null)} / ${fmtNum(d.Long_Delta ?? null, 2)}`}
+        />
+        <StatRow label="GARCH σ" value={fmtNum(d.Sigma_GARCH ?? null, 3)} />
+        <StatRow label="IVR proxy" value={fmtNum(d.IVR_Proxy ?? null, 1)} />
+      </div>
+    </>
   );
 }
 

@@ -9,19 +9,32 @@
 
 import { ApiError } from "./types";
 import type {
+  AlertsFeed,
+  BrokerageConnectRequest,
+  BrokerageConnectResult,
+  BrokerageDisconnectResult,
+  BrokerageStatus,
   Follow,
   FollowResult,
+  ForecastSkill,
   Headline,
   Holding,
+  ModelRow,
+  OptionsDirective,
+  OptionsMatrix,
+  PairsRadar,
   PerfRange,
   PerformanceResponse,
   PilotDetail,
   PilotSummary,
   PilotTrade,
   Portfolio,
+  RealizedPerformance,
+  RealizedTrade,
   SectorSlice,
   SymbolDetail,
   SymbolHeldBy,
+  SymbolOptions,
 } from "./types";
 
 const SECTORS = [
@@ -395,11 +408,11 @@ const RAW: Array<{
     ],
   },
   {
-    id: "volatility-edge",
-    name: "Volatility Edge",
-    category: "Risk",
+    id: "edge-garch",
+    name: "Edge & Volatility",
+    category: "Factor",
     description:
-      "Times market exposure off a forward volatility forecast — leans in when risk is cheap and de-risks hard into turbulent, fat-tailed regimes.",
+      "Per-symbol statistical edge ratio combined with a GARCH tail-risk volatility veto — rewards names with a favorable historical risk/reward profile, penalized in high-volatility regimes.",
     headline: h(0.88, 0.961, 0.35, 0.12, true),
     long_only: false,
     aum: 96700,
@@ -688,6 +701,268 @@ const MOCK_MODE = "review" as const; // paper-first: nothing is ever placed
 const NOTIONAL_CAP = 2500;
 const MIN_AMOUNT = 100;
 
+// ---- Local brokerage-connect simulation (localStorage; never stores the
+// actual credential strings — only a boolean "connected" marker, matching the
+// real backend's honesty posture of never echoing/persisting secrets client-side) ----
+const BROKERAGE_KEY = "stockpy.mock.brokerage";
+
+function readBrokerageConnected(): boolean {
+  try {
+    return localStorage.getItem(BROKERAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeBrokerageConnected(connected: boolean) {
+  try {
+    if (connected) localStorage.setItem(BROKERAGE_KEY, "1");
+    else localStorage.removeItem(BROKERAGE_KEY);
+  } catch {
+    /* ignore quota */
+  }
+}
+
+// ---- Realized broker P&L fixture (FIFO round-trips) ----
+const REALIZED_TRADES: RealizedTrade[] = [
+  rt("NVDA", 10, 82.4, 132.6, 41),
+  rt("AAPL", 20, 172.1, 168.9, 12),
+  rt("MSFT", 8, 351.2, 431.0, 63),
+  rt("V", 15, 245.0, 279.8, 88),
+  rt("COST", 3, 640.0, 889.4, 120),
+  rt("DUK", 40, 99.1, 91.2, 22),
+];
+
+function rt(
+  symbol: string,
+  quantity: number,
+  entry: number,
+  exit: number,
+  holdDays: number
+): RealizedTrade {
+  const pnl = +((exit - entry) * quantity).toFixed(2);
+  const now = Date.now();
+  return {
+    symbol,
+    quantity,
+    entry_ts: new Date(now - (holdDays + 5) * 86400000).toISOString(),
+    exit_ts: new Date(now - 5 * 86400000).toISOString(),
+    entry_price: entry,
+    exit_price: exit,
+    realized_pnl: pnl,
+    return_pct: +(((exit - entry) / entry) * 100).toFixed(2),
+    holding_days: holdDays,
+  };
+}
+
+function realizedSummary(trades: RealizedTrade[]) {
+  const pnls = trades.map((t) => t.realized_pnl ?? 0);
+  const wins = pnls.filter((p) => p > 0);
+  const losses = pnls.filter((p) => p < 0);
+  const gp = +wins.reduce((a, b) => a + b, 0).toFixed(2);
+  const gl = +losses.reduce((a, b) => a + b, 0).toFixed(2);
+  return {
+    n_trades: trades.length,
+    total_realized_pnl: +pnls.reduce((a, b) => a + b, 0).toFixed(2),
+    win_rate: trades.length ? +(wins.length / trades.length).toFixed(4) : null,
+    avg_win: wins.length ? +(gp / wins.length).toFixed(2) : null,
+    avg_loss: losses.length ? +(gl / losses.length).toFixed(2) : null,
+    profit_factor: losses.length ? +(gp / Math.abs(gl)).toFixed(3) : null,
+    avg_return_pct: +(
+      trades.reduce((a, t) => a + (t.return_pct ?? 0), 0) / (trades.length || 1)
+    ).toFixed(2),
+    avg_holding_days: +(
+      trades.reduce((a, t) => a + (t.holding_days ?? 0), 0) / (trades.length || 1)
+    ).toFixed(1),
+    best_trade_pnl: pnls.length ? Math.max(...pnls) : null,
+    worst_trade_pnl: pnls.length ? Math.min(...pnls) : null,
+    gross_profit: gp,
+    gross_loss: gl,
+  };
+}
+
+// ---- Alerts feed fixture ----
+function mockAlerts(): AlertsFeed {
+  const now = Date.now();
+  return {
+    reason: null,
+    entries: [
+      {
+        timestamp: new Date(now - 8 * 60000).toISOString(),
+        level: "INFO",
+        message: "Refresh complete — 6 symbols evaluated, 2 BUY / 3 HOLD / 1 SELL.",
+        extra: { type: "run_summary", symbols: 6 },
+      },
+      {
+        timestamp: new Date(now - 52 * 60000).toISOString(),
+        level: "WARNING",
+        message: "Portfolio heat 6.1% exceeds the 5% soft cap.",
+        extra: { type: "risk", heat: 0.061 },
+      },
+      {
+        timestamp: new Date(now - 3 * 3600000).toISOString(),
+        level: "CRITICAL",
+        message: "HMM regime flipped to risk-off (risk_on_probability 0.22).",
+        extra: { type: "regime", risk_on: 0.22 },
+      },
+      {
+        timestamp: new Date(now - 26 * 3600000).toISOString(),
+        level: "INFO",
+        message: "Fill: bought 4 NVDA @ $131.90 (paper).",
+        extra: { type: "fill", symbol: "NVDA" },
+      },
+    ],
+  };
+}
+
+// ---- Forecast reliability fixture ----
+function mockForecast(ticker: string, horizon = 30): ForecastSkill {
+  const sym = ticker.toUpperCase();
+  if (!SYMBOL_UNIVERSE.has(sym)) {
+    return {
+      symbol: sym,
+      horizon_days: horizon,
+      reliability_curve: [],
+      skill_weights: {},
+      pending: 0,
+      completed: 0,
+      reason: "No forecast history yet — run the pipeline to accumulate it.",
+    };
+  }
+  const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0) + horizon);
+  const models = ["arima", "monte_carlo", "holt_winters", "cnn_lstm"];
+  const curve = models.flatMap((m) =>
+    [-0.3, -0.1, 0.1, 0.3].map((center) => ({
+      model_name: m,
+      horizon_days: horizon,
+      bin_center: center,
+      // some bins honestly null (too few samples)
+      mean_pct_error: rng() < 0.2 ? null : +((rng() - 0.5) * 0.12).toFixed(4),
+      count: Math.floor(rng() * 12) + 1,
+    }))
+  );
+  const raw = models.map(() => 0.1 + rng());
+  const tot = raw.reduce((a, b) => a + b, 0);
+  const skill_weights: Record<string, number> = {};
+  models.forEach((m, i) => (skill_weights[m] = +(raw[i] / tot).toFixed(3)));
+  return {
+    symbol: sym,
+    horizon_days: horizon,
+    reliability_curve: curve,
+    skill_weights,
+    pending: Math.floor(rng() * 5),
+    completed: Math.floor(rng() * 60) + 20,
+    reason: null,
+  };
+}
+
+// ---- ML registry fixture (honest: two un-validated / not-deployable) ----
+const MODELS: ModelRow[] = [
+  {
+    name: "lgbm_ranker",
+    role: "cross_sectional_ranker",
+    trained_date: "2026-07-06",
+    cpcv_dsr: 0.0019,
+    pbo: 0.267,
+    n_train: 260,
+    deployable: false,
+    notes: "LightGBM LambdaRank — modest weight until validated at >200 OOS dates.",
+  },
+  {
+    name: "meta_labeler_timeseries_momentum",
+    role: "meta_labeler",
+    trained_date: "2026-07-06",
+    cpcv_dsr: null,
+    pbo: null,
+    n_train: 3499,
+    deployable: false,
+    notes: "Binary classifier predicting P(timeseries_momentum correct).",
+  },
+  {
+    name: "meta_labeler_cross_sectional_momentum",
+    role: "meta_labeler",
+    trained_date: "2026-07-06",
+    cpcv_dsr: null,
+    pbo: null,
+    n_train: 3460,
+    deployable: false,
+    notes: "Binary classifier predicting P(cross_sectional_momentum correct).",
+  },
+];
+
+// ---- Options premium matrix fixture ----
+function optDirective(symbol: string): OptionsDirective {
+  const rng = seeded([...symbol].reduce((a, c) => a + c.charCodeAt(0), 0) + 7);
+  const price = +(80 + rng() * 300).toFixed(2);
+  const shortK = +(Math.round((price * 0.95) / 0.5) * 0.5).toFixed(2);
+  const longK = +(shortK - 5).toFixed(2);
+  return {
+    Symbol: symbol,
+    Price: price,
+    Strategy: "Put Credit Spread",
+    Action: "Sell to open",
+    Trend_Bias: rng() > 0.5 ? "Bullish" : "Neutral",
+    Sigma_GARCH: +(0.18 + rng() * 0.3).toFixed(3),
+    IVR_Proxy: +(40 + rng() * 45).toFixed(1),
+    Net_Premium: +(0.6 + rng() * 1.8).toFixed(2),
+    Realizable_Daily_Theta: +(0.02 + rng() * 0.05).toFixed(3),
+    Short_Strike: shortK,
+    Long_Strike: longK,
+    Short_Delta: -0.3,
+    Long_Delta: -0.15,
+    Integrity_OK: true,
+    Integrity_Issues: [],
+  };
+}
+
+const OPTIONS_SYMBOLS = ["AAPL", "MSFT", "NVDA", "V"];
+function mockOptionsMatrix(): OptionsMatrix {
+  return {
+    as_of: new Date(Date.now() - 5_400_000).toISOString(),
+    target_dte: 30,
+    vix: 15.2,
+    market_regime: "RISK ON",
+    directives: OPTIONS_SYMBOLS.map(optDirective),
+    reason: null,
+  };
+}
+
+// ---- Pairs radar fixture ----
+function mockPairs(): PairsRadar {
+  const rows = [
+    ["XOM", "CVX"],
+    ["V", "JPM"],
+    ["MSFT", "AAPL"],
+    ["HD", "COST"],
+  ].map(([t1, t2]) => {
+    const rng = seeded([...t1, ...t2].reduce((a, c) => a + c.charCodeAt(0), 0));
+    const z = +((rng() - 0.5) * 6).toFixed(2);
+    return {
+      ticker1: t1,
+      ticker2: t2,
+      p_value: +(rng() * 0.05).toFixed(4),
+      half_life: +(8 + rng() * 40).toFixed(1),
+      z_score: z,
+      beta: +(0.5 + rng()).toFixed(3),
+      rolling_p: +(rng() * 0.1).toFixed(4),
+      position: z > 2 ? -1 : z < -2 ? 1 : 0,
+      signal:
+        Math.abs(z) > 4
+          ? "STOP — |z|>4"
+          : Math.abs(z) > 2
+            ? z > 0
+              ? "ENTER SHORT spread"
+              : "ENTER LONG spread"
+            : "Flat — no entry (|z|<2)",
+    };
+  });
+  return {
+    as_of: new Date(Date.now() - 5_400_000).toISOString(),
+    universe: ["XOM", "CVX", "V", "JPM", "MSFT", "AAPL", "HD", "COST"],
+    pairs: rows,
+    reason: null,
+  };
+}
+
 async function delay<T>(v: T, ms = 260): Promise<T> {
   return new Promise((res) => setTimeout(() => res(v), ms));
 }
@@ -897,6 +1172,76 @@ export const mockApi = {
       notice:
         "This creates a gated, paper-first order queue that you must confirm. No order is placed automatically.",
     });
+  },
+
+  async getBrokerageStatus(): Promise<BrokerageStatus> {
+    return delay(
+      {
+        connected: readBrokerageConnected(),
+        has_account_snapshot: readBrokerageConnected(),
+      },
+      80
+    );
+  },
+
+  async connectBrokerage(
+    creds: BrokerageConnectRequest
+  ): Promise<BrokerageConnectResult> {
+    // Simulated verification only — the mock never contacts a real broker and
+    // never persists the credential strings themselves, only a boolean marker.
+    const verified = Boolean(
+      creds.username.trim() && creds.password.trim() && creds.mfa_secret.trim()
+    );
+    if (!verified) {
+      throw new ApiError("Could not verify Robinhood credentials.", 401);
+    }
+    writeBrokerageConnected(true);
+    return delay({ connected: true, verified: true, has_account_snapshot: false }, 500);
+  },
+
+  async disconnectBrokerage(): Promise<BrokerageDisconnectResult> {
+    writeBrokerageConnected(false);
+    return delay({ connected: false }, 150);
+  },
+
+  async getRealized(): Promise<RealizedPerformance> {
+    return delay({
+      summary: realizedSummary(REALIZED_TRADES),
+      trades: REALIZED_TRADES,
+      n_fills: REALIZED_TRADES.length * 2,
+      available: true,
+    });
+  },
+
+  async getAlerts(limit = 50): Promise<AlertsFeed> {
+    const feed = mockAlerts();
+    return delay({ ...feed, entries: feed.entries.slice(0, limit) });
+  },
+
+  async getForecast(ticker: string, horizon = 30): Promise<ForecastSkill> {
+    return delay(mockForecast(ticker, horizon));
+  },
+
+  async getModels(): Promise<ModelRow[]> {
+    return delay(MODELS);
+  },
+
+  async getOptions(): Promise<OptionsMatrix> {
+    return delay(mockOptionsMatrix());
+  },
+
+  async getSymbolOptions(ticker: string): Promise<SymbolOptions> {
+    const sym = ticker.trim().toUpperCase();
+    const directive = OPTIONS_SYMBOLS.includes(sym) ? optDirective(sym) : null;
+    return delay({
+      symbol: sym,
+      directive,
+      reason: directive ? null : "No options directive for this symbol yet.",
+    });
+  },
+
+  async getPairs(): Promise<PairsRadar> {
+    return delay(mockPairs());
   },
 };
 

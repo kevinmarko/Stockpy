@@ -946,6 +946,91 @@ class TestContextExtrasThreading:
             for key in ("value_z", "quality_z", "lowvol_z", "size_z", "multifactor_composite"):
                 assert math.isnan(rec_missing.key_indicators[key]), f"{key} should be NaN, got {rec_missing.key_indicators[key]}"
 
+    def test_symboldetail_fields_populate_key_indicators(self):
+        """The SymbolDetail parity fields threaded through context_extras
+        (xsec 12-1m return + rank, news sentiment, portfolio CoVaR proxy, and the
+        per-symbol excursion MFE/MAE/Edge Ratio/Realized Slippage) must surface on
+        Recommendation.key_indicators under the snake_case keys the advisory
+        writer (reporting/state_snapshot.py) reads."""
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+
+        context_extras = {
+            "xsec_12_1m": {"TEST": 0.185},
+            "xsec_percentile_ranks": {"TEST": 0.9},
+            "news_sentiment": {"TEST": 0.28},
+            "covar_proxy": 0.34,
+            "excursion": {
+                "TEST": {
+                    "MFE": 0.12, "MAE": 0.04, "Edge Ratio": 3.0,
+                    "Realized Slippage": 0.0042,
+                }
+            },
+        }
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            MockSE.return_value = se_instance
+
+            ki = evaluate(
+                "TEST", None, market, _make_account_snapshot(),
+                transactions_store=ts,
+                context_extras=context_extras,
+            ).key_indicators
+
+            assert ki["xsec_12_1m"] == pytest.approx(0.185)
+            assert ki["xsec_momentum_rank"] == pytest.approx(0.9)
+            assert ki["news_sentiment"] == pytest.approx(0.28)
+            assert ki["covar_proxy"] == pytest.approx(0.34)
+            assert ki["mfe"] == pytest.approx(0.12)
+            assert ki["mae"] == pytest.approx(0.04)
+            assert ki["edge_ratio"] == pytest.approx(3.0)
+            assert ki["realized_slippage"] == pytest.approx(0.0042)
+
+    def test_symboldetail_fields_absent_degrade_to_nan(self):
+        """CONSTRAINT #4: with no context_extras, every SymbolDetail parity field
+        is NaN (→ JSON null downstream), never a fabricated 0.0."""
+        import math
+        import unittest.mock as mock
+        from engine.advisory import evaluate
+        from transactions_store import TransactionsStore
+
+        ts = TransactionsStore(db_url="sqlite:///:memory:")
+        market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
+
+        with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
+             mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
+             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.StrategyEngine") as MockSE:
+
+            MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
+            MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
+            MockTOE.return_value.estimate_gjr_garch_volatility.return_value = 0.18
+            se_instance = MagicMock()
+            se_instance.evaluate_security.return_value = {
+                "Action Signal": "HOLD", "Score": 50, "Kelly Target": 0.02,
+            }
+            MockSE.return_value = se_instance
+
+            ki = evaluate("TEST", None, market, _make_account_snapshot(), transactions_store=ts).key_indicators
+            for key in ("xsec_12_1m", "xsec_momentum_rank", "news_sentiment",
+                        "covar_proxy", "mfe", "mae", "edge_ratio", "realized_slippage"):
+                assert math.isnan(ki[key]), f"{key} should be NaN, got {ki[key]}"
+
 
 class TestCurrentRatioKeyIndicator:
     """REUSE sweep: evaluate() must surface the liquidity ratio

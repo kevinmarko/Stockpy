@@ -39,7 +39,60 @@ automatically.
 | — | Persist real benchmark comparison series | `validation/harness.py`, `pilots/performance.py` | #256 |
 | — | Mirror force-exit of dropped names via per-follow attribution | `pilots/mirror.py`, `pilots/follows_store.py` | #257 |
 | — | Symbol detail pages (`/symbol/:ticker`) — per-symbol snapshot view + the reverse "which Pilots hold this" cross-link; tappable holding/position rows | `pilots/symbols.py`, `api/pilots_api.py` (`GET /symbols/{ticker}`), `webapp/src/screens/SymbolDetail.tsx` | #270 |
-| — | Catalog coverage — 7 new dedicated Pilots for the previously-uncovered signal modules (`macro_regime`, `edge_garch`, `rsi_extremes`, `relative_strength`, `news_catalyst`, `forecast_alignment`, `sortino_drawdown`), 5 new price-only backtest adapters (`garch_vol_target`, `cross_sectional_momentum` — widened to a 30-name universe, `relative_strength_xsec` — same widened universe, `rsi14_extremes` — 3 variants incl. an SMA(200) trend filter, `sortino_drawdown` — rolling 504d Sortino/drawdown gate) so every honestly-backtestable module gets a real curve (real curves 4→9 of 16 Pilots), 4 new categories (Macro/Risk/Sentiment/Forecast) with a dataviz-skill-validated categorical palette for the chip color, PWA `mock.ts` resynced to the real catalog, `docs/signals/*.md` cross-linked to their Pilot (or an honest reason for having none) | `pilots/catalog.py`, `scripts/refresh_validations.py`, `webapp/src/{api/{mock,types}.ts,theme.ts,components/ui.tsx}`, `docs/signals/*.md` | this PR |
+| — | Finish SymbolDetail data — advisory-path snapshot parity (xsec_12_1m, xsec_momentum_rank, macro_status, news_sentiment, CoVaR proxy, MFE/MAE/edge ratio/realized slippage now threaded onto `Recommendation.key_indicators` so the advisory writer matches the rich orchestrator writer) | `main.py` (`_build_context_extras`), `engine/advisory.py`, `reporting/state_snapshot.py` | #271 |
+| — | Onboarding "Connect Robinhood" — local, single-operator credential intake (verify-before-persist, three independent gates: `BROKERAGE_CONNECT_ENABLED`, `FOLLOW_API_TOKEN`, loopback-only) | `data/brokerage_credentials.py`, `data/robinhood_portfolio.py` (`verify_credentials`), `api/pilots_api.py` (`/brokerage/status`, `/brokerage/connect`, `/brokerage/disconnect`), `webapp/src/screens/Onboarding.tsx` | #272 |
+| — | Expand the catalog — new `edge-garch` Pilot (the highest-weighted genuinely per-symbol orphan signal not already covered by a Pilot) + honest backtests for 4 previously curve-less Pilots (`cross-sectional-momentum` price-only; `dividend-income`/`deep-value`/`value-quality` via a first-time production wiring of the existing SEC EDGAR point-in-time fundamentals mechanism). 8/10 Pilots now backed by a real validation report, up from 4/9. | `pilots/catalog.py`, `scripts/refresh_validations.py` (4 new adapters + `_pit_asof_frame` helper) | #275 |
+| — | Backend analytics surfaces with zero PWA presence — realized broker P&L (Portfolio section), alerts feed (new "Activity" tab), forecast skill/reliability + news-sentiment polish + options premium (SymbolDetail sections), ML registry ("The models" sub-page), pairs radar ("Pairs radar" sub-page). Read-path surfaces served from persisted state; options matrix + pairs are persisted upstream first (opt-in, `OPTIONS_MATRIX_ENABLED`/`PAIRS_SNAPSHOT_ENABLED`) since `technical_options_engine`/`statsmodels` are off the AST-guarded read path | `pilots/{realized,alerts_feed,forecast_skill,models,options,pairs}.py`, `reporting/{options,pairs}_snapshot.py`, `api/pilots_api.py`, `webapp/src/screens/{Activity,Models,PairsRadar}.tsx` | #274 |
+| — | Catalog coverage completion — 6 more dedicated Pilots for previously-uncovered signal modules (`macro_regime`→`regime-navigator`, `rsi_extremes`→`rsi-reversal`, `relative_strength`→`relative-strength`, `news_catalyst`→`news-catalyst`, `forecast_alignment`→`forecast-aligned`, `sortino_drawdown`→`risk-adjusted`), real price-only backtests for 3 of them (`rsi14_extremes`, `relative_strength_xsec`, `sortino_drawdown`), and an upgrade of the existing `edge-garch` Pilot from curve-less to backed (`garch_vol_target`, a RiskMetrics EWMA vol-timing proxy covering the GARCH-veto half of that signal — the `edge_ratio` half still isn't backtested standalone). `cross-sectional-momentum`'s existing backtest was widened from an 8-name to a 30-name universe for finer-grained ranks. 4 new categories (Macro/Risk/Sentiment/Forecast) with a dataviz-skill-validated categorical palette for the chip color; `docs/signals/*.md` cross-linked to their Pilot (or an honest reason for having none). Final tally: 16 total Pilots, 12 backed by a real validation report, 4 honestly curve-less. | `pilots/catalog.py`, `scripts/refresh_validations.py`, `webapp/src/{api/{mock,types}.ts,theme.ts,components/ui.tsx}`, `docs/signals/*.md` | #273 |
+
+> **Full parity achieved.** Every SymbolDetail field the rich orchestrator writer
+> emits now has a real source on the advisory path too — including `risk.realized_slippage`,
+> which turned out to have TWO producers under the same name in this codebase:
+> `research_engine.calculate_realized_slippage(transactions_df)` (a portfolio-wide bps
+> scalar over a `Trans Code`/`Amount`/`Commission` sheet neither path actually threads
+> into the dashboard) and `evaluation_engine.EvaluationEngine.calculate_realized_slippage
+> (entry_price, arrival_price)` (the REAL, per-symbol implementation-shortfall figure
+> `evaluate_portfolio()` uses to populate `dashboard_df`'s `'Realized Slippage'` column on
+> the rich path). The second one needs only a closed trade's entry price + the current
+> close — both already fetched for the MFE/MAE/Edge Ratio excursion pre-compute — so it's
+> wired from the SAME per-symbol closed-trade lookup, null until that symbol has a closed
+> trade (honest by construction). MFE/MAE/Edge Ratio/Realized Slippage light up as trade
+> history accrues; news_sentiment needs `FINNHUB_API_KEY`.
+
+> **Catalog expansion — why `macro_regime` didn't get a Pilot.** Of the platform's two
+> highest-weighted "orphan" signals (no dedicated Pilot, only riding inside `balanced-blend`),
+> only `edge_garch` (weight 35) got one. `macro_regime` (weight 45, `signals/macro_regime.py`)
+> was investigated and rejected: its only per-row input is `sector` — every stock sharing a
+> sector gets the IDENTICAL score in a given macro regime, so a standalone Pilot built from it
+> would recommend a whole sector's names with the exact same "reasoning," misrepresenting
+> "why this stock" (against the spirit of honesty — CONSTRAINT #4). `edge_garch` IS genuinely
+> per-symbol (real `edge_ratio` + `garch_vol` per ticker).
+>
+> **Follow-up (#273) — shipped `regime-navigator` anyway, with an honest caveat.** A
+> later PR revisited this and shipped the Pilot despite the objection above. The
+> sector-homogeneity property is real and not disputed, but it's a UX/framing concern,
+> not a CONSTRAINT #4 violation: the Pilot's `weights={"macro_regime": 1.0}` and its
+> "Top-down macro regime read" description accurately represent what it does — nothing
+> about it is fabricated. `pilots/catalog.py`'s comment on the Pilot now states the
+> sector-homogeneity caveat explicitly rather than silently overriding this note.
+>
+> **EDGAR PIT production wiring.** `dividend-income`/`deep-value`/`value-quality`'s backtests
+> read real SEC EDGAR point-in-time fundamentals via `data.historical_store.HistoricalStore
+> .get_fundamentals_history()` — read-only, never touching `data/edgar_fundamentals.py`,
+> `data/historical_store.py`, or `scripts/backfill_edgar_fundamentals.py` (Gemini-owned per
+> `docs/DATA_LAYER_PLAN.md`). That store is a pure DB reader with no live-EDGAR fallback: a
+> fresh clone's `quant_platform.db` has zero EDGAR rows until an operator runs
+> `python scripts/backfill_edgar_fundamentals.py --tickers AAPL,JNJ,XOM,KO,JPM,PG,INTC,T,GE,F`
+> (a real, rate-limited SEC network operation, not run automatically by any pipeline). Until
+> then these three backtests honestly degrade to NaN-shaped/no-position reports — never
+> fabricated, never crash (tested explicitly against a genuinely empty store).
+>
+> **What stays curve-less, on purpose.** `balanced-blend` (17 signals, several needing
+> FRED/Finnhub/a trained-ML walk-forward — out of scope per CONSTRAINT #7),
+> `regime-navigator` (macro DTO, not price-only), `news-catalyst` (point-in-time news),
+> and `forecast-aligned` (external forecast target) have no honest single-series
+> backtest, so `validation_strategy_id=None`. `edge-garch` is no longer in this list —
+> #273 gave it a real, narrower-scope backtest (`garch_vol_target`, see the row above).
 
 ## Hardening (post-Phase-3) — the core ships; this is the "declared done too early" layer
 
@@ -120,6 +173,21 @@ stayed green throughout.
   single-operator deployment hitting their own local backend the risk is low. Decision: leave as
   one token; revisit only if the frontend is ever exposed more broadly or a second consumer needs
   scoped read-only access.
+- **D5 — brokerage-connect credential intake is local, single-operator, verify-before-persist
+  (2026-07-15).** Onboarding's "Connect brokerage" step was a client-side-only stub (no intake,
+  no endpoint) while the read/serialize half (`data/robinhood_portfolio.py`,
+  `GET /portfolio`) already existed — this was the actual gap AGENTS.md's safety posture warns
+  about ("never log or persist secrets", single-operator/local-first). Scoped narrowly rather
+  than building a multi-user encrypted vault: `POST /brokerage/connect` reuses `FOLLOW_API_TOKEN`
+  (not a new token — same single-token-client tradeoff as D4) and adds two MORE independent
+  gates on top — `settings.BROKERAGE_CONNECT_ENABLED` (new, default `False`, deliberately NOT in
+  `gui/env_io.py`'s `ALLOWED_KEYS` so a GUI bug can't enable it) and a loopback-only
+  (`127.0.0.1`/`::1`) request check. Credentials are verified with a real read-only Robinhood
+  login (`data.robinhood_portfolio.verify_credentials`, never falls back to interactive MFA
+  prompting — a headless HTTP request must not block on stdin) BEFORE being written, via a
+  dedicated hard-scoped writer (`data/brokerage_credentials.py`, NOT `gui/env_io.py`, which
+  exists specifically to refuse secret writes) to the ONE local `.env` file. Never a vault, never
+  multi-tenant, never echoed back in any response.
 
 ## Running it
 

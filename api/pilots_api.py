@@ -17,11 +17,26 @@ reason.
 
 What this module MAY import (and its own AST guard test enforces): the pure
 ``pilots.*`` package, ``execution.kill_switch``, ``data.historical_store``,
-``data.robinhood_portfolio``. What it must NEVER import directly: the heavy
-calculation engines (``processing_engine``, ``strategy_engine``,
-``forecasting_engine``, ``macro_engine``, ``technical_options_engine``,
-``main_orchestrator``) — all Pilot reads run off already-persisted state, and
-the follow write reaches execution only through ``pilots.mirror``.
+``data.robinhood_portfolio``, ``data.brokerage_credentials``. What it must
+NEVER import directly: the heavy calculation engines (``processing_engine``,
+``strategy_engine``, ``forecasting_engine``, ``macro_engine``,
+``technical_options_engine``, ``main_orchestrator``) — all Pilot reads run off
+already-persisted state, and the follow write reaches execution only through
+``pilots.mirror``.
+
+Brokerage-connect credential intake (``/brokerage/*``)
+--------------------------------------------------------
+A deliberate, narrowly-scoped exception to this codebase's normal
+hand-edit-``.env`` posture for secrets — see ``data/brokerage_credentials.py``
+for the full rationale. Gated behind THREE independent controls, all of which
+must pass: (1) ``settings.BROKERAGE_CONNECT_ENABLED`` (default ``False``,
+never GUI-writable), (2) the same fail-closed ``FOLLOW_API_TOKEN`` command
+token as the follow write-path, (3) ``require_loopback`` — the request must
+originate from ``127.0.0.1``/``::1``. Credentials are verified with a
+read-only login (``data.robinhood_portfolio.verify_credentials``) BEFORE they
+are ever persisted, and are never logged, cached, or echoed back
+(CONSTRAINT #3). This remains a single-operator, single-machine model — not a
+multi-user credential vault.
 
 Run standalone:
     uvicorn api.pilots_api:app --port 8602
@@ -56,7 +71,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -65,7 +80,18 @@ from pydantic import BaseModel, Field
 from settings import settings
 
 # Pilot layer (pure, persisted-state readers) + the gated follow write-path.
-from pilots import catalog, performance, scoring, symbols
+from pilots import (
+    alerts_feed,
+    catalog,
+    forecast_skill,
+    models,
+    options,
+    pairs,
+    performance,
+    realized,
+    scoring,
+    symbols,
+)
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
 
@@ -75,6 +101,12 @@ from pilots.mirror import plan_follow
 # module top so tests can ``mock.patch.object(pilots_api, "HistoricalStore", ...)``.
 from data.historical_store import HistoricalStore
 from execution.kill_switch import GlobalKillSwitch
+
+# Brokerage-connect credential intake — read-only verification + the dedicated,
+# hard-scoped .env writer (see data/brokerage_credentials.py). Imported at
+# module top (not lazily) so tests can `mock.patch.object(pilots_api, ...)`.
+import data.robinhood_portfolio as robinhood_portfolio
+import data.brokerage_credentials as brokerage_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +189,35 @@ def require_command_token(
         raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def require_loopback(request: Request) -> None:
+    """Defense-in-depth for brokerage-credential intake ONLY: reject any
+    request whose client host is not loopback. ``request.client`` can be
+    ``None`` under some ASGI transports — treated as NOT loopback (fail
+    closed), never assumed safe. Tests override this dependency or construct
+    ``TestClient(app, client=("127.0.0.1", <port>))`` for the loopback case."""
+    host = request.client.host if request.client else None
+    if host not in _LOOPBACK_HOSTS:
+        raise HTTPException(
+            status_code=403,
+            detail="Brokerage credential endpoints are loopback-only.",
+        )
+
+
+def require_brokerage_connect_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``/brokerage/connect`` and
+    ``/brokerage/disconnect``. ``settings.BROKERAGE_CONNECT_ENABLED`` is
+    deliberately NOT GUI-writable (gui/env_io.py) — it must be hand-set in
+    ``.env``. ``/brokerage/status`` is read-only and NOT gated by this flag."""
+    if not settings.BROKERAGE_CONNECT_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Brokerage connect is disabled (BROKERAGE_CONNECT_ENABLED=false).",
+        )
+
+
 if not settings.STATE_API_TOKEN:
     logger.warning(
         "STATE_API_TOKEN not set — Pilots read endpoints are UNAUTHENTICATED. "
@@ -183,6 +244,16 @@ def _snapshot_path() -> str:
 def _history_dir() -> str:
     """Resolve the rotated-snapshot history dir from live settings per call."""
     return str(settings.OUTPUT_DIR / "history")
+
+
+def _options_matrix_path() -> str:
+    """Resolve ``output/options_matrix.json`` from live settings per call."""
+    return str(settings.OUTPUT_DIR / "options_matrix.json")
+
+
+def _pairs_snapshot_path() -> str:
+    """Resolve ``output/pairs.json`` from live settings per call."""
+    return str(settings.OUTPUT_DIR / "pairs.json")
 
 
 def _reports_dir() -> Optional[str]:
@@ -215,6 +286,22 @@ class FollowRequest(BaseModel):
     """Body for ``POST /pilots/{id}/follow``. Must allocate a positive amount."""
 
     amount: float = Field(..., gt=0.0)
+
+
+class BrokerageConnectRequest(BaseModel):
+    """Body for ``POST /brokerage/connect``. Never logged (CONSTRAINT #3) —
+    Pydantic's default repr is not invoked anywhere in this module's logging."""
+
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+    mfa_secret: str = Field(
+        default="",
+        description=(
+            "Base32 TOTP secret. Required — interactive MFA prompting is not "
+            "available over HTTP, so a login attempt with no MFA secret is "
+            "treated as a verification failure."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +518,42 @@ def get_symbol_detail(ticker: str) -> Any:
     return detail
 
 
+@app.get("/symbols/{ticker}/forecast", dependencies=[Depends(require_read_token)])
+def get_symbol_forecast(
+    ticker: str,
+    horizon: int = Query(30, ge=1, le=365),
+) -> Dict[str, Any]:
+    """Per-symbol forecast reliability curve + live inverse-RMSE skill weights +
+    pending/completed counts, from the ``forecast_errors`` history.
+
+    Reads persisted DB state only (no engine, no network). Returns empty
+    collections + an honest ``reason`` when no forecast history exists yet — NOT
+    a 404 (the symbol is valid; there's simply nothing tracked). A bin with too
+    few samples has ``mean_pct_error=null``; never fabricated (CONSTRAINT #4)."""
+    return forecast_skill.forecast_skill_view(ticker, horizon_days=horizon)
+
+
+@app.get("/symbols/{ticker}/options", dependencies=[Depends(require_read_token)])
+def get_symbol_options(ticker: str) -> Any:
+    """The persisted options premium-selling directive for one ticker
+    (Strategy/Action, short/long strike + delta legs, net premium, ATM Greeks,
+    integrity verdict).
+
+    Reads only ``output/options_matrix.json`` (written upstream by
+    ``reporting/options_snapshot.py`` when ``OPTIONS_MATRIX_ENABLED`` is on) —
+    never imports ``technical_options_engine``. Returns ``{directive: null,
+    reason}`` (200, not 404) when the matrix is disabled/absent or the symbol
+    isn't in it, so the PWA renders an honest "no options data yet"."""
+    directive = options.symbol_options(ticker, path=_options_matrix_path())
+    if directive is None:
+        return {
+            "symbol": str(ticker or "").upper(),
+            "directive": None,
+            "reason": "No options directive for this symbol yet.",
+        }
+    return {"symbol": str(ticker or "").upper(), "directive": directive, "reason": None}
+
+
 @app.get("/portfolio", dependencies=[Depends(require_read_token)])
 def get_portfolio() -> Any:
     """Serialize the latest account snapshot (DB-first, read-only, no
@@ -495,6 +618,66 @@ def get_equity_curve(
             continue
         curve.append({"date": row.get("fetched_at"), "value": value})
     return {"range": range, "curve": curve}
+
+
+@app.get("/portfolio/realized", dependencies=[Depends(require_read_token)])
+def get_realized_performance() -> Dict[str, Any]:
+    """Realized broker P&L (win rate / profit factor / realized P&L / holding
+    stats) reconstructed by PURE FIFO lot-matching of the Robinhood filled-order
+    history — the account's TRUE realized performance, distinct from any internal
+    paper P&L.
+
+    Cache-only: reads the warm ``cache/robinhood_orders.json`` and NEVER triggers
+    a live Robinhood login on this request path. NaN summary fields (win rate /
+    profit factor when there are no trades) serialize as ``null``, never a
+    fabricated ``0.0`` (CONSTRAINT #4); ``available=false`` when nothing is cached
+    yet. Never 500s (CONSTRAINT #6)."""
+    return realized.realized_performance_view()
+
+
+@app.get("/alerts", dependencies=[Depends(require_read_token)])
+def get_alerts(limit: int = Query(50, ge=1, le=500)) -> Dict[str, Any]:
+    """Newest-first tail of the structured alert feed (``observability/alerts.py``
+    file channel, JSONL at ``settings.ALERT_FILE_PATH``).
+
+    Returns ``{entries, reason}``. Honest empty ``entries`` + a ``reason`` when
+    ``ALERT_FILE_PATH`` is unset or the file does not exist yet — never a
+    fabricated alert (CONSTRAINT #4). Never 500s (CONSTRAINT #6)."""
+    return alerts_feed.alerts_feed(limit=limit)
+
+
+@app.get("/models", dependencies=[Depends(require_read_token)])
+def get_models() -> List[Dict[str, Any]]:
+    """The ML model registry (``ml/registry.yaml``): per-model role, trained
+    date, CPCV-DSR, PBO, and deployable flag — a transparency surface for the
+    models behind the platform.
+
+    ``cpcv_dsr``/``pbo`` are ``null`` for an un-validated model (CONSTRAINT #4).
+    ``[]`` when the registry is missing/unreadable; never 500s (CONSTRAINT #6)."""
+    return models.model_registry_rows()
+
+
+@app.get("/options", dependencies=[Depends(require_read_token)])
+def get_options_matrix() -> Dict[str, Any]:
+    """The persisted options premium-selling matrix across the universe.
+
+    Reads only ``output/options_matrix.json`` (never imports
+    ``technical_options_engine``). Returns ``{as_of, directives, reason}`` — empty
+    ``directives`` + an honest ``reason`` when ``OPTIONS_MATRIX_ENABLED`` is off or
+    the artifact hasn't been written yet (CONSTRAINT #4). Never 500s."""
+    return options.options_matrix(path=_options_matrix_path())
+
+
+@app.get("/pairs", dependencies=[Depends(require_read_token)])
+def get_pairs_radar() -> Dict[str, Any]:
+    """The persisted pairs-trading radar (ranked cointegrated pairs + current
+    spread state — z-score, half-life, advisory signal label). ADVISORY ONLY.
+
+    Reads only ``output/pairs.json`` (never imports the pairs engine /
+    ``statsmodels``). Returns ``{as_of, universe, pairs, reason}`` — empty
+    ``pairs`` + an honest ``reason`` when ``PAIRS_SNAPSHOT_ENABLED`` is off or the
+    artifact hasn't been written yet (CONSTRAINT #4). Never 500s."""
+    return pairs.pairs_radar(path=_pairs_snapshot_path())
 
 
 # ---------------------------------------------------------------------------
@@ -589,3 +772,80 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
         # Retained for back-compat with any client reading `note` directly.
         response["note"] = note
     return response
+
+
+# ---------------------------------------------------------------------------
+# Brokerage-connect endpoints (credential intake — see module docstring)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/brokerage/status", dependencies=[Depends(require_read_token)])
+def get_brokerage_status() -> Dict[str, Any]:
+    """Whether Robinhood portfolio-snapshot credentials are configured and
+    whether an account snapshot has ever been stored. Read-only — NOT gated by
+    ``BROKERAGE_CONNECT_ENABLED`` (status is safe to read even when connect
+    intake is disabled; the operator may have set credentials by hand in
+    ``.env``, the normal path). Never returns credential values."""
+    connected = brokerage_credentials.rh_credentials_present()
+    has_account_snapshot = False
+    try:
+        has_account_snapshot = HistoricalStore().latest_account_snapshot() is not None
+    except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> honest False
+        logger.warning("pilots_api: brokerage status account-snapshot check failed: %s", exc)
+    return {"connected": connected, "has_account_snapshot": has_account_snapshot}
+
+
+@app.post(
+    "/brokerage/connect",
+    dependencies=[
+        Depends(require_brokerage_connect_enabled),
+        Depends(require_command_token),
+        Depends(require_loopback),
+    ],
+)
+def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
+    """Verify Robinhood credentials with a read-only login, then persist them
+    to the local ``.env`` (and the live process environment) ONLY on success.
+
+    Gated by three independent controls (see the dependencies above):
+    ``BROKERAGE_CONNECT_ENABLED``, the fail-closed follow command token, and a
+    loopback-only request check. Credential values are never logged, cached,
+    or echoed back in the response (CONSTRAINT #3) — on failure this returns a
+    plain 401 with no detail about which field was wrong (username vs.
+    password vs. MFA), since that distinction itself would leak information
+    about a candidate credential."""
+    verified = robinhood_portfolio.verify_credentials(
+        body.username, body.password, body.mfa_secret
+    )
+    if not verified:
+        raise HTTPException(
+            status_code=401,
+            detail="Could not verify Robinhood credentials.",
+        )
+    brokerage_credentials.write_rh_credentials(body.username, body.password, body.mfa_secret)
+    account_present = False
+    try:
+        account_present = HistoricalStore().latest_account_snapshot() is not None
+    except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> honest False
+        logger.warning("pilots_api: connect account-snapshot check failed: %s", exc)
+    return {"connected": True, "verified": True, "has_account_snapshot": account_present}
+
+
+@app.post(
+    "/brokerage/disconnect",
+    dependencies=[
+        Depends(require_brokerage_connect_enabled),
+        Depends(require_command_token),
+        Depends(require_loopback),
+    ],
+)
+def disconnect_brokerage() -> Dict[str, Any]:
+    """Log out of the active Robinhood session (best-effort) and clear
+    RH_USERNAME/RH_PASSWORD/RH_MFA_SECRET from ``.env`` and the process
+    environment. Idempotent — safe to call when nothing is connected."""
+    try:
+        robinhood_portfolio.logout()
+    except Exception as exc:  # noqa: BLE001 - logout failure must not block disconnect
+        logger.warning("pilots_api: brokerage logout failed (ignored): %s", exc)
+    brokerage_credentials.clear_rh_credentials()
+    return {"connected": False}

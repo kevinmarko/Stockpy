@@ -184,6 +184,56 @@ class AccountSnapshot:
         )
 
 
+def _login_with(
+    username: str,
+    password: str,
+    mfa_secret: str,
+    *,
+    allow_interactive: bool = False,
+) -> dict:
+    """Perform the actual ``r.login()`` call with explicit credentials.
+
+    Shared by ``_login()`` (env-var path, used by every read pipeline call)
+    and ``verify_credentials()`` (explicit-args path used only by the
+    brokerage-connect intake flow). Never logs credential values.
+
+    When ``mfa_secret`` is supplied, generates the current TOTP code via
+    ``pyotp.TOTP(mfa_secret).now()`` (RFC 6238) and passes ``mfa_code=``.
+    When absent and ``allow_interactive=True``, falls through to
+    ``robin_stocks``' interactive terminal MFA prompt (only safe for the
+    env-var CLI/GUI path — never for an HTTP request, which must not block on
+    stdin). When absent and ``allow_interactive=False``, raises immediately
+    rather than risking a hang.
+    """
+    if mfa_secret:
+        # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
+        mfa_code = pyotp.TOTP(mfa_secret).now()
+        result = r.login(
+            username,
+            password,
+            store_session=True,  # persist ~/.tokens pickle for same-device reuse
+            mfa_code=mfa_code,
+        )
+    elif allow_interactive:
+        result = r.login(
+            username,
+            password,
+            store_session=True,  # persist ~/.tokens pickle for same-device reuse
+        )
+    else:
+        raise ValueError(
+            "An MFA secret is required (interactive MFA prompting is not "
+            "available in this context)."
+        )
+
+    if not isinstance(result, dict) or "access_token" not in result:
+        raise RuntimeError(
+            "Robinhood login failed — no access_token in login response. "
+            "Check the username, password, and MFA secret."
+        )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Authentication (private)
 # ---------------------------------------------------------------------------
@@ -200,38 +250,71 @@ def _login() -> None:
     minimising MFA prompts and avoiding spurious "new device" notifications.
     Passing ``mfa_code=`` selects the TOTP path; ``robin-stocks`` >= 3.4
     removed the legacy ``by_sms=`` kwarg and infers the path from whether
-    ``mfa_code`` is supplied. If RH_MFA_SECRET is not set, falls back to 
+    ``mfa_code`` is supplied. If RH_MFA_SECRET is not set, falls back to
     interactive MFA prompting in the terminal.
     """
     username = _require_env("RH_USERNAME")
     password = _require_env("RH_PASSWORD")
     mfa_secret = os.environ.get("RH_MFA_SECRET", "").strip()
 
-    if mfa_secret:
-        # Generate the current 6-digit TOTP code from the base32 secret.
-        # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
-        mfa_code = pyotp.TOTP(mfa_secret).now()
-        
-        result = r.login(
-            username,
-            password,
-            store_session=True,  # persist ~/.tokens pickle for same-device reuse
-            mfa_code=mfa_code,
-        )
-    else:
+    if not mfa_secret:
         logger.info("RH_MFA_SECRET is missing or empty. Falling back to interactive MFA login.")
-        result = r.login(
-            username,
-            password,
-            store_session=True,  # persist ~/.tokens pickle for same-device reuse
-        )
 
-    if not isinstance(result, dict) or "access_token" not in result:
-        raise RuntimeError(
-            "Robinhood login failed — no access_token in login response. "
-            "Check RH_USERNAME and RH_PASSWORD."
-        )
+    _login_with(username, password, mfa_secret, allow_interactive=True)
     logger.info("Robinhood login succeeded.")
+
+
+# ---------------------------------------------------------------------------
+# Credential verification (public — brokerage-connect intake)
+# ---------------------------------------------------------------------------
+
+def verify_credentials(username: str, password: str, mfa_secret: str = "") -> bool:
+    """Attempt a read-only Robinhood login with EXPLICIT credentials, then log out.
+
+    Used ONLY by the brokerage-connect intake flow
+    (``api/pilots_api.py::POST /brokerage/connect``) to verify a candidate
+    username/password/TOTP-secret BEFORE they are ever persisted to ``.env`` —
+    never after. Unlike ``_login()``, this never falls back to interactive MFA
+    prompting: a headless HTTP request must not block on stdin, so a missing
+    or empty ``mfa_secret`` is treated as a verification failure, not an
+    invitation to prompt.
+
+    This function establishes no lasting session beyond whatever
+    ``robin_stocks``' own ``store_session=True`` pickle does, and immediately
+    logs out on success. It NEVER raises — any failure (bad credentials,
+    missing MFA secret, network error) returns ``False`` — and NEVER logs the
+    username/password/mfa_secret values themselves, only exception *types*
+    (CONSTRAINT #3).
+
+    Returns
+    -------
+    bool
+        True if the login succeeded (credentials verified), False otherwise.
+    """
+    username = (username or "").strip()
+    password = (password or "").strip()
+    mfa_secret = (mfa_secret or "").strip()
+
+    if not username or not password:
+        logger.info("Brokerage credential verification failed: username/password missing.")
+        return False
+
+    try:
+        _login_with(username, password, mfa_secret, allow_interactive=False)
+    except Exception as exc:
+        logger.info(
+            "Brokerage credential verification failed: %s", type(exc).__name__
+        )
+        return False
+
+    try:
+        r.logout()
+    except Exception as exc:
+        logger.warning(
+            "Robinhood logout after credential verification failed (ignored): %s",
+            type(exc).__name__,
+        )
+    return True
 
 
 # ---------------------------------------------------------------------------

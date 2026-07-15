@@ -159,6 +159,26 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(result).toBeUndefined();
   });
 
+  it("the new analytics endpoints build the expected GET URLs", async () => {
+    const mod = await importLiveClient({ VITE_API_BASE_URL: "http://example.test:9000" });
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const cases: [() => Promise<unknown>, string][] = [
+      [() => mod.api.getRealized(), "http://example.test:9000/portfolio/realized"],
+      [() => mod.api.getAlerts(25), "http://example.test:9000/alerts?limit=25"],
+      [() => mod.api.getForecast("aapl", 30), "http://example.test:9000/symbols/aapl/forecast?horizon=30"],
+      [() => mod.api.getModels(), "http://example.test:9000/models"],
+      [() => mod.api.getOptions(), "http://example.test:9000/options"],
+      [() => mod.api.getSymbolOptions("nvda"), "http://example.test:9000/symbols/nvda/options"],
+      [() => mod.api.getPairs(), "http://example.test:9000/pairs"],
+    ];
+    for (const [call, expectedUrl] of cases) {
+      fetchMock.mockResolvedValueOnce(jsonResponse({}));
+      await call();
+      const [url] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
+      expect(url).toBe(expectedUrl);
+    }
+  });
+
   it("useMock=true (default) never touches fetch — mock and live are mutually exclusive", async () => {
     vi.resetModules();
     vi.unstubAllEnvs();
@@ -167,5 +187,73 @@ describe("client.ts — live client (mocked fetch)", () => {
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
     await mod.api.listPilots();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("getBrokerageStatus() calls GET /brokerage/status", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ connected: false, has_account_snapshot: false })
+    );
+
+    const result = await mod.api.getBrokerageStatus();
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/status");
+    expect(result).toEqual({ connected: false, has_account_snapshot: false });
+  });
+
+  it("connectBrokerage() POSTs credentials as JSON to /brokerage/connect", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ connected: true, verified: true, has_account_snapshot: false })
+    );
+
+    await mod.api.connectBrokerage({
+      username: "user@example.com",
+      password: "hunter2",
+      mfa_secret: "SECRET",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/connect");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      username: "user@example.com",
+      password: "hunter2",
+      mfa_secret: "SECRET",
+    });
+  });
+
+  it("connectBrokerage() surfaces a 401 verification failure as an ApiError", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { detail: "Could not verify Robinhood credentials." },
+        { status: 401, ok: false }
+      )
+    );
+
+    await expect(
+      mod.api.connectBrokerage({ username: "u", password: "wrong", mfa_secret: "s" })
+    ).rejects.toMatchObject({
+      status: 401,
+      message: "Could not verify Robinhood credentials.",
+    });
+  });
+
+  it("disconnectBrokerage() POSTs to /brokerage/disconnect", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(jsonResponse({ connected: false }));
+
+    const result = await mod.api.disconnectBrokerage();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/disconnect");
+    expect(init.method).toBe("POST");
+    expect(result).toEqual({ connected: false });
   });
 });

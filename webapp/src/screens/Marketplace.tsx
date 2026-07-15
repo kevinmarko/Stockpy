@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import { api, apiMeta } from "../api/client";
 import type { PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
@@ -127,6 +128,27 @@ export function Marketplace() {
           {byCategory.map(([cat, ps]) => (
             <Rail key={cat} title={cat} pilots={ps} />
           ))}
+
+          {/* Explore: research surfaces that aren't a single Pilot */}
+          <div className="rail-head" style={{ marginTop: 24 }}>
+            <h2>Explore</h2>
+          </div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <Link to="/models" className="card card-pad" style={{ flex: 1, textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🧠</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>The models</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                CPCV-gated ML registry
+              </div>
+            </Link>
+            <Link to="/pairs" className="card card-pad" style={{ flex: 1, textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🔗</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Pairs radar</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Cointegrated stat-arb candidates
+              </div>
+            </Link>
+          </div>
 
           <p
             style={{

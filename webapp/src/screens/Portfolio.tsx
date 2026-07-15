@@ -7,12 +7,13 @@ import type {
   Portfolio as PortfolioT,
   PilotSummary,
   CurvePoint,
+  RealizedPerformance,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { ErrorState, Loading, Tile } from "../components/ui";
-import { fmtPct, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
+import { fmtNum, fmtPct, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 
 export function Portfolio() {
@@ -25,6 +26,7 @@ export function Portfolio() {
   );
   const follows = useApi<Follow[]>(() => api.getFollows(), []);
   const pilots = useApi<PilotSummary[]>(() => api.listPilots(), []);
+  const realized = useApi<RealizedPerformance>(() => api.getRealized(), []);
 
   if (port.loading) {
     return (
@@ -107,6 +109,69 @@ export function Portfolio() {
         <div style={{ marginTop: 12 }}>
           <RangeToggle value={range} onChange={setRange} />
         </div>
+      </section>
+
+      {/* Realized performance (broker order history, FIFO round-trips) */}
+      <section className="card card-pad" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Realized performance</h2>
+        <p style={{ color: theme.textMuted, fontSize: 11.5, margin: "0 0 12px" }}>
+          Reconstructed from your Robinhood filled-order history (closed round-trips).
+        </p>
+        {realized.loading ? (
+          <Loading lines={2} />
+        ) : !realized.data || !realized.data.available ? (
+          <div className="empty" style={{ padding: 22 }}>
+            No realized trades cached yet.
+          </div>
+        ) : (
+          <>
+            <div className="tiles">
+              <Tile
+                label="Realized P&L"
+                value={fmtSignedUsd(realized.data.summary.total_realized_pnl)}
+                tone={realized.data.summary.total_realized_pnl >= 0 ? "pos" : "neg"}
+              />
+              <Tile
+                label="Win rate"
+                value={fmtPct(realized.data.summary.win_rate, 0, { fromFraction: true })}
+              />
+              <Tile
+                label="Profit factor"
+                value={fmtNum(realized.data.summary.profit_factor, 2)}
+              />
+              <Tile label="Trades" value={realized.data.summary.n_trades} />
+            </div>
+            {realized.data.trades.length > 0 && (
+              <div className="list" style={{ marginTop: 12 }}>
+                {realized.data.trades.slice(0, 8).map((t, i) => (
+                  <Link className="row" key={`${t.symbol}-${i}`} to={`/symbol/${t.symbol}`}>
+                    <div className="row-main">
+                      <span className="row-title">{t.symbol}</span>
+                      <span className="row-sub">
+                        {t.quantity == null ? "—" : fmtNum(t.quantity, 0)} sh ·{" "}
+                        {t.holding_days == null ? "—" : `${fmtNum(t.holding_days, 0)}d`}
+                      </span>
+                    </div>
+                    <div className="row-end">
+                      <div
+                        className="num"
+                        style={{
+                          fontWeight: 700,
+                          color: (t.realized_pnl ?? 0) >= 0 ? theme.growth : theme.decline,
+                        }}
+                      >
+                        {fmtSignedUsd(t.realized_pnl)}
+                      </div>
+                      <div className="num row-sub">
+                        {fmtPct(t.return_pct, 1, { signed: true })}
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </section>
 
       {/* Active follows */}

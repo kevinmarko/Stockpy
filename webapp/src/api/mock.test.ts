@@ -13,7 +13,7 @@
  * Mock layer only — no network, no live API.
  */
 
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import { mockApi } from "./mock";
 import { ApiError } from "./types";
 import type {
@@ -308,5 +308,79 @@ describe("mock API — /symbols/{ticker} contract", () => {
   it("throws an ApiError(404) for an unknown ticker", async () => {
     await expect(mockApi.getSymbol("ZZZZ")).rejects.toBeInstanceOf(ApiError);
     await expect(mockApi.getSymbol("ZZZZ")).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe("mock API — brokerage-connect contract", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("getBrokerageStatus() starts disconnected", async () => {
+    const status = await mockApi.getBrokerageStatus();
+    expect(status).toEqual({ connected: false, has_account_snapshot: false });
+  });
+
+  it("connectBrokerage() with all three fields succeeds and flips status", async () => {
+    const result = await mockApi.connectBrokerage({
+      username: "user@example.com",
+      password: "hunter2",
+      mfa_secret: "JBSWY3DPEHPK3PXP",
+    });
+    expect(result).toEqual({ connected: true, verified: true, has_account_snapshot: false });
+
+    const status = await mockApi.getBrokerageStatus();
+    expect(status.connected).toBe(true);
+  });
+
+  it("connectBrokerage() never echoes the submitted credential values", async () => {
+    const result = await mockApi.connectBrokerage({
+      username: "user@example.com",
+      password: "sUp3rS3cr3t!!",
+      mfa_secret: "JBSWY3DPEHPK3PXP",
+    });
+    expect(JSON.stringify(result)).not.toContain("sUp3rS3cr3t");
+    expect(JSON.stringify(result)).not.toContain("JBSWY3DPEHPK3PXP");
+  });
+
+  it("connectBrokerage() rejects with ApiError(401) when a field is blank", async () => {
+    await expect(
+      mockApi.connectBrokerage({ username: "", password: "pw", mfa_secret: "s" })
+    ).rejects.toBeInstanceOf(ApiError);
+    await expect(
+      mockApi.connectBrokerage({ username: "u", password: "pw", mfa_secret: "" })
+    ).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("disconnectBrokerage() clears the connected state", async () => {
+    await mockApi.connectBrokerage({
+      username: "user@example.com",
+      password: "hunter2",
+      mfa_secret: "JBSWY3DPEHPK3PXP",
+    });
+    expect((await mockApi.getBrokerageStatus()).connected).toBe(true);
+
+    const result = await mockApi.disconnectBrokerage();
+    expect(result).toEqual({ connected: false });
+    expect((await mockApi.getBrokerageStatus()).connected).toBe(false);
+  });
+
+  it("never persists the raw credential strings to localStorage", async () => {
+    await mockApi.connectBrokerage({
+      username: "user@example.com",
+      password: "sUp3rS3cr3t!!",
+      mfa_secret: "JBSWY3DPEHPK3PXP",
+    });
+    const dump: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)!;
+      dump.push(`${key}=${localStorage.getItem(key)}`);
+    }
+    const joined = dump.join("\n");
+    expect(joined).not.toContain("sUp3rS3cr3t");
+    expect(joined).not.toContain("JBSWY3DPEHPK3PXP");
   });
 });

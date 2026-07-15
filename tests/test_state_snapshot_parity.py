@@ -11,20 +11,25 @@ Cross-writer schema-parity guard for the two ``state_snapshot.json`` producers:
     columns. This is a *superset* — it emits several columns the advisory path
     has no source for.
 
-Both feed the SAME GUI Observability / Analytics panels, so the *shared* fields
-must carry identical key spellings, and — critically — the three operator
-metrics ``news_sentiment`` / ``realized_slippage`` / ``covar_proxy`` must:
+Both feed the SAME GUI Observability / Analytics panels (and the Pilots
+SymbolDetail page via ``pilots/symbols.py``), so the two writers must now emit
+the SAME per-signal key set — the advisory writer reached full parity once
+``engine.advisory.evaluate()`` began threading the cross-sectional-momentum,
+news-sentiment, CoVaR and post-trade-excursion values onto ``key_indicators``
+(via ``main._build_context_extras``), and ``macro_status`` off
+``Recommendation.macro_regime``.
 
-  * be present as keys in every per-signal record from BOTH writers (stable
-    schema), and
+Every per-signal metric must:
+
+  * be present as a key in every record from BOTH writers (stable schema), and
   * serialize as JSON ``null`` — never a fabricated ``0.0`` (CONSTRAINT #4) —
-    when the underlying value is genuinely unavailable (which, on the advisory
-    path, is always: ``engine.advisory`` does not yet thread these onto
-    ``key_indicators``).
-
-The test also documents (and pins) the known ORCHESTRATOR-only superset fields,
-so a future divergence in the shared set is caught while the legitimate
-superset stays allowed.
+    when the underlying value is genuinely unavailable (its pre-compute inputs
+    were absent for that symbol/cycle). ``realized_slippage`` is
+    ``evaluation_engine.EvaluationEngine``'s per-symbol implementation-shortfall
+    figure (entry vs. arrival price) — the SAME source ``evaluate_portfolio()``
+    uses for ``dashboard_df``'s column on the rich path — sourced from the
+    per-symbol closed-trade excursion pre-compute, so it is null only when the
+    symbol has no closed trade yet.
 """
 
 from __future__ import annotations
@@ -68,11 +73,10 @@ SHARED_SIGNAL_FIELDS = {
     "covar_proxy",
     "sector",
     "score_components",
-}
-
-# Fields the ORCHESTRATOR writer legitimately adds that the advisory writer has
-# no source for (documented superset — NOT a parity violation).
-ORCHESTRATOR_ONLY_FIELDS = {
+    # Reached advisory parity: these were ORCHESTRATOR-only until
+    # engine.advisory.evaluate() began threading them onto key_indicators
+    # (xsec/news/covar/excursion via main._build_context_extras) and the advisory
+    # writer began emitting macro_status off Recommendation.macro_regime.
     "macro_status",
     "xsec_12_1m",
     "xsec_momentum_rank",
@@ -80,6 +84,11 @@ ORCHESTRATOR_ONLY_FIELDS = {
     "mae",
     "edge_ratio",
 }
+
+# Full parity — the advisory writer now emits every per-signal field the
+# orchestrator writer does. Kept (empty) so test_orchestrator_superset_documented
+# still guards against a NEW orchestrator-only field silently appearing.
+ORCHESTRATOR_ONLY_FIELDS: set[str] = set()
 
 
 # ── Advisory writer fixture (Recommendation / RunResult stubs) ───────────────
@@ -104,6 +113,7 @@ def _recommendation(symbol: str, **extra_ki) -> SimpleNamespace:
         sell_range="Sell: $12 - $13",
         suggested_exit_pct=0.5,
         sector="Technology",
+        macro_regime="RISK ON",
     )
 
 
@@ -216,12 +226,12 @@ class TestTripletPresence:
 
 class TestTripletNullHonesty:
     def test_advisory_triplet_is_null_when_absent(self, advisory_signals):
-        """engine.advisory.Recommendation.key_indicators does not (yet) carry
-        these, so the advisory writer must emit JSON null — never a fabricated
-        0.0 the GUI would misread as a real reading (CONSTRAINT #4)."""
+        """When ``key_indicators`` does not carry these (the fixture rec has an
+        empty pre-compute), the advisory writer must emit JSON null — never a
+        fabricated 0.0 the GUI would misread as a real reading (CONSTRAINT #4)."""
         sig = advisory_signals[0]
         for key in _TRIPLET:
-            assert sig[key] is None, f"{key} must be null on the advisory path"
+            assert sig[key] is None, f"{key} must be null when absent from key_indicators"
             assert sig[key] != 0.0
 
     def test_orchestrator_triplet_round_trips_when_present(self, orchestrator_signals):
@@ -257,3 +267,44 @@ class TestTripletSourcedFromKeyIndicators:
         assert sig["news_sentiment"] == pytest.approx(0.33)
         assert sig["realized_slippage"] == pytest.approx(0.002)
         assert sig["covar_proxy"] == pytest.approx(-0.07)
+
+
+class TestAdvisoryNewFieldsRoundTrip:
+    """The advisory writer surfaces the newly-wired SymbolDetail fields from
+    ``key_indicators`` (proving the plumbing reads them, not a hard-coded null),
+    and ``macro_status`` from ``Recommendation.macro_regime``."""
+
+    def test_xsec_and_excursion_round_trip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        rec = _recommendation(
+            "AAPL",
+            xsec_12_1m=0.185,
+            xsec_momentum_rank=0.9,
+            mfe=0.12,
+            mae=0.04,
+            edge_ratio=3.0,
+        )
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}), recommendations=[rec]
+        )
+        ss.write_state_snapshot(result, _macro())
+        sig = json.loads(
+            (tmp_path / "state_snapshot.json").read_text(encoding="utf-8")
+        )["signals"][0]
+        assert sig["xsec_12_1m"] == pytest.approx(0.185)
+        assert sig["xsec_momentum_rank"] == pytest.approx(0.9)
+        assert sig["mfe"] == pytest.approx(0.12)
+        assert sig["mae"] == pytest.approx(0.04)
+        assert sig["edge_ratio"] == pytest.approx(3.0)
+
+    def test_macro_status_from_recommendation(self, advisory_signals):
+        # _recommendation stub carries macro_regime="RISK ON".
+        assert advisory_signals[0]["macro_status"] == "RISK ON"
+
+    def test_new_numeric_fields_null_when_absent(self, advisory_signals):
+        # The base fixture rec has no xsec/excursion in key_indicators → null,
+        # never a fabricated 0.0 (CONSTRAINT #4).
+        sig = advisory_signals[0]
+        for key in ("xsec_12_1m", "xsec_momentum_rank", "mfe", "mae", "edge_ratio"):
+            assert sig[key] is None, f"{key} must be null when absent from key_indicators"
+            assert sig[key] != 0.0

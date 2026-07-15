@@ -31,25 +31,35 @@ honest caveats baked into the catalog below:
 
 * ``multifactor`` Pilot uses the full 4-factor ``multifactor`` signal but joins
   the ``multifactor_lowvol_size`` backtest, which validates only the Low-Vol +
-  Size factors (Value/Quality have no free point-in-time fundamentals). The
-  headline Sharpe therefore reflects the honest, narrower proxy.
-* The income/value single-factor Pilots (``dividend-income``, ``deep-value``),
-  the ``value-quality`` blend, and ``balanced-blend`` have **no** matching
-  validated backtest, so ``validation_strategy_id=None`` (the UI shows "no
-  backtest series yet"). Their signals need point-in-time fundamentals no free
-  vendor supplies, or (``balanced-blend``) are an ensemble no single backtest
-  honestly represents.
-* Likewise the ``regime-navigator`` (macro DTO), ``news-catalyst`` (point-in-time
-  news), and ``forecast-aligned`` (external forecast target) Pilots stay
+  Size factors (free point-in-time Value/Quality fundamentals didn't exist when
+  this backtest was built — see the next bullet for the fix).
+* ``dividend-income``/``deep-value``/``value-quality`` join real SEC EDGAR
+  point-in-time (PIT) fundamentals backtests (``dividend_yield_edgar_pit`` /
+  ``deep_value_edgar_pit`` / ``value_quality_edgar_pit``) — each an honest,
+  narrower single/dual-factor proxy of the live signal(s), not a literal
+  reimplementation (e.g. ``deep-value``'s backtest is a P/B "cheapness" tilt,
+  not a Graham Number reconstruction — see ``scripts/refresh_validations.py``
+  for why). Requires the EDGAR PIT backfill to have been run
+  (``scripts/backfill_edgar_fundamentals.py``); degrades to an honest
+  "insufficient data" report otherwise, never fabricated.
+* ``cross-sectional-momentum`` joins ``cross_sectional_momentum``, a faithful
+  price-only reimplementation of the live 12-1m signal over a 30-name liquid
+  large-cap universe (no proxy narrowing needed).
+* ``edge-garch`` joins ``garch_vol_target``, a RiskMetrics EWMA vol-timing proxy
+  on SPY — this backtests only the GARCH tail-risk-veto half of the live signal;
+  the ``edge_ratio`` half (which depends on real closed-trade history) still
+  isn't backtested standalone, so the curve is an honest, narrower proxy — the
+  same scope-narrowing precedent as the ``multifactor`` Pilot's own backtest.
+* ``rsi-reversal``/``relative-strength``/``risk-adjusted`` join real price-only
+  backtests (``rsi14_extremes`` / ``relative_strength_xsec`` / ``sortino_drawdown``).
+* ``regime-navigator`` (macro DTO), ``news-catalyst`` (point-in-time news), and
+  ``forecast-aligned`` (external forecast target) stay
   ``validation_strategy_id=None`` — their signals can't be honestly reconstructed
   from price/volume alone.
-* Every module that CAN be honestly backtested price-only IS joined to a real
-  ``STRATEGY_REGISTRY`` adapter: ``cross-sectional-momentum`` →
-  ``cross_sectional_momentum``, ``volatility-edge`` → ``garch_vol_target``,
-  ``rsi-reversal`` → ``rsi14_extremes``, ``relative-strength`` →
-  ``relative_strength_xsec``, ``risk-adjusted`` → ``sortino_drawdown`` (plus the
-  pre-existing ``trend-following`` / ``dip-buyer`` / ``macd-trend`` /
-  ``multifactor`` joins).
+* ``balanced-blend`` (an ensemble of all 17 signal modules, several needing
+  FRED/Finnhub/a trained-ML walk-forward) has **no** honest single-series
+  backtest, so ``validation_strategy_id=None`` (the UI shows "no backtest series
+  yet").
 * ``coppock_momentum`` exists in ``STRATEGY_REGISTRY`` but has no corresponding
   signal module in ``SIGNAL_WEIGHTS``, so it is deliberately NOT surfaced as a
   Pilot (a Pilot's weights must be real signal-module ids).
@@ -142,8 +152,9 @@ PILOTS: List[Pilot] = [
         ),
         weights={"cross_sectional_momentum": 1.0},
         long_only=False,
-        # Honest price-only Jegadeesh-Titman 12-1 cross-sectional backtest over a
-        # liquid mega-cap universe (scripts.refresh_validations).
+        # Faithful price-only reimplementation of the live 12-1m signal
+        # (signals/cross_sectional_momentum.py) over a 30-name liquid
+        # large-cap universe (scripts.refresh_validations._XSEC_UNIVERSE_30).
         validation_strategy_id="cross_sectional_momentum",
     ),
     Pilot(
@@ -194,8 +205,9 @@ PILOTS: List[Pilot] = [
         ),
         weights={"dividend_quality": 1.0},
         long_only=True,
-        # No income/dividend backtest exists in STRATEGY_REGISTRY.
-        validation_strategy_id=None,
+        # Single-factor cross-sectional tilt on real SEC EDGAR point-in-time
+        # dividend_yield (see scripts/refresh_validations.py's EDGAR PIT note).
+        validation_strategy_id="dividend_yield_edgar_pit",
     ),
     Pilot(
         id="deep-value",
@@ -207,8 +219,12 @@ PILOTS: List[Pilot] = [
         ),
         weights={"graham_value": 1.0},
         long_only=True,
-        # No standalone value backtest exists in STRATEGY_REGISTRY.
-        validation_strategy_id=None,
+        # A price-to-book "cheapness" tilt on real SEC EDGAR PIT fundamentals —
+        # NOT a literal Graham Number reconstruction (see
+        # scripts/refresh_validations.py's _build_deep_value_adapter docstring
+        # for why: deriving book value in dollars from a stored ratio would mix
+        # price vintages).
+        validation_strategy_id="deep_value_edgar_pit",
     ),
     Pilot(
         id="value-quality",
@@ -224,7 +240,28 @@ PILOTS: List[Pilot] = [
             "multifactor": 1.0,
         },
         long_only=True,
-        validation_strategy_id=None,
+        # Real SEC EDGAR PIT Value(P/B) + Quality(ROE+op margin) composite — a
+        # narrower, honest proxy of the full three-signal blend above (the same
+        # scope-narrowing precedent as the "multifactor" Pilot's own backtest).
+        validation_strategy_id="value_quality_edgar_pit",
+    ),
+    Pilot(
+        id="edge-garch",
+        name="Edge & Volatility",
+        category="Factor",
+        description=(
+            "Per-symbol statistical edge ratio combined with a GARCH tail-risk "
+            "volatility veto — rewards names with a favorable historical "
+            "risk/reward profile, penalized in high-volatility regimes."
+        ),
+        weights={"edge_garch": 1.0},
+        long_only=False,
+        # Honest price-only RiskMetrics EWMA vol-timing proxy on SPY — covers
+        # only the GARCH tail-risk-veto half of this signal. The edge_ratio
+        # half (depends on real closed-trade history, evaluation_engine's
+        # post-trade MFE/MAE) still isn't backtested standalone; same
+        # narrower-proxy precedent as the "multifactor" Pilot's own backtest.
+        validation_strategy_id="garch_vol_target",
     ),
     Pilot(
         id="balanced-blend",
@@ -254,21 +291,13 @@ PILOTS: List[Pilot] = [
         ),
         weights={"macro_regime": 1.0},
         long_only=False,
-        # Macro-DTO driven (yield curve, HY spreads, VIX, Sahm) — not price-only.
+        # Macro-DTO driven (yield curve, HY spreads, VIX, Sahm) — not price-only,
+        # so validation_strategy_id stays None. Honest caveat: the live signal's
+        # only per-row input beyond the shared macro state is `sector`, so within
+        # a given regime every stock in the same sector scores identically. This
+        # Pilot is deliberately a top-down, macro+sector-driven read (as its
+        # description already states) — not a claim of stock-specific analysis.
         validation_strategy_id=None,
-    ),
-    Pilot(
-        id="volatility-edge",
-        name="Volatility Edge",
-        category="Risk",
-        description=(
-            "Times market exposure off a forward volatility forecast — leans in when "
-            "risk is cheap and de-risks hard into turbulent, fat-tailed regimes."
-        ),
-        weights={"edge_garch": 1.0},
-        long_only=False,
-        # Honest price-only GARCH/EWMA vol-timing backtest on SPY.
-        validation_strategy_id="garch_vol_target",
     ),
     Pilot(
         id="rsi-reversal",

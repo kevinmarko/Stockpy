@@ -917,6 +917,55 @@ class Settings(BaseSettings):
             "Follow modal. Not a broker constraint."
         ),
     )
+    # Master switch for the Pilots API's brokerage-credential intake endpoints
+    # (api/pilots_api.py POST /brokerage/connect, /brokerage/disconnect —
+    # see data/brokerage_credentials.py). Default False: credential intake over
+    # HTTP is a deliberate departure from this project's normal hand-edit-.env
+    # posture, so it must be explicitly opted into. Deliberately NOT in
+    # gui/env_io.py's ALLOWED_KEYS — a GUI bug must never be able to flip this
+    # on; set it by hand in .env. The endpoints are ALSO gated by
+    # FOLLOW_API_TOKEN (fail-closed command token, reused from the follow
+    # write-path) and a loopback-only check — three independent gates, not one.
+    BROKERAGE_CONNECT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables the Pilots API's brokerage-credential connect/disconnect "
+            "endpoints. Off by default; also requires FOLLOW_API_TOKEN and a "
+            "loopback (127.0.0.1) request. Never GUI-writable."
+        ),
+    )
+    # --- Pilots PWA: persisted analytics artifacts (options matrix + pairs radar) ---
+    # The options premium matrix (technical_options_engine) and pairs radar
+    # (pairs/ + signals.pairs_trading) are computed live in the Streamlit GUI but
+    # persisted nowhere, so the AST-guarded Pilots API (which must never import the
+    # heavy engines) cannot surface them. When enabled, the pipeline's
+    # StateSnapshotStep writes reporting/options_snapshot.py -> output/options_matrix.json
+    # and reporting/pairs_snapshot.py -> output/pairs.json, which the pure
+    # pilots.options / pilots.pairs readers then serve. Default OFF so fresh
+    # clones / CI are unaffected (mirrors the FORECAST_*_ENABLED opt-in convention).
+    OPTIONS_MATRIX_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, the pipeline persists the per-symbol options premium "
+            "directive matrix to output/options_matrix.json for the Pilots PWA "
+            "(GET /options, GET /symbols/{ticker}/options). Default False."
+        ),
+    )
+    PAIRS_SNAPSHOT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, the pipeline persists the cointegrated pairs radar "
+            "(ranking + current spread state) to output/pairs.json for the "
+            "Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False."
+        ),
+    )
+    PAIRS_SNAPSHOT_MAX_PAIRS: int = Field(
+        default=20,
+        description=(
+            "Maximum number of cointegrated pairs persisted to output/pairs.json "
+            "by reporting/pairs_snapshot.py (find_cointegrated_pairs max_pairs)."
+        ),
+    )
 
     # --- Multifactor signal (signals/multifactor.py) ---
     MULTIFACTOR_MICROCAP_THRESHOLD: float = Field(

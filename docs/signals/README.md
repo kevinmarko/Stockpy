@@ -29,7 +29,7 @@ loosened to force a green check.
 | Module | Weight | File | Description | Pilot | Backtest |
 |--------|--------|------|--------------|-------|----------|
 | [`macro_regime`](macro_regime.md) | 45.0 | `signals/macro_regime.py` | Rules-based macro regime gate (RISK ON / NEUTRAL / RECESSION / CREDIT EVENT) + sector rotation | Regime Navigator (`regime-navigator`) | — (macro DTO, not price-only) |
-| [`edge_garch`](edge_garch.md) | 35.0 | `signals/edge_garch.py` | Mathematical edge ratio × GJR-GARCH tail-risk vol | Volatility Edge (`volatility-edge`) | `garch_vol_target` |
+| [`edge_garch`](edge_garch.md) | 35.0 | `signals/edge_garch.py` | Mathematical edge ratio × GJR-GARCH tail-risk vol | Edge & Volatility (`edge-garch`) | `garch_vol_target` (covers the GARCH-veto half only) |
 | [`dividend_quality`](dividend_quality.md) | 25.0 | `signals/dividend_quality.py` | Dividend sustainability (payout ratio gate) | Dividend Income (`dividend-income`) | — (point-in-time fundamentals) |
 | [`rsi_extremes`](rsi_extremes.md) | 20.0 | `signals/rsi_extremes.py` | RSI-14 overbought / oversold | RSI Reversal (`rsi-reversal`) | `rsi14_extremes` |
 | [`graham_value`](graham_value.md) | 15.0 | `signals/graham_value.py` | Graham Number intrinsic value vs current price | Deep Value (`deep-value`) | — (point-in-time fundamentals) |

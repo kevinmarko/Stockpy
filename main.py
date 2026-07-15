@@ -625,10 +625,116 @@ def _build_context_extras(
             len(shared_ctx.xsec_percentile_ranks),
             len(shared_ctx.multifactor_scores),
         )
-        return {
+        extras: Dict[str, Any] = {
             "xsec_percentile_ranks": shared_ctx.xsec_percentile_ranks,
             "multifactor_scores": shared_ctx.multifactor_scores,
+            # Raw 12-1m cross-sectional return per symbol (already computed above
+            # as `xsec_return`); surfaced so the advisory path reaches parity with
+            # main_orchestrator's rich snapshot for factors.xsec_12_1m. {} when no
+            # symbol had enough history — a missing symbol degrades to NaN/null
+            # downstream, never a fabricated 0.0 (CONSTRAINT #4).
+            "xsec_12_1m": dict(xsec_return),
         }
+
+        # news_catalyst.pre_compute() (run inside run_pre_compute above) wrote
+        # per-symbol FinBERT scores onto shared_ctx.news_sentiment_scores. Empty /
+        # absent when the module didn't run (no FINNHUB_API_KEY, unregistered) — a
+        # symbol absent then degrades to null downstream, never fabricated.
+        _news = getattr(shared_ctx, "news_sentiment_scores", None)
+        if isinstance(_news, dict) and _news:
+            extras["news_sentiment"] = dict(_news)
+
+        # CoVaR proxy (portfolio-wide max pairwise |corr|). Mirrors
+        # processing_engine.calculate_technical_metrics()'s Topic-30 computation
+        # over the universe returns matrix, so the advisory path reaches parity for
+        # risk.covar_proxy. Portfolio-wide scalar (the advisory writer broadcasts it
+        # to every symbol, same as the rich path). Emitted only when ≥2 symbols have
+        # real returns AND the engine returns a non-zero value — its 0.0 no-data /
+        # error sentinel is treated as "unavailable" (null), never a fabricated 0.0
+        # (CONSTRAINT #4).
+        try:
+            from research_engine import AdvancedResearchEngine
+
+            _returns = {
+                _s: _d["Close"].pct_change(fill_method=None)
+                for _s, _d in bars_dict.items()
+                if _d is not None and not _d.empty and len(_d) >= 2
+            }
+            if len(_returns) >= 2:
+                _covar = AdvancedResearchEngine().calculate_portfolio_covar_dependency(
+                    pd.DataFrame(_returns)
+                )
+                if _covar and _covar != 0.0:
+                    extras["covar_proxy"] = float(_covar)
+        except Exception as _cov_exc:
+            logger.debug("CoVaR proxy pre-compute skipped: %s", _cov_exc)
+
+        # Per-symbol post-trade excursion (MFE / MAE / Edge Ratio / Realized
+        # Slippage) from the latest CLOSED trade in the shared TransactionsStore +
+        # the already-fetched bars. Reuses evaluation_engine.EvaluationEngine's
+        # calculate_edge_ratio and calculate_realized_slippage — the SAME two
+        # methods evaluate_portfolio() calls to populate dashboard_df's
+        # 'MFE'/'MAE'/'Edge Ratio'/'Realized Slippage' columns on the rich
+        # orchestrator path (pipeline/production_steps.py's evaluate_portfolio()
+        # call), so this is a genuine parity fix, not a different metric under the
+        # same name. NOTE: this is distinct from
+        # research_engine.AdvancedResearchEngine.calculate_realized_slippage(
+        # transactions_df) — a portfolio-wide bps scalar over a Trans-Code/Amount/
+        # Commission transactions SHEET that neither path actually threads into the
+        # dashboard's 'Realized Slippage' column (that column is overwritten by
+        # evaluate_portfolio() later in the rich pipeline) — EvaluationEngine's
+        # two-argument, per-symbol calculate_realized_slippage(entry_price,
+        # arrival_price) is the real source, and needs only entry price (from the
+        # trade record) + current price (the latest close, mirroring the rich
+        # path's `row['Price']`), both already available here.
+        # A symbol with no closed trade is omitted → NaN/null downstream (honest
+        # by construction on a fresh install, lighting up as record_trade()/
+        # Robinhood reconstruction accrue history).
+        try:
+            from engine.advisory import _get_transactions_store
+            from evaluation_engine import EvaluationEngine
+
+            _store = _get_transactions_store()
+            _ee = EvaluationEngine()
+            _excursion: Dict[str, Dict[str, float]] = {}
+            for _s, _d in bars_dict.items():
+                if _d is None or _d.empty:
+                    continue
+                try:
+                    _th = _store.get_trade_history(_s)
+                except Exception:
+                    continue
+                if _th is None or _th.empty:
+                    continue
+                _th = _th.copy()
+                _th["entry_ts"] = pd.to_datetime(_th["entry_ts"])
+                _th = _th.sort_values("entry_ts", ascending=False)
+                _latest = _th.iloc[0]
+                _exit_ts = _latest.get("exit_ts")
+                if _exit_ts is None or pd.isna(_exit_ts):
+                    continue  # only a CLOSED trade has a defined hold window
+                _entry_price = float(_latest["entry_price"])
+                _res = _ee.calculate_edge_ratio(
+                    _d, _entry_price, _latest["entry_ts"], _exit_ts
+                )
+                _arrival_price = float(_d["Close"].iloc[-1])
+                _slippage = (
+                    _ee.calculate_realized_slippage(_entry_price, _arrival_price)
+                    if (_entry_price > 0 and _arrival_price > 0)
+                    else float("nan")
+                )
+                _excursion[_s] = {
+                    "MFE": _res.get("MFE", float("nan")),
+                    "MAE": _res.get("MAE", float("nan")),
+                    "Edge Ratio": _res.get("Edge Ratio", float("nan")),
+                    "Realized Slippage": _slippage,
+                }
+            if _excursion:
+                extras["excursion"] = _excursion
+        except Exception as _exc_exc:
+            logger.debug("Excursion pre-compute skipped: %s", _exc_exc)
+
+        return extras
 
     except Exception as exc:
         logger.warning(
