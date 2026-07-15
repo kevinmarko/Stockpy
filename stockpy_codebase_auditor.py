@@ -69,6 +69,8 @@ DEFAULT_EXCLUDE_DIRS = {
     "venv",
     "env",
     ".git",
+    ".claude",  # Claude Code transient dir (agent worktrees, etc.) — never app code
+    ".worktrees",
     "__pycache__",
     "node_modules",
     "dist",
@@ -107,6 +109,10 @@ class ModuleInfo:
     rel: str
     dotted: str
     imports: Set[str] = field(default_factory=set)
+    # imports that actually execute at module import time (module-top, not inside
+    # a function/class body, not under ``if TYPE_CHECKING:``). Only these can form
+    # a *runtime* circular dependency — lazy in-function imports cannot.
+    top_level_imports: Set[str] = field(default_factory=set)
     has_module_docstring: bool = False
     functions: int = 0
     documented_functions: int = 0
@@ -189,19 +195,9 @@ _SECRET_ALLOW = re.compile(
 # ---------------------------------------------------------------------------
 # I/O-without-error-handling heuristics
 # ---------------------------------------------------------------------------
-# Calls that perform network or filesystem I/O and, per the codebase's
-# dead-letter convention (CONSTRAINT #6), should sit inside a try/except.
-_IO_CALL_PATTERN = re.compile(
-    r"\b("
-    r"requests\.(get|post|put|delete|patch)"
-    r"|urllib\.request\.urlopen|urlopen"
-    r"|yf\.(download|Ticker)"
-    r"|\.history\("
-    r"|fred\.get_series"
-    r"|\.get_series\("
-    r"|socket\.(connect|create_connection)"
-    r")"
-)
+# The unguarded-I/O check is AST-based (see StockpyAuditor._io_call_signature) —
+# it inspects real ``ast.Call`` nodes rather than matching source lines, so import
+# statements and docstring prose mentioning an I/O function are not false-flagged.
 
 # Order-execution verbs that must NOT appear outside the execution/ package
 # (mirrors tests/test_pipeline_smoke.py::TestNoOrderFunctions — the advisory
@@ -290,6 +286,7 @@ class StockpyAuditor:
 
             info.has_module_docstring = ast.get_docstring(tree) is not None
             self._walk_ast(info, tree)
+            self._collect_top_level_imports(info, tree.body)
             self._scan_source_only(info, source)
             self.modules[dotted] = info
 
@@ -334,6 +331,44 @@ class StockpyAuditor:
                 info.classes += 1
                 if ast.get_docstring(node) is not None:
                     info.documented_classes += 1
+
+    @staticmethod
+    def _is_type_checking_test(test: ast.AST) -> bool:
+        """True if an ``if`` test is ``TYPE_CHECKING`` / ``typing.TYPE_CHECKING``
+        (imports guarded by it never execute at runtime)."""
+        if isinstance(test, ast.Name):
+            return test.id == "TYPE_CHECKING"
+        if isinstance(test, ast.Attribute):
+            return test.attr == "TYPE_CHECKING"
+        return False
+
+    def _collect_top_level_imports(self, info: ModuleInfo, body: List[ast.stmt]) -> None:
+        """Collect only imports that execute at *module import time*: reachable
+        from the module body without entering a function/class body, and not under
+        ``if TYPE_CHECKING:``. Descends into module-level try/if/with/for (which do
+        run at import) so those imports still count. Lazy in-function imports and
+        type-only imports are excluded — they cannot form a runtime import cycle."""
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue  # not executed at import time
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    info.top_level_imports.add(alias.name.split(".")[0])
+                    info.top_level_imports.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and node.level == 0:
+                    info.top_level_imports.add(node.module.split(".")[0])
+                    info.top_level_imports.add(node.module)
+                    for alias in node.names:
+                        info.top_level_imports.add(f"{node.module}.{alias.name}")
+            elif isinstance(node, ast.If) and self._is_type_checking_test(node.test):
+                # TYPE_CHECKING is False at runtime — only the else branch runs.
+                self._collect_top_level_imports(info, node.orelse)
+            else:
+                for attr in ("body", "orelse", "finalbody"):
+                    sub = getattr(node, attr, None)
+                    if isinstance(sub, list):
+                        self._collect_top_level_imports(info, sub)
 
     @staticmethod
     def _is_typed(node) -> bool:
@@ -381,25 +416,30 @@ class StockpyAuditor:
 
     # -- cross-module checks ----------------------------------------------
 
-    def _resolve_local_imports(self, info: ModuleInfo) -> Set[str]:
-        """Return the set of *local* module dotted names this module imports.
-
-        Exact matches only (an import string that names a real module or package
-        ``__init__``). We deliberately do NOT expand a bare package head to every
-        submodule — that produced spurious cycles between unrelated files that
-        merely share a top-level package.
-        """
-        resolved: Set[str] = {imp for imp in info.imports if imp in self.modules}
-        resolved.discard(info.dotted)
+    def _resolve_local(self, imports: Set[str], own: str) -> Set[str]:
+        """Resolve an import-string set to local module dotted names (exact match
+        only — a bare package head is not expanded to every submodule)."""
+        resolved: Set[str] = {imp for imp in imports if imp in self.modules}
+        resolved.discard(own)
         return resolved
 
     def check_architecture(self) -> None:
-        # Build local import graph.
-        graph: Dict[str, Set[str]] = {}
+        # Two graphs, because they answer different questions:
+        #  * runtime_graph (module-top imports only) — for CYCLE detection: only an
+        #    import that executes at import time can form a *runtime* circular
+        #    dependency. Lazy in-function / TYPE_CHECKING imports cannot, so they
+        #    are excluded to avoid flagging cycles the codebase has already broken.
+        #  * usage_graph (all imports, incl. lazy) — for ORPHAN detection: a module
+        #    imported only lazily is still used, hence not orphaned.
+        runtime_graph: Dict[str, Set[str]] = {}
+        usage_graph: Dict[str, Set[str]] = {}
         for dotted, info in self.modules.items():
-            graph[dotted] = self._resolve_local_imports(info)
+            runtime_graph[dotted] = self._resolve_local(info.top_level_imports, dotted)
+            usage_graph[dotted] = self._resolve_local(info.imports, dotted)
 
-        # 1) Circular dependencies (Tarjan SCCs of size > 1, or self-loops).
+        # 1) Circular dependencies (Tarjan SCCs of size > 1, or self-loops) over
+        #    the runtime graph.
+        graph = runtime_graph
         for cycle in self._find_cycles(graph):
             pretty = " -> ".join(cycle + [cycle[0]])
             benign = self._is_package_reexport_cycle(cycle)
@@ -415,9 +455,10 @@ class StockpyAuditor:
                 "Break the cycle with a lazy (in-function) import or a shared leaf module.",
             )
 
-        # 2) Orphaned modules: imported by nobody and not an entry point.
+        # 2) Orphaned modules: imported by nobody (via ANY import, incl. lazy) and
+        #    not an entry point.
         imported_by: Dict[str, int] = defaultdict(int)
-        for deps in graph.values():
+        for deps in usage_graph.values():
             for d in deps:
                 imported_by[d] += 1
         for dotted, info in self.modules.items():
@@ -588,10 +629,15 @@ class StockpyAuditor:
     # -- error handling ---------------------------------------------------
 
     def check_error_handling(self) -> None:
-        """Flag network/file I/O calls that are not wrapped in try/except.
+        """Flag genuine network/file I/O *calls* (AST ``Call`` nodes) that are not
+        lexically inside a ``try`` body.
 
-        Uses AST so we only flag genuine calls, and we consider a call 'guarded'
-        when it lexically sits inside a Try node.
+        AST-based on purpose: a line-regex would match import statements
+        (``from urllib.request import urlopen``) and docstring prose ("used to call
+        ``ticker.history()``") — neither is a call. This only inspects real call
+        expressions. It is a LOW/advisory hint, not a defect assertion: a call not
+        guarded locally may be deliberately allowed to raise so a caller can handle
+        it (a common, correct pattern here) — the reviewer confirms.
         """
         for info in self.modules.values():
             if info.parse_error or info.rel in SELF_FILES:
@@ -600,39 +646,69 @@ class StockpyAuditor:
                 tree = ast.parse(info.path.read_text(encoding="utf-8", errors="replace"))
             except SyntaxError:
                 continue
-            guarded_lines = self._guarded_line_ranges(tree)
-            src_lines = info.path.read_text(encoding="utf-8", errors="replace").splitlines()
-            for lineno, line in enumerate(src_lines, start=1):
-                if not _IO_CALL_PATTERN.search(line):
+            guarded = self._guarded_call_nodes(tree)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
                     continue
-                if any(lo <= lineno <= hi for lo, hi in guarded_lines):
+                sig = self._io_call_signature(node.func)
+                if sig is None or id(node) in guarded:
                     continue
                 self._add(
-                    "MEDIUM", "Error Handling", "unguarded_io",
-                    "Network/file I/O call is not inside a try/except (dead-letter "
-                    "resilience, CONSTRAINT #6).",
-                    info.rel, lineno,
-                    "Wrap the call in try/except and degrade to a sentinel rather than raising.",
+                    "LOW", "Error Handling", "unguarded_io",
+                    f"I/O call `{sig}(...)` is not inside a local try/except — verify "
+                    f"it degrades to a sentinel or that a caller guards it (dead-letter "
+                    f"resilience, CONSTRAINT #6).",
+                    info.rel, getattr(node, "lineno", None),
+                    "Guard locally, or confirm the caller catches it — do not swallow errors silently.",
                 )
 
+    # Curated I/O call signatures: exact dotted funcs, bare names, and method
+    # (trailing-attribute) names that denote genuine network/file I/O.
+    _IO_DOTTED = {
+        "requests.get", "requests.post", "requests.put", "requests.delete",
+        "requests.patch", "urllib.request.urlopen", "yf.download", "yf.Ticker",
+        "socket.connect", "socket.create_connection",
+    }
+    _IO_BARE = {"urlopen"}
+    _IO_METHOD_ATTR = {"history", "get_series"}
+
+    @classmethod
+    def _io_call_signature(cls, func: ast.AST) -> Optional[str]:
+        dotted = cls._dotted_from_expr(func)
+        if dotted is None:
+            return None
+        if dotted in cls._IO_DOTTED or dotted in cls._IO_BARE:
+            return dotted
+        # method call: match on the trailing attribute (e.g. ``ticker.history``)
+        if isinstance(func, ast.Attribute) and func.attr in cls._IO_METHOD_ATTR:
+            return dotted
+        return None
+
     @staticmethod
-    def _guarded_line_ranges(tree: ast.AST) -> List[Tuple[int, int]]:
-        ranges: List[Tuple[int, int]] = []
+    def _dotted_from_expr(node: ast.AST) -> Optional[str]:
+        """Reconstruct a dotted name from a Name/Attribute chain (``a.b.c``);
+        None if the base is not a plain name (e.g. a call result or subscript)."""
+        parts: List[str] = []
+        cur = node
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+            return ".".join(reversed(parts))
+        return None
+
+    @staticmethod
+    def _guarded_call_nodes(tree: ast.AST) -> Set[int]:
+        """Return ids of every AST node lexically inside some ``try`` *body* (the
+        except/else/finally clauses are not the guarded region)."""
+        guarded: Set[int] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Try):
-                lo = node.body[0].lineno if node.body else node.lineno
-                hi = lo
-                for child in ast.walk(node):
-                    if hasattr(child, "lineno"):
-                        hi = max(hi, child.lineno)
-                # only the try-body counts as guarded (not the except/finally)
-                body_hi = lo
                 for stmt in node.body:
                     for child in ast.walk(stmt):
-                        if hasattr(child, "lineno"):
-                            body_hi = max(body_hi, child.lineno)
-                ranges.append((lo, body_hi))
-        return ranges
+                        guarded.add(id(child))
+        return guarded
 
     # -- code quality -----------------------------------------------------
 

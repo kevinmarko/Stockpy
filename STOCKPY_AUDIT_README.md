@@ -59,9 +59,17 @@ python stockpy_codebase_auditor.py --root . --fail-on HIGH
 | Severity | Category | Examples the script flags |
 |----------|----------|---------------------------|
 | 🔴 CRITICAL | Security | Hardcoded FRED key (32-hex), AWS keys, Postgres DSN with `user:pass@host`, committed private keys, `.env` not gitignored |
-| 🟠 HIGH | Architecture / Execution | Cross-package circular import, order-execution verb defined outside `execution/` (advisory-quarantine violation) |
-| 🟡 MEDIUM | Config / Robustness | Undeclared env var (read at runtime, absent from `settings.py` + `.env.example`), network/file I/O not inside try/except, fabricated-`0.0`-metric smell, parse errors |
-| 🔵 LOW | Quality | Missing module docstring, thin type-hint coverage, undocumented public API, orphaned module, benign package re-export cycle, possible scaler leakage |
+| 🟠 HIGH | Architecture / Execution | Genuine cross-package circular import (every edge a module-top import), order-execution verb defined outside `execution/` (advisory-quarantine violation) |
+| 🟡 MEDIUM | Config / Robustness | Undeclared env var (read at runtime, absent from `settings.py` + `.env.example`), fabricated-`0.0`-metric smell, parse errors |
+| 🔵 LOW | Quality | Missing module docstring, thin type-hint coverage, undocumented public API, orphaned module, benign package re-export cycle, unguarded I/O (advisory), possible scaler leakage |
+
+> **Circular-dependency accuracy.** The cycle detector builds its import graph from
+> **module-top runtime imports only** — imports inside a function body or under
+> `if TYPE_CHECKING:` are excluded, because they cannot form a *runtime* import
+> cycle. This codebase deliberately uses lazy in-function imports to break cycles
+> (per `CLAUDE.md`), so those already-broken cycles are correctly *not* flagged. A
+> cycle is HIGH only when every edge is a module-top import; a benign package
+> `__init__` re-export cycle is downgraded to LOW.
 
 Each finding carries: **severity, category, check name, message, module, line
 (when applicable), and a concrete remediation suggestion.**
@@ -70,8 +78,10 @@ Each finding carries: **severity, category, check name, message, module, line
 
 The script covers the mechanical parts of every area in `stockpy_audit_prompt.md`:
 
-- **Area 1 Architecture** — circular-dependency SCC detection (Tarjan), orphan
-  detection, with benign package/submodule re-export cycles auto-downgraded to LOW.
+- **Area 1 Architecture** — circular-dependency SCC detection (Tarjan) over the
+  **module-top runtime import graph** (lazy / `TYPE_CHECKING` imports excluded), with
+  benign package/submodule re-export cycles auto-downgraded to LOW; orphan detection
+  over the full import graph (a lazily-imported module is still "used").
 - **Area 2 Security** — regex secret scanning with an allowlist that excludes
   `os.environ`/`settings.`/`Field(...)`/fixtures/`…EXAMPLE` placeholders; `.env`
   gitignore check.
