@@ -38,15 +38,28 @@ downloads exactly the union of tickers required by the selected strategies.
 
 Honest cross-sectional scope (CONSTRAINT #4)
 --------------------------------------------
-The ``multifactor_lowvol_size`` cross-sectional adapter is intentionally
-restricted to the Low-Vol and Size factors — the only two honestly derivable
-from free, point-in-time-correct data (trailing realized vol from prices; log
-market-cap from prices × a CURRENT shares-outstanding snapshot, flagged as an
-approximation).  Value and Quality (book-to-market, earnings yield, ROE,
-operating margin) require POINT-IN-TIME historical fundamentals that yfinance's
-current-snapshot ``.info`` does not provide and no free vendor supplies.  They
-are deliberately EXCLUDED rather than fabricated — mirroring the same scope note
-in ``tests/test_validation_multifactor.py``.
+The ``multifactor_lowvol_size`` cross-sectional adapter stays restricted to the
+Low-Vol and Size factors — the only two honestly derivable from free,
+point-in-time-correct PRICE data (trailing realized vol; log market-cap from
+prices × a CURRENT shares-outstanding snapshot, flagged as an approximation).
+
+Point-in-time fundamentals (Value / Quality / Dividend Yield)
+---------------------------------------------------------------
+``dividend_yield_edgar_pit`` / ``deep_value_edgar_pit`` / ``value_quality_edgar_pit``
+use REAL point-in-time SEC EDGAR fundamentals — closing the gap the note above
+used to describe as permanently excluded. They read ONLY through
+``data.historical_store.HistoricalStore.get_fundamentals_history(ticker)`` (a
+pure DB reader; Gemini-owned per ``docs/DATA_LAYER_PLAN.md`` — never edited or
+fetched-from directly here). That table is populated by a SEPARATE,
+manually/cron-run backfill (``scripts/backfill_edgar_fundamentals.py``,
+NOT invoked by this module) — a fresh clone's ``quant_platform.db`` has no
+EDGAR rows until that backfill runs for the relevant tickers. Until then these
+three adapters honestly degrade to NaN-shaped/no-position results (never
+fabricated, never a crash — see ``tests/test_validation_edgar_pit_strategies.py``'s
+empty-store dead-letter test). Each is also an intentionally NARROWER proxy of
+its live signal module (documented in each adapter's own docstring — e.g.
+``deep_value_edgar_pit`` uses a P/B ratio directly rather than reconstructing a
+Graham Number, which would mix price vintages).
 
 Design constraints
 ------------------
@@ -55,9 +68,13 @@ Design constraints
   ``error`` key and the overall exit code is non-zero.
 * CONSTRAINT #4 — fabricated/synthetic returns are never passed to the harness;
   if the adapter cannot build valid X/y the strategy is skipped with an error.
-  No fabricated point-in-time fundamentals (see the cross-sectional scope note).
-* CONSTRAINT #7 — data fetching uses yfinance (same library as the existing
-  test harnesses in ``tests/test_validation_*.py``).  No new data providers.
+  No fabricated point-in-time fundamentals (see the sections above).
+* CONSTRAINT #7 — price/shares fetching uses yfinance (same library as the
+  existing test harnesses in ``tests/test_validation_*.py``); no new data
+  providers are added to THIS module's own fetch surface. The EDGAR-PIT
+  adapters add no new network call here — they only read the existing,
+  already-shipped internal ``HistoricalStore`` abstraction other code already
+  populates and consumes.
 """
 from __future__ import annotations
 
@@ -368,6 +385,292 @@ def _build_lowvol_size_adapter(
     return X, y, precomputed
 
 
+def _build_xsec_momentum_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Cross-sectional 12-1m momentum proxy over a multi-ticker universe.
+
+    Faithfully reimplements ``signals/cross_sectional_momentum.py``'s causal
+    12-1m formula — the SAME ``SKIP_DAYS=22`` / ``LOOKBACK_DAYS=252``
+    convention already used by ``main._build_context_extras``'s
+    ``xsec_return`` (see PR #271): ``ret[t] = close[t-SKIP_DAYS] /
+    close[t-LOOKBACK_DAYS] - 1``, the trailing-12-month return skipping the
+    most recent month (Jegadeesh-Titman 1993). No fundamentals needed —
+    unlike the EDGAR-PIT adapters below, this is a faithful reimplementation,
+    not a narrowed proxy.
+
+    LONG-ONLY top-half equal-weight book, not long-short: Pilots never place
+    short orders (broker quarantine — ``pilots/mirror.py`` only ever emits
+    BUY intents), so a long-only top-half tilt is the honest analog of "what
+    does Following this Pilot actually buy" — mirrors
+    ``_build_lowvol_size_adapter``'s own top-half-long-only construction
+    exactly. ``weights.shift(1)`` enforces no lookahead.
+    """
+    SKIP_DAYS = 22
+    LOOKBACK_DAYS = 252
+    common_index = closes.dropna(how="all").index
+
+    mom_cols: Dict[str, pd.Series] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    for ticker in closes.columns:
+        close = closes[ticker].reindex(common_index)
+        mom_cols[ticker] = close.shift(SKIP_DAYS) / close.shift(LOOKBACK_DAYS) - 1.0
+        ret_cols[ticker] = close.pct_change()
+
+    mom_df = pd.DataFrame(mom_cols)
+    rets_df = pd.DataFrame(ret_cols)
+    composite = _xsec_zscore(mom_df)
+
+    weights = composite.rank(axis=1, pct=True).ge(0.5).astype(float)
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["Momentum_12_1_Composite"] = composite.mean(axis=1).fillna(0.0)
+    y = rets_df.mean(axis=1).fillna(0.0)
+
+    # Trim the leading 12m+1m warm-up so X/y aren't dominated by NaN-zeros.
+    valid_idx = X.index[LOOKBACK_DAYS:]
+    X = X.loc[valid_idx]
+    y = y.loc[valid_idx]
+    precomputed = {
+        "XSec_Momentum_TopHalf": portfolio_returns.loc[valid_idx],
+    }
+    return X, y, precomputed
+
+
+# ---------------------------------------------------------------------------
+# SEC EDGAR point-in-time (PIT) fundamentals adapters
+#
+# Consume real PIT fundamentals via ``data.historical_store.HistoricalStore``
+# (Gemini-owned per docs/DATA_LAYER_PLAN.md — read-only here, never modified,
+# never fetched from directly; the underlying SEC EDGAR fetch/backfill lives
+# entirely in scripts/backfill_edgar_fundamentals.py). ``HistoricalStore`` is
+# a pure DB reader with no live-EDGAR fallback, so these adapters are only as
+# good as whatever's already been backfilled into quant_platform.db (see the
+# module docstring's EDGAR PIT note) — an empty store degrades honestly to
+# NaN/no-position, never a fabricated value, never a crash.
+# ---------------------------------------------------------------------------
+
+def _pit_asof_frame(
+    store: Any,
+    tickers: List[str],
+    common_index: pd.DatetimeIndex,
+) -> Dict[str, pd.DataFrame]:
+    """Forward-fill each ticker's PIT fundamentals history onto
+    ``common_index`` via ``pd.merge_asof(direction="backward")`` — the exact
+    alignment mechanism proven in
+    ``tests/test_validation_multifactor.py::test_value_quality_proxy_validation_harness_runs``.
+
+    Reads ONLY through ``HistoricalStore.get_fundamentals_history(ticker)``.
+    A ticker with no stored PIT rows yet (the EDGAR backfill hasn't reached
+    it) returns an all-NaN-columns frame for that ticker — never fabricated
+    (CONSTRAINT #4), never raises (CONSTRAINT #6).
+    """
+    out: Dict[str, pd.DataFrame] = {}
+    for ticker in tickers:
+        try:
+            hist = store.get_fundamentals_history(ticker)
+        except Exception:
+            hist = pd.DataFrame()
+        if hist is None or hist.empty:
+            out[ticker] = pd.DataFrame(index=common_index)
+            continue
+        hist = hist.copy()
+        hist["as_of"] = pd.to_datetime(hist["as_of"])
+        hist = hist.sort_values("as_of")
+        daily = pd.merge_asof(
+            pd.DataFrame(index=common_index),
+            hist,
+            left_index=True,
+            right_on="as_of",
+            direction="backward",
+        )
+        daily.index = common_index
+        out[ticker] = daily
+    return out
+
+
+def _build_dividend_yield_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Cross-sectional dividend-yield tilt over real SEC EDGAR point-in-time
+    fundamentals — the honest backtest for the ``dividend-income`` Pilot.
+
+    ``dividend_yield`` in the stored PIT row is already a ratio (trailing
+    dividends paid ÷ market cap AT the filing date —
+    ``data/edgar_fundamentals.py::compute_pit_ratios``), so it is used
+    directly — no reconstruction, no mixed-vintage risk. A ticker with no PIT
+    coverage for a date (backfill not yet run, or the fact genuinely absent
+    from the filing) degrades to NaN and drops out of that day's
+    cross-section — never fabricated (CONSTRAINT #4). No fixed warm-up trim:
+    unlike a rolling-window factor, PIT coverage doesn't monotonically
+    resolve after N days — it may legitimately stay NaN if the backfill was
+    never run for a ticker (see
+    ``tests/test_validation_edgar_pit_strategies.py``'s empty-store
+    dead-letter test).
+
+    LONG-ONLY top-half equal-weight book (same rationale as
+    ``_build_xsec_momentum_adapter`` — Pilots never short).
+    """
+    from data.historical_store import HistoricalStore
+
+    common_index = closes.dropna(how="all").index
+    store = HistoricalStore()
+    pit = _pit_asof_frame(store, list(closes.columns), common_index)
+
+    yield_cols: Dict[str, pd.Series] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    for ticker in closes.columns:
+        close = closes[ticker].reindex(common_index)
+        ret_cols[ticker] = close.pct_change()
+        daily_fund = pit.get(ticker)
+        if daily_fund is not None and "dividend_yield" in daily_fund.columns:
+            yield_cols[ticker] = pd.to_numeric(daily_fund["dividend_yield"], errors="coerce")
+        else:
+            yield_cols[ticker] = pd.Series(np.nan, index=common_index)
+
+    yield_df = pd.DataFrame(yield_cols)
+    rets_df = pd.DataFrame(ret_cols)
+    composite = _xsec_zscore(yield_df)
+
+    weights = composite.rank(axis=1, pct=True).ge(0.5).astype(float)
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["DividendYield_Composite"] = composite.mean(axis=1).fillna(0.0)
+    y = rets_df.mean(axis=1).fillna(0.0)
+
+    precomputed = {"DividendYield_TopHalf": portfolio_returns}
+    return X, y, precomputed
+
+
+def _build_deep_value_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Cross-sectional Price-to-Book "cheapness" tilt over real SEC EDGAR PIT
+    fundamentals — the honest backtest for the ``deep-value`` Pilot.
+
+    Uses ``value_score = 1 / pb_ratio`` DIRECTLY, exactly as the proven
+    ``value_z`` factor in
+    ``tests/test_validation_multifactor.py::test_value_quality_proxy_validation_harness_runs``.
+    Deliberately NOT a literal Graham Number
+    (``sqrt(22.5 * EPS * BookValuePerShare)`` vs price) reconstruction: the
+    stored ``fundamentals_history`` row carries ``pb_ratio`` (a RATIO,
+    computed against the price AT THE FILING DATE) but not book value in
+    dollars. Deriving book value as ``current_price / pb_ratio`` would divide
+    by a DIFFERENT day's price than the one the ratio was computed against —
+    a mixed-vintage bug that would silently corrupt the signal. Using the
+    ratio itself, forward-filled as a point-in-time multiple and never
+    recombined with a mismatched price, avoids this entirely and mirrors the
+    already-proven, safe pattern.
+
+    (See ``_build_dividend_yield_adapter``'s docstring for the shared PIT /
+    dead-letter / long-only-construction rationale, which applies identically
+    here.)
+    """
+    from data.historical_store import HistoricalStore
+
+    common_index = closes.dropna(how="all").index
+    store = HistoricalStore()
+    pit = _pit_asof_frame(store, list(closes.columns), common_index)
+
+    value_cols: Dict[str, pd.Series] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    for ticker in closes.columns:
+        close = closes[ticker].reindex(common_index)
+        ret_cols[ticker] = close.pct_change()
+        daily_fund = pit.get(ticker)
+        if daily_fund is not None and "pb_ratio" in daily_fund.columns:
+            pb = pd.to_numeric(daily_fund["pb_ratio"], errors="coerce")
+            value_cols[ticker] = 1.0 / pb.replace(0.0, np.nan)
+        else:
+            value_cols[ticker] = pd.Series(np.nan, index=common_index)
+
+    value_df = pd.DataFrame(value_cols)
+    rets_df = pd.DataFrame(ret_cols)
+    composite = _xsec_zscore(value_df)
+
+    weights = composite.rank(axis=1, pct=True).ge(0.5).astype(float)
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["Value_PB_Composite"] = composite.mean(axis=1).fillna(0.0)
+    y = rets_df.mean(axis=1).fillna(0.0)
+
+    precomputed = {"DeepValue_TopHalf": portfolio_returns}
+    return X, y, precomputed
+
+
+def _build_value_quality_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Cross-sectional Value(1/P-B) + Quality(ROE+OpMargin) composite over
+    real SEC EDGAR PIT fundamentals — the honest backtest for the
+    ``value-quality`` Pilot. Production port of the proven construction in
+    ``tests/test_validation_multifactor.py::test_value_quality_proxy_validation_harness_runs``
+    (``value_z = 1/pb_ratio``, ``quality_z = roe + operating_margin``,
+    equal-weighted composite).
+
+    This narrower Value+Quality proxy does not include the Graham-value or
+    dividend-quality legs of the live ``value-quality`` Pilot's full
+    three-signal blend — the same honest scope-narrowing precedent as the
+    ``multifactor`` Pilot's own ``multifactor_lowvol_size`` backtest.
+
+    (See ``_build_dividend_yield_adapter``'s docstring for the shared PIT /
+    dead-letter / long-only-construction rationale, which applies identically
+    here.)
+    """
+    from data.historical_store import HistoricalStore
+
+    common_index = closes.dropna(how="all").index
+    store = HistoricalStore()
+    pit = _pit_asof_frame(store, list(closes.columns), common_index)
+
+    value_cols: Dict[str, pd.Series] = {}
+    quality_cols: Dict[str, pd.Series] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    for ticker in closes.columns:
+        close = closes[ticker].reindex(common_index)
+        ret_cols[ticker] = close.pct_change()
+        daily_fund = pit.get(ticker)
+        if daily_fund is not None and "pb_ratio" in daily_fund.columns:
+            pb = pd.to_numeric(daily_fund["pb_ratio"], errors="coerce")
+            value_cols[ticker] = 1.0 / pb.replace(0.0, np.nan)
+            roe = pd.to_numeric(daily_fund["roe"], errors="coerce")
+            opm = pd.to_numeric(daily_fund["operating_margin"], errors="coerce")
+            quality_cols[ticker] = roe + opm
+        else:
+            value_cols[ticker] = pd.Series(np.nan, index=common_index)
+            quality_cols[ticker] = pd.Series(np.nan, index=common_index)
+
+    value_df = pd.DataFrame(value_cols)
+    quality_df = pd.DataFrame(quality_cols)
+    rets_df = pd.DataFrame(ret_cols)
+
+    val_xz = _xsec_zscore(value_df)
+    qual_xz = _xsec_zscore(quality_df)
+    composite = (val_xz + qual_xz) / 2.0
+
+    weights = composite.rank(axis=1, pct=True).ge(0.5).astype(float)
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["Value_Composite"] = val_xz.mean(axis=1).fillna(0.0)
+    X["Quality_Composite"] = qual_xz.mean(axis=1).fillna(0.0)
+    y = rets_df.mean(axis=1).fillna(0.0)
+
+    precomputed = {"ValueQuality_TopHalf": portfolio_returns}
+    return X, y, precomputed
+
+
 def _make_strategy_fn(
     precomputed: Dict[str, pd.Series],
     turnover: float = 0.01,
@@ -426,6 +729,29 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
         _build_lowvol_size_adapter,
         0.05,
         ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"],
+    ),
+    "cross_sectional_momentum": (
+        _build_xsec_momentum_adapter,
+        0.05,
+        ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"],
+    ),
+    # EDGAR PIT-based (see the module docstring's "Point-in-time fundamentals"
+    # section) — universe matches tests/fixtures/edgar_pit_fundamentals_sample.json
+    # exactly so tests/test_validation_edgar_pit_strategies.py can reuse it.
+    "dividend_yield_edgar_pit": (
+        _build_dividend_yield_adapter,
+        0.05,
+        ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"],
+    ),
+    "deep_value_edgar_pit": (
+        _build_deep_value_adapter,
+        0.05,
+        ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"],
+    ),
+    "value_quality_edgar_pit": (
+        _build_value_quality_adapter,
+        0.05,
+        ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"],
     ),
 }
 

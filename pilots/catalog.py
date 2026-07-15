@@ -31,10 +31,24 @@ honest caveats baked into the catalog below:
 
 * ``multifactor`` Pilot uses the full 4-factor ``multifactor`` signal but joins
   the ``multifactor_lowvol_size`` backtest, which validates only the Low-Vol +
-  Size factors (Value/Quality have no free point-in-time fundamentals). The
-  headline Sharpe therefore reflects the honest, narrower proxy.
-* ``cross-sectional-momentum``, the income/value single-factor Pilots, and both
-  curated blends have **no** matching validated backtest, so
+  Size factors (free point-in-time Value/Quality fundamentals didn't exist when
+  this backtest was built — see the next bullet for the fix).
+* ``dividend-income``/``deep-value``/``value-quality`` join real SEC EDGAR
+  point-in-time (PIT) fundamentals backtests (``dividend_yield_edgar_pit`` /
+  ``deep_value_edgar_pit`` / ``value_quality_edgar_pit``) — each an honest,
+  narrower single/dual-factor proxy of the live signal(s), not a literal
+  reimplementation (e.g. ``deep-value``'s backtest is a P/B "cheapness" tilt,
+  not a Graham Number reconstruction — see ``scripts/refresh_validations.py``
+  for why). Requires the EDGAR PIT backfill to have been run
+  (``scripts/backfill_edgar_fundamentals.py``); degrades to an honest
+  "insufficient data" report otherwise, never fabricated.
+* ``cross-sectional-momentum`` joins ``cross_sectional_momentum``, a faithful
+  price-only reimplementation of the live 12-1m signal (no proxy narrowing
+  needed).
+* ``balanced-blend`` (an ensemble of all 17 signal modules, several needing
+  FRED/Finnhub/a trained-ML walk-forward) and ``edge-garch`` (whose live
+  ``edge_ratio`` input depends on real closed-trade history — circular for a
+  pure-price backtest) have **no** honest single-series backtest, so
   ``validation_strategy_id=None`` (the UI shows "no backtest series yet").
 * ``coppock_momentum`` exists in ``STRATEGY_REGISTRY`` but has no corresponding
   signal module in ``SIGNAL_WEIGHTS``, so it is deliberately NOT surfaced as a
@@ -128,9 +142,9 @@ PILOTS: List[Pilot] = [
         ),
         weights={"cross_sectional_momentum": 1.0},
         long_only=False,
-        # No cross-sectional-momentum backtest in STRATEGY_REGISTRY (the two
-        # momentum entries there are time-series / Coppock, not this factor).
-        validation_strategy_id=None,
+        # Faithful price-only reimplementation of the live 12-1m signal
+        # (signals/cross_sectional_momentum.py) — no narrowing needed.
+        validation_strategy_id="cross_sectional_momentum",
     ),
     Pilot(
         id="dip-buyer",
@@ -180,8 +194,9 @@ PILOTS: List[Pilot] = [
         ),
         weights={"dividend_quality": 1.0},
         long_only=True,
-        # No income/dividend backtest exists in STRATEGY_REGISTRY.
-        validation_strategy_id=None,
+        # Single-factor cross-sectional tilt on real SEC EDGAR point-in-time
+        # dividend_yield (see scripts/refresh_validations.py's EDGAR PIT note).
+        validation_strategy_id="dividend_yield_edgar_pit",
     ),
     Pilot(
         id="deep-value",
@@ -193,8 +208,12 @@ PILOTS: List[Pilot] = [
         ),
         weights={"graham_value": 1.0},
         long_only=True,
-        # No standalone value backtest exists in STRATEGY_REGISTRY.
-        validation_strategy_id=None,
+        # A price-to-book "cheapness" tilt on real SEC EDGAR PIT fundamentals —
+        # NOT a literal Graham Number reconstruction (see
+        # scripts/refresh_validations.py's _build_deep_value_adapter docstring
+        # for why: deriving book value in dollars from a stored ratio would mix
+        # price vintages).
+        validation_strategy_id="deep_value_edgar_pit",
     ),
     Pilot(
         id="value-quality",
@@ -210,6 +229,25 @@ PILOTS: List[Pilot] = [
             "multifactor": 1.0,
         },
         long_only=True,
+        # Real SEC EDGAR PIT Value(P/B) + Quality(ROE+op margin) composite — a
+        # narrower, honest proxy of the full three-signal blend above (the same
+        # scope-narrowing precedent as the "multifactor" Pilot's own backtest).
+        validation_strategy_id="value_quality_edgar_pit",
+    ),
+    Pilot(
+        id="edge-garch",
+        name="Edge & Volatility",
+        category="Factor",
+        description=(
+            "Per-symbol statistical edge ratio combined with a GARCH tail-risk "
+            "volatility veto — rewards names with a favorable historical "
+            "risk/reward profile, penalized in high-volatility regimes."
+        ),
+        weights={"edge_garch": 1.0},
+        long_only=False,
+        # The live signal's edge_ratio input depends on real closed-trade
+        # history (evaluation_engine's post-trade MFE/MAE) — circular for a
+        # pure-price backtest, so no honest proxy exists yet.
         validation_strategy_id=None,
     ),
     Pilot(
