@@ -1605,6 +1605,474 @@ def send_test_alert(title: str = "Test Alert", message: str = "This is a test no
 
 
 # ==========================================
+# [8] ADVISORY & MARKET INTELLIGENCE (READ-ONLY)
+# ==========================================
+# All tools in this section are strictly READ-ONLY analytics wrappers over the
+# platform's advisory / options / regime / coverage engines. They NEVER place,
+# submit, or simulate any broker order (advisory-only platform). Each is
+# dead-letter safe (try/except -> error string, never raises) and returns human
+# markdown plus a compact machine-readable JSON block (real values only; NaN/None
+# serialized as null, never fabricated).
+
+
+@mcp.tool()
+def get_recommendation(symbol: str) -> str:
+    """
+    Runs the platform's PRIMARY output — the holding-aware advisory engine — for
+    one symbol and returns its BUY/SELL/HOLD recommendation, conviction, strategy,
+    suggested position %, 30-day forecast, data quality, key indicators, and the
+    full plain-English rationale. READ-ONLY: no Robinhood login, no order code.
+    """
+    import json
+    import math
+
+    try:
+        from engine.advisory import evaluate
+        from data.market_data import get_provider
+
+        sym = symbol.upper().strip()
+        # position=None, snapshot=None -> clean read-only non-held recommendation.
+        rec = evaluate(sym, position=None, market=get_provider(), snapshot=None)
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        forecast = _num(getattr(rec, "forecast", None))
+        conviction = _num(getattr(rec, "conviction", None))
+        pct = _num(getattr(rec, "suggested_position_pct", None))
+
+        lines = [f"# Advisory Recommendation — {rec.symbol}\n"]
+        lines.append(f"- **Action**: {rec.action}")
+        lines.append(f"- **Strategy**: {rec.strategy}")
+        lines.append(
+            f"- **Conviction**: {conviction:.3f}" if conviction is not None else "- **Conviction**: N/A"
+        )
+        lines.append(
+            f"- **Suggested Position %**: {pct * 100:.2f}%" if pct is not None else "- **Suggested Position %**: N/A"
+        )
+        lines.append(
+            f"- **30-Day Forecast**: ${forecast:,.2f}" if forecast is not None else "- **30-Day Forecast**: unavailable"
+        )
+        lines.append(f"- **Data Quality**: {rec.data_quality}")
+
+        ki = getattr(rec, "key_indicators", {}) or {}
+        ki_clean = {}
+        if isinstance(ki, dict) and ki:
+            lines.append("\n## Key Indicators")
+            for k, v in ki.items():
+                nv = _num(v)
+                ki_clean[k] = nv
+                lines.append(f"- **{k}**: {nv:.4f}" if nv is not None else f"- **{k}**: N/A")
+
+        lines.append("\n## Rationale")
+        lines.append(getattr(rec, "rationale", "") or "(no rationale provided)")
+
+        payload = {
+            "symbol": rec.symbol,
+            "action": rec.action,
+            "strategy": rec.strategy,
+            "conviction": conviction,
+            "suggested_position_pct": pct,
+            "forecast_30d": forecast,
+            "data_quality": rec.data_quality,
+            "key_indicators": ki_clean,
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to compute recommendation for {symbol}: {str(e)}"
+
+
+@mcp.tool()
+def get_options_directive(symbol: str) -> str:
+    """
+    Runs the premium-selling directive engine (build_premium_directive) for one
+    symbol and returns the hydrated directive — Strategy/Action, Net Premium,
+    GARCH sigma, IVR proxy, trend bias, short/long strikes + deltas, ATM Greeks —
+    plus the integrity-validator verdict. If a regime gates it to Cash/Wait, that
+    is shown honestly. READ-ONLY analytics; NaN values render as N/A. No order code.
+    """
+    import json
+    import math
+
+    try:
+        from technical_options_engine import build_premium_directive, validate_directive_integrity
+        from data.market_data import get_provider
+
+        sym = symbol.upper().strip()
+        provider = get_provider()
+
+        bars = provider.get_intraday_bars(sym)
+        if bars is None or bars.empty:
+            return f"No bar data available for {sym}; cannot build options directive."
+
+        # Spot price + staleness from the latest quote, falling back to the last
+        # bar Close when the quote is unavailable (bars still let us build sigma).
+        spot_price = None
+        is_stale = True
+        try:
+            q = provider.get_latest_quote(sym)
+            if q is not None and q.price is not None and float(q.price) > 0:
+                spot_price = float(q.price)
+                is_stale = bool(getattr(q, "is_stale", True))
+        except Exception:
+            spot_price = None
+        if spot_price is None:
+            spot_price = float(bars["Close"].iloc[-1])
+            is_stale = True
+
+        directive = build_premium_directive(
+            sym, bars, spot_price=spot_price, is_stale=is_stale
+        )
+        if not isinstance(directive, dict) or not directive:
+            return f"Options directive engine returned no result for {sym}."
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        def _fmt(key, money=False, pct=False):
+            nv = _num(directive.get(key))
+            if nv is None:
+                # Non-numeric fields (Strategy, Action, Trend_Bias) pass through raw.
+                raw = directive.get(key)
+                return str(raw) if raw not in (None, "") else "N/A"
+            if money:
+                return f"${nv:,.2f}"
+            if pct:
+                return f"{nv:.4f}"
+            return f"{nv:.4f}"
+
+        lines = [f"# Options Premium Directive — {sym}\n"]
+        lines.append(f"- **Strategy**: {directive.get('Strategy', 'N/A')}")
+        lines.append(f"- **Action**: {directive.get('Action', 'N/A')}")
+        lines.append(f"- **Trend Bias**: {directive.get('Trend_Bias', 'N/A')}")
+        lines.append(f"- **Price**: {_fmt('Price', money=True)}")
+        lines.append(f"- **Stale Quote**: {directive.get('Stale', is_stale)}")
+        lines.append(f"- **Net Premium**: {_fmt('Net_Premium', money=True)}")
+        lines.append(f"- **Realizable Daily Theta**: {_fmt('Realizable_Daily_Theta', money=True)}")
+        lines.append(f"- **Sigma (GJR-GARCH, annualized)**: {_fmt('Sigma_GARCH')}")
+        lines.append(f"- **IVR Proxy**: {_fmt('IVR_Proxy')}")
+        lines.append(f"- **Aroon Oscillator**: {_fmt('Aroon_Oscillator')}")
+        lines.append(f"- **Coppock Curve**: {_fmt('Coppock_Curve')}")
+
+        lines.append("\n## Legs")
+        lines.append(f"- **Short Strike / Delta**: {_fmt('Short_Strike', money=True)} / {_fmt('Short_Delta')}")
+        lines.append(f"- **Long Strike / Delta**: {_fmt('Long_Strike', money=True)} / {_fmt('Long_Delta')}")
+
+        lines.append("\n## ATM Greeks")
+        lines.append(f"- **Delta**: {_fmt('ATM_Delta')}")
+        lines.append(f"- **Gamma**: {_fmt('ATM_Gamma')}")
+        lines.append(f"- **Vega**: {_fmt('ATM_Vega')}")
+        lines.append(f"- **Theta (daily)**: {_fmt('ATM_Theta_Daily')}")
+
+        # Integrity validation
+        integrity = {}
+        try:
+            integrity = validate_directive_integrity(directive) or {}
+        except Exception as ie:
+            integrity = {"ok": None, "issues": [f"validator error: {ie}"]}
+        ok = integrity.get("ok")
+        issues = integrity.get("issues", []) or []
+        lines.append("\n## Integrity")
+        lines.append(f"- **OK**: {ok}")
+        if issues:
+            for iss in issues:
+                lines.append(f"  - {iss}")
+        else:
+            lines.append("  - (no issues)")
+
+        payload = {
+            "symbol": sym,
+            "strategy": directive.get("Strategy"),
+            "action": directive.get("Action"),
+            "trend_bias": directive.get("Trend_Bias"),
+            "price": _num(directive.get("Price")),
+            "net_premium": _num(directive.get("Net_Premium")),
+            "realizable_daily_theta": _num(directive.get("Realizable_Daily_Theta")),
+            "sigma_garch": _num(directive.get("Sigma_GARCH")),
+            "ivr_proxy": _num(directive.get("IVR_Proxy")),
+            "short_strike": _num(directive.get("Short_Strike")),
+            "short_delta": _num(directive.get("Short_Delta")),
+            "long_strike": _num(directive.get("Long_Strike")),
+            "long_delta": _num(directive.get("Long_Delta")),
+            "atm_delta": _num(directive.get("ATM_Delta")),
+            "atm_gamma": _num(directive.get("ATM_Gamma")),
+            "atm_vega": _num(directive.get("ATM_Vega")),
+            "atm_theta_daily": _num(directive.get("ATM_Theta_Daily")),
+            "integrity_ok": ok,
+            "integrity_issues": list(issues),
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to build options directive for {symbol}: {str(e)}"
+
+
+@mcp.tool()
+def get_regime_status() -> str:
+    """
+    Reports the current macro regime, VIX, recession telemetry (Sahm Rule, HY OAS,
+    yield curve), HMM risk-on probability, macro-regime-gate state, and the global
+    kill-switch state — WITHOUT a live FRED call, by reading the persisted
+    output/state_snapshot.json. Missing values render as "unavailable" and are
+    never fabricated. READ-ONLY.
+    """
+    import json
+    import math
+    import os
+
+    try:
+        # Resolve the snapshot path via settings.OUTPUT_DIR when possible.
+        snap_path = None
+        try:
+            from settings import settings as _settings
+            snap_path = os.path.join(str(_settings.OUTPUT_DIR), "state_snapshot.json")
+        except Exception:
+            snap_path = os.path.join("output", "state_snapshot.json")
+
+        snap = None
+        if snap_path and os.path.exists(snap_path):
+            try:
+                with open(snap_path, "r", encoding="utf-8") as fh:
+                    snap = json.load(fh)
+            except Exception:
+                snap = None
+
+        # Kill switch — checked live (cheap file-existence probe, no engine work).
+        kill_active = None
+        try:
+            from execution.kill_switch import GlobalKillSwitch
+            kill_active = bool(GlobalKillSwitch().is_active())
+        except Exception:
+            kill_active = None
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        def _badge_vix(v):
+            if v is None:
+                return "unavailable"
+            if v > 30:
+                return f"🔴 {v:.2f} (elevated)"
+            if v > 20:
+                return f"🟡 {v:.2f}"
+            return f"🟢 {v:.2f}"
+
+        def _badge_sahm(v):
+            if v is None:
+                return "unavailable"
+            if v >= 0.5:
+                return f"🔴 {v:.2f} (recession trigger)"
+            if v >= 0.3:
+                return f"🟡 {v:.2f}"
+            return f"🟢 {v:.2f}"
+
+        def _badge_oas(v):
+            if v is None:
+                return "unavailable"
+            if v > 6:
+                return f"🔴 {v:.2f}% (credit stress)"
+            if v > 4:
+                return f"🟡 {v:.2f}%"
+            return f"🟢 {v:.2f}%"
+
+        def _badge_hmm(v):
+            if v is None:
+                return "unavailable (HMM did not run)"
+            if v < 0.3:
+                return f"🔴 {v * 100:.1f}% risk-on"
+            if v < 0.6:
+                return f"🟡 {v * 100:.1f}% risk-on"
+            return f"🟢 {v * 100:.1f}% risk-on"
+
+        lines = ["# Macro Regime & Risk Status\n"]
+
+        if snap is None:
+            lines.append(
+                "_State snapshot unavailable — run the pipeline (`main.py` / "
+                "`main_orchestrator.py`) to generate `output/state_snapshot.json`._\n"
+            )
+            regime = None
+            vix = sahm = oas = ycurve = hmm = None
+            gate = None
+        else:
+            regime = snap.get("market_regime") or snap.get("regime")
+            vix = _num(snap.get("vix"))
+            sahm = _num(snap.get("sahm_rule"))
+            oas = _num(snap.get("high_yield_oas"))
+            ycurve = _num(snap.get("yield_curve"))
+            hmm = _num(snap.get("hmm_risk_on_probability"))
+            gate = snap.get("macro_regime_gate_enabled")
+            ts = snap.get("timestamp", "unknown")
+            lines.append(f"_Snapshot timestamp: {ts}_\n")
+            lines.append(f"- **Market Regime**: {regime or 'unavailable'}")
+            lines.append(f"- **VIX**: {_badge_vix(vix)}")
+            lines.append(f"- **Sahm Rule**: {_badge_sahm(sahm)}")
+            lines.append(f"- **High-Yield OAS**: {_badge_oas(oas)}")
+            lines.append(
+                f"- **Yield Curve (10Y-2Y)**: {ycurve:.2f}" if ycurve is not None else "- **Yield Curve (10Y-2Y)**: unavailable"
+            )
+            lines.append(f"- **HMM Risk-On Probability**: {_badge_hmm(hmm)}")
+            lines.append(
+                f"- **Macro Regime Gate**: {'🟢 ENABLED' if gate else '🔴 DISABLED' if gate is not None else 'unavailable'}"
+            )
+
+        lines.append(
+            f"- **Global Kill Switch**: "
+            + ("🔴 ACTIVE" if kill_active else "🟢 inactive" if kill_active is not None else "unavailable")
+        )
+
+        payload = {
+            "snapshot_available": snap is not None,
+            "market_regime": (snap.get("market_regime") or snap.get("regime")) if snap else None,
+            "vix": _num(snap.get("vix")) if snap else None,
+            "sahm_rule": _num(snap.get("sahm_rule")) if snap else None,
+            "high_yield_oas": _num(snap.get("high_yield_oas")) if snap else None,
+            "yield_curve": _num(snap.get("yield_curve")) if snap else None,
+            "hmm_risk_on_probability": _num(snap.get("hmm_risk_on_probability")) if snap else None,
+            "macro_regime_gate_enabled": snap.get("macro_regime_gate_enabled") if snap else None,
+            "kill_switch_active": kill_active,
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to read regime status: {str(e)}"
+
+
+@mcp.tool()
+def get_portfolio_coverage() -> str:
+    """
+    Reports the portfolio/watchlist coverage report (holdings ∪ watchlists) with
+    each symbol's CoverageStatus (FULL/STALE/QUOTES_ONLY/EQUITY_ONLY/UNCOVERED),
+    cost-basis delta, and forecast availability. Tries a cached Robinhood account
+    snapshot first (no forced login); degrades to snapshot=None when unavailable.
+    READ-ONLY analytics; no order code; dead-letter safe.
+    """
+    import json
+    import math
+
+    try:
+        from data.portfolio_sync import build_sync_report, CoverageStatus  # noqa: F401
+
+        # Try a cached account snapshot WITHOUT forcing a live Robinhood login.
+        snapshot = None
+        snapshot_note = "no account snapshot (holdings excluded)"
+        try:
+            from data.robinhood_portfolio import fetch_account_snapshot
+            snapshot = fetch_account_snapshot()
+            snapshot_note = "account snapshot loaded"
+        except Exception as se:
+            snapshot = None
+            snapshot_note = f"account snapshot unavailable ({type(se).__name__})"
+
+        report = build_sync_report(snapshot, probe_market=True)
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        symbols = getattr(report, "symbols", {}) or {}
+        lines = ["# Portfolio & Watchlist Coverage\n"]
+        lines.append(f"_{snapshot_note}._\n")
+        lines.append(f"- **Provider Source**: {getattr(report, 'provider_source', 'N/A')}")
+        lines.append(f"- **Fundamentals Source**: {getattr(report, 'fundamentals_source', 'N/A')}")
+        lines.append(f"- **Total Symbols**: {getattr(report, 'n_total', len(symbols))}")
+        lines.append(f"- **Full**: {getattr(report, 'n_full', 0)}  |  "
+                     f"**Equity-Only**: {getattr(report, 'n_equity_only', 0)}  |  "
+                     f"**Uncovered**: {getattr(report, 'n_uncovered', 0)}\n")
+
+        rows = []
+        json_symbols = []
+        for sym in sorted(symbols.keys()):
+            st = symbols[sym]
+            coverage = getattr(getattr(st, "coverage", None), "value", None) or str(getattr(st, "coverage", ""))
+            delta = _num(getattr(st, "cost_basis_delta_per_share", None))
+            price = _num(getattr(st, "current_price", None))
+            held = bool(getattr(st, "held", False))
+            fc = bool(getattr(st, "forecast_available", False))
+            rows.append(
+                "| {sym} | {cov} | {held} | {price} | {delta} | {fc} |".format(
+                    sym=sym,
+                    cov=coverage,
+                    held="✅" if held else "",
+                    price=f"${price:,.2f}" if price is not None else "N/A",
+                    delta=f"{delta:+,.2f}" if delta is not None else "N/A",
+                    fc="✅" if fc else "",
+                )
+            )
+            json_symbols.append({
+                "symbol": sym,
+                "coverage": coverage,
+                "held": held,
+                "current_price": price,
+                "cost_basis_delta_per_share": delta,
+                "forecast_available": fc,
+                "diagnostic": getattr(st, "diagnostic", "") or "",
+            })
+
+        if rows:
+            lines.append("| Symbol | Coverage | Held | Price | Δ/Share | Forecast |")
+            lines.append("|--------|----------|------|-------|---------|----------|")
+            lines.extend(rows)
+        else:
+            lines.append("_No symbols in the tracked universe (no holdings or watchlists found)._")
+
+        # Coverage-gap callout
+        gaps = [s for s in json_symbols if s["coverage"] in ("uncovered", "equity_only")]
+        if gaps:
+            lines.append("\n## Coverage Gaps")
+            for g in gaps:
+                note = f" — {g['diagnostic']}" if g["diagnostic"] else ""
+                lines.append(f"- **{g['symbol']}** ({g['coverage']}){note}")
+
+        payload = {
+            "snapshot_loaded": snapshot is not None,
+            "provider_source": getattr(report, "provider_source", None),
+            "fundamentals_source": getattr(report, "fundamentals_source", None),
+            "n_total": getattr(report, "n_total", len(symbols)),
+            "n_full": getattr(report, "n_full", 0),
+            "n_equity_only": getattr(report, "n_equity_only", 0),
+            "n_uncovered": getattr(report, "n_uncovered", 0),
+            "symbols": json_symbols,
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to build portfolio coverage report: {str(e)}"
+
+
+# ==========================================
 # [7] SERVER EXECUTION
 # ==========================================
 
