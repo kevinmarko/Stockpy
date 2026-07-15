@@ -918,7 +918,7 @@ def _forecast_skill_rows(
                 rmse_by_cell = {}
 
         # ── 2. ONE ForecastTracker for pending/completed/weights ─────────────
-        tracker = ForecastTracker()
+        tracker = ForecastTracker(db_path=db_path)
 
         rows: List[Dict[str, Any]] = []
         any_history = False

@@ -219,10 +219,15 @@ class TestMultimodalNetworkException:
 
 class TestMissingSDK:
     def test_missing_sdk_returns_none(self):
-        # Remove fake SDK before importing GeminiProvider — the ImportError
-        # branch in __init__ sets _client=None; the call is silently inert.
-        sys.modules.pop("google.genai", None)
-        sys.modules.pop("google", None)
+        # Force ImportError for `from google import genai` regardless of
+        # whether the real google-genai package is actually installed
+        # (requirements.txt now requires it unconditionally): setting a
+        # sys.modules entry to None — not just popping it — makes Python's
+        # import system raise ModuleNotFoundError immediately rather than
+        # falling through to a real on-disk package. The autouse fixture's
+        # teardown restores whatever was there before regardless.
+        sys.modules["google.genai"] = None
+        sys.modules["google"] = None
         sys.modules.pop("llm.providers", None)
         from llm.providers import GeminiProvider
 
