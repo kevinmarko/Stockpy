@@ -40,7 +40,8 @@ automatically.
 | — | Mirror force-exit of dropped names via per-follow attribution | `pilots/mirror.py`, `pilots/follows_store.py` | #257 |
 | — | Symbol detail pages (`/symbol/:ticker`) — per-symbol snapshot view + the reverse "which Pilots hold this" cross-link; tappable holding/position rows | `pilots/symbols.py`, `api/pilots_api.py` (`GET /symbols/{ticker}`), `webapp/src/screens/SymbolDetail.tsx` | #270 |
 | — | Finish SymbolDetail data — advisory-path snapshot parity (xsec_12_1m, xsec_momentum_rank, macro_status, news_sentiment, CoVaR proxy, MFE/MAE/edge ratio/realized slippage now threaded onto `Recommendation.key_indicators` so the advisory writer matches the rich orchestrator writer) | `main.py` (`_build_context_extras`), `engine/advisory.py`, `reporting/state_snapshot.py` | #271 |
-| — | Onboarding "Connect Robinhood" — local, single-operator credential intake (verify-before-persist, three independent gates: `BROKERAGE_CONNECT_ENABLED`, `FOLLOW_API_TOKEN`, loopback-only) | `data/brokerage_credentials.py`, `data/robinhood_portfolio.py` (`verify_credentials`), `api/pilots_api.py` (`/brokerage/status`, `/brokerage/connect`, `/brokerage/disconnect`), `webapp/src/screens/Onboarding.tsx` | this PR |
+| — | Onboarding "Connect Robinhood" — local, single-operator credential intake (verify-before-persist, three independent gates: `BROKERAGE_CONNECT_ENABLED`, `FOLLOW_API_TOKEN`, loopback-only) | `data/brokerage_credentials.py`, `data/robinhood_portfolio.py` (`verify_credentials`), `api/pilots_api.py` (`/brokerage/status`, `/brokerage/connect`, `/brokerage/disconnect`), `webapp/src/screens/Onboarding.tsx` | #272 |
+| — | Expand the catalog — new `edge-garch` Pilot (the highest-weighted genuinely per-symbol orphan signal not already covered by a Pilot) + honest backtests for 4 previously curve-less Pilots (`cross-sectional-momentum` price-only; `dividend-income`/`deep-value`/`value-quality` via a first-time production wiring of the existing SEC EDGAR point-in-time fundamentals mechanism). 8/10 Pilots now backed by a real validation report, up from 4/9. | `pilots/catalog.py`, `scripts/refresh_validations.py` (4 new adapters + `_pit_asof_frame` helper) | this PR |
 
 > **Full parity achieved.** Every SymbolDetail field the rich orchestrator writer
 > emits now has a real source on the advisory path too — including `risk.realized_slippage`,
@@ -55,6 +56,31 @@ automatically.
 > wired from the SAME per-symbol closed-trade lookup, null until that symbol has a closed
 > trade (honest by construction). MFE/MAE/Edge Ratio/Realized Slippage light up as trade
 > history accrues; news_sentiment needs `FINNHUB_API_KEY`.
+
+> **Catalog expansion — why `macro_regime` didn't get a Pilot.** Of the platform's two
+> highest-weighted "orphan" signals (no dedicated Pilot, only riding inside `balanced-blend`),
+> only `edge_garch` (weight 35) got one. `macro_regime` (weight 45, `signals/macro_regime.py`)
+> was investigated and rejected: its only per-row input is `sector` — every stock sharing a
+> sector gets the IDENTICAL score in a given macro regime, so a standalone Pilot built from it
+> would recommend a whole sector's names with the exact same "reasoning," misrepresenting
+> "why this stock" (against the spirit of honesty — CONSTRAINT #4). `edge_garch` IS genuinely
+> per-symbol (real `edge_ratio` + `garch_vol` per ticker).
+>
+> **EDGAR PIT production wiring.** `dividend-income`/`deep-value`/`value-quality`'s backtests
+> read real SEC EDGAR point-in-time fundamentals via `data.historical_store.HistoricalStore
+> .get_fundamentals_history()` — read-only, never touching `data/edgar_fundamentals.py`,
+> `data/historical_store.py`, or `scripts/backfill_edgar_fundamentals.py` (Gemini-owned per
+> `docs/DATA_LAYER_PLAN.md`). That store is a pure DB reader with no live-EDGAR fallback: a
+> fresh clone's `quant_platform.db` has zero EDGAR rows until an operator runs
+> `python scripts/backfill_edgar_fundamentals.py --tickers AAPL,JNJ,XOM,KO,JPM,PG,INTC,T,GE,F`
+> (a real, rate-limited SEC network operation, not run automatically by any pipeline). Until
+> then these three backtests honestly degrade to NaN-shaped/no-position reports — never
+> fabricated, never crash (tested explicitly against a genuinely empty store).
+>
+> **What stays curve-less, on purpose.** `balanced-blend` (17 signals, several needing
+> FRED/Finnhub/a trained-ML walk-forward — out of scope per CONSTRAINT #7) and the new
+> `edge-garch` (its live `edge_ratio` input depends on real closed-trade history — circular
+> for a pure-price backtest, no honest proxy designed yet).
 
 ## Hardening (post-Phase-3) — the core ships; this is the "declared done too early" layer
 
