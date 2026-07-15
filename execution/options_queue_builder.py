@@ -1,3 +1,5 @@
+"""Tier 8 gated, dry-run OPTIONS execution-queue builder — the seam between the headless pipeline and the Robinhood Trading MCP for multi-leg option intents. Sources premium-selling directives, keeps only gate-passing ones, screens each through PreTradeRiskGate + GlobalKillSwitch in dry-run, and writes output/options_execution_queue.json. Never contacts a broker; allow_place is structurally False outside live mode."""
+
 # =============================================================================
 # MODULE: OPTIONS EXECUTION QUEUE BUILDER  (Tier 8 — Robinhood options bridge)
 # File: execution/options_queue_builder.py

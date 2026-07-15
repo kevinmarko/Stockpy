@@ -1,3 +1,5 @@
+"""InvestYo MCP Server — a FastMCP server exposing the platform's read + analytics surface (tools, resources, and a prompt template) to an AI client such as Claude Desktop. Advisory-only: it exposes no order-submission code (execute_paper_trade writes only to the paper TransactionsStore). Runs over stdio locally or SSE for cloud deployment."""
+
 import os
 import re
 import sys

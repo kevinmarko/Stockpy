@@ -1,3 +1,5 @@
+"""Async master orchestrator. Runs the full cycle: concurrent data fetch, run_pipeline (macro -> options -> processing -> forecasting -> strategy), schema validation, HTML report + Plotly chart, JSON payload, and gated broker execution (only when Alpaca credentials are configured). Supports engine reuse via EngineContext, a heartbeat watchdog, and hot-path parallelization; raises PipelineFatalError (not sys.exit) on a fatal cycle so a long-lived daemon caller survives a crashed cycle."""
+
 # =============================================================================
 # MODULE: MASTER ORCHESTRATOR
 # File: main_orchestrator.py

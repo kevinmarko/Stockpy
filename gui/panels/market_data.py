@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Market Data tab. Displays the active market-data provider, quote/bar freshness and staleness, and in-process cache state via the data.market_data CompositeProvider."""
+
 from __future__ import annotations
 
 from __future__ import annotations

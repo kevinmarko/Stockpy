@@ -1,3 +1,5 @@
+"""Strategy performance evaluation. Provides calibration_curve (conviction vs. realized win rate from closed trades) and calculate_equity_curve_metrics (Sharpe, Calmar, max drawdown, max-DD duration, CAGR) from an account equity curve, plus portfolio heat / edge / attribution helpers. Undefined statistics degrade to NaN, never a fabricated 0.0."""
+
 # =============================================================================
 # MODULE: EVALUATION ENGINE
 # File: evaluation_engine.py

@@ -1,3 +1,5 @@
+"""Centralized, environment-driven runtime configuration for the InvestYo Quant Platform. All secrets, financial constants, feature flags, and machine-specific paths are sourced here via pydantic-settings (environment / .env) instead of being hardcoded across the engines and orchestrators."""
+
 # =============================================================================
 # MODULE: RUNTIME CONFIGURATION
 # File: settings.py
@@ -406,6 +408,36 @@ class Settings(BaseSettings):
             "Only applies to callers that opt in via dedup_key; omitting it "
             "reproduces the pre-dedup always-fires behavior exactly."
         ),
+    )
+    # --- alerting_mcp/notifier.py (the standalone MCP push-notifier) --------
+    # These are read via os.getenv() inside alerting_mcp/notifier.py, which is a
+    # separate subsystem from observability/alerts.py above (note the distinct
+    # ALERT_EMAIL_SMTP_* names vs. ALERT_SMTP_* used by observability/alerts.py).
+    # Declared here for discoverability/consistency; the notifier keeps reading
+    # os.getenv directly so it stays importable without a full Settings() load.
+    ALERT_NTFY_TOPIC: Optional[str] = Field(
+        default=None,
+        description="ntfy.sh topic for alerting_mcp push notifications. Unset = ntfy channel disabled.",
+    )
+    ALERT_EMAIL_SMTP_HOST: Optional[str] = Field(
+        default=None,
+        description="SMTP hostname for alerting_mcp email alerts (e.g. smtp.gmail.com).",
+    )
+    ALERT_EMAIL_SMTP_PORT: int = Field(
+        default=587,
+        description="SMTP port for alerting_mcp email alerts (587 = STARTTLS).",
+    )
+    ALERT_EMAIL_SMTP_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="SMTP app-password for alerting_mcp email alerts. Secret; unset = email channel disabled.",
+    )
+    ALERT_SLACK_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Slack incoming-webhook URL for alerting_mcp Slack alerts. Secret; unset = Slack channel disabled.",
+    )
+    ALERT_CHANNELS: Optional[str] = Field(
+        default=None,
+        description="Comma-separated active alerting_mcp channels (e.g. 'ntfy,email,slack'). Unset defaults to 'ntfy'.",
     )
     DASHBOARD_REFRESH_SECONDS: int = Field(
         default=1800, description="Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min."

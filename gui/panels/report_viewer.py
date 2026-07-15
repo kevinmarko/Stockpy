@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Report Viewer tab. Surfaces evaluation-engine analytics (portfolio heat / edge / Brinson-Fachler attribution), LLM commentary, and report export/download."""
+
 from __future__ import annotations
 
 from __future__ import annotations

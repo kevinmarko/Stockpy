@@ -1,3 +1,5 @@
+"""Options-specific technical metrics (IV rank, GJR-GARCH volatility, options IV edge) plus the build_premium_directive helper that fuses GARCH sigma, an IVR proxy, Aroon+Coppock trend bias, ATM Black-Scholes Greeks, and a deterministic strategy directive into one hydrated row, and validate_directive_integrity which enforces the strike-grid and delta-target invariants. Uncomputable primitives degrade to NaN, never fabricated zeros."""
+
 # ==============================================================================
 # MODULE: TECHNICAL INDICATORS & OPTIONS STRATEGY ENGINE
 # File: technical_options_engine.py

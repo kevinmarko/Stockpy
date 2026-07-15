@@ -1,3 +1,5 @@
+"""Tier 8 gated, dry-run EQUITY execution-queue builder (Robinhood MCP bridge). Emits output/execution_queue.json for a Claude Code agent to consume, gating each OrderIntent through PreTradeRiskGate + GlobalKillSwitch in dry-run. Writes nothing in 'off' mode; allow_place is structurally False unless mode=='live' AND the gate passes AND the kill switch is clear AND a notional cap is set. Never contacts a broker."""
+
 # =============================================================================
 # MODULE: EXECUTION QUEUE BUILDER  (Tier 8 — Robinhood execution bridge)
 # File: execution/queue_builder.py

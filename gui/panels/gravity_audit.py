@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Gravity Audit Logs tab. Runs the Gravity AI Review Suite as a subprocess, parses the trailing JSON verdict, and renders per-step pass/fail status for the strategy-verification audit."""
+
 from __future__ import annotations
 
 from __future__ import annotations

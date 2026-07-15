@@ -1,3 +1,5 @@
+"""Single Source of Truth (SSOT) for the platform's tabular schema. COLUMN_SCHEMA defines every dashboard column's Google Sheets header, internal dict key, and display format, and this module derives the Pandera validation schemas plus header/internal-key accessors from it. Any new field must be added here first before use elsewhere."""
+
 # ==============================================================================
 # MODULE: CONFIGURATION & SCHEMA REGISTRY
 # File: config.py
@@ -198,15 +200,15 @@ COLUMN_SCHEMA = [
     {"header": "Advisory Data Quality", "key": "Advisory_Data_Quality", "format": "string"},
 ]
 
-def get_headers():
+def get_headers() -> list[str]:
     """Returns list of display headers for gspread/Google Sheets."""
     return [col["header"] for col in COLUMN_SCHEMA]
 
-def get_internal_keys():
+def get_internal_keys() -> list[str]:
     """Returns list of internal dictionary keys for DataFrame construction."""
     return [col["key"] for col in COLUMN_SCHEMA]
 
-def get_rename_mapping():
+def get_rename_mapping() -> dict[str, str]:
     """Returns dict mapping internal keys to external headers."""
     return {col["key"]: col["header"] for col in COLUMN_SCHEMA}
 
@@ -245,7 +247,7 @@ DashboardSchema = pa.DataFrameSchema(
 
 class Config:
     @staticmethod
-    def validate_config():
+    def validate_config() -> None:
         """Validates that keys and headers in COLUMN_SCHEMA are unique and consistent."""
         keys = [c["key"] for c in COLUMN_SCHEMA]
         headers = [c["header"] for c in COLUMN_SCHEMA]

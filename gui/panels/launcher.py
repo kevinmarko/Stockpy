@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Launcher & Orchestration tab. Triggers a pipeline run (subprocess or persistent-daemon fast path), shows a live 0-100% progress bar, and tails the run log / heartbeat / stage status."""
+
 from __future__ import annotations
 
 from __future__ import annotations

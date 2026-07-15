@@ -1,3 +1,5 @@
+"""CLI script to backfill historical ATM implied volatilities into the iv_history table, seeding the lookahead-free IV-rank / VRP computations in volatility/iv_engine.py."""
+
 import os
 import argparse
 import logging

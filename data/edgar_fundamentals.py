@@ -1,3 +1,5 @@
+"""SEC EDGAR fundamentals fetcher. Resolves a ticker to its CIK via the SEC company-tickers file and pulls XBRL company facts from data.sec.gov, with polite request throttling (~10 req/s) and a compliant User-Agent, to supply point-in-time historical fundamentals for backfill."""
+
 import json
 import logging
 import time

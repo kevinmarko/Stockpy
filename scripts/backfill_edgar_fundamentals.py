@@ -1,3 +1,5 @@
+"""CLI backfill script that pulls point-in-time historical fundamentals from SEC EDGAR (via data/edgar_fundamentals.py) for a ticker universe and persists them into the HistoricalStore fundamentals history."""
+
 import argparse
 import logging
 from datetime import datetime

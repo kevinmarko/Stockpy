@@ -1,3 +1,5 @@
+"""InvestYo Command Center — AI Insights tab. Surfaces the LLM analytics layer: an Opal research brief (OpenAI), a per-symbol Claude analyst note, Gemini chart vision, and a rolling-beta chart — each gated behind its own capability master switch and run on demand."""
+
 from __future__ import annotations
 
 from __future__ import annotations

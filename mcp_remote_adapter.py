@@ -1,3 +1,5 @@
+"""Stdio proxy that bridges a local MCP client to the InvestYo MCP server running on a remote GCP VM. Opens an SSH session (cd /opt/investyo so pydantic can read .env) and pipes stdin/stdout/stderr transparently to the remote server process."""
+
 import subprocess
 import sys
 import os

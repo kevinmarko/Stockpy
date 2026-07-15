@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Help tab. Renders a searchable glossary, an onboarding tour, and per-tab descriptions sourced from gui/help_content.py."""
+
 from __future__ import annotations
 
 from __future__ import annotations

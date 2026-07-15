@@ -1,3 +1,5 @@
+"""ADVISORY ONLY: derives two actionable trading abilities — conviction-momentum (building/fading trajectory alerts) and stop/target proximity for held positions — from the current cycle's RunResult recommendations and Robinhood account snapshot, emitting debounced TradeAlerts through the ntfy channel. No order code; every update_/detect_ function is pure and lookahead-free."""
+
 # =============================================================================
 # MODULE: TRADE SIGNALS  (two advisory trading abilities — ADVISORY ONLY)
 # File: engine/trade_signals.py

@@ -1,3 +1,5 @@
+"""Vectorized fundamental valuations (Graham Number, Gordon Fair Value) and technical indicators (RSI, MACD, Aroon, ATR, SMA, rolling beta, multifactor raw inputs). All math is expressed as pandas/numpy vector operations (no per-row loops) and is verified lookahead-free; fundamentals are optionally served from the HistoricalStore cache."""
+
 # =============================================================================
 # MODULE: COMPUTATIONAL CORE
 # File: processing_engine.py

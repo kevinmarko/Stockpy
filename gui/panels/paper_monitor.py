@@ -1,3 +1,5 @@
+"""InvestYo Command Center — Paper-Trading Monitor tab. Compares the live Robinhood account snapshot (source of truth for account state) against the pipeline's projected signals, with each value source-labeled."""
+
 from __future__ import annotations
 
 from __future__ import annotations

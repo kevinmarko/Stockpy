@@ -1,3 +1,5 @@
+"""ADVISORY ONLY autonomous advisory-loop policy: decides WHEN to re-run the advisory pipeline (adaptive cadence from market hours / macro regime / VIX / errors) and WHICH high-conviction backlog items to re-ping, with persistent AgentState round-tripped to disk. Contains no order-submission or broker code; all compute_* functions are pure and lookahead-free."""
+
 # =============================================================================
 # MODULE: ADVISORY AGENT  (autonomous advisory loop policy — ADVISORY ONLY)
 # File: engine/advisory_agent.py
