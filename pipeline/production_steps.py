@@ -983,6 +983,28 @@ class StateSnapshotStep(PipelineStep):
 
         _write_state_snapshot(ctx.macro_raw, ctx.dashboard_df, ctx.symbols)
 
+        # Persist the optional Pilots-PWA analytics artifacts (options premium
+        # matrix + pairs radar). Both are opt-in (settings.*_ENABLED, default
+        # False) and dead-letter-guarded: a failure here NEVER affects the
+        # pipeline (CONSTRAINT #6). Heavy engine imports live in reporting/*,
+        # never in the AST-guarded api/pilots_api.py.
+        try:
+            from reporting.options_snapshot import write_options_matrix
+
+            write_options_matrix(
+                ctx.symbols,
+                vix=float(ctx.macro_raw.get("VIXCLS", 0.0) or 0.0),
+                market_regime=str(ctx.macro_raw.get("market_regime", "RISK ON")),
+            )
+        except Exception as opt_err:  # noqa: BLE001
+            telemetry.warning(f"Options matrix snapshot skipped: {opt_err}")
+        try:
+            from reporting.pairs_snapshot import write_pairs_snapshot
+
+            write_pairs_snapshot(ctx.symbols)
+        except Exception as pairs_err:  # noqa: BLE001
+            telemetry.warning(f"Pairs radar snapshot skipped: {pairs_err}")
+
         # Jinja HTML report
         try:
             portfolio_dicts = ctx.dashboard_df.to_dict(orient="records")

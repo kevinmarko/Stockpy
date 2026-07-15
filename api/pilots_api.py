@@ -80,7 +80,18 @@ from pydantic import BaseModel, Field
 from settings import settings
 
 # Pilot layer (pure, persisted-state readers) + the gated follow write-path.
-from pilots import catalog, performance, scoring, symbols
+from pilots import (
+    alerts_feed,
+    catalog,
+    forecast_skill,
+    models,
+    options,
+    pairs,
+    performance,
+    realized,
+    scoring,
+    symbols,
+)
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
 
@@ -233,6 +244,16 @@ def _snapshot_path() -> str:
 def _history_dir() -> str:
     """Resolve the rotated-snapshot history dir from live settings per call."""
     return str(settings.OUTPUT_DIR / "history")
+
+
+def _options_matrix_path() -> str:
+    """Resolve ``output/options_matrix.json`` from live settings per call."""
+    return str(settings.OUTPUT_DIR / "options_matrix.json")
+
+
+def _pairs_snapshot_path() -> str:
+    """Resolve ``output/pairs.json`` from live settings per call."""
+    return str(settings.OUTPUT_DIR / "pairs.json")
 
 
 def _reports_dir() -> Optional[str]:
@@ -497,6 +518,42 @@ def get_symbol_detail(ticker: str) -> Any:
     return detail
 
 
+@app.get("/symbols/{ticker}/forecast", dependencies=[Depends(require_read_token)])
+def get_symbol_forecast(
+    ticker: str,
+    horizon: int = Query(30, ge=1, le=365),
+) -> Dict[str, Any]:
+    """Per-symbol forecast reliability curve + live inverse-RMSE skill weights +
+    pending/completed counts, from the ``forecast_errors`` history.
+
+    Reads persisted DB state only (no engine, no network). Returns empty
+    collections + an honest ``reason`` when no forecast history exists yet — NOT
+    a 404 (the symbol is valid; there's simply nothing tracked). A bin with too
+    few samples has ``mean_pct_error=null``; never fabricated (CONSTRAINT #4)."""
+    return forecast_skill.forecast_skill_view(ticker, horizon_days=horizon)
+
+
+@app.get("/symbols/{ticker}/options", dependencies=[Depends(require_read_token)])
+def get_symbol_options(ticker: str) -> Any:
+    """The persisted options premium-selling directive for one ticker
+    (Strategy/Action, short/long strike + delta legs, net premium, ATM Greeks,
+    integrity verdict).
+
+    Reads only ``output/options_matrix.json`` (written upstream by
+    ``reporting/options_snapshot.py`` when ``OPTIONS_MATRIX_ENABLED`` is on) —
+    never imports ``technical_options_engine``. Returns ``{directive: null,
+    reason}`` (200, not 404) when the matrix is disabled/absent or the symbol
+    isn't in it, so the PWA renders an honest "no options data yet"."""
+    directive = options.symbol_options(ticker, path=_options_matrix_path())
+    if directive is None:
+        return {
+            "symbol": str(ticker or "").upper(),
+            "directive": None,
+            "reason": "No options directive for this symbol yet.",
+        }
+    return {"symbol": str(ticker or "").upper(), "directive": directive, "reason": None}
+
+
 @app.get("/portfolio", dependencies=[Depends(require_read_token)])
 def get_portfolio() -> Any:
     """Serialize the latest account snapshot (DB-first, read-only, no
@@ -561,6 +618,66 @@ def get_equity_curve(
             continue
         curve.append({"date": row.get("fetched_at"), "value": value})
     return {"range": range, "curve": curve}
+
+
+@app.get("/portfolio/realized", dependencies=[Depends(require_read_token)])
+def get_realized_performance() -> Dict[str, Any]:
+    """Realized broker P&L (win rate / profit factor / realized P&L / holding
+    stats) reconstructed by PURE FIFO lot-matching of the Robinhood filled-order
+    history — the account's TRUE realized performance, distinct from any internal
+    paper P&L.
+
+    Cache-only: reads the warm ``cache/robinhood_orders.json`` and NEVER triggers
+    a live Robinhood login on this request path. NaN summary fields (win rate /
+    profit factor when there are no trades) serialize as ``null``, never a
+    fabricated ``0.0`` (CONSTRAINT #4); ``available=false`` when nothing is cached
+    yet. Never 500s (CONSTRAINT #6)."""
+    return realized.realized_performance_view()
+
+
+@app.get("/alerts", dependencies=[Depends(require_read_token)])
+def get_alerts(limit: int = Query(50, ge=1, le=500)) -> Dict[str, Any]:
+    """Newest-first tail of the structured alert feed (``observability/alerts.py``
+    file channel, JSONL at ``settings.ALERT_FILE_PATH``).
+
+    Returns ``{entries, reason}``. Honest empty ``entries`` + a ``reason`` when
+    ``ALERT_FILE_PATH`` is unset or the file does not exist yet — never a
+    fabricated alert (CONSTRAINT #4). Never 500s (CONSTRAINT #6)."""
+    return alerts_feed.alerts_feed(limit=limit)
+
+
+@app.get("/models", dependencies=[Depends(require_read_token)])
+def get_models() -> List[Dict[str, Any]]:
+    """The ML model registry (``ml/registry.yaml``): per-model role, trained
+    date, CPCV-DSR, PBO, and deployable flag — a transparency surface for the
+    models behind the platform.
+
+    ``cpcv_dsr``/``pbo`` are ``null`` for an un-validated model (CONSTRAINT #4).
+    ``[]`` when the registry is missing/unreadable; never 500s (CONSTRAINT #6)."""
+    return models.model_registry_rows()
+
+
+@app.get("/options", dependencies=[Depends(require_read_token)])
+def get_options_matrix() -> Dict[str, Any]:
+    """The persisted options premium-selling matrix across the universe.
+
+    Reads only ``output/options_matrix.json`` (never imports
+    ``technical_options_engine``). Returns ``{as_of, directives, reason}`` — empty
+    ``directives`` + an honest ``reason`` when ``OPTIONS_MATRIX_ENABLED`` is off or
+    the artifact hasn't been written yet (CONSTRAINT #4). Never 500s."""
+    return options.options_matrix(path=_options_matrix_path())
+
+
+@app.get("/pairs", dependencies=[Depends(require_read_token)])
+def get_pairs_radar() -> Dict[str, Any]:
+    """The persisted pairs-trading radar (ranked cointegrated pairs + current
+    spread state — z-score, half-life, advisory signal label). ADVISORY ONLY.
+
+    Reads only ``output/pairs.json`` (never imports the pairs engine /
+    ``statsmodels``). Returns ``{as_of, universe, pairs, reason}`` — empty
+    ``pairs`` + an honest ``reason`` when ``PAIRS_SNAPSHOT_ENABLED`` is off or the
+    artifact hasn't been written yet (CONSTRAINT #4). Never 500s."""
+    return pairs.pairs_radar(path=_pairs_snapshot_path())
 
 
 # ---------------------------------------------------------------------------

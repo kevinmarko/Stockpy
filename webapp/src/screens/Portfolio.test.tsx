@@ -46,6 +46,37 @@ describe("Portfolio screen (real mock API)", () => {
     expect(screen.queryByText("Total equity")).not.toBeInTheDocument();
   });
 
+  it("renders the realized-performance section from broker order history", async () => {
+    renderPortfolio();
+    expect(await screen.findByText("Realized performance")).toBeInTheDocument();
+    expect(screen.getByText("Win rate")).toBeInTheDocument();
+    expect(screen.getByText("Profit factor")).toBeInTheDocument();
+  });
+
+  it("no cached realized trades renders the honest empty state, not a fabricated win rate", async () => {
+    vi.spyOn(api, "getRealized").mockResolvedValueOnce({
+      summary: {
+        n_trades: 0,
+        total_realized_pnl: 0,
+        win_rate: null,
+        avg_win: null,
+        avg_loss: null,
+        profit_factor: null,
+        avg_return_pct: null,
+        avg_holding_days: null,
+        best_trade_pnl: null,
+        worst_trade_pnl: null,
+        gross_profit: 0,
+        gross_loss: 0,
+      },
+      trades: [],
+      n_fills: 0,
+      available: false,
+    });
+    renderPortfolio();
+    expect(await screen.findByText("No realized trades cached yet.")).toBeInTheDocument();
+  });
+
   it("no active follows renders the honest empty state with a link back to the marketplace, not a fabricated follow", async () => {
     vi.spyOn(api, "getFollows").mockResolvedValueOnce([]);
 
