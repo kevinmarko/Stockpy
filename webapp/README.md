@@ -43,26 +43,38 @@ webapp/
 ├── public/                   # icon.svg, favicon.svg (PWA icons)
 └── src/
     ├── main.tsx              # entry (BrowserRouter)
-    ├── App.tsx               # router + bottom nav + onboarding gate
+    ├── App.tsx               # router + bottom nav (mobile) + sidebar (desktop) + onboarding gate
     ├── theme.ts              # dark fintech tokens + validated donut palette
     ├── index.css             # design-token CSS variables, mobile-first styles
     ├── format.ts             # $/%/date formatters
     ├── onboarding.ts         # localStorage completion marker
     ├── api/
     │   ├── types.ts          # TS mirror of api/pilots_api.py response shapes
-    │   ├── client.ts         # typed client + USE_MOCK switch
-    │   └── mock.ts           # realistic offline fixtures for every endpoint
-    ├── hooks/useApi.ts       # async loader (distinguishes honest 404 from error)
+    │   ├── client.ts         # typed client + USE_MOCK switch (api: typeof liveApi)
+    │   ├── mock.ts           # realistic offline fixtures for every endpoint
+    │   └── offlineCache.ts   # localStorage GET cache (offline fallback)
+    ├── hooks/
+    │   ├── useApi.ts         # async loader (distinguishes honest 404 from error)
+    │   └── usePwaStatus.ts   # service-worker registration/update state
     ├── components/
-    │   ├── ui.tsx            # badges, honesty row, tiles, states
+    │   ├── ui.tsx            # badges, honesty row, tiles, loading/error/empty states
     │   ├── charts.tsx        # PerfLine, SectorDonut, Sparkline (Recharts)
     │   ├── PilotCard.tsx     # marketplace rail cards
-    │   └── RangeToggle.tsx   # 1W/1M/3M/6M/1Y/2Y segmented control
+    │   ├── RangeToggle.tsx   # 1W/1M/3M/6M/1Y/2Y segmented control
+    │   ├── ActivityFeed.tsx  # polling ENTER/EXIT/REWEIGHT feed
+    │   ├── NotebookMLExport.tsx  # copy/download portfolio as JSON
+    │   └── PwaStatusDrawer.tsx   # ⚙ service-worker status sheet (every screen)
     └── screens/
         ├── Onboarding.tsx    # 3 steps: Pilot → brokerage (paper-first) → amount
-        ├── Marketplace.tsx   # `/` — Top Performers / Most Popular / category rails
+        ├── Dashboard.tsx     # `/` — draggable widget grid
+        ├── Marketplace.tsx   # `/marketplace` — Top Performers / Most Popular / category rails
         ├── PilotDetail.tsx   # `/pilots/:id` — perf chart, holdings, donut, trades
         ├── Portfolio.tsx     # `/portfolio` — equity tiles, curve, active follows
+        ├── Comparison.tsx    # `/compare` — multi-Pilot comparison
+        ├── SymbolDetail.tsx  # `/symbol/:ticker` — per-symbol context/forecast/options
+        ├── Activity.tsx      # `/activity` — full activity feed
+        ├── Models.tsx        # `/models` — ML model registry + honest CPCV metrics
+        ├── PairsRadar.tsx    # `/pairs` — cointegrated pairs radar
         └── FollowModal.tsx   # amount → planned_intents preview + gating notice
 ```
 
