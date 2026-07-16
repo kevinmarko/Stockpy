@@ -13,6 +13,10 @@
 
 # ── Weekly: Full EDGAR backfill sweep (Sundays at 06:00 UTC / 2 AM ET) ──────
 # Catches any missed filings and backfills new tickers added to the universe.
+# "all" resolves (data.portfolio_sync.resolve_universe) to held ∪ watchlists ∪
+# DEFAULT_TICKERS; the backfill's incremental skip means steady-state runs only
+# fetch genuinely new filings. No --since so it defaults to 2015-01-01, but the
+# skip makes re-checking that full range cheap after the first sweep.
 0 6 * * 0 cd /opt/investyo && .venv/bin/python scripts/backfill_edgar_fundamentals.py --tickers all >> /opt/investyo/logs/edgar_backfill.log 2>&1
 
 # ── Monthly: ML model retraining (1st of month at 07:00 UTC / 3 AM ET) ──────

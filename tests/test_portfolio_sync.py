@@ -457,3 +457,99 @@ def test_unauthenticated_client_returns_empty(monkeypatch):
     client.is_authenticated = False
     assert rc.discover_watchlists(client) == {}
     assert rc.discover_universe(client) == []
+
+
+# ---------------------------------------------------------------------------
+# resolve_universe — the "all" sentinel shared by the EDGAR backfill CLI/MCP
+# ---------------------------------------------------------------------------
+
+
+class TestResolveUniverse:
+    def test_explicit_list_never_touches_robinhood_or_market(self, monkeypatch):
+        """An explicit comma list is sanitized (upper/strip/dedupe/sort) with NO
+        snapshot fetch, NO market probe, NO DB — the hot/common path stays free."""
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+
+        def _boom(*a, **k):  # pragma: no cover - must never run
+            raise AssertionError("explicit list must not fetch an account snapshot")
+
+        monkeypatch.setattr(rp, "fetch_account_snapshot", _boom)
+        assert ps.resolve_universe("msft, aapl ,AAPL,goog") == ["AAPL", "GOOG", "MSFT"]
+
+    def test_all_degrades_to_default_tickers_when_no_snapshot(self, monkeypatch):
+        """The cron/headless degrade path: a failed snapshot fetch still yields
+        DEFAULT_TICKERS (CONSTRAINT #6) — never a crash, never empty by accident."""
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+        from settings import settings
+
+        monkeypatch.setattr(
+            rp, "fetch_account_snapshot",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no creds")),
+        )
+        # No file-backed watchlists in play.
+        monkeypatch.delenv("SYNC_WATCHLIST_FILES", raising=False)
+        got = ps.resolve_universe("all")
+        assert got == sorted({t.upper() for t in settings.DEFAULT_TICKERS})
+
+    def test_all_unions_holdings_watchlist_files_and_defaults(self, monkeypatch, tmp_path):
+        """'all' = held ∪ watchlist files ∪ DEFAULT_TICKERS, via a probe_market=False
+        build_sync_report (zero per-symbol market I/O)."""
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+        from settings import settings
+
+        # A held position and a file-backed watchlist entry.
+        held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
+        monkeypatch.setattr(rp, "fetch_account_snapshot", lambda *a, **k: _FakeSnapshot(positions=held))
+        wl = tmp_path / "wl.txt"
+        wl.write_text("TSLA\n# a comment\nNVDA\n", encoding="utf-8")
+        monkeypatch.setenv("SYNC_WATCHLIST_FILES", str(wl))
+
+        got = ps.resolve_universe("all")
+        expected = sorted(
+            {"NVDA", "TSLA"} | {t.upper() for t in settings.DEFAULT_TICKERS}
+        )
+        assert got == expected
+
+    def test_all_passes_probe_market_false(self, monkeypatch):
+        """resolve_universe must never trigger a per-symbol market probe (pure
+        waste in a universe-resolve). Spy on build_sync_report's kwargs."""
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+
+        monkeypatch.setattr(rp, "fetch_account_snapshot", lambda *a, **k: None)
+        seen = {}
+
+        def _spy(snapshot, **kwargs):
+            seen.update(kwargs)
+
+            @dataclass
+            class _R:
+                symbols: Dict[str, Any]
+
+            return _R(symbols={})
+
+        monkeypatch.setattr(ps, "build_sync_report", _spy)
+        ps.resolve_universe("all")
+        assert seen.get("probe_market") is False
+
+    def test_all_never_calls_interactive_login(self, monkeypatch):
+        """The 'all' path must use the non-interactive TOTP snapshot, never the
+        stdin-prompting RobinhoodClient.login() (which would hang a cron job)."""
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+        from data import robinhood_client as rc
+
+        def _no_login(self, *a, **k):  # pragma: no cover - must never run
+            raise AssertionError("resolve_universe must not call interactive login")
+
+        monkeypatch.setattr(rc.RobinhoodClient, "login", _no_login)
+        monkeypatch.setattr(
+            rp, "fetch_account_snapshot",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no creds")),
+        )
+        monkeypatch.delenv("SYNC_WATCHLIST_FILES", raising=False)
+        # Completes (returns DEFAULT_TICKERS) without ever hitting login().
+        assert ps.resolve_universe("all")

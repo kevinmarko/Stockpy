@@ -1059,3 +1059,48 @@ class TestPITFundamentals:
         assert "eps" in hist.columns
         assert len(hist) == 1
         assert hist.iloc[0]["report_date"] == "2021-05-01"
+
+
+class TestGetPitReportDates:
+    """get_pit_report_dates powers the EDGAR backfill's incremental skip — it MUST
+    be a source-scoped SET (not a MAX), honour the `since` filter, and degrade to
+    set() on error (never raise)."""
+
+    def test_returns_only_edgar_source_dates(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "pit.db"))
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 1.0}, {}, report_date="2020-01-15", source="edgar")
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 2.0}, {}, report_date="2021-01-15", source="edgar")
+        # A daily yahoo_computed row at another date must NOT leak into the edgar set.
+        store.upsert_fundamentals_pit("AAPL", {"pe_ratio": 3.0}, {}, report_date="2099-01-01", source="yahoo_computed")
+
+        got = store.get_pit_report_dates("AAPL", source="edgar")
+        assert got == {"2020-01-15", "2021-01-15"}
+        assert store.get_pit_report_dates("AAPL", source="yahoo_computed") == {"2099-01-01"}
+
+    def test_since_filter_slices_the_set(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "pit.db"))
+        for d in ("2018-06-01", "2020-06-01", "2022-06-01"):
+            store.upsert_fundamentals_pit("MSFT", {"pe_ratio": 1.0}, {}, report_date=d, source="edgar")
+
+        assert store.get_pit_report_dates("MSFT", source="edgar", since="2020-01-01") == {
+            "2020-06-01", "2022-06-01",
+        }
+        # No `since` returns the full set.
+        assert store.get_pit_report_dates("MSFT", source="edgar") == {
+            "2018-06-01", "2020-06-01", "2022-06-01",
+        }
+
+    def test_empty_and_unknown_symbol_return_empty_set(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "pit.db"))
+        assert store.get_pit_report_dates("NOSUCH", source="edgar") == set()
+
+    def test_error_degrades_to_empty_set(self, tmp_path, monkeypatch):
+        """A DB failure yields set() (process everything), never a raise —
+        a broken skip must cost time, not rows (CONSTRAINT #6)."""
+        store = HistoricalStore(db_path=str(tmp_path / "pit.db"))
+
+        def _boom():
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(store, "_get_conn", _boom)
+        assert store.get_pit_report_dates("AAPL", source="edgar") == set()

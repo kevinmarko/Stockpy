@@ -1193,6 +1193,46 @@ class HistoricalStore:
             )
             return None
 
+    def get_pit_report_dates(
+        self, symbol: str, *, source: str = "edgar", since: Optional[str] = None
+    ) -> set:
+        """Return the SET of stored ``report_date`` values for *symbol* from one
+        *source* (default ``"edgar"``), optionally limited to ``report_date >= since``.
+
+        Powers the backfill's incremental skip: a filed date already in this set
+        can be skipped (its ``(symbol, as_of=report_date)`` row already exists and
+        ``upsert_fundamentals_pit`` is idempotent on that key), while restatements
+        and a widened ``--since`` produce dates NOT in the set and are processed.
+
+        Deliberately a SET scoped to one ``source`` — NOT a ``MAX(report_date)``.
+        ``fundamentals_history`` is shared by three writers (``edgar`` /
+        ``yahoo_computed`` / ``audit_injection``); a MAX-based skip would (a) mix
+        sources and (b) silently drop history whenever ``--since`` widens past a
+        prior run's max. This can therefore only ever remove a redundant refetch,
+        never change WHICH rows land.
+
+        Returns ``set()`` on any error (CONSTRAINT #6) → the caller processes every
+        date = today's behavior. A broken skip costs time, never rows.
+        """
+        try:
+            params: list = [symbol.upper(), source]
+            sql = (
+                "SELECT DISTINCT report_date FROM fundamentals_history "
+                "WHERE symbol = ? AND source = ? AND report_date IS NOT NULL"
+            )
+            if since:
+                sql += " AND report_date >= ?"
+                params.append(since)
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(sql, tuple(params)).fetchall()
+            return {r[0] for r in rows if r and r[0]}
+        except Exception as exc:
+            logger.debug(
+                "get_pit_report_dates(%s, source=%s) failed: %s", symbol, source, exc,
+            )
+            return set()
+
     def _upsert_fundamentals(
         self,
         symbol: str,

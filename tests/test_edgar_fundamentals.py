@@ -209,6 +209,102 @@ class TestScaleRuleParityWithYahooFundamentals:
 def test_fetch_companyfacts(monkeypatch):
     mock_get = mock.Mock(return_value=b'{"facts": {"us-gaap": {}}}')
     monkeypatch.setattr(edgar_fundamentals, "_http_get", mock_get)
-    
+
     res = edgar_fundamentals.fetch_companyfacts("0000320193")
     assert "facts" in res
+
+
+@pytest.fixture
+def reset_edgar_state():
+    """Clear the module-global CIK cache and throttle clock before AND after —
+    thread-safety tests must not inherit or leak cross-test state (a stale
+    _last_request_time would make the throttle sleep for real)."""
+    edgar_fundamentals._cik_cache.clear()
+    edgar_fundamentals._last_request_time = 0.0
+    yield
+    edgar_fundamentals._cik_cache.clear()
+    edgar_fundamentals._last_request_time = 0.0
+
+
+class TestThreadSafety:
+    """The backfill script now drives this module from a ThreadPoolExecutor, so
+    the throttle and the lazy CIK cache must be thread-safe."""
+
+    def test_throttle_serializes_request_issuance(self, monkeypatch, reset_edgar_state):
+        """Under N concurrent _http_get calls, consecutive requests are still
+        issued >= _REQUEST_DELAY apart. An unlocked throttle would let a burst
+        through with near-zero gaps and blow SEC's ≤10 req/s limit. Verified at
+        W > 10 (per the plan)."""
+        import threading
+        import time
+
+        monkeypatch.setattr(edgar_fundamentals, "_REQUEST_DELAY", 0.02)
+
+        issued: list[float] = []
+        issued_lock = threading.Lock()
+
+        class _FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"{}"
+
+        def _fake_urlopen(req, timeout=10):
+            with issued_lock:
+                issued.append(time.monotonic())
+            return _FakeResp()
+
+        monkeypatch.setattr(edgar_fundamentals.urllib.request, "urlopen", _fake_urlopen)
+
+        n = 12
+        threads = [
+            threading.Thread(target=lambda: edgar_fundamentals._http_get("https://x.test/y"))
+            for _ in range(n)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(issued) == n
+        issued.sort()
+        gaps = [b - a for a, b in zip(issued, issued[1:])]
+        # 0.8x tolerance for scheduler jitter; a broken throttle produces ~0 gaps.
+        assert all(g >= 0.02 * 0.8 for g in gaps), gaps
+
+    def test_cik_cache_fetched_once_under_concurrency(self, monkeypatch, reset_edgar_state):
+        """W threads racing into get_cik with an empty cache trigger exactly ONE
+        company_tickers.json fetch (the double-checked lock), not W."""
+        import threading
+
+        data = b'{"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}'
+        call_count = {"n": 0}
+        count_lock = threading.Lock()
+
+        def _counting_http_get(url):
+            with count_lock:
+                call_count["n"] += 1
+            return data
+
+        monkeypatch.setattr(edgar_fundamentals, "_http_get", _counting_http_get)
+
+        results: list = []
+        res_lock = threading.Lock()
+
+        def worker():
+            r = edgar_fundamentals.get_cik("AAPL")
+            with res_lock:
+                results.append(r)
+
+        threads = [threading.Thread(target=worker) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert call_count["n"] == 1
+        assert all(r == "0000320193" for r in results)

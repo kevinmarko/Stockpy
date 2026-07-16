@@ -640,6 +640,26 @@ class Settings(BaseSettings):
             "by symbol regardless of value."
         ),
     )
+    # Worker threads for the SEC EDGAR backfill's per-ticker companyfacts fetch
+    # (scripts/backfill_edgar_fundamentals.py). Defaults to 4, LOWER than the
+    # DATA_FETCH sibling above, because this is a MEMORY knob, NOT a rate-limit
+    # knob: unlike the DATA_FETCH loop, the worker count here does NOT serve as
+    # the de-facto rate limit -- edgar_fundamentals._throttle() (a thread-safe
+    # 150ms gap) already guarantees SEC's ≤10 req/s limit for ANY worker count.
+    # A large filer's parsed companyfacts JSON is 50-150 MB resident, so 8
+    # concurrent could hold ~1.2 GB vs ~600 MB at 4. And because json.loads /
+    # get_all_filed_dates hold the GIL, only the download wait parallelizes --
+    # the speedup is real but sublinear past ~4. Set to 1 for the original
+    # sequential path.
+    EDGAR_MAX_CONCURRENCY: int = Field(
+        default=4,
+        description=(
+            "Worker-thread count for the SEC EDGAR backfill per-ticker fetch in "
+            "scripts/backfill_edgar_fundamentals.py. 1 = sequential. A memory "
+            "knob, not a rate-limit knob (the throttle enforces SEC's limit at "
+            "any value). Results are reassembled deterministically by ticker."
+        ),
+    )
     # Refresh cadence (seconds) for the persistent orchestrator daemon's
     # internal timer thread (desktop/daemon_runtime.py). 0 (the default)
     # disables the timer entirely -- the daemon then only runs cycles when

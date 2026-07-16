@@ -22,12 +22,12 @@ Following the successful implementation of all Phase 1–5 improvements, the **I
 
 ---
 
-## 3. SEC EDGAR Ingestion & Data Automation
+## 3. SEC EDGAR Ingestion & Data Automation — ✅ RESOLVED 2026-07-16
 
 | Gap Identified | Current Codebase Status | Recommended Solution |
 | :--- | :--- | :--- |
-| **EDGAR Backfill Automation** | PIT historical fundamentals database rows are populated only when the operator manually invokes `scripts/backfill_edgar_fundamentals.py` for specific tickers. | Add an optional weekly task to `main_orchestrator.py` or a dedicated system cron utility to automatically query SEC EDGAR for new filings for S&P 500 components. |
-| **Filing-Date Parsing Latency** | Direct XBRL parsing on backfill is slow due to synchronous filing lookups and SEC rate-limits (10 requests/sec). | Implement a multi-ticker batch queue that respects SEC headers while processing filings asynchronously. |
+| ~~**EDGAR Backfill Automation**~~ | ~~PIT historical fundamentals database rows are populated only when the operator manually invokes `scripts/backfill_edgar_fundamentals.py` for specific tickers.~~ **Investigation found the weekly cron/launchd automation this row asked for already existed (`deploy/crontab.txt`) but had never actually run**: the script lacked a repo-root `sys.path` shim, so the direct-path invocation cron/the MCP tool both use died at import (`ModuleNotFoundError: No module named 'data'`) — silently failing every Sunday, and breaking `trigger_edgar_backfill` for every input, not just "all". A second bug meant `--tickers all` resolved to a literal ticker named `"ALL"` (zero rows) even once the import worked. Both fixed; `all` now resolves via a shared `data.portfolio_sync.resolve_universe()` to held ∪ watchlists ∪ `DEFAULT_TICKERS`, used identically by the CLI and the MCP tool. A macOS launchd job (`scripts/com.investyo.weekly-edgar.plist`) was added alongside the existing Linux cron entry. See `CLAUDE.md`'s `scripts/backfill_edgar_fundamentals.py` entry for the full contract. | Done — no further action; the recommended weekly-cron shape was directionally right, the script underneath it was silently broken. |
+| ~~**Filing-Date Parsing Latency**~~ | ~~Direct XBRL parsing on backfill is slow due to synchronous filing lookups and SEC rate-limits (10 requests/sec).~~ **This diagnosis was wrong**: the fetcher makes ~1 HTTP request per ticker total (one shared `company_tickers.json` for the whole run, then one `companyfacts` fetch per ticker) — at the existing 150ms throttle, 500 tickers is ~75s of rate-limit budget, nowhere near the bottleneck. The actual cost is each `companyfacts` payload being multi-MB JSON, i.e. download wait — an async queue targets nothing real. Fixed with a `ThreadPoolExecutor` (`EDGAR_MAX_CONCURRENCY`, default 4 — a memory knob, not a rate-limit knob) over a made-thread-safe throttle, not an async batch queue. | Done — implemented as bounded thread-pool concurrency instead of an async queue; see CLAUDE.md for why. |
 
 ---
 
