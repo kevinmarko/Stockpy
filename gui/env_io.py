@@ -189,6 +189,9 @@ SECRET_KEYS: tuple[str, ...] = (
     "ALERT_SMTP_HOST",
     "ALERT_SMTP_USER",
     "ALERT_SMTP_PASSWORD",
+    # alerting_mcp/notifier.py's own SMTP credential — distinct from
+    # ALERT_SMTP_PASSWORD above (observability/alerts.py's channel).
+    "ALERT_EMAIL_SMTP_PASSWORD",
     # Prompt Registry credentials — 4 separate roles (read / publish / sign / url).
     # Never GUI-writable; edit .env by hand only (CONSTRAINT #3).
     "PROMPT_REGISTRY_URL",           # protected HTTPS manifest endpoint

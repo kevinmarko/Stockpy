@@ -3,8 +3,9 @@
 # =============================================================================
 # MODULE: EVALUATION ENGINE
 # File: evaluation_engine.py
-# Description: Implements post-trade evaluation (MFE/MAE/Edge Ratio), 
-#              Kelly Criterion position sizing, and Brinson-Fachler sector attribution.
+# Description: Implements post-trade evaluation (MFE/MAE/Edge Ratio) and
+#              Brinson-Fachler sector attribution. Position sizing ("Kelly Target")
+#              is sizing/kelly.py + StrategyEngine._calculate_kelly_sizing — see CLAUDE.md.
 # =============================================================================
 
 import json
@@ -125,48 +126,6 @@ class EvaluationEngine:
                 "error": str(e)
             }))
             return {"MFE": np.nan, "MAE": np.nan, "Edge Ratio": np.nan, "Return Std Dev": np.nan}
-
-    def calculate_kelly_target(
-        self, 
-        expected_return: float, 
-        variance: float, 
-        win_probability: Optional[float] = None, 
-        win_loss_ratio: Optional[float] = None,
-        half_kelly: bool = True
-    ) -> Dict[str, Any]:
-        """
-        Calculates optimal fractional allocation using the Kelly Criterion.
-        Supports win-rate/ratio calculations and continuous return/variance formulations.
-        Constrained by a Half-Kelly allocation factor and bounded to [0.0, 1.0].
-        """
-        try:
-            # 1. Win-Loss Probability Method
-            if win_probability is not None and win_loss_ratio is not None:
-                if win_loss_ratio > 0:
-                    kelly_fraction = win_probability - (1.0 - win_probability) / win_loss_ratio
-                else:
-                    kelly_fraction = 0.0
-            # 2. Continuous Return/Variance Method
-            elif variance > 0:
-                kelly_fraction = expected_return / variance
-            else:
-                kelly_fraction = 0.0
-
-            # Apply Half-Kelly constraints
-            if half_kelly:
-                kelly_fraction = kelly_fraction / 2.0
-
-            # Clamp allocation range to [0.0, 1.0] to protect against bankruptcy / shorting
-            kelly_fraction = float(max(0.0, min(1.0, kelly_fraction)))
-
-            return {"Kelly Target": kelly_fraction}
-
-        except Exception as e:
-            telemetry.error(json.dumps({
-                "event": "kelly_target_failed",
-                "error": str(e)
-            }))
-            return {"Kelly Target": 0.0}
 
     def calculate_excursion_metrics(
         self,

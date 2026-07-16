@@ -625,48 +625,6 @@ def test_evaluation_engine_edge_ratio():
     assert results["Return Std Dev"] > 0.0
 
 
-def test_evaluation_engine_kelly_target():
-    """
-    Verifies Kelly Criterion allocation sizing and Half-Kelly constraints.
-    """
-    from evaluation_engine import EvaluationEngine
-    
-    engine = EvaluationEngine()
-    
-    # Win-Loss Probability Method
-    # win rate = 0.60, win/loss ratio = 2.0
-    # Full Kelly: 0.60 - (1 - 0.60) / 2.0 = 0.60 - 0.20 = 0.40
-    # Half Kelly: 0.20
-    results_half = engine.calculate_kelly_target(
-        expected_return=0.0,
-        variance=0.0,
-        win_probability=0.60,
-        win_loss_ratio=2.0,
-        half_kelly=True
-    )
-    assert math.isclose(results_half["Kelly Target"], 0.20, rel_tol=1e-5)
-    
-    results_full = engine.calculate_kelly_target(
-        expected_return=0.0,
-        variance=0.0,
-        win_probability=0.60,
-        win_loss_ratio=2.0,
-        half_kelly=False
-    )
-    assert math.isclose(results_full["Kelly Target"], 0.40, rel_tol=1e-5)
-
-    # Continuous Return Method
-    # expected_return = 0.05, variance = 0.04
-    # Full Kelly: 0.05 / 0.04 = 1.25 -> clamped to 1.0
-    # Half Kelly: 1.25 / 2 = 0.625
-    results_cont_half = engine.calculate_kelly_target(
-        expected_return=0.05,
-        variance=0.04,
-        half_kelly=True
-    )
-    assert math.isclose(results_cont_half["Kelly Target"], 0.625, rel_tol=1e-5)
-
-
 def test_evaluation_engine_brinson_fachler():
     """
     Verifies Brinson-Fachler portfolio attribution model equations and fallback correctness.
