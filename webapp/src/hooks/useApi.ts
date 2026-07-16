@@ -6,6 +6,10 @@ export interface AsyncState<T> {
   loading: boolean;
   error: string | null;
   status: number | null; // HTTP-ish status (404 => "not run yet")
+  // True when `data` was served from client.ts's localStorage offline-cache
+  // fallback (the network was unreachable) rather than a live response.
+  stale: boolean;
+  cachedAt: string | null; // ISO timestamp the stale `data` was cached at
   reload: () => void;
 }
 
@@ -21,6 +25,8 @@ export function useApi<T>(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<number | null>(null);
+  const [stale, setStale] = useState(false);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const alive = useRef(true);
 
@@ -35,10 +41,24 @@ export function useApi<T>(
       .then((d) => {
         if (!alive.current) return;
         setData(d);
+        setStale(false);
+        setCachedAt(null);
       })
       .catch((e: unknown) => {
         if (!alive.current) return;
+        if (e instanceof ApiError && e.cachedData !== undefined) {
+          // Offline fallback: render the cached response as real data (not an
+          // error screen) and flag it `stale` so a screen can note it's cached.
+          setData(e.cachedData as T);
+          setStale(true);
+          setCachedAt(e.cachedAt ?? null);
+          setError(null);
+          setStatus(null);
+          return;
+        }
         setData(null);
+        setStale(false);
+        setCachedAt(null);
         if (e instanceof ApiError) {
           setError(e.message);
           setStatus(e.status);
@@ -56,5 +76,5 @@ export function useApi<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick]);
 
-  return { data, loading, error, status, reload };
+  return { data, loading, error, status, stale, cachedAt, reload };
 }

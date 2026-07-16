@@ -402,6 +402,14 @@ export interface PairsRadar {
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;
+  /**
+   * Populated by client.ts's `http()` when a GET fails because the network is
+   * unreachable (status 0) AND a previously cached response exists for that
+   * path (see api/offlineCache.ts). `undefined` for every other error —
+   * a reachable server's own 4xx/5xx is never masked by stale cache data.
+   */
+  cachedData?: unknown;
+  cachedAt?: string;
   constructor(message: string, status: number) {
     super(message);
     this.name = "ApiError";

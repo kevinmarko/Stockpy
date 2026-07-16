@@ -9,7 +9,14 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: "autoUpdate",
+      // "prompt" (not "autoUpdate") so a new SW version surfaces as a
+      // `needRefresh` flag the UI can show (PwaStatusDrawer) instead of
+      // silently force-reloading every open tab the instant it activates.
+      registerType: "prompt",
+      // We register the SW ourselves via `virtual:pwa-register/react`
+      // (usePwaStatus.ts) so the UI can see its state — disable the
+      // plugin's own auto-injected <script> to avoid double registration.
+      injectRegister: false,
       includeAssets: ["favicon.svg", "icon.svg", "icon-192.png", "icon-512.png"],
       devOptions: {
         // let the SW register in `npm run dev` so the install flow is testable

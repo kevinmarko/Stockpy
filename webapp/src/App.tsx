@@ -17,6 +17,7 @@ import { Models } from "./screens/Models";
 import { PairsRadar } from "./screens/PairsRadar";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
+import { PwaStatusDrawer } from "./components/PwaStatusDrawer";
 
 /** Shared between the mobile bottom tab bar and the desktop sidebar. */
 const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) => boolean }[] = [
@@ -110,6 +111,7 @@ export default function App() {
         </Routes>
       </div>
       <BottomNav />
+      <PwaStatusDrawer />
     </div>
   );
 }

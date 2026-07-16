@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Headline, PilotCategory } from "../api/types";
-import { fmtNum, fmtPct } from "../format";
+import { fmtNum, fmtPct, timeAgo } from "../format";
 import { categoryColor } from "../theme";
 
 /**
@@ -138,6 +138,40 @@ export function EmptyState({
         {title}
       </div>
       {hint && <div style={{ marginTop: 6 }}>{hint}</div>}
+    </div>
+  );
+}
+
+/**
+ * Shown when `useApi` served a GET from the localStorage offline-cache
+ * fallback (client.ts) instead of a live response — generalizes Dashboard's
+ * ad hoc "Offline: using cached data" notice to any screen.
+ */
+export function StaleDataNotice({
+  cachedAt,
+  onRetry,
+}: {
+  cachedAt?: string | null;
+  onRetry?: () => void;
+}) {
+  return (
+    <div
+      className="notice notice-warn"
+      style={{ marginBottom: 12, alignItems: "center" }}
+      data-testid="stale-data-notice"
+    >
+      <span>
+        Offline: showing cached data{cachedAt ? ` from ${timeAgo(cachedAt)}` : ""}.
+      </span>
+      {onRetry && (
+        <button
+          className="btn"
+          onClick={onRetry}
+          style={{ marginLeft: "auto", fontSize: 12, padding: "2px 8px" }}
+        >
+          Retry
+        </button>
+      )}
     </div>
   );
 }

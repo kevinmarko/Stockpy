@@ -5,7 +5,7 @@ import type { PerfRange, PilotDetail as PilotDetailT, PerformanceResponse } from
 import { useApi } from "../hooks/useApi";
 import { RangeToggle } from "../components/RangeToggle";
 import { PerfLine, SectorDonut } from "../components/charts";
-import { ErrorState, HonestyRow, Loading } from "../components/ui";
+import { ErrorState, HonestyRow, Loading, StaleDataNotice } from "../components/ui";
 import { FollowModal } from "./FollowModal";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -99,6 +99,10 @@ export function PilotDetail() {
               <PerfDelta curve={perf.data.curve} />
             )}
           </div>
+
+          {perf.stale && (
+            <StaleDataNotice cachedAt={perf.cachedAt} onRetry={perf.reload} />
+          )}
 
           {perf.loading ? (
             <div className="skeleton" style={{ height: 200 }} />

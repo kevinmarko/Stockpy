@@ -29,12 +29,17 @@ function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {
 describe("client.ts — live client (mocked fetch)", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
+    // Every test starts with an empty offline cache — otherwise a write from
+    // one test (e.g. a successful listPilots()) could leak into an unrelated
+    // test's network-failure fallback lookup for the same path.
+    localStorage.clear();
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.resetModules();
+    localStorage.clear();
   });
 
   it("USE_MOCK is false and apiMeta reflects it once VITE_USE_MOCK=false", async () => {
@@ -255,5 +260,79 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(url).toBe("http://localhost:8602/brokerage/disconnect");
     expect(init.method).toBe("POST");
     expect(result).toEqual({ connected: false });
+  });
+
+  describe("offline localStorage cache fallback (Web App Resilience gap)", () => {
+    it("a successful GET is persisted to localStorage under a namespaced key", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "trend-following" }]));
+
+      await mod.api.listPilots();
+
+      const raw = localStorage.getItem("stockpy.cache.v1:/pilots");
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).data).toEqual([{ id: "trend-following" }]);
+    });
+
+    it("a network failure with a prior cached response attaches cachedData/cachedAt to the rejection, but still rejects", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+
+      fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "trend-following" }]));
+      await mod.api.listPilots();
+
+      fetchMock.mockRejectedValueOnce(new TypeError("network down"));
+      await expect(mod.api.listPilots()).rejects.toMatchObject({
+        status: 0,
+        cachedData: [{ id: "trend-following" }],
+      });
+    });
+
+    it("a network failure with no prior cache leaves cachedData undefined", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockRejectedValueOnce(new TypeError("network down"));
+
+      await expect(mod.api.listPilots()).rejects.toMatchObject({ status: 0 });
+      let caught: unknown;
+      fetchMock.mockRejectedValueOnce(new TypeError("network down"));
+      try {
+        await mod.api.listPilots();
+      } catch (e) {
+        caught = e;
+      }
+      expect((caught as { cachedData?: unknown }).cachedData).toBeUndefined();
+    });
+
+    it("a reachable server's own error response is never masked by stale cache data", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+
+      fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "trend-following" }]));
+      await mod.api.listPilots();
+
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ detail: "backend error" }, { status: 500, ok: false })
+      );
+      await expect(mod.api.listPilots()).rejects.toMatchObject({
+        status: 500,
+        cachedData: undefined,
+      });
+    });
+
+    it("a POST (follow) is never written to the offline cache", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ mode: "off", queue_written: false, planned_intents: [] })
+      );
+
+      await mod.api.follow("trend-following", 500);
+
+      expect(
+        localStorage.getItem("stockpy.cache.v1:/pilots/trend-following/follow")
+      ).toBeNull();
+    });
   });
 });

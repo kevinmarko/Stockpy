@@ -4,7 +4,7 @@ import { api, apiMeta } from "../api/client";
 import type { PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { PilotCard, PopularCard } from "../components/PilotCard";
-import { ErrorState, Loading } from "../components/ui";
+import { ErrorState, Loading, StaleDataNotice } from "../components/ui";
 import { theme } from "../theme";
 
 function Rail({
@@ -51,10 +51,9 @@ function byDesc(sel: (p: PilotSummary) => number | null) {
 }
 
 export function Marketplace() {
-  const { data, loading, error, status, reload } = useApi<PilotSummary[]>(
-    () => api.listPilots(),
-    []
-  );
+  const { data, loading, error, status, stale, cachedAt, reload } = useApi<
+    PilotSummary[]
+  >(() => api.listPilots(), []);
 
   const pilots = data ?? [];
 
@@ -110,6 +109,7 @@ export function Marketplace() {
 
       {!loading && !error && (
         <>
+          {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
           <Rail
             title="Top Performers"
             sub="by Sharpe / DSR"
