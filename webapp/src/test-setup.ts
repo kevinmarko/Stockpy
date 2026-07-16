@@ -17,6 +17,27 @@ class ResizeObserverStub {
 }
 globalThis.ResizeObserver = ResizeObserverStub;
 
+// Node >=22.4 defines its own `localStorage`/`sessionStorage` globals (real
+// Storage objects, but only when the process is started with
+// `--localstorage-file`; otherwise they're `undefined` getters). Vitest's
+// jsdom environment (still true as of vitest@4.1.10) only copies a window
+// property onto globalThis when either the name is missing from `global` or
+// it's on its hardcoded key allowlist — `localStorage`/`sessionStorage` are
+// on neither, so Node's broken stub silently shadows jsdom's real, working
+// Storage implementation. Wire jsdom's own window storage back onto
+// globalThis so tests get the real thing instead of `undefined`.
+const jsdomWindow = (globalThis as { jsdom?: { window?: Window } }).jsdom?.window;
+for (const key of ["localStorage", "sessionStorage"] as const) {
+  const store = jsdomWindow?.[key];
+  if (store && globalThis[key] !== store) {
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      enumerable: true,
+      get: () => store,
+    });
+  }
+}
+
 afterEach(() => {
   cleanup();
 });
