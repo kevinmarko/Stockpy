@@ -25,6 +25,17 @@ def make_memory_db_init(original_init: Callable) -> Callable:
     ``db_url="sqlite:///:memory:"``, ignoring whatever ``db_url`` (if any)
     the caller passed.
 
+    Also strips a ``readonly`` kwarg if present: ``db_config.
+    create_readonly_db_engine`` deliberately RAISES for ``sqlite:///:memory:``
+    (a read-only in-memory DB is definitionally empty and pointless), so a
+    production call site that legitimately passes ``readonly=True`` (e.g.
+    ``TransactionsStore(readonly=True)``) would otherwise blow up the moment
+    a test redirects it onto ``:memory:``. This helper's entire purpose is
+    test-isolation plumbing, not exercising the read-only feature itself
+    (see ``tests/test_transactions_store.py::TestReadonlyMode`` /
+    ``tests/test_historical_store.py::TestReadonlyMode`` for that, both of
+    which correctly use a real ``tmp_path``-backed file DB).
+
     Returns a plain callable suitable for ``mock.patch.object(cls,
     "__init__", make_memory_db_init(cls.__init__))`` -- useful when a test
     already composes several patches inside one ``with (...)`` tuple and
@@ -33,6 +44,7 @@ def make_memory_db_init(original_init: Callable) -> Callable:
     """
 
     def _mem_init(self, db_url=None, *args, **kwargs):  # noqa: ANN001
+        kwargs.pop("readonly", None)
         original_init(self, db_url="sqlite:///:memory:", *args, **kwargs)
 
     return _mem_init

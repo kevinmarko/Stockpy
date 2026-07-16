@@ -418,7 +418,10 @@ class EvaluationEngine:
             if col not in df.columns:
                 df[col] = np.nan
         
-        store = TransactionsStore()
+        # This function only ever reads (store.get_trade_history below) — never
+        # writes — so a DATABASE-LEVEL read-only store closes the gap where a
+        # future bug in this analytics path could otherwise write to `trades`.
+        store = TransactionsStore(readonly=True)
 
         # Batch pre-fetch technical history for ALL symbols ONCE, up front, instead
         # of a per-row fetch_technical_raw([symbol]) call inside the loop below.
@@ -927,6 +930,14 @@ def recommendation_tracking_report(
     if historical_store is None:
         try:
             from data.historical_store import HistoricalStore
+            # NOT readonly: get_bars() is a write-through cache (it tops up
+            # stale/missing ranges by fetching live and persisting the delta).
+            # A read-only store doesn't crash here — the write is blocked and
+            # get_bars() falls back to a live-only fetch — but it silently
+            # defeats the whole point of the cache (every call would live-fetch
+            # instead of reading it), which is a real regression, not a safe
+            # hardening. Only genuinely read-only methods (latest_account_
+            # snapshot, account_snapshot_history) belong on a readonly instance.
             historical_store = HistoricalStore()
         except Exception as exc:
             logger.warning("recommendation_tracking_report: HistoricalStore unavailable: %s", exc)

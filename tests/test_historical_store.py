@@ -1104,3 +1104,138 @@ class TestGetPitReportDates:
 
         monkeypatch.setattr(store, "_get_conn", _boom)
         assert store.get_pit_report_dates("AAPL", source="edgar") == set()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# readonly=True — DATABASE-LEVEL read-only store
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReadonlyMode:
+    def test_reads_data_written_by_a_write_mode_store(self, tmp_path):
+        db = str(tmp_path / "t.db")
+        writer = HistoricalStore(db_path=db)
+        original = _make_account_snapshot(age_hours=0.5, n_positions=2)
+        writer.save_account_snapshot(original)
+
+        reader = HistoricalStore(db_path=db, readonly=True)
+        loaded = reader.latest_account_snapshot()
+        assert loaded is not None
+        assert loaded.total_equity == pytest.approx(original.total_equity)
+
+    def test_write_is_blocked_and_leaves_no_trace(self, tmp_path):
+        db = str(tmp_path / "t.db")
+        HistoricalStore(db_path=db)  # write-mode: creates the schema first
+        reader = HistoricalStore(db_path=db, readonly=True)
+        snap_id = reader.save_account_snapshot(_make_account_snapshot(age_hours=0.1, n_positions=1))
+        assert snap_id == -1  # documented failure sentinel, never fabricated success
+        writer = HistoricalStore(db_path=db)
+        assert writer.latest_account_snapshot() is None
+
+    def test_degrades_to_empty_on_missing_tables(self, tmp_path):
+        """No write-mode store has ever run -> the tables don't exist. A
+        readonly instance must degrade gracefully (CONSTRAINT #6), not crash.
+
+        get_bars() is deliberately NOT asserted here (see the dedicated
+        get_bars tests below) -- it is a write-through cache, not a pure
+        reader, so its degrade path is a live-provider fallback, not empty."""
+        db = str(tmp_path / "never_written.db")
+        open(db, "w").close()
+        reader = HistoricalStore(db_path=db, readonly=True)
+        assert reader.latest_account_snapshot() is None
+        assert reader.account_snapshot_history().empty
+
+    def test_construction_skips_ensure_tables(self, tmp_path, monkeypatch):
+        """readonly=True must not attempt DDL at construction."""
+        calls = []
+        monkeypatch.setattr(
+            HistoricalStore, "_ensure_tables", lambda self: calls.append("ensure")
+        )
+        HistoricalStore(db_path=str(tmp_path / "t.db"), readonly=True)
+        assert calls == []
+
+    def test_readonly_connection_reads_a_non_wal_db_without_raising(self, tmp_path):
+        """Regression for the WAL trap (see db_config.create_readonly_db_engine):
+        reading a NON-WAL db read-only must not raise a journal_mode write."""
+        db = str(tmp_path / "plain.db")
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE account_snapshots (snapshot_id INTEGER PRIMARY KEY "
+            "AUTOINCREMENT, fetched_at TEXT NOT NULL, buying_power REAL, "
+            "total_equity REAL, total_dividends REAL, source TEXT NOT NULL)"
+        )
+        conn.commit()
+        conn.close()
+        assert not (tmp_path / "plain.db-wal").exists()  # confirm non-WAL
+
+        reader = HistoricalStore(db_path=db, readonly=True)
+        # Would raise here if the readonly hook issued journal_mode=WAL.
+        assert reader.latest_account_snapshot() is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# get_bars() + readonly=True — documented NOT-a-safe-hardening-target finding
+# ─────────────────────────────────────────────────────────────────────────────
+# get_bars() is a write-through cache (top up stale/missing ranges by fetching
+# live and persisting the delta), not a pure reader. A readonly instance never
+# crashes here, but the write-back is unconditionally blocked at the DB level,
+# so EVERY call falls through to a live-only fetch -- silently defeating the
+# cache's entire purpose. This is why evaluation_engine.py's
+# recommendation_tracking_report deliberately stays on a write-mode
+# HistoricalStore() despite only calling get_bars() (a read, in isolation) --
+# see the comment at that call site. These tests pin the exact mechanism.
+
+class TestReadonlyGetBarsFallsBackToLive:
+    def test_readonly_store_with_a_fully_fresh_cache_needs_no_write(self, tmp_path):
+        """When the cache already ends today, get_bars() skips the provider
+        entirely (see TestGetBars.test_up_to_date_skips_provider) -- no top-up
+        write is needed, so THIS case works perfectly fine readonly."""
+        db = str(tmp_path / "t.db")
+        writer = HistoricalStore(db_path=db)
+        today = pd.Timestamp.now().normalize()
+        df_today = pd.concat([_make_ohlcv(9), _make_ohlcv(1, end=today).set_axis([today])])
+        writer._upsert_bars("AAPL", df_today, source="yfinance")
+
+        reader = HistoricalStore(db_path=db, readonly=True)
+        live_provider = _make_provider(_make_ohlcv(5))
+        result = reader.get_bars("AAPL", lookback_days=30, provider=live_provider)
+
+        assert live_provider.get_intraday_bars.call_count == 0  # served from cache
+        assert not result.empty
+
+    def test_readonly_store_with_a_stale_cache_falls_back_to_live(self, tmp_path):
+        """When the cache is STALE (ends days ago), a top-up write is genuinely
+        needed. A readonly store cannot perform it, so get_bars() takes the
+        DB-path exception branch and live-fetches instead -- this is the case
+        that makes get_bars() unsuitable for a readonly-hardened call site."""
+        db = str(tmp_path / "t.db")
+        writer = HistoricalStore(db_path=db)
+        five_days_ago = pd.Timestamp.now().normalize() - pd.offsets.BDay(5)
+        writer._upsert_bars("AAPL", _make_ohlcv(30, end=five_days_ago), source="yfinance")
+
+        reader = HistoricalStore(db_path=db, readonly=True)
+        live_provider = _make_provider(_make_ohlcv(5))
+        result = reader.get_bars("AAPL", lookback_days=30, provider=live_provider)
+
+        # Exact call count is an internal implementation detail (the blocked
+        # top-up attempt itself may call the provider before failing to
+        # persist, then _live_fetch calls it again) -- what matters is that the
+        # provider WAS reached (the cache alone could not satisfy the request)
+        # and real data still came back despite the write being blocked.
+        assert live_provider.get_intraday_bars.call_count >= 1
+        assert not result.empty
+
+    def test_readonly_get_bars_write_attempt_leaves_the_cache_unchanged(self, tmp_path):
+        """The blocked top-up write (on a STALE cache -- see the test above for
+        why a fresh one doesn't exercise this path) must not have partially
+        landed."""
+        db = str(tmp_path / "t.db")
+        writer = HistoricalStore(db_path=db)
+        five_days_ago = pd.Timestamp.now().normalize() - pd.offsets.BDay(5)
+        writer._upsert_bars("MSFT", _make_ohlcv(30, end=five_days_ago), source="yfinance")
+        before = writer.latest_bar_date("MSFT")
+
+        reader = HistoricalStore(db_path=db, readonly=True)
+        reader.get_bars("MSFT", lookback_days=30, provider=_make_provider(_make_ohlcv(3)))
+
+        after = HistoricalStore(db_path=db).latest_bar_date("MSFT")
+        assert after == before

@@ -76,6 +76,16 @@ class ForecastTracker:
     ----------
     db_path : str
         Path to the SQLite database file (default ``"quant_platform.db"``).
+    readonly : bool
+        When True, the cached connection is opened DATABASE-LEVEL read-only
+        (``db_config.sqlite_readonly_uri``, ``?mode=ro``) and ``_ensure_table()``
+        is skipped at construction (DDL is itself a write). A readonly instance
+        assumes ``forecast_errors`` already exists — true once any write-mode
+        tracker has run, which happens before any read-only consumer is
+        reachable in practice; if it genuinely doesn't exist yet, reads degrade
+        to their normal empty-sentinel behavior (CONSTRAINT #6). A write call
+        (``record_forecasts``/``update_actuals``) on a readonly instance is
+        rejected at the DB level rather than silently no-op'd (CONSTRAINT #4).
     """
 
     _TABLE_DDL = """
@@ -97,8 +107,9 @@ class ForecastTracker:
         ON forecast_errors (symbol, model_name, horizon_days, forecast_ts)
     """
 
-    def __init__(self, db_path: str = "quant_platform.db") -> None:
+    def __init__(self, db_path: str = "quant_platform.db", *, readonly: bool = False) -> None:
         self._db_path = db_path
+        self._readonly = readonly
         # ONE reused sqlite connection (opened lazily on first data-method use)
         # replaces the previous per-call open+PRAGMA. A per-ticker×per-horizon
         # caller used to open ~12 short-lived connections per ticker per cycle;
@@ -114,7 +125,8 @@ class ForecastTracker:
         # lock adds no meaningful contention while guaranteeing correctness.
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
-        self._ensure_table()
+        if not readonly:
+            self._ensure_table()
 
     # -------------------------------------------------------------------------
     # Private helpers
@@ -126,6 +138,16 @@ class ForecastTracker:
         from more than one ThreadPoolExecutor worker; correctness is provided
         by ``self._lock`` guarding every query.
         """
+        if self._readonly:
+            from db_config import sqlite_readonly_uri
+            conn = sqlite3.connect(
+                sqlite_readonly_uri(self._db_path), uri=True, check_same_thread=False
+            )
+            # busy_timeout ONLY — journal_mode=WAL is itself a write and would
+            # raise on a non-WAL db read-only (see db_config.create_readonly_db_
+            # engine's identical sqlite hook for the full explanation).
+            conn.execute("PRAGMA busy_timeout=5000")
+            return conn
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")  # concurrent read-write safe
         conn.execute("PRAGMA busy_timeout=5000")  # wait out cross-process locks

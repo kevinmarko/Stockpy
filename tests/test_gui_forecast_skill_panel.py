@@ -64,6 +64,14 @@ def test_rmse_helper_empty_db_returns_empty(tmp_path):
     assert _forecast_rmse_by_model(db, "AAPL", 30, window_days=180) == {}
 
 
+def test_rmse_helper_missing_db_creates_no_file(tmp_path):
+    """DATABASE-LEVEL read-only (mode=ro): a missing DB degrades to {} WITHOUT
+    creating a stray empty DB file as a side effect of rendering the panel."""
+    db = tmp_path / "absent.db"
+    assert _forecast_rmse_by_model(str(db), "AAPL", 30, window_days=180) == {}
+    assert not db.exists()
+
+
 def test_rmse_helper_returns_real_per_model_rmse(tmp_path):
     """A warmed DB yields finite per-model RMSE — proves the query column names
     match the forecast_errors schema (not silently returning {})."""

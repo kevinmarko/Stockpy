@@ -389,6 +389,64 @@ class TestQueryInvestyoDb:
 
         assert "Database query failed" in result
 
+    # -- DATABASE-LEVEL read-only enforcement (layer 2, beneath the regex) -----
+
+    def test_db_query_connection_is_readonly_at_db_level(self, monkeypatch, tmp_path):
+        """The property the regex guard alone cannot provide: calling _db_query
+        DIRECTLY (bypassing query_investyo_db's regex) must still be rejected by
+        the connection itself. This is the path every other _db_query caller —
+        and any future caller — takes."""
+        monkeypatch.chdir(tmp_path)
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute("CREATE TABLE T (symbol TEXT, score REAL)")
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            srv._db_query("INSERT INTO T VALUES ('X', 1.0)")
+
+    def test_db_query_pragma_query_only_cannot_be_reverted(self, monkeypatch, tmp_path):
+        """mode=ro is strictly stronger than PRAGMA query_only: even after asking
+        to disable query_only, a write still fails (mode=ro is not revertible)."""
+        monkeypatch.chdir(tmp_path)
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute("CREATE TABLE T (x INTEGER)")
+        conn.commit()
+        conn.close()
+
+        # query_only=0 on a mode=ro connection is itself a no-op; the subsequent
+        # write is still rejected by the read-only connection.
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            srv._db_query("PRAGMA query_only=0")
+            srv._db_query("INSERT INTO T VALUES (1)")
+
+    def test_query_investyo_db_regex_still_first_line_of_defense(self):
+        """The friendly regex layer is intact — a mutation gets the clear
+        message, not a raw DB error string."""
+        assert "Only SELECT queries are permitted" in srv.query_investyo_db(
+            "INSERT INTO T VALUES (1)"
+        )
+
+    def test_db_query_does_not_create_missing_db_file(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            srv._db_query("SELECT 1")
+        assert not (tmp_path / "quant_platform.db").exists()
+
+    def test_db_query_readonly_creates_no_wal_sidecars(self, monkeypatch, tmp_path):
+        """A read over a non-WAL db must not leave -wal/-shm sidecars behind."""
+        monkeypatch.chdir(tmp_path)
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute("CREATE TABLE T (x INTEGER)")
+        conn.execute("INSERT INTO T VALUES (1)")
+        conn.commit()
+        conn.close()
+
+        srv._db_query("SELECT * FROM T")
+
+        assert not (tmp_path / "quant_platform.db-wal").exists()
+        assert not (tmp_path / "quant_platform.db-shm").exists()
+
 
 # ---------------------------------------------------------------------------
 # execute_paper_trade

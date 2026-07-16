@@ -232,22 +232,41 @@ class HistoricalStore:
     ----------
     db_path:
         Path to the SQLite database file (default ``"quant_platform.db"``).
+    readonly:
+        When True, builds a DATABASE-LEVEL read-only engine
+        (``db_config.create_readonly_db_engine``) and skips ``_ensure_tables()``
+        (DDL is itself a write, and would raise on every construction). A
+        readonly instance therefore assumes the schema already exists — true in
+        practice once any write-mode store has run once, which happens before
+        any read-only consumer (a GUI panel, an API endpoint) is reachable. If
+        the schema genuinely doesn't exist yet, reads degrade to their normal
+        empty-sentinel dead-letter behavior (CONSTRAINT #6) exactly as they
+        would against an existing-but-empty table — this is not a new failure
+        mode, just a different reason for the same outcome. Calling a write
+        method (e.g. ``save_account_snapshot``) on a readonly instance raises
+        at the DB level (CONSTRAINT #4 — never silently no-op a write).
     """
 
-    def __init__(self, db_path: str = "quant_platform.db") -> None:
+    def __init__(self, db_path: str = "quant_platform.db", *, readonly: bool = False) -> None:
         self._db_path = db_path
+        self._readonly = readonly
         if "://" not in db_path:
             db_url = f"sqlite:///{os.path.abspath(db_path)}"
         else:
             db_url = db_path
 
-        from db_config import create_db_engine
         from sqlalchemy.orm import sessionmaker
-        self.engine = create_db_engine(db_url)
+        if readonly:
+            from db_config import create_readonly_db_engine
+            self.engine = create_readonly_db_engine(db_url)
+        else:
+            from db_config import create_db_engine
+            self.engine = create_db_engine(db_url)
         self.Session = sessionmaker(bind=self.engine)
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
-        self._ensure_tables()
+        if not readonly:
+            self._ensure_tables()
 
     # ─────────────────────────────────────────────────────────────────────────
     def _check_mock_connection(self) -> None:

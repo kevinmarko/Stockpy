@@ -811,6 +811,24 @@ class Settings(BaseSettings):
             "SQLAlchemy pool max overflow connections (Postgres backend only; ignored for SQLite)."
         ),
     )
+    # Optional dedicated read-only Postgres DSN for db_config.create_readonly_db_engine().
+    # `postgresql_readonly=True` (used when this is unset) is a session GUC any
+    # connected client can flip back — defense-in-depth, not a hard boundary. Set
+    # this to a DSN authenticating as a RESTRICTED ROLE with no INSERT/UPDATE/
+    # DELETE/DDL grants (see db_config.py's create_readonly_db_engine docstring
+    # for the CREATE ROLE script) to get a genuine database-ENFORCED read-only
+    # boundary, matching SQLite's mode=ro. Only consulted on the Postgres branch;
+    # SQLite ignores this (mode=ro is already a hard boundary there). None →
+    # today's postgresql_readonly-only behavior, unchanged. May embed
+    # credentials; never logged (CONSTRAINT #3).
+    MCP_DATABASE_URL_RO: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional read-only Postgres DSN (a restricted ROLE with no write "
+            "grants) for the MCP query surface. None → falls back to "
+            "postgresql_readonly=True on the primary DATABASE_URL. Never logged."
+        ),
+    )
 
     # --- Historical Persistence (data/historical_store.py, Tier 2.3) ---
     # Gates all DB read/write routing through HistoricalStore.  Setting False

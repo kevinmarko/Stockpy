@@ -74,7 +74,9 @@ def forecast_skill_view(symbol: str, horizon_days: int = _DEFAULT_HORIZON) -> Di
     try:
         from forecasting.forecast_tracker import ForecastTracker
 
-        tracker = ForecastTracker()
+        # A GET endpoint never writes; read-only also means a fresh install
+        # doesn't silently create the table as a side effect of a read.
+        tracker = ForecastTracker(readonly=True)
     except Exception as exc:  # noqa: BLE001 — dead-letter
         logger.debug("ForecastTracker unavailable: %s", exc)
         return _empty_view(sym, horizon)

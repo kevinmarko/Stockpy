@@ -515,3 +515,64 @@ class TestGetForecastReliabilityCurve:
         assert not curve.empty
         assert curve["count"].dtype.kind in "iu"
         assert curve["horizon_days"].dtype.kind in "iu"
+
+
+# ---------------------------------------------------------------------------
+# readonly=True — DATABASE-LEVEL read-only tracker
+# ---------------------------------------------------------------------------
+
+class TestReadonlyMode:
+    def test_reads_data_written_by_a_write_mode_tracker(self, tmp_path):
+        db = os.path.join(str(tmp_path), "t.db")
+        writer = ForecastTracker(db_path=db)
+        _record(writer, symbol="AAPL", horizon=30, arima=100.0)
+
+        reader = ForecastTracker(db_path=db, readonly=True)
+        # get_skill_weights needs completed (actualized) rows to return
+        # anything nonempty; pending_count is the more direct proof of a read.
+        assert reader.pending_count("AAPL", 30) == 1
+
+    def test_write_is_blocked_and_leaves_no_trace(self, tmp_path):
+        db = os.path.join(str(tmp_path), "t.db")
+        ForecastTracker(db_path=db)  # write-mode: creates the schema first
+        reader = ForecastTracker(db_path=db, readonly=True)
+        reader.record_forecasts("MSFT", 30, {"arima": 50.0}, datetime.now(timezone.utc))
+        writer = ForecastTracker(db_path=db)
+        assert writer.pending_count("MSFT", 30) == 0
+
+    def test_degrades_to_empty_on_missing_table(self, tmp_path):
+        """No write-mode tracker has ever run -> forecast_errors doesn't exist.
+        A readonly instance must degrade gracefully (CONSTRAINT #6), not crash."""
+        db = os.path.join(str(tmp_path), "never_written.db")
+        open(db, "w").close()
+        reader = ForecastTracker(db_path=db, readonly=True)
+        assert reader.get_skill_weights("AAPL", 30) == {}
+        assert reader.pending_count("AAPL", 30) == 0
+        assert reader.completed_count("AAPL", 30) == 0
+
+    def test_construction_skips_ensure_table(self, tmp_path, monkeypatch):
+        """readonly=True must not attempt DDL at construction — a read-only
+        engine would reject it anyway, and it would fire on every construction."""
+        calls = []
+        monkeypatch.setattr(
+            ForecastTracker, "_ensure_table", lambda self: calls.append("ensure")
+        )
+        db = os.path.join(str(tmp_path), "t.db")
+        ForecastTracker(db_path=db, readonly=True)
+        assert calls == []
+
+    def test_readonly_connection_sets_no_journal_mode(self, tmp_path):
+        """Regression for the WAL trap (see db_config.create_readonly_db_engine):
+        the readonly connection must issue busy_timeout only, never journal_mode
+        -- reading a NON-WAL db read-only must not raise."""
+        import sqlite3
+        db = os.path.join(str(tmp_path), "plain.db")
+        conn = sqlite3.connect(db)
+        conn.execute(ForecastTracker._TABLE_DDL)
+        conn.commit()
+        conn.close()
+        assert not os.path.exists(db + "-wal")  # confirm non-WAL
+
+        reader = ForecastTracker(db_path=db, readonly=True)
+        # Would raise here if the readonly hook issued journal_mode=WAL.
+        assert reader.pending_count("AAPL", 30) == 0

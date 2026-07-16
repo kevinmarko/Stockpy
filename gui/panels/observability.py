@@ -277,7 +277,7 @@ def render_observability() -> None:
     try:
         from transactions_store import TransactionsStore
 
-        ts = TransactionsStore()
+        ts = TransactionsStore(readonly=True)
         closed = ts.closed_trades_df()
         if not closed.empty and {"realized_pnl", "strategy_id"} <= set(closed.columns):
             pnl = (closed.groupby("strategy_id")["realized_pnl"].sum()
@@ -445,7 +445,7 @@ def _render_observability_open_positions_vs_signals(snap: Dict[str, Any]) -> Non
     try:
         from transactions_store import TransactionsStore
 
-        open_df = TransactionsStore().open_trades_df()
+        open_df = TransactionsStore(readonly=True).open_trades_df()
     except Exception as exc:  # noqa: BLE001
         st.caption(f"(transactions store unavailable: {exc})")
         open_df = pd.DataFrame()
@@ -498,7 +498,7 @@ def _render_observability_portfolio_risk_metrics() -> None:
     try:
         from transactions_store import TransactionsStore
 
-        open_df = TransactionsStore().open_trades_df()
+        open_df = TransactionsStore(readonly=True).open_trades_df()
     except Exception:
         open_df = pd.DataFrame()
 
@@ -615,7 +615,7 @@ def _render_observability_recent_closed_trades() -> None:
     try:
         from transactions_store import TransactionsStore
 
-        closed_df = TransactionsStore().closed_trades_df()
+        closed_df = TransactionsStore(readonly=True).closed_trades_df()
     except Exception as exc:  # noqa: BLE001
         st.caption(f"(transactions store unavailable: {exc})")
         return
@@ -662,7 +662,7 @@ def _render_observability_equity_curve() -> None:
     try:
         from transactions_store import TransactionsStore
 
-        closed_df = TransactionsStore().closed_trades_df()
+        closed_df = TransactionsStore(readonly=True).closed_trades_df()
     except Exception as exc:  # noqa: BLE001
         st.caption(f"(transactions store unavailable: {exc})")
         return
@@ -809,12 +809,20 @@ def _forecast_rmse_by_model(
     import sqlite3
     from datetime import datetime, timedelta, timezone
 
+    from db_config import sqlite_readonly_uri
+
     out: Dict[str, float] = {}
     try:
         since_iso = (
             datetime.now(timezone.utc) - timedelta(days=window_days)
         ).isoformat()
-        conn = sqlite3.connect(db_path)
+        # DATABASE-LEVEL read-only (mode=ro): this helper only SELECTs, and a
+        # read-only connection also avoids create'ing a stray empty DB file when
+        # db_path is missing (which raises here → caught → empty render). Scope
+        # note: _forecast_skill_rows below ALSO builds a ForecastTracker, whose
+        # own connection stays read-write (it has real writers elsewhere); this
+        # change hardens the two direct SELECT connections, not the whole panel.
+        conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
         try:
             cursor = conn.execute(
                 """SELECT model_name, AVG(squared_error) AS mse
@@ -877,6 +885,8 @@ def _forecast_skill_rows(
     import sqlite3
     from datetime import datetime, timedelta, timezone
 
+    from db_config import sqlite_readonly_uri
+
     try:
         from forecasting.forecast_tracker import ALL_MODEL_NAMES, ForecastTracker
     except Exception as exc:  # noqa: BLE001
@@ -890,12 +900,15 @@ def _forecast_skill_rows(
 
         # ── 1. ONE aggregated RMSE query over ONE connection ─────────────────
         # rmse_by_cell[(symbol_upper, horizon)] -> {model_name: rmse|nan}
+        # DATABASE-LEVEL read-only (mode=ro) — SELECT-only, and no stray DB file
+        # is created if db_path is missing. The ForecastTracker built below keeps
+        # its own read-write connection (it has real writers elsewhere).
         rmse_by_cell: Dict[Tuple[str, int], Dict[str, float]] = {}
         upper_syms = [s.upper() for s in symbols]
         if upper_syms:
             placeholders = ",".join("?" for _ in upper_syms)
             try:
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
                 try:
                     cursor = conn.execute(
                         f"""SELECT symbol, horizon_days, model_name,
@@ -920,7 +933,10 @@ def _forecast_skill_rows(
                 rmse_by_cell = {}
 
         # ── 2. ONE ForecastTracker for pending/completed/weights ─────────────
-        tracker = ForecastTracker(db_path=db_path)
+        # Safe to open read-only: this loader is only ever reached (via
+        # _render_observability_forecast_skill, below) AFTER that function's own
+        # write-mode ForecastTracker() has already self-provisioned the table.
+        tracker = ForecastTracker(db_path=db_path, readonly=True)
 
         rows: List[Dict[str, Any]] = []
         any_history = False
@@ -1083,7 +1099,10 @@ def _render_observability_forecast_skill(snap: Dict[str, Any]) -> None:
     try:
         from forecasting.forecast_tracker import ForecastTracker
 
-        tracker = ForecastTracker()
+        # Safe to open read-only: this section only renders after the RMSE
+        # section above's write-mode ForecastTracker() has already run (any
+        # earlier failure/early-return in the same function exits before here).
+        tracker = ForecastTracker(readonly=True)
         horizons_available = sorted({int(h) for h in {10, 30, 60, 90}})
         rel_horizon = st.selectbox(
             "Horizon (days)", options=["All"] + horizons_available,

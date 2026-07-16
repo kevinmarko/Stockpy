@@ -169,6 +169,10 @@ SECRET_KEYS: tuple[str, ...] = (
     # Postgres/Supabase DSN — may embed user:pass@host; never logged, never
     # returned in cleartext by the GUI (CONSTRAINT #3).
     "DATABASE_URL",
+    # Optional dedicated read-only Postgres DSN (a restricted ROLE with no write
+    # grants) for db_config.create_readonly_db_engine(). Same treatment as
+    # DATABASE_URL — may embed credentials, never logged, never GUI-writable.
+    "MCP_DATABASE_URL_RO",
     "ALERT_WEBHOOK_URL",
     # Bearer token for the read-only State API (api/state_api.py). Treated like a
     # webhook/token secret — masked, never GUI-writable (CONSTRAINT #3).
