@@ -399,6 +399,112 @@ export interface PairsRadar {
   reason: string | null;
 }
 
+/**
+ * GET /automation/status — the "did the pipeline run?" composite. Every
+ * sub-object is honest about WHERE it came from (`source`/`*_source` fields)
+ * rather than silently blending sources: after a daemon restart the
+ * in-memory run history is gone, and this shape says so explicitly instead
+ * of rendering a blank or fabricated run record.
+ */
+export interface DaemonInfo {
+  alive: boolean;
+  source: "control_api" | "daemon_json" | "none";
+  pid: number | null;
+  port: number | null;
+  started_at: string | null;
+  interval_seconds: number | null;
+  is_running: boolean | null;
+  current_run_id: string | null;
+  engines_warm: boolean | null;
+}
+
+export interface RunRecord {
+  run_id: string;
+  state: "queued" | "running" | "succeeded" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  error: string | null;
+  reason: string;
+  progress: ProgressState | null;
+}
+
+export interface ProgressState {
+  run_id: string | null;
+  state: string;
+  stage: string;
+  stage_index: number;
+  stage_total: number;
+  symbols_done: number;
+  symbols_total: number;
+  percent: number;
+  message: string;
+  started_at: string;
+  updated_at: string;
+  age_seconds: number;
+  is_terminal: boolean;
+  /** A "running" progress file untouched for 15+ minutes -- a dead run left
+   * behind by a crash, not a live one. Never render it as still in-flight. */
+  stale: boolean;
+}
+
+export interface DeadLetterReport {
+  generated_at: string | null;
+  entry_count: number; // TRUE total, even when `entries` is capped
+  entries: Array<Record<string, unknown>>;
+}
+
+export interface AutomationStatus {
+  daemon: DaemonInfo;
+  last_run: RunRecord | null;
+  /** "daemon_memory" when a real run record exists; "state_snapshot" when
+   * the daemon has never triggered a run this process lifetime (nothing is
+   * synthesized in that case -- fall back to pipeline.snapshot_age_seconds). */
+  last_run_source: "daemon_memory" | "state_snapshot";
+  pipeline: {
+    snapshot_age_seconds: number | null;
+    snapshot_age_source: "timestamp" | "mtime" | "missing";
+    /** null in advisory mode BY DESIGN -- see heartbeat_note. Never render
+     * this alone as "engine down". */
+    heartbeat_age_seconds: number | null;
+    heartbeat_note: string;
+  };
+  progress: ProgressState | null;
+  kill_switch: { active: boolean; reason: string | null };
+  errors: DeadLetterReport;
+  advisory_only: boolean;
+  dry_run: boolean;
+}
+
+/** GET /automation/schedule — interval drift display + read-only cron. */
+export interface CronEntry {
+  schedule: string; // "0 21 * * 1-5"
+  command: string;
+  comment: string;
+}
+
+export interface AutomationSchedule {
+  interval: {
+    running_value: number | null;
+    configured_value: number;
+    /** running_value disagrees with configured_value -- a .env edit hasn't
+     * reached the live daemon yet (it applies on next restart). */
+    drift: boolean;
+    writable: boolean;
+    note: string;
+  };
+  cron: {
+    source: string; // "deploy/crontab.txt"
+    /** Always null -- this API parses the repo file, never `crontab -l`
+     * (that would be a subprocess call from an API, the same RCE-adjacent
+     * surface cron/systemd WRITING was excluded for). It cannot confirm
+     * what's actually installed on the host. */
+    installed: null;
+    note: string;
+    entries: CronEntry[];
+  };
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

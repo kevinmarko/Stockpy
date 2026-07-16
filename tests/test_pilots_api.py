@@ -802,7 +802,20 @@ def test_pilots_api_never_imports_heavy_engines():
     import pilots.*, execution.kill_switch, data.historical_store, and
     data.robinhood_portfolio — but must NEVER directly import a heavy
     calculation engine or the orchestrator (those are reached, if at all, only
-    through pilots.mirror -> execution.queue_builder)."""
+    through pilots.mirror -> execution.queue_builder).
+
+    ``desktop`` is forbidden too, even though it's not itself a calculation
+    engine: ``desktop.daemon_runtime`` imports ``main_orchestrator`` at its own
+    module top, so importing anything under ``desktop.*`` here would pull the
+    orchestrator in TRANSITIVELY and defeat this guard's intent (the guard's
+    walk is first-segment-only and non-transitive, so ``desktop.daemon_runtime``
+    would otherwise pass while smuggling `main_orchestrator` in behind it).
+    The Data & Automation feature (api/pilots_api.py's GET /automation/status)
+    reaches the orchestrator daemon ONLY over loopback HTTP via
+    gui.daemon_client — never by importing the daemon object directly via
+    api.control_api.get_daemon(), which only works in the single co-hosted
+    deployment shape (PILOTS_API_ENABLED=True) and not the documented
+    standalone one. See gui/daemon_client.py's module docstring."""
     src = pathlib.Path(pilots_api.__file__).read_text(encoding="utf-8")
     tree = ast.parse(src)
 
@@ -821,6 +834,386 @@ def test_pilots_api_never_imports_heavy_engines():
         "macro_engine",
         "technical_options_engine",
         "main_orchestrator",
+        "desktop",
     }
     overlap = imported_modules & forbidden_modules
     assert not overlap, f"api/pilots_api.py must not import {overlap}"
+
+
+def test_gui_package_init_stays_import_inert():
+    """api/pilots_api.py imports gui.daemon_client (GET /automation/status'
+    only path to the orchestrator daemon — see the guard test above), which
+    executes gui/__init__.py as a side effect of the import. That file is
+    docstring + `__all__` (a list of strings) only today, so the import is
+    inert. If anyone ever adds a real import to gui/__init__.py, the Pilots
+    API would silently inherit it — this test pins that gui/__init__.py stays
+    free of any actual import statement, so such a change fails loudly here
+    instead of surfacing as an unexplained pilots_api import-time side effect."""
+    import gui
+
+    tree = ast.parse(pathlib.Path(gui.__file__).read_text(encoding="utf-8"))
+    real_imports = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        and getattr(node, "module", None) != "__future__"
+    ]
+    assert not real_imports, (
+        f"gui/__init__.py must stay import-inert (found: {real_imports}) — "
+        "api/pilots_api.py imports gui.daemon_client and would silently "
+        "inherit any real import added here."
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /automation/status — the "did the pipeline run?" composite endpoint.
+# gui.daemon_client and execution.kill_switch.GlobalKillSwitch are both
+# module-top imports on pilots_api, so both are mock.patch.object-able here.
+# ---------------------------------------------------------------------------
+
+
+class _ActiveKS:
+    def is_active(self):
+        return True
+
+    def reason(self):
+        return "test halt"
+
+
+class _InactiveKS:
+    def is_active(self):
+        return False
+
+    def reason(self):
+        return ""
+
+
+def _fake_daemon_status(**overrides):
+    base = {
+        "daemon_alive": True,
+        "is_running": False,
+        "current_run_id": None,
+        "interval_seconds": 300,
+        "engines_warm": True,
+        "started_at": "2026-07-16T15:34:45.942581+00:00",
+    }
+    base.update(overrides)
+    return base
+
+
+def _fake_run_record(**overrides):
+    base = {
+        "run_id": "orch-123",
+        "state": "succeeded",
+        "started_at": "2026-07-16T19:00:00+00:00",
+        "finished_at": "2026-07-16T19:05:00+00:00",
+        "duration_seconds": 300.0,
+        "error": None,
+        "reason": "manual",
+        "progress": None,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestAutomationStatus:
+    def test_daemon_reachable_via_control_api(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(
+                pilots_api.daemon_client, "get_status",
+                return_value=_fake_daemon_status(),
+            ):
+                with mock.patch.object(
+                    pilots_api.daemon_client, "get_latest_run",
+                    return_value=_fake_run_record(),
+                ):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                        resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["daemon"]["alive"] is True
+        assert body["daemon"]["source"] == "control_api"
+        assert body["daemon"]["interval_seconds"] == 300
+        assert body["last_run"]["run_id"] == "orch-123"
+        assert body["last_run_source"] == "daemon_memory"
+        assert body["kill_switch"] == {"active": False, "reason": None}
+
+    def test_daemon_unreachable_falls_back_to_daemon_json(self, tmp_path):
+        """The restart-honesty core: when the Control API can't be reached,
+        output/daemon.json (written once at startup) still supplies pid/
+        interval/started_at, and `alive` honestly reads False."""
+        daemon_json = {
+            "pid": 77880,
+            "state": "started",
+            "interval_seconds": 300,
+            "started_at": "2026-07-16T15:34:45.942581+00:00",
+            "port": 8601,
+            "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(__import__("json").dumps(daemon_json), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                        resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["daemon"]["alive"] is False
+        assert body["daemon"]["source"] == "daemon_json"
+        assert body["daemon"]["pid"] == 77880
+        assert body["daemon"]["interval_seconds"] == 300
+        assert body["last_run"] is None
+        assert body["last_run_source"] == "state_snapshot"
+
+    def test_daemon_unreachable_and_no_daemon_json(self, tmp_path):
+        """Neither the Control API nor a daemon.json file exist (never
+        launched, or a very early state) — everything degrades to null,
+        never a 500, never a fabricated value."""
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["daemon"] == {
+            "alive": False, "source": "none", "pid": None, "port": None,
+            "started_at": None, "interval_seconds": None, "is_running": None,
+            "current_run_id": None, "engines_warm": None,
+        }
+        assert body["last_run"] is None
+        assert body["last_run_source"] == "state_snapshot"
+
+    def test_cold_start_is_200_with_honest_nulls_never_404(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pipeline"]["snapshot_age_seconds"] is None
+        assert body["pipeline"]["snapshot_age_source"] == "missing"
+        assert body["pipeline"]["heartbeat_age_seconds"] is None
+        assert body["progress"] is None
+        assert body["errors"] == {"generated_at": None, "entry_count": 0, "entries": []}
+
+    def test_snapshot_timestamp_source(self, tmp_path):
+        import json
+        from datetime import datetime, timezone
+
+        snap = {"timestamp": datetime.now(timezone.utc).isoformat(), "tickers": []}
+        (tmp_path / "state_snapshot.json").write_text(json.dumps(snap), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    resp = client.get("/automation/status")
+        body = resp.json()
+        assert body["pipeline"]["snapshot_age_source"] == "timestamp"
+        assert body["pipeline"]["snapshot_age_seconds"] < 5.0
+
+    def test_snapshot_missing_timestamp_field_falls_back_to_mtime(self, tmp_path):
+        import json
+
+        (tmp_path / "state_snapshot.json").write_text(json.dumps({"tickers": []}), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    resp = client.get("/automation/status")
+        body = resp.json()
+        assert body["pipeline"]["snapshot_age_source"] == "mtime"
+        assert body["pipeline"]["snapshot_age_seconds"] < 5.0
+
+    def test_progress_running_and_stale_flag(self, tmp_path):
+        import json
+        from datetime import datetime, timedelta, timezone
+
+        old = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+        progress = {
+            "run_id": "orch-999", "state": "running", "stage": "forecasting",
+            "stage_index": 2, "stage_total": 4, "symbols_done": 5,
+            "symbols_total": 10, "percent": 62.5, "message": "Forecasting AAPL",
+            "started_at": old, "updated_at": old,
+        }
+        (tmp_path / "progress.json").write_text(json.dumps(progress), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    resp = client.get("/automation/status")
+        body = resp.json()
+        assert body["progress"]["state"] == "running"
+        assert body["progress"]["stale"] is True  # 20 min > the 900s/15min threshold
+
+    def test_progress_running_but_fresh_is_not_stale(self, tmp_path):
+        import json
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        progress = {
+            "run_id": "orch-999", "state": "running", "stage": "forecasting",
+            "stage_index": 2, "stage_total": 4, "symbols_done": 5,
+            "symbols_total": 10, "percent": 62.5, "message": "Forecasting AAPL",
+            "started_at": now, "updated_at": now,
+        }
+        (tmp_path / "progress.json").write_text(json.dumps(progress), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    resp = client.get("/automation/status")
+        assert resp.json()["progress"]["stale"] is False
+
+    def test_dead_letter_entries_surfaced_and_capped(self, tmp_path):
+        import json
+
+        entries = [{"symbol": f"SYM{i}", "stage": "forecasting", "error": "boom"} for i in range(60)]
+        payload = {"run_id": "x", "generated_at": "2026-07-16T19:00:00+00:00", "entries": entries}
+        (tmp_path / "dead_letter.json").write_text(json.dumps(payload), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    resp = client.get("/automation/status")
+        body = resp.json()
+        assert body["errors"]["entry_count"] == 60
+        assert len(body["errors"]["entries"]) == 50  # capped, true count still 60
+
+    def test_dead_letter_malformed_degrades_to_empty(self, tmp_path):
+        (tmp_path / "dead_letter.json").write_text("{not valid json", encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        assert resp.json()["errors"] == {"generated_at": None, "entry_count": 0, "entries": []}
+
+    def test_kill_switch_active_surfaced(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_ActiveKS()):
+                        resp = client.get("/automation/status")
+        body = resp.json()
+        assert body["kill_switch"] == {"active": True, "reason": "test halt"}
+
+    def test_daemon_client_raising_is_not_silently_swallowed(self, tmp_path):
+        """daemon_client's own contract is non-raising (its docstring's
+        CONSTRAINT #6) — this endpoint deliberately does NOT wrap the call in
+        its own try/except, so if that contract were ever violated the
+        failure surfaces loudly (TestClient re-raises server exceptions by
+        default) rather than this endpoint silently faking a healthy status."""
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(
+                pilots_api.daemon_client, "get_status",
+                side_effect=RuntimeError("unexpected"),
+            ):
+                with pytest.raises(RuntimeError, match="unexpected"):
+                    client.get("/automation/status")
+
+    def test_read_token_gates_the_endpoint(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/automation/status")
+        assert resp.status_code == 401
+
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get(
+                    "/automation/status", headers={"Authorization": "Bearer read-tok"}
+                )
+        assert resp.status_code == 200
+
+    def test_read_token_unset_is_open(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", ""):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/automation/status")
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /automation/schedule
+# ---------------------------------------------------------------------------
+
+
+class TestAutomationSchedule:
+    def test_no_drift_when_running_matches_configured(self):
+        with mock.patch.object(settings, "ORCHESTRATOR_INTERVAL_SECONDS", 300):
+            with mock.patch.object(
+                pilots_api.daemon_client, "get_status",
+                return_value=_fake_daemon_status(interval_seconds=300),
+            ):
+                resp = client.get("/automation/schedule")
+        body = resp.json()
+        assert body["interval"]["running_value"] == 300
+        assert body["interval"]["configured_value"] == 300
+        assert body["interval"]["drift"] is False
+
+    def test_drift_flagged_when_running_differs_from_configured(self):
+        """A .env edit doesn't reach a live daemon until it restarts -- this
+        is the whole point of the endpoint: never let the operator assume an
+        edit already took effect."""
+        with mock.patch.object(settings, "ORCHESTRATOR_INTERVAL_SECONDS", 0):
+            with mock.patch.object(
+                pilots_api.daemon_client, "get_status",
+                return_value=_fake_daemon_status(interval_seconds=300),
+            ):
+                resp = client.get("/automation/schedule")
+        body = resp.json()
+        assert body["interval"]["running_value"] == 300
+        assert body["interval"]["configured_value"] == 0
+        assert body["interval"]["drift"] is True
+
+    def test_running_value_falls_back_to_daemon_json_when_control_api_down(self, tmp_path):
+        import json
+
+        (tmp_path / "daemon.json").write_text(
+            json.dumps({"interval_seconds": 120, "pid": 1, "started_at": "x", "port": 8601, "pilots_api_port": None}),
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                resp = client.get("/automation/schedule")
+        assert resp.json()["interval"]["running_value"] == 120
+
+    def test_running_value_null_when_no_daemon_signal_at_all(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                resp = client.get("/automation/schedule")
+        body = resp.json()
+        assert body["interval"]["running_value"] is None
+        assert body["interval"]["drift"] is False  # null running_value never claims drift
+
+    def test_interval_is_read_only_in_this_build(self):
+        with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+            resp = client.get("/automation/schedule")
+        assert resp.json()["interval"]["writable"] is False
+
+    def test_cron_never_shells_out_and_installed_is_honestly_null(self):
+        """Regression guard for the RCE-adjacent surface this design
+        deliberately avoids: no subprocess call, ever."""
+        with mock.patch("subprocess.run", side_effect=AssertionError("must not shell out")):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                resp = client.get("/automation/schedule")
+        assert resp.status_code == 200
+        assert resp.json()["cron"]["installed"] is None
+
+    def test_cron_entries_parsed_from_repo_crontab(self):
+        with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+            resp = client.get("/automation/schedule")
+        entries = resp.json()["cron"]["entries"]
+        assert len(entries) >= 1
+        assert all({"schedule", "command", "comment"} <= e.keys() for e in entries)
+        # The real deploy/crontab.txt's daily-briefing line, so this test
+        # would catch that file being emptied or moved without noticing.
+        assert any("daily_briefing.py" in e["command"] for e in entries)
+
+    def test_cron_missing_file_degrades_to_empty_list(self):
+        """A missing/unreadable crontab.txt (pilots.run_status.parse_crontab's
+        own OSError catch — see test_run_status.py for that unit-level proof)
+        must surface as an empty list here, never a 500."""
+        with mock.patch.object(pilots_api.run_status, "parse_crontab", return_value=[]):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                resp = client.get("/automation/schedule")
+        assert resp.status_code == 200
+        assert resp.json()["cron"]["entries"] == []
+
+    def test_read_token_gates_the_endpoint(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/automation/schedule")
+        assert resp.status_code == 401

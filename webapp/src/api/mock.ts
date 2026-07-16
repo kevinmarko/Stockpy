@@ -10,6 +10,8 @@
 import { ApiError } from "./types";
 import type {
   AlertsFeed,
+  AutomationSchedule,
+  AutomationStatus,
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
@@ -1172,6 +1174,85 @@ export const mockApi = {
       notice:
         "This creates a gated, paper-first order queue that you must confirm. No order is placed automatically.",
     });
+  },
+
+  async getAutomationStatus(): Promise<AutomationStatus> {
+    const now = Date.now();
+    return delay(
+      {
+        daemon: {
+          alive: true,
+          source: "control_api",
+          pid: null,
+          port: 8601,
+          started_at: new Date(now - 6 * 3600_000).toISOString(),
+          interval_seconds: 300,
+          is_running: false,
+          current_run_id: null,
+          engines_warm: true,
+        },
+        last_run: {
+          run_id: "orch-mock-0417",
+          state: "succeeded",
+          started_at: new Date(now - 5 * 60_000 - 40_000).toISOString(),
+          finished_at: new Date(now - 5 * 60_000).toISOString(),
+          duration_seconds: 40.2,
+          error: null,
+          reason: "interval",
+          progress: null,
+        },
+        last_run_source: "daemon_memory",
+        pipeline: {
+          snapshot_age_seconds: 300,
+          snapshot_age_source: "timestamp",
+          heartbeat_age_seconds: null,
+          heartbeat_note:
+            "heartbeat.txt is written only by main_orchestrator.py; advisory runs (main.py) never write it, so null here does not mean the engine is down — see pipeline.snapshot_age_seconds for the cross-mode liveness signal.",
+        },
+        progress: null,
+        kill_switch: { active: false, reason: null },
+        errors: { generated_at: new Date(now - 5 * 60_000).toISOString(), entry_count: 0, entries: [] },
+        advisory_only: true,
+        dry_run: false,
+      },
+      120
+    );
+  },
+
+  async getAutomationSchedule(): Promise<AutomationSchedule> {
+    return delay(
+      {
+        interval: {
+          running_value: 300,
+          configured_value: 300,
+          drift: false,
+          writable: false,
+          note: "Read-only in this build — schedule writes land in a follow-up.",
+        },
+        cron: {
+          source: "deploy/crontab.txt",
+          installed: null,
+          note:
+            "Parsed from the repo file — the intended schedule. This API never runs `crontab -l`, so it cannot confirm what is actually installed on the host; it may differ.",
+          entries: [
+            {
+              schedule: "0 21 * * 1-5",
+              command:
+                "cd /opt/investyo && .venv/bin/python scripts/daily_briefing.py >> /opt/investyo/logs/daily_briefing.log 2>&1",
+              comment:
+                "Daily: Full pipeline refresh (weekdays, 1 hour after market close) Fetches latest price bars, EDGAR filings, macro indicators, and computes composite signals for the active universe.",
+            },
+            {
+              schedule: "0 6 * * 0",
+              command:
+                "cd /opt/investyo && .venv/bin/python scripts/backfill_edgar_fundamentals.py --tickers all >> /opt/investyo/logs/edgar_backfill.log 2>&1",
+              comment: "Weekly: Full EDGAR backfill sweep (Sundays at 06:00 UTC / 2 AM ET)",
+            },
+          ],
+        },
+      },
+      80
+    );
   },
 
   async getBrokerageStatus(): Promise<BrokerageStatus> {

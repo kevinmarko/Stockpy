@@ -12,6 +12,8 @@ import { ApiError } from "./types";
 import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type {
   AlertsFeed,
+  AutomationSchedule,
+  AutomationStatus,
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
@@ -135,6 +137,8 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify({ amount }),
     }),
+  getAutomationStatus: () => http<AutomationStatus>("/automation/status"),
+  getAutomationSchedule: () => http<AutomationSchedule>("/automation/schedule"),
   getBrokerageStatus: () => http<BrokerageStatus>("/brokerage/status"),
   connectBrokerage: (creds: BrokerageConnectRequest) =>
     http<BrokerageConnectResult>("/brokerage/connect", {

@@ -89,6 +89,7 @@ from pilots import (
     pairs,
     performance,
     realized,
+    run_status,
     scoring,
     symbols,
 )
@@ -101,6 +102,17 @@ from pilots.mirror import plan_follow
 # module top so tests can ``mock.patch.object(pilots_api, "HistoricalStore", ...)``.
 from data.historical_store import HistoricalStore
 from execution.kill_switch import GlobalKillSwitch
+
+# The Data & Automation surface (GET /automation/*) reaches the orchestrator
+# daemon ONLY over loopback HTTP via gui.daemon_client — never by importing the
+# daemon object directly (api.control_api.get_daemon() only works in the
+# single co-hosted-process deployment shape, not the documented standalone
+# one; see gui/daemon_client.py's module docstring). ``desktop.*`` is a
+# forbidden import for this module (see this file's AST guard test) precisely
+# because it would pull main_orchestrator in transitively. Imported at module
+# top, aliased, so tests can ``mock.patch.object(pilots_api, "daemon_client", ...)``.
+import gui.daemon_client as daemon_client
+from reporting.progress import read_progress
 
 # Brokerage-connect credential intake — read-only verification + the dedicated,
 # hard-scoped .env writer (see data/brokerage_credentials.py). Imported at
@@ -849,3 +861,198 @@ def disconnect_brokerage() -> Dict[str, Any]:
         logger.warning("pilots_api: brokerage logout failed (ignored): %s", exc)
     brokerage_credentials.clear_rh_credentials()
     return {"connected": False}
+
+
+# ---------------------------------------------------------------------------
+# Data & Automation — read-only pipeline run status + schedule (Phase 2 of the
+# Data & Automation settings dashboard; the webapp/ /settings screen's backend).
+# Both endpoints are read-only GETs guarded by the fail-open require_read_token,
+# same posture as every other read endpoint in this module. Manual "Run Now"
+# and schedule/pause writes are a later phase — this phase exists to get
+# "did the pipeline run?" off the operator's SSH/journalctl critical path.
+# ---------------------------------------------------------------------------
+
+
+def _serialize_progress(state: Any) -> Optional[Dict[str, Any]]:
+    """JSON-safe dict from a ``reporting.progress.ProgressState``, or ``None``.
+
+    Adds ``age_seconds``/``stale`` on top of the raw fields: a ``"running"``
+    progress.json that hasn't been touched in 15+ minutes is a DEAD run, not a
+    live one (the daemon/process that owned it crashed without cleaning up) —
+    the PWA needs that distinction to avoid rendering a permanently-spinning
+    progress bar."""
+    if state is None:
+        return None
+    age = state.age_seconds()
+    return {
+        "run_id": state.run_id,
+        "state": state.state,
+        "stage": state.stage,
+        "stage_index": state.stage_index,
+        "stage_total": state.stage_total,
+        "symbols_done": state.symbols_done,
+        "symbols_total": state.symbols_total,
+        "percent": state.percent,
+        "message": state.message,
+        "started_at": state.started_at.isoformat(),
+        "updated_at": state.updated_at.isoformat(),
+        "age_seconds": age,
+        "is_terminal": state.is_terminal,
+        "stale": (not state.is_terminal) and age > 900,
+    }
+
+
+@app.get("/automation/status", dependencies=[Depends(require_read_token)])
+def get_automation_status() -> Dict[str, Any]:
+    """Composite "did the pipeline run?" answer for the Settings screen.
+
+    Composes FIVE independent sources and NAMES which one supplied each field
+    — the honesty contract this endpoint exists for:
+
+    * ``daemon`` — ``gui.daemon_client.get_status()`` (live, over loopback
+      HTTP to the Control API) when reachable (``source: "control_api"``);
+      falls back to ``output/daemon.json`` (written once at daemon startup)
+      when it isn't (``source: "daemon_json"``, ``alive: false`` — this is the
+      RESTART-HONESTY core: the daemon's in-memory run history is gone after
+      a restart, but daemon.json still has the last known pid/interval/
+      started_at); ``source: "none"`` when neither is available.
+    * ``last_run`` — ``gui.daemon_client.get_latest_run()``. ``None`` (with
+      ``last_run_source: "state_snapshot"``) when the daemon has never
+      triggered a run this process lifetime (a fresh restart with an empty
+      in-memory ring) — NOTHING is synthesized in that case; the caller must
+      fall back to ``pipeline.snapshot_age_seconds`` for "the pipeline last
+      produced output at T" instead of a fabricated run record.
+    * ``pipeline`` — ``pilots.run_status``'s file-backed snapshot/heartbeat
+      age readers. ``heartbeat_age_seconds`` is ``null`` in advisory mode by
+      design (see ``heartbeat_note``) — never render that as "engine down".
+    * ``progress`` — live ``reporting.progress.read_progress()``, with
+      ``stale`` computed here (a "running" progress file untouched for 15+
+      minutes is a dead run, not a live one).
+    * ``kill_switch`` / ``errors`` — ``execution.kill_switch.GlobalKillSwitch``
+      (already imported at module top) and the bounded, structured
+      ``output/dead_letter.json`` tail (capped at 50 entries, true count
+      echoed) — deliberately NOT a raw log tail (CLAUDE.md: never fabricate,
+      dead-letter don't crash; the actual log files run 100+ MB and may carry
+      secrets, both disqualifying for an API response).
+
+    Never raises, never 500s (CONSTRAINT #6) — every sub-read already degrades
+    to an honest ``None``/empty shape on its own failure."""
+    daemon_status = daemon_client.get_status()
+    if daemon_status is not None:
+        daemon_info: Dict[str, Any] = {
+            "alive": True,
+            "source": "control_api",
+            "pid": None,  # not echoed by /status; only daemon.json carries it
+            "port": settings.ORCHESTRATOR_API_PORT,
+            "started_at": daemon_status.get("started_at"),
+            "interval_seconds": daemon_status.get("interval_seconds"),
+            "is_running": daemon_status.get("is_running"),
+            "current_run_id": daemon_status.get("current_run_id"),
+            "engines_warm": daemon_status.get("engines_warm"),
+        }
+    else:
+        dj = run_status.read_daemon_json()
+        if dj is not None:
+            daemon_info = {
+                "alive": False,
+                "source": "daemon_json",
+                "pid": dj.get("pid"),
+                "port": dj.get("port"),
+                "started_at": dj.get("started_at"),
+                "interval_seconds": dj.get("interval_seconds"),
+                "is_running": None,
+                "current_run_id": None,
+                "engines_warm": None,
+            }
+        else:
+            daemon_info = {
+                "alive": False,
+                "source": "none",
+                "pid": None,
+                "port": None,
+                "started_at": None,
+                "interval_seconds": None,
+                "is_running": None,
+                "current_run_id": None,
+                "engines_warm": None,
+            }
+
+    last_run = daemon_client.get_latest_run()
+    last_run_source = "daemon_memory" if last_run is not None else "state_snapshot"
+
+    snapshot_age, snapshot_source = run_status.snapshot_age_seconds()
+    heartbeat_age = run_status.heartbeat_age_seconds()
+
+    ks = GlobalKillSwitch()
+    ks_active = ks.is_active()
+
+    return {
+        "daemon": daemon_info,
+        "last_run": last_run,
+        "last_run_source": last_run_source,
+        "pipeline": {
+            "snapshot_age_seconds": snapshot_age,
+            "snapshot_age_source": snapshot_source,
+            "heartbeat_age_seconds": heartbeat_age,
+            "heartbeat_note": run_status.HEARTBEAT_ADVISORY_NOTE,
+        },
+        "progress": _serialize_progress(read_progress()),
+        "kill_switch": {
+            "active": ks_active,
+            "reason": ks.reason() if ks_active else None,
+        },
+        "errors": run_status.read_dead_letter(),
+        "advisory_only": settings.ADVISORY_ONLY,
+        "dry_run": settings.DRY_RUN,
+    }
+
+
+@app.get("/automation/schedule", dependencies=[Depends(require_read_token)])
+def get_automation_schedule() -> Dict[str, Any]:
+    """Interval drift display + the read-only cron schedule.
+
+    ``interval.running_value`` is what the LIVE daemon (or its last-known
+    ``daemon.json`` startup record) is actually running on; ``configured_value``
+    is what ``.env``/``settings.ORCHESTRATOR_INTERVAL_SECONDS`` currently says.
+    They can legitimately disagree (a `.env` edit doesn't reach a live daemon
+    until it restarts) — ``drift`` flags that explicitly rather than letting
+    the operator assume a `.env` edit already took effect.
+
+    ``cron`` is parsed from the checked-in ``deploy/crontab.txt`` — NEVER via
+    ``crontab -l`` (a subprocess call from this API is exactly the RCE-adjacent
+    surface cron/systemd *writing* was excluded for elsewhere in this feature;
+    the read side gets the same posture). ``installed`` is honestly ``null``:
+    this endpoint cannot confirm what's actually installed on the host, only
+    what the repo says is intended.
+
+    No write endpoint exists yet (``interval.writable`` is always ``false`` in
+    this build) — see the Data & Automation plan's later phases."""
+    daemon_status = daemon_client.get_status()
+    if daemon_status is not None:
+        running_value = daemon_status.get("interval_seconds")
+    else:
+        dj = run_status.read_daemon_json()
+        running_value = dj.get("interval_seconds") if dj else None
+
+    configured_value = settings.ORCHESTRATOR_INTERVAL_SECONDS
+    drift = running_value is not None and running_value != configured_value
+
+    return {
+        "interval": {
+            "running_value": running_value,
+            "configured_value": configured_value,
+            "drift": drift,
+            "writable": False,
+            "note": "Read-only in this build — schedule writes land in a follow-up.",
+        },
+        "cron": {
+            "source": "deploy/crontab.txt",
+            "installed": None,
+            "note": (
+                "Parsed from the repo file — the intended schedule. This API "
+                "never runs `crontab -l`, so it cannot confirm what is "
+                "actually installed on the host; it may differ."
+            ),
+            "entries": run_status.parse_crontab(),
+        },
+    }
