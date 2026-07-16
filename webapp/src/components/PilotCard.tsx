@@ -14,13 +14,8 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
   return (
     <Link
       to={`/pilots/${pilot.id}`}
-      className="card"
-      style={{
-        display: "block",
-        width: 220,
-        padding: 14,
-        textDecoration: "none",
-      }}
+      className="card pilot-card"
+      style={{ textDecoration: "none" }}
     >
       <div
         style={{
@@ -88,11 +83,7 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
 /** Compact popularity card (Most Popular rail). */
 export function PopularCard({ pilot }: { pilot: PilotSummary }) {
   return (
-    <Link
-      to={`/pilots/${pilot.id}`}
-      className="card"
-      style={{ display: "block", width: 200, padding: 14 }}
-    >
+    <Link to={`/pilots/${pilot.id}`} className="card popular-card">
       <div style={{ fontSize: 16, fontWeight: 700 }}>{pilot.name}</div>
       <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2 }}>
         {pilot.category}
