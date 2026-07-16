@@ -82,4 +82,31 @@ describe("Marketplace screen (real mock API)", () => {
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
+
+  it("offline with a cached catalog (client.ts's localStorage fallback) renders the rails from cached data behind a stale-data notice, not a blank/error screen", async () => {
+    const err = new ApiError("Network error reaching Pilots API", 0);
+    err.cachedData = [
+      {
+        id: "trend-following",
+        name: "Trend Follower",
+        category: "Momentum",
+        description: "cached description",
+        headline: { sharpe: 1.1, dsr: 0.97, pbo: 0.3, max_drawdown: 0.2, deployable: true },
+        holdings_count: 5,
+        aum_proxy: 100,
+        followers_proxy: 10,
+        long_only: false,
+      },
+    ];
+    err.cachedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    vi.spyOn(api, "listPilots").mockRejectedValueOnce(err);
+
+    renderMarketplace();
+
+    const notice = await screen.findByTestId("stale-data-notice");
+    expect(notice).toHaveTextContent(/offline: showing cached data/i);
+    // The cached catalog still rendered as real rails, not an error/blank screen.
+    expect(screen.getAllByText(/Trend Follower/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Couldn't load")).not.toBeInTheDocument();
+  });
 });

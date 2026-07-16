@@ -84,8 +84,13 @@ export function Dashboard() {
     if (port.data) setLastGoodPortfolio(port.data);
   }, [port.data]);
   const shownPortfolio = port.data ?? lastGoodPortfolio;
-  // A live fetch failed but we still hold a cached snapshot to display.
-  const portfolioIsOffline = !port.loading && !port.data && !!port.error && !!lastGoodPortfolio;
+  // A live fetch failed but we still hold a cached snapshot to display —
+  // either this session's in-memory `lastGoodPortfolio`, or (surviving a
+  // fresh page reload too) client.ts's localStorage offline-cache fallback,
+  // flagged via `port.stale`.
+  const portfolioIsOffline =
+    !port.loading &&
+    (port.stale || (!port.data && !!port.error && !!lastGoodPortfolio));
   // Local for clean type-narrowing of the (nullable) equity curve in the JSX.
   const equityCurve: CurvePoint[] | null = equity.data?.curve ?? null;
 

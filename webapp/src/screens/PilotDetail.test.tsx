@@ -8,8 +8,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PilotDetail } from "./PilotDetail";
+import { api } from "../api/client";
+import { ApiError } from "../api/types";
 
 function renderDetail(id: string) {
   return render(
@@ -22,6 +24,10 @@ function renderDetail(id: string) {
 }
 
 describe("PilotDetail screen (real mock API)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("renders holdings, sector allocation, and the Follow CTA for a deployable pilot", async () => {
     renderDetail("trend-following");
 
@@ -70,5 +76,28 @@ describe("PilotDetail screen (real mock API)", () => {
   it("an unknown pilot id renders the honest 404 'Nothing here yet' state", async () => {
     renderDetail("does-not-exist");
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+  });
+
+  it("offline with a cached performance curve (client.ts's localStorage fallback) renders the cached chart behind a stale-data notice", async () => {
+    const err = new ApiError("Network error reaching Pilots API", 0);
+    err.cachedData = {
+      range: "1M",
+      metrics: { sharpe: 1.1, dsr: 0.97, pbo: 0.3, max_drawdown: 0.2, deployable: true },
+      curve: [
+        { date: "2026-06-01", value: 100 },
+        { date: "2026-06-15", value: 104 },
+      ],
+      benchmark: null,
+      macro_benchmark: null,
+    };
+    err.cachedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    vi.spyOn(api, "getPerformance").mockRejectedValueOnce(err);
+
+    renderDetail("trend-following");
+
+    const notice = await screen.findByTestId("stale-data-notice");
+    expect(notice).toHaveTextContent(/offline: showing cached data/i);
+    // The cached curve still rendered as a real chart, not the empty state.
+    expect(screen.queryByText("No backtest series yet")).not.toBeInTheDocument();
   });
 });

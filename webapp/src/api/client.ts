@@ -9,6 +9,7 @@
 
 import { mockApi, MOCK_META } from "./mock";
 import { ApiError } from "./types";
+import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type {
   AlertsFeed,
   BrokerageConnectRequest,
@@ -47,6 +48,10 @@ async function http<T>(
   path: string,
   init?: RequestInit & { method?: string }
 ): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  // Only idempotent reads are ever cached/served-from-cache — a POST (follow,
+  // connectBrokerage, ...) must never be silently satisfied by a stale value.
+  const cacheable = method === "GET";
   const headers: Record<string, string> = {
     Accept: "application/json",
     ...(init?.body ? { "Content-Type": "application/json" } : {}),
@@ -57,10 +62,22 @@ async function http<T>(
   try {
     resp = await fetch(`${BASE_URL}${path}`, { ...init, headers });
   } catch (e) {
-    throw new ApiError(
+    const err = new ApiError(
       `Network error reaching Pilots API at ${BASE_URL}. Is it running (uvicorn api.pilots_api:app --port 8602)?`,
       0
     );
+    // Offline fallback (Web App Resilience gap): the network is genuinely
+    // unreachable, not just a server-side error — if we have a previously
+    // cached response for this exact GET, attach it so useApi can render it
+    // instead of an empty/error screen. See api/offlineCache.ts.
+    if (cacheable) {
+      const cached = readCacheEntry<T>(path);
+      if (cached) {
+        err.cachedData = cached.data;
+        err.cachedAt = cached.cachedAt;
+      }
+    }
+    throw err;
   }
   if (!resp.ok) {
     let msg = `${resp.status} ${resp.statusText}`;
@@ -70,10 +87,14 @@ async function http<T>(
     } catch {
       /* non-JSON error body */
     }
+    // A reachable server's own error response is a genuine failure, never
+    // masked by stale cache data (only a network-unreachable GET falls back).
     throw new ApiError(msg, resp.status);
   }
   if (resp.status === 204) return undefined as T;
-  return (await resp.json()) as T;
+  const data = (await resp.json()) as T;
+  if (cacheable) writeCacheEntry(path, data);
+  return data;
 }
 
 // ---- Live client (shape-identical to mockApi) ----
