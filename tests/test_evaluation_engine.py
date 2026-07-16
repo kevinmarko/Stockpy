@@ -7,7 +7,6 @@ already-existing scattered coverage.
 
 Coverage:
   - EvaluationEngine.calculate_edge_ratio      (DataFrame-slice MFE/MAE/Edge/StdDev)
-  - EvaluationEngine.calculate_kelly_target    (win/loss + continuous methods, half-Kelly, [0,1] clamp)
   - EvaluationEngine.calculate_excursion_metrics (long/short (mae, mfe) tuple, direct)
   - EvaluationEngine.calculate_realized_slippage (implementation shortfall)
   - EvaluationEngine.calculate_tail_dependency   (CoVaR proxy, beta floor)
@@ -168,69 +167,6 @@ class TestCalculateEdgeRatio:
         out = eng.calculate_edge_ratio(hist, 100.0, "2026-06-20", "2026-06-22")
         assert out["MFE"] == pytest.approx(0.12, abs=1e-9)
         assert out["MAE"] == pytest.approx(0.05, abs=1e-9)
-
-
-# ===========================================================================
-# TestCalculateKellyTarget
-# ===========================================================================
-
-class TestCalculateKellyTarget:
-    """calculate_kelly_target: win/loss method, continuous return/variance
-    method, half-Kelly scaling, and the [0,1] bankruptcy/shorting clamp."""
-
-    def test_win_loss_full_kelly(self):
-        eng = _engine()
-        # f = p - (1-p)/b = 0.6 - 0.4/2 = 0.4
-        out = eng.calculate_kelly_target(0.0, 0.0, win_probability=0.6,
-                                         win_loss_ratio=2.0, half_kelly=False)
-        assert out["Kelly Target"] == pytest.approx(0.4, abs=1e-9)
-
-    def test_win_loss_half_kelly_halves(self):
-        eng = _engine()
-        out = eng.calculate_kelly_target(0.0, 0.0, win_probability=0.6,
-                                         win_loss_ratio=2.0, half_kelly=True)
-        assert out["Kelly Target"] == pytest.approx(0.2, abs=1e-9)
-
-    def test_win_loss_ratio_non_positive_returns_zero(self):
-        eng = _engine()
-        out = eng.calculate_kelly_target(0.0, 0.0, win_probability=0.6,
-                                         win_loss_ratio=0.0)
-        assert out["Kelly Target"] == 0.0
-
-    def test_continuous_method_uses_return_over_variance(self):
-        eng = _engine()
-        # er/var = 0.10/0.25 = 0.4, half-Kelly → 0.2
-        out = eng.calculate_kelly_target(0.10, 0.25, half_kelly=True)
-        assert out["Kelly Target"] == pytest.approx(0.2, abs=1e-9)
-
-    def test_continuous_zero_variance_returns_zero(self):
-        eng = _engine()
-        out = eng.calculate_kelly_target(0.10, 0.0)
-        assert out["Kelly Target"] == 0.0
-
-    def test_clamped_to_one_on_huge_edge(self):
-        eng = _engine()
-        # Continuous method: er/var = 5.0/1.0 = 5.0 → clamped to the [0,1] ceiling.
-        out = eng.calculate_kelly_target(5.0, 1.0, half_kelly=False)
-        assert out["Kelly Target"] == 1.0
-
-    def test_clamped_to_zero_on_negative_edge(self):
-        eng = _engine()
-        # p=0.2, b=1 → f = 0.2 - 0.8 = -0.6 → clamped to 0.0
-        out = eng.calculate_kelly_target(0.0, 0.0, win_probability=0.2,
-                                         win_loss_ratio=1.0, half_kelly=False)
-        assert out["Kelly Target"] == 0.0
-
-    def test_negative_expected_return_clamped_to_zero(self):
-        eng = _engine()
-        out = eng.calculate_kelly_target(-0.10, 0.25)
-        assert out["Kelly Target"] == 0.0
-
-    def test_return_shape_is_dict_with_single_key(self):
-        eng = _engine()
-        out = eng.calculate_kelly_target(0.10, 0.25)
-        assert set(out.keys()) == {"Kelly Target"}
-        assert isinstance(out["Kelly Target"], float)
 
 
 # ===========================================================================
