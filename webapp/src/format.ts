@@ -43,7 +43,14 @@ export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  // Render the calendar date embedded in the ISO string itself, not the
+  // host machine's local calendar date. Both real call sites (Models.tsx's
+  // `trained_date`, charts.tsx's `CurvePoint.date`) pass date-only strings
+  // like "2026-03-15", which the spec parses as UTC midnight — without
+  // `timeZone: "UTC"` here, `toLocaleDateString` re-renders that instant in
+  // the browser's local zone, silently shifting the displayed day back one
+  // for every user in a UTC-negative timezone (all of the US).
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 export function timeAgo(iso: string | null | undefined): string {

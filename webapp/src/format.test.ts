@@ -106,8 +106,27 @@ describe("fmtSignedUsd", () => {
 });
 
 describe("fmtDate", () => {
+  // fmtDate must render the calendar date embedded in the ISO string itself,
+  // never the host machine's local calendar date — these values (a model's
+  // trained_date, an equity-curve point's date) mean "which day", not "what
+  // local moment". Every assertion below must hold regardless of the test
+  // runner's TZ (bug: without `timeZone: "UTC"` in the underlying
+  // `toLocaleDateString` call, "2026-03-15T00:00:00Z" rendered as "Mar 14"
+  // for any host in a UTC-negative timezone, e.g. America/New_York).
   it("formats a valid ISO date as 'Mon D'", () => {
     expect(fmtDate("2026-03-15T00:00:00Z")).toBe("Mar 15");
+  });
+
+  it("formats a date-only string (no time-of-day) using its own calendar date", () => {
+    // Date-only strings are parsed as UTC midnight per the ECMA-262 spec, so
+    // this is the exact same bug surface as the full-datetime case above —
+    // and it's the shape both real call sites (Models.tsx's `trained_date`,
+    // charts.tsx's `CurvePoint.date`) actually pass.
+    expect(fmtDate("2026-03-15")).toBe("Mar 15");
+  });
+
+  it("is stable across late-in-the-day UTC timestamps too (no off-by-one either direction)", () => {
+    expect(fmtDate("2026-03-15T23:59:59Z")).toBe("Mar 15");
   });
 
   it("returns the em-dash sentinel for null/undefined/empty string", () => {
