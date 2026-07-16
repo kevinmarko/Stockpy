@@ -624,6 +624,18 @@ python3 main.py
 The GUI also exposes the kill switch toggle in the Launcher tab → Safety Controls. While
 the sentinel is active, the GUI safety indicator shows `🔴 PAUSED`.
 
+> **Note — the Pilots PWA is a second front-end for this same sentinel (2026-07):**
+> `api/pilots_api.py`'s `POST /automation/pause` / `POST /automation/resume` (Settings
+> screen → Signal generation toggle) call the exact `GlobalKillSwitch` this section
+> describes — not a separate mechanism. Two things to know operating it from there:
+> (1) **pausing does NOT stop the schedule** — the daemon's interval timer keeps
+> firing and cycles keep running; they just produce no recommendations (or submit no
+> orders in live mode). `POST /automation/run` returns 423 while paused. (2) **remote
+> resume is refused whenever `ADVISORY_ONLY=false`** (live order submission enabled) —
+> deactivate the kill switch at the console in that case, per the CLI steps below. This
+> is deliberate: pausing remotely is always safe, but re-enabling live order submission
+> from a possibly-compromised or leaked token is not.
+
 > **Note — macro-triggered advisory gating (automatic, always active):** Separately from
 > the manual kill switch, `engine/advisory.evaluate()` applies conservative overrides when
 > macro conditions deteriorate.  Three tiers: (1) RECESSION / CREDIT EVENT regime → all

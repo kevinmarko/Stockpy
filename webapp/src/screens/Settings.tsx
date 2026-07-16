@@ -1,24 +1,27 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { AutomationSchedule, AutomationStatus } from "../api/types";
+import type { AutomationSchedule, AutomationStatus, Follow } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
-import { EmptyState, ErrorState, Loading, MetricBadge } from "../components/ui";
+import { useMutation } from "../hooks/useMutation";
+import { Button, EmptyState, ErrorState, Input, Loading, MetricBadge } from "../components/ui";
 import { Modal } from "../components/Modal";
-import { Button } from "../components/ui";
+import { Toggle } from "../components/Toggle";
 import { PwaStatusSection } from "../components/PwaStatusSection";
-import { fmtAge, fmtDate } from "../format";
+import { fmtAge, fmtDate, fmtUsd } from "../format";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
 
 /**
- * Data & Automation settings — Phase 2 (read-only): "did the pipeline run,
- * and when" plus a read-only view of the schedule, replacing an operator's
- * SSH + journalctl loop for that one question. Manual Run Now and
- * pause/resume/interval writes are a later phase — nothing on this screen
- * mutates backend state (Reset onboarding is the one exception, and it's
- * client-side localStorage only, never a network write).
+ * Data & Automation settings — "did the pipeline run, and when", a manual
+ * Run Now trigger, pause/resume of signal generation, a read-only-by-default
+ * schedule view with an opt-in interval write, and per-pilot re-plan —
+ * replacing an operator's SSH + journalctl loop for all of it. Every write
+ * on this screen (run/pause/resume/interval) fails closed server-side when
+ * its gate isn't configured (FOLLOW_API_TOKEN / AUTOMATION_WRITES_ENABLED /
+ * ADVISORY_ONLY) — the UI here renders whatever the server actually allowed,
+ * never assumes a write succeeded.
  */
 export function Settings() {
   const nav = useNavigate();
@@ -85,6 +88,17 @@ export function Settings() {
         onRetry={reloadSchedule}
       />
 
+      {status && (
+        <SignalGenerationSection
+          active={status.kill_switch.active}
+          reason={status.kill_switch.reason}
+          advisoryOnly={status.advisory_only}
+          onChanged={reloadStatus}
+        />
+      )}
+
+      <ActiveFollowsSection />
+
       <div style={{ marginTop: 16 }}>
         <PwaStatusSection />
       </div>
@@ -127,6 +141,71 @@ function SectionCard({
       )}
       {children}
     </section>
+  );
+}
+
+/**
+ * Pure proxy over daemon_client.trigger_run() (see api/pilots_api.py) --
+ * every branch here maps a real, documented server outcome, never a client
+ * guess. `onTriggered` re-fetches /automation/status so the daemon/progress
+ * rows update immediately after a successful trigger (usePoll then keeps it
+ * live while the run is actually in flight).
+ */
+function RunNowButton({
+  disabled,
+  onTriggered,
+}: {
+  disabled: boolean;
+  onTriggered: () => void;
+}) {
+  const { run, pending, result, error } = useMutation(() => api.triggerRun());
+
+  const handleClick = async () => {
+    await run();
+    onTriggered();
+  };
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <Button variant="primary" block pending={pending} disabled={disabled} onClick={handleClick}>
+        Run now
+      </Button>
+      {error && (
+        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+          <span>⚠️</span>
+          <span>{error}</span>
+        </div>
+      )}
+      {result && !result.ok && result.error === "already_running" && (
+        <div className="notice notice-info" style={{ marginTop: 10 }}>
+          <span>ℹ️</span>
+          <span>
+            A run is already in flight
+            {result.existing_run_id ? ` (${result.existing_run_id})` : ""}.
+          </span>
+        </div>
+      )}
+      {result && !result.ok && result.error === "kill_switch_active" && (
+        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+          <span>⚠️</span>
+          <span>
+            Kill switch active{result.kill_switch_reason ? `: ${result.kill_switch_reason}` : ""}.
+          </span>
+        </div>
+      )}
+      {result && !result.ok && result.error === "unavailable" && (
+        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+          <span>⚠️</span>
+          <span>Orchestrator daemon is not reachable.</span>
+        </div>
+      )}
+      {result?.ok && (
+        <div className="notice notice-info" style={{ marginTop: 10 }}>
+          <span>✅</span>
+          <span>Run queued{result.run_id ? ` (${result.run_id})` : ""}.</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -223,6 +302,8 @@ function PipelineStatusSection({
             </div>
           )}
 
+          <RunNowButton disabled={status.daemon.is_running === true} onTriggered={onRetry} />
+
           <ErrorsSubsection errors={status.errors} />
 
           <p
@@ -280,6 +361,73 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
   );
 }
 
+/**
+ * PUT /automation/schedule/interval writes ORCHESTRATOR_INTERVAL_SECONDS to
+ * .env via the same allowlist-bounded writer the GUI Settings tab uses -- it
+ * does NOT reach a live daemon (no runtime setter exists yet), so `onSaved`
+ * only re-fetches the schedule to surface the resulting `drift` against
+ * `running_value`, never claims the change is already live.
+ */
+function IntervalEditor({
+  schedule,
+  onSaved,
+}: {
+  schedule: AutomationSchedule;
+  onSaved: () => void;
+}) {
+  const [value, setValue] = useState(String(schedule.interval.configured_value));
+  const { run, pending, error } = useMutation((seconds: number) =>
+    api.setAutomationInterval(seconds)
+  );
+
+  const parsed = Number(value);
+  const invalid =
+    !Number.isFinite(parsed) || parsed < 0 || parsed > 86400 || (parsed !== 0 && parsed < 60);
+
+  const save = async () => {
+    if (invalid) return;
+    await run(parsed);
+    onSaved();
+  };
+
+  if (!schedule.interval.writable) {
+    return (
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: 8 }}>
+        {schedule.interval.note}
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <Input
+        label="Configured interval (seconds)"
+        type="number"
+        inputMode="numeric"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        invalid={invalid}
+        hint={invalid ? "Must be 0 or between 60 and 86400." : schedule.interval.note}
+      />
+      <Button
+        variant="neutral"
+        onClick={save}
+        disabled={invalid}
+        pending={pending}
+        style={{ marginTop: 8 }}
+      >
+        Save
+      </Button>
+      {error && (
+        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+          <span>⚠️</span>
+          <span>{error}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ScheduleSection({
   schedule,
   loading,
@@ -294,7 +442,7 @@ function ScheduleSection({
   onRetry: () => void;
 }) {
   return (
-    <SectionCard title="Schedule" sub="Read-only in this build.">
+    <SectionCard title="Schedule">
       {loading && <Loading lines={2} />}
       {!loading && error && (
         <ErrorState message={error} status={httpStatus} onRetry={onRetry} />
@@ -321,6 +469,8 @@ function ScheduleSection({
               </span>
             </div>
           )}
+
+          <IntervalEditor schedule={schedule} onSaved={onRetry} />
 
           <div style={{ marginTop: 14 }}>
             <div className="row-sub" style={{ marginBottom: 6 }}>
@@ -352,6 +502,203 @@ function ScheduleSection({
         </>
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * Pause/resume the GLOBAL kill switch (execution/kill_switch.py) -- the
+ * SAME documented mechanism as docs/RUNBOOK.md §6, not a new one. Labeled
+ * "Signal generation: Running/Paused", never "Schedule: on/off" -- pausing
+ * does NOT stop the daemon's interval timer; cycles still run, they just
+ * produce no recommendations (or submit no orders in live mode).
+ *
+ * Both directions require a typed reason via a confirm Modal (guards a
+ * fat-fingered tap, not an attacker -- the real gates are server-side:
+ * the command token, AUTOMATION_WRITES_ENABLED, and the ADVISORY_ONLY
+ * check on resume). When `advisoryOnly` is false the Toggle is disabled
+ * from the paused state -- resume must happen at the console while live
+ * order submission is enabled.
+ */
+function SignalGenerationSection({
+  active,
+  reason,
+  advisoryOnly,
+  onChanged,
+}: {
+  active: boolean; // kill switch active == paused
+  reason: string | null;
+  advisoryOnly: boolean;
+  onChanged: () => void;
+}) {
+  const [confirmKind, setConfirmKind] = useState<"pause" | "resume" | null>(null);
+  const [inputReason, setInputReason] = useState("");
+  const pauseMutation = useMutation((r: string) => api.pauseAutomation(r));
+  const resumeMutation = useMutation((r: string) => api.resumeAutomation(r));
+
+  const running = !active;
+  const busy = pauseMutation.pending || resumeMutation.pending;
+  const resumeBlocked = !running && !advisoryOnly;
+
+  const openConfirm = (next: boolean) => {
+    setInputReason("");
+    setConfirmKind(next ? "resume" : "pause");
+  };
+
+  const confirmAction = async () => {
+    if (confirmKind === "pause") {
+      await pauseMutation.run(inputReason);
+    } else if (confirmKind === "resume") {
+      await resumeMutation.run(inputReason);
+    }
+    setConfirmKind(null);
+    onChanged();
+  };
+
+  return (
+    <SectionCard title="Signal generation">
+      <Toggle
+        checked={running}
+        onChange={openConfirm}
+        label={running ? "Signal generation: Running" : "Signal generation: Paused"}
+        disabled={resumeBlocked}
+        pending={busy}
+      />
+      {active && reason && (
+        <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>Reason: {reason}</p>
+      )}
+      {resumeBlocked && (
+        <p style={{ color: theme.caution, fontSize: 12, marginTop: 8 }}>
+          Resume must be done at the console while live trading is enabled.
+        </p>
+      )}
+      <p
+        style={{
+          color: theme.textMuted,
+          fontSize: "var(--t-caption)",
+          marginTop: 8,
+          lineHeight: 1.45,
+        }}
+      >
+        Pausing does not stop the schedule — cycles still run, they just
+        produce no recommendations (or submit no orders in live mode).
+      </p>
+      {(pauseMutation.error || resumeMutation.error) && (
+        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+          <span>⚠️</span>
+          <span>{pauseMutation.error ?? resumeMutation.error}</span>
+        </div>
+      )}
+
+      {confirmKind && (
+        <Modal
+          ariaLabel={
+            confirmKind === "pause" ? "Pause signal generation" : "Resume signal generation"
+          }
+          onClose={() => setConfirmKind(null)}
+        >
+          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
+            {confirmKind === "pause" ? "Pause signal generation?" : "Resume signal generation?"}
+          </h2>
+          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+            {confirmKind === "pause"
+              ? "New recommendations stop until resumed. The schedule keeps running."
+              : "Recommendations resume on the next scheduled or manual run."}
+          </p>
+          <Input
+            label="Reason"
+            value={inputReason}
+            onChange={(e) => setInputReason(e.target.value)}
+            hint="Required."
+          />
+          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+            <Button variant="neutral" onClick={() => setConfirmKind(null)} style={{ flex: 1 }}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={confirmAction}
+              disabled={!inputReason.trim()}
+              pending={busy}
+              style={{ flex: 2 }}
+            >
+              {confirmKind === "pause" ? "Pause" : "Resume"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </SectionCard>
+  );
+}
+
+/**
+ * Per-pilot "Re-plan" over the EXISTING POST /pilots/{id}/follow endpoint --
+ * zero new backend code. "Re-plan all" was cut from this feature: cross-
+ * Pilot netting doesn't exist, so a naive loop would emit duplicate intents
+ * for a symbol held by two Pilots (see the Data & Automation plan).
+ */
+function ActiveFollowsSection() {
+  const {
+    data: follows,
+    loading,
+    error,
+    status: httpStatus,
+    reload,
+  } = useApi<Follow[]>(() => api.getFollows(), []);
+
+  return (
+    <SectionCard
+      title="Active follows"
+      sub="Re-plan recomputes and replaces output/execution_queue.json for that Pilot only."
+    >
+      {loading && <Loading lines={2} />}
+      {!loading && error && (
+        <ErrorState message={error} status={httpStatus} onRetry={reload} />
+      )}
+      {!loading && !error && follows && (
+        follows.length === 0 ? (
+          <EmptyState title="No active follows" />
+        ) : (
+          <div className="list">
+            {follows.map((f) => (
+              <FollowRow key={f.pilot_id} follow={f} />
+            ))}
+          </div>
+        )
+      )}
+    </SectionCard>
+  );
+}
+
+function FollowRow({ follow }: { follow: Follow }) {
+  const { run, pending, result, error } = useMutation(() =>
+    api.follow(follow.pilot_id, follow.amount)
+  );
+
+  return (
+    <div className="row" style={{ alignItems: "flex-start" }}>
+      <div className="row-main">
+        <span className="row-title">{follow.pilot_id}</span>
+        <span className="row-sub">{fmtUsd(follow.amount)}</span>
+        {result && (
+          <span
+            className="row-sub"
+            style={{ color: result.queue_written ? theme.growth : theme.textMuted }}
+          >
+            {result.queue_written
+              ? `Re-planned — ${result.planned_intents.length} order(s) queued.`
+              : "Preview only — execution mode is off, nothing was written."}
+          </span>
+        )}
+        {error && (
+          <span className="row-sub" style={{ color: theme.decline }}>
+            {error}
+          </span>
+        )}
+      </div>
+      <Button variant="neutral" pending={pending} onClick={() => run()}>
+        Re-plan
+      </Button>
+    </div>
   );
 }
 

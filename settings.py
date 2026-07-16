@@ -1004,6 +1004,28 @@ class Settings(BaseSettings):
             "loopback (127.0.0.1) request. Never GUI-writable."
         ),
     )
+    # Master switch for the Pilots API's Data & Automation WRITE endpoints
+    # (api/pilots_api.py PUT /automation/schedule/interval, POST /automation/resume
+    # — see the Data & Automation plan). Mirrors BROKERAGE_CONNECT_ENABLED exactly:
+    # default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug
+    # must never be able to flip this on; hand-set in .env only). Deliberately
+    # does NOT gate POST /automation/run or POST /automation/pause — those already
+    # sit behind require_command_token alone, matching the existing
+    # POST /pilots/{id}/follow precedent (which writes an order queue under
+    # FOLLOW_API_TOKEN alone, no master flag); gating a run trigger or pause more
+    # strictly than the most sensitive endpoint already shipped would invert the
+    # risk ordering. Reserved for the two writes with a real persistence/rollback
+    # cost: an .env edit and re-enabling live order submission.
+    AUTOMATION_WRITES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables PUT /automation/schedule/interval and POST /automation/resume "
+            "on the Pilots API. Off by default; also requires FOLLOW_API_TOKEN. "
+            "Never GUI-writable. POST /automation/run and /automation/pause are "
+            "NOT gated by this flag (require_command_token alone, matching the "
+            "follow write-path's existing risk posture)."
+        ),
+    )
     # --- Pilots PWA: persisted analytics artifacts (options matrix + pairs radar) ---
     # The options premium matrix (technical_options_engine) and pairs radar
     # (pairs/ + signals.pairs_trading) are computed live in the Streamlit GUI but

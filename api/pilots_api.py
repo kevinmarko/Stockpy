@@ -75,7 +75,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from settings import settings
 
@@ -103,15 +103,21 @@ from pilots.mirror import plan_follow
 from data.historical_store import HistoricalStore
 from execution.kill_switch import GlobalKillSwitch
 
-# The Data & Automation surface (GET /automation/*) reaches the orchestrator
-# daemon ONLY over loopback HTTP via gui.daemon_client — never by importing the
-# daemon object directly (api.control_api.get_daemon() only works in the
-# single co-hosted-process deployment shape, not the documented standalone
-# one; see gui/daemon_client.py's module docstring). ``desktop.*`` is a
-# forbidden import for this module (see this file's AST guard test) precisely
-# because it would pull main_orchestrator in transitively. Imported at module
-# top, aliased, so tests can ``mock.patch.object(pilots_api, "daemon_client", ...)``.
+# The Data & Automation surface (GET/POST/PUT /automation/*) reaches the
+# orchestrator daemon ONLY over loopback HTTP via gui.daemon_client — never by
+# importing the daemon object directly (api.control_api.get_daemon() only
+# works in the single co-hosted-process deployment shape, not the documented
+# standalone one; see gui/daemon_client.py's module docstring). ``desktop.*``
+# is a forbidden import for this module (see this file's AST guard test)
+# precisely because it would pull main_orchestrator in transitively. Imported
+# at module top, aliased, so tests can ``mock.patch.object(pilots_api, "daemon_client", ...)``.
 import gui.daemon_client as daemon_client
+# The interval WRITE (PUT /automation/schedule/interval) goes through the same
+# allowlist-bounded .env writer the GUI Settings tab uses — NOT a bespoke file
+# write — so it inherits the exact same ALLOWED_KEYS/SECRET_KEYS enforcement
+# (CONSTRAINT #3) with zero new code. gui/env_io.py's own imports are stdlib +
+# dotenv only (see this file's gui-import-inertness test's sibling reasoning).
+import gui.env_io as env_io
 from reporting.progress import read_progress
 
 # Brokerage-connect credential intake — read-only verification + the dedicated,
@@ -230,6 +236,25 @@ def require_brokerage_connect_enabled() -> None:
         )
 
 
+def require_automation_writes_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for the two Data & Automation writes
+    with a real persistence/rollback cost: ``PUT /automation/schedule/interval``
+    (an ``.env`` edit) and ``POST /automation/resume`` (re-enabling live order
+    submission when ``ADVISORY_ONLY=False``). Mirrors
+    ``require_brokerage_connect_enabled`` exactly. ``settings.AUTOMATION_WRITES_ENABLED``
+    is deliberately NOT GUI-writable — hand-set in ``.env`` only.
+
+    ``POST /automation/run`` and ``POST /automation/pause`` are NOT gated by
+    this — they sit behind ``require_command_token`` alone, matching
+    ``POST /pilots/{id}/follow``'s existing risk posture (an order-queue write
+    under ``FOLLOW_API_TOKEN`` alone, no master flag)."""
+    if not settings.AUTOMATION_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Automation writes are disabled (AUTOMATION_WRITES_ENABLED=false).",
+        )
+
+
 if not settings.STATE_API_TOKEN:
     logger.warning(
         "STATE_API_TOKEN not set — Pilots read endpoints are UNAUTHENTICATED. "
@@ -298,6 +323,40 @@ class FollowRequest(BaseModel):
     """Body for ``POST /pilots/{id}/follow``. Must allocate a positive amount."""
 
     amount: float = Field(..., gt=0.0)
+
+
+class PauseRequest(BaseModel):
+    """Body for ``POST /automation/pause``. A non-empty reason is required —
+    mirrors ``docs/RUNBOOK.md`` §6's own pause-procedure example, and guards
+    against a fat-fingered click leaving no record of why."""
+
+    reason: str = Field(..., min_length=1)
+
+
+class ResumeRequest(BaseModel):
+    """Body for ``POST /automation/resume``. ``confirm`` guards against a
+    fat-fingered click (not an attacker — the real gates are the command
+    token, AUTOMATION_WRITES_ENABLED, and the ADVISORY_ONLY check)."""
+
+    confirm: bool = Field(..., description="Must be true.")
+    reason: str = Field(..., min_length=1)
+
+
+class IntervalUpdateRequest(BaseModel):
+    """Body for ``PUT /automation/schedule/interval``. ``0`` disables the
+    daemon's internal timer (on-demand only); otherwise MUST be in
+    [60, 86400] seconds — a sub-60s interval would trigger runs faster than a
+    cycle can complete (degenerate, not dangerous: trigger_run would just
+    return ALREADY_RUNNING every time — but there's no reason to allow it)."""
+
+    interval_seconds: int = Field(..., ge=0, le=86400)
+
+    @field_validator("interval_seconds")
+    @classmethod
+    def _zero_or_at_least_60(cls, v: int) -> int:
+        if v != 0 and v < 60:
+            raise ValueError("interval_seconds must be 0 or >= 60")
+        return v
 
 
 class BrokerageConnectRequest(BaseModel):
@@ -1025,8 +1084,10 @@ def get_automation_schedule() -> Dict[str, Any]:
     this endpoint cannot confirm what's actually installed on the host, only
     what the repo says is intended.
 
-    No write endpoint exists yet (``interval.writable`` is always ``false`` in
-    this build) — see the Data & Automation plan's later phases."""
+    ``interval.writable`` reflects whether ``PUT /automation/schedule/interval``
+    would actually succeed right now (``settings.AUTOMATION_WRITES_ENABLED`` —
+    the same fail-closed master switch that endpoint requires), so the PWA can
+    disable its own Save button instead of letting the operator hit a 403."""
     daemon_status = daemon_client.get_status()
     if daemon_status is not None:
         running_value = daemon_status.get("interval_seconds")
@@ -1036,14 +1097,19 @@ def get_automation_schedule() -> Dict[str, Any]:
 
     configured_value = settings.ORCHESTRATOR_INTERVAL_SECONDS
     drift = running_value is not None and running_value != configured_value
+    writable = bool(settings.AUTOMATION_WRITES_ENABLED)
 
     return {
         "interval": {
             "running_value": running_value,
             "configured_value": configured_value,
             "drift": drift,
-            "writable": False,
-            "note": "Read-only in this build — schedule writes land in a follow-up.",
+            "writable": writable,
+            "note": (
+                "Writes persist to .env and apply on the daemon's next restart."
+                if writable
+                else "Writes are disabled (AUTOMATION_WRITES_ENABLED=false)."
+            ),
         },
         "cron": {
             "source": "deploy/crontab.txt",
@@ -1055,4 +1121,150 @@ def get_automation_schedule() -> Dict[str, Any]:
             ),
             "entries": run_status.parse_crontab(),
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Data & Automation — WRITE endpoints (Phase 3). Auth posture, per endpoint:
+#
+#   POST /automation/run     -> require_command_token alone (matches
+#                                POST /pilots/{id}/follow's existing posture:
+#                                an order-queue write under FOLLOW_API_TOKEN
+#                                alone, no master flag — gating a run trigger
+#                                MORE strictly would invert the risk ordering)
+#   POST /automation/pause   -> require_command_token alone (same reasoning;
+#                                pausing is the SAFE direction)
+#   POST /automation/resume  -> + require_automation_writes_enabled, AND
+#                                fails 403 when settings.ADVISORY_ONLY is False
+#                                (re-enabling LIVE order submission remotely)
+#   PUT  /automation/schedule/interval -> + require_automation_writes_enabled
+#                                (persists to .env)
+# ---------------------------------------------------------------------------
+
+
+_TRIGGER_ERROR_STATUS: Dict[str, int] = {
+    "already_running": 409,
+    "kill_switch_active": 423,
+    "command_disabled": 503,
+    "unauthorized": 503,  # deliberately same as command_disabled -- never
+    "unavailable": 503,   # leak which side's token/config is wrong
+    "network_error": 503,
+    "unexpected_response": 503,
+}
+
+
+@app.post("/automation/run", dependencies=[Depends(require_command_token)])
+def trigger_automation_run() -> JSONResponse:
+    """Trigger an immediate pipeline cycle. Pure proxy over
+    ``gui.daemon_client.trigger_run()`` — no new orchestration logic here, all
+    single-flight/kill-switch/auth enforcement already lives in
+    ``desktop/daemon_runtime.py`` and ``api/control_api.py``.
+
+    Status mapping (from ``TriggerResponse.error``, see ``gui/daemon_client.py``):
+    202 (ok) / 409 already_running / 423 kill_switch_active / 503 for
+    command_disabled, unauthorized, unavailable, network_error, and
+    unexpected_response — ``unauthorized`` and ``command_disabled`` return the
+    IDENTICAL generic message so a caller can never learn which side's token
+    is misconfigured (this API's ``FOLLOW_API_TOKEN`` vs. the daemon's own
+    ``ORCHESTRATOR_DAEMON_TOKEN``).
+
+    Requires the operator to have set BOTH ``FOLLOW_API_TOKEN`` (browser to
+    this API) and ``ORCHESTRATOR_DAEMON_TOKEN`` (this API to the Control API,
+    read live by ``gui.daemon_client._auth_headers()``) — same host, same
+    ``.env``."""
+    result = daemon_client.trigger_run()
+    if result.ok:
+        return JSONResponse(
+            status_code=202, content={"run_id": result.run_id, "state": result.state}
+        )
+
+    status_code = _TRIGGER_ERROR_STATUS.get(result.error or "", 503)
+    if result.error == "already_running":
+        detail: Any = {"detail": "A run is already in flight.", "run_id": result.existing_run_id}
+    elif result.error == "kill_switch_active":
+        detail = {
+            "detail": "Kill switch active — pipeline triggering is paused.",
+            "kill_switch_reason": result.kill_switch_reason,
+        }
+    elif result.error in ("command_disabled", "unauthorized"):
+        detail = "Orchestrator daemon command channel is not available."
+    else:
+        detail = "Orchestrator daemon is not reachable."
+    return JSONResponse(status_code=status_code, content={"detail": detail})
+
+
+@app.post("/automation/pause", dependencies=[Depends(require_command_token)])
+def pause_automation(body: PauseRequest) -> Dict[str, Any]:
+    """Activate the global kill switch (``execution.kill_switch.GlobalKillSwitch``
+    — already imported at module top). Idempotent (the class's own contract).
+
+    This is the DOCUMENTED existing pause mechanism (``docs/RUNBOOK.md`` §6),
+    not a new one: in advisory mode the sentinel gates SIGNAL GENERATION (no
+    broker to halt); in live mode the same sentinel gates ORDER SUBMISSION.
+    Pausing is the safe direction in either mode, so it needs no extra gate
+    beyond the command token.
+
+    IMPORTANT caveat the PWA must surface: this does NOT stop the daemon's
+    interval timer — cycles still run on schedule, they just produce no
+    recommendations (advisory) or submit no orders (live). ``POST
+    /automation/run`` returns 423 while paused; the timer keeps ticking."""
+    ks = GlobalKillSwitch()
+    ks.activate(reason=body.reason)
+    return {"active": True, "reason": body.reason}
+
+
+@app.post(
+    "/automation/resume",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_automation_writes_enabled),
+    ],
+)
+def resume_automation(body: ResumeRequest) -> Dict[str, Any]:
+    """Deactivate the global kill switch.
+
+    FAILS 403 when ``settings.ADVISORY_ONLY is False`` — remote resume is
+    allowed exactly while the broker surface is quarantined (resuming just
+    resumes recommendations); once live order submission is enabled the same
+    sentinel is the last line of defense against a compromised/leaked token
+    re-enabling it remotely, so resume must be done at the console in that
+    mode. This maps the gate to the actual risk rather than treating pause and
+    resume symmetrically."""
+    if not settings.ADVISORY_ONLY:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Resume is disabled while ADVISORY_ONLY=false (live order "
+                "submission is enabled) — deactivate the kill switch at the "
+                "console, not remotely."
+            ),
+        )
+    ks = GlobalKillSwitch()
+    ks.deactivate()
+    return {"active": False, "reason": None}
+
+
+@app.put(
+    "/automation/schedule/interval",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_automation_writes_enabled),
+    ],
+)
+def set_automation_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
+    """Write ``ORCHESTRATOR_INTERVAL_SECONDS`` to ``.env`` via the SAME
+    allowlist-bounded writer (``gui.env_io.write_setting``) the GUI Settings
+    tab uses — not a bespoke file write, so it inherits CONSTRAINT #3's
+    enforcement for free.
+
+    This is an ``.env``-ONLY write in this build: it does NOT reach a live
+    daemon (no runtime setter exists yet — a later phase). ``applies`` is
+    always ``"next_daemon_restart"``, never a lie of ``"immediately"``; pair
+    this with ``GET /automation/schedule``'s ``drift`` field so the operator
+    SEES the pending change rather than assuming it already took effect."""
+    encoded = env_io.write_setting("ORCHESTRATOR_INTERVAL_SECONDS", body.interval_seconds)
+    return {
+        "configured_value": body.interval_seconds,
+        "written": encoded,
+        "applies": "next_daemon_restart",
     }

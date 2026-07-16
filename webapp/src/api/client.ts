@@ -22,6 +22,8 @@ import type {
   FollowResult,
   ForecastSkill,
   Holding,
+  IntervalUpdateResult,
+  KillSwitchActionResult,
   ModelRow,
   OptionsMatrix,
   PairsRadar,
@@ -34,6 +36,7 @@ import type {
   RealizedPerformance,
   SymbolDetail,
   SymbolOptions,
+  TriggerRunResult,
 } from "./types";
 
 const BASE_URL = (
@@ -139,6 +142,86 @@ const liveApi = {
     }),
   getAutomationStatus: () => http<AutomationStatus>("/automation/status"),
   getAutomationSchedule: () => http<AutomationSchedule>("/automation/schedule"),
+  /**
+   * POST /automation/run. Mirrors gui/daemon_client.py's own non-raising
+   * TriggerResponse contract: a documented RUNTIME outcome (queued, already
+   * running, kill-switch-paused, daemon unreachable) resolves as data here,
+   * NEVER throws -- only a genuine config/auth problem with THIS request
+   * (this API's own FOLLOW_API_TOKEN gate returning 401/403, or a network
+   * failure) throws ApiError the normal way, same as every other endpoint.
+   * Deliberately bypasses the shared `http()` helper (a bare fetch instead)
+   * because http()'s generic error path does `String(body.detail)`, which
+   * would mangle the STRUCTURED detail objects the 409/423 responses carry
+   * (`{detail, run_id}` / `{detail, kill_switch_reason}`) into "[object Object]".
+   */
+  triggerRun: async (): Promise<TriggerRunResult> => {
+    const headers: Record<string, string> = {};
+    if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
+
+    let resp: Response;
+    try {
+      resp = await fetch(`${BASE_URL}/automation/run`, { method: "POST", headers });
+    } catch {
+      return {
+        ok: false, run_id: null, state: null, error: "unavailable",
+        existing_run_id: null, kill_switch_reason: null,
+      };
+    }
+
+    let body: { detail?: unknown; run_id?: string; state?: string } | null = null;
+    try {
+      body = await resp.json();
+    } catch {
+      /* non-JSON body */
+    }
+
+    if (resp.status === 202) {
+      return {
+        ok: true, run_id: body?.run_id ?? null, state: body?.state ?? null,
+        error: null, existing_run_id: null, kill_switch_reason: null,
+      };
+    }
+    if (resp.status === 409) {
+      const detail = body?.detail as { run_id?: string } | undefined;
+      return {
+        ok: false, run_id: null, state: null, error: "already_running",
+        existing_run_id: detail?.run_id ?? null, kill_switch_reason: null,
+      };
+    }
+    if (resp.status === 423) {
+      const detail = body?.detail as { kill_switch_reason?: string } | undefined;
+      return {
+        ok: false, run_id: null, state: null, error: "kill_switch_active",
+        existing_run_id: null, kill_switch_reason: detail?.kill_switch_reason ?? null,
+      };
+    }
+    if (resp.status === 503) {
+      return {
+        ok: false, run_id: null, state: null, error: "unavailable",
+        existing_run_id: null, kill_switch_reason: null,
+      };
+    }
+    // 401/403 (this API's own auth gate) or anything else undocumented is a
+    // genuine configuration problem for THIS request, not a documented
+    // daemon-runtime outcome -- surface it like every other endpoint's error.
+    const detailStr = typeof body?.detail === "string" ? body.detail : undefined;
+    throw new ApiError(detailStr ?? `${resp.status} ${resp.statusText}`, resp.status);
+  },
+  pauseAutomation: (reason: string) =>
+    http<KillSwitchActionResult>("/automation/pause", {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  resumeAutomation: (reason: string) =>
+    http<KillSwitchActionResult>("/automation/resume", {
+      method: "POST",
+      body: JSON.stringify({ confirm: true, reason }),
+    }),
+  setAutomationInterval: (seconds: number) =>
+    http<IntervalUpdateResult>("/automation/schedule/interval", {
+      method: "PUT",
+      body: JSON.stringify({ interval_seconds: seconds }),
+    }),
   getBrokerageStatus: () => http<BrokerageStatus>("/brokerage/status"),
   connectBrokerage: (creds: BrokerageConnectRequest) =>
     http<BrokerageConnectResult>("/brokerage/connect", {

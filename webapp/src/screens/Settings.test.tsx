@@ -1,10 +1,11 @@
 /**
- * Settings.test.tsx — the "did the pipeline run?" screen (Phase 2, read-only:
- * no Run Now / pause / resume / interval-write yet, those are a later phase).
- * Exercises the honesty contract GET /automation/status exists for: a
- * daemon restart never renders as a blank/fabricated run record, a kill
- * switch renders its real reason, and an interval drift is surfaced rather
- * than silently assumed applied.
+ * Settings.test.tsx — the "did the pipeline run?" screen, plus its four
+ * writes (Run Now, pause/resume, interval, per-pilot re-plan). Exercises
+ * the honesty contract GET /automation/status exists for (a daemon restart
+ * never renders as a blank/fabricated run record, a kill switch renders its
+ * real reason, an interval drift is surfaced rather than silently assumed
+ * applied), plus the write UI's own contract: every mutation renders
+ * whatever the server actually returned, never assumes success client-side.
  */
 import { useEffect } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -13,7 +14,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "./Settings";
 import { api } from "../api/client";
-import type { AutomationSchedule, AutomationStatus } from "../api/types";
+import type { AutomationSchedule, AutomationStatus, Follow, FollowResult, TriggerRunResult } from "../api/types";
 import { writeOnboarding, readOnboarding } from "../onboarding";
 
 vi.mock("virtual:pwa-register/react", () => ({
@@ -136,7 +137,9 @@ describe("Settings screen", () => {
     vi.spyOn(api, "getAutomationSchedule").mockResolvedValueOnce(HEALTHY_SCHEDULE);
     renderSettings();
 
-    expect(await screen.findByText(/manual pause for maintenance/)).toBeInTheDocument();
+    // Reason renders twice by design: the Pipeline-status kill-switch notice
+    // AND the Signal-generation section's own "Reason: ..." line.
+    expect((await screen.findAllByText(/manual pause for maintenance/)).length).toBeGreaterThan(0);
   });
 
   it("dead-letter errors render the true count even when the list is capped", async () => {
@@ -225,5 +228,310 @@ describe("Settings screen", () => {
     await user.click(screen.getByRole("button", { name: "Reset" }));
 
     await waitFor(() => expect(readOnboarding().completed).toBe(false));
+  });
+});
+
+function trigger(overrides: Partial<TriggerRunResult> = {}): TriggerRunResult {
+  return {
+    ok: true, run_id: "orch-x", state: "queued", error: null,
+    existing_run_id: null, kill_switch_reason: null,
+    ...overrides,
+  };
+}
+
+describe("Settings screen — Run Now", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+  });
+
+  it("a successful trigger shows the queued confirmation", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "triggerRun").mockResolvedValueOnce(trigger({ run_id: "orch-42" }));
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Run now" }));
+    expect(await screen.findByText(/Run queued.*orch-42/)).toBeInTheDocument();
+  });
+
+  it("already_running renders the existing run id, not a generic error", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "triggerRun").mockResolvedValueOnce(
+      trigger({ ok: false, run_id: null, state: null, error: "already_running", existing_run_id: "orch-old" })
+    );
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Run now" }));
+    expect(await screen.findByText(/already in flight.*orch-old/)).toBeInTheDocument();
+  });
+
+  it("kill_switch_active renders the real reason", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "triggerRun").mockResolvedValueOnce(
+      trigger({ ok: false, run_id: null, state: null, error: "kill_switch_active", kill_switch_reason: "halted for review" })
+    );
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Run now" }));
+    expect(await screen.findByText(/halted for review/)).toBeInTheDocument();
+  });
+
+  it("unavailable renders 'not reachable'", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "triggerRun").mockResolvedValueOnce(
+      trigger({ ok: false, run_id: null, state: null, error: "unavailable" })
+    );
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Run now" }));
+    expect(await screen.findByText(/not reachable/)).toBeInTheDocument();
+  });
+
+  it("disabled while a run is already in flight (daemon.is_running)", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue({
+      ...HEALTHY_STATUS,
+      daemon: { ...HEALTHY_STATUS.daemon, is_running: true },
+    });
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    renderSettings();
+
+    expect(await screen.findByRole("button", { name: "Run now" })).toBeDisabled();
+  });
+});
+
+describe("Settings screen — Signal generation (pause/resume)", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+  });
+
+  it("toggling off opens a confirm dialog and pauses with the typed reason", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS); // kill_switch inactive -> running
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    const pauseSpy = vi.spyOn(api, "pauseAutomation").mockResolvedValueOnce({ active: true, reason: "lunch break" });
+    renderSettings();
+
+    const toggle = await screen.findByRole("switch", { name: /Signal generation: Running/ });
+    await user.click(toggle);
+    expect(screen.getByText("Pause signal generation?")).toBeInTheDocument();
+
+    // Save is disabled until a reason is typed.
+    const pauseBtn = screen.getByRole("button", { name: "Pause" });
+    expect(pauseBtn).toBeDisabled();
+
+    await user.type(screen.getByLabelText("Reason"), "lunch break");
+    expect(pauseBtn).not.toBeDisabled();
+    await user.click(pauseBtn);
+
+    await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith("lunch break"));
+  });
+
+  it("toggling on (from paused) opens a confirm dialog and resumes", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue({
+      ...HEALTHY_STATUS,
+      kill_switch: { active: true, reason: "was paused" },
+    });
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    const resumeSpy = vi.spyOn(api, "resumeAutomation").mockResolvedValueOnce({ active: false, reason: null });
+    renderSettings();
+
+    const toggle = await screen.findByRole("switch", { name: /Signal generation: Paused/ });
+    await user.click(toggle);
+    expect(screen.getByText("Resume signal generation?")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Reason"), "back online");
+    await user.click(screen.getByRole("button", { name: "Resume" }));
+
+    await waitFor(() => expect(resumeSpy).toHaveBeenCalledWith("back online"));
+  });
+
+  it("resume is disabled from the paused state when advisory_only is false", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue({
+      ...HEALTHY_STATUS,
+      kill_switch: { active: true, reason: "live halt" },
+      advisory_only: false,
+    });
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    renderSettings();
+
+    const toggle = await screen.findByRole("switch", { name: /Signal generation: Paused/ });
+    expect(toggle).toBeDisabled();
+    expect(
+      screen.getByText(/Resume must be done at the console/)
+    ).toBeInTheDocument();
+  });
+
+  it("a pause failure renders the server's error message", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "pauseAutomation").mockRejectedValueOnce(new Error("Automation writes are disabled"));
+    renderSettings();
+
+    const toggle = await screen.findByRole("switch", { name: /Signal generation: Running/ });
+    await user.click(toggle);
+    await user.type(screen.getByLabelText("Reason"), "x");
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+
+    expect(await screen.findByText("Automation writes are disabled")).toBeInTheDocument();
+  });
+});
+
+describe("Settings screen — Schedule interval write", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+  });
+
+  it("not writable: shows the note only, no input", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue({
+      ...HEALTHY_SCHEDULE,
+      interval: { ...HEALTHY_SCHEDULE.interval, writable: false, note: "Writes are disabled." },
+    });
+    renderSettings();
+
+    expect(await screen.findByText("Writes are disabled.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Configured interval (seconds)")).not.toBeInTheDocument();
+  });
+
+  it("writable: an in-range value saves and reloads the schedule", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    const scheduleSpy = vi
+      .spyOn(api, "getAutomationSchedule")
+      .mockResolvedValue({ ...HEALTHY_SCHEDULE, interval: { ...HEALTHY_SCHEDULE.interval, writable: true } });
+    const setSpy = vi
+      .spyOn(api, "setAutomationInterval")
+      .mockResolvedValueOnce({ configured_value: 600, written: "600", applies: "next_daemon_restart" });
+    renderSettings();
+
+    const input = await screen.findByLabelText("Configured interval (seconds)");
+    await user.clear(input);
+    await user.type(input, "600");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(setSpy).toHaveBeenCalledWith(600));
+    // onSaved triggers a reload -- getAutomationSchedule called again after mount.
+    await waitFor(() => expect(scheduleSpy.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("an out-of-range value (1-59) disables Save", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue({
+      ...HEALTHY_SCHEDULE,
+      interval: { ...HEALTHY_SCHEDULE.interval, writable: true },
+    });
+    renderSettings();
+
+    const input = await screen.findByLabelText("Configured interval (seconds)");
+    await user.clear(input);
+    await user.type(input, "30");
+
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("0 is a valid value (parks the timer)", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue({
+      ...HEALTHY_SCHEDULE,
+      interval: { ...HEALTHY_SCHEDULE.interval, writable: true },
+    });
+    renderSettings();
+
+    const input = await screen.findByLabelText("Configured interval (seconds)");
+    await user.clear(input);
+    await user.type(input, "0");
+
+    expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled();
+  });
+});
+
+describe("Settings screen — Active follows / Re-plan", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+  });
+
+  const FOLLOW: Follow = {
+    pilot_id: "trend-following", amount: 500,
+    created_at: "2026-07-01T00:00:00Z", updated_at: "2026-07-01T00:00:00Z",
+    status: "active",
+  };
+
+  it("no active follows renders the honest empty state", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "getFollows").mockResolvedValueOnce([]);
+    renderSettings();
+
+    expect(await screen.findByText("No active follows")).toBeInTheDocument();
+  });
+
+  it("Re-plan calls follow() with the stored amount and renders queue_written honestly", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "getFollows").mockResolvedValueOnce([FOLLOW]);
+    const followSpy = vi.spyOn(api, "follow").mockResolvedValueOnce({
+      follow: FOLLOW,
+      planned_intents: [{ symbol: "AAPL", weight: 1, target_notional: 500, allow_place: false, conviction: 0.8 }],
+      mode: "review",
+      queue_written: true,
+      notional_cap: 2500,
+      min_amount: 100,
+      notice: "gated",
+    } as FollowResult);
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Re-plan" }));
+    expect(followSpy).toHaveBeenCalledWith("trend-following", 500);
+    expect(await screen.findByText(/Re-planned — 1 order\(s\) queued\./)).toBeInTheDocument();
+  });
+
+  it("queue_written:false renders 'Preview only', never a false success claim", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "getFollows").mockResolvedValueOnce([FOLLOW]);
+    vi.spyOn(api, "follow").mockResolvedValueOnce({
+      follow: FOLLOW, planned_intents: [], mode: "off", queue_written: false,
+      notional_cap: 0, min_amount: 100, notice: "off",
+    } as FollowResult);
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Re-plan" }));
+    expect(
+      await screen.findByText(/Preview only — execution mode is off, nothing was written\./)
+    ).toBeInTheDocument();
   });
 });

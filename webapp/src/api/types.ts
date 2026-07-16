@@ -505,6 +505,43 @@ export interface AutomationSchedule {
   };
 }
 
+/**
+ * POST /automation/run's result. Mirrors gui/daemon_client.py's own
+ * TriggerResponse contract on the Python side: a documented RUNTIME outcome
+ * (queued, already running, kill-switch-paused, daemon unreachable) is
+ * returned as data here, NEVER thrown -- only a genuine config/auth problem
+ * with THIS request (this API's own FOLLOW_API_TOKEN gate, a network error)
+ * throws ApiError the normal way. `error` is a stable tag, not a message, so
+ * the UI can branch on it without string-matching.
+ */
+export interface TriggerRunResult {
+  ok: boolean;
+  run_id: string | null;
+  state: string | null;
+  error:
+    | "already_running"
+    | "kill_switch_active"
+    | "unavailable"
+    | null;
+  /** Populated only for the already_running case. */
+  existing_run_id: string | null;
+  /** Populated only for the kill_switch_active case. */
+  kill_switch_reason: string | null;
+}
+
+/** POST /automation/pause / POST /automation/resume. */
+export interface KillSwitchActionResult {
+  active: boolean;
+  reason: string | null;
+}
+
+/** PUT /automation/schedule/interval. */
+export interface IntervalUpdateResult {
+  configured_value: number;
+  written: string;
+  applies: "next_daemon_restart" | "immediately";
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

@@ -188,6 +188,34 @@ stayed green throughout.
   dedicated hard-scoped writer (`data/brokerage_credentials.py`, NOT `gui/env_io.py`, which
   exists specifically to refuse secret writes) to the ONE local `.env` file. Never a vault, never
   multi-tenant, never echoed back in any response.
+- **D6 — Data & Automation writes reuse `FOLLOW_API_TOKEN`; risk-ordering, not aesthetics,
+  decides which endpoints need a second gate (2026-07-16).** `POST /automation/run` and
+  `POST /automation/pause` sit behind `require_command_token` (`FOLLOW_API_TOKEN`) ALONE —
+  same single-token-client tradeoff as D4/D5 (`client.ts` still sends one shared token; a
+  second `VITE_*` token the browser can't route per-endpoint wasn't worth the client
+  redesign). This is deliberate, not an oversight: `POST /pilots/{id}/follow` *already*
+  writes a real order queue under `FOLLOW_API_TOKEN` alone with no master flag, so gating a
+  run trigger or a pause (the SAFE direction) more strictly than the most sensitive endpoint
+  already shipped would invert the risk ordering. The two writes that DO get a second gate
+  (`settings.AUTOMATION_WRITES_ENABLED`, new, default `False`, deliberately NOT in
+  `gui/env_io.py`'s `ALLOWED_KEYS` — mirrors D5's `BROKERAGE_CONNECT_ENABLED` exactly) are the
+  ones with a real persistence/rollback cost: `PUT /automation/schedule/interval` (an `.env`
+  edit) and `POST /automation/resume`, which additionally fails 403 whenever
+  `settings.ADVISORY_ONLY is False` — remote resume is refused once live order submission is
+  enabled; deactivating the kill switch in that state must happen at the console
+  (`docs/RUNBOOK.md` §6), never over a possibly-compromised or leaked token.
+- **D7 — "re-plan all active follows" was cut; cross-Pilot netting doesn't exist
+  (2026-07-16).** The Data & Automation Settings screen's per-pilot "Re-plan" button reuses
+  the EXISTING `POST /pilots/{id}/follow` endpoint verbatim — zero new backend code. A
+  "re-plan everything at once" endpoint was designed and rejected: `execution/queue_builder.py`
+  overwrites the single `output/execution_queue.json` file per call, so a naive loop over
+  active follows would leave only the LAST pilot's intents on disk; worse, two Pilots holding
+  the same symbol would emit two separate intents for it (`_intent_key` dedupes for
+  *notification* purposes, not order-sizing), and `pilots/mirror.py::plan_follow`'s
+  `set_mirrored` side effect means an earlier pilot's force-exit drop-attribution gets
+  consumed and then silently overwritten before ever reaching disk. None of that is fixable
+  without designing real cross-Pilot position netting first — a genuine quant decision in the
+  broker-adjacent quarantined code, out of scope for a settings-screen convenience button.
 
 ## Running it
 
