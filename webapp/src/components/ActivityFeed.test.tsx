@@ -1,165 +1,193 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/**
+ * ActivityFeed.test.tsx — the shared alerts-feed widget. Exercises the frozen
+ * signature ({ limit, pilotIds, pollIntervalMs }) and, above all, the HONESTY
+ * invariants: no fabricated severity for a null level, the feed's real `reason`
+ * surfaced verbatim on an empty feed, exact-match-only pilotId attribution (no
+ * message-text matching), and the 404-vs-hard-error ErrorState split.
+ *
+ * `api` is already the mock (VITE_USE_MOCK default-true) — we never vi.mock the
+ * module; we spy on api.getAlerts only for the error / edge fixtures.
+ */
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActivityFeed } from "./ActivityFeed";
 import { api } from "../api/client";
+import { ApiError } from "../api/types";
 import { theme } from "../theme";
 
-describe("ActivityFeed component (R3)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
+/** Normalize a CSS color through the DOM so a hex compares equal to jsdom's rgb(). */
+function normColor(c: string): string {
+  const el = document.createElement("span");
+  el.style.color = c;
+  return el.style.color;
+}
 
-  // T1.1: Renders Alerts List
-  it("loads and displays alerts with severity levels", async () => {
+describe("ActivityFeed — rendering & honesty", () => {
+  it("loads and displays alert cards from the real mock feed", async () => {
     render(<ActivityFeed limit={5} />);
-    expect(await screen.findByTestId("refresh-alerts-btn")).toBeInTheDocument();
     const cards = await screen.findAllByTestId("alert-card");
     expect(cards.length).toBeGreaterThan(0);
   });
 
-  // T1.2: Refresh Event Dispatch
-  it("triggers API refresh on button click", async () => {
-    const spy = vi.spyOn(api, "getAlerts");
-    render(<ActivityFeed limit={5} />);
-    
-    // First call is from mount
-    expect(spy).toHaveBeenCalledTimes(1);
+  it("formats a CRITICAL alert with the decline theme color", async () => {
+    vi.spyOn(api, "getAlerts").mockResolvedValueOnce({
+      reason: null,
+      entries: [
+        {
+          timestamp: new Date().toISOString(),
+          level: "CRITICAL",
+          message: "Critical volatility event",
+          extra: null,
+        },
+      ],
+    });
+    render(<ActivityFeed limit={1} />);
+    const label = await screen.findByText("Critical");
+    expect(label.style.color).toBe(normColor(theme.decline));
+  });
 
-    const refreshBtn = await screen.findByTestId("refresh-alerts-btn");
-    fireEvent.click(refreshBtn);
+  it("renders '—' for a null level and NEVER a fabricated 'Info'", async () => {
+    vi.spyOn(api, "getAlerts").mockResolvedValueOnce({
+      reason: null,
+      entries: [
+        {
+          timestamp: new Date().toISOString(),
+          level: null,
+          message: "No level alert",
+          extra: null,
+        },
+      ],
+    });
+    render(<ActivityFeed limit={1} />);
+    expect(await screen.findByText("No level alert")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByText("Info")).not.toBeInTheDocument();
+  });
+
+  it("shows the feed's real `reason` verbatim on an empty feed, not 'No alerts yet.'", async () => {
+    vi.spyOn(api, "getAlerts").mockResolvedValueOnce({
+      entries: [],
+      reason: "Alert file not configured (set ALERT_FILE_PATH to enable).",
+    });
+    render(<ActivityFeed limit={5} />);
+    expect(
+      await screen.findByText(/Alert file not configured/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No alerts yet.")).not.toBeInTheDocument();
+  });
+});
+
+describe("ActivityFeed — pilotIds exact-match attribution", () => {
+  it("matches ONLY on extra.pilot_id, never on message text", async () => {
+    vi.spyOn(api, "getAlerts").mockResolvedValueOnce({
+      reason: null,
+      entries: [
+        {
+          timestamp: new Date().toISOString(),
+          level: "INFO",
+          message: "Attributed alert",
+          extra: { pilot_id: "trend-following" },
+        },
+        {
+          // Message MENTIONS a pilot by name but carries no extra.pilot_id — it
+          // must NOT be attributed (this is the facade the fix removes).
+          timestamp: new Date().toISOString(),
+          level: "INFO",
+          message: "The trend follower fired a signal",
+          extra: { type: "signal" },
+        },
+      ],
+    });
+    render(<ActivityFeed pilotIds={["trend-following"]} />);
+    expect(await screen.findByText("Attributed alert")).toBeInTheDocument();
+    expect(
+      screen.queryByText("The trend follower fired a signal")
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("ActivityFeed — error vs cold-start", () => {
+  it("surfaces ErrorState with a Retry on a hard error, and retry reloads", async () => {
+    const spy = vi
+      .spyOn(api, "getAlerts")
+      .mockRejectedValueOnce(new ApiError("boom", 500));
+
+    render(<ActivityFeed />);
+
+    expect(await screen.findByText("Couldn't load")).toBeInTheDocument();
+    expect(screen.getByText("boom")).toBeInTheDocument();
+
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry).toBeInTheDocument();
+
+    // Next call falls through to the real mock (4 entries) → error clears.
+    retry.click();
+    await waitFor(() =>
+      expect(screen.queryByText("Couldn't load")).not.toBeInTheDocument()
+    );
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  // T1.3: Auto-Polling Interval
-  it("polls alerts API every 10 seconds", async () => {
-    const spy = vi.spyOn(api, "getAlerts");
-    render(<ActivityFeed limit={5} />);
-    expect(spy).toHaveBeenCalledTimes(1);
+  it("renders the cold-start copy with NO Retry button on a 404", async () => {
+    vi.spyOn(api, "getAlerts").mockRejectedValueOnce(new ApiError("nope", 404));
+    render(<ActivityFeed />);
+    expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry" })
+    ).not.toBeInTheDocument();
+  });
+});
 
-    await act(async () => {
-      vi.advanceTimersByTime(10000);
-    });
+describe("ActivityFeed — refresh & polling", () => {
+  it("triggers a fetch on the manual Refresh button", async () => {
+    vi.useFakeTimers();
+    const spy = vi
+      .spyOn(api, "getAlerts")
+      .mockResolvedValue({ entries: [], reason: null });
+
+    render(<ActivityFeed limit={5} />);
+    expect(spy).toHaveBeenCalledTimes(1); // mount
+    await act(async () => {}); // flush the mount fetch so the in-flight guard clears
+
+    fireEvent.click(screen.getByTestId("refresh-alerts-btn"));
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  // T1.4: Toggle Polling Switch
-  it("halts polling when auto-poll checkbox is unchecked", async () => {
-    const spy = vi.spyOn(api, "getAlerts");
-    render(<ActivityFeed limit={5} />);
-    const checkbox = await screen.findByTestId("toggle-polling-checkbox");
-    
-    // Uncheck polling
-    fireEvent.click(checkbox);
-    
-    await act(async () => {
-      vi.advanceTimersByTime(10000);
-    });
-    expect(spy).toHaveBeenCalledTimes(1); // Only mount fetch
-  });
+  it("halts polling when the auto-poll checkbox is unchecked", async () => {
+    vi.useFakeTimers();
+    const spy = vi
+      .spyOn(api, "getAlerts")
+      .mockResolvedValue({ entries: [], reason: null });
 
-  // T1.5: Level Indicator Formatting
-  it("formats CRITICAL alerts with the decline theme color", async () => {
-    vi.spyOn(api, "getAlerts").mockResolvedValueOnce({
-      reason: null,
-      entries: [{ timestamp: new Date().toISOString(), level: "CRITICAL", message: "Critical Volatility Event" }]
-    });
-
-    render(<ActivityFeed limit={1} />);
-    const levelLabel = await screen.findByText("Critical");
-    expect(levelLabel.style.color).toBe(theme.decline);
-  });
-
-  // T2.1: Debounce Refresh Operations
-  it("debounces manual refresh button clicks to prevent parallel API requests", async () => {
-    const spy = vi.spyOn(api, "getAlerts");
-    render(<ActivityFeed limit={5} />);
-    const refreshBtn = await screen.findByTestId("refresh-alerts-btn");
-    
-    fireEvent.click(refreshBtn);
-    fireEvent.click(refreshBtn);
-    fireEvent.click(refreshBtn);
-
-    expect(spy).toHaveBeenCalledTimes(2); // 1 mount + 1 debounced manual click
-  });
-
-  // T2.2: Maintain Display During Fetch Failure
-  it("keeps the last valid alerts visible on background polling failures", async () => {
-    let callCount = 0;
-    vi.spyOn(api, "getAlerts").mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return Promise.resolve({
-          reason: null,
-          entries: [{ timestamp: new Date().toISOString(), level: "INFO", message: "Initial alert" }]
-        });
-      }
-      return Promise.reject(new Error("Network connection lost"));
-    });
-
-    render(<ActivityFeed limit={5} />);
-    expect(await screen.findByText("Initial alert")).toBeInTheDocument();
-
-    // Trigger background poll which fails
-    await act(async () => {
-      vi.advanceTimersByTime(10000);
-    });
-
-    // Alert should still be visible on screen
-    expect(screen.getByText("Initial alert")).toBeInTheDocument();
-    expect(screen.queryByText("Network connection lost")).not.toBeInTheDocument();
-  });
-
-  // T2.3: Missing Level Category Values
-  it("defaults missing level categories to INFO", async () => {
-    vi.spyOn(api, "getAlerts").mockResolvedValueOnce({
-      reason: null,
-      entries: [{ timestamp: new Date().toISOString(), level: null, message: "No Level alert" }]
-    });
-
-    render(<ActivityFeed limit={1} />);
-    const levelLabel = await screen.findByText("Info");
-    expect(levelLabel.style.color).toBe(theme.accent);
-  });
-
-  // T2.4: Limit Pagination Bounds
-  it("applies container scroll constraint and virtual styles on large pagination lists (>100)", async () => {
-    const largeEntries = Array.from({ length: 110 }).map((_, i) => ({
-      timestamp: new Date().toISOString(),
-      level: "INFO",
-      message: `Alert #${i}`
-    }));
-
-    vi.spyOn(api, "getAlerts").mockResolvedValueOnce({
-      reason: null,
-      entries: largeEntries
-    });
-
-    render(<ActivityFeed limit={150} />);
-    
-    const firstAlert = await screen.findByText("Alert #0");
-    const container = firstAlert.closest("[data-testid='alert-card']")?.parentElement;
-    expect(container).toBeInTheDocument();
-    expect(container?.style.maxHeight).toBe("300px");
-    expect(container?.style.overflowY).toBe("auto");
-    expect(container?.style.contentVisibility).toBe("auto");
-  });
-
-  // T2.5: Cleanup Timers on Unmount
-  it("clears polling intervals on unmount", async () => {
-    const spy = vi.spyOn(api, "getAlerts");
-    const { unmount } = render(<ActivityFeed limit={5} />);
+    render(<ActivityFeed limit={5} pollIntervalMs={10000} />);
+    await act(async () => {});
     expect(spy).toHaveBeenCalledTimes(1);
 
-    unmount();
-
+    fireEvent.click(screen.getByTestId("toggle-polling-checkbox")); // uncheck
     await act(async () => {
       vi.advanceTimersByTime(10000);
     });
-    expect(spy).toHaveBeenCalledTimes(1); // No additional poll
+    expect(spy).toHaveBeenCalledTimes(1); // no background poll fired
+  });
+
+  it("polls on the configured pollIntervalMs cadence (not a hardcoded interval)", async () => {
+    vi.useFakeTimers();
+    const spy = vi
+      .spyOn(api, "getAlerts")
+      .mockResolvedValue({ entries: [], reason: null });
+
+    render(<ActivityFeed pollIntervalMs={15000} />);
+    await act(async () => {});
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });

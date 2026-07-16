@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { api } from "../api/client";
-import type { AlertEntry } from "../api/types";
+import type { AlertEntry, AlertsFeed } from "../api/types";
+import { ApiError } from "../api/types";
 import { ErrorState, Loading } from "./ui";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
@@ -14,11 +15,12 @@ const LEVEL_STYLE: Record<string, { color: string; label: string }> = {
 };
 
 function LevelDot({ level }: { level: string | null }) {
-  // Missing level category values default to INFO
-  const normalizedLevel = (level || "INFO").toUpperCase();
-  const style = LEVEL_STYLE[normalizedLevel] || {
+  // Honesty: an unknown/null level is NEVER promoted to a fabricated severity.
+  // It renders the raw level string if present, else "—", in the muted color —
+  // mirroring the pre-existing Activity screen's LevelDot idiom.
+  const style = (level && LEVEL_STYLE[level.toUpperCase()]) || {
     color: theme.textMuted,
-    label: normalizedLevel,
+    label: level ?? "—",
   };
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -41,7 +43,11 @@ function LevelDot({ level }: { level: string | null }) {
 
 function AlertCard({ entry }: { entry: AlertEntry }) {
   return (
-    <div className="card card-pad" style={{ marginBottom: 10, background: theme.surface, border: `1px solid ${theme.border}` }} data-testid="alert-card">
+    <div
+      className="card card-pad"
+      style={{ marginBottom: 10, background: theme.surface, border: `1px solid ${theme.border}` }}
+      data-testid="alert-card"
+    >
       <div
         style={{
           display: "flex",
@@ -62,12 +68,19 @@ function AlertCard({ entry }: { entry: AlertEntry }) {
   );
 }
 
-export function ActivityFeed({ limit = 20, filterPilotIds }: { limit?: number; filterPilotIds?: string[] }) {
+export function ActivityFeed({
+  limit = 20,
+  pilotIds,
+  pollIntervalMs = 30000,
+}: { limit?: number; pilotIds?: string[]; pollIntervalMs?: number }) {
   const [pollingActive, setPollingActive] = useState(true);
-  const [alerts, setAlerts] = useState<AlertEntry[]>([]);
+  // Keep the whole feed (not just entries) so the honest `reason` string is
+  // available for the empty state instead of a hardcoded placeholder.
+  const [feed, setFeed] = useState<AlertsFeed | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+  const [status, setStatus] = useState<number | null>(null);
+
   const isFetchingRef = useRef(false);
 
   const fetchAlerts = useCallback(async (isBackground = false) => {
@@ -77,15 +90,20 @@ export function ActivityFeed({ limit = 20, filterPilotIds }: { limit?: number; f
     if (!isBackground) {
       setLoading(true);
       setError(null);
+      setStatus(null);
     }
 
     try {
       const data = await api.getAlerts(limit);
-      setAlerts((data && data.entries) || []);
+      setFeed(data ?? { entries: [], reason: null });
       setError(null);
-    } catch (e: any) {
+      setStatus(null);
+    } catch (e: unknown) {
+      // Background poll failures never clobber the last good feed or surface an
+      // error banner — only a foreground (mount / manual refresh) failure does.
       if (!isBackground) {
-        setError(e?.message || "Failed to fetch alerts");
+        setError(e instanceof Error ? e.message : "Failed to fetch alerts");
+        setStatus(e instanceof ApiError ? e.status : null);
       }
     } finally {
       setLoading(false);
@@ -101,29 +119,25 @@ export function ActivityFeed({ limit = 20, filterPilotIds }: { limit?: number; f
     if (!pollingActive) return;
     const interval = setInterval(() => {
       fetchAlerts(true);
-    }, 10000);
+    }, pollIntervalMs);
     return () => clearInterval(interval);
-  }, [pollingActive, fetchAlerts]);
+  }, [pollingActive, pollIntervalMs, fetchAlerts]);
 
   const handleManualRefresh = () => {
     fetchAlerts(false);
   };
 
-  // Filter alerts by pilot IDs if specified
-  const validAlerts = Array.isArray(alerts) ? alerts.filter(a => a && typeof a === "object") : [];
-  const filteredAlerts = filterPilotIds && filterPilotIds.length > 0
-    ? validAlerts.filter(a => {
-        if (!a) return false;
-        const msg = (a.message || "").toLowerCase();
-        return filterPilotIds.some(id => {
-          const name = id === "trend-following" ? "trend follower"
-                     : id === "dip-buyer" ? "dip buyer"
-                     : id === "balanced-blend" ? "balanced blend"
-                     : id.replace(/-/g, " ").toLowerCase();
-          return msg.includes(id.toLowerCase()) || msg.includes(name) || (a.extra && (a.extra as any).pilot_id === id);
-        });
-      })
-    : validAlerts;
+  const entries = feed?.entries ?? [];
+  const reason = feed?.reason ?? null;
+
+  // pilotIds filters ONLY on an exact `extra.pilot_id` match — never message-text
+  // substring matching, never an alias table. An alert whose message mentions a
+  // pilot by name but carries no `extra.pilot_id` is NOT attributed to it.
+  const validEntries = entries.filter((a) => a && typeof a === "object");
+  const filteredAlerts =
+    pilotIds && pilotIds.length > 0
+      ? validEntries.filter((a) => pilotIds.includes(String(a.extra?.pilot_id)))
+      : validEntries;
 
   const isLargeList = filteredAlerts.length > 100;
 
@@ -154,23 +168,23 @@ export function ActivityFeed({ limit = 20, filterPilotIds }: { limit?: number; f
       {loading && <Loading lines={3} />}
 
       {!loading && error && (
-        <ErrorState message={error} onRetry={handleManualRefresh} />
+        <ErrorState message={error} status={status} onRetry={handleManualRefresh} />
       )}
 
       {!loading && !error && (
         <>
           {filteredAlerts.length === 0 ? (
             <div className="empty" style={{ padding: 20 }} data-testid="empty-alerts">
-              No alerts yet.
+              {reason ?? "No alerts yet."}
             </div>
           ) : (
-            <div 
-              style={{ 
-                display: "flex", 
-                flexDirection: "column", 
-                maxHeight: 300, 
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                maxHeight: 300,
                 overflowY: "auto",
-                ...(isLargeList ? { contentVisibility: "auto", containIntrinsicSize: "0 100px" } : {})
+                ...(isLargeList ? { contentVisibility: "auto", containIntrinsicSize: "0 100px" } : {}),
               }}
             >
               {filteredAlerts.slice(0, limit).map((e, i) => (

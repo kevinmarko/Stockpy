@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Portfolio, PilotSummary } from "../api/types";
+import type { Portfolio, PilotSummary, PerfRange, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
 import { ActivityFeed } from "../components/ActivityFeed";
@@ -65,13 +65,29 @@ export function Dashboard() {
     }
   });
 
-  const [range, setRange] = useState<any>("3M");
+  const [range, setRange] = useState<PerfRange>("3M");
   const port = useApi<Portfolio>(() => api.getPortfolio(), []);
-  const equity = useApi<any>(() => api.getEquityCurve(range), [range]);
+  const equity = useApi<{ range: PerfRange; curve: CurvePoint[] | null }>(
+    () => api.getEquityCurve(range),
+    [range]
+  );
   const pilots = useApi<PilotSummary[]>(() => api.listPilots(), []);
 
   const [selectedTopPilots, setSelectedTopPilots] = useState<string[]>([]);
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
+
+  // Retain the last successfully-loaded portfolio so a FAILED refresh keeps the
+  // stale snapshot on screen behind an "offline: using cached data" notice,
+  // rather than blanking to an error (useApi clears `data` on error).
+  const [lastGoodPortfolio, setLastGoodPortfolio] = useState<Portfolio | null>(null);
+  useEffect(() => {
+    if (port.data) setLastGoodPortfolio(port.data);
+  }, [port.data]);
+  const shownPortfolio = port.data ?? lastGoodPortfolio;
+  // A live fetch failed but we still hold a cached snapshot to display.
+  const portfolioIsOffline = !port.loading && !port.data && !!port.error && !!lastGoodPortfolio;
+  // Local for clean type-narrowing of the (nullable) equity curve in the JSX.
+  const equityCurve: CurvePoint[] | null = equity.data?.curve ?? null;
 
   useEffect(() => {
     localStorage.setItem("dashboard_layout", JSON.stringify(layout));
@@ -282,9 +298,9 @@ export function Dashboard() {
             <div style={{ flex: 1, overflow: "auto" }} onClick={(e) => e.stopPropagation()} onDragStart={(e) => e.stopPropagation()}>
               {w.id === "portfolio-summary" && (
                 <div>
-                  {port.loading ? (
+                  {port.loading && !shownPortfolio ? (
                     <Loading lines={2} />
-                  ) : !port.data ? (
+                  ) : !shownPortfolio ? (
                     port.status === 404 ? (
                       <div data-testid="portfolio-empty-state" style={{ padding: 8 }}>
                         <h3>Nothing here yet</h3>
@@ -295,10 +311,10 @@ export function Dashboard() {
                     )
                   ) : (
                     <div>
-                      {port.error && (
-                        <div 
-                          className="notice notice-warn" 
-                          style={{ marginBottom: 12, fontSize: 12 }} 
+                      {portfolioIsOffline && (
+                        <div
+                          className="notice notice-warn"
+                          style={{ marginBottom: 12, fontSize: 12 }}
                           data-testid="portfolio-offline-warning"
                         >
                           Offline: using cached data. <button onClick={port.reload} style={{ background: "none", border: "none", color: theme.accent, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Retry</button>
@@ -306,7 +322,7 @@ export function Dashboard() {
                       )}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div className="num" style={{ fontSize: 24, fontWeight: 800 }}>
-                          {fmtUsd(port.data!.total_equity)}
+                          {fmtUsd(shownPortfolio.total_equity)}
                         </div>
                         <button
                           className="btn"
@@ -317,12 +333,12 @@ export function Dashboard() {
                           Refresh
                         </button>
                       </div>
-                      <div className="num" style={{ color: port.data!.total_unrealized_pl >= 0 ? theme.growth : theme.decline, fontSize: 13, marginBottom: 12 }}>
-                        {fmtSignedUsd(port.data!.total_unrealized_pl)} unrealized
+                      <div className="num" style={{ color: shownPortfolio.total_unrealized_pl >= 0 ? theme.growth : theme.decline, fontSize: 13, marginBottom: 12 }}>
+                        {fmtSignedUsd(shownPortfolio.total_unrealized_pl)} unrealized
                       </div>
                       <div className="tiles">
-                        <Tile label="Buying Power" value={fmtUsd(port.data!.buying_power)} />
-                        <Tile label="Positions" value={port.data!.position_count} />
+                        <Tile label="Buying Power" value={fmtUsd(shownPortfolio.buying_power)} />
+                        <Tile label="Positions" value={shownPortfolio.position_count} />
                       </div>
                     </div>
                   )}
@@ -333,10 +349,25 @@ export function Dashboard() {
                 <div>
                   {equity.loading ? (
                     <div className="skeleton" style={{ height: 150 }} />
-                  ) : Array.isArray(equity.data?.curve) ? (
-                    <PerfLine data={equity.data.curve} />
+                  ) : Array.isArray(equityCurve) && equityCurve.length > 0 ? (
+                    <PerfLine data={equityCurve} />
                   ) : (
-                    <div className="empty">No curve data available.</div>
+                    // Honest empty panel (mirrors PilotDetail) — never a blank
+                    // chart. PerfLine returns null on an empty series, so the
+                    // caller owns the empty state.
+                    <div
+                      className="empty"
+                      data-testid="equity-empty"
+                      style={{ padding: "32px 8px", background: "var(--surface-2)", borderRadius: 12 }}
+                    >
+                      <div style={{ fontWeight: 600, color: theme.textSecondary }}>
+                        No account performance data yet
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 13 }}>
+                        No curve data available. Run the Stockpy pipeline to accumulate an
+                        account equity history.
+                      </div>
+                    </div>
                   )}
                   <div style={{ marginTop: 8 }}>
                     <RangeToggle value={range} onChange={setRange} />

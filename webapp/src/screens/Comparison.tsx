@@ -21,6 +21,11 @@ export function Comparison() {
   });
 
   const [curves, setCurves] = useState<Record<string, CurvePoint[]>>({});
+  // Pilots whose performance fetch SUCCEEDED but returned `curve: null` (no
+  // persisted backtest series). These are NOT errors — they stay in the metrics
+  // table but must never get a fabricated chart line. Tracked with the honest
+  // `reason` the API returns so the UI can explain the absence.
+  const [nullCurves, setNullCurves] = useState<Record<string, string>>({});
   const [fetchErrors, setFetchErrors] = useState<Record<string, string>>({});
   const [loadingCurves, setLoadingCurves] = useState(false);
   const [followPilot, setFollowPilot] = useState<PilotSummary | null>(null);
@@ -33,7 +38,9 @@ export function Comparison() {
   useEffect(() => {
     if (selectedIds.length === 0) {
       setCurves({});
+      setNullCurves({});
       setFetchErrors({});
+      setLoadingCurves(false);
       return;
     }
 
@@ -44,26 +51,50 @@ export function Comparison() {
     Promise.all(
       selectedIds.map(id =>
         api.getPerformance(id, "3M")
-          .then(res => ({ id, curve: res.curve, error: null }))
-          .catch(err => ({ id, curve: null, error: err?.message || "Failed to load performance" }))
+          .then(res => ({
+            id,
+            curve: res.curve,
+            reason: res.reason ?? null,
+            error: null as string | null,
+          }))
+          .catch(err => ({
+            id,
+            curve: null as CurvePoint[] | null,
+            reason: null as string | null,
+            error: (err?.message as string) || "Failed to load performance",
+          }))
       )
-    ).then(results => {
-      if (!active) return;
-      const nextCurves: Record<string, CurvePoint[]> = {};
-      const nextErrors: Record<string, string> = {};
+    )
+      .then(results => {
+        if (!active) return;
+        const nextCurves: Record<string, CurvePoint[]> = {};
+        const nextNull: Record<string, string> = {};
+        const nextErrors: Record<string, string> = {};
 
-      results.forEach(r => {
-        if (r.error) {
-          nextErrors[r.id] = r.error;
-        } else if (r.curve) {
-          nextCurves[r.id] = r.curve;
-        }
+        results.forEach(r => {
+          if (r.error) {
+            nextErrors[r.id] = r.error;
+          } else if (Array.isArray(r.curve) && r.curve.length > 0) {
+            nextCurves[r.id] = r.curve;
+          } else {
+            // Success, but no persisted backtest series — honest, not an error.
+            nextNull[r.id] =
+              r.reason ?? "This Pilot's validation report has no persisted return curve.";
+          }
+        });
+
+        setCurves(nextCurves);
+        setNullCurves(nextNull);
+        setFetchErrors(nextErrors);
+        setLoadingCurves(false);
+      })
+      .catch(() => {
+        // Individual promises already catch; this is a defensive backstop so a
+        // rejection can never leave the spinner stuck.
+        if (!active) return;
+        setFetchErrors({ _batch: "Failed to load performance curves." });
+        setLoadingCurves(false);
       });
-
-      setCurves(nextCurves);
-      setFetchErrors(nextErrors);
-      setLoadingCurves(false);
-    });
 
     return () => {
       active = false;
@@ -86,7 +117,14 @@ export function Comparison() {
     setSelectedIds([]);
   };
 
+  // Metrics-table columns: every selected pilot that didn't hard-error, INCLUDING
+  // null-curve pilots (they keep their honest metrics row).
   const selectedPilots = pilotsList.data?.filter(p => selectedIds.includes(p.id) && !fetchErrors[p.id]) ?? [];
+  // Chart series: only pilots with a REAL curve — a null-curve pilot is never
+  // drawn (no phantom line, no phantom legend entry).
+  const chartPilots = selectedPilots.filter(p => Array.isArray(curves[p.id]) && curves[p.id].length > 0);
+  // Pilots to name in the honest "no backtest series" note.
+  const nullCurvePilots = selectedPilots.filter(p => nullCurves[p.id]);
 
   const chartData = useMemo(() => {
     const validCurves: Record<string, CurvePoint[]> = {};
@@ -217,13 +255,13 @@ export function Comparison() {
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
                     <XAxis dataKey="date" stroke={theme.textMuted} fontSize={10} tickLine={false} />
                     <YAxis stroke={theme.textMuted} fontSize={10} tickLine={false} domain={["auto", "auto"]} />
-                    <Tooltip 
+                    <Tooltip
                       contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
                       labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
                       itemStyle={{ fontSize: 11 }}
                     />
                     <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
-                    {selectedPilots.map((p, index) => (
+                    {chartPilots.map((p, index) => (
                       <Line
                         key={p.id}
                         type="monotone"
@@ -232,11 +270,30 @@ export function Comparison() {
                         stroke={colors[index % colors.length]}
                         dot={false}
                         strokeWidth={2}
+                        isAnimationActive={false}
                         activeDot={{ r: 4 }}
                       />
                     ))}
                   </LineChart>
                 </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* Honest "no backtest series" note — never a fabricated line for
+                Pilots whose validation report has no persisted return curve. */}
+            {nullCurvePilots.length > 0 && (
+              <div
+                data-testid="no-series-note"
+                className="empty"
+                style={{ marginTop: 12, padding: "16px 12px", background: "var(--surface-2)", borderRadius: 12 }}
+              >
+                <div style={{ fontWeight: 600, color: theme.textSecondary }}>
+                  No backtest series for: {nullCurvePilots.map(p => p.name).join(", ")}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 13, color: theme.textMuted }}>
+                  These Pilots have no persisted return curve yet, so no line is drawn for them.
+                  Their metrics below are shown honestly.
+                </div>
               </div>
             )}
           </section>
@@ -249,10 +306,10 @@ export function Comparison() {
                 <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
                   <th style={{ padding: 8 }}>Metric</th>
                   {selectedPilots.map(p => (
-                    <th 
-                      key={p.id} 
-                      style={{ 
-                        padding: 8, 
+                    <th
+                      key={p.id}
+                      style={{
+                        padding: 8,
                         color: theme.accent,
                         whiteSpace: "normal",
                         wordBreak: "break-word",
@@ -338,10 +395,10 @@ export function Comparison() {
             </table>
           </section>
 
-          {/* Comparative Activity Feed */}
+          {/* Recent pilot alerts */}
           <section className="card card-pad" style={{ marginTop: 16 }} data-testid="comparison-activity-feed">
-            <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Comparative Activity Feed</h2>
-            <ActivityFeed limit={5} filterPilotIds={selectedIds} />
+            <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Recent pilot alerts</h2>
+            <ActivityFeed limit={5} pilotIds={selectedIds} />
           </section>
         </>
       )}

@@ -628,6 +628,33 @@ def plan_follow(
             logger.debug("mirror: plan_follow could not persist mirrored set for %s (%s)",
                          pilot_id, exc)
 
+    # Emit exactly one pilot-attributed alert for this follow plan. This is the
+    # ONLY genuinely pilot-scoped alert in the platform: only follow-planning
+    # carries the Pilot's identity. Risk-gate / kill-switch / reconciliation
+    # alerts stay PLATFORM-scoped and are deliberately NOT backfilled with a
+    # pilot_id — those subsystems have no notion of which Pilot (if any) a given
+    # order intent belongs to, so attributing one would be fabricated. The alert
+    # is lazily imported and fully dead-lettered (CONSTRAINT #6): an alerting
+    # failure must NEVER break plan_follow's normal result.
+    try:
+        from observability.alerts import send_alert
+
+        send_alert(
+            "INFO",
+            f"Follow planned for {pilot.name}: {len(intents)} intent(s), mode={mode}",
+            extra={
+                "type": "follow_planned",
+                "pilot_id": pilot.id,
+                "amount": amount,
+                "intent_count": len(intents),
+                "mode": mode,
+                "queue_written": queue_written,
+            },
+        )
+    except Exception as exc:  # pragma: no cover - defensive dead-letter
+        logger.debug("mirror: plan_follow alert emission failed for %s (%s)",
+                     pilot_id, exc)
+
     return {
         "planned_intents": planned,
         "mode": mode,

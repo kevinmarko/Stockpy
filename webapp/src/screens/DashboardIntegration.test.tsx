@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "./Dashboard";
 import { Comparison } from "./Comparison";
 import { api } from "../api/client";
@@ -8,10 +8,9 @@ import { ApiError } from "../api/types";
 import { theme } from "../theme";
 
 describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
+  // Real timers by default: RTL's findBy*/waitFor cannot advance vitest fake
+  // timers here (they'd hang). Only the background-polling test opts into fake
+  // timers locally, and uses synchronous queries there.
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -25,6 +24,7 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
 
   // T3.1: Dashboard Drag + Activity Polling (R1+R3)
   it("does not reset layout drag state when activity polling triggers in background", async () => {
+    vi.useFakeTimers();
     const spy = vi.spyOn(api, "getAlerts");
     render(
       <MemoryRouter>
@@ -32,7 +32,9 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
       </MemoryRouter>
     );
 
-    const widgetPortfolio = await screen.findByTestId("widget-portfolio-summary");
+    // Widgets render synchronously from initial layout state (no async needed);
+    // findBy* would hang under fake timers, so query synchronously.
+    const widgetPortfolio = screen.getByTestId("widget-portfolio-summary");
     const dataTransfer = {
       setData: vi.fn(),
       getData: vi.fn().mockReturnValue("0"),
@@ -41,16 +43,17 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     // Simulate drag start on widget
     fireEvent.dragStart(widgetPortfolio, { dataTransfer });
 
-    // Advance fake timers by 10 seconds to trigger background refresh
+    // Advance fake timers by 10 seconds to trigger a background poll cycle
     await act(async () => {
       vi.advanceTimersByTime(10000);
     });
 
     // Check that api was polled in background
     expect(spy).toHaveBeenCalled();
-    
+
     // Drag state should still be active/valid (i.e. did not crash)
     expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "0");
+    vi.useRealTimers();
   });
 
   // T3.2: Widget to Comparison Redirection (R1+R2)
@@ -74,8 +77,9 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     fireEvent.click(compareBtn);
 
     expect(await screen.findByTestId("comparison-title")).toBeInTheDocument();
-    
-    const trendFollowingCheckbox = screen.getByTestId("comparison-checkbox-trend-following") as HTMLInputElement;
+
+    // Checkboxes render once the pilots list resolves — wait for the first.
+    const trendFollowingCheckbox = (await screen.findByTestId("comparison-checkbox-trend-following")) as HTMLInputElement;
     const dipBuyerCheckbox = screen.getByTestId("comparison-checkbox-dip-buyer") as HTMLInputElement;
     expect(trendFollowingCheckbox.checked).toBe(true);
     expect(dipBuyerCheckbox.checked).toBe(true);
@@ -98,17 +102,24 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     const preview = await screen.findByTestId("export-preview");
     const parsed = JSON.parse(preview.textContent || "");
     expect(parsed).toHaveProperty("dashboard_layout");
-    expect(parsed.dashboard_layout).toEqual(customLayout);
+    // The saved layout is carried into the export metadata. The Dashboard merges
+    // any missing DEFAULT_LAYOUT widgets in and writes that back, so the export's
+    // layout begins with (at least) the user's saved widgets in their saved order.
+    expect(Array.isArray(parsed.dashboard_layout)).toBe(true);
+    expect(parsed.dashboard_layout.slice(0, customLayout.length)).toEqual(customLayout);
   });
 
   // T3.4: Context-Sensitive Comparative Alerts (R2+R3)
   it("dynamically filters comparative activity widget alerts based on active comparison set", async () => {
+    // ActivityFeed attributes an alert to a pilot ONLY via an exact
+    // `extra.pilot_id` match (never message-text matching), so the fixtures carry
+    // pilot_id. Selecting "trend-following" must show only its attributed alert.
     vi.spyOn(api, "getAlerts").mockResolvedValue({
       reason: null,
       entries: [
-        { timestamp: new Date().toISOString(), level: "INFO", message: "Trend Follower executed BUY order" },
-        { timestamp: new Date().toISOString(), level: "INFO", message: "Dip Buyer executed SELL order" },
-        { timestamp: new Date().toISOString(), level: "INFO", message: "Momentum Leaders executed order" }
+        { timestamp: new Date().toISOString(), level: "INFO", message: "Trend Follower executed BUY order", extra: { pilot_id: "trend-following" } },
+        { timestamp: new Date().toISOString(), level: "INFO", message: "Dip Buyer executed SELL order", extra: { pilot_id: "dip-buyer" } },
+        { timestamp: new Date().toISOString(), level: "INFO", message: "Momentum Leaders executed order", extra: { pilot_id: "cross-sectional-momentum" } }
       ]
     });
 
@@ -122,7 +133,11 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     fireEvent.click(cb);
 
     expect(await screen.findByTestId("comparison-activity-feed")).toBeInTheDocument();
-    expect(screen.getByText("Trend Follower executed BUY order")).toBeInTheDocument();
+    // Alerts load asynchronously — wait for the matching one to appear.
+    expect(await screen.findByText("Trend Follower executed BUY order")).toBeInTheDocument();
+    // NOTE: this negative assertion exercises ActivityFeed's pilotIds filtering,
+    // which lives in the sibling-owned ActivityFeed component (frozen prop
+    // `pilotIds`). It passes once that component filters by pilotIds.
     expect(screen.queryByText("Dip Buyer executed SELL order")).not.toBeInTheDocument();
   });
 
@@ -193,7 +208,7 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     vi.spyOn(api, "getAlerts").mockResolvedValue({
       reason: null,
       entries: [
-        { timestamp: new Date().toISOString(), level: "CRITICAL", message: "CRITICAL Volatility Event!" }
+        { timestamp: new Date().toISOString(), level: "CRITICAL", message: "CRITICAL Volatility Event!", extra: null }
       ]
     });
 
@@ -203,9 +218,13 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
       </MemoryRouter>
     );
 
-    // Verify Critical Dot appears with theme decline color
+    // Verify Critical Dot appears with the theme decline color. jsdom normalizes
+    // inline color to rgb(), so compare against the normalized form of the token
+    // rather than the raw hex string.
     const criticalDot = await screen.findByText("Critical");
-    expect(criticalDot.style.color).toBe(theme.decline);
+    const probe = document.createElement("span");
+    probe.style.color = theme.decline;
+    expect(criticalDot.style.color).toBe(probe.style.color);
 
     // Verify export panel mounts successfully (contains current state)
     expect(screen.getByTestId("export-preview")).toBeInTheDocument();

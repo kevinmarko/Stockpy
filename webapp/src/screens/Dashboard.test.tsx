@@ -90,7 +90,9 @@ describe("Dashboard screen (R1)", () => {
 
     renderDashboard();
     const widgets = await screen.findAllByTestId(/^widget-/);
-    expect(widgets.length).toBe(2);
+    // The saved 2-widget order is applied first, then the 3 missing DEFAULT_LAYOUT
+    // widgets are merged in (same behavior asserted by the merge test below).
+    expect(widgets.length).toBe(5);
     expect(widgets[0]).toHaveAttribute("data-testid", "widget-activity-feed");
     expect(widgets[1]).toHaveAttribute("data-testid", "widget-portfolio-summary");
     expect(widgets[1].style.gridColumn).toBe("span 3");
