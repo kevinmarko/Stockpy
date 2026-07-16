@@ -1910,3 +1910,336 @@ class TestGenerateDailySignals:
         msft_idx = result.index("MSFT")
         assert aapl_idx < msft_idx  # ranked descending
         assert "HOLD" in result  # None action defaults to HOLD elsewhere in the row, MSFT's real action
+
+
+# ---------------------------------------------------------------------------
+# Pilots marketplace tools (list_pilots / get_pilot_detail /
+# get_pilot_performance / get_pilot_trades / get_follows / follow_pilot)
+#
+# These wrap pilots.catalog / pilots.scoring / pilots.performance /
+# pilots.follows_store / pilots.mirror -- each of which already has its own
+# dedicated test suite (tests/test_pilots_*.py). Tests here therefore focus
+# on the MCP tool WIRING: arg validation, markdown+json rendering, unknown-
+# pilot 404-equivalent messages, and dead-letter degradation -- not on
+# re-proving the pilots.* layer's own math. ``catalog.get_pilot``/
+# ``list_pilots`` are real (pure, static, dependency-light) rather than
+# mocked; the snapshot/performance/follow layers are monkeypatched for
+# determinism.
+# ---------------------------------------------------------------------------
+
+
+class TestListPilots:
+    def test_no_snapshot_renders_dashes_and_json(self, monkeypatch):
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+
+        result = srv.list_pilots()
+
+        assert "# Pilots Marketplace" in result
+        assert "trend-following" in result
+        assert "```json" in result
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert isinstance(payload, list) and payload
+        assert all(row["holdings_count"] == 0 for row in payload)
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.catalog as catalog_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("catalog boom")
+
+        monkeypatch.setattr(catalog_mod, "list_pilots", _raise)
+
+        result = srv.list_pilots()
+        assert "Failed to list pilots" in result
+
+
+class TestGetPilotDetail:
+    def test_unknown_pilot(self):
+        result = srv.get_pilot_detail("does-not-exist")
+        assert "No such pilot 'does-not-exist'" in result
+        assert "trend-following" in result
+
+    def test_no_snapshot_degrades_honestly(self, monkeypatch):
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+
+        result = srv.get_pilot_detail("trend-following")
+
+        assert "No state snapshot yet" in result
+        assert '"holdings": []' in result
+
+    def test_happy_path_with_holdings(self, monkeypatch):
+        import pilots.performance as performance_mod
+        import pilots.scoring as scoring_mod
+
+        fake_snapshot = {"timestamp": "2026-01-01T00:00:00Z", "signals": []}
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: fake_snapshot)
+        monkeypatch.setattr(
+            scoring_mod,
+            "pilot_holdings",
+            lambda pilot, snap, top_n=None: [
+                {"symbol": "AAPL", "weight": 0.6, "score": 0.5, "price": 150.0, "sector": "Technology"}
+            ],
+        )
+        monkeypatch.setattr(
+            scoring_mod, "sector_allocation", lambda holdings: [{"sector": "Technology", "weight": 0.6}]
+        )
+        monkeypatch.setattr(
+            scoring_mod,
+            "pilot_trades",
+            lambda pilot, **k: [{"date": "2026-01-02", "symbol": "AAPL", "side": "ENTER", "weight_delta": 0.6}],
+        )
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_headline",
+            lambda pilot, **k: {"sharpe": 1.2, "dsr": 0.99, "pbo": 0.1, "max_drawdown": 0.2, "deployable": True},
+        )
+
+        result = srv.get_pilot_detail("trend-following")
+
+        assert "AAPL" in result
+        assert "Technology" in result
+        assert "```json" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.catalog as catalog_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
+
+        result = srv.get_pilot_detail("trend-following")
+        assert "Failed to get pilot detail" in result
+
+
+class TestGetPilotPerformance:
+    def test_unknown_pilot(self):
+        assert "No such pilot" in srv.get_pilot_performance("nope", "1M")
+
+    def test_invalid_range(self):
+        result = srv.get_pilot_performance("trend-following", "5Y")
+        assert "Invalid range '5Y'" in result
+
+    def test_case_insensitive_range_and_metrics_rendering(self, monkeypatch):
+        import pilots.performance as performance_mod
+
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_performance",
+            lambda pilot, range="1M", **k: {
+                "metrics": {"sharpe": 1.1, "dsr": 0.98, "pbo": 0.05, "max_drawdown": 0.15, "deployable": True},
+                "curve": [{"date": "2026-01-01", "value": 100.0}, {"date": "2026-01-02", "value": 101.0}],
+                "benchmark": None,
+                "macro_benchmark": None,
+                "reason": None,
+                "range": range,
+            },
+        )
+
+        result = srv.get_pilot_performance("trend-following", "1m")
+
+        assert "1M" in result
+        assert "2 points" in result
+        assert "```json" in result
+
+    def test_no_backtest_reason_surfaced(self, monkeypatch):
+        import pilots.performance as performance_mod
+
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_performance",
+            lambda pilot, range="1M", **k: {
+                "metrics": None,
+                "curve": None,
+                "benchmark": None,
+                "macro_benchmark": None,
+                "reason": "no validated backtest for this pilot",
+                "range": range,
+            },
+        )
+
+        result = srv.get_pilot_performance("regime-navigator", "1M")
+        assert "no validated backtest for this pilot" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.performance as performance_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(performance_mod, "pilot_performance", _raise)
+
+        result = srv.get_pilot_performance("trend-following", "1M")
+        assert "Failed to get performance" in result
+
+
+class TestGetPilotTrades:
+    def test_unknown_pilot(self):
+        assert "No such pilot" in srv.get_pilot_trades("nope")
+
+    def test_empty_history(self, monkeypatch):
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "pilot_trades", lambda *a, **k: [])
+
+        result = srv.get_pilot_trades("trend-following")
+        assert "No trade events" in result
+
+    def test_happy_path_respects_limit(self, monkeypatch):
+        import pilots.scoring as scoring_mod
+
+        events = [
+            {"date": f"2026-01-0{i}", "symbol": "AAPL", "side": "REWEIGHT", "weight_delta": 0.01 * i}
+            for i in range(1, 4)
+        ]
+        monkeypatch.setattr(scoring_mod, "pilot_trades", lambda *a, **k: events)
+
+        result = srv.get_pilot_trades("trend-following", limit=2)
+
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert payload == events[-2:]
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.scoring as scoring_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(scoring_mod, "pilot_trades", _raise)
+
+        result = srv.get_pilot_trades("trend-following")
+        assert "Failed to get trades" in result
+
+
+class TestGetFollows:
+    def test_no_active_follows(self, monkeypatch):
+        import pilots.follows_store as fs_mod
+
+        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", lambda self: [])
+
+        result = srv.get_follows()
+        assert "No active follows" in result
+
+    def test_happy_path(self, monkeypatch):
+        import pilots.follows_store as fs_mod
+
+        rows = [
+            {
+                "pilot_id": "trend-following",
+                "amount": 500.0,
+                "created_at": "t1",
+                "updated_at": "t2",
+                "status": "active",
+            }
+        ]
+        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", lambda self: rows)
+
+        result = srv.get_follows()
+        assert "trend-following" in result
+        assert "$500.00" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.follows_store as fs_mod
+
+        def _raise(self):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", _raise)
+
+        result = srv.get_follows()
+        assert "Failed to list follows" in result
+
+
+class TestFollowPilot:
+    def test_unknown_pilot(self):
+        assert "No such pilot" in srv.follow_pilot("nope", 100)
+
+    def test_non_positive_amount_rejected(self):
+        assert "amount must be > 0" in srv.follow_pilot("trend-following", 0)
+        assert "amount must be > 0" in srv.follow_pilot("trend-following", -5)
+
+    def test_kill_switch_blocks(self, monkeypatch):
+        import execution.kill_switch as ks_mod
+
+        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: True)
+        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "reason", lambda self: "VIX spike")
+
+        result = srv.follow_pilot("trend-following", 500)
+
+        assert "Kill switch is active" in result
+        assert "VIX spike" in result
+
+    def test_happy_path_no_account_snapshot(self, monkeypatch):
+        import data.historical_store as hs_mod
+        import execution.kill_switch as ks_mod
+        import pilots.follows_store as fs_mod
+        import pilots.mirror as mirror_mod
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: False)
+        follow_row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
+        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: follow_row)
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: None)
+        monkeypatch.setattr(
+            mirror_mod,
+            "plan_follow",
+            lambda pilot, amount, account_snapshot, snapshot=None: {
+                "planned_intents": [],
+                "mode": "off",
+                "queue_written": False,
+            },
+        )
+
+        result = srv.follow_pilot("trend-following", 500)
+
+        assert "no account snapshot" in result
+        assert "No order is placed automatically" in result
+        assert '"queue_written": false' in result
+
+    def test_happy_path_with_planned_intents(self, monkeypatch):
+        import data.historical_store as hs_mod
+        import execution.kill_switch as ks_mod
+        import pilots.follows_store as fs_mod
+        import pilots.mirror as mirror_mod
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: False)
+        monkeypatch.setattr(
+            fs_mod.FollowsStore, "upsert", lambda self, pid, amt: {"pilot_id": pid, "amount": amt}
+        )
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: {"timestamp": "t"})
+        fake_snap = SimpleNamespace(total_equity=10000.0)
+        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: fake_snap)
+        monkeypatch.setattr(
+            mirror_mod,
+            "plan_follow",
+            lambda pilot, amount, account_snapshot, snapshot=None: {
+                "planned_intents": [
+                    {"symbol": "AAPL", "action": "BUY", "target_notional": 300.0, "rationale": "underweight"}
+                ],
+                "mode": "review",
+                "queue_written": True,
+            },
+        )
+
+        result = srv.follow_pilot("trend-following", 500)
+
+        assert "account snapshot loaded (DB)" in result
+        assert "AAPL" in result
+        assert "$300.00" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.catalog as catalog_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
+
+        result = srv.follow_pilot("trend-following", 500)
+        assert "Failed to follow pilot" in result

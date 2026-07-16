@@ -2096,6 +2096,416 @@ def get_portfolio_coverage() -> str:
 
 
 # ==========================================
+# [9] PILOTS MARKETPLACE (READ-ONLY + GATED FOLLOW)
+# ==========================================
+# Exposes pilots/ (catalog, scoring, performance, follows_store, mirror) —
+# the same read/follow surface api/pilots_api.py serves to the webapp/ PWA —
+# as MCP tools. Read tools only touch already-persisted state (output/state_
+# snapshot.json, output/history/, reports/*_validation_summary.json,
+# output/follows.json) and never import a heavy calculation engine.
+# follow_pilot is the one write action: it persists a follow and calls
+# pilots.mirror.plan_follow, which only ever produces a GATED, paper-first
+# DRY-RUN queue at output/execution_queue.json (readable via
+# get_execution_queue) — it never contacts a broker or places an order.
+
+_PILOT_RANGES = ("1W", "1M", "3M", "6M", "1Y", "2Y")
+
+
+def _unknown_pilot_message(pilot_id: str) -> str:
+    from pilots import catalog
+    available = ", ".join(p.id for p in catalog.list_pilots())
+    return f"No such pilot '{pilot_id}'. Available pilot ids: {available}"
+
+
+@mcp.tool()
+def list_pilots() -> str:
+    """
+    Lists every Stockpy "Pilot" (a copyable strategy = a named blend of
+    signal-module weights) with its honest PBO/DSR-gated backtest headline
+    (Sharpe, DSR, PBO, MaxDD, deployable), current holdings_count from the
+    latest snapshot, and local follow proxies (aum_proxy/followers_proxy).
+    Read-only; never fabricates a metric for a Pilot with no validated
+    backtest (those show "—").
+    """
+    try:
+        from pilots import catalog, performance, scoring
+        from pilots.follows_store import FollowsStore
+
+        snapshot = scoring.load_snapshot()
+        store = FollowsStore()
+
+        def _fmt(v):
+            return f"{v:.2f}" if isinstance(v, (int, float)) else "—"
+
+        rows = []
+        json_rows = []
+        for pilot in catalog.list_pilots():
+            headline = performance.pilot_headline(pilot)
+            holdings_count = len(scoring.pilot_holdings(pilot, snapshot)) if snapshot else 0
+            deployable = headline.get("deployable")
+            rows.append(
+                "| `{id}` | {name} | {cat} | {dep} | {sharpe} | {dsr} | {pbo} | {holdings} | ${aum:,.0f} |".format(
+                    id=pilot.id,
+                    name=pilot.name,
+                    cat=pilot.category,
+                    dep="✅" if deployable else ("❌" if deployable is False else "—"),
+                    sharpe=_fmt(headline.get("sharpe")),
+                    dsr=_fmt(headline.get("dsr")),
+                    pbo=_fmt(headline.get("pbo")),
+                    holdings=holdings_count,
+                    aum=store.aum_for(pilot.id),
+                )
+            )
+            json_rows.append({
+                "id": pilot.id,
+                "name": pilot.name,
+                "category": pilot.category,
+                "long_only": pilot.long_only,
+                "validation_strategy_id": pilot.validation_strategy_id,
+                "headline": headline,
+                "holdings_count": holdings_count,
+                "aum_proxy": store.aum_for(pilot.id),
+                "followers_proxy": store.followers_for(pilot.id),
+            })
+
+        lines = ["# Pilots Marketplace\n"]
+        if snapshot is None:
+            lines.append("_No state snapshot yet — holdings_count reads 0 for every Pilot until the pipeline runs._\n")
+        lines.append("| ID | Name | Category | Deployable | Sharpe | DSR | PBO | Holdings | AUM (proxy) |")
+        lines.append("|----|------|----------|------------|--------|-----|-----|----------|-------------|")
+        lines.extend(rows)
+        lines.append("\n```json")
+        lines.append(json.dumps(json_rows, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to list pilots: {str(e)}"
+
+
+@mcp.tool()
+def get_pilot_detail(pilot_id: str) -> str:
+    """
+    Full detail for one Pilot: identity, signal weights, honest backtest
+    headline, top-N target holdings (symbol/weight/score/price/sector),
+    sector allocation, and the last 10 ENTER/EXIT/REWEIGHT trades diffed from
+    output/history/. Empty holdings/sector/trades with an honest note when no
+    state snapshot exists yet — never fabricated.
+
+    Args:
+        pilot_id: A Pilot id from list_pilots (e.g. "trend-following").
+    """
+    try:
+        from pilots import catalog, performance, scoring
+
+        pilot = catalog.get_pilot(pilot_id)
+        if pilot is None:
+            return _unknown_pilot_message(pilot_id)
+
+        snapshot = scoring.load_snapshot()
+        headline = performance.pilot_headline(pilot)
+
+        lines = [f"# Pilot: {pilot.name} (`{pilot.id}`)\n"]
+        lines.append(f"**Category**: {pilot.category}  |  **Long-only**: {pilot.long_only}")
+        lines.append(f"**Description**: {pilot.description}\n")
+        lines.append("**Signal Weights**: " + ", ".join(f"{k}={v}" for k, v in pilot.weights.items()))
+        lines.append(
+            f"**Validation Strategy**: {pilot.validation_strategy_id or 'None (no honest backtest for this pilot)'}\n"
+        )
+
+        lines.append("## Backtest Headline")
+        if headline.get("deployable") is None:
+            lines.append("_No validated backtest available._\n")
+        else:
+            lines.append(f"- **Deployable**: {'✅' if headline['deployable'] else '❌'}")
+            lines.append(f"- **Sharpe**: {headline.get('sharpe')}")
+            lines.append(f"- **DSR**: {headline.get('dsr')}")
+            lines.append(f"- **PBO**: {headline.get('pbo')}")
+            lines.append(f"- **Max Drawdown**: {headline.get('max_drawdown')}\n")
+
+        if snapshot is None:
+            lines.append("_No state snapshot yet — holdings/sector/trades are empty until the pipeline runs._")
+            holdings, sector_alloc, trades = [], [], []
+        else:
+            holdings = scoring.pilot_holdings(pilot, snapshot)
+            sector_alloc = scoring.sector_allocation(holdings)
+            trades = scoring.pilot_trades(pilot)[-10:]
+
+            lines.append("## Top Holdings")
+            if holdings:
+                lines.append("| Symbol | Weight | Score | Price | Sector |")
+                lines.append("|--------|--------|-------|-------|--------|")
+                for h in holdings:
+                    price = h.get("price")
+                    lines.append(
+                        "| `{sym}` | {w:.1%} | {sc:.3f} | {px} | {sec} |".format(
+                            sym=h["symbol"],
+                            w=h["weight"],
+                            sc=h["score"],
+                            px=f"${price:.2f}" if price is not None else "N/A",
+                            sec=h.get("sector") or "Unknown",
+                        )
+                    )
+            else:
+                lines.append("_No positive-scoring holdings in the latest snapshot._")
+
+            lines.append("\n## Sector Allocation")
+            if sector_alloc:
+                for s in sector_alloc:
+                    lines.append(f"- **{s['sector']}**: {s['weight']:.1%}")
+            else:
+                lines.append("_None._")
+
+            lines.append("\n## Recent Trades (last 10)")
+            if trades:
+                lines.append("| Date | Symbol | Side | Weight Δ |")
+                lines.append("|------|--------|------|----------|")
+                for t in trades:
+                    lines.append(f"| {t['date']} | `{t['symbol']}` | {t['side']} | {t['weight_delta']:+.4f} |")
+            else:
+                lines.append("_Fewer than two historical snapshots — no trade diff yet._")
+
+        payload = {
+            "id": pilot.id,
+            "name": pilot.name,
+            "category": pilot.category,
+            "weights": dict(pilot.weights),
+            "long_only": pilot.long_only,
+            "validation_strategy_id": pilot.validation_strategy_id,
+            "headline": headline,
+            "holdings": holdings,
+            "sector_allocation": sector_alloc,
+            "recent_trades": trades,
+            "as_of": snapshot.get("timestamp") if snapshot else None,
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to get pilot detail for '{pilot_id}': {str(e)}"
+
+
+@mcp.tool()
+def get_pilot_performance(pilot_id: str, range: str = "1M") -> str:
+    """
+    Honest backtest performance for a Pilot: the full validation-summary
+    metrics (Sharpe/DSR/PBO/MaxDD/deployable/...) plus the REAL downsampled
+    base-100 OOS equity curve (and buy-and-hold benchmark / SPY
+    macro-benchmark overlays) persisted by validation/harness.py, tail-sliced
+    to `range`. Returns curve=None with an honest reason when the Pilot has
+    no validated backtest yet or the summary predates that field — never
+    synthesized.
+
+    Args:
+        pilot_id: A Pilot id from list_pilots (e.g. "trend-following").
+        range: One of "1W","1M","3M","6M","1Y","2Y" (default "1M").
+    """
+    try:
+        from pilots import catalog, performance
+
+        pilot = catalog.get_pilot(pilot_id)
+        if pilot is None:
+            return _unknown_pilot_message(pilot_id)
+
+        range_norm = (range or "1M").upper()
+        if range_norm not in _PILOT_RANGES:
+            return f"Invalid range '{range}'. Allowed: {', '.join(_PILOT_RANGES)}"
+
+        result = performance.pilot_performance(pilot, range=range_norm)
+
+        lines = [f"# Performance: {pilot.name} (`{pilot.id}`) — {range_norm}\n"]
+        if result.get("metrics") is None:
+            lines.append(f"_No metrics available: {result.get('reason')}_")
+        else:
+            m = result["metrics"]
+            lines.append(f"- **Deployable**: {'✅' if m.get('deployable') else '❌'}")
+            lines.append(
+                f"- **Sharpe**: {m.get('sharpe')}  |  **DSR**: {m.get('dsr')}  |  "
+                f"**PBO**: {m.get('pbo')}  |  **MaxDD**: {m.get('max_drawdown')}"
+            )
+            if result.get("curve"):
+                lines.append(f"- **Equity Curve**: {len(result['curve'])} points, base-100 OOS, real (not synthesized)")
+            else:
+                lines.append(f"- **Equity Curve**: unavailable ({result.get('reason')})")
+
+        lines.append("\n```json")
+        lines.append(json.dumps(result, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to get performance for '{pilot_id}': {str(e)}"
+
+
+@mcp.tool()
+def get_pilot_trades(pilot_id: str, limit: int = 20) -> str:
+    """
+    Recent signal-change trades (ENTER/EXIT/REWEIGHT) for a Pilot, most
+    recent last, diffed day-over-day from the rotated output/history/
+    snapshots. Empty when fewer than two historical snapshots exist.
+
+    Args:
+        pilot_id: A Pilot id from list_pilots.
+        limit: Max number of trade events to return (default 20).
+    """
+    try:
+        from pilots import catalog, scoring
+
+        pilot = catalog.get_pilot(pilot_id)
+        if pilot is None:
+            return _unknown_pilot_message(pilot_id)
+
+        trades = scoring.pilot_trades(pilot)[-limit:]
+        lines = [f"# Recent Trades: {pilot.name} (`{pilot.id}`)\n"]
+        if trades:
+            lines.append("| Date | Symbol | Side | Weight Δ |")
+            lines.append("|------|--------|------|----------|")
+            for t in trades:
+                lines.append(f"| {t['date']} | `{t['symbol']}` | {t['side']} | {t['weight_delta']:+.4f} |")
+        else:
+            lines.append("_No trade events — fewer than two historical snapshots under output/history/._")
+
+        lines.append("\n```json")
+        lines.append(json.dumps(trades, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to get trades for '{pilot_id}': {str(e)}"
+
+
+@mcp.tool()
+def get_follows() -> str:
+    """
+    Lists the operator's active Pilot follows from the local, single-operator
+    JSON store (output/follows.json) with amount and status.
+    """
+    try:
+        from pilots.follows_store import FollowsStore
+
+        follows = FollowsStore().list_active()
+        lines = ["# Active Pilot Follows\n"]
+        if follows:
+            lines.append("| Pilot ID | Amount | Created | Updated |")
+            lines.append("|----------|--------|---------|---------|")
+            for f in follows:
+                lines.append(
+                    "| `{pid}` | ${amt:,.2f} | {created} | {updated} |".format(
+                        pid=f.get("pilot_id"),
+                        amt=f.get("amount", 0.0),
+                        created=f.get("created_at", "N/A"),
+                        updated=f.get("updated_at", "N/A"),
+                    )
+                )
+        else:
+            lines.append("_No active follows._")
+
+        lines.append("\n```json")
+        lines.append(json.dumps(follows, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to list follows: {str(e)}"
+
+
+@mcp.tool()
+def follow_pilot(pilot_id: str, amount: float) -> str:
+    """
+    Follows a Pilot with a dollar amount: persists the follow to
+    output/follows.json, then builds a GATED, paper-first DRY-RUN
+    rebalance-to-target order queue via pilots.mirror.plan_follow — this
+    NEVER places a real order. The resulting queue (output/execution_queue.json,
+    the same file get_execution_queue reads) still must be reviewed and
+    confirmed through the robinhood-execution skill before anything reaches a
+    broker.
+
+    Refuses to plan (returns a message, no queue written) when the global
+    kill switch is active. Reads the account snapshot DB-first
+    (data.historical_store.HistoricalStore.latest_account_snapshot()) and
+    never forces a live Robinhood login — with no stored snapshot the follow
+    is still persisted and a preview-only result is returned (no equity
+    fabricated).
+
+    Args:
+        pilot_id: A Pilot id from list_pilots (e.g. "trend-following").
+        amount: Dollar amount to allocate to this Pilot (must be > 0).
+    """
+    try:
+        from pilots import catalog
+        from pilots.follows_store import FollowsStore
+        from pilots.mirror import plan_follow
+        from pilots.scoring import load_snapshot
+        from data.historical_store import HistoricalStore
+        from execution.kill_switch import GlobalKillSwitch
+
+        pilot = catalog.get_pilot(pilot_id)
+        if pilot is None:
+            return _unknown_pilot_message(pilot_id)
+
+        if amount is None or amount <= 0:
+            return "amount must be > 0 to follow a pilot."
+
+        ks = GlobalKillSwitch()
+        if ks.is_active():
+            return f"🚫 Kill switch is active — following is paused. Reason: {ks.reason() or 'N/A'}"
+
+        follow = FollowsStore().upsert(pilot_id, float(amount))
+
+        snapshot = load_snapshot()
+        account_snapshot = None
+        account_note = "no account snapshot (preview only, no equity fabricated)"
+        try:
+            account_snapshot = HistoricalStore().latest_account_snapshot()
+            if account_snapshot is not None:
+                account_note = "account snapshot loaded (DB)"
+        except Exception as ae:
+            account_note = f"account snapshot unavailable ({type(ae).__name__})"
+
+        plan = plan_follow(pilot, float(amount), account_snapshot, snapshot=snapshot)
+
+        lines = [f"# Follow: {pilot.name} (`{pilot.id}`) — ${float(amount):,.2f}\n"]
+        lines.append(
+            "⚠️ This creates a GATED, paper-first order-queue preview. "
+            "**No order is placed automatically** — review it with `get_execution_queue` "
+            "and confirm through the robinhood-execution skill.\n"
+        )
+        lines.append(f"_{account_note}._")
+        lines.append(f"- **Mode**: {plan.get('mode')}")
+        lines.append(f"- **Queue Written**: {'✅' if plan.get('queue_written') else '❌ (preview only)'}")
+
+        intents = plan.get("planned_intents", [])
+        if intents:
+            lines.append("\n## Planned Intents")
+            lines.append("| Symbol | Action | Target Notional | Rationale |")
+            lines.append("|--------|--------|------------------|-----------|")
+            for it in intents:
+                notional = it.get("target_notional")
+                lines.append(
+                    "| `{sym}` | {act} | {notional} | {rat} |".format(
+                        sym=it.get("symbol", "?"),
+                        act=it.get("action", "?"),
+                        notional=f"${notional:,.2f}" if notional is not None else "N/A",
+                        rat=it.get("rationale", ""),
+                    )
+                )
+        else:
+            lines.append(
+                "\n_No planned intents (Pilot has no positive-scoring holdings yet, or the follow is already balanced)._"
+            )
+
+        payload = {
+            "follow": follow,
+            "planned_intents": intents,
+            "mode": plan.get("mode"),
+            "queue_written": plan.get("queue_written", False),
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to follow pilot '{pilot_id}': {str(e)}"
+
+
+# ==========================================
 # [7] SERVER EXECUTION
 # ==========================================
 
