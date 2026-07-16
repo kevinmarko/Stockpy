@@ -449,6 +449,318 @@ class TestQueryInvestyoDb:
 
 
 # ---------------------------------------------------------------------------
+# _db_query internals — two dormant Postgres-branch bugs (fixed):
+#   1. ``sqlalchemy.text(sql)`` doesn't understand SQLite's ``?`` positional
+#      placeholders, and a plain tuple params arg raises ArgumentError under
+#      SQLAlchemy 2.0 — `_qmark_to_named` rewrites `?` -> `:pN` + a bind dict.
+#   2. The sqlite branch silently discarded a caller-configured custom
+#      DATABASE_URL and always read the cwd-relative "quant_platform.db"
+#      literal — fixed to honor an EXPLICIT custom sqlite DATABASE_URL,
+#      while leaving the (unset/default) case, and every existing
+#      chdir-based test above, byte-for-byte unchanged.
+# ---------------------------------------------------------------------------
+
+
+class TestQmarkToNamed:
+    """Pure-function tests for the `?` -> `:pN` SQLAlchemy bind-rewrite helper."""
+
+    def test_no_params_is_a_noop(self):
+        sql = "SELECT * FROM T"
+        rewritten, binds = srv._qmark_to_named(sql, ())
+        assert rewritten == sql
+        assert binds == {}
+
+    def test_single_placeholder(self):
+        rewritten, binds = srv._qmark_to_named(
+            "SELECT timestamp FROM ExecutionLogs ORDER BY id DESC LIMIT ?", (50,)
+        )
+        assert "?" not in rewritten
+        assert ":p0" in rewritten
+        assert binds == {"p0": 50}
+
+    def test_multiple_placeholders_preserve_order(self):
+        rewritten, binds = srv._qmark_to_named(
+            "SELECT symbol, composite_score FROM DailySignals "
+            "WHERE date=? ORDER BY composite_score DESC LIMIT ?",
+            ("2026-07-15", 10),
+        )
+        assert "?" not in rewritten
+        assert rewritten.index(":p0") < rewritten.index(":p1")
+        assert binds == {"p0": "2026-07-15", "p1": 10}
+
+    def test_matches_read_platform_logs_query(self):
+        """Exact call-site query from `read_platform_logs` rewrites cleanly."""
+        sql = (
+            "SELECT timestamp, status, ticker_count, execution_time_seconds, error_message "
+            "FROM ExecutionLogs ORDER BY id DESC LIMIT ?"
+        )
+        rewritten, binds = srv._qmark_to_named(sql, (25,))
+        assert rewritten == sql.replace("?", ":p0")
+        assert binds == {"p0": 25}
+
+    def test_matches_get_signal_breakdown_query(self):
+        sql = "SELECT * FROM DailySignals WHERE symbol = ? ORDER BY date DESC LIMIT 1"
+        rewritten, binds = srv._qmark_to_named(sql, ("AAPL",))
+        assert rewritten == sql.replace("?", ":p0")
+        assert binds == {"p0": "AAPL"}
+
+    def test_matches_generate_daily_signals_query(self):
+        sql = (
+            "SELECT symbol, composite_score, action, conviction FROM DailySignals "
+            "WHERE date = ? ORDER BY composite_score DESC LIMIT ?"
+        )
+        rewritten, binds = srv._qmark_to_named(sql, ("2026-07-15", 10))
+        assert rewritten == "SELECT symbol, composite_score, action, conviction FROM DailySignals " \
+            "WHERE date = :p0 ORDER BY composite_score DESC LIMIT :p1"
+        assert binds == {"p0": "2026-07-15", "p1": 10}
+
+    def test_mismatched_placeholder_count_raises(self):
+        with pytest.raises(ValueError):
+            srv._qmark_to_named("SELECT * FROM T WHERE id = ?", (1, 2))
+
+    def test_mismatched_placeholder_count_too_few_params_raises(self):
+        with pytest.raises(ValueError):
+            srv._qmark_to_named("SELECT * FROM T WHERE id = ? AND x = ?", (1,))
+
+
+class _FakeSQLAlchemyResult:
+    def __init__(self, columns, rows):
+        self._columns = columns
+        self._rows = rows
+
+    def keys(self):
+        return self._columns
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeSQLAlchemyConnection:
+    def __init__(self, captured, result):
+        self._captured = captured
+        self._result = result
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, clause, parameters=None):
+        self._captured["sql_text"] = str(clause)
+        self._captured["parameters"] = parameters
+        return self._result
+
+
+class _FakeSQLAlchemyEngine:
+    def __init__(self, captured, result):
+        self._captured = captured
+        self._result = result
+
+    def connect(self):
+        return _FakeSQLAlchemyConnection(self._captured, self._result)
+
+
+class TestDbQueryPostgresBranch:
+    """Integration-style tests mocked at the SQLAlchemy engine boundary --
+    no live Postgres server is available in this environment, so
+    `db_config.create_readonly_db_engine` (the DATABASE-LEVEL read-only seam
+    _db_query actually routes through) is replaced with a fake engine/
+    connection that records exactly what `_db_query` passed to `.execute()`."""
+
+    def test_parameterized_query_rewrites_qmarks_and_binds(self, monkeypatch):
+        import db_config
+        from settings import settings
+
+        monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://u:p@host/db1")
+        captured = {}
+        fake_result = _FakeSQLAlchemyResult(["symbol", "date"], [("AAPL", "2026-07-15")])
+        # _db_query routes through the cached, DATABASE-LEVEL read-only
+        # _readonly_engine() -> db_config.create_readonly_db_engine(), not the
+        # write-path create_db_engine -- mock at that boundary instead. A
+        # per-test-unique db_url avoids collisions with @lru_cache on
+        # _readonly_engine (also cleared explicitly for safety).
+        monkeypatch.setattr(
+            db_config, "create_readonly_db_engine",
+            lambda url: _FakeSQLAlchemyEngine(captured, fake_result),
+        )
+        srv._readonly_engine.cache_clear()
+
+        columns, rows = srv._db_query(
+            "SELECT * FROM DailySignals WHERE symbol = ? ORDER BY date DESC LIMIT 1",
+            ("AAPL",),
+        )
+
+        assert columns == ["symbol", "date"]
+        assert rows == [("AAPL", "2026-07-15")]
+        # The `?` placeholder must be gone and replaced with a named bind --
+        # this is the exact break the bug report identified (sqlalchemy.text()
+        # does not recognize `?`).
+        assert "?" not in captured["sql_text"]
+        assert ":p0" in captured["sql_text"]
+        assert captured["parameters"] == {"p0": "AAPL"}
+
+    def test_no_params_query_passes_empty_bind_dict(self, monkeypatch):
+        import db_config
+        from settings import settings
+
+        monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://u:p@host/db2")
+        captured = {}
+        fake_result = _FakeSQLAlchemyResult(["c"], [(1,)])
+        monkeypatch.setattr(
+            db_config, "create_readonly_db_engine",
+            lambda url: _FakeSQLAlchemyEngine(captured, fake_result),
+        )
+        srv._readonly_engine.cache_clear()
+
+        columns, rows = srv._db_query("SELECT 1 AS c")
+
+        assert columns == ["c"]
+        assert rows == [(1,)]
+        assert captured["sql_text"] == "SELECT 1 AS c"
+        assert captured["parameters"] == {}
+
+    def test_multi_param_query_rewrites_in_order(self, monkeypatch):
+        import db_config
+        from settings import settings
+
+        monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://u:p@host/db3")
+        captured = {}
+        fake_result = _FakeSQLAlchemyResult(["symbol"], [])
+        monkeypatch.setattr(
+            db_config, "create_readonly_db_engine",
+            lambda url: _FakeSQLAlchemyEngine(captured, fake_result),
+        )
+        srv._readonly_engine.cache_clear()
+
+        srv._db_query(
+            "SELECT symbol FROM DailySignals WHERE date = ? ORDER BY composite_score DESC LIMIT ?",
+            ("2026-07-15", 10),
+        )
+
+        assert captured["parameters"] == {"p0": "2026-07-15", "p1": 10}
+        assert "?" not in captured["sql_text"]
+
+
+class TestDbQuerySqliteDatabaseUrlHonored:
+    """Bug 2: DATABASE_URL unset must reproduce today's exact cwd-relative
+    behavior; an EXPLICIT custom sqlite DATABASE_URL must be honored instead
+    of silently reading the wrong file."""
+
+    def test_unset_database_url_uses_cwd_relative_default(self, monkeypatch, tmp_path):
+        """Unchanged-behavior pin: identical to how every other test in this
+        file already calls query_investyo_db/read_platform_logs/etc, just
+        exercised directly against `_db_query`."""
+        from settings import settings
+
+        monkeypatch.setattr(settings, "DATABASE_URL", None)
+        monkeypatch.chdir(tmp_path)
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute("CREATE TABLE T (id INTEGER)")
+        conn.execute("INSERT INTO T VALUES (7)")
+        conn.commit()
+        conn.close()
+
+        columns, rows = srv._db_query("SELECT id FROM T")
+
+        assert rows == [(7,)]
+
+    def test_custom_sqlite_database_url_is_honored(self, monkeypatch, tmp_path):
+        """The core regression: a custom DATABASE_URL pointing at a
+        DIFFERENT sqlite file must actually be read from -- not silently
+        ignored in favor of the cwd-relative "quant_platform.db" default."""
+        from settings import settings
+
+        monkeypatch.chdir(tmp_path)
+
+        # A DIFFERENT default-named DB sits in the cwd with no matching
+        # table -- if the bug were still present, `_db_query` would read
+        # this file (via the hardcoded "quant_platform.db" literal) and
+        # raise/degrade instead of returning the custom DB's row.
+        sqlite3.connect("quant_platform.db").close()
+
+        custom_db = tmp_path / "custom_subdir" / "other.db"
+        custom_db.parent.mkdir()
+        conn = sqlite3.connect(str(custom_db))
+        conn.execute("CREATE TABLE T (id INTEGER)")
+        conn.execute("INSERT INTO T VALUES (42)")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{custom_db}")
+
+        columns, rows = srv._db_query("SELECT id FROM T")
+
+        assert rows == [(42,)]
+
+    def test_custom_sqlite_database_url_missing_file_raises(self, monkeypatch, tmp_path):
+        from settings import settings
+
+        monkeypatch.chdir(tmp_path)
+        missing_db = tmp_path / "does_not_exist.db"
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{missing_db}")
+
+        with pytest.raises(FileNotFoundError):
+            srv._db_query("SELECT 1")
+
+    def test_custom_sqlite_database_url_with_uri_metacharacters_stays_readonly(
+        self, monkeypatch, tmp_path
+    ):
+        """Interaction regression: when a custom DATABASE_URL is honored, its
+        path is no longer the hardcoded literal with zero URI metacharacters
+        -- an unescaped path containing '?'/'#'/'%' would silently DROP
+        ?mode=ro and hand back a READ-WRITE connection (the exact fail-open
+        trap db_config.sqlite_readonly_uri exists to prevent). This pins that
+        _db_query reuses that helper rather than raw f-string interpolation."""
+        from settings import settings
+
+        weird_dir = tmp_path / "100%data"
+        weird_dir.mkdir()
+        custom_db = weird_dir / "other.db"
+        conn = sqlite3.connect(str(custom_db))
+        conn.execute("CREATE TABLE T (id INTEGER)")
+        conn.execute("INSERT INTO T VALUES (99)")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{custom_db}")
+
+        # Round-trips despite the '%' in the path (proves escaping happened).
+        columns, rows = srv._db_query("SELECT id FROM T")
+        assert rows == [(99,)]
+
+        # And the connection is still genuinely read-only (proves mode=ro
+        # wasn't silently dropped by an unescaped metacharacter).
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            srv._db_query("INSERT INTO T VALUES (1)")
+
+    def test_resolve_database_url_failure_falls_back_to_default_path(self, monkeypatch, tmp_path):
+        """Dead-letter path: if `resolve_database_url()` itself raises,
+        `_db_query` must still fall back to the exact pre-fix relative-path
+        behavior, never raise from the resolution step itself. Mocked at
+        `db_config`'s own attribute (the module `_db_query` locally
+        imports from on every call), matching this file's established
+        monkeypatch convention."""
+        import db_config
+
+        monkeypatch.chdir(tmp_path)
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute("CREATE TABLE T (id INTEGER)")
+        conn.execute("INSERT INTO T VALUES (99)")
+        conn.commit()
+        conn.close()
+
+        def _raise(*_a, **_k):
+            raise RuntimeError("simulated resolve_database_url failure")
+
+        monkeypatch.setattr(db_config, "resolve_database_url", _raise)
+
+        columns, rows = srv._db_query("SELECT id FROM T")
+
+        assert rows == [(99,)]
+
+
+# ---------------------------------------------------------------------------
 # execute_paper_trade
 # ---------------------------------------------------------------------------
 
