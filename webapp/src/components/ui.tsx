@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ButtonHTMLAttributes, type ChangeEvent, type ReactNode } from "react";
 import type { Headline, PilotCategory } from "../api/types";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { categoryColor } from "../theme";
@@ -203,5 +203,127 @@ export function ErrorState({
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * Normal-sized text/number input — a SIBLING to the `.field` class, not a
+ * replacement. `.field` is deliberately money-styled (22px/700/tabular-nums)
+ * for the Follow amount input; leave it alone. This is for everything else
+ * (e.g. a schedule interval, a pause reason) where 22px/700 would be wrong.
+ * `--t-input` is a 16px hard floor (see the index.css token comment) — below
+ * that, iOS Safari auto-zooms the page on focus.
+ */
+export function Input({
+  label,
+  value,
+  onChange,
+  type = "text",
+  inputMode,
+  invalid,
+  hint,
+  id,
+  disabled,
+  min,
+  max,
+  step,
+}: {
+  label: string;
+  value: string | number;
+  onChange: (e: ChangeEvent<HTMLInputElement>) => void;
+  type?: "text" | "number" | "email" | "password";
+  inputMode?: "text" | "numeric" | "decimal" | "email";
+  invalid?: boolean;
+  hint?: string;
+  id?: string;
+  disabled?: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+}) {
+  const autoId = useId();
+  const inputId = id ?? autoId;
+  const hintId = hint ? `${inputId}-hint` : undefined;
+
+  return (
+    <div>
+      <label
+        htmlFor={inputId}
+        className="tile-label"
+        style={{ display: "block", marginBottom: 6 }}
+      >
+        {label}
+      </label>
+      <input
+        id={inputId}
+        className="input"
+        type={type}
+        inputMode={inputMode}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        min={min}
+        max={max}
+        step={step}
+        aria-invalid={invalid ? "true" : undefined}
+        aria-describedby={hintId}
+      />
+      {hint && (
+        <div
+          id={hintId}
+          style={{
+            marginTop: 6,
+            fontSize: "var(--t-caption)",
+            color: invalid ? "var(--decline)" : "var(--text-muted)",
+          }}
+        >
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Thin wrapper over the `.btn` class — exists so a mutation's `submitting`
+ * boolean doesn't get hand-wired at every call site the way FollowModal does
+ * (`disabled={submitting}` + a manually-inlined `<span className="spinner"/>`
+ * ternary, repeated verbatim wherever a write button appears). `pending` sets
+ * both `disabled` and `aria-busy` and swaps the label for the spinner.
+ */
+export function Button({
+  children,
+  variant = "neutral",
+  block,
+  pending,
+  disabled,
+  onClick,
+  type = "button",
+  ...rest
+}: {
+  children: ReactNode;
+  variant?: "primary" | "neutral";
+  block?: boolean;
+  pending?: boolean;
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "className" | "children">) {
+  const cls = [
+    "btn",
+    variant === "primary" ? "btn-primary" : "btn-neutral",
+    block ? "btn-block" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <button
+      type={type}
+      className={cls}
+      disabled={disabled || pending}
+      aria-busy={pending}
+      onClick={onClick}
+      {...rest}
+    >
+      {pending ? <span className="spinner" /> : children}
+    </button>
   );
 }

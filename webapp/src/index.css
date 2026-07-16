@@ -31,6 +31,35 @@
 
   --tap: 44px; /* minimum tap target */
 
+  /* Spacing scale (4px base). Existing screens use raw literals throughout —
+     these are for NEW code (the Settings screen onward), not a retroactive
+     refactor of existing screens (no linter to enforce it, so a mass rename
+     would be unreviewable churn for zero behavior change). */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+
+  /* Typography scale. Values chosen to match what the app already renders
+     elsewhere (11.5px footnote, 13px body/.notice, 20px .sheet h2, 22px
+     .field) rather than inventing a new ramp. --t-input is a HARD FLOOR, not
+     a taste call: iOS Safari auto-zooms the viewport on focus for any input
+     under 16px. .field never hit this because it's 22px; a new plain-text
+     input must not go below 16px or every focus zooms the page on a phone —
+     the primary device for this app. */
+  --t-footnote: 11.5px;
+  --t-caption: 12px;
+  --t-body: 13px;
+  --t-input: 16px;
+  --t-subhead: 15px;
+  --t-title: 20px;
+  --t-display: 22px;
+  --lh-tight: 1.25;
+  --lh-body: 1.45;
+
   --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
     0 8px 24px rgba(0, 0, 0, 0.35);
 
@@ -578,6 +607,103 @@ button {
 .field:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* ---- Text input (sibling to .field, NOT a replacement) ----
+   .field is deliberately money-styled (22px/700/tabular-nums) for the Follow
+   amount input — do not touch it. .input is the normal-sized variant for
+   everything else (settings fields, etc). --t-input is a 16px hard floor;
+   see the token comment above .field. */
+.input {
+  width: 100%;
+  min-height: var(--tap);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-primary);
+  font-size: var(--t-input);
+  font-weight: 500;
+  padding: var(--s-2) var(--s-3);
+}
+.input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.input[aria-invalid="true"] {
+  border-color: var(--decline);
+}
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- Toggle / switch ----
+   A button, not a checkbox — see Toggle.tsx: it fires a mutation immediately
+   (pause/resume, feature toggles), so it's an action control. role="switch"
+   on a native <button> gives Space/Enter for free. The 44px --tap hit area
+   is preserved via padding even though the visible track is ~28px, matching
+   .nav-item's pattern of a small visual inside a --tap-sized hit target. */
+.switch-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--tap);
+  border: none;
+  background: none;
+  padding: var(--s-2) 0;
+}
+.switch-wrap:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.switch-wrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-pill);
+}
+.switch-track {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  transition: background 0.15s ease, border-color 0.15s ease;
+  flex: 0 0 auto;
+}
+.switch-track.on {
+  background: var(--growth);
+  border-color: transparent;
+}
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.switch-track.on .switch-thumb {
+  transform: translateX(18px);
+}
+.switch-label {
+  font-size: var(--t-body);
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: left;
+}
+/* pending = an in-flight mutation. aria-busy is the a11y signal; this is the
+   visual one -- prevents a double-tap from double-firing while the round-trip
+   (e.g. the kill switch) is in progress. */
+.switch-wrap[aria-busy="true"] {
+  cursor: wait;
+  pointer-events: none;
+}
+.switch-wrap[aria-busy="true"] .switch-track {
+  opacity: 0.7;
 }
 
 /* ---- Notice banners ---- */
