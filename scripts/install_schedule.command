@@ -3,11 +3,13 @@
 # install_schedule.command — install the InvestYo launchd scheduled jobs
 # =============================================================================
 #
-# Double-click this file from Finder (or the Dock) to install BOTH macOS
+# Double-click this file from Finder (or the Dock) to install the macOS
 # launchd timers:
 #   • com.investyo.daily-advisory  — runs `main.py` each weekday 08:45 local
 #   • com.investyo.monthly-retrain — runs `python -m scripts.retrain_models`
 #                                    on the 1st of each month at 04:00 local
+#   • com.investyo.weekly-edgar    — runs `python -m scripts.backfill_edgar_
+#                                    fundamentals --tickers all` each Sunday 02:00 local
 #
 # These are OS timers ONLY — they invoke the scripts on a schedule. They do
 # NOT create any autonomous self-invoking agent loop. Retraining deliberately
@@ -29,6 +31,8 @@
 #   rm ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
 #   launchctl unload ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
 #   rm ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
+#   launchctl unload ~/Library/LaunchAgents/com.investyo.weekly-edgar.plist
+#   rm ~/Library/LaunchAgents/com.investyo.weekly-edgar.plist
 #
 # =============================================================================
 
@@ -40,6 +44,7 @@ LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LABELS=(
     "com.investyo.daily-advisory"
     "com.investyo.monthly-retrain"
+    "com.investyo.weekly-edgar"
 )
 
 # ── Always pause before the window auto-closes so errors are visible ─────────
@@ -128,10 +133,12 @@ echo "════════════════════════�
 echo "Installed. Schedules:"
 echo "  • daily-advisory  — each weekday 08:45 local time"
 echo "  • monthly-retrain — 1st of the month, 04:00 local time"
+echo "  • weekly-edgar    — each Sunday, 02:00 local time"
 echo ""
 echo "Logs:"
 echo "  $REPO_ROOT/output/scheduled_advisory.out (and .err)"
 echo "  $REPO_ROOT/output/scheduled_retrain.out (and .err)"
+echo "  $REPO_ROOT/output/scheduled_edgar.out (and .err)"
 echo ""
 echo "To uninstall a job:"
 echo "  launchctl unload ~/Library/LaunchAgents/<label>.plist && rm ~/Library/LaunchAgents/<label>.plist"

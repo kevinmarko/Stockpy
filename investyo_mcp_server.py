@@ -1012,19 +1012,20 @@ def trigger_edgar_backfill(tickers: str = "all", since: str = "2015-01-01") -> s
         since: Earliest filing date to backfill from (default: 2015-01-01).
     """
     try:
-        from settings import settings
+        # Shared resolver so this tool and the CLI agree on what "all" means
+        # (held ∪ watchlists ∪ DEFAULT_TICKERS). The tool still resolves + passes
+        # explicit --tickers so it can report the concrete universe back to the
+        # agent and abort early on empty.
+        from data.portfolio_sync import resolve_universe
 
-        tickers_stripped = tickers.strip().lower()
-        if tickers_stripped in ("", "all"):
-            ticker_list = [t.upper() for t in settings.DEFAULT_TICKERS]
-            if not ticker_list:
-                return (
-                    "EDGAR backfill aborted: tickers='all' was requested but "
-                    "settings.DEFAULT_TICKERS is empty — no universe to resolve. "
-                    "Pass explicit tickers or configure DEFAULT_TICKERS."
-                )
-        else:
-            ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+        ticker_list = resolve_universe(tickers)
+        if not ticker_list:
+            return (
+                "EDGAR backfill aborted: tickers='all' was requested but resolved "
+                "to an empty universe (no Robinhood snapshot / watchlists and "
+                "settings.DEFAULT_TICKERS is empty). Pass explicit tickers or "
+                "configure DEFAULT_TICKERS."
+            )
 
         cmd = [
             sys.executable, "scripts/backfill_edgar_fundamentals.py",

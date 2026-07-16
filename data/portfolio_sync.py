@@ -531,6 +531,80 @@ def read_cache(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Universe resolution — the "all" sentinel shared by the EDGAR backfill CLI
+# (scripts/backfill_edgar_fundamentals.py) and the trigger_edgar_backfill MCP
+# tool, so the two can never drift on what "all" means (they used to: the MCP
+# meant DEFAULT_TICKERS while the CLI meant a literal ticker named "ALL").
+# ---------------------------------------------------------------------------
+
+
+def resolve_universe(
+    spec: Optional[str] = "all", *, snapshot: Optional[Any] = None
+) -> List[str]:
+    """Resolve a ``--tickers`` spec to a concrete sorted symbol list. Never raises.
+
+    Two forms:
+
+    * An explicit comma-separated list (``"AAPL,MSFT"``) → sanitized verbatim.
+      **No network, no DB, no snapshot** — the explicit path stays free.
+    * The ``"all"`` sentinel (also ``""`` / ``None``, case-insensitive) → the
+      operator's *tracked* universe: held positions ∪ every watchlist ∪
+      ``settings.DEFAULT_TICKERS``.
+
+    The tracked-universe path is deliberately built to be safe under cron /
+    headless invocation (CONSTRAINT #6 — never raises, never blocks on stdin):
+
+    * It reads the Robinhood account via
+      :func:`data.robinhood_portfolio.fetch_account_snapshot` (TOTP-based,
+      three-tier DB→JSON→live cache) — NOT
+      :func:`data.robinhood_client.discover_universe`, whose holdings path
+      requires an interactive ``login()`` that prompts for MFA on stdin and
+      would hang a cron job forever.
+    * The snapshot fetch is wrapped in try/except → ``None`` on any failure.
+    * :func:`build_sync_report` is called with ``probe_market=False`` so it does
+      zero per-symbol market I/O (a market probe inside a universe-resolve is
+      pure waste).
+    * ``settings.DEFAULT_TICKERS`` is ALWAYS unioned in, which is what makes the
+      no-snapshot / no-watchlist case degrade *structurally* to
+      ``DEFAULT_TICKERS`` rather than through a special-case fallback branch.
+      Only when ``DEFAULT_TICKERS`` is also empty does this return ``[]``, and
+      the caller is expected to emit an explicit "empty universe" abort message.
+    """
+    from data.robinhood_client import _sanitize_tickers
+
+    normalized = (spec or "").strip().lower()
+    if normalized not in ("", "all"):
+        # Explicit list — no snapshot, no network, no DB.
+        return _sanitize_tickers(str(spec).split(","))
+
+    # --- "all" sentinel: the operator's tracked universe ---
+    if snapshot is None:
+        try:
+            from data.robinhood_portfolio import fetch_account_snapshot
+
+            snapshot = fetch_account_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "resolve_universe: account snapshot unavailable (%s) — "
+                "falling back to DEFAULT_TICKERS only.",
+                exc,
+            )
+            snapshot = None
+
+    tracked: set[str] = set()
+    try:
+        report = build_sync_report(snapshot, probe_market=False)
+        tracked.update(report.symbols.keys())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("resolve_universe: build_sync_report failed (%s).", exc)
+
+    from settings import settings
+
+    tracked.update(str(t) for t in (settings.DEFAULT_TICKERS or []))
+    return _sanitize_tickers(tracked)
+
+
+# ---------------------------------------------------------------------------
 # On-demand async refresh (used by GUI Sync Now button)
 # ---------------------------------------------------------------------------
 

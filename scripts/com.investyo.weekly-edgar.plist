@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.investyo.weekly-edgar.plist
+  ===============================
+  macOS launchd job: sweep SEC EDGAR PIT fundamentals for the operator's whole
+  tracked universe ONCE a week (Sundays, 02:00 local time) via the standalone
+  `python -m scripts.backfill_edgar_fundamentals --tickers all` entrypoint. The
+  Linux/GCP deployment runs the same sweep from deploy/crontab.txt (Sun 06:00
+  UTC); this plist is the macOS equivalent so a Mac-only operator gets the same
+  weekly PIT-fundamentals refresh. This is an OS timer only — it does NOT create
+  any autonomous self-invoking agent loop.
+
+  What it does: at 02:00 local on Sunday, launchd invokes
+  `.venv/bin/python3 -m scripts.backfill_edgar_fundamentals --tickers all` with
+  WorkingDirectory set to the repo root, redirecting stdout/stderr to
+  output/scheduled_edgar.out and output/scheduled_edgar.err. "all" resolves (via
+  data.portfolio_sync.resolve_universe) to held ∪ watchlists ∪ DEFAULT_TICKERS.
+  The backfill's incremental skip means steady-state weekly runs only fetch +
+  compute genuinely new filings; already-stored dates are logged and skipped.
+
+  INSTALL (recommended): double-click scripts/install_schedule.command (which
+  installs the daily-advisory, monthly-retrain, AND this weekly-edgar job), or:
+      launchctl load  ~/Library/LaunchAgents/com.investyo.weekly-edgar.plist
+
+  UNINSTALL:
+      launchctl unload ~/Library/LaunchAgents/com.investyo.weekly-edgar.plist
+      rm ~/Library/LaunchAgents/com.investyo.weekly-edgar.plist
+
+  STATUS / LOGS:
+      launchctl list | grep com.investyo.weekly-edgar
+      tail -f /Users/kevinlee/Desktop/Stockpy/output/scheduled_edgar.out
+
+  NOTE: launchd StartCalendarInterval fires in the machine's LOCAL timezone,
+  whereas deploy/crontab.txt schedules the same sweep in UTC (Sun 06:00 UTC).
+  The two are only the same wall-clock instant if the Mac is on America/New_York
+  — adjust Hour below if you want to match the UTC run exactly. If the Mac is
+  asleep at 02:00 Sunday, launchd runs the job at the next wake. Paths below are
+  absolute (launchd does not expand ~ or $HOME inside string values) — edit them
+  if the repo lives elsewhere, or let install_schedule.command rewrite them.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.investyo.weekly-edgar</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kevinlee/Desktop/Stockpy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kevinlee/Desktop/Stockpy/.venv/bin/python3</string>
+        <string>-m</string>
+        <string>scripts.backfill_edgar_fundamentals</string>
+        <string>--tickers</string>
+        <string>all</string>
+    </array>
+
+    <!-- Every Sunday (Weekday 0) at 02:00 local time. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>0</integer>
+        <key>Hour</key><integer>2</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <!-- Do NOT run at load time; only on the calendar schedule above. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/scheduled_edgar.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/scheduled_edgar.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

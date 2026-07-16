@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -21,13 +22,30 @@ _cik_cache = {}
 _last_request_time = 0.0
 _REQUEST_DELAY = 0.15  # 10 req/sec limit, so 150ms delay is safe
 
+# This module is used from a ThreadPoolExecutor by the backfill script, so the
+# rate-limit throttle and the lazy CIK-cache build MUST be thread-safe. The
+# throttle lock guarantees SEC's ≤10 req/s limit is honoured for ANY worker
+# count (the worker count is then purely a memory/throughput knob, never a
+# compliance knob). The CIK lock stops W threads racing to fetch the multi-MB
+# company_tickers.json at once.
+_throttle_lock = threading.Lock()
+_cik_lock = threading.Lock()
+
 def _throttle():
     global _last_request_time
-    now = time.time()
-    elapsed = now - _last_request_time
-    if elapsed < _REQUEST_DELAY:
-        time.sleep(_REQUEST_DELAY - elapsed)
-    _last_request_time = time.time()
+    # The lock is held ACROSS the sleep on purpose — that is what serializes
+    # request *issuance* so consecutive requests are spaced >= _REQUEST_DELAY.
+    # Releasing before sleeping would let every waiting thread compute the same
+    # gap and wake together (a thundering herd that breaks SEC's limit exactly
+    # when concurrency is added). The actual download (urlopen) happens outside
+    # this lock, so downloads still overlap. monotonic (not time.time) so an NTP
+    # step can't make `elapsed` go negative and skip the delay.
+    with _throttle_lock:
+        now = time.monotonic()
+        elapsed = now - _last_request_time
+        if elapsed < _REQUEST_DELAY:
+            time.sleep(_REQUEST_DELAY - elapsed)
+        _last_request_time = time.monotonic()
 
 def _http_get(url: str) -> bytes:
     _throttle()
@@ -40,16 +58,22 @@ def _http_get(url: str) -> bytes:
         raise
 
 def get_cik(symbol: str) -> Optional[str]:
-    """Resolve a symbol to its 10-digit CIK string. Caches in memory."""
+    """Resolve a symbol to its 10-digit CIK string. Caches in memory (thread-safe)."""
     symbol = symbol.upper()
     if not _cik_cache:
-        try:
-            data = json.loads(_http_get(SEC_TICKERS_URL).decode("utf-8"))
-            for entry in data.values():
-                _cik_cache[entry["ticker"].upper()] = str(entry["cik_str"]).zfill(10)
-        except Exception as exc:
-            logger.warning("Failed to fetch SEC tickers: %s", exc)
-            return None
+        # Double-checked lock: only the first thread to find an empty cache
+        # fetches company_tickers.json; the rest block, then read the populated
+        # cache. Without this, W concurrent workers would each pull the multi-MB
+        # file. The re-check inside the lock handles the thread that lost the race.
+        with _cik_lock:
+            if not _cik_cache:
+                try:
+                    data = json.loads(_http_get(SEC_TICKERS_URL).decode("utf-8"))
+                    for entry in data.values():
+                        _cik_cache[entry["ticker"].upper()] = str(entry["cik_str"]).zfill(10)
+                except Exception as exc:
+                    logger.warning("Failed to fetch SEC tickers: %s", exc)
+                    return None
 
     return _cik_cache.get(symbol)
 
