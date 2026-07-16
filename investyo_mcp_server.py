@@ -43,6 +43,56 @@ def _readonly_engine(db_url: str):
     return create_readonly_db_engine(db_url)
 
 
+def _qmark_to_named(sql: str, params: tuple) -> tuple:
+    """
+    Rewrites SQLite-style positional ``?`` placeholders into SQLAlchemy
+    ``:pN`` named binds, for use with ``sqlalchemy.text()`` against the
+    Postgres/Supabase backend.
+
+    ``sqlalchemy.text(sql)`` does not recognize ``?`` as a bind parameter
+    (SQLAlchemy uses ``:name``-style binds), and passing a plain tuple as
+    the params argument to ``Connection.execute()`` in SQLAlchemy 2.0
+    raises ``ArgumentError``. Every ``?``-placeholder query in this module
+    was written against the stdlib ``sqlite3`` DB-API (which natively
+    supports ``?`` + a positional tuple) and needs this translation to
+    also work against the SQLAlchemy-only Postgres path.
+
+    Returns ``(rewritten_sql, bind_dict)``. A no-op — ``(sql, {})`` — when
+    ``params`` is empty, so callers with no params (e.g. the free-form
+    ``query_investyo_db`` tool) are unaffected.
+
+    Known limitation: this does a plain ``str.split("?")``, so a literal
+    ``?`` character inside a quoted SQL string literal would be
+    misidentified as a placeholder. Verified this does not occur for any
+    current ``?``-using call site in this module (``read_platform_logs``'s
+    ``LIMIT ?``, ``get_signal_breakdown``'s ``WHERE symbol = ?``,
+    ``generate_daily_signals``'s ``WHERE date=? ... LIMIT ?``) — none of
+    them embed a literal ``?`` inside a quoted string, and params are
+    always bound values, never SQL fragments. A full SQL tokenizer was
+    judged unnecessary complexity for this codebase's actual query
+    surface; if a future call site needs a literal ``?`` inside a string,
+    this function must be revisited (e.g. to skip placeholders found
+    inside quotes).
+    """
+    if not params:
+        return sql, {}
+
+    parts = sql.split("?")
+    placeholder_count = len(parts) - 1
+    if placeholder_count != len(params):
+        raise ValueError(
+            f"_qmark_to_named: sql has {placeholder_count} '?' placeholder(s) "
+            f"but {len(params)} param(s) were supplied."
+        )
+
+    bind_names = [f"p{i}" for i in range(len(params))]
+    rewritten = parts[0]
+    for name, tail in zip(bind_names, parts[1:]):
+        rewritten += f":{name}" + tail
+    bind_dict = dict(zip(bind_names, params))
+    return rewritten, bind_dict
+
+
 def _db_query(sql: str, params: tuple = ()):
     """
     Executes a read query against the platform database, transparently
@@ -60,28 +110,44 @@ def _db_query(sql: str, params: tuple = ()):
     wrap this in try/except per the codebase convention).
     """
     try:
-        from db_config import resolve_database_url
+        from db_config import resolve_database_url, DEFAULT_DATABASE_URL
         db_url = resolve_database_url()
+        # Only an EXPLICITLY-configured DATABASE_URL should redirect the
+        # sqlite fast path below to a non-default file — when the operator
+        # hasn't set DATABASE_URL, resolve_database_url() returns this
+        # exact default sentinel and today's cwd-relative behavior (and
+        # every existing chdir-based test) must be preserved unchanged.
+        is_default_sqlite = db_url == DEFAULT_DATABASE_URL
     except Exception:
         db_url = "sqlite:///quant_platform.db"
+        is_default_sqlite = True
 
     if db_url.startswith("sqlite"):
         # Local sqlite fast path - preserve existing raw sqlite3 behavior.
-        # NOTE: the resolved db_url is used ONLY to pick this branch; the path is
-        # a hardcoded RELATIVE literal (a DATABASE_URL pointing at a different
-        # sqlite file is not honored here — a pre-existing constraint kept so the
-        # test suite's `monkeypatch.chdir(tmp_path)` fixtures stay valid).
-        db_path = "quant_platform.db"
+        if is_default_sqlite:
+            # DATABASE_URL unset -> the RELATIVE literal, cwd-relative (the
+            # test suite's `monkeypatch.chdir(tmp_path)` fixtures depend on this).
+            db_path = "quant_platform.db"
+        else:
+            # An explicit custom sqlite DATABASE_URL was configured — honor
+            # its actual file path instead of silently reading the wrong
+            # (default, cwd-relative) file.
+            from sqlalchemy.engine import make_url
+            db_path = make_url(db_url).database or "quant_platform.db"
         if not os.path.exists(db_path):
             # Keep this check: `mode=ro` on a missing file raises the less-clear
             # "unable to open database file" and does NOT create it, so this
             # preserves the "<path> not found." message contract.
             raise FileNotFoundError(f"{db_path} not found.")
         # DB-LEVEL read-only via `?mode=ro` (uri=True). Unlike PRAGMA query_only,
-        # this cannot be reverted by any subsequent PRAGMA. No escaping needed:
-        # db_path is a hardcoded literal with no URI metacharacters (db_config's
-        # sqlite_readonly_uri does escape, for its configurable-path callers).
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        # this cannot be reverted by any subsequent PRAGMA. Escaping IS required
+        # here: when a custom DATABASE_URL is configured, db_path comes from
+        # make_url().database rather than the hardcoded literal, so it can
+        # contain URI metacharacters (?/#/%) — an unescaped path would silently
+        # DROP ?mode=ro and hand back a READ-WRITE connection (fail-open). Reuse
+        # db_config's own escaping helper rather than duplicating the logic.
+        from db_config import sqlite_readonly_uri
+        conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
         try:
             cursor = conn.cursor()
             cursor.execute(sql, params)
@@ -92,10 +158,15 @@ def _db_query(sql: str, params: tuple = ()):
             conn.close()
     else:
         # Postgres/Supabase backend via SQLAlchemy (cached read-only engine).
+        # sql uses SQLite's `?` positional placeholder syntax, which
+        # sqlalchemy.text() does not understand — rewrite to `:pN` named
+        # binds first (see _qmark_to_named's docstring for why this is
+        # necessary).
         from sqlalchemy import text
         engine = _readonly_engine(db_url)
+        rewritten_sql, bind_dict = _qmark_to_named(sql, params)
         with engine.connect() as conn:
-            result = conn.execute(text(sql), params)
+            result = conn.execute(text(rewritten_sql), bind_dict)
             columns = list(result.keys())
             rows = [tuple(row) for row in result.fetchall()]
         return columns, rows
