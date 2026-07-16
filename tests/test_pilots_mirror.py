@@ -581,6 +581,62 @@ class TestConvictionFloorAndLiveMode:
 
 
 # ---------------------------------------------------------------------------
+# Pilot-scoped alerting — plan_follow emits one pilot-attributed INFO alert
+# ---------------------------------------------------------------------------
+
+class TestPilotScopedAlert:
+    """``plan_follow`` emits exactly one pilot-attributed ``follow_planned`` alert
+    per plan. The lazy ``from observability.alerts import send_alert`` inside
+    ``plan_follow`` resolves the module attribute at call time, so monkeypatching
+    ``observability.alerts.send_alert`` intercepts the call."""
+
+    def test_emits_one_pilot_attributed_alert(
+        self, pilot, account, snapshot, tmp_path, monkeypatch
+    ):
+        from settings import settings
+        import observability.alerts as alerts_mod
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "off", raising=False)
+
+        calls = []
+        monkeypatch.setattr(
+            alerts_mod, "send_alert",
+            lambda *a, **k: calls.append((a, k)), raising=True,
+        )
+
+        result = plan_follow(pilot, _AMOUNT, account, snapshot=snapshot, output_dir=tmp_path)
+
+        # Exactly one alert, and it is pilot-attributed.
+        assert len(calls) == 1
+        args, kwargs = calls[0]
+        assert args[0] == "INFO"
+        extra = kwargs["extra"]
+        assert extra["pilot_id"] == pilot.id
+        assert extra["type"] == "follow_planned"
+        assert extra["mode"] == result["mode"]
+        assert extra["intent_count"] == len(result["planned_intents"])
+        assert extra["queue_written"] == result["queue_written"]
+
+    def test_alert_failure_does_not_break_plan_follow(
+        self, pilot, account, snapshot, tmp_path, monkeypatch
+    ):
+        """Dead-letter (CONSTRAINT #6): a raising ``send_alert`` is swallowed and
+        ``plan_follow`` still returns its normal result dict."""
+        from settings import settings
+        import observability.alerts as alerts_mod
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "off", raising=False)
+
+        def _boom(*a, **k):
+            raise RuntimeError("alert channel down")
+
+        monkeypatch.setattr(alerts_mod, "send_alert", _boom, raising=True)
+
+        result = plan_follow(pilot, _AMOUNT, account, snapshot=snapshot, output_dir=tmp_path)
+        assert set(result.keys()) == {"planned_intents", "mode", "queue_written"}
+        assert result["mode"] == "off"
+        assert result["planned_intents"]  # preview still returned despite alert failure
+
+
+# ---------------------------------------------------------------------------
 # AST self-guard — no order-submission symbol names in pilots/mirror.py
 # ---------------------------------------------------------------------------
 

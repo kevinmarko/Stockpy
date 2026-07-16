@@ -246,6 +246,11 @@ button {
 .btn-block {
   width: 100%;
 }
+.btn-neutral {
+  background: var(--surface-3);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
