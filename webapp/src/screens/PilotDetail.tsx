@@ -79,69 +79,75 @@ export function PilotDetail() {
         <HonestyRow h={pilot.headline} />
       </div>
 
-      {/* Performance */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
-            marginBottom: 12,
-          }}
+      {/* Performance + sector allocation: paired side-by-side on desktop (.detail-grid),
+          stacked on mobile. Sector donut only renders when there's allocation data. */}
+      <div className={pilot.sector_allocation.length > 0 ? "detail-grid" : undefined}>
+        <section
+          className="card card-pad"
+          style={pilot.sector_allocation.length > 0 ? undefined : { marginBottom: 16 }}
         >
-          <h2 style={{ fontSize: 16, margin: 0 }}>Performance</h2>
-          {perf.data?.curve && perf.data.curve.length > 1 && (
-            <PerfDelta curve={perf.data.curve} />
-          )}
-        </div>
-
-        {perf.loading ? (
-          <div className="skeleton" style={{ height: 200 }} />
-        ) : perf.data?.curve ? (
-          <PerfLine
-            data={perf.data.curve}
-            benchmark={perf.data.benchmark}
-            macroBenchmark={perf.data.macro_benchmark}
-          />
-        ) : (
           <div
-            className="empty"
-            style={{ padding: "44px 8px", background: "var(--surface-2)", borderRadius: 12 }}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+              marginBottom: 12,
+            }}
           >
-            <div style={{ fontWeight: 600, color: theme.textSecondary }}>
-              No backtest series yet
-            </div>
-            <div style={{ marginTop: 6, fontSize: 13 }}>
-              {perf.data?.reason ??
-                "This Pilot's validation report has no persisted return curve."}
-            </div>
+            <h2 style={{ fontSize: 16, margin: 0 }}>Performance</h2>
+            {perf.data?.curve && perf.data.curve.length > 1 && (
+              <PerfDelta curve={perf.data.curve} />
+            )}
           </div>
-        )}
 
-        <div style={{ marginTop: 12 }}>
-          <RangeToggle value={range} onChange={setRange} />
-        </div>
-        {perf.data?.curve &&
-          (perf.data.benchmark || perf.data.macro_benchmark) && (
-            <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11.5 }}>
-              <LegendDot color={theme.growth} label="Pilot" />
-              {perf.data.benchmark && (
-                <LegendDot color={theme.textMuted} label="Benchmark" dashed />
-              )}
-              {perf.data.macro_benchmark && (
-                <LegendDot color={theme.accent} label="S&P 500" dashed />
-              )}
+          {perf.loading ? (
+            <div className="skeleton" style={{ height: 200 }} />
+          ) : perf.data?.curve ? (
+            <PerfLine
+              data={perf.data.curve}
+              benchmark={perf.data.benchmark}
+              macroBenchmark={perf.data.macro_benchmark}
+            />
+          ) : (
+            <div
+              className="empty"
+              style={{ padding: "44px 8px", background: "var(--surface-2)", borderRadius: 12 }}
+            >
+              <div style={{ fontWeight: 600, color: theme.textSecondary }}>
+                No backtest series yet
+              </div>
+              <div style={{ marginTop: 6, fontSize: 13 }}>
+                {perf.data?.reason ??
+                  "This Pilot's validation report has no persisted return curve."}
+              </div>
             </div>
           )}
-      </section>
 
-      {/* Sector allocation donut */}
-      {pilot.sector_allocation.length > 0 && (
-        <section className="card card-pad" style={{ marginBottom: 16 }}>
-          <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Sector allocation</h2>
-          <SectorDonut slices={pilot.sector_allocation} />
+          <div style={{ marginTop: 12 }}>
+            <RangeToggle value={range} onChange={setRange} />
+          </div>
+          {perf.data?.curve &&
+            (perf.data.benchmark || perf.data.macro_benchmark) && (
+              <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11.5 }}>
+                <LegendDot color={theme.growth} label="Pilot" />
+                {perf.data.benchmark && (
+                  <LegendDot color={theme.textMuted} label="Benchmark" dashed />
+                )}
+                {perf.data.macro_benchmark && (
+                  <LegendDot color={theme.accent} label="S&P 500" dashed />
+                )}
+              </div>
+            )}
         </section>
-      )}
+
+        {/* Sector allocation donut */}
+        {pilot.sector_allocation.length > 0 && (
+          <section className="card card-pad">
+            <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Sector allocation</h2>
+            <SectorDonut slices={pilot.sector_allocation} />
+          </section>
+        )}
+      </div>
 
       {/* Holdings */}
       <section className="card card-pad" style={{ marginBottom: 16 }}>

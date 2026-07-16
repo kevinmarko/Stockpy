@@ -73,17 +73,51 @@ button {
   --safe-top: env(safe-area-inset-top, 0px);
 }
 
-/* ---- App shell ---- */
+/* ---- App shell ----
+   Mobile (default): single column, bottom tab bar, capped at a phone width.
+   Desktop (>= 900px): .app-shell becomes a sidebar + content row; .app-standalone
+   (onboarding only) stays a centered narrow column at any width — a step wizard
+   reads better narrow than stretched full-bleed. */
 .app {
-  max-width: 520px;
-  margin: 0 auto;
   min-height: 100%;
   position: relative;
   background: var(--base);
 }
 
+.app-standalone {
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.app-shell {
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.app-main {
+  min-width: 0;
+}
+
 .screen {
   padding: calc(var(--safe-top) + 12px) 16px 96px; /* bottom room for nav */
+}
+
+@media (min-width: 900px) {
+  .app-shell {
+    max-width: none;
+    margin: 0;
+    display: flex;
+    align-items: stretch;
+    min-height: 100vh;
+  }
+  .app-main {
+    flex: 1;
+  }
+  .app-shell .screen {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 32px 48px;
+  }
 }
 
 .screen-title {
@@ -109,6 +143,19 @@ button {
 
 .card-pad {
   padding: 16px;
+}
+
+/* Marketplace rail cards — fixed width on mobile (horizontal scroll strip),
+   stretch to fill their grid cell on desktop (see .rail media query above). */
+.pilot-card {
+  display: block;
+  width: 220px;
+  padding: 14px;
+}
+.popular-card {
+  display: block;
+  width: 200px;
+  padding: 14px;
 }
 
 /* ---- Chips / badges ---- */
@@ -239,11 +286,37 @@ button {
   color: var(--text-muted);
 }
 
+/* Desktop: rails stop being horizontal-scroll strips and wrap into a grid
+   so more Pilots are visible without scrolling. */
+@media (min-width: 900px) {
+  .rail {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    overflow: visible;
+    scroll-snap-type: none;
+    margin: 0;
+    padding: 4px 0 8px;
+  }
+  .rail > * {
+    scroll-snap-align: none;
+    flex: unset;
+  }
+  .pilot-card,
+  .popular-card {
+    width: 100%;
+  }
+}
+
 /* ---- Stat tiles ---- */
 .tiles {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+@media (min-width: 900px) {
+  .tiles {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
 }
 .tile {
   background: var(--surface);
@@ -261,6 +334,22 @@ button {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.01em;
+}
+
+/* ---- Detail-page paired panels (e.g. PilotDetail's chart + donut) ----
+   Mobile: stacked with a gap. Desktop: side by side. */
+.detail-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@media (min-width: 900px) {
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    align-items: start;
+  }
 }
 
 /* ---- Bottom nav ---- */
@@ -299,6 +388,58 @@ button {
 .nav-item .nav-ico {
   font-size: 20px;
   line-height: 1;
+}
+
+/* ---- Sidebar (desktop nav; hidden on mobile) ---- */
+.sidebar {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .bottom-nav {
+    display: none;
+  }
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 232px;
+    flex-shrink: 0;
+    gap: 2px;
+    padding: 20px 12px;
+    border-right: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+    padding: 8px 10px 18px;
+  }
+  .sidebar .nav-item {
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 12px;
+    min-height: 40px;
+    width: 100%;
+    padding: 0 10px;
+    border-radius: var(--r-md);
+    font-size: 14px;
+  }
+  .sidebar .nav-item .nav-ico {
+    font-size: 17px;
+  }
+  .sidebar .nav-item.active {
+    background: var(--surface-2);
+    color: var(--text-primary);
+  }
 }
 
 /* ---- Lists ---- */
@@ -391,6 +532,17 @@ button {
   border-radius: 2px;
   background: var(--border-strong);
   margin: 8px auto 12px;
+}
+
+/* Desktop: the mobile bottom-sheet becomes a centered modal. */
+@media (min-width: 900px) {
+  .sheet-backdrop {
+    align-items: center;
+  }
+  .sheet {
+    border-radius: 22px;
+    max-width: 440px;
+  }
 }
 
 @keyframes fade {
