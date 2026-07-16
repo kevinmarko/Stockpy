@@ -148,8 +148,17 @@ const liveApi = {
     }),
 };
 
-/** The single API surface every screen consumes. */
-export const api = USE_MOCK ? mockApi : liveApi;
+/**
+ * The single API surface every screen consumes.
+ *
+ * The `: typeof liveApi` annotation is load-bearing: `api = USE_MOCK ? mockApi
+ * : liveApi` would otherwise let `mockApi` and `liveApi` drift out of shape
+ * silently (a mock method with the wrong return type, or a missing/extra
+ * method, would typecheck). Annotating the union to `liveApi`'s shape makes
+ * `tsc --noEmit` reject any such drift in the one place both are in scope.
+ * (A real bug once shipped from exactly this gap — see docs/AUTOPILOT_PLAN.md.)
+ */
+export const api: typeof liveApi = USE_MOCK ? mockApi : liveApi;
 
 /** Small runtime banner metadata for the UI (mode label etc.). */
 export const apiMeta = {
