@@ -6,6 +6,8 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
+import { Dashboard } from "./screens/Dashboard";
+import { Comparison } from "./screens/Comparison";
 import { Marketplace } from "./screens/Marketplace";
 import { PilotDetail } from "./screens/PilotDetail";
 import { Portfolio } from "./screens/Portfolio";
@@ -18,9 +20,11 @@ import { readOnboarding } from "./onboarding";
 
 /** Shared between the mobile bottom tab bar and the desktop sidebar. */
 const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) => boolean }[] = [
-  { to: "/", label: "Pilots", ico: "🧭", match: (p) => p === "/" || p.startsWith("/pilots") },
+  { to: "/", label: "Dashboard", ico: "⚡", match: (p) => p === "/" },
+  { to: "/marketplace", label: "Pilots", ico: "🧭", match: (p) => p.startsWith("/marketplace") || p.startsWith("/pilots") },
   { to: "/activity", label: "Activity", ico: "🔔", match: (p) => p.startsWith("/activity") },
   { to: "/portfolio", label: "Portfolio", ico: "📊", match: (p) => p.startsWith("/portfolio") },
+  { to: "/compare", label: "Compare", ico: "⚖️", match: (p) => p.startsWith("/compare") },
   { to: "/models", label: "Models", ico: "🧠", match: (p) => p.startsWith("/models") },
   { to: "/pairs", label: "Pairs radar", ico: "🔗", match: (p) => p.startsWith("/pairs") },
 ];
@@ -93,7 +97,9 @@ export default function App() {
       <Sidebar />
       <div className="app-main">
         <Routes>
-          <Route path="/" element={<Marketplace />} />
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/marketplace" element={<Marketplace />} />
+          <Route path="/compare" element={<Comparison />} />
           <Route path="/pilots/:id" element={<PilotDetail />} />
           <Route path="/symbol/:ticker" element={<SymbolDetail />} />
           <Route path="/activity" element={<Activity />} />
