@@ -64,3 +64,20 @@ export function timeAgo(iso: string | null | undefined): string {
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.round(hrs / 24)}d ago`;
 }
+
+/**
+ * Same bucketing as `timeAgo`, but for an API that already returns an age in
+ * RAW SECONDS (e.g. GET /automation/status's `snapshot_age_seconds`) rather
+ * than an ISO timestamp to diff against "now" — the Settings screen's
+ * pipeline-status fields are shaped this way so the server's clock, not the
+ * browser's, is the source of truth for "how long ago".
+ */
+export function fmtAge(seconds: number | null | undefined): string {
+  if (seconds == null || Number.isNaN(seconds)) return "unknown";
+  const mins = Math.round(seconds / 60);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
