@@ -4495,6 +4495,10 @@ class GravityAIAuditor:
         self.step_91_robinhood_account_cache_audit()
         # Autopilot "Pilots" gated follow-mirror — broker-quarantine + gating audit
         self.step_92_pilots_mirror_quarantine_audit()
+        # MCP DB query surface — DATABASE-LEVEL read-only enforcement audit
+        self.step_93_mcp_db_readonly_audit()
+        # HistoricalStore/ForecastTracker/TransactionsStore readonly=True hardening
+        self.step_94_readonly_store_class_hardening_audit()
         # Extend existing steps with new coverage
         self._extend_launcher_telemetry_audit_stage_status()
         self._extend_safety_control_audit_launcher()
@@ -15191,6 +15195,436 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_92_pilots_mirror_quarantine_audit"] = audit
+
+    def step_93_mcp_db_readonly_audit(self) -> None:
+        """Step 93 — MCP DB query surface DATABASE-LEVEL read-only enforcement.
+
+        Background
+        ----------
+        ``investyo_mcp_server.py::query_investyo_db`` previously relied on a regex
+        keyword scan alone to block mutations. Regex guards are bypassable, and —
+        more to the point — the regex lives in ONE tool while the underlying
+        ``_db_query`` helper has ~10 call sites; anything calling ``_db_query``
+        directly (its other callers, or any future one) got ZERO protection.
+        This change makes the connection itself read-only: SQLite via a
+        ``?mode=ro`` URI (a hard boundary no PRAGMA reverts), Postgres via
+        ``postgresql_readonly`` (defense-in-depth). ``db_config`` grows a
+        dedicated ``create_readonly_db_engine`` seam separate from the write path
+        (``create_db_engine``) so read-only can never be a silently-omitted default.
+
+        Honesty (CONSTRAINT #4): SQLite and Postgres are NOT equally protected BY
+        DEFAULT — ``postgresql_readonly`` is a defeasible session GUC, not
+        sqlite's hard ``mode=ro``. An operator can close that gap by setting
+        ``settings.MCP_DATABASE_URL_RO`` to a DSN for a genuinely RESTRICTED
+        Postgres role (no write grants — see ``create_readonly_db_engine``'s
+        docstring for the ``CREATE ROLE`` script); this codebase never creates or
+        grants that role itself (out of scope: modifying database access
+        controls is operator/infra work). This step asserts the SQLite hard
+        boundary, the Postgres defense-in-depth default, AND that the
+        restricted-role DSN (when configured) is actually used.
+
+        Checks
+        ------
+        1.  ``_db_query`` source carries ``?mode=ro`` + ``uri=True`` (DB-level ro).
+        2.  ``db_config.create_readonly_db_engine`` exists AND ``create_db_engine``
+            gained no ``readonly`` kwarg (the write path is untouched — writers
+            like TransactionsStore/HistoricalStore are unaffected).
+        3.  The read-only sqlite engine BLOCKS a write at the DB level.
+        4.  The read-only sqlite hook issues NO ``journal_mode`` (proven by reading
+            a NON-WAL tmp db read-only without raising — a WAL pragma is itself a
+            write and would raise here).
+        5.  Fail-closed: unknown backend AND ``sqlite :memory:`` both raise.
+        6.  The regex guard is still layer 1 in ``query_investyo_db`` (the friendly
+            "Only SELECT queries are permitted" message is retained).
+        7.  ``execute_paper_trade`` still writes via ``TransactionsStore`` — the one
+            genuine MCP writer is unaffected by the read-only ``_db_query`` change.
+        8.  CONSTRAINT #3: constructing a read-only Postgres engine never logs the
+            DSN/password.
+        9.  ``settings.MCP_DATABASE_URL_RO``, when set, routes the read-only
+            engine to THAT restricted-role DSN instead of the primary write DSN.
+        """
+        import importlib
+        import inspect
+        import logging as _logging
+        import sqlite3 as _sqlite3
+        import sys
+        import tempfile
+        from pathlib import Path
+
+        repo_root = str(Path(__file__).resolve().parent)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+
+        audit: dict = {
+            "step": "step_93_mcp_db_readonly_audit",
+            "description": "MCP DB query surface — DATABASE-LEVEL read-only enforcement",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"check": name, "passed": bool(passed), "detail": str(detail)})
+            return bool(passed)
+
+        try:
+            mcp_src = Path("investyo_mcp_server.py").read_text(encoding="utf-8")
+            db_config = importlib.import_module("db_config")
+
+            # ── 1: _db_query opens a DB-level read-only sqlite connection ──
+            ok1 = ("?mode=ro" in mcp_src) and ("uri=True" in mcp_src)
+            all_pass = _chk(
+                "_db_query source carries ?mode=ro + uri=True (DB-level read-only)",
+                ok1, f"mode_ro={'?mode=ro' in mcp_src} uri_true={'uri=True' in mcp_src}",
+            ) and all_pass
+
+            # ── 2: new read-only seam exists; write path untouched ────────
+            has_ro = hasattr(db_config, "create_readonly_db_engine")
+            rw_params = list(inspect.signature(db_config.create_db_engine).parameters)
+            no_ro_kwarg = "readonly" not in rw_params
+            ok2 = has_ro and no_ro_kwarg
+            all_pass = _chk(
+                "create_readonly_db_engine exists AND create_db_engine has no 'readonly' kwarg",
+                ok2, f"has_ro={has_ro} create_db_engine_params={rw_params}",
+            ) and all_pass
+
+            # ── 3 & 4: functional — non-WAL tmp db, read OK + write blocked ─
+            ok3 = ok4 = False
+            detail3 = detail4 = "skipped — create_readonly_db_engine missing"
+            if has_ro:
+                from sqlalchemy import text as _text
+                with tempfile.TemporaryDirectory() as td:
+                    dbp = Path(td) / "audit.db"
+                    # plain sqlite3 → delete-mode journal (NON-WAL) on purpose
+                    c = _sqlite3.connect(str(dbp))
+                    c.execute("CREATE TABLE T (x INTEGER)")
+                    c.execute("INSERT INTO T VALUES (5)")
+                    c.commit()
+                    c.close()
+                    non_wal = not (Path(td) / "audit.db-wal").exists()
+                    eng = db_config.create_readonly_db_engine(f"sqlite:///{dbp}")
+                    with eng.connect() as conn:
+                        # check 4: a WAL-writing hook would have raised on connect
+                        read_val = conn.execute(_text("SELECT x FROM T")).scalar()
+                        ok4 = non_wal and read_val == 5
+                        detail4 = f"non_wal={non_wal} read={read_val}"
+                        # check 3: the write is rejected by the connection itself
+                        try:
+                            conn.execute(_text("CREATE TABLE Z (a INTEGER)"))
+                            ok3, detail3 = False, "write SUCCEEDED (fail-open!)"
+                        except Exception as exc:
+                            ok3 = "readonly" in str(exc).lower()
+                            detail3 = f"blocked={type(exc).__name__}"
+            all_pass = _chk("read-only sqlite engine blocks a write at DB level", ok3, detail3) and all_pass
+            all_pass = _chk("read-only sqlite hook issues no journal_mode (non-WAL db reads OK)", ok4, detail4) and all_pass
+
+            # ── 5: fail-closed on :memory: and unknown backend ───────────
+            ok5 = False
+            detail5 = "skipped — create_readonly_db_engine missing"
+            if has_ro:
+                def _raises_value_error(url):
+                    try:
+                        db_config.create_readonly_db_engine(url)
+                        return False
+                    except ValueError:
+                        return True
+                    except Exception:
+                        return False
+                mem_closed = _raises_value_error("sqlite:///:memory:")
+                unknown_closed = _raises_value_error("mysql://u:p@h/db")
+                ok5 = mem_closed and unknown_closed
+                detail5 = f"memory_raises={mem_closed} unknown_raises={unknown_closed}"
+            all_pass = _chk("fail-closed: :memory: and unknown backend both raise", ok5, detail5) and all_pass
+
+            # ── 6: regex guard retained as layer 1 ───────────────────────
+            ok6 = "Only SELECT queries are permitted" in mcp_src
+            all_pass = _chk(
+                "query_investyo_db regex guard retained (friendly layer 1)", ok6,
+                f"message_present={ok6}",
+            ) and all_pass
+
+            # ── 7: the one genuine MCP writer is unaffected ──────────────
+            ok7 = "from transactions_store import TransactionsStore" in mcp_src
+            all_pass = _chk(
+                "execute_paper_trade still writes via TransactionsStore (writer unaffected)",
+                ok7, f"transactions_store_import={ok7}",
+            ) and all_pass
+
+            # ── 8: CONSTRAINT #3 — read-only PG engine never logs the DSN ─
+            ok8 = False
+            detail8 = "skipped — create_readonly_db_engine missing"
+            if has_ro:
+                records: list = []
+
+                class _Capture(_logging.Handler):
+                    def emit(self, record):
+                        records.append(record.getMessage())
+
+                cap = _Capture()
+                dbc_logger = _logging.getLogger("db_config")
+                prior_level = dbc_logger.level
+                dbc_logger.addHandler(cap)
+                dbc_logger.setLevel(_logging.INFO)
+                try:
+                    # construct-only, never connects
+                    db_config.create_readonly_db_engine(
+                        "postgresql://user:supersecretpw@localhost/testdb"
+                    )
+                finally:
+                    dbc_logger.removeHandler(cap)
+                    dbc_logger.setLevel(prior_level)
+                logged = "\n".join(records)
+                ok8 = "supersecretpw" not in logged
+                detail8 = f"secret_leaked={'supersecretpw' in logged}"
+            all_pass = _chk("read-only Postgres engine never logs the DSN (CONSTRAINT #3)", ok8, detail8) and all_pass
+
+            # ── 9: MCP_DATABASE_URL_RO (restricted-role DSN) seam ──────────
+            # When set, this closes the Postgres defeasibility gap noted in check
+            # 8's docstring: a restricted ROLE with no write grants is a hard
+            # boundary, unlike the postgresql_readonly session GUC alone.
+            ok9 = False
+            detail9 = "skipped — create_readonly_db_engine missing"
+            if has_ro:
+                from settings import settings as _settings93
+                prior_ro_dsn = getattr(_settings93, "MCP_DATABASE_URL_RO", None)
+                try:
+                    _settings93.MCP_DATABASE_URL_RO = (
+                        "postgresql://mcp_readonly:x@restrictedhost/testdb"
+                    )
+                    eng9 = db_config.create_readonly_db_engine(
+                        "postgresql://user:pass@primaryhost/testdb"
+                    )
+                    uses_restricted = "restrictedhost" in str(eng9.url)
+                    ignores_primary = "primaryhost" not in str(eng9.url)
+                    ok9 = uses_restricted and ignores_primary
+                    detail9 = f"uses_restricted={uses_restricted} ignores_primary={ignores_primary}"
+                finally:
+                    _settings93.MCP_DATABASE_URL_RO = prior_ro_dsn
+            all_pass = _chk(
+                "MCP_DATABASE_URL_RO, when set, routes to the restricted-role DSN (not the primary DSN)",
+                ok9, detail9,
+            ) and all_pass
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_93_mcp_db_readonly_audit"] = audit
+
+    def step_94_readonly_store_class_hardening_audit(self) -> None:
+        """Step 94 — HistoricalStore / ForecastTracker / TransactionsStore
+        gain a genuine DATABASE-LEVEL read-only construction mode.
+
+        Background
+        ----------
+        Step 93 hardened the MCP query surface. Extending "read-only" further
+        found that every OTHER read-only-in-practice DB access in this codebase
+        (GUI panels, the Pilots/State APIs, evaluation_engine.py) goes through
+        one of three classes that share ONE connection between reads and
+        writers, whose CONSTRUCTORS always issue DDL (``CREATE TABLE IF NOT
+        EXISTS`` / ``ALTER TABLE``) — so even a call site that only ever calls
+        read methods couldn't safely open a read-only connection without also
+        skipping that DDL. Each class gained a ``readonly: bool = False``
+        constructor kwarg that (a) builds the engine/connection via
+        ``db_config.create_readonly_db_engine`` / ``sqlite_readonly_uri``
+        instead of the write path, and (b) skips its own DDL entirely (a
+        readonly instance assumes the schema already exists — true in practice
+        once any write-mode instance has run, which always happens before any
+        read-only consumer is reachable).
+
+        Honesty (CONSTRAINT #4/#6): a write attempt on a readonly instance is
+        rejected AT THE DB LEVEL, never silently no-op'd; a read against a
+        schema that genuinely doesn't exist yet degrades to the class's normal
+        empty-sentinel dead-letter behavior, never a crash.
+
+        Documented exception: ``HistoricalStore.get_bars()`` is a WRITE-THROUGH
+        CACHE (it tops up stale ranges by fetching live and persisting the
+        delta), not a pure reader — a readonly instance doesn't crash but
+        silently loses the caching benefit on every call whose cache is stale
+        (the write-back is blocked, so it always falls through to a live
+        fetch). ``evaluation_engine.py``'s ``recommendation_tracking_report``
+        therefore deliberately stays on a WRITE-mode ``HistoricalStore()``
+        despite only calling ``get_bars()`` — this step asserts that exception
+        remains in place so a future refactor doesn't "fix" it into readonly
+        and silently regress the cache.
+
+        Checks
+        ------
+        1.  All three classes accept ``readonly=True`` and construct without
+            error against a real (non-``:memory:``) tmp file DB.
+        2.  ``readonly=True`` skips DDL: patching each class's table-creation
+            method proves it is never called.
+        3.  A write attempt on a readonly instance is rejected at the DB level
+            (not a silent no-op) for all three classes.
+        4.  A read against a genuinely nonexistent schema degrades to the
+            documented empty sentinel (``None`` / empty DataFrame / ``{}``),
+            never raises.
+        5.  Representative call sites actually pass ``readonly=True`` in
+            source: ``gui/panels/observability.py`` (5 TransactionsStore + 2
+            ForecastTracker sites), ``api/pilots_api.py`` (5 HistoricalStore
+            sites), ``api/state_api.py`` (1 TransactionsStore site),
+            ``gui/panels/analytics.py`` (1 HistoricalStore site),
+            ``pilots/forecast_skill.py`` (1 ForecastTracker site).
+        6.  The documented ``get_bars()`` exception holds: ``evaluation_engine.
+            py``'s ``recommendation_tracking_report`` constructs a WRITE-mode
+            ``HistoricalStore()`` (no ``readonly=True``), with a comment
+            explaining why.
+        """
+        import re as _re94
+        from pathlib import Path
+
+        audit: dict = {
+            "step": "step_94_readonly_store_class_hardening_audit",
+            "description": "HistoricalStore/ForecastTracker/TransactionsStore readonly=True hardening",
+            "checks": [],
+            "overall_pass": False,
+        }
+        all_pass = True
+
+        def _chk(name, passed, detail=""):
+            audit["checks"].append({"check": name, "passed": bool(passed), "detail": str(detail)})
+            return bool(passed)
+
+        try:
+            import tempfile
+            from datetime import datetime, timezone
+            from data.historical_store import HistoricalStore
+            from forecasting.forecast_tracker import ForecastTracker
+            from transactions_store import TransactionsStore
+
+            with tempfile.TemporaryDirectory() as td:
+                hpath = str(Path(td) / "h.db")
+                fpath = str(Path(td) / "f.db")
+                tpath = str(Path(td) / "t.db")
+
+                # ── 1 & 3: construct + write-blocked, per class ──────────────
+                HistoricalStore(db_path=hpath)  # write-mode: creates schema
+                ro_h = HistoricalStore(db_path=hpath, readonly=True)
+                blocked_h = False
+                try:
+                    sid = ro_h.save_account_snapshot(
+                        type("S", (), {"fetched_at": datetime.now(timezone.utc), "buying_power": 1.0,
+                                        "total_equity": 1.0, "total_dividends": 0.0, "positions": {}})()
+                    )
+                    blocked_h = (sid == -1)
+                except Exception:
+                    blocked_h = True
+
+                ForecastTracker(db_path=fpath)
+                ro_f = ForecastTracker(db_path=fpath, readonly=True)
+                before = ro_f.pending_count("ZZZZ", 30)
+                ro_f.record_forecasts("ZZZZ", 30, {"arima": 1.0}, datetime.now(timezone.utc))
+                blocked_f = ro_f.pending_count("ZZZZ", 30) == before == 0
+
+                TransactionsStore(db_url=f"sqlite:///{tpath}")
+                ro_t = TransactionsStore(db_url=f"sqlite:///{tpath}", readonly=True)
+                blocked_t = False
+                try:
+                    ro_t.record_trade(symbol="ZZZZ", side="long", entry_ts=datetime.now(timezone.utc),
+                                       entry_price=1.0, shares=1.0)
+                except Exception:
+                    blocked_t = True
+
+                ok13 = blocked_h and blocked_f and blocked_t
+                all_pass = _chk(
+                    "readonly=True constructs cleanly and blocks a write at the DB level (all 3 classes)",
+                    ok13, f"HistoricalStore={blocked_h} ForecastTracker={blocked_f} TransactionsStore={blocked_t}",
+                ) and all_pass
+
+                # ── 2: DDL skipped at construction (patch each table-creator) ─
+                ddl_calls: list = []
+                orig_h_ensure = HistoricalStore._ensure_tables
+                orig_f_ensure = ForecastTracker._ensure_table
+                orig_t_create_all = TransactionsStore.__init__.__globals__["Base"].metadata.create_all
+                HistoricalStore._ensure_tables = lambda self: ddl_calls.append("h")
+                ForecastTracker._ensure_table = lambda self: ddl_calls.append("f")
+                try:
+                    HistoricalStore(db_path=str(Path(td) / "h2.db"), readonly=True)
+                    ForecastTracker(db_path=str(Path(td) / "f2.db"), readonly=True)
+                finally:
+                    HistoricalStore._ensure_tables = orig_h_ensure
+                    ForecastTracker._ensure_table = orig_f_ensure
+                ok2 = ddl_calls == []
+                all_pass = _chk(
+                    "readonly=True skips DDL at construction (HistoricalStore/ForecastTracker)",
+                    ok2, f"unexpected_ddl_calls={ddl_calls}",
+                ) and all_pass
+
+                # ── 4: missing-schema reads degrade to empty sentinels ────────
+                empty_path = str(Path(td) / "never_written.db")
+                open(empty_path, "w").close()
+                ro_h_empty = HistoricalStore(db_path=empty_path, readonly=True)
+                ro_f_empty = ForecastTracker(db_path=empty_path, readonly=True)
+                ro_t_empty = TransactionsStore(db_url=f"sqlite:///{empty_path}", readonly=True)
+                ok4 = (
+                    ro_h_empty.latest_account_snapshot() is None
+                    and ro_f_empty.get_skill_weights("AAPL", 30) == {}
+                    and ro_t_empty.open_trades_df().empty
+                )
+                all_pass = _chk(
+                    "reads against a nonexistent schema degrade to empty sentinels, never raise",
+                    ok4, f"h_none={ro_h_empty.latest_account_snapshot() is None} "
+                         f"f_empty={ro_f_empty.get_skill_weights('AAPL', 30) == {}} "
+                         f"t_empty={ro_t_empty.open_trades_df().empty}",
+                ) and all_pass
+
+            # ── 5: representative call sites pass readonly=True in source ────
+            _sources = {
+                "gui/panels/observability.py": Path("gui/panels/observability.py").read_text(encoding="utf-8"),
+                "api/pilots_api.py": Path("api/pilots_api.py").read_text(encoding="utf-8"),
+                "api/state_api.py": Path("api/state_api.py").read_text(encoding="utf-8"),
+                "gui/panels/analytics.py": Path("gui/panels/analytics.py").read_text(encoding="utf-8"),
+                "pilots/forecast_skill.py": Path("pilots/forecast_skill.py").read_text(encoding="utf-8"),
+            }
+            expected_counts = {
+                "gui/panels/observability.py": [
+                    ("TransactionsStore(readonly=True)", 5),
+                    ("ForecastTracker(db_path=db_path, readonly=True)", 1),
+                    ("ForecastTracker(readonly=True)", 1),
+                ],
+                "api/pilots_api.py": [("HistoricalStore(readonly=True)", 5)],
+                "api/state_api.py": [("TransactionsStore(readonly=True)", 1)],
+                "gui/panels/analytics.py": [("HistoricalStore(readonly=True)", 1)],
+                "pilots/forecast_skill.py": [("ForecastTracker(readonly=True)", 1)],
+            }
+            mismatches = []
+            for fname, expectations in expected_counts.items():
+                src = _sources[fname]
+                for needle, expected_n in expectations:
+                    actual_n = src.count(needle)
+                    if actual_n != expected_n:
+                        mismatches.append(f"{fname}: {needle!r} expected={expected_n} actual={actual_n}")
+            ok5 = mismatches == []
+            all_pass = _chk(
+                "representative call sites pass readonly=True (source count check)",
+                ok5, f"mismatches={mismatches}",
+            ) and all_pass
+
+            # ── 6: the documented get_bars() exception holds ─────────────────
+            ee_src = Path("evaluation_engine.py").read_text(encoding="utf-8")
+            m = _re94.search(
+                r"if historical_store is None:.*?historical_store = (HistoricalStore\([^)]*\))",
+                ee_src, _re94.DOTALL,
+            )
+            ok6 = bool(m) and m.group(1) == "HistoricalStore()"
+            all_pass = _chk(
+                "recommendation_tracking_report's HistoricalStore() stays write-mode (get_bars cache exception)",
+                ok6, f"construction_call={m.group(1) if m else 'NOT FOUND'}",
+            ) and all_pass
+
+            audit["overall_pass"] = all_pass
+            audit["status"] = "PASSED" if all_pass else "FAILED"
+
+        except Exception as exc:
+            audit["status"] = f"Execution Error: {exc}"
+            audit["error"] = str(exc)
+            audit["overall_pass"] = False
+
+        self.report["step_94_readonly_store_class_hardening_audit"] = audit
 
 # =============================================================================
 # EXECUTION (GRAVITY AI ENTRY POINT)

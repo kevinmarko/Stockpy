@@ -249,7 +249,7 @@ def _load_account_equity_history() -> pd.DataFrame:
     try:
         from data.historical_store import HistoricalStore
 
-        hist = HistoricalStore().account_snapshot_history()
+        hist = HistoricalStore(readonly=True).account_snapshot_history()
         return hist if hist is not None else pd.DataFrame()
     except Exception as exc:  # noqa: BLE001 — dead-letter: never raise into UI
         logger.debug("account_snapshot_history() failed: %s", exc)

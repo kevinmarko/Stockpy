@@ -172,7 +172,7 @@ def get_trades() -> List[Dict[str, Any]]:
     yet, or when the DB read fails outright — dead-letter resilient, never
     a raw 500 traceback."""
     try:
-        store = TransactionsStore()
+        store = TransactionsStore(readonly=True)
         df = store.closed_trades_df()
         if df is None or df.empty:
             return []

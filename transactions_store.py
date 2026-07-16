@@ -34,12 +34,30 @@ class Trade(Base):
     conviction = Column(Float, nullable=True)  # advisory signal conviction [0,1] at entry
 
 class TransactionsStore:
-    def __init__(self, db_url: Optional[str] = None):
+    def __init__(self, db_url: Optional[str] = None, *, readonly: bool = False):
+        """
+        readonly:
+            When True, builds a DATABASE-LEVEL read-only engine
+            (``db_config.create_readonly_db_engine``) and skips
+            ``Base.metadata.create_all`` / ``_ensure_conviction_column`` (both
+            are writes; a readonly instance assumes the ``trades`` table already
+            exists — true in practice once any write-mode store has run, which
+            happens before any read-only consumer is reachable). Read methods
+            degrade to an empty DataFrame (matching ``_OfflineTransactionsStore``'s
+            shape) if the schema genuinely doesn't exist yet — CONSTRAINT #6.
+            Write methods (``record_trade``/``close_trade``) still raise on a
+            readonly instance (CONSTRAINT #4 — never silently no-op a write).
+        """
         db_url = db_url or resolve_database_url()
-        self.engine = create_db_engine(db_url)
-        Base.metadata.create_all(self.engine)
+        self._readonly = readonly
+        if readonly:
+            from db_config import create_readonly_db_engine
+            self.engine = create_readonly_db_engine(db_url)
+        else:
+            self.engine = create_db_engine(db_url)
+            Base.metadata.create_all(self.engine)
+            self._ensure_conviction_column()
         self.Session = sessionmaker(bind=self.engine)
-        self._ensure_conviction_column()
 
     def _ensure_conviction_column(self) -> None:
         """Add conviction column to existing DBs that predate this feature."""
@@ -94,32 +112,51 @@ class TransactionsStore:
             trade.exit_price = float(exit_price)
 
     def open_trades_df(self) -> pd.DataFrame:
-        """Returns all open trades as a pandas DataFrame."""
+        """Returns all open trades as a pandas DataFrame.
+
+        Dead-letter (CONSTRAINT #6): degrades to an empty DataFrame — matching
+        ``_OfflineTransactionsStore``'s shape — on a genuinely missing ``trades``
+        table. In write mode this is unreachable (``Base.metadata.create_all``
+        always ran at construction); it only matters for ``readonly=True``
+        against a schema that hasn't been created by any write-mode store yet.
+        """
         session = self.Session()
         try:
             query = session.query(Trade).filter(Trade.exit_ts == None)
             df = pd.read_sql(query.statement, self.engine)
             return df
+        except Exception as exc:
+            logger.debug("open_trades_df: %s", exc)
+            return pd.DataFrame()
         finally:
             session.close()
 
     def closed_trades_df(self) -> pd.DataFrame:
-        """Returns all closed trades as a pandas DataFrame."""
+        """Returns all closed trades as a pandas DataFrame. See open_trades_df's
+        docstring for the dead-letter/readonly-mode degrade contract."""
         session = self.Session()
         try:
             query = session.query(Trade).filter(Trade.exit_ts != None)
             df = pd.read_sql(query.statement, self.engine)
             return df
+        except Exception as exc:
+            logger.debug("closed_trades_df: %s", exc)
+            return pd.DataFrame()
         finally:
             session.close()
 
     def get_trade_history(self, symbol: str) -> pd.DataFrame:
-        """Returns trade history (both open and closed) for a symbol as a pandas DataFrame."""
+        """Returns trade history (both open and closed) for a symbol as a pandas
+        DataFrame. See open_trades_df's docstring for the dead-letter/readonly-
+        mode degrade contract."""
         session = self.Session()
         try:
             query = session.query(Trade).filter(Trade.symbol == symbol.upper().strip())
             df = pd.read_sql(query.statement, self.engine)
             return df
+        except Exception as exc:
+            logger.debug("get_trade_history: %s", exc)
+            return pd.DataFrame()
         finally:
             session.close()
 

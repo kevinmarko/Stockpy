@@ -6,6 +6,7 @@ import sys
 import subprocess
 import sqlite3
 import json
+from functools import lru_cache
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
 
@@ -29,11 +30,30 @@ def _active_universe() -> list:
         return ["AAPL", "MSFT", "JNJ", "AGNC"]
 
 
+@lru_cache(maxsize=None)
+def _readonly_engine(db_url: str):
+    """Cached DATABASE-LEVEL read-only SQLAlchemy engine for the Postgres path.
+
+    Caching here (not in db_config) keeps db_config free of process-global
+    state, and fixes a pre-existing inefficiency: the old code built a fresh
+    connection pool on EVERY query. Keyed by db_url so a config change yields a
+    new engine.
+    """
+    from db_config import create_readonly_db_engine
+    return create_readonly_db_engine(db_url)
+
+
 def _db_query(sql: str, params: tuple = ()):
     """
     Executes a read query against the platform database, transparently
     supporting both the local SQLite file and a configured Postgres/Supabase
     DATABASE_URL (the dual-backend seam in db_config.py).
+
+    The connection is opened DATABASE-LEVEL read-only (SQLite `?mode=ro`,
+    Postgres `postgresql_readonly`), so a mutation is rejected by the connection
+    itself — not just by query_investyo_db's regex guard, which protects only
+    that one tool. This is the real boundary beneath the regex, and it also
+    covers this helper's other callers and any future caller.
 
     Returns a (columns: list[str], rows: list[tuple]) tuple.
     Dead-letter safe: raises only if BOTH backends fail (callers already
@@ -47,10 +67,21 @@ def _db_query(sql: str, params: tuple = ()):
 
     if db_url.startswith("sqlite"):
         # Local sqlite fast path - preserve existing raw sqlite3 behavior.
+        # NOTE: the resolved db_url is used ONLY to pick this branch; the path is
+        # a hardcoded RELATIVE literal (a DATABASE_URL pointing at a different
+        # sqlite file is not honored here — a pre-existing constraint kept so the
+        # test suite's `monkeypatch.chdir(tmp_path)` fixtures stay valid).
         db_path = "quant_platform.db"
         if not os.path.exists(db_path):
+            # Keep this check: `mode=ro` on a missing file raises the less-clear
+            # "unable to open database file" and does NOT create it, so this
+            # preserves the "<path> not found." message contract.
             raise FileNotFoundError(f"{db_path} not found.")
-        conn = sqlite3.connect(db_path)
+        # DB-LEVEL read-only via `?mode=ro` (uri=True). Unlike PRAGMA query_only,
+        # this cannot be reverted by any subsequent PRAGMA. No escaping needed:
+        # db_path is a hardcoded literal with no URI metacharacters (db_config's
+        # sqlite_readonly_uri does escape, for its configurable-path callers).
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         try:
             cursor = conn.cursor()
             cursor.execute(sql, params)
@@ -60,10 +91,9 @@ def _db_query(sql: str, params: tuple = ()):
         finally:
             conn.close()
     else:
-        # Postgres/Supabase backend via SQLAlchemy.
+        # Postgres/Supabase backend via SQLAlchemy (cached read-only engine).
         from sqlalchemy import text
-        from db_config import create_db_engine
-        engine = create_db_engine(db_url)
+        engine = _readonly_engine(db_url)
         with engine.connect() as conn:
             result = conn.execute(text(sql), params)
             columns = list(result.keys())

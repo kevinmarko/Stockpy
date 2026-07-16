@@ -562,7 +562,7 @@ def get_portfolio() -> Any:
     404s honestly when no account snapshot has ever been stored. Dead-letter
     resilient: a cold/unavailable DB degrades to the same 404, never a 500."""
     try:
-        store = HistoricalStore()
+        store = HistoricalStore(readonly=True)
         snap = store.latest_account_snapshot()
     except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> honest 404
         logger.warning("pilots_api: latest_account_snapshot failed: %s", exc)
@@ -593,7 +593,7 @@ def get_equity_curve(
     if days:
         since = datetime.now(timezone.utc) - timedelta(days=days)
     try:
-        store = HistoricalStore()
+        store = HistoricalStore(readonly=True)
         df = store.account_snapshot_history(since=since)
     except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> empty curve
         logger.warning("pilots_api: account_snapshot_history failed: %s", exc)
@@ -733,7 +733,7 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
     snapshot = _load_snapshot()
     account_snapshot = None
     try:
-        account_snapshot = HistoricalStore().latest_account_snapshot()
+        account_snapshot = HistoricalStore(readonly=True).latest_account_snapshot()
     except Exception as exc:  # noqa: BLE001 - dead-letter: no account -> preview only
         logger.warning("pilots_api: follow could not load account snapshot: %s", exc)
 
@@ -789,7 +789,7 @@ def get_brokerage_status() -> Dict[str, Any]:
     connected = brokerage_credentials.rh_credentials_present()
     has_account_snapshot = False
     try:
-        has_account_snapshot = HistoricalStore().latest_account_snapshot() is not None
+        has_account_snapshot = HistoricalStore(readonly=True).latest_account_snapshot() is not None
     except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> honest False
         logger.warning("pilots_api: brokerage status account-snapshot check failed: %s", exc)
     return {"connected": connected, "has_account_snapshot": has_account_snapshot}
@@ -825,7 +825,7 @@ def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
     brokerage_credentials.write_rh_credentials(body.username, body.password, body.mfa_secret)
     account_present = False
     try:
-        account_present = HistoricalStore().latest_account_snapshot() is not None
+        account_present = HistoricalStore(readonly=True).latest_account_snapshot() is not None
     except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> honest False
         logger.warning("pilots_api: connect account-snapshot check failed: %s", exc)
     return {"connected": True, "verified": True, "has_account_snapshot": account_present}

@@ -24,8 +24,11 @@ def test_evaluation_with_history_computes_excursions():
     original_store_init = transactions_store.TransactionsStore.__init__
     
     try:
-        def mock_init(self, db_url=None):
-            # Point TransactionsStore to our prepared test DB
+        def mock_init(self, db_url=None, *, readonly=False, **kwargs):
+            # Point TransactionsStore to our prepared test DB. `readonly` is
+            # accepted (evaluate_portfolio's own construction now passes
+            # readonly=True) and ignored -- this mock always points at the
+            # same prepared, write-capable in-memory engine regardless.
             self.engine = store.engine
             self.Session = store.Session
         transactions_store.TransactionsStore.__init__ = mock_init
