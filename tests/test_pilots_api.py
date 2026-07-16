@@ -1217,3 +1217,367 @@ class TestAutomationSchedule:
         with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
             resp = client.get("/automation/schedule")
         assert resp.status_code == 401
+
+    def test_writable_reflects_automation_writes_enabled(self):
+        with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                resp = client.get("/automation/schedule")
+        assert resp.json()["interval"]["writable"] is False
+
+        with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                resp = client.get("/automation/schedule")
+        assert resp.json()["interval"]["writable"] is True
+
+
+# ---------------------------------------------------------------------------
+# POST /automation/run — pure proxy over daemon_client.trigger_run()
+# ---------------------------------------------------------------------------
+
+
+def _trigger_response(**overrides):
+    from gui.daemon_client import TriggerResponse
+
+    base = dict(ok=True, run_id="orch-1", state="queued", error=None,
+                existing_run_id=None, kill_switch_reason=None)
+    base.update(overrides)
+    return TriggerResponse(**base)
+
+
+class TestAutomationRun:
+    def test_ok_returns_202(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(
+                pilots_api.daemon_client, "trigger_run",
+                return_value=_trigger_response(),
+            ):
+                resp = client.post(
+                    "/automation/run", headers={"Authorization": f"Bearer {_CMD_TOKEN}"}
+                )
+        assert resp.status_code == 202
+        assert resp.json() == {"run_id": "orch-1", "state": "queued"}
+
+    @pytest.mark.parametrize(
+        "error,expected_status",
+        [
+            ("already_running", 409),
+            ("kill_switch_active", 423),
+            ("command_disabled", 503),
+            ("unauthorized", 503),
+            ("unavailable", 503),
+            ("network_error", 503),
+            ("unexpected_response", 503),
+        ],
+    )
+    def test_each_error_tag_maps_to_its_status(self, error, expected_status):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(
+                pilots_api.daemon_client, "trigger_run",
+                return_value=_trigger_response(
+                    ok=False, run_id=None, state=None, error=error,
+                    existing_run_id="orch-old" if error == "already_running" else None,
+                    kill_switch_reason="halt" if error == "kill_switch_active" else None,
+                ),
+            ):
+                resp = client.post(
+                    "/automation/run", headers={"Authorization": f"Bearer {_CMD_TOKEN}"}
+                )
+        assert resp.status_code == expected_status
+
+    def test_already_running_surfaces_the_existing_run_id(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(
+                pilots_api.daemon_client, "trigger_run",
+                return_value=_trigger_response(
+                    ok=False, run_id=None, state=None, error="already_running",
+                    existing_run_id="orch-old",
+                ),
+            ):
+                resp = client.post(
+                    "/automation/run", headers={"Authorization": f"Bearer {_CMD_TOKEN}"}
+                )
+        assert resp.json()["detail"]["run_id"] == "orch-old"
+
+    def test_kill_switch_surfaces_the_reason(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(
+                pilots_api.daemon_client, "trigger_run",
+                return_value=_trigger_response(
+                    ok=False, run_id=None, state=None, error="kill_switch_active",
+                    kill_switch_reason="manual halt",
+                ),
+            ):
+                resp = client.post(
+                    "/automation/run", headers={"Authorization": f"Bearer {_CMD_TOKEN}"}
+                )
+        assert resp.json()["detail"]["kill_switch_reason"] == "manual halt"
+
+    def test_unauthorized_and_command_disabled_bodies_are_indistinguishable(self):
+        """Never let a caller learn which side's token/config is wrong."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(
+                pilots_api.daemon_client, "trigger_run",
+                return_value=_trigger_response(ok=False, run_id=None, state=None, error="unauthorized"),
+            ):
+                r1 = client.post(
+                    "/automation/run", headers={"Authorization": f"Bearer {_CMD_TOKEN}"}
+                )
+            with mock.patch.object(
+                pilots_api.daemon_client, "trigger_run",
+                return_value=_trigger_response(ok=False, run_id=None, state=None, error="command_disabled"),
+            ):
+                r2 = client.post(
+                    "/automation/run", headers={"Authorization": f"Bearer {_CMD_TOKEN}"}
+                )
+        assert r1.status_code == r2.status_code == 503
+        assert r1.json() == r2.json()
+
+    def test_command_token_required_unset_disables(self):
+        resp = client.post("/automation/run")
+        assert resp.status_code == 403
+
+    def test_command_token_wrong_401(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post("/automation/run", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
+
+    def test_run_not_gated_by_automation_writes_enabled(self):
+        """Deliberate: run sits behind require_command_token alone, matching
+        POST /pilots/{id}/follow's existing posture -- gating it more
+        strictly than the follow write-path would invert the risk ordering."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
+                with mock.patch.object(
+                    pilots_api.daemon_client, "trigger_run",
+                    return_value=_trigger_response(),
+                ):
+                    resp = client.post(
+                        "/automation/run", headers={"Authorization": f"Bearer {_CMD_TOKEN}"}
+                    )
+        assert resp.status_code == 202
+
+
+# ---------------------------------------------------------------------------
+# POST /automation/pause / /automation/resume
+# ---------------------------------------------------------------------------
+
+
+class TestAutomationPause:
+    def test_pause_activates_kill_switch_with_reason(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(pilots_api, "GlobalKillSwitch") as MockKS:
+                inst = MockKS.return_value
+                resp = client.post(
+                    "/automation/pause", json={"reason": "maintenance"},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        assert resp.json() == {"active": True, "reason": "maintenance"}
+        inst.activate.assert_called_once_with(reason="maintenance")
+
+    def test_pause_requires_a_non_empty_reason(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/automation/pause", json={"reason": ""},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_pause_not_gated_by_automation_writes_enabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
+                with mock.patch.object(pilots_api, "GlobalKillSwitch"):
+                    resp = client.post(
+                        "/automation/pause", json={"reason": "x"},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 200
+
+    def test_pause_command_token_required(self):
+        resp = client.post("/automation/pause", json={"reason": "x"})
+        assert resp.status_code == 403
+
+
+class TestAutomationResume:
+    def test_resume_deactivates_kill_switch(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "ADVISORY_ONLY", True):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch") as MockKS:
+                        inst = MockKS.return_value
+                        resp = client.post(
+                            "/automation/resume", json={"confirm": True, "reason": "back online"},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 200
+        assert resp.json() == {"active": False, "reason": None}
+        inst.deactivate.assert_called_once()
+
+    def test_resume_fails_closed_when_writes_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
+                resp = client.post(
+                    "/automation/resume", json={"confirm": True, "reason": "x"},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 403
+
+    def test_resume_fails_closed_when_live_trading_enabled(self):
+        """The core safety property: remote resume is refused once
+        ADVISORY_ONLY=False, regardless of every other gate passing."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "ADVISORY_ONLY", False):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch") as MockKS:
+                        resp = client.post(
+                            "/automation/resume", json={"confirm": True, "reason": "x"},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 403
+        MockKS.return_value.deactivate.assert_not_called()
+
+    def test_resume_requires_confirm_true(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "ADVISORY_ONLY", True):
+                    resp = client.post(
+                        "/automation/resume", json={"confirm": False, "reason": "x"},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        # confirm=False is a valid bool per the schema (no server-side check
+        # forces true beyond client intent) -- but a missing confirm key is
+        # a validation error, exercised below. Assert this succeeds today,
+        # documenting confirm as a client-side guard, not a server gate.
+        assert resp.status_code == 200
+
+    def test_resume_missing_confirm_field_422(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "ADVISORY_ONLY", True):
+                    resp = client.post(
+                        "/automation/resume", json={"reason": "x"},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 422
+
+    def test_resume_missing_reason_422(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                resp = client.post(
+                    "/automation/resume", json={"confirm": True, "reason": ""},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 422
+
+    def test_resume_command_token_required(self):
+        with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+            resp = client.post("/automation/resume", json={"confirm": True, "reason": "x"})
+        assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# PUT /automation/schedule/interval
+# ---------------------------------------------------------------------------
+
+
+class TestAutomationIntervalWrite:
+    def test_writes_via_env_io_allowlist(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    resp = client.put(
+                        "/automation/schedule/interval", json={"interval_seconds": 300},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["configured_value"] == 300
+        assert body["applies"] == "next_daemon_restart"
+        assert "ORCHESTRATOR_INTERVAL_SECONDS=300" in env_file.read_text(encoding="utf-8")
+
+    def test_zero_is_valid(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    resp = client.put(
+                        "/automation/schedule/interval", json={"interval_seconds": 0},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 200
+
+    def test_59_is_rejected(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/automation/schedule/interval", json={"interval_seconds": 59},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 422
+
+    def test_60_is_accepted(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    resp = client.put(
+                        "/automation/schedule/interval", json={"interval_seconds": 60},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 200
+
+    def test_86400_is_accepted_86401_is_rejected(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    resp = client.put(
+                        "/automation/schedule/interval", json={"interval_seconds": 86400},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+                    assert resp.status_code == 200
+                    resp2 = client.put(
+                        "/automation/schedule/interval", json={"interval_seconds": 86401},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+                    assert resp2.status_code == 422
+
+    def test_negative_is_rejected(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/automation/schedule/interval", json={"interval_seconds": -1},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 422
+
+    def test_fails_closed_when_automation_writes_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
+                resp = client.put(
+                    "/automation/schedule/interval", json={"interval_seconds": 300},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 403
+
+    def test_command_token_required(self):
+        with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+            resp = client.put("/automation/schedule/interval", json={"interval_seconds": 300})
+        assert resp.status_code == 403
+
+
+class TestAutomationWritesInvariants:
+    def test_interval_key_is_allowlisted(self):
+        assert "ORCHESTRATOR_INTERVAL_SECONDS" in pilots_api.env_io.ALLOWED_KEYS
+
+    def test_automation_writes_enabled_is_not_gui_writable(self):
+        """The D5/BROKERAGE_CONNECT_ENABLED invariant: a GUI bug must never
+        be able to flip this on. It must be in NEITHER allowlist nor
+        secret-list (hand-set in .env only, like its sibling)."""
+        assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS

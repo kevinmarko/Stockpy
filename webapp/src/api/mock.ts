@@ -21,6 +21,8 @@ import type {
   ForecastSkill,
   Headline,
   Holding,
+  IntervalUpdateResult,
+  KillSwitchActionResult,
   ModelRow,
   OptionsDirective,
   OptionsMatrix,
@@ -37,6 +39,7 @@ import type {
   SymbolDetail,
   SymbolHeldBy,
   SymbolOptions,
+  TriggerRunResult,
 } from "./types";
 
 const SECTORS = [
@@ -724,6 +727,56 @@ function writeBrokerageConnected(connected: boolean) {
   }
 }
 
+// ---- Local kill-switch simulation (localStorage) so pause/resume have a
+// visible, persistent round-trip effect in the demo, same convention as the
+// brokerage-connect marker above. ----
+const KILL_SWITCH_KEY = "stockpy.mock.kill_switch";
+const KILL_SWITCH_REASON_KEY = "stockpy.mock.kill_switch_reason";
+
+function readKillSwitch(): { active: boolean; reason: string | null } {
+  try {
+    return {
+      active: localStorage.getItem(KILL_SWITCH_KEY) === "1",
+      reason: localStorage.getItem(KILL_SWITCH_REASON_KEY),
+    };
+  } catch {
+    return { active: false, reason: null };
+  }
+}
+function writeKillSwitch(active: boolean, reason: string | null) {
+  try {
+    if (active) {
+      localStorage.setItem(KILL_SWITCH_KEY, "1");
+      if (reason) localStorage.setItem(KILL_SWITCH_REASON_KEY, reason);
+    } else {
+      localStorage.removeItem(KILL_SWITCH_KEY);
+      localStorage.removeItem(KILL_SWITCH_REASON_KEY);
+    }
+  } catch {
+    /* ignore quota */
+  }
+}
+
+// ---- Local configured-interval simulation (localStorage) so a Save in the
+// demo visibly reflects on the next GET /automation/schedule read. ----
+const INTERVAL_KEY = "stockpy.mock.automation_interval";
+
+function readMockInterval(): number {
+  try {
+    const raw = localStorage.getItem(INTERVAL_KEY);
+    return raw != null ? Number(raw) : 300;
+  } catch {
+    return 300;
+  }
+}
+function writeMockInterval(seconds: number) {
+  try {
+    localStorage.setItem(INTERVAL_KEY, String(seconds));
+  } catch {
+    /* ignore quota */
+  }
+}
+
 // ---- Realized broker P&L fixture (FIFO round-trips) ----
 const REALIZED_TRADES: RealizedTrade[] = [
   rt("NVDA", 10, 82.4, 132.6, 41),
@@ -1210,7 +1263,7 @@ export const mockApi = {
             "heartbeat.txt is written only by main_orchestrator.py; advisory runs (main.py) never write it, so null here does not mean the engine is down — see pipeline.snapshot_age_seconds for the cross-mode liveness signal.",
         },
         progress: null,
-        kill_switch: { active: false, reason: null },
+        kill_switch: readKillSwitch(),
         errors: { generated_at: new Date(now - 5 * 60_000).toISOString(), entry_count: 0, entries: [] },
         advisory_only: true,
         dry_run: false,
@@ -1220,14 +1273,15 @@ export const mockApi = {
   },
 
   async getAutomationSchedule(): Promise<AutomationSchedule> {
+    const configured = readMockInterval();
     return delay(
       {
         interval: {
           running_value: 300,
-          configured_value: 300,
-          drift: false,
-          writable: false,
-          note: "Read-only in this build — schedule writes land in a follow-up.",
+          configured_value: configured,
+          drift: configured !== 300,
+          writable: true,
+          note: "Writes persist to .env and apply on the daemon's next restart.",
         },
         cron: {
           source: "deploy/crontab.txt",
@@ -1252,6 +1306,45 @@ export const mockApi = {
         },
       },
       80
+    );
+  },
+
+  async triggerRun(): Promise<TriggerRunResult> {
+    const ks = readKillSwitch();
+    if (ks.active) {
+      return delay(
+        {
+          ok: false, run_id: null, state: null, error: "kill_switch_active",
+          existing_run_id: null, kill_switch_reason: ks.reason,
+        },
+        150
+      );
+    }
+    return delay(
+      { ok: true, run_id: `orch-mock-${Date.now()}`, state: "queued", error: null, existing_run_id: null, kill_switch_reason: null },
+      300
+    );
+  },
+
+  async pauseAutomation(reason: string): Promise<KillSwitchActionResult> {
+    writeKillSwitch(true, reason);
+    return delay({ active: true, reason }, 150);
+  },
+
+  async resumeAutomation(_reason: string): Promise<KillSwitchActionResult> {
+    writeKillSwitch(false, null);
+    return delay({ active: false, reason: null }, 150);
+  },
+
+  async setAutomationInterval(seconds: number): Promise<IntervalUpdateResult> {
+    writeMockInterval(seconds);
+    return delay(
+      {
+        configured_value: seconds,
+        written: String(seconds),
+        applies: "next_daemon_restart",
+      },
+      150
     );
   },
 

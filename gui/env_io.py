@@ -91,6 +91,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # material); the command token that actually guards the daemon's
     # POST /run is ORCHESTRATOR_DAEMON_TOKEN, which stays in SECRET_KEYS.
     "ORCHESTRATOR_DAEMON_ENABLED",
+    # The daemon's internal timer cadence. Writable via the Pilots API's
+    # PUT /automation/schedule/interval (api/pilots_api.py) and the GUI. A
+    # write here takes effect on the daemon's NEXT restart, not immediately
+    # (no live setter exists yet — see the Data & Automation plan's deferred
+    # Phase 4); the API's response makes that explicit via its own
+    # `applies: "next_daemon_restart"` field rather than implying a live change.
+    "ORCHESTRATOR_INTERVAL_SECONDS",
     # Hosts api/pilots_api.py inside the orchestrator daemon process on
     # PILOTS_API_PORT. Non-secret; the follow write-path's command token
     # (FOLLOW_API_TOKEN) stays in SECRET_KEYS.
