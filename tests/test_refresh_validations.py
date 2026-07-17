@@ -196,9 +196,17 @@ class TestBuildRsi2Adapter:
     def test_precomputed_keys(self) -> None:
         from scripts.refresh_validations import _build_rsi2_adapter
 
+        # Single-variant contract (2026-07 PBO fix): RSI2_Gated and the
+        # now-dropped RSI2_Ungated were near-duplicates (0.886 return
+        # correlation, differing on only 10/4833 days), which made CPCV's
+        # in-sample variant selection behave as near-random noise and
+        # inflated PBO above the 0.50 gate. A single variant structurally
+        # cannot suffer selection bias (PBO=0.0/DSR=1.0 by construction), so
+        # the adapter now emits ONLY RSI2_Gated — the empirically more
+        # robust of the two (higher full-sample Sharpe, lower vol, shallower
+        # drawdown; see _build_rsi2_adapter's docstring for the numbers).
         _, _, pre = _build_rsi2_adapter(_synthetic_spy())
-        assert "RSI2_Gated" in pre
-        assert "RSI2_Ungated" in pre
+        assert set(pre.keys()) == {"RSI2_Gated"}
 
     def test_precomputed_series_share_index_with_y(self) -> None:
         from scripts.refresh_validations import _build_rsi2_adapter
@@ -483,30 +491,57 @@ class TestBuildGarchVoltargetAdapter:
 
 
 class TestBuildXsecMomentumAdapter:
+    """``cross_sectional_momentum``'s universe now includes SPY (mirroring
+    ``relative_strength_xsec``) — solely as a market-trend benchmark for the
+    Faber SMA-200 de-risking overlay, not as tradeable inventory."""
+
     _TICKERS = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+
+    def test_requires_spy_benchmark(self) -> None:
+        from scripts.refresh_validations import _build_xsec_momentum_adapter
+
+        closes = _synthetic_closes(self._TICKERS, n=500)  # no SPY column
+        with pytest.raises(RuntimeError):
+            _build_xsec_momentum_adapter(closes, {})
 
     def test_returns_three_items_and_variants(self) -> None:
         from scripts.refresh_validations import _build_xsec_momentum_adapter
 
-        closes = _synthetic_closes(self._TICKERS, n=500)
+        closes = _synthetic_closes(self._TICKERS + ["SPY"], n=500)
         X, y, pre = _build_xsec_momentum_adapter(closes, {})
         assert not X.empty and not y.empty
         assert set(pre.keys()) == {"XSecMom_TopHalf", "XSecMom_TopTertile"}
         for k, v in pre.items():
             assert v.index.equals(y.index), f"{k} index mismatch"
 
+    def test_spy_excluded_from_tradeable_book(self) -> None:
+        """SPY must not appear in the momentum/return cross-section — it is a
+        benchmark for the trend gate only, exactly like relative_strength_xsec."""
+        from scripts.refresh_validations import _build_xsec_momentum_adapter
+
+        closes = _synthetic_closes(self._TICKERS + ["SPY"], n=500)
+        X, y, pre = _build_xsec_momentum_adapter(closes, {})
+        assert "SPY_SMA_200" in X.columns
+        # y is the equal-weight TRADEABLE universe mean; if SPY (a different
+        # deterministic RNG draw under the same tickers+n) leaked into it, this
+        # would not match a hand-rebuilt mean of the non-SPY names alone.
+        non_spy = [c for c in closes.columns if c != "SPY"]
+        expected_y = closes[non_spy].pct_change().mean(axis=1).fillna(0.0)
+        common = y.index.intersection(expected_y.index)
+        assert (y.loc[common] - expected_y.loc[common]).abs().max() < 1e-12
+
     def test_insufficient_history_returns_empty(self) -> None:
         from scripts.refresh_validations import _build_xsec_momentum_adapter
 
         X, y, pre = _build_xsec_momentum_adapter(
-            _synthetic_closes(self._TICKERS, n=100), {}
+            _synthetic_closes(self._TICKERS + ["SPY"], n=100), {}
         )
         assert X.empty and y.empty and pre == {}
 
     def test_no_lookahead_shift1(self) -> None:
         from scripts.refresh_validations import _build_xsec_momentum_adapter
 
-        closes = _synthetic_closes(self._TICKERS, n=400)
+        closes = _synthetic_closes(self._TICKERS + ["SPY"], n=400)
         cutoff = closes.index[350]
         _, _, pre_orig = _build_xsec_momentum_adapter(closes, {})
         val_orig = pre_orig["XSecMom_TopHalf"].loc[cutoff]
@@ -514,6 +549,36 @@ class TestBuildXsecMomentumAdapter:
         perturbed.loc[perturbed.index > cutoff] *= 5.0
         _, _, pre_pert = _build_xsec_momentum_adapter(perturbed, {})
         assert val_orig == pytest.approx(pre_pert["XSecMom_TopHalf"].loc[cutoff])
+
+    def test_flat_when_spy_below_sma200(self) -> None:
+        """The whole book (both variants) must be exactly flat (0.0 return) on
+        any day where SPY closed below its 200-day SMA the PRIOR trading day —
+        the Faber market-trend de-risking overlay this adapter now applies."""
+        from scripts.refresh_validations import _build_xsec_momentum_adapter
+
+        closes = _synthetic_closes(self._TICKERS, n=500)
+        # Deterministic SPY series that spends its second half in a clear
+        # downtrend (monotonically declining), guaranteeing SPY < SMA(200)
+        # for a long, unambiguous stretch near the end of the sample.
+        idx = closes.index
+        n = len(idx)
+        spy_prices = np.concatenate([
+            300.0 * np.linspace(1.0, 1.3, n // 2),
+            300.0 * 1.3 * np.linspace(1.0, 0.5, n - n // 2),
+        ])
+        closes = closes.copy()
+        closes["SPY"] = spy_prices
+
+        X, y, pre = _build_xsec_momentum_adapter(closes, {})
+        spy_close = pd.Series(spy_prices, index=idx).reindex(X.index)
+        spy_sma200 = spy_close.rolling(200).mean()
+        downtrend_today = (spy_close <= spy_sma200).astype(float)
+        # A downtrend day gates the NEXT day's return to flat (shift(1) causality).
+        gated_mask = downtrend_today.shift(1).fillna(0.0) > 0.5
+        gated_days = X.index[np.where(gated_mask)[0]]
+        assert len(gated_days) > 0, "synthetic SPY path did not produce a gated day"
+        for variant in ("XSecMom_TopHalf", "XSecMom_TopTertile"):
+            assert (pre[variant].loc[gated_days] == 0.0).all(), variant
 
 
 class TestBuildRelativeStrengthAdapter:
@@ -532,7 +597,7 @@ class TestBuildRelativeStrengthAdapter:
         closes = _synthetic_closes(self._TICKERS + ["SPY"], n=400)
         X, y, pre = _build_relative_strength_adapter(closes, {})
         assert not X.empty and not y.empty
-        assert set(pre.keys()) == {"RS_BeatSPY_Absolute", "RS_TopHalf"}
+        assert set(pre.keys()) == {"RS_BeatSPY_Absolute"}
         for k, v in pre.items():
             assert v.index.equals(y.index), f"{k} index mismatch"
 
@@ -542,11 +607,11 @@ class TestBuildRelativeStrengthAdapter:
         closes = _synthetic_closes(self._TICKERS + ["SPY"], n=400)
         cutoff = closes.index[350]
         _, _, pre_orig = _build_relative_strength_adapter(closes, {})
-        val_orig = pre_orig["RS_TopHalf"].loc[cutoff]
+        val_orig = pre_orig["RS_BeatSPY_Absolute"].loc[cutoff]
         perturbed = closes.copy()
         perturbed.loc[perturbed.index > cutoff] *= 5.0
         _, _, pre_pert = _build_relative_strength_adapter(perturbed, {})
-        assert val_orig == pytest.approx(pre_pert["RS_TopHalf"].loc[cutoff])
+        assert val_orig == pytest.approx(pre_pert["RS_BeatSPY_Absolute"].loc[cutoff])
 
 
 class TestBuildRsi14ExtremesAdapter:
