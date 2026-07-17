@@ -478,17 +478,26 @@ class TestForceExitDroppedNames:
 class TestForceExitEndToEnd:
     """plan_follow wires attribution end-to-end: it loads the follow's prior
     mirrored set from the store, force-exits a dropped name, and persists the
-    Pilot's current holdings back so the drop is not re-emitted forever."""
+    Pilot's current holdings back — RETAINING any dropped name the follower
+    still holds market value in (Bug A fix), so the exit keeps being
+    re-derivable on every subsequent call until it is actually gone from the
+    account, regardless of mode or whether a queue was ever written."""
 
-    def test_plan_follow_force_exits_and_updates_mirrored_set(
+    def test_dropped_name_still_held_is_retained_and_reexits_on_next_call(
         self, pilot, snapshot, tmp_path, monkeypatch
     ):
+        """The exact Bug A regression: in `off` mode (the default) NOTHING
+        is ever written to execution_queue.json, so gating retention on
+        `queue_written` (or on mode at all) meant a force-exit computed on
+        one call was shown only in that call's ephemeral preview and then
+        immediately forgotten -- the docstring's "emitted once, when the
+        drop is first observed" was in fact emitted to nowhere durable. The
+        held-ness axis fixes this: the still-held name survives the persist
+        step and is force-exited again on the very next call."""
         from settings import settings
         from pilots.follows_store import FollowsStore
-        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "off", raising=False)
 
-        # Seed the store (same path plan_follow derives from output_dir) with a
-        # prior mirrored set that includes a now-dropped TSLA the follower holds.
         store = FollowsStore(path=str(tmp_path / "follows.json"))
         store.upsert(_PILOT_ID, _AMOUNT)
         store.set_mirrored(_PILOT_ID, [
@@ -498,22 +507,92 @@ class TestForceExitEndToEnd:
         acct = _FakeSnapshot(250_000.0, positions={
             "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
         })
-        plan_follow(pilot, _AMOUNT, acct, snapshot=snapshot, output_dir=tmp_path)
 
+        # Call 1, off mode: nothing written, but the force-exit IS computed
+        # in the ephemeral preview.
+        result1 = plan_follow(pilot, _AMOUNT, acct, snapshot=snapshot, output_dir=tmp_path)
+        assert result1["queue_written"] is False
+        assert not (tmp_path / "execution_queue.json").exists()
+        assert "TSLA" in {i["symbol"] for i in result1["planned_intents"]}
+
+        after_call1 = FollowsStore(path=str(tmp_path / "follows.json")).get_mirrored(_PILOT_ID)
+        after_call1_symbols = {m["symbol"] for m in after_call1}
+        assert "TSLA" in after_call1_symbols, (
+            "a dropped-but-still-held name must be RETAINED in the "
+            "persisted mirrored set, not silently discarded on the first "
+            "persist -- this is the exact Bug A regression"
+        )
+        # Current Pilot holdings still advance unconditionally alongside it.
+        assert after_call1_symbols - {"TSLA"}
+        # The retained row is carried forward UNCHANGED (still this follow's
+        # original claim), never recomputed.
+        tsla_row = next(m for m in after_call1 if m["symbol"] == "TSLA")
+        assert tsla_row["target_notional"] == pytest.approx(2000.0)
+        assert tsla_row["weight"] == pytest.approx(0.2)
+
+        # Call 2, still held: the exit is re-derivable because attribution
+        # survived. Switch to review mode to see it actually land in a queue.
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
+        plan_follow(pilot, _AMOUNT, acct, snapshot=snapshot, output_dir=tmp_path)
         payload = json.loads((tmp_path / "execution_queue.json").read_text(encoding="utf-8"))
         by_symbol = {i["symbol"]: i for i in payload["intents"]}
-        # The dropped name is force-sold as a partial trim (qty resolved downstream).
         assert by_symbol["TSLA"]["action"] == "SELL"
         assert by_symbol["TSLA"]["qty"] is None
         assert by_symbol["TSLA"]["target_notional"] == pytest.approx(2000.0, rel=1e-2)
-        assert by_symbol["TSLA"]["allow_place"] is False  # review mode
+        assert by_symbol["TSLA"]["allow_place"] is False  # review mode: never places
 
-        # The mirrored set is updated to the CURRENT holdings — TSLA is gone, so a
-        # subsequent follow won't re-emit the exit forever.
+        # Still retained after call 2 -- still held.
+        after_call2 = FollowsStore(path=str(tmp_path / "follows.json")).get_mirrored(_PILOT_ID)
+        assert "TSLA" in {m["symbol"] for m in after_call2}
+
+    def test_review_mode_queue_written_does_not_change_retention(
+        self, pilot, snapshot, tmp_path, monkeypatch
+    ):
+        """queue_written=True in review mode does not mean the exit was
+        acted on -- the robinhood-execution skill contractually never
+        places from a review-mode queue. Retention must not key off mode or
+        queue_written at all, only held-ness -- so this behaves identically
+        to the off-mode case above."""
+        from settings import settings
+        from pilots.follows_store import FollowsStore
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
+
+        store = FollowsStore(path=str(tmp_path / "follows.json"))
+        store.upsert(_PILOT_ID, _AMOUNT)
+        store.set_mirrored(_PILOT_ID, [
+            {"symbol": "TSLA", "weight": 0.2, "target_notional": 2000.0},
+        ])
+        acct = _FakeSnapshot(250_000.0, positions={
+            "TSLA": _FakePosition("TSLA", quantity=10.0, current_price=250.0),
+        })
+        result = plan_follow(pilot, _AMOUNT, acct, snapshot=snapshot, output_dir=tmp_path)
+        assert result["queue_written"] is True
+
         updated = FollowsStore(path=str(tmp_path / "follows.json")).get_mirrored(_PILOT_ID)
-        updated_symbols = {m["symbol"] for m in updated}
-        assert "TSLA" not in updated_symbols
-        assert updated_symbols  # current pilot holdings persisted
+        assert "TSLA" in {m["symbol"] for m in updated}
+
+    def test_dropped_name_once_no_longer_held_drops_out_of_retained_set(
+        self, pilot, snapshot, tmp_path, monkeypatch
+    ):
+        """Once the follower's held market value in the dropped name reaches
+        zero -- however that exit actually happened -- it stops being
+        retained, so it is not re-prompted forever."""
+        from settings import settings
+        from pilots.follows_store import FollowsStore
+        monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
+
+        store = FollowsStore(path=str(tmp_path / "follows.json"))
+        store.upsert(_PILOT_ID, _AMOUNT)
+        store.set_mirrored(_PILOT_ID, [
+            {"symbol": "TSLA", "weight": 0.2, "target_notional": 2000.0},
+        ])
+
+        # Follower no longer holds TSLA at all.
+        acct = _FakeSnapshot(250_000.0, positions={})
+        plan_follow(pilot, _AMOUNT, acct, snapshot=snapshot, output_dir=tmp_path)
+
+        updated = FollowsStore(path=str(tmp_path / "follows.json")).get_mirrored(_PILOT_ID)
+        assert "TSLA" not in {m["symbol"] for m in updated}
 
     def test_first_follow_without_prior_set_does_not_force_exit(
         self, pilot, snapshot, account, tmp_path, monkeypatch

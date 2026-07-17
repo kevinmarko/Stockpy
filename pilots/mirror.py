@@ -51,9 +51,10 @@ Flow
     (a legacy follow, or the very first follow) there is nothing to attribute, so
     the pre-existing behavior holds and NOTHING is force-sold; (3) a name that is
     unrelated to any Pilot the follower ever mirrored is still left untouched;
-    (4) the exit is emitted once, when the drop is first observed — the mirrored
-    set is then updated to the Pilot's current holdings, so a follower who does
-    not act on the queued sell is not re-prompted every cycle.
+    (4) attribution for a dropped-but-still-held name is RETAINED across calls,
+    not silently discarded the moment it is first computed — see ``plan_follow``'s
+    persistence step below for why ``queue_written`` is the wrong axis for this
+    and held-ness is the right one.
 
 ``plan_follow(pilot, amount, account_snapshot, snapshot=None)``
     Wrap the intents in a ``RunResult``-shaped object (``.recommendations`` +
@@ -580,10 +581,33 @@ def plan_follow(
     :func:`build_follow_intents` as ``prior_mirrored`` so a name the Pilot has
     since fully dropped is force-sold (attributed quantity only). After building,
     the Pilot's CURRENT target holdings are persisted back via
-    ``FollowsStore.set_mirrored`` so the next follow can attribute the next drop.
-    The store path follows ``output_dir`` when supplied (keeping the follows file
-    beside the queue for isolated tests), else the default
-    ``settings.OUTPUT_DIR / "follows.json"`` the API already writes.
+    ``FollowsStore.set_mirrored`` — PLUS any row from ``prior_mirrored`` whose
+    symbol is no longer a current Pilot holding but the follower STILL holds
+    market value in (see the retention note below) — so the next follow can
+    attribute the next drop AND does not lose track of a drop it already
+    started attributing. The store path follows ``output_dir`` when supplied
+    (keeping the follows file beside the queue for isolated tests), else the
+    default ``settings.OUTPUT_DIR / "follows.json"`` the API already writes.
+
+    **Retention axis is held-ness, not ``queue_written`` or mode:** an earlier
+    version of this persistence step overwrote the mirrored set to exactly the
+    Pilot's current holdings on every call, unconditionally. In ``off`` mode
+    (the default) ``emit_execution_queue`` always returns ``None`` and writes
+    nothing, so a force-exit computed by :func:`build_follow_intents` on one
+    call was shown only in that call's ephemeral ``planned_intents`` response
+    and then immediately forgotten — the very next ``plan_follow`` call had no
+    record it had ever been dropped. Gating on ``queue_written`` instead does
+    not fix this either: in ``review`` mode a queue IS written, but the
+    ``robinhood-execution`` skill contractually never places from a review
+    -mode queue, so "written" still does not mean "acted on". The correct
+    signal is whether the follower's account still shows market value in the
+    dropped name — a dropped name is retained here (carried forward alongside
+    ``current_set``) for as long as the follower still holds it, and drops out
+    of the retained set the moment ``_current_market_value`` reads zero,
+    however that exit actually happened (placed via the skill, sold manually,
+    or exited some other way). Current Pilot holdings always advance
+    unconditionally; only the RETAINED (dropped-but-still-held) rows get this
+    extra held-ness check.
 
     The emitter itself decides whether anything is written: in ``off`` mode
     (the default) it returns ``None`` and NOTHING is written, but the
@@ -671,11 +695,30 @@ def plan_follow(
     # force-exit) any name the Pilot drops between now and then. Only when we have
     # a positive amount + usable snapshot: a cancel (amount <= 0) or an
     # unavailable snapshot must NOT wipe the prior attribution.
+    #
+    # Bug A fix: also carry forward any `prior_mirrored` row for a symbol that
+    # dropped out of `current_set` (the Pilot no longer holds it) but the
+    # follower's account STILL shows market value in it -- see the module and
+    # function docstrings above for why `queue_written`/mode is the wrong axis
+    # and held-ness is the right one. A retained row is passed through
+    # UNCHANGED (its original weight/target_notional, not recomputed) since it
+    # still represents this follow's original claim on that name; it drops out
+    # on its own the next time this runs once the held market value hits zero.
     if store is not None:
         try:
             current_set = _current_target_holdings(pilot, amount, snapshot)
             if current_set:
-                store.set_mirrored(pilot_id, current_set)
+                current_symbols = {row.get("symbol") for row in current_set}
+                retained: List[Dict[str, Any]] = []
+                for row in prior_mirrored:
+                    if not isinstance(row, dict):
+                        continue
+                    sym = str(row.get("symbol") or "").upper().strip()
+                    if not sym or sym in current_symbols:
+                        continue
+                    if _current_market_value(account_snapshot, sym) > 0:
+                        retained.append(row)
+                store.set_mirrored(pilot_id, current_set + retained)
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("mirror: plan_follow could not persist mirrored set for %s (%s)",
                          pilot_id, exc)
