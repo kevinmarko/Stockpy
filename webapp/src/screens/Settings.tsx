@@ -1,7 +1,12 @@
 import { useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { AutomationSchedule, AutomationStatus, Follow } from "../api/types";
+import type {
+  AutomationSchedule,
+  AutomationStatus,
+  Follow,
+  StrategyMatrix,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
 import { useMutation } from "../hooks/useMutation";
@@ -97,6 +102,8 @@ export function Settings() {
         />
       )}
 
+      <SignalModulesLink />
+
       <ActiveFollowsSection />
 
       <div style={{ marginTop: 16 }}>
@@ -141,6 +148,36 @@ function SectionCard({
       )}
       {children}
     </section>
+  );
+}
+
+/**
+ * Entry point to the Strategy Matrix screen — a `.env`-write surface, so it
+ * lives under /settings alongside every other write surface, not in top-level
+ * nav. Shows a live "N modules · M disabled" summary and links to the editor.
+ */
+function SignalModulesLink() {
+  const { data } = useApi<StrategyMatrix>(() => api.getStrategyMatrix(), []);
+  const count = data?.modules.length ?? null;
+  const disabledCount = data?.disabled.length ?? null;
+  return (
+    <Link
+      to="/settings/strategy"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none", marginTop: 16 }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Signal modules</div>
+          <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 2 }}>
+            {count == null
+              ? "Signal weights & enabled modules"
+              : `${count} modules · ${disabledCount} disabled`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: 20 }}>›</span>
+      </div>
+    </Link>
   );
 }
 

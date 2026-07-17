@@ -17,6 +17,7 @@ import { Models } from "./screens/Models";
 import { PairsRadar } from "./screens/PairsRadar";
 import { OptionsMatrix } from "./screens/OptionsMatrix";
 import { Settings } from "./screens/Settings";
+import { StrategyMatrix } from "./screens/StrategyMatrix";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { usePwaStatus } from "./hooks/usePwaStatus";
@@ -176,6 +177,7 @@ export default function App() {
           <Route path="/options" element={<OptionsMatrix />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/strategy" element={<StrategyMatrix />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

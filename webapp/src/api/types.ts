@@ -575,6 +575,59 @@ export interface IntervalUpdateResult {
   applies: "next_daemon_restart" | "immediately";
 }
 
+/** Provenance of a strategy-module row (GET /strategy/matrix). */
+export type StrategyModuleSource = "weights" | "snapshot" | "both";
+
+/** One signal module's weight/enablement row (GET /strategy/matrix). */
+export interface StrategyModuleRow {
+  name: string;
+  /** Configured SIGNAL_WEIGHTS value; null when the module has no configured weight. */
+  weight: number | null;
+  /** Regime-resolved weight; null when overrides are active but the regime is unknown. */
+  effective_weight: number | null;
+  /** The regime effective_weight was resolved for; null when it applies to every regime. */
+  effective_weight_regime: string | null;
+  enabled: boolean;
+  source: StrategyModuleSource;
+  contributed_last_run: boolean;
+  /** Symbols scored last run; null when there is no snapshot yet. */
+  symbols_scored: number | null;
+  /** Structurally pinned to weight 0.0 (e.g. regime_multiplier). */
+  pinned_zero: boolean;
+}
+
+/** GET /strategy/matrix — the signal-module weight/enablement matrix. */
+export interface StrategyMatrix {
+  as_of: string | null;
+  market_regime: string | null;
+  regime_overrides_active: boolean;
+  weights_source: string;
+  modules: StrategyModuleRow[];
+  disabled: string[];
+  max_weight: number;
+  /** Tracks STRATEGY_WRITES_ENABLED — false means PUT /strategy/modules is disabled. */
+  writable: boolean;
+  note: string;
+  /** Whether an .env write is pending against the running (in-process) values. */
+  env_drift: { detected: boolean; keys: string[]; note: string };
+  reason: string | null;
+}
+
+/** Body for PUT /strategy/modules. `weights` must cover EVERY known module. */
+export interface StrategyModulesUpdate {
+  weights: Record<string, number>;
+  disabled: string[];
+}
+
+/** PUT /strategy/modules result. `configured_weights` echoes the request body. */
+export interface StrategyModulesUpdateResult {
+  written: string[];
+  configured_weights: Record<string, number>;
+  disabled: string[];
+  applies: "next_daemon_restart";
+  note: string;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;
