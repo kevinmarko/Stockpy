@@ -32,7 +32,10 @@ pytestmark = pytest.mark.network
 
 # Same representative universe as tests/test_validation_multifactor.py and
 # STRATEGY_REGISTRY["cross_sectional_momentum"]'s declared universe.
-TICKERS = ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"]
+# "SPY" is required (2026-07 MaxDD fix): _build_xsec_momentum_adapter now
+# raises RuntimeError if SPY is absent from `closes` — it's the SMA-200
+# market-trend gate's benchmark input, excluded from the tradeable book.
+TICKERS = ["SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"]
 
 
 @pytest.fixture(scope="module")
