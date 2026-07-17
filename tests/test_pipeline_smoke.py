@@ -579,20 +579,101 @@ class TestNoOrderFunctions:
             + "\n".join(f"  {v}" for v in violations)
         )
 
-    def test_queue_builder_defines_no_order_function(self) -> None:
-        """Belt-and-suspenders for the Tier 8 Robinhood execution bridge.
+    # Belt-and-suspenders scan for files that live INSIDE the excluded
+    # execution/ zone (so the repo-wide scan above skips them) but are, by
+    # design, the seam closest to live execution — they must NEVER define a
+    # place_* / submit_order / *_order function or class (only emit a gated
+    # JSON queue; the Robinhood MCP placement happens in a Claude Code agent,
+    # not in committed Python). Uses the STRICTER check from
+    # tests/test_pilots_mirror.py::TestNoOrderSymbols (exact names ∪
+    # startswith("place_") ∪ endswith("_order"), and FunctionDef/
+    # AsyncFunctionDef/ClassDef all scanned) rather than the repo-wide scan's
+    # looser ``_ORDER_NAMES ∪ startswith("place_")`` — the repo-wide check
+    # deliberately does NOT include endswith("_order") because that
+    # false-positives on real Backtrader callbacks (simulation_engine.py's and
+    # pairs/simulation.py's `notify_order`, pinned not to regress by
+    # test_repo_wide_scan_does_not_flag_notify_order below); the stricter
+    # per-file check is safe to apply ONLY to files we've hand-verified don't
+    # define any such legitimate name.
+    #
+    # THIS IS A MANUAL ALLOWLIST, not a closed guard: a new execution/ file
+    # is unscanned by EITHER check until it is added here. Add every new
+    # execution/ module that builds or emits order-adjacent data (queues,
+    # intents, netted composites) to this tuple when it lands.
+    _EXECUTION_ZONE_GUARDED_FILES = (
+        "execution/queue_builder.py",
+        "execution/options_queue_builder.py",
+    )
 
-        ``execution/queue_builder.py`` lives inside the excluded ``execution/``
-        zone, so the repo-wide scan above skips it.  But the bridge is, by
-        design, the seam closest to live execution — it must NEVER define a
-        ``place_*`` / ``submit_order`` / ``*_order`` function (it only emits a
-        gated JSON queue; the Robinhood MCP placement happens in a Claude Code
-        agent, not in committed Python).  Assert that explicitly.
+    _STRICT_FORBIDDEN_EXACT = frozenset({
+        "submit_order",
+        "buy_order",
+        "sell_order",
+        "place_order",
+        "place_equity_order",
+        "place_option_order",
+    })
+
+    @classmethod
+    def _strict_forbidden_names_in(cls, path: Path) -> list[str]:
+        """FunctionDef/AsyncFunctionDef/ClassDef names matching the stricter
+        exact-names ∪ place_* ∪ *_order check (mirrors
+        tests/test_pilots_mirror.py::TestNoOrderSymbols._defined_names)."""
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        found = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = node.name
+                if (
+                    name in cls._STRICT_FORBIDDEN_EXACT
+                    or name.startswith("place_")
+                    or name.endswith("_order")
+                ):
+                    found.append(name)
+        return found
+
+    @pytest.mark.parametrize("rel_path", _EXECUTION_ZONE_GUARDED_FILES)
+    def test_execution_zone_file_defines_no_order_symbol(self, rel_path: str) -> None:
+        """Every file in ``_EXECUTION_ZONE_GUARDED_FILES`` must define zero
+        function/class names matching the stricter order-submission check.
+
+        Was previously hard-coded to `execution/queue_builder.py` alone,
+        leaving `execution/options_queue_builder.py` (also inside the
+        excluded execution/ zone, also emitting an order-adjacent JSON queue
+        via `main.py`) covered by NEITHER the repo-wide scan NOR any
+        per-file guard — a real, pre-existing gap.
         """
-        builder = Path(__file__).parent.parent / "execution" / "queue_builder.py"
-        assert builder.exists(), "execution/queue_builder.py is missing"
-        hits = self._order_function_names_in(builder)
-        assert not hits, (
-            "execution/queue_builder.py must define no order-submission function; "
-            f"found: {hits}"
-        )
+        target = Path(__file__).parent.parent / rel_path
+        assert target.exists(), f"{rel_path} is missing"
+        hits = self._strict_forbidden_names_in(target)
+        assert not hits, f"{rel_path} must define no order-submission symbol; found: {hits}"
+
+    def test_repo_wide_scan_does_not_flag_notify_order(self) -> None:
+        """Regression guard for a false-positive fix that must never be
+        'helpfully' re-broken: `endswith("_order")` is deliberately NOT part
+        of the repo-wide `_order_function_names_in` check (only
+        `_ORDER_NAMES` ∪ `startswith("place_")`), because it would flag real
+        Backtrader callbacks — `notify_order` in simulation_engine.py and
+        pairs/simulation.py are legitimate broker-event handlers, not
+        order-submission code. If someone adds `endswith("_order")` to the
+        repo-wide scan later (as the STRICTER per-file check above already
+        safely does, for a hand-verified allowlist only), these two files
+        would wrongly fail the repo-wide scan."""
+        repo_root = Path(__file__).parent.parent
+        for rel in ("simulation_engine.py", "pairs/simulation.py"):
+            path = repo_root / rel
+            assert path.exists(), f"{rel} is missing"
+            assert not self._is_excluded(path), f"{rel} unexpectedly excluded from the scan"
+            hits = self._order_function_names_in(path)
+            assert not hits, (
+                f"{rel} was flagged by the repo-wide scan (found: {hits}) — "
+                "notify_order must never match _ORDER_NAMES/place_*."
+            )
+            # And it genuinely does define notify_order (proving this test
+            # isn't vacuously passing because the function doesn't exist).
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            defined = {
+                n.name for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            assert "notify_order" in defined, f"{rel} no longer defines notify_order"
