@@ -4,7 +4,6 @@ import { api } from "../api/client";
 import type {
   OptionsDirective,
   OptionsMatrix as OptionsMatrixT,
-  OptionsLeg,
   Portfolio,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
@@ -13,6 +12,24 @@ import { Modal } from "../components/Modal";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { realizableTheta } from "../optionsHonesty";
+import {
+  computePayoff,
+  computeExpectedMove,
+  computeBreakevenPoints,
+  normalProbabilityDensity,
+} from "../optionsMath";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as ChartTooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+  ReferenceArea,
+} from "recharts";
+
 
 function isCredit(d: OptionsDirective): boolean {
   return typeof d.Net_Premium === "number" && d.Net_Premium > 0;
@@ -135,57 +152,44 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
   );
 }
 
-function StatRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="row">
-      <div className="row-main">
-        <span className="row-title">{label}</span>
-      </div>
-      <div className="row-end num">{value}</div>
-    </div>
-  );
-}
 
-function LegsTable({ legs }: { legs: OptionsLeg[] }) {
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead>
-          <tr style={{ color: theme.textMuted, textAlign: "left" }}>
-            <th style={{ padding: "4px 8px 4px 0", fontWeight: 600 }}>Side</th>
-            <th style={{ padding: "4px 8px", fontWeight: 600 }}>Type</th>
-            <th style={{ padding: "4px 8px", fontWeight: 600, textAlign: "right" }}>Strike</th>
-            <th style={{ padding: "4px 8px", fontWeight: 600, textAlign: "right" }}>Price</th>
-            <th style={{ padding: "4px 0 4px 8px", fontWeight: 600, textAlign: "right" }}>Δ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {legs.map((leg, i) => (
-            <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
-              <td style={{ padding: "6px 8px 6px 0", color: leg.Side === "Short" ? theme.decline : theme.growth, fontWeight: 600 }}>
-                {leg.Side}
-              </td>
-              <td style={{ padding: "6px 8px" }}>{leg.Type}</td>
-              <td className="num" style={{ padding: "6px 8px", textAlign: "right" }}>
-                {fmtUsd(leg.Strike)}
-              </td>
-              <td className="num" style={{ padding: "6px 8px", textAlign: "right" }}>
-                {fmtUsd(leg.Price)}
-              </td>
-              <td className="num" style={{ padding: "6px 0 6px 8px", textAlign: "right" }}>
-                {fmtNum(leg.Delta ?? null, 2)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
-function DetailSheet({ d, onClose }: { d: OptionsDirective; onClose: () => void }) {
+function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; onClose: () => void }) {
   const theta = realizableTheta(d);
   const legs = Array.isArray(d.Legs) ? d.Legs : [];
+  const spotPrice = d.Price ?? 0;
+  const sigma = d.Sigma_GARCH ?? 0;
+
+  // Compute options metrics
+  const expectedMove = computeExpectedMove(spotPrice, sigma, dte);
+  const breakevens = computeBreakevenPoints(legs);
+  const payoffPoints = computePayoff(legs, spotPrice, 150);
+
+  // Split payoff into profit/loss areas for visualization
+  const chartData = useMemo(() => {
+    return payoffPoints.map((p) => ({
+      price: p.price,
+      payoff: p.payoff,
+      profit: p.payoff >= 0 ? p.payoff : 0,
+      loss: p.payoff < 0 ? p.payoff : 0,
+    }));
+  }, [payoffPoints]);
+
+  // Integrate PDF to calculate POP
+  const popPercent = useMemo(() => {
+    const sd = spotPrice * sigma * Math.sqrt(dte / 252);
+    if (payoffPoints.length < 2 || sd <= 0) return null;
+    let pop = 0;
+    const step = payoffPoints[1].price - payoffPoints[0].price;
+    payoffPoints.forEach((pt) => {
+      if (pt.payoff > 0) {
+        const pdfVal = normalProbabilityDensity(pt.price, spotPrice, sd);
+        if (!isNaN(pdfVal)) pop += pdfVal * step;
+      }
+    });
+    return Math.min(100, Math.max(0, pop * 100));
+  }, [payoffPoints, spotPrice, sigma, dte]);
+
   return (
     <Modal ariaLabel={`${d.Symbol} options directive`} onClose={onClose}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -198,41 +202,164 @@ function DetailSheet({ d, onClose }: { d: OptionsDirective; onClose: () => void 
         {d.Stale === true && <span className="badge badge-warn">stale</span>}
       </div>
 
+      {/* Volatility & expected move context panel */}
+      <div className="options-vol-panel-vis">
+        <div className="options-vol-item">
+          <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>Expected Move</div>
+          <div className="num" style={{ fontSize: 16, fontWeight: 700 }}>
+            {expectedMove > 0 ? `± ${fmtUsd(expectedMove)}` : "—"}
+          </div>
+        </div>
+        <div className="options-vol-item" style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>Prob of Profit (POP)</div>
+          <div className="num" style={{ fontSize: 16, fontWeight: 700, color: theme.growth }}>
+            {popPercent !== null ? `${fmtNum(popPercent, 1)}%` : "—"}
+          </div>
+        </div>
+        <div className="options-vol-item" style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>IVR Proxy</div>
+          <div className="num" style={{ fontSize: 16, fontWeight: 700 }}>
+            {fmtNum(d.IVR_Proxy ?? null, 0)}
+          </div>
+        </div>
+      </div>
+
+      {/* Visual legs view */}
       {legs.length > 0 && (
         <section style={{ marginTop: 16 }}>
-          <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 6px" }}>Legs</h3>
-          <LegsTable legs={legs} />
+          <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 6px" }}>Visual Structure</h3>
+          <div className="options-legs-row">
+            {legs.map((leg, i) => (
+              <div
+                key={i}
+                className={`options-leg-card-vis options-leg-card-${leg.Side === "Short" ? "sell" : "buy"}`}
+              >
+                <div className="options-leg-label-vis">
+                  {leg.Side} {leg.Type}
+                </div>
+                <div className="options-leg-strike-vis">{fmtUsd(leg.Strike)}</div>
+                <div className="options-leg-detail-vis">
+                  Price: {fmtUsd(leg.Price)} | Δ: {leg.Delta != null ? fmtNum(leg.Delta, 2) : "—"}
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 
-      <section style={{ marginTop: 16 }}>
-        <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>Signals</h3>
-        <div className="list">
-          <StatRow label="Net premium" value={<PremiumLabel d={d} />} />
-          <StatRow label="GARCH σ (annual)" value={fmtNum(d.Sigma_GARCH ?? null, 3)} />
-          <StatRow label="IVR (realized-vol rank)" value={fmtNum(d.IVR_Proxy ?? null, 1)} />
-          <StatRow label="Aroon oscillator" value={fmtNum(d.Aroon_Oscillator ?? null, 1)} />
-          <StatRow label="Coppock curve" value={fmtNum(d.Coppock_Curve ?? null, 1)} />
-          <StatRow label="Trend bias" value={d.Trend_Bias ?? "—"} />
-        </div>
-      </section>
+      {/* Interactive Payoff Curve */}
+      {chartData.length > 0 && (
+        <section style={{ marginTop: 16 }}>
+          <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 6px" }}>P/L Payoff Curve</h3>
+          <div style={{ width: "100%", height: 180, background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 10px 0 0" }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                <XAxis
+                  dataKey="price"
+                  tickFormatter={(val) => fmtUsd(val)}
+                  stroke="rgba(255,255,255,0.4)"
+                  style={{ fontSize: 10 }}
+                  type="number"
+                  domain={["dataMin", "dataMax"]}
+                />
+                <YAxis
+                  stroke="rgba(255,255,255,0.4)"
+                  style={{ fontSize: 10 }}
+                  tickFormatter={(val) => fmtUsd(val)}
+                />
+                <ChartTooltip
+                  formatter={(value: any) => [fmtUsd(value), "P/L"]}
+                  labelFormatter={(label: any) => `Underlying: ${fmtUsd(label)}`}
+                />
+                {/* Expected move 1SD shading */}
+                {expectedMove > 0 && (
+                  <ReferenceArea
+                    x1={spotPrice - expectedMove}
+                    x2={spotPrice + expectedMove}
+                    fill="rgba(56, 189, 248, 0.04)"
+                    isFront={false}
+                  />
+                )}
+                <ReferenceLine y={0} stroke="rgba(255, 255, 255, 0.2)" strokeWidth={1} />
+                {/* Spot Price Line */}
+                {spotPrice > 0 && (
+                  <ReferenceLine
+                    x={spotPrice}
+                    stroke={theme.accent}
+                    strokeDasharray="3 3"
+                    label={{ value: "Spot", fill: theme.accent, fontSize: 9, position: "top" }}
+                  />
+                )}
+                {/* Breakeven lines */}
+                {breakevens.map((be, idx) => (
+                  <ReferenceLine
+                    key={idx}
+                    x={be}
+                    stroke={theme.caution}
+                    strokeWidth={1}
+                    label={{ value: "B/E", fill: theme.caution, fontSize: 9, position: "top" }}
+                  />
+                ))}
+                <Area
+                  type="monotone"
+                  dataKey="profit"
+                  stroke="none"
+                  fill={theme.growth}
+                  fillOpacity={0.15}
+                  connectNulls
+                />
+                <Area
+                  type="monotone"
+                  dataKey="loss"
+                  stroke="none"
+                  fill={theme.decline}
+                  fillOpacity={0.15}
+                  connectNulls
+                />
+                <Area
+                  type="monotone"
+                  dataKey="payoff"
+                  stroke="#ffffff"
+                  strokeWidth={2}
+                  fill="none"
+                  connectNulls
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      )}
 
+      {/* Greeks Grid */}
       <section style={{ marginTop: 16 }}>
-        <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>ATM Greeks</h3>
-        <div className="list">
-          <StatRow label="Δ delta" value={fmtNum(d.ATM_Delta ?? null, 3)} />
-          <StatRow label="Γ gamma" value={fmtNum(d.ATM_Gamma ?? null, 3)} />
-          <StatRow label="V vega" value={fmtNum(d.ATM_Vega ?? null, 3)} />
-          <StatRow label="Θ theta/day" value={fmtNum(d.ATM_Theta_Daily ?? null, 3)} />
+        <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>Greeks</h3>
+        <div className="options-greeks-grid">
+          <div className="options-greek-card-vis">
+            <div className="options-greek-label-vis">Delta</div>
+            <div className="options-greek-value-vis">{fmtNum(d.ATM_Delta ?? null, 3)}</div>
+          </div>
+          <div className="options-greek-card-vis">
+            <div className="options-greek-label-vis">Gamma</div>
+            <div className="options-greek-value-vis">{fmtNum(d.ATM_Gamma ?? null, 3)}</div>
+          </div>
+          <div className="options-greek-card-vis">
+            <div className="options-greek-label-vis">Vega</div>
+            <div className="options-greek-value-vis">{fmtNum(d.ATM_Vega ?? null, 3)}</div>
+          </div>
+          <div className="options-greek-card-vis">
+            <div className="options-greek-label-vis">Theta</div>
+            <div className="options-greek-value-vis">{fmtNum(d.ATM_Theta_Daily ?? null, 3)}</div>
+          </div>
         </div>
-        <p style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 6, lineHeight: 1.45 }}>
-          Computed for a hypothetical at-the-money <strong>call</strong> at this symbol's
-          spot and σ — describes the symbol's ATM sensitivity, not this structure's exposure.
+        <p style={{ fontSize: 11, color: theme.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+          ATM Greeks reflect sensitivity per option contract at spot & σ, not structure exposure.
         </p>
       </section>
 
+      {/* Realizable Theta details */}
       <section style={{ marginTop: 16 }}>
-        <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>Realizable theta</h3>
+        <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>Realizable Theta</h3>
         {theta.note ? (
           <>
             <div className="num muted" style={{ fontSize: 15 }}>—</div>
@@ -248,6 +375,7 @@ function DetailSheet({ d, onClose }: { d: OptionsDirective; onClose: () => void 
         )}
       </section>
 
+      {/* Integrity */}
       <section style={{ marginTop: 16 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <h3 style={{ fontSize: 13, color: theme.textMuted, margin: 0 }}>Integrity</h3>
@@ -565,7 +693,11 @@ export function OptionsMatrix() {
       )}
 
       {openDirective && (
-        <DetailSheet d={openDirective} onClose={() => setOpenSymbol(null)} />
+        <DetailSheet
+          d={openDirective}
+          dte={data?.target_dte ?? 30}
+          onClose={() => setOpenSymbol(null)}
+        />
       )}
     </div>
   );

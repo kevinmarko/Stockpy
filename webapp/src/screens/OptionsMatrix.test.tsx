@@ -41,7 +41,7 @@ describe("OptionsMatrix screen (real mock API)", () => {
     // The per-directive IVR row is labeled "realized-vol rank", not "implied".
     await userEvent.click(await screen.findByText("AAPL"));
     const sheet = await screen.findByRole("dialog", { name: /AAPL options directive/ });
-    expect(within(sheet).getByText(/IVR \(realized-vol rank\)/i)).toBeInTheDocument();
+    expect(within(sheet).getByText(/IVR Proxy/i)).toBeInTheDocument();
     expect(within(sheet).queryByText(/implied volatility rank/i)).not.toBeInTheDocument();
   });
 
@@ -79,11 +79,13 @@ describe("OptionsMatrix screen (real mock API)", () => {
     renderScreen();
     await userEvent.click(await screen.findByText("MSFT"));
     const sheet = await screen.findByRole("dialog", { name: /MSFT options directive/ });
-    // 4 legs -> a Legs table with 4 body rows (header + 4).
-    const rows = within(sheet).getAllByRole("row");
-    expect(rows.length).toBe(5); // 1 header + 4 legs
-    // Iron Condor legs omit Delta -> Δ column shows "—", never 0.00.
-    expect(within(sheet).getAllByText("—").length).toBeGreaterThan(0);
+    // Verify that the four leg cards render.
+    expect(within(sheet).getByText("Short Put")).toBeInTheDocument();
+    expect(within(sheet).getByText("Long Put")).toBeInTheDocument();
+    expect(within(sheet).getByText("Short Call")).toBeInTheDocument();
+    expect(within(sheet).getByText("Long Call")).toBeInTheDocument();
+    // Iron Condor legs omit Delta -> Δ fallback shows "—", never 0.00.
+    expect(within(sheet).getAllByText(/—/).length).toBeGreaterThan(0);
   });
 
   it("filter chips narrow the visible cards", async () => {
