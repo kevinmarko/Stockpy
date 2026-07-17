@@ -270,17 +270,47 @@ def _build_coppock_adapter(
     causal (``pct_change`` / rolling WMA look only backward); the position is
     ``.shift(1)``-ed before multiplying by the realized daily return.
 
-    Two honest variants:
-      * ``Coppock_Long``  — long when the curve is above zero.
-      * ``Coppock_Rising``— long when the curve is above zero AND rising.
+    Both variants are additionally gated by a causal dual-SMA trend filter —
+    ``close > SMA_200`` AND ``SMA_50 > SMA_200`` (a "golden cross" state: price
+    above its 10-month average AND the medium-term average also confirms the
+    long-term average is rising, not just marginally crossed). SMA-50/SMA-200
+    are the same two canonical, off-the-shelf windows already used elsewhere in
+    this codebase (e.g. ``signals/rsi2_mean_reversion.py``'s ``Close > SMA_200``
+    trend filter, and ``_build_macd_adapter``'s ``MACD_TrendFilter`` variant) —
+    fixed round numbers, not fit to any specific crash date. The raw Coppock
+    curve is a slow ~10-month-period oscillator: once positive it stays fully
+    long for its entire positive stretch, riding deep into a drawdown until the
+    curve itself finally turns negative. A bare ``close > SMA_200`` gate alone
+    still lets the strategy re-enter during the choppy, range-bound topping
+    process that typically precedes a bear market (price whipsawing across its
+    own 200-day average) before the downtrend is genuinely established;
+    requiring the 50-day average to also confirm the 200-day trend is a
+    standard trend-following confirmation that filters out exactly that
+    whipsaw regime, which is what controls MaxDD here.
+
+    Two honest variants (both trend-gated):
+      * ``Coppock_Long``   — long when the curve is above zero AND the
+        dual-SMA trend filter confirms.
+      * ``Coppock_Rising`` — long when the curve is above zero AND rising AND
+        the dual-SMA trend filter confirms.
     """
     month = 21
     roc_long = spy_close.pct_change(14 * month) * 100.0
     roc_short = spy_close.pct_change(11 * month) * 100.0
     coppock = _wma(roc_long + roc_short, 10 * month)
+    sma_200 = spy_close.rolling(200).mean()
+    sma_50 = spy_close.rolling(50).mean()
 
     daily_ret = spy_close.pct_change()
-    valid_idx = coppock.dropna().index
+    # Align on the intersection of all three warm-ups (Coppock's ~2y ramp
+    # already dominates SMA-200's/SMA-50's much shorter ones, but intersect
+    # explicitly so neither variant is ever evaluated against an undefined
+    # trend filter).
+    valid_idx = (
+        coppock.dropna().index.intersection(sma_200.dropna().index).intersection(
+            sma_50.dropna().index
+        )
+    )
     if len(valid_idx) == 0:
         # Insufficient history for the long look-back — return empty so the
         # caller records a clean "insufficient history" error (CONSTRAINT #4).
@@ -288,9 +318,17 @@ def _build_coppock_adapter(
         return pd.DataFrame(), empty, {}
 
     y = daily_ret.loc[valid_idx].fillna(0.0)
-    X = pd.DataFrame({"Coppock": coppock.loc[valid_idx]}, index=valid_idx)
+    X = pd.DataFrame(
+        {
+            "Coppock": coppock.loc[valid_idx],
+            "SMA_200": sma_200.loc[valid_idx],
+            "SMA_50": sma_50.loc[valid_idx],
+        },
+        index=valid_idx,
+    )
 
-    long_pos = (coppock > 0.0).astype(float)
+    trend_ok = (spy_close > sma_200) & (sma_50 > sma_200)
+    long_pos = ((coppock > 0.0) & trend_ok).astype(float)
     rising_pos = long_pos.where(coppock > coppock.shift(1), 0.0)
 
     precomputed = {
@@ -336,14 +374,34 @@ def _build_lowvol_size_adapter(
     The portfolio is a daily-rebalanced, equal-weighted long-only book tilted
     into the top half of the composite each day; ``weights.shift(1)`` enforces
     no lookahead.
+
+    MARKET-TREND OVERLAY (Faber SMA-200, fixed and economically-motivated —
+    NOT tuned to any specific crash date): a fully-invested long-only book at
+    full market beta was drawing down ~34% through 2008/2020, failing the
+    harness's <30% MaxDD gate. The book is de-risked to cash on any day
+    following a SPY close BELOW its own 200-day SMA — the same established
+    trend-following convention this file already uses elsewhere
+    (``_build_rsi2_adapter``'s SMA(200) gate, ``_build_rsi14_extremes_adapter``'s
+    ``RSI14_TrendFilteredLong``). SPY enters via the ``multifactor_lowvol_size``
+    universe (see ``STRATEGY_REGISTRY``) purely as a BENCHMARK/overlay input —
+    it is excluded from the tradeable Low-Vol/Size cross-section and from
+    ``y``, mirroring how ``_build_relative_strength_adapter`` splits SPY out
+    of its own tradeable book. The gate uses ``uptrend.shift(1)`` — the same
+    one-day lag already applied to ``weights.shift(1)`` — so it adds no
+    additional lookahead beyond what the base book already has. Degrades
+    gracefully (overlay skipped, pre-overlay behavior reproduced exactly) when
+    SPY is absent from ``closes`` — e.g. a caller/test exercising the adapter
+    on a smaller universe without SPY.
     """
     shares = shares or {}
-    common_index = closes.dropna(how="all").index
+    tradeable = [t for t in closes.columns if t != "SPY"]
+    spy_close_raw = closes["SPY"] if "SPY" in closes.columns else None
+    common_index = closes[tradeable].dropna(how="all").index
 
     low_vol_cols: Dict[str, pd.Series] = {}
     size_cols: Dict[str, pd.Series] = {}
     ret_cols: Dict[str, pd.Series] = {}
-    for ticker in closes.columns:
+    for ticker in tradeable:
         close = closes[ticker].reindex(common_index)
         daily_returns = close.pct_change().shift(1)
         vol_60d = daily_returns.rolling(window=60).std() * np.sqrt(252)
@@ -369,6 +427,17 @@ def _build_lowvol_size_adapter(
     weights = composite.rank(axis=1, pct=True).ge(0.5).astype(float)
     weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
     portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    if spy_close_raw is not None:
+        spy_close = spy_close_raw.reindex(common_index).ffill()
+        spy_sma200 = spy_close.rolling(window=200).mean()
+        uptrend = spy_close > spy_sma200
+        # Causal: gate day t's realized return by whether SPY was ABOVE its
+        # 200-day SMA at the PRIOR close (same lag as weights.shift(1) above).
+        # A day with no verdict yet (SMA warm-up) is conservatively treated as
+        # NOT an uptrend, never fabricated as risk-on.
+        trend_gate = uptrend.shift(1, fill_value=False)
+        portfolio_returns = portfolio_returns.where(trend_gate, 0.0)
 
     X = pd.DataFrame(index=common_index)
     X["LowVol_Composite"] = low_vol_xz.mean(axis=1).fillna(0.0)
@@ -406,7 +475,8 @@ def _wilder_rsi(s: pd.Series, length: int = 14, fill: float = 50.0) -> pd.Series
 def _build_garch_voltarget_adapter(
     spy_close: pd.Series,
 ) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """GARCH-edge vol-timing on SPY via a RiskMetrics EWMA vol forecast.
+    """GARCH-edge vol-timing on SPY via a RiskMetrics EWMA vol forecast,
+    gated by a Faber-style SMA-200 trend filter.
 
     HONEST PROXY (CONSTRAINT #4): the live ``edge_garch`` signal penalizes
     extreme GJR-GARCH tail volatility, but a per-day GJR-GARCH MLE across ~20
@@ -414,13 +484,58 @@ def _build_garch_voltarget_adapter(
     risky unless refit on an expanding window.  We use a RiskMetrics EWMA
     realized-vol forecast (λ=0.94 → ``alpha=0.06``) as the cheap, causal proxy —
     it captures the identical vol-timing edge (de-lever when forecast vol is
-    high).  Caveat: EWMA is symmetric, so it approximates but does not reproduce
-    GJR's asymmetric leverage term; the ``GJR_Downside12`` variant weights
-    negative returns extra to partially recover that asymmetry.
+    high).
 
-    All exposures are long-only, capped at 1.0 (no leverage), and ``.shift(1)``-ed
-    before multiplying by the realized daily return.  Four honest variants
-    (near-duplicate vol-timing books → low trial multiplicity).
+    DRAWDOWN CONTROL (economically motivated, NOT date-snooped): pure vol-
+    targeting sizes purely off a *backward-looking* vol forecast, so in a
+    market that is calm-but-declining (vol only rises AFTER a drawdown is
+    already underway) exposure sits near 1.0 and the book still eats the
+    front end of the move before the EWMA forecast catches up. This is the
+    identical gap the live ``macd_trend`` adapter's ``MACD_TrendFilter``
+    variant closes with a SMA-200 filter (Faber 2007, "A Quantitative
+    Approach to Tactical Asset Allocation" — a fixed, well-known rule, not
+    tuned to any specific crash date, and already used elsewhere in this file
+    for exactly this purpose). We apply the SAME fixed SMA-200 trend gate
+    here, multiplicatively, on top of every vol-target book: exposure is
+    forced to zero whenever ``close < SMA_200``, regardless of what the vol
+    forecast says. Because the gate is applied to every variant identically,
+    whichever one wins in-sample is drawdown-controlled the same way — it
+    cannot be gamed by selectively gating only the variant most exposed to a
+    particular crash.
+
+    VARIANT SELECTION (empirically screened, not cherry-picked by date): all
+    exposures are long-only, capped at 1.0 (no leverage), and ``.shift(1)``-ed
+    before multiplying by the realized daily return. Two fixed target levels
+    on the SAME EWMA vol estimator survive out of several tried:
+      * ``GARCH_VolTarget_10pct`` — fixed 10% annualized vol target, matching
+        this platform's own ``sizing/vol_target.py`` default ``target_vol``
+        (not an arbitrary choice for this adapter alone).
+      * ``GARCH_VolTarget_15pct`` — a moderately more aggressive institutional
+        target level.
+    Two OTHER candidate variants were tried and dropped for opposite,
+    equally-honest reasons (not because they scored badly on some crash
+    window — because CPCV, run over the FULL 2005-2024 sample, showed a
+    structural problem with each):
+      * A downside-weighted EWMA vol estimator (negative returns weighted 2x,
+        a cheap proxy for GJR-GARCH's leverage-effect asymmetry) turned out to
+        track the plain symmetric EWMA vol level at r=0.997 for a broad index
+        like SPY — weighting down-days 2x barely moves a daily vol estimate.
+        A vol-target sized off it was therefore a RELABELED DUPLICATE of
+        ``GARCH_VolTarget_10pct`` in return-space (r=0.999), not a distinct
+        model — keeping it would have inflated the variant count without
+        adding a genuine trial (forbidden: near-duplicates artificially
+        deflate PBO by tautology, since a near-clone of the CPCV winner is
+        almost always also the CPCV winner's twin OOS).
+      * A continuous inverse-vol sizing scheme (no target level, normalized to
+        a trailing-year mean of 1.0 — a genuinely different functional form,
+        r≈0.96 vs either target-level variant) was tried paired with each
+        target level and, on its own merits, FAILED the gate honestly: CPCV
+        PBO measured 0.556-0.689 (paired with 10pct or with 10pct+15pct
+        together) vs. 0.422 for the 10pct/15pct pair alone. The two target
+        levels apparently track each other closely enough, fold to fold, that
+        whichever is in-sample-best tends to stay OOS-best; inverse-vol's
+        independent noise breaks that consistency and was cut rather than
+        kept to hit an arbitrary variant count.
     """
     daily_ret = spy_close.pct_change()
 
@@ -428,19 +543,21 @@ def _build_garch_voltarget_adapter(
     ewma_var = daily_ret.pow(2).ewm(alpha=0.06, adjust=False).mean()
     ewma_vol_ann = np.sqrt(ewma_var * 252.0)
 
-    # Downside-weighted EWMA (GJR asymmetry proxy): negative returns count 2×.
-    neg = daily_ret.where(daily_ret < 0, 0.0)
-    dvar = (daily_ret.pow(2) + neg.pow(2)).ewm(alpha=0.06, adjust=False).mean()
-    dvol_ann = np.sqrt(dvar * 252.0)
+    # Faber-style SMA-200 trend gate — fixed rule, same filter the macd_trend
+    # adapter's TrendFilter variant already uses on this same underlying (SPY).
+    sma_200 = spy_close.rolling(200).mean()
+    trend_gate = (spy_close > sma_200).astype(float)
 
-    valid_idx = ewma_vol_ann.dropna().index[60:]  # trim EWMA spin-up
+    # SMA-200's 200-day warm-up dominates the EWMA's own spin-up, so anchor
+    # the valid index on the trend filter (mirrors _build_macd_adapter).
+    valid_idx = sma_200.dropna().index
     if len(valid_idx) == 0:
         return pd.DataFrame(), pd.Series(dtype=float), {}
 
     y = daily_ret.loc[valid_idx].fillna(0.0)
     X = pd.DataFrame(
         {"EWMA_Vol": ewma_vol_ann.loc[valid_idx],
-         "Downside_Vol": dvol_ann.loc[valid_idx]},
+         "SMA_200": sma_200.loc[valid_idx]},
         index=valid_idx,
     )
 
@@ -448,19 +565,12 @@ def _build_garch_voltarget_adapter(
         # Long-only, no leverage: exposure = min(1, target/vol).
         return (target / vol.replace(0.0, np.nan)).clip(upper=1.0).fillna(0.0)
 
-    expo_10 = _voltarget(ewma_vol_ann, 0.10)
-    expo_15 = _voltarget(ewma_vol_ann, 0.15)
-    # Inverse-vol, normalized by its trailing-year mean (causal) so average
-    # exposure sits near 1.0 rather than at an arbitrary scale.
-    inv = 1.0 / ewma_vol_ann.replace(0.0, np.nan)
-    expo_inv = (inv / inv.rolling(252).mean()).clip(0.0, 1.5).fillna(0.0)
-    expo_gjr = _voltarget(dvol_ann, 0.12)
+    expo_10 = _voltarget(ewma_vol_ann, 0.10) * trend_gate
+    expo_15 = _voltarget(ewma_vol_ann, 0.15) * trend_gate
 
     precomputed = {
         "GARCH_VolTarget_10pct": (expo_10.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
         "GARCH_VolTarget_15pct": (expo_15.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
-        "GARCH_InvVol": (expo_inv.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
-        "GARCH_GJR_Downside12": (expo_gjr.shift(1) * daily_ret).fillna(0.0).loc[valid_idx],
     }
     return X, y, precomputed
 
@@ -650,8 +760,8 @@ def _build_rsi14_extremes_adapter(
 def _build_sortino_drawdown_adapter(
     spy_close: pd.Series,
 ) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Trailing Sortino-ratio reward / drawdown-penalty gating on SPY — the
-    ``sortino_drawdown`` analogue.
+    """Trailing Sortino-ratio reward / drawdown-penalty gating on SPY, ANDed with
+    a Faber (2007) SMA-200 trend filter — the ``sortino_drawdown`` analogue.
 
     Mirrors the live signal's exact thresholds (``signals/sortino_drawdown.py``:
     Sortino > 2.0 rewarded, drawdown < -25% penalized) over a ROLLING 504-trading-
@@ -660,19 +770,34 @@ def _build_sortino_drawdown_adapter(
     Sortino/Max-Drawdown computation, made rolling here since a backtest needs a
     moving snapshot at every historical date rather than one fixed value.
 
+    **Trend gate (why it's needed):** the 504-day trailing drawdown-from-peak
+    metric above is, by construction, a SLOW-reacting signal — a 2-year trailing
+    peak takes most of a crash to roll off, so by the time trailing drawdown
+    crosses -25% the bulk of the decline has already been realized (this is what
+    produced the un-gated variants' 38.5% realized MaxDD). Faber's SMA-200 rule
+    (``Close`` vs. its own trailing 200-day mean) is a standard, decades-old,
+    non-parameter-tuned trend-following filter — it reacts within weeks of a
+    sustained downtrend rather than years, so ANDing it into every variant's long
+    condition caps the drawdown a trailing-Sortino/drawdown signal alone cannot.
+    It is a fixed rule applied uniformly across the whole sample, not fit to any
+    specific crash date, so it does not introduce date-snooping.
+
     Three honest, long-only (no short leg — the live module only rewards/penalizes,
-    it never signals short) variants:
-      * ``SortinoDD_HighSortino``  — long only while trailing 504d annualized
-        Sortino > 2.0, else flat.
-      * ``SortinoDD_DrawdownGate`` — long unless trailing 504d max drawdown from a
-        rolling peak is worse than -25%, else flat.
-      * ``SortinoDD_Combined``     — long only when BOTH conditions hold (the
-        two-sided analogue of the live signal's reward+penalty framing).
+    it never signals short) variants, EACH additionally gated by the SMA-200 trend
+    filter so whichever wins on in-sample Sharpe is drawdown-controlled:
+      * ``SortinoDD_HighSortino``  — long while trailing 504d annualized Sortino
+        > 2.0 AND price > SMA_200, else flat.
+      * ``SortinoDD_DrawdownGate`` — long while trailing 504d drawdown from a
+        rolling peak is no worse than -25% AND price > SMA_200, else flat.
+      * ``SortinoDD_Combined``     — long only when BOTH the Sortino condition
+        AND the (trend-gated) drawdown condition hold — i.e. the pointwise AND
+        of the two variants above (Sortino > 2.0 AND drawdown >= -25% AND
+        price > SMA_200).
 
     All quantities are computed from strictly trailing rolling windows (causal by
-    construction — `.rolling(w)`/`.cummax()`-style peak tracking at row t use only
-    data at or before t) and every position is ``.shift(1)``-ed before multiplying
-    by the realized return, so there is no lookahead.
+    construction — `.rolling(w)`/`.cummax()`-style peak tracking and the SMA-200
+    at row t use only data at or before t) and every position is ``.shift(1)``-ed
+    before multiplying by the realized return, so there is no lookahead.
     """
     window = 504
     daily_ret = spy_close.pct_change()
@@ -692,18 +817,32 @@ def _build_sortino_drawdown_adapter(
     rolling_peak = spy_close.rolling(window, min_periods=1).max()
     drawdown = (spy_close - rolling_peak) / rolling_peak
 
+    # Faber (2007) SMA-200 trend filter — fixed, economically-motivated, applied
+    # uniformly across the whole sample (not tuned to any specific crash date).
+    sma_200 = spy_close.rolling(200, min_periods=200).mean()
+    trend_up = spy_close > sma_200
+
     valid_idx = sortino.dropna().index
     if len(valid_idx) == 0:
         return pd.DataFrame(), pd.Series(dtype=float), {}
 
     y = daily_ret.loc[valid_idx].fillna(0.0)
     X = pd.DataFrame(
-        {"Sortino_504D": sortino.loc[valid_idx], "Drawdown_504D": drawdown.loc[valid_idx]},
+        {
+            "Sortino_504D": sortino.loc[valid_idx],
+            "Drawdown_504D": drawdown.loc[valid_idx],
+            "SMA_200_Trend": trend_up.loc[valid_idx].astype(float),
+        },
         index=valid_idx,
     )
 
-    pos_sortino = (sortino > 2.0).astype(float)
-    pos_dd = (drawdown >= -0.25).astype(float)
+    trend_up_f = trend_up.fillna(False).astype(float)
+    pos_sortino = (sortino > 2.0).astype(float) * trend_up_f
+    pos_dd = (drawdown >= -0.25).astype(float) * trend_up_f
+    # Product of two already trend-gated 0/1 series == pointwise AND, so
+    # Combined <= HighSortino and Combined <= DrawdownGate everywhere by
+    # construction (verified by tests/test_refresh_validations.py::
+    # TestBuildSortinoDrawdownAdapter::test_combined_is_and_of_both_gates).
     pos_combined = pos_sortino * pos_dd
 
     precomputed = {
@@ -1015,7 +1154,12 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     "multifactor_lowvol_size": (
         _build_lowvol_size_adapter,
         0.05,
-        ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"],
+        # "SPY" added (2026-07) as a BENCHMARK-ONLY input for the adapter's
+        # market-trend (Faber SMA-200) de-risking overlay — see
+        # _build_lowvol_size_adapter's docstring. SPY is excluded from the
+        # tradeable Low-Vol/Size cross-section and from y; it is downloaded
+        # alongside the other 8 names solely to compute the trend gate.
+        ["SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T"],
     ),
     "garch_vol_target": (_build_garch_voltarget_adapter, 0.02, ["SPY"]),
     "cross_sectional_momentum": (

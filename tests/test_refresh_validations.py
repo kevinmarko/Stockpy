@@ -450,9 +450,14 @@ class TestBuildGarchVoltargetAdapter:
 
         X, y, pre = _build_garch_voltarget_adapter(_synthetic_spy(n=500))
         assert len(X.columns) >= 1 and not y.empty
+        # 2026-07 MaxDD fix (Wave 1): added a Faber SMA-200 trend gate and
+        # dropped GARCH_InvVol/GARCH_GJR_Downside12 — the latter was found to
+        # be a near-duplicate of GARCH_VolTarget_10pct in return-space
+        # (r=0.999), and InvVol independently failed the CPCV PBO gate on its
+        # own merits. Only the two genuinely-distinct target-level variants
+        # remain, each trend-gated.
         assert set(pre.keys()) == {
             "GARCH_VolTarget_10pct", "GARCH_VolTarget_15pct",
-            "GARCH_InvVol", "GARCH_GJR_Downside12",
         }
         for k, v in pre.items():
             assert v.index.equals(y.index), f"{k} index mismatch"
