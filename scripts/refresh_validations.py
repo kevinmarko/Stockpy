@@ -61,6 +61,29 @@ its live signal module (documented in each adapter's own docstring — e.g.
 ``deep_value_edgar_pit`` uses a P/B ratio directly rather than reconstructing a
 Graham Number, which would mix price vintages).
 
+Real point-in-time macro regime (Regime Navigator)
+----------------------------------------------------
+``macro_regime_pit`` reconstructs ``dto_models.MacroEconomicDTO.market_regime``/
+``.killSwitch`` at every historical date from real FRED series persisted in
+``HistoricalStore.get_macro()`` (VIXCLS, T10Y2Y, BAMLH0A0HYM2, UNRATE — the
+latter two added to ``DataEngine.fetch_macro_history()`` specifically for this
+adapter), reusing the REAL live DTO class rather than re-deriving its branch
+logic. Two documented v1 caveats (see ``_build_macro_regime_adapter``'s own
+docstring): the HMM regime-downgrade overlay is not replayed, and sector is a
+CURRENT snapshot (``_load_ticker_sectors``, ``forecasting/data/ticker_sectors.csv``)
+applied across the full backtest history.
+
+Narrower forecast-direction proxy (Forecast Aligned)
+--------------------------------------------------------
+``forecast_direction_arima_hw`` reconstructs a forecast-direction score using
+ONLY the cheap ARIMA + Holt-Winters fit-once helpers already in
+``ForecastingEngine`` (NOT the full 5-model ensemble the live
+``forecast_alignment`` signal actually blends — CNN-LSTM/Prophet re-fits at
+every historical date across ~20 years are computationally infeasible), over
+a BOUNDED 5-year window with WEEKLY (not daily) refits. See
+``_build_forecast_direction_adapter``'s own docstring for the full cost
+accounting and honesty contract.
+
 Design constraints
 ------------------
 * CONSTRAINT #6 — every per-strategy execution is wrapped in try/except so one
@@ -945,6 +968,346 @@ def _build_value_quality_adapter(
     return X, y, precomputed
 
 
+# ---------------------------------------------------------------------------
+# Regime Navigator (macro_regime_pit) -- real point-in-time macro reconstruction
+# ---------------------------------------------------------------------------
+
+def _asof_align(series: pd.Series, common_index: pd.DatetimeIndex) -> pd.Series:
+    """Align *series* (arbitrary date frequency) onto *common_index* via
+    ``pd.merge_asof(direction="backward")`` — the same PIT alignment
+    mechanism as ``_pit_asof_frame``, generalized to a plain Series. Empty
+    input degrades to an all-NaN Series (never fabricated — CONSTRAINT #4).
+    """
+    if series is None or series.empty:
+        return pd.Series(np.nan, index=common_index)
+    s = series.sort_index()
+    aligned = pd.merge_asof(
+        pd.DataFrame(index=common_index),
+        s.rename("value").to_frame(),
+        left_index=True,
+        right_index=True,
+        direction="backward",
+    )
+    aligned.index = common_index
+    return aligned["value"]
+
+
+def _reconstruct_macro_regime_series(
+    common_index: pd.DatetimeIndex,
+    vix: pd.Series,
+    t10y2y: pd.Series,
+    credit_spread: pd.Series,
+    unrate: pd.Series,
+) -> pd.DataFrame:
+    """Reconstruct the REAL ``dto_models.MacroEconomicDTO.market_regime`` /
+    ``.killSwitch`` classification at every date in *common_index*, from raw
+    FRED series (VIXCLS, T10Y2Y, BAMLH0A0HYM2, UNRATE).
+
+    Honesty design: this constructs the actual live ``MacroEconomicDTO``
+    class per date and reads its real properties — NOT a re-implementation
+    of its branch logic — so there is zero drift risk from the live code
+    path. A few thousand DTO constructions over ~20 years of daily dates is
+    a trivial, one-time cost (<1s), deliberately accepted in exchange for
+    that fidelity guarantee.
+
+    v1 SCOPE (documented caveat, not a bug): ``hmm_risk_on_probability`` is
+    always ``None``, so the HMM disagreement-downgrade (RISK ON -> NEUTRAL)
+    is NEVER replayed here. Correctly replaying ``regime/hmm_regime.py``'s
+    calendar-gated (``retrain_freq_days``) expanding-window refit needs its
+    own walk-forward implementation — a materially larger, statistically
+    delicate task deferred to a future v2. The rules-based classification
+    (``MacroEconomicDTO._rules_based_regime`` / base ``killSwitch``) is fully
+    genuine.
+
+    The Sahm Rule is computed on the RAW MONTHLY UNRATE series (rolling-3 /
+    rolling-12 over monthly observations, mirroring
+    ``macro_engine.MacroEngine.calculate_sahm_rule``'s formula) BEFORE
+    alignment onto the daily ``common_index`` — aligning UNRATE to daily
+    first would forward-fill within a month and corrupt the rolling-window
+    semantics (each row must represent one distinct month).
+
+    A date with any missing input series degrades to ``market_regime=None``
+    / ``kill_switch=False`` (never a fabricated classification —
+    CONSTRAINT #4); callers must treat ``None`` as "unknown", not "neutral".
+    """
+    from dto_models import MacroEconomicDTO
+
+    if unrate is not None and not unrate.empty:
+        ma3 = unrate.sort_index().rolling(window=3).mean()
+        sahm = ma3 - ma3.rolling(window=12).min()
+    else:
+        sahm = pd.Series(dtype=float)
+
+    vix_daily = _asof_align(vix, common_index)
+    yc_daily = _asof_align(t10y2y, common_index)
+    oas_daily = _asof_align(credit_spread, common_index)
+    sahm_daily = _asof_align(sahm, common_index)
+
+    regimes: List[Optional[str]] = []
+    kill_switches: List[bool] = []
+    for yc, oas, sahm_val, vix_val in zip(yc_daily, oas_daily, sahm_daily, vix_daily):
+        if pd.isna(yc) or pd.isna(oas) or pd.isna(sahm_val) or pd.isna(vix_val):
+            regimes.append(None)
+            kill_switches.append(False)
+            continue
+        dto = MacroEconomicDTO(
+            yield_curve_10y_2y=float(yc),
+            high_yield_oas=float(oas),
+            inflation_rate=2.0,  # unused by market_regime/killSwitch -- documented placeholder
+            sahm_rule_indicator=float(sahm_val),
+            vix_value=float(vix_val),
+            hmm_risk_on_probability=None,  # v1 scope -- HMM downgrade not replayed, see docstring above
+        )
+        regimes.append(dto.market_regime)
+        kill_switches.append(dto.killSwitch)
+
+    return pd.DataFrame(
+        {"market_regime": regimes, "kill_switch": kill_switches}, index=common_index
+    )
+
+
+def _build_macro_regime_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Real point-in-time macro-regime backtest — the honest backtest for the
+    ``regime-navigator`` Pilot (``signals/macro_regime.py``).
+
+    Reconstructs ``dto_models.MacroEconomicDTO.market_regime``/``.killSwitch``
+    at every historical date (see ``_reconstruct_macro_regime_series``) from
+    real FRED series persisted in ``HistoricalStore.get_macro()``, then
+    faithfully reproduces ``MacroRegimeSignal.compute()``'s exact point scale:
+    RECESSION -15, CREDIT EVENT -25, RISK ON +10, killSwitch -5, and — ONLY
+    within RECESSION/CREDIT EVENT — a sector rotation of -15 (Financial/Real
+    Estate) or +10 (Consumer Staples/Healthcare), normalized by /45.0.
+
+    FIDELITY NOTE (deliberately NOT "fixed"): the live signal's sector check
+    is ``"Consumer Staples" in sector``, but yfinance's real sector taxonomy
+    (what ``forecasting/data/ticker_sectors.csv`` and the live
+    ``FundamentalDataDTO.sector`` actually populate) uses "Consumer
+    Defensive", not "Consumer Staples" — so that half of the OR condition
+    never actually matches in the live system; only the "Healthcare" half
+    fires. This backtest reproduces that exact behavior (bug and all) rather
+    than silently correcting it, since the whole point is to backtest what
+    the live signal REALLY does.
+
+    TWO caveats carried from earlier in this module (documented, not solved):
+    (1) the HMM regime downgrade is not replayed (see
+    ``_reconstruct_macro_regime_series``'s v1 scope note); (2) sector is a
+    CURRENT snapshot (``_load_ticker_sectors``) applied across the full
+    backtest history — GICS reclassifications are rare for this universe but
+    not impossible.
+
+    Two honest variants:
+      * ``MacroRegime_TopHalf`` — rank-based top-half book, consistent with
+        every other cross-sectional adapter in this module. Because score is
+        identical for every ticker sharing a (regime, sector) pair, this is
+        tie-heavy on many days.
+      * ``MacroRegime_SectorRotation`` — an explicit long-defensive /
+        short-cyclical book, active ONLY within RECESSION/CREDIT EVENT and
+        flat otherwise — a non-degenerate alternative that doesn't pretend
+        to rank within ties.
+
+    Long-only universe per ``_XSEC_UNIVERSE_30``; ``.shift(1)`` no-lookahead
+    on both variants.
+    """
+    from data.historical_store import HistoricalStore
+
+    common_index = closes.dropna(how="all").index
+    store = HistoricalStore()
+    vix = store.get_macro("VIXCLS")
+    t10y2y = store.get_macro("T10Y2Y")
+    credit_spread = store.get_macro("BAMLH0A0HYM2")
+    unrate = store.get_macro("UNRATE")
+
+    regime_df = _reconstruct_macro_regime_series(common_index, vix, t10y2y, credit_spread, unrate)
+    sectors = _load_ticker_sectors()
+
+    is_stressed = regime_df["market_regime"].isin(["RECESSION", "CREDIT EVENT"])
+
+    base_points = pd.Series(0.0, index=common_index)
+    base_points[regime_df["market_regime"] == "RECESSION"] -= 15.0
+    base_points[regime_df["market_regime"] == "CREDIT EVENT"] -= 25.0
+    base_points[regime_df["market_regime"] == "RISK ON"] += 10.0
+    base_points[regime_df["kill_switch"]] -= 5.0
+    base_points[regime_df["market_regime"].isna()] = np.nan  # unknown regime -> no fabricated score
+
+    score_cols: Dict[str, pd.Series] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    defensive_tickers: List[str] = []
+    cyclical_tickers: List[str] = []
+    for ticker in closes.columns:
+        close = closes[ticker].reindex(common_index)
+        ret_cols[ticker] = close.pct_change()
+
+        sector = sectors.get(ticker)
+        sector_bonus = pd.Series(0.0, index=common_index)
+        if sector:
+            if "Financial" in sector or "Real Estate" in sector:
+                sector_bonus[is_stressed] = -15.0
+                cyclical_tickers.append(ticker)
+            elif "Consumer Staples" in sector or "Healthcare" in sector:
+                sector_bonus[is_stressed] = 10.0
+                defensive_tickers.append(ticker)
+        score_cols[ticker] = (base_points + sector_bonus) / 45.0
+
+    score_df = pd.DataFrame(score_cols)
+    rets_df = pd.DataFrame(ret_cols)
+
+    # Variant 1: rank-based top-half book (tie-heavy -- see docstring).
+    weights = score_df.rank(axis=1, pct=True).ge(0.5).astype(float)
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    top_half_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    # Variant 2: explicit long-defensive/short-cyclical book, RECESSION/CREDIT
+    # EVENT only; flat otherwise.
+    rotation_weights = pd.DataFrame(0.0, index=common_index, columns=closes.columns)
+    if defensive_tickers:
+        rotation_weights.loc[is_stressed, defensive_tickers] = 0.5 / len(defensive_tickers)
+    if cyclical_tickers:
+        rotation_weights.loc[is_stressed, cyclical_tickers] = -0.5 / len(cyclical_tickers)
+    sector_rotation_returns = (rotation_weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["MacroRegime_Composite"] = score_df.mean(axis=1).fillna(0.0)
+    y = rets_df.mean(axis=1).fillna(0.0)
+
+    precomputed = {
+        "MacroRegime_TopHalf": top_half_returns,
+        "MacroRegime_SectorRotation": sector_rotation_returns,
+    }
+    return X, y, precomputed
+
+
+# ---------------------------------------------------------------------------
+# Forecast Aligned (forecast_direction_arima_hw) -- narrower ARIMA+HW proxy
+# ---------------------------------------------------------------------------
+
+FORECAST_DIRECTION_WINDOW_YEARS = 5
+FORECAST_DIRECTION_HORIZON_DAYS = 30
+
+# Same 10-ticker universe as the EDGAR PIT adapters -- keeps total ARIMA/HW
+# fit count bounded (see _build_forecast_direction_adapter's docstring for
+# the cost estimate that drove this choice).
+FORECAST_DIRECTION_UNIVERSE = ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"]
+
+
+def _weekly_rebalance_dates(common_index: pd.DatetimeIndex) -> List[pd.Timestamp]:
+    """One rebalance date per ISO calendar week — the LAST trading day
+    actually present in *common_index* for that week (never a non-trading
+    calendar Friday, which would silently drop that week's rebalance)."""
+    weekly_last = common_index.to_series().resample("W").last().dropna()
+    return list(weekly_last)
+
+
+def _build_forecast_direction_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Narrower ARIMA+Holt-Winters forecast-direction proxy — the honest
+    backtest for the ``forecast-aligned`` Pilot (``signals/forecast_alignment.py``).
+
+    HONEST SCOPE (CONSTRAINT #4): the live signal's ``forecast_price`` is the
+    full 5-model blend (ARIMA, Monte Carlo, Holt-Winters, CNN-LSTM, Prophet,
+    optionally skill-weighted). Re-fitting that full ensemble at every
+    historical rebalance date across ~20 years is computationally
+    infeasible — CNN-LSTM/Prophet fits are already the dominant per-cycle
+    CPU cost in LIVE operation (see forecasting_engine.py's own perf notes).
+    This adapter uses ONLY the two cheap, deterministic-trend fit-once
+    helpers already in ``ForecastingEngine`` (``run_arima_fit``/
+    ``forecast_from_arima_fit``, ``run_holt_winters_fit``/
+    ``forecast_from_hw_fit`` — the exact methods ``generate_forecast()``
+    itself calls), simple-averaged — NOT the live skill-weighted blend (no
+    historical ``ForecastTracker`` skill weights exist this far back).
+
+    BOUNDED SCOPE (deliberate, not a data-availability gap): the backtest
+    window is trimmed to the last ``FORECAST_DIRECTION_WINDOW_YEARS`` (5)
+    years of *closes*, and refits happen WEEKLY (not daily) — holding each
+    week's forecast score constant (ffill) between refits while exposure
+    still marks-to-market daily. Cost estimate that drove these numbers:
+    ~5yr × 52 weeks × 10 tickers × ~3 statsmodels fits (1 ARIMA + Holt-
+    Winters' own internal train/val grid search + final fit) ≈ 7,800 total
+    fits, a few minutes, ONE TIME per full run (the harness's CPCV/walk-
+    forward splits re-slice this precomputed series — they never re-fit).
+
+    Faithfully reproduces the live signal via the REAL
+    ``ForecastAlignmentSignal().compute()`` call (not a hand-rolled
+    reimplementation of its +10/+5/-10 thresholds) — ``context`` is passed
+    as ``None`` since ``compute()`` never reads it for this module.
+
+    A rebalance date where BOTH models fail to fit is skipped entirely
+    (never fabricates a forecast from a 0.0/last-price sentinel —
+    CONSTRAINT #4); the score simply holds at its last valid value.
+
+    Score is a per-ticker ABSOLUTE view (not a cross-sectional rank), so the
+    book is SCORE-WEIGHTED (long positive-score names, short/flat negative,
+    weight ∝ |score|) rather than a top-half rank cut — a rank cut would
+    manufacture false cross-sectional differentiation between two tickers
+    whose real ARIMA/HW-implied directions are both, say, mildly bullish.
+    ``.shift(1)`` no-lookahead.
+    """
+    from forecasting_engine import ForecastingEngine
+    from signals.forecast_alignment import ForecastAlignmentSignal
+
+    full_index = closes.dropna(how="all").index
+    if len(full_index) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    window_start = full_index[-1] - pd.DateOffset(years=FORECAST_DIRECTION_WINDOW_YEARS)
+    common_index = full_index[full_index >= window_start]
+    if len(common_index) < 60:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    rebalance_dates = _weekly_rebalance_dates(common_index)
+    engine = ForecastingEngine()
+    signal = ForecastAlignmentSignal()
+
+    ret_cols: Dict[str, pd.Series] = {}
+    score_cols: Dict[str, pd.Series] = {}
+    for ticker in closes.columns:
+        close = closes[ticker].reindex(common_index).ffill()
+        ret_cols[ticker] = close.pct_change()
+
+        scores = pd.Series(np.nan, index=common_index)
+        for rebalance_date in rebalance_dates:
+            history = close.loc[:rebalance_date].dropna().to_numpy()
+            if len(history) < 30:
+                continue
+            current_price = float(history[-1])
+
+            arima_fit = engine.run_arima_fit(history)
+            arima_price = engine.forecast_from_arima_fit(arima_fit, FORECAST_DIRECTION_HORIZON_DAYS)
+            hw_fit = engine.run_holt_winters_fit(history)
+            hw_price = engine.forecast_from_hw_fit(hw_fit, FORECAST_DIRECTION_HORIZON_DAYS, history)
+
+            # A failed fit returns a sentinel (0.0 for ARIMA, float(history[-1])
+            # for HW) -- both filtered out here rather than blended in, since
+            # neither is a real forecast (CONSTRAINT #4).
+            candidates = [p for p in (arima_price, hw_price) if p and p != current_price]
+            if not candidates:
+                continue
+            forecast_price = float(np.mean(candidates))
+
+            row = pd.Series({"current_price": current_price, "forecast_price": forecast_price})
+            output = signal.compute(row, context=None)
+            scores.loc[rebalance_date] = output.score
+
+        score_cols[ticker] = scores.ffill()
+
+    score_df = pd.DataFrame(score_cols)
+    rets_df = pd.DataFrame(ret_cols)
+
+    weights = score_df.div(score_df.abs().sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=common_index)
+    X["ForecastDirection_Composite"] = score_df.mean(axis=1).fillna(0.0)
+    y = rets_df.mean(axis=1).fillna(0.0)
+
+    precomputed = {"ForecastDirection_ScoreWeighted": portfolio_returns}
+    return X, y, precomputed
+
+
 def _make_strategy_fn(
     precomputed: Dict[str, pd.Series],
     turnover: float = 0.01,
@@ -1047,6 +1410,21 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
         _build_value_quality_adapter,
         0.05,
         ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"],
+    ),
+    # Real point-in-time macro-regime reconstruction (see
+    # _build_macro_regime_adapter's docstring for the full honesty contract:
+    # real MacroEconomicDTO reuse, HMM-downgrade-excluded v1 scope, and the
+    # documented "Consumer Staples" vs "Consumer Defensive" fidelity note).
+    "macro_regime_pit": (_build_macro_regime_adapter, 0.03, _XSEC_UNIVERSE_30),
+    # Narrower ARIMA+Holt-Winters forecast-direction proxy (see
+    # _build_forecast_direction_adapter's docstring for the full honesty
+    # contract: bounded 5yr window, weekly cadence, real ForecastAlignmentSignal
+    # reuse). Weekly turnover on a 10-name universe is higher than the EDGAR
+    # PIT adapters' slower-moving fundamentals-driven books.
+    "forecast_direction_arima_hw": (
+        _build_forecast_direction_adapter,
+        0.05,
+        FORECAST_DIRECTION_UNIVERSE,
     ),
 }
 

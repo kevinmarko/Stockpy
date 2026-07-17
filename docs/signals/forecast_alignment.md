@@ -4,10 +4,14 @@
 **Default weight:** 10.0  
 **Score range:** `[-1.0, +1.0]`  
 **Regime gate:** Always active  
-**Pilot:** Forecast Aligned (`forecast-aligned`, `pilots/catalog.py`) — no backtest curve
-(`validation_strategy_id=None`); the module scores against an external multi-model
-forecast target (ARIMA/MC/HW/CNN-LSTM ensemble), not a price-only signal, so it can't be
-honestly reconstructed inside a price-series-only backtest adapter.
+**Pilot:** Forecast Aligned (`forecast-aligned`, `pilots/catalog.py`) — as of 2026-07, joins
+`forecast_direction_arima_hw` (`validation_strategy_id="forecast_direction_arima_hw"`,
+`scripts/refresh_validations.py`), a NARROWER proxy that reconstructs a forecast-direction
+score using only the cheap ARIMA + Holt-Winters fit-once helpers (not the full live
+ARIMA/MC/HW/CNN-LSTM/Prophet ensemble — re-fitting the full ensemble at every historical
+date across ~20 years is computationally infeasible), bounded to the last 5 years with
+weekly (not daily) refits, over the same 10-ticker universe as the EDGAR PIT adapters.
+Reuses the real `ForecastAlignmentSignal().compute()` scoring, not a reimplementation.
 
 ---
 
