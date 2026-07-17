@@ -760,6 +760,96 @@ export interface StrategyModulesUpdateResult {
   note: string;
 }
 
+// ---------------------------------------------------------------------------
+// GET /observability/summary — Mission Control composite: portfolio risk
+// metrics, the account equity curve + drawdown, the current macro-regime
+// overlay, portfolio-wide forecast skill, and the risk-gate block log. Every
+// section degrades independently server-side (pilots/observability.py) — one
+// section's cold start never blocks the other four. Every leaf the backend
+// cannot compute is `null`, never a fabricated 0 (CONSTRAINT #4).
+// ---------------------------------------------------------------------------
+
+/** Sharpe/Calmar/MaxDD/MaxDD-duration/CAGR over the full account equity history. */
+export interface PortfolioRiskMetrics {
+  sharpe_ratio: number | null;
+  calmar_ratio: number | null;
+  max_drawdown: number | null; // fraction, <= 0 (0 = never dipped, a real value)
+  max_drawdown_duration_days: number | null;
+  cagr: number | null; // fraction
+  n_snapshots: number;
+  min_snapshots_required: number;
+  reason: string | null; // present when n_snapshots < min_snapshots_required
+}
+
+/** One point of the account equity + drawdown series. */
+export interface EquityDrawdownPoint {
+  date: string; // ISO date
+  equity: number;
+  drawdown: number; // fraction, <= 0 (against the all-time running peak)
+}
+
+export interface EquityDrawdownCurve {
+  range: PerfRange;
+  points: EquityDrawdownPoint[];
+  reason: string | null; // present when points is empty
+}
+
+/** Current macro-regime telemetry from the persisted state snapshot. */
+export interface RegimeOverlay {
+  as_of: string | null;
+  market_regime: string | null;
+  vix: number | null;
+  sahm_rule: number | null;
+  high_yield_oas: number | null;
+  yield_curve: number | null;
+  hmm_risk_on_probability: number | null;
+  kill_switch_active: boolean | null;
+  macro_regime_gate_enabled: boolean | null;
+  reason: string | null; // present when no state snapshot exists yet
+}
+
+/** Portfolio-wide (all-symbol) forecast reliability + skill weights for one horizon. */
+export interface PortfolioForecastSkill {
+  horizon_days: number;
+  window_days: number;
+  min_obs: number;
+  reliability_curve: ReliabilityBin[];
+  skill_weights: Record<string, number>; // {model: normalized inverse-RMSE weight}
+  pending: number;
+  completed: number;
+  reason: string | null;
+}
+
+/** One entry from output/risk_gate_blocks.jsonl (execution/risk_gate.py). */
+export interface RiskGateBlockEntry {
+  ts: string | null;
+  check: string | null;
+  reason: string | null;
+  symbol: string | null;
+  side: string | null;
+  qty: number | null;
+  strategy_id: string | null;
+}
+
+export interface RiskGateBlockLog {
+  entries: RiskGateBlockEntry[];
+  // Always equal to entries.length today (pilots/observability.py returns at
+  // most `n` rows, default 100, and count is that same list's length) — NOT
+  // an uncapped true-total distinct from `entries` the way
+  // DeadLetterReport.entry_count is. Kept as its own field for parity with
+  // that shape and in case the backend later caps entries below count.
+  count: number;
+  reason: string | null;
+}
+
+export interface ObservabilitySummary {
+  portfolio_risk: PortfolioRiskMetrics;
+  equity_curve: EquityDrawdownCurve;
+  regime: RegimeOverlay;
+  forecast_skill: PortfolioForecastSkill;
+  risk_gate_blocks: RiskGateBlockLog;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

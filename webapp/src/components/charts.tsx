@@ -11,7 +11,7 @@ import {
   YAxis,
   Line,
 } from "recharts";
-import type { CurvePoint, SectorSlice } from "../api/types";
+import type { CurvePoint, EquityDrawdownPoint, SectorSlice } from "../api/types";
 import { sectorColor, theme } from "../theme";
 import { fmtDate, fmtPct } from "../format";
 
@@ -247,6 +247,74 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * DrawdownArea — running peak-to-trough drawdown % beneath a hairline zero
+ * line. Always decline-toned (a drawdown is never a "good" direction, unlike
+ * PerfLine which flips color by net series direction). `drawdown` values are
+ * fractions <= 0 (e.g. -0.146 = -14.6%).
+ */
+export function DrawdownArea({ data }: { data: EquityDrawdownPoint[] }) {
+  if (data.length === 0) return null;
+  const rows = data.map((p) => ({ date: p.date, drawdown: p.drawdown }));
+  const min = Math.min(0, ...rows.map((r) => r.drawdown));
+
+  return (
+    <div style={{ width: "100%", height: 120 }}>
+      <ResponsiveContainer>
+        <AreaChart data={rows} margin={{ top: 4, right: 6, left: 6, bottom: 0 }}>
+          <defs>
+            <linearGradient id="gradDrawdown" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={theme.decline} stopOpacity={0} />
+              <stop offset="100%" stopColor={theme.decline} stopOpacity={0.32} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid
+            vertical={false}
+            stroke="rgba(255,255,255,0.06)"
+            strokeDasharray="0"
+          />
+          <XAxis
+            dataKey="date"
+            tickFormatter={fmtDate}
+            tick={{ fill: theme.textMuted, fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+            minTickGap={44}
+          />
+          <YAxis
+            domain={[min || -0.01, 0]}
+            tick={{ fill: theme.textMuted, fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+            width={38}
+            tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+          />
+          <Tooltip
+            contentStyle={{
+              background: theme.surface3,
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: 10,
+              color: theme.textPrimary,
+              fontSize: 12,
+            }}
+            labelFormatter={(l) => fmtDate(String(l))}
+            formatter={(val: number) => [fmtPct(val, 1, { fromFraction: true }), "Drawdown"]}
+          />
+          <Area
+            type="monotone"
+            dataKey="drawdown"
+            stroke={theme.decline}
+            strokeWidth={1.75}
+            fill="url(#gradDrawdown)"
+            dot={false}
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }

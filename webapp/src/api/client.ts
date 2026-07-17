@@ -25,6 +25,7 @@ import type {
   KillSwitchActionResult,
   LlmStatus,
   ModelRow,
+  ObservabilitySummary,
   OptionsMatrix,
   PairsRadar,
   PerfRange,
@@ -138,6 +139,10 @@ const liveApi = {
   getSymbolOptions: (ticker: string) =>
     http<SymbolOptions>(`/symbols/${encodeURIComponent(ticker)}/options`),
   getPairs: () => http<PairsRadar>("/pairs"),
+  getObservabilitySummary: (range: PerfRange, horizon = 30) =>
+    http<ObservabilitySummary>(
+      `/observability/summary?range=${range}&horizon=${horizon}`
+    ),
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
   setStrategyModules: (body: StrategyModulesUpdate) =>
     http<StrategyModulesUpdateResult>("/strategy/modules", {
