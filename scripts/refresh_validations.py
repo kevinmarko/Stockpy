@@ -84,6 +84,22 @@ a BOUNDED 5-year window with WEEKLY (not daily) refits. See
 ``_build_forecast_direction_adapter``'s own docstring for the full cost
 accounting and honesty contract.
 
+Real SignalAggregator replay (Balanced Blend)
+-------------------------------------------------
+``signal_replay_balanced_blend`` is the first adapter here to replay the
+REAL ``SignalAggregator``/``SignalRegistry`` weighted-sum code path across
+history rather than hand-writing a standalone formula. 3 of the 17 signal
+modules are excluded for the whole backtest window (``news_catalyst``,
+``lgbm_ranker``, ``forecast_alignment``) and their weight mass is
+renormalized to the 14 survivors; 2 of the survivors (``graham_value``,
+``dividend_quality``) genuinely degrade to their own real "no data" branches
+because EDGAR PIT fundamentals don't safely carry a dollar book-value-per-
+share or payout ratio. See ``_build_signal_replay_adapter``'s own docstring
+for the full honesty contract and ``_REPLAY_EXCLUDED_MODULES``'s comment for
+why each exclusion matters (mostly weight-redistribution correctness, not
+just network-call safety — a subtlety worth reading before touching this
+adapter).
+
 Design constraints
 ------------------
 * CONSTRAINT #6 — every per-strategy execution is wrapped in try/except so one
@@ -1634,6 +1650,469 @@ def _build_forecast_direction_adapter(
     return X, y, precomputed
 
 
+# ---------------------------------------------------------------------------
+# Balanced Blend (signal_replay_balanced_blend) -- real SignalAggregator replay
+# ---------------------------------------------------------------------------
+
+# Excluded for the FULL backtest window (see _build_signal_replay_adapter's
+# docstring for the full rationale of each):
+#   news_catalyst      -- its live Finnhub call lives in pre_compute(), which
+#                         this adapter never calls for it (only for
+#                         multifactor/cross_sectional_momentum) -- so
+#                         including it would NOT itself trigger a network
+#                         call. It is excluded anyway because (a) that safety
+#                         property is an accident of today's hardcoded
+#                         pre_compute call list, not a structural guarantee --
+#                         a future refactor to a batch
+#                         registry.run_pre_compute() would silently
+#                         reintroduce the network call if this exclusion were
+#                         removed at the same time; and (b) without
+#                         pre_compute ever running, compute() would just
+#                         return a constant neutral score under its real
+#                         nonzero settings.SIGNAL_WEIGHTS weight -- wasting
+#                         that weight mass instead of redistributing it to
+#                         modules that can produce a real historical score.
+#   lgbm_ranker        -- identical situation to news_catalyst: its
+#                         LGBMCrossSectionalRanker.load_latest() call (which
+#                         WOULD load the CURRENT model regardless of
+#                         historical date -- a real lookahead risk) lives in
+#                         pre_compute(), never called here; excluded for the
+#                         same forward-safety + weight-redistribution reasons.
+#   forecast_alignment -- only backtestable within forecast_direction_arima_hw's
+#                         bounded 5yr window; excluded here to keep ONE
+#                         consistent 14/17-module composition across the whole
+#                         window rather than a signal set that silently
+#                         changes mid-history.
+_REPLAY_EXCLUDED_MODULES = {"news_catalyst", "lgbm_ranker", "forecast_alignment"}
+
+_AROON_LENGTH = 25
+_EWMA_VOL_ALPHA = 0.06  # RiskMetrics lambda=0.94, same as _build_garch_voltarget_adapter
+
+
+def _download_ohlcv(
+    tickers: List[str], start_date: str, end_date: str
+) -> Dict[str, pd.DataFrame]:
+    """Download full OHLCV (not just Close) via yfinance, one DataFrame per
+    ticker. Every other adapter in this module only needs Close; Aroon needs
+    High/Low too. Per-ticker failures are logged and skipped (never abort
+    the whole batch); a ticker absent from the return dict simply has no
+    Aroon/trend_strength contribution downstream (never fabricated).
+    """
+    import yfinance as yf
+
+    out: Dict[str, pd.DataFrame] = {}
+    ordered = list(dict.fromkeys(tickers))
+    df = yf.download(
+        ordered, start=start_date, end=end_date, progress=False,
+        auto_adjust=True, group_by="ticker",
+    )
+    if df is None or df.empty:
+        return out
+    for ticker in ordered:
+        try:
+            if isinstance(df.columns, pd.MultiIndex):
+                sub = df[ticker][["Open", "High", "Low", "Close", "Volume"]].copy()
+            else:
+                sub = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+            sub.index = pd.to_datetime(sub.index)
+            sub = sub.dropna(how="all")
+            if not sub.empty:
+                out[ticker] = sub
+        except Exception as exc:  # noqa: BLE001 -- per-ticker dead-letter
+            logger.warning("_download_ohlcv: no data for %s: %s", ticker, exc)
+    return out
+
+
+def _aroon_up_down(
+    high: pd.Series, low: pd.Series, length: int = _AROON_LENGTH
+) -> Tuple[pd.Series, pd.Series]:
+    """Real Aroon Up / Aroon Down (0-100), causal by construction.
+
+    Aroon Up = 100 * (length - periods since the rolling *length*-window
+    high) / length; Aroon Down mirrors this on the rolling low. Both use
+    ``rolling(length+1)`` (the window INCLUDING today, standard Aroon
+    convention) and only ever look at data at or before the current row.
+    """
+    window = length + 1
+    periods_since_high = high.rolling(window).apply(
+        lambda w: float(len(w) - 1 - np.argmax(w.values)), raw=False
+    )
+    periods_since_low = low.rolling(window).apply(
+        lambda w: float(len(w) - 1 - np.argmin(w.values)), raw=False
+    )
+    aroon_up = 100.0 * (length - periods_since_high) / length
+    aroon_down = 100.0 * (length - periods_since_low) / length
+    return aroon_up, aroon_down
+
+
+def _ewma_vol_annualized(daily_ret: pd.Series, alpha: float = _EWMA_VOL_ALPHA) -> pd.Series:
+    """RiskMetrics EWMA annualized realized-vol proxy — the SAME formula
+    ``_build_garch_voltarget_adapter`` uses as the honest, causal proxy for
+    GJR-GARCH volatility elsewhere in this module. Shared here so it can
+    feed BOTH ``GARCH_Vol`` (timeseries_momentum) and ``garch_vol``
+    (edge_garch) from a single computation per ticker.
+    """
+    ewma_var = daily_ret.pow(2).ewm(alpha=alpha, adjust=False).mean()
+    return np.sqrt(ewma_var * 252.0)
+
+
+def _pit_row_to_fundamentals_dto(ticker: str, sector: str, raw: Dict[str, Any]):
+    """Map one EDGAR PIT ``raw_json`` dict (``data/edgar_fundamentals.py::
+    compute_pit_ratios``'s output shape) onto a REAL ``dto_models.
+    FundamentalDataDTO``, for feeding ``graham_value``/``dividend_quality``'s
+    real ``compute()`` (which read ``context.fundamentals.graham_number`` /
+    ``.dividend_yield`` / ``.is_dividend_sustainable`` — DTO properties, not
+    row columns).
+
+    HONEST DEGRADE (CONSTRAINT #4), not a bug: EDGAR PIT's raw_json shape is
+    ``{pe_ratio, pb_ratio, roe, dividend_yield, market_cap, eps,
+    operating_margin, debt_to_equity, current_ratio}`` — it does NOT carry a
+    dollar book-value-per-share or a payout ratio. Deriving book_value as
+    ``current_price / pb_ratio`` would repeat the EXACT mixed-vintage bug
+    ``_build_deep_value_adapter``'s docstring already warns against (dividing
+    by a price from a different vintage than the ratio was computed
+    against) — so ``book_value`` and ``payout_ratio`` are fed as explicit
+    NaN (verified ``dto_models.BaseDTO._to_float`` passes NaN through
+    unchanged rather than coercing it to a fabricated 0.0 default). This
+    means ``graham_value``/``dividend_quality`` genuinely degrade to their
+    own real "no data" branches for EVERY EDGAR-PIT ticker/date — a low-
+    information but honest contribution, not a fabricated one. Document
+    this prominently wherever this adapter's caveats are listed.
+    """
+    from dto_models import FundamentalDataDTO
+
+    raw = raw or {}
+    return FundamentalDataDTO(
+        ticker=ticker,
+        pe_ratio=raw.get("pe_ratio"),
+        pb_ratio=raw.get("pb_ratio"),
+        dividend_yield=raw.get("dividend_yield", float("nan")),
+        book_value=float("nan"),  # see docstring -- not safely derivable from PIT data
+        eps_trailing=raw.get("eps", float("nan")),
+        dividend_growth_rate=0.02,  # module default; not read by any surviving module
+        payout_ratio=float("nan"),  # see docstring -- not available in EDGAR PIT raw_json
+        sector=sector or "N/A",
+        company_name=ticker,
+        market_cap=raw.get("market_cap", float("nan")),
+    )
+
+
+def _build_signal_replay_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Real ``SignalAggregator``/``SignalRegistry`` replay across history —
+    the honest backtest for the ``balanced-blend`` Pilot.
+
+    This is genuinely new infrastructure: every other adapter in this module
+    hand-writes a standalone formula that approximates a live signal. This
+    one instead constructs REAL per-(ticker, date) ``SignalContext``/row
+    objects from persisted historical data and calls the REAL
+    ``SignalAggregator.aggregate()`` weighted-sum code path — the same
+    method ``StrategyEngine.evaluate_security()`` calls live.
+
+    NOT a literal reconstruction of ``settings.SIGNAL_WEIGHTS``'s full
+    17-module blend — 3 modules are excluded for the whole window (see
+    ``_REPLAY_EXCLUDED_MODULES``), and 2 of the 14 survivors
+    (``graham_value``, ``dividend_quality``) genuinely degrade to their own
+    "no data" branches because EDGAR PIT fundamentals don't safely carry the
+    inputs they need (see ``_pit_row_to_fundamentals_dto``'s docstring).
+    Weights of the 14 surviving modules are renormalized proportionally back
+    to the original total weight mass, so the score scale still spans the
+    live aggregate's ~50±X range rather than collapsing toward neutral.
+
+    Cost: ~14 modules x ~N dates x ~30 tickers via per-ticker ``aggregate()``
+    (not ``aggregate_vectorized()`` — 4 of the 14 survivors, including
+    ``multifactor``/``cross_sectional_momentum``/``macro_regime``, don't
+    implement ``compute_vectorized()``, and ``SignalRegistry.
+    compute_all_vectorized()`` has no per-module fallback). A few minutes,
+    one-time, same order of magnitude as ``forecast_direction_arima_hw``'s
+    accepted cost.
+
+    Requires ``"SPY"`` present in ``closes.columns`` (relative_strength and
+    cross_sectional_momentum both need it as benchmark) — raises cleanly,
+    never fabricates a benchmark, if missing (CONSTRAINT #4).
+    """
+    from data.historical_store import HistoricalStore
+    from dto_models import MacroEconomicDTO, MarketBarDTO
+    from settings import settings
+    from signals.aggregator import SignalAggregator
+    from signals.base import SignalContext
+    from signals.registry import SignalRegistry, global_registry as _live_global_registry
+
+    if "SPY" not in closes.columns:
+        raise RuntimeError(
+            "signal_replay_balanced_blend requires SPY as a benchmark for "
+            "relative_strength/cross_sectional_momentum; SPY missing from download."
+        )
+
+    common_index = closes.dropna(how="all").index
+    # Must exceed the 504-day Sortino warm-up trim below (with at least one
+    # row left over) -- guarding here avoids wasted macro/OHLCV/PIT fetches
+    # on a window that will unconditionally degrade to empty anyway.
+    if len(common_index) < 505:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    tickers = [c for c in closes.columns if c != "SPY"]
+    spy_close = closes["SPY"].reindex(common_index)
+    spy_ret = spy_close.pct_change()
+    spy_ret_63 = spy_close / spy_close.shift(63) - 1.0
+
+    # --- Macro DTO series (reuses Phase 1's exact alignment machinery) -----
+    store = HistoricalStore()
+    vix = store.get_macro("VIXCLS")
+    t10y2y = store.get_macro("T10Y2Y")
+    credit_spread = store.get_macro("BAMLH0A0HYM2")
+    unrate = store.get_macro("UNRATE")
+    if not unrate.empty:
+        ma3 = unrate.sort_index().rolling(window=3).mean()
+        sahm = ma3 - ma3.rolling(window=12).min()
+    else:
+        sahm = pd.Series(dtype=float)
+    vix_daily = _asof_align(vix, common_index)
+    yc_daily = _asof_align(t10y2y, common_index)
+    oas_daily = _asof_align(credit_spread, common_index)
+    sahm_daily = _asof_align(sahm, common_index)
+
+    macro_dtos: Dict[pd.Timestamp, MacroEconomicDTO] = {}
+    for dt, yc, oas, sahm_val, vix_val in zip(
+        common_index, yc_daily, oas_daily, sahm_daily, vix_daily
+    ):
+        if pd.isna(yc) or pd.isna(oas) or pd.isna(sahm_val) or pd.isna(vix_val):
+            macro_dtos[dt] = MacroEconomicDTO(
+                yield_curve_10y_2y=0.0, high_yield_oas=0.0, inflation_rate=2.0,
+                sahm_rule_indicator=0.0, vix_value=15.0, hmm_risk_on_probability=None,
+            )
+            continue
+        macro_dtos[dt] = MacroEconomicDTO(
+            yield_curve_10y_2y=float(yc), high_yield_oas=float(oas), inflation_rate=2.0,
+            sahm_rule_indicator=float(sahm_val), vix_value=float(vix_val),
+            hmm_risk_on_probability=None,
+        )
+
+    # --- Sector map + OHLCV + PIT fundamentals ------------------------------
+    sectors = _load_ticker_sectors()
+    ohlcv = _download_ohlcv(
+        tickers, common_index[0].strftime("%Y-%m-%d"),
+        (common_index[-1] + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+    )
+    pit = _pit_asof_frame(store, tickers, common_index)
+
+    # --- Per-ticker vectorized feature construction -------------------------
+    features: Dict[str, pd.DataFrame] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    for ticker in tickers:
+        close = closes[ticker].reindex(common_index)
+        ret = close.pct_change()
+        ret_cols[ticker] = ret
+
+        ohlcv_t = ohlcv.get(ticker)
+        if ohlcv_t is not None:
+            high = ohlcv_t["High"].reindex(common_index).ffill()
+            low = ohlcv_t["Low"].reindex(common_index).ffill()
+            aroon_up, aroon_down = _aroon_up_down(high, low)
+        else:
+            aroon_up = pd.Series(np.nan, index=common_index)
+            aroon_down = pd.Series(np.nan, index=common_index)
+        aroon_osc = aroon_up - aroon_down
+
+        ema_12 = close.ewm(span=12, adjust=False).mean()
+        ema_26 = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema_12 - ema_26
+        macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+
+        window = 504
+        avg_return = ret.rolling(window).mean()
+        downside_std = ret.where(ret < 0).rolling(window, min_periods=60).std()
+        sortino = ((avg_return * 252.0) / (downside_std * np.sqrt(252.0))).where(downside_std > 0)
+        rolling_peak = close.rolling(window, min_periods=1).max()
+        drawdown = (close - rolling_peak) / rolling_peak
+
+        vol_60d = ret.shift(1).rolling(60).std() * np.sqrt(252)
+        garch_vol = _ewma_vol_annualized(ret)
+
+        daily_fund = pit.get(ticker)
+        if daily_fund is not None and not daily_fund.empty:
+            pb_ratio = pd.to_numeric(daily_fund.get("pb_ratio"), errors="coerce")
+            pe_ratio = pd.to_numeric(daily_fund.get("pe_ratio"), errors="coerce")
+            roe = pd.to_numeric(daily_fund.get("roe"), errors="coerce")
+            op_margin = pd.to_numeric(daily_fund.get("operating_margin"), errors="coerce")
+            market_cap = pd.to_numeric(daily_fund.get("market_cap"), errors="coerce")
+            dividend_yield = pd.to_numeric(daily_fund.get("dividend_yield"), errors="coerce")
+            eps = pd.to_numeric(daily_fund.get("eps"), errors="coerce")
+            raw_json_col = daily_fund.get("raw_json")
+        else:
+            _nan_series = pd.Series(np.nan, index=common_index)
+            pb_ratio = pe_ratio = roe = op_margin = market_cap = dividend_yield = eps = _nan_series
+            raw_json_col = pd.Series([None] * len(common_index), index=common_index)
+
+        book_to_market = 1.0 / pb_ratio.replace(0.0, np.nan)
+        earnings_yield = 1.0 / pe_ratio.replace(0.0, np.nan)
+        quality_factor_score = pd.concat([roe, op_margin], axis=1).mean(axis=1, skipna=True)
+        log_market_cap = np.log(market_cap.where(market_cap > 0))
+
+        features[ticker] = pd.DataFrame({
+            "Close": close,
+            "RSI_2": _wilder_rsi(close, length=2, fill=100.0),
+            "SMA_5": close.rolling(5).mean(),
+            "SMA_200": close.rolling(200).mean(),
+            "rsi": _wilder_rsi(close, length=14, fill=50.0),
+            "macd_line": macd_line,
+            "macd_signal": macd_signal,
+            "aroon_osc": aroon_osc,
+            "trend_strength": aroon_up,
+            "sortino_ratio": sortino,
+            "max_drawdown": drawdown,
+            "relative_strength": (close / close.shift(63) - 1.0) - spy_ret_63,
+            "ROC_12M": close.shift(1) / close.shift(253) - 1.0,
+            "GARCH_Vol": garch_vol,
+            "garch_vol": garch_vol,
+            "edge_ratio": np.nan,
+            "current_price": close,
+            "sector": sectors.get(ticker),
+            "XSec_12_1M": close.shift(22) / close.shift(252) - 1.0,
+            "book_to_market": book_to_market,
+            "earnings_yield": earnings_yield,
+            "quality_factor_score": quality_factor_score,
+            "low_vol_score": -vol_60d,
+            "log_market_cap": log_market_cap,
+            "Market Cap": market_cap,
+            "raw_json": raw_json_col,
+        }, index=common_index)
+
+    # --- Filtered registry + renormalized weights ---------------------------
+    surviving_names = [
+        name for name in _live_global_registry.get_all()
+        if name not in _REPLAY_EXCLUDED_MODULES
+    ]
+    replay_registry = SignalRegistry()
+    for name, module in _live_global_registry.get_all().items():
+        if name in surviving_names:
+            replay_registry.register(module)
+
+    base_weights = dict(settings.SIGNAL_WEIGHTS)
+    survivor_weight_sum = sum(base_weights.get(n, 0.0) for n in surviving_names)
+    original_total = sum(base_weights.values()) or 1.0
+    renorm_factor = (original_total / survivor_weight_sum) if survivor_weight_sum > 0 else 1.0
+    replay_weights = {
+        n: base_weights.get(n, 0.0) * renorm_factor for n in surviving_names
+    }
+    aggregator = SignalAggregator(replay_registry, weights=replay_weights)
+
+    # --- Daily loop: cross-sectional pre_compute + per-ticker aggregate() --
+    from signals.cross_sectional_momentum import CrossSectionalMomentumSignal
+    from signals.multifactor import MultifactorSignal
+
+    xsec_module = CrossSectionalMomentumSignal() if "cross_sectional_momentum" in surviving_names else None
+    multifactor_module = MultifactorSignal() if "multifactor" in surviving_names else None
+
+    score_series: Dict[str, list] = {t: [] for t in tickers}
+    valid_dates: list = []
+
+    # Trim the longest technical warm-up (504d Sortino) so the replay isn't
+    # dominated by NaN-heavy early rows -- mirrors every other adapter's
+    # rolling-window trim convention.
+    warm_index = common_index[504:]
+
+    for dt in warm_index:
+        universe_rows = []
+        for ticker in tickers:
+            f = features[ticker]
+            universe_rows.append({
+                "Symbol": ticker,
+                "Market Cap": f.at[dt, "Market Cap"],
+                "book_to_market": f.at[dt, "book_to_market"],
+                "earnings_yield": f.at[dt, "earnings_yield"],
+                "quality_factor_score": f.at[dt, "quality_factor_score"],
+                "low_vol_score": f.at[dt, "low_vol_score"],
+                "log_market_cap": f.at[dt, "log_market_cap"],
+                "XSec_12_1M": f.at[dt, "XSec_12_1M"],
+            })
+        universe_df = pd.DataFrame(universe_rows)
+        macro_dto = macro_dtos[dt]
+
+        precompute_ctx = SignalContext(
+            bar=MarketBarDTO(date=dt, ticker="_UNIVERSE_", open_price=0.0, high_price=0.0,
+                              low_price=0.0, close_price=0.0, volume=0),
+            fundamentals=_pit_row_to_fundamentals_dto("_UNIVERSE_", "N/A", {}),
+            macro=macro_dto,
+        )
+        if multifactor_module is not None:
+            multifactor_module.pre_compute(universe_df, precompute_ctx)
+        if xsec_module is not None:
+            xsec_module.pre_compute(universe_df, precompute_ctx)
+
+        for ticker in tickers:
+            f = features[ticker]
+            close_val = f.at[dt, "Close"]
+            if pd.isna(close_val):
+                score_series[ticker].append(np.nan)
+                continue
+
+            row = pd.Series({
+                "Symbol": ticker,
+                "current_price": close_val,
+                "Close": close_val,
+                "RSI_2": f.at[dt, "RSI_2"],
+                "SMA_5": f.at[dt, "SMA_5"],
+                "SMA_200": f.at[dt, "SMA_200"],
+                "rsi": f.at[dt, "rsi"],
+                "macd_line": f.at[dt, "macd_line"],
+                "macd_signal": f.at[dt, "macd_signal"],
+                "aroon_osc": f.at[dt, "aroon_osc"],
+                "trend_strength": f.at[dt, "trend_strength"],
+                "sortino_ratio": f.at[dt, "sortino_ratio"],
+                "max_drawdown": f.at[dt, "max_drawdown"],
+                "relative_strength": f.at[dt, "relative_strength"],
+                "ROC_12M": f.at[dt, "ROC_12M"],
+                "GARCH_Vol": f.at[dt, "GARCH_Vol"],
+                "garch_vol": f.at[dt, "garch_vol"],
+                "edge_ratio": f.at[dt, "edge_ratio"],
+                "sector": f.at[dt, "sector"],
+            })
+
+            raw_json = f.at[dt, "raw_json"]
+            raw_dict = {}
+            if isinstance(raw_json, str):
+                try:
+                    raw_dict = json.loads(raw_json)
+                except (ValueError, TypeError):
+                    raw_dict = {}
+            fundamentals = _pit_row_to_fundamentals_dto(ticker, f.at[dt, "sector"], raw_dict)
+
+            bar = MarketBarDTO(
+                date=dt, ticker=ticker,
+                open_price=close_val, high_price=close_val,
+                low_price=close_val, close_price=close_val, volume=0,
+            )
+            ctx = SignalContext(
+                bar=bar, fundamentals=fundamentals, macro=macro_dto,
+                xsec_percentile_ranks=precompute_ctx.xsec_percentile_ranks,
+                multifactor_scores=precompute_ctx.multifactor_scores,
+            )
+            try:
+                final_score, *_rest = aggregator.aggregate(row, ctx)
+            except Exception as exc:  # noqa: BLE001 -- per-(ticker,date) dead-letter
+                logger.debug("signal_replay: aggregate failed for %s@%s: %s", ticker, dt, exc)
+                final_score = 50.0
+            score_series[ticker].append((final_score - 50.0) / 50.0)
+        valid_dates.append(dt)
+
+    score_df = pd.DataFrame(score_series, index=pd.DatetimeIndex(valid_dates))
+    rets_df = pd.DataFrame({t: ret_cols[t].reindex(score_df.index) for t in tickers})
+
+    weights = score_df.rank(axis=1, pct=True).ge(0.5).astype(float)
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    X = pd.DataFrame(index=score_df.index)
+    X["SignalReplay_Composite"] = score_df.mean(axis=1).fillna(0.0)
+    y = rets_df.mean(axis=1).fillna(0.0)
+
+    precomputed = {"SignalReplay_TopHalf": portfolio_returns}
+    return X, y, precomputed
+
+
 def _make_strategy_fn(
     precomputed: Dict[str, pd.Series],
     turnover: float = 0.01,
@@ -1793,6 +2272,15 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
         _build_forecast_direction_adapter,
         0.05,
         FORECAST_DIRECTION_UNIVERSE,
+    ),
+    # Real SignalAggregator/SignalRegistry replay across history (see
+    # _build_signal_replay_adapter's docstring for the full honesty contract:
+    # 14/17 modules replayed, real weight renormalization, real DTO reuse).
+    # SPY required as benchmark for relative_strength/cross_sectional_momentum.
+    "signal_replay_balanced_blend": (
+        _build_signal_replay_adapter,
+        0.06,
+        ["SPY", *_XSEC_UNIVERSE_30],
     ),
 }
 

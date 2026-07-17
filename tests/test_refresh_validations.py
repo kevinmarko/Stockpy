@@ -153,6 +153,7 @@ class TestRegistryStructure:
             "garch_vol_target", "cross_sectional_momentum",
             "relative_strength_xsec", "rsi14_extremes", "sortino_drawdown",
             "macro_regime_pit", "forecast_direction_arima_hw",
+            "signal_replay_balanced_blend",
         ):
             assert name in STRATEGY_REGISTRY, f"{name} missing from STRATEGY_REGISTRY"
 
