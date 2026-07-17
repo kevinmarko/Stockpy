@@ -261,6 +261,40 @@ def _current_market_value(account_snapshot: Any, symbol: str) -> float:
     return 0.0
 
 
+def _follow_rationale(
+    pilot: Any,
+    *,
+    rank: int,
+    total: int,
+    score: Optional[float],
+    weight: float,
+    target_notional: float,
+) -> str:
+    """Build the honest per-name "why" for a follow intent — a RANKING, not a thesis.
+
+    A Pilot didn't reason about a stock; it ranked the stock's blended signal
+    score against its peers and normalized the survivors' scores into target
+    weights (see ``pilots.scoring.pilot_holdings``). This one-liner says exactly
+    that, in real numbers pulled straight from the holdings row — nothing
+    invented (CONSTRAINT #4). It deliberately reads as "ranked #N by score",
+    never "the Pilot believes...", so the operator is never misled into thinking
+    a discretionary judgment was made. Example::
+
+        Follow:trend-following — ranked #2 of 20 by its signal blend
+        (score 0.82 → 25.0% target weight, $2,500 target).
+
+    ``score`` may be ``None`` (an older snapshot without the field); the phrase
+    degrades to omit it rather than fabricate one.
+    """
+    label = f"Follow:{getattr(pilot, 'id', 'unknown')}"
+    score_frag = f"score {score:.2f} → " if score is not None else ""
+    return (
+        f"{label} — ranked #{rank} of {total} by its signal blend "
+        f"({score_frag}{weight * 100:.1f}% target weight, "
+        f"${target_notional:,.0f} target)."
+    )
+
+
 def _current_target_holdings(
     pilot: Pilot,
     amount: float,
@@ -399,7 +433,8 @@ def build_follow_intents(
         strategy_label = f"Follow:{getattr(pilot, 'id', 'unknown')}"
 
         intents: List[FollowIntent] = []
-        for h in holdings:
+        _total_holdings = len(holdings)
+        for _rank0, h in enumerate(holdings):
             symbol = str(h.get("symbol") or "").upper().strip()
             weight = _coerce_float(h.get("weight"))
             if not symbol or weight is None or weight <= 0:
@@ -428,6 +463,7 @@ def build_follow_intents(
                 continue
 
             pct = order_notional / equity  # equity > 0 guaranteed above
+            _score = _coerce_float(h.get("score"))
             intents.append(FollowIntent(
                 symbol=symbol,
                 action=action,
@@ -438,8 +474,20 @@ def build_follow_intents(
                 target_notional=round(float(order_notional), 2),
                 weight=float(weight),
                 price=_coerce_float(h.get("price")),
-                score=_coerce_float(h.get("score")),
-                rationale=strategy_label,
+                score=_score,
+                # Bug D: a real per-name "why" (an honest ranking, not a thesis)
+                # instead of the bare owner label. `target` is the position
+                # target (amt*weight, cap-clamped), NOT the order delta — the
+                # rationale describes why this NAME is in the Pilot, sized by the
+                # weight that put it there, not the mechanics of this one order.
+                rationale=_follow_rationale(
+                    pilot,
+                    rank=_rank0 + 1,
+                    total=_total_holdings,
+                    score=_score,
+                    weight=float(weight),
+                    target_notional=float(target),
+                ),
             ))
 
         # -------------------------------------------------------------------
@@ -492,7 +540,11 @@ def build_follow_intents(
                     weight=0.0,
                     price=None,
                     score=None,
-                    rationale=f"{strategy_label} (exit: dropped from pilot)",
+                    rationale=(
+                        f"{strategy_label} — exit: this name is no longer in the "
+                        f"Pilot's ranked holdings; trimming the follow-attributed "
+                        f"${order_notional:,.0f} back out."
+                    ),
                 ))
 
         return intents
