@@ -2,11 +2,12 @@
  * App.test.tsx — nav/gear wiring for the Data & Automation fold-in: the
  * gear button navigates to /settings (instead of opening a local sheet), it
  * still carries the needRefresh "update available" dot from any screen, the
- * /settings route resolves to the real Settings screen, and BottomNav still
- * shows exactly 3 items (Settings is NAV_ITEMS' 8th entry -- desktop Sidebar
- * only, per App.tsx's own comment on NAV_ITEMS).
+ * /settings route resolves to the real Settings screen, and BottomNav shows
+ * the 3 primary tabs plus a "More" button whose sheet backfills mobile
+ * reachability for the secondary sections (Portfolio/Compare/Models/Pairs/
+ * Options) -- Settings stays gear-only.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { useEffect } from "react";
@@ -165,13 +166,47 @@ describe("App — Settings gear + nav", () => {
     expect(await screen.findByText("App status")).toBeInTheDocument();
   });
 
-  it("BottomNav still shows exactly 3 items (Settings does not evict Activity)", () => {
+  it("BottomNav shows the 3 primary tabs plus a More button (Settings not evicted)", () => {
     const { container } = renderApp("/");
     const bottomNav = container.querySelector(".bottom-nav");
     expect(bottomNav).not.toBeNull();
     const items = bottomNav!.querySelectorAll(".nav-item");
-    expect(items).toHaveLength(3);
+    // Dashboard, Pilots, Activity + More.
+    expect(items).toHaveLength(4);
     const labels = Array.from(items).map((el) => el.textContent);
+    expect(labels.some((l) => l?.includes("More"))).toBe(true);
+    // Settings stays gear-only, never a direct bottom-nav tab.
     expect(labels.some((l) => l?.includes("Settings"))).toBe(false);
+  });
+
+  it("the More sheet reaches every secondary section and omits Settings (gear covers it)", async () => {
+    const user = userEvent.setup();
+    renderApp("/");
+
+    await user.click(screen.getByTestId("more-nav-button"));
+
+    const dialog = await screen.findByRole("dialog", { name: "More sections" });
+    for (const label of ["Portfolio", "Compare", "Models", "Pairs radar", "Options"]) {
+      expect(within(dialog).getByText(label)).toBeInTheDocument();
+    }
+    // Settings has one entry point (the gear) -- not duplicated into the sheet.
+    expect(within(dialog).queryByText("Settings")).not.toBeInTheDocument();
+  });
+
+  it("Portfolio is reachable on mobile via More -> navigates and closes the sheet", async () => {
+    const user = userEvent.setup();
+    renderApp("/");
+
+    await user.click(screen.getByTestId("more-nav-button"));
+    const dialog = await screen.findByRole("dialog", { name: "More sections" });
+    await user.click(within(dialog).getByText("Portfolio"));
+
+    // Landed on the Portfolio screen and the sheet is gone.
+    expect(
+      await screen.findByRole("heading", { name: "Portfolio" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "More sections" })
+    ).not.toBeInTheDocument();
   });
 });
