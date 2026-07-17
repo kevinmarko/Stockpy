@@ -458,6 +458,27 @@ export interface ForecastSkill {
   reason: string | null;
 }
 
+/**
+ * GET /symbols/{ticker}/rolling-beta — time-varying beta vs SPY
+ * (Cov(returns, spy_returns) / Var(spy_returns) over a rolling window),
+ * distinct from the single point-in-time static `Beta` figure elsewhere in the
+ * platform. Computed on demand from HistoricalStore-cached daily bars
+ * (pilots/rolling_beta.py); never fabricated/forward-filled (CONSTRAINT #4).
+ */
+export interface RollingBetaPoint {
+  date: string; // ISO date (YYYY-MM-DD)
+  beta: number;
+}
+
+export interface RollingBeta {
+  symbol: string;
+  window: number;
+  series: RollingBetaPoint[];
+  // Honest explanation when `series` is empty (insufficient cached history,
+  // unknown symbol, no SPY history yet); null on a normal hit.
+  reason: string | null;
+}
+
 /** GET /models — ML model registry row (ml/registry.yaml). */
 export interface ModelRow {
   name: string;

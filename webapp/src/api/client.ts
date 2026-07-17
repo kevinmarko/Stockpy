@@ -36,6 +36,7 @@ import type {
   PortfolioAttribution,
   CurvePoint,
   RealizedPerformance,
+  RollingBeta,
   StrategyMatrix,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
@@ -133,6 +134,10 @@ const liveApi = {
   getForecast: (ticker: string, horizon = 30) =>
     http<ForecastSkill>(
       `/symbols/${encodeURIComponent(ticker)}/forecast?horizon=${horizon}`
+    ),
+  getRollingBeta: (ticker: string, window = 60) =>
+    http<RollingBeta>(
+      `/symbols/${encodeURIComponent(ticker)}/rolling-beta?window=${window}`
     ),
   getModels: () => http<ModelRow[]>("/models"),
   getOptions: () => http<OptionsMatrix>("/options"),
