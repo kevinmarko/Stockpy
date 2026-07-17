@@ -106,6 +106,7 @@ from pilots import (
     pairs,
     performance,
     realized,
+    rolling_beta,
     run_status,
     scoring,
     strategy_matrix as strategy_matrix_reader,
@@ -673,6 +674,24 @@ def get_symbol_forecast(
     a 404 (the symbol is valid; there's simply nothing tracked). A bin with too
     few samples has ``mean_pct_error=null``; never fabricated (CONSTRAINT #4)."""
     return forecast_skill.forecast_skill_view(ticker, horizon_days=horizon)
+
+
+@app.get("/symbols/{ticker}/rolling-beta", dependencies=[Depends(require_read_token)])
+def get_symbol_rolling_beta(
+    ticker: str,
+    window: int = Query(60, ge=5, le=252),
+) -> Dict[str, Any]:
+    """Time-varying beta vs SPY for one ticker (rolling covariance/variance),
+    distinct from the single point-in-time static ``Beta`` column elsewhere in
+    the platform.
+
+    Computed on demand from ``HistoricalStore``-cached daily bars (see
+    ``pilots/rolling_beta.py`` for the full contract) — never imports
+    ``processing_engine``. Returns an empty ``series`` + an honest ``reason``
+    (not a 404 — the symbol is valid, there's simply not enough cached history
+    yet) when bars for the symbol or SPY aren't cached, or the date-aligned
+    overlap is shorter than ``window`` trading days. Never 500s (CONSTRAINT #6)."""
+    return rolling_beta.rolling_beta_view(ticker, window=window)
 
 
 @app.get("/symbols/{ticker}/options", dependencies=[Depends(require_read_token)])

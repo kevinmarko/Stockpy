@@ -47,6 +47,7 @@ import type {
   RiskGateBlockEntry,
   RiskGateBlockLog,
   RealizedTrade,
+  RollingBeta,
   SectorSlice,
   StrategyMatrix,
   StrategyModulesUpdate,
@@ -999,6 +1000,36 @@ function mockForecast(ticker: string, horizon = 30): ForecastSkill {
     completed: Math.floor(rng() * 60) + 20,
     reason: null,
   };
+}
+
+// ---- Rolling beta vs SPY fixture ----
+// A mean-reverting daily walk around a symbol-specific mean beta -- looks like
+// a real drifting-but-anchored beta series, not white noise or a flat line.
+function mockRollingBeta(ticker: string, window = 60): RollingBeta {
+  const sym = ticker.toUpperCase();
+  const win = Math.max(5, Math.min(252, Math.trunc(window) || 60));
+  if (!SYMBOL_UNIVERSE.has(sym)) {
+    return {
+      symbol: sym,
+      window: win,
+      series: [],
+      reason: "No cached price history for this symbol yet.",
+    };
+  }
+  const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0) + win);
+  const meanBeta = 0.5 + rng() * 1.3; // symbol-specific mean, roughly 0.5-1.8
+  const days = 220;
+  const now = Date.now();
+  let beta = meanBeta;
+  const series: { date: string; beta: number }[] = [];
+  for (let i = days; i >= 0; i--) {
+    beta += (rng() - 0.5) * 0.06 + (meanBeta - beta) * 0.08;
+    series.push({
+      date: new Date(now - i * 86400000).toISOString().slice(0, 10),
+      beta: +beta.toFixed(3),
+    });
+  }
+  return { symbol: sym, window: win, series, reason: null };
 }
 
 // ---- ML registry fixture (honest: two un-validated / not-deployable) ----
@@ -1981,6 +2012,10 @@ export const mockApi = {
 
   async getForecast(ticker: string, horizon = 30): Promise<ForecastSkill> {
     return delay(mockForecast(ticker, horizon));
+  },
+
+  async getRollingBeta(ticker: string, window = 60): Promise<RollingBeta> {
+    return delay(mockRollingBeta(ticker, window));
   },
 
   async getModels(): Promise<ModelRow[]> {

@@ -4,11 +4,13 @@ import { api } from "../api/client";
 import type {
   ForecastSkill,
   OptionsDirective,
+  RollingBeta,
   SymbolDetail as SymbolDetailT,
   SymbolOptions,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, MetricBadge } from "../components/ui";
+import { PerfLine } from "../components/charts";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { realizableTheta } from "../optionsHonesty";
@@ -71,6 +73,7 @@ export function SymbolDetail() {
   );
   const forecast = useApi<ForecastSkill>(() => api.getForecast(ticker, 30), [ticker]);
   const options = useApi<SymbolOptions>(() => api.getSymbolOptions(ticker), [ticker]);
+  const rollingBeta = useApi<RollingBeta>(() => api.getRollingBeta(ticker, 60), [ticker]);
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
@@ -229,6 +232,35 @@ export function SymbolDetail() {
           <StatRow label="MAE" value={fmtNum(risk.mae, 2)} />
           <StatRow label="Edge ratio" value={fmtNum(risk.edge_ratio, 2)} />
         </div>
+      </section>
+
+      {/* Rolling beta vs SPY — time-varying, distinct from the static point-in-time beta */}
+      <section className="card card-pad" style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Rolling beta vs SPY</h2>
+        {rollingBeta.loading ? (
+          <Loading lines={2} />
+        ) : !rollingBeta.data || rollingBeta.data.series.length === 0 ? (
+          <div className="empty" style={{ padding: 18 }}>
+            {rollingBeta.data?.reason ?? "No cached price history yet."}
+          </div>
+        ) : (
+          <>
+            <PerfLine
+              data={rollingBeta.data.series.map((p) => ({ date: p.date, value: p.beta }))}
+              valueLabel="Beta"
+              yTickDecimals={1}
+            />
+            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>
+              {rollingBeta.data.window}-day rolling beta — latest:{" "}
+              <span className="num" style={{ fontWeight: 700, color: theme.textSecondary }}>
+                {fmtNum(
+                  rollingBeta.data.series[rollingBeta.data.series.length - 1].beta,
+                  2
+                )}
+              </span>
+            </p>
+          </>
+        )}
       </section>
 
       {/* Forecast reliability + model skill weights */}

@@ -892,6 +892,117 @@ class TestForecastSkill:
         assert isinstance(body["skill_weights"], dict)
 
 
+# ---------------------------------------------------------------------------
+# GET /symbols/{ticker}/rolling-beta
+# ---------------------------------------------------------------------------
+
+
+def _rolling_beta_price_frame(closes):
+    """Minimal OHLCV frame (only Close matters for beta) over business days."""
+    n = len(closes)
+    idx = pd.bdate_range(end=pd.Timestamp.now().normalize(), periods=n)
+    return pd.DataFrame(
+        {"Open": closes, "High": closes, "Low": closes, "Close": closes,
+         "Volume": [1_000_000] * n},
+        index=idx,
+    )
+
+
+class _RollingBetaStore:
+    """Fake HistoricalStore serving canned bars for a fixed set of symbols."""
+
+    def __init__(self, bars_by_symbol):
+        self._bars_by_symbol = bars_by_symbol
+
+    def get_bars(self, symbol, lookback_days=504, provider=None):
+        return self._bars_by_symbol.get(symbol.upper(), pd.DataFrame())
+
+
+class TestRollingBeta:
+    def test_shape_stable_and_default_window(self):
+        """Real, non-trivial beta values from a synthetic correlated series --
+        proves the endpoint wires pilots.rolling_beta through end-to-end, not
+        just an empty honest shape."""
+        import random
+
+        rng = random.Random(1)
+        n = 200
+        spy = [100.0]
+        aapl = [50.0]
+        for _ in range(n - 1):
+            r = rng.uniform(-0.02, 0.02)
+            spy.append(spy[-1] * (1 + r))
+            aapl.append(aapl[-1] * (1 + 1.2 * r + rng.uniform(-0.002, 0.002)))
+        store = _RollingBetaStore({
+            "AAPL": _rolling_beta_price_frame(aapl),
+            "SPY": _rolling_beta_price_frame(spy),
+        })
+        with mock.patch("data.historical_store.HistoricalStore", return_value=store):
+            resp = client.get("/symbols/AAPL/rolling-beta")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {"symbol", "window", "series", "reason"}
+        assert body["symbol"] == "AAPL"
+        assert body["window"] == 60  # default
+        assert body["reason"] is None
+        assert len(body["series"]) > 0
+        first = body["series"][0]
+        assert set(first) == {"date", "beta"}
+        assert isinstance(first["beta"], float)
+
+    def test_window_query_param_is_honored(self):
+        store = _RollingBetaStore({})  # empty -> honest degrade, still checks wiring
+        with mock.patch("data.historical_store.HistoricalStore", return_value=store):
+            resp = client.get("/symbols/AAPL/rolling-beta?window=30")
+        assert resp.status_code == 200
+        assert resp.json()["window"] == 30
+
+    def test_window_below_minimum_is_422(self):
+        resp = client.get("/symbols/AAPL/rolling-beta?window=1")
+        assert resp.status_code == 422
+
+    def test_window_above_maximum_is_422(self):
+        resp = client.get("/symbols/AAPL/rolling-beta?window=9999")
+        assert resp.status_code == 422
+
+    def test_no_cached_bars_is_honest_empty_not_404(self):
+        store = _RollingBetaStore({})  # no bars for AAPL or SPY
+        with mock.patch("data.historical_store.HistoricalStore", return_value=store):
+            resp = client.get("/symbols/AAPL/rolling-beta")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["series"] == []
+        assert body["reason"]
+
+    def test_store_construction_failure_never_500s(self):
+        with mock.patch(
+            "data.historical_store.HistoricalStore",
+            side_effect=RuntimeError("db unavailable"),
+        ):
+            resp = client.get("/symbols/AAPL/rolling-beta")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["series"] == []
+        assert body["reason"]
+
+    def test_read_token_gates_the_endpoint(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/symbols/AAPL/rolling-beta")
+        assert resp.status_code == 401
+
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get(
+                "/symbols/AAPL/rolling-beta",
+                headers={"Authorization": "Bearer read-tok"},
+            )
+        assert resp.status_code == 200
+
+    def test_read_token_unset_is_open(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", ""):
+            resp = client.get("/symbols/AAPL/rolling-beta")
+        assert resp.status_code == 200
+
+
 class TestModelsRegistry:
     def test_reads_registry_rows(self):
         resp = client.get("/models")

@@ -6,8 +6,9 @@
  */
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SymbolDetail } from "./SymbolDetail";
+import { api } from "../api/client";
 
 function renderSymbol(ticker: string) {
   return render(
@@ -63,5 +64,38 @@ describe("SymbolDetail screen (real mock API)", () => {
     const row = screen.getByText("Realizable θ/day").closest(".row") as HTMLElement;
     const value = row.querySelector(".num") as HTMLElement;
     expect(value.textContent).toBe("—");
+  });
+
+  describe("Rolling beta vs SPY section", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("renders a real, non-empty rolling beta series for a known symbol", async () => {
+      renderSymbol("AAPL");
+      await screen.findByRole("heading", { name: "AAPL" });
+      expect(
+        await screen.findByRole("heading", { name: "Rolling beta vs SPY" })
+      ).toBeInTheDocument();
+      // The mock fixture returns a real series for a known symbol -- the
+      // "latest" caption (not the honest-empty placeholder) must render.
+      expect(await screen.findByText(/60-day rolling beta — latest:/)).toBeInTheDocument();
+    });
+
+    it("insufficient cached history renders the honest reason, never a fabricated chart", async () => {
+      vi.spyOn(api, "getRollingBeta").mockResolvedValueOnce({
+        symbol: "AAPL",
+        window: 60,
+        series: [],
+        reason: "Not enough overlapping history to compute a 60-day rolling beta for AAPL yet.",
+      });
+      renderSymbol("AAPL");
+      await screen.findByRole("heading", { name: "AAPL" });
+      expect(
+        await screen.findByText(
+          "Not enough overlapping history to compute a 60-day rolling beta for AAPL yet."
+        )
+      ).toBeInTheDocument();
+      // The "latest" caption belongs to the real-series branch only.
+      expect(screen.queryByText(/60-day rolling beta — latest:/)).not.toBeInTheDocument();
+    });
   });
 });

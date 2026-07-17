@@ -27,12 +27,21 @@ export function PerfLine({
   data,
   benchmark,
   macroBenchmark,
+  valueLabel = "Pilot",
+  yTickDecimals = 0,
 }: {
   data: CurvePoint[];
   benchmark?: CurvePoint[] | null;
   // SEPARATE, explicitly-labeled SPY (broad-market) overlay — distinct from
   // `benchmark` (the strategy's own underlying). Omitted/null renders no line.
   macroBenchmark?: CurvePoint[] | null;
+  // Tooltip name for the primary series — defaults to "Pilot" (the original,
+  // only caller) so existing usages are unaffected. Pass an explicit label for
+  // non-Pilot series (e.g. "Beta") so the tooltip never mislabels the value.
+  valueLabel?: string;
+  // Y-axis tick decimal places — 0 fits a base-100 indexed curve; a series
+  // with a narrow range (e.g. beta, typically 0-2) needs more precision.
+  yTickDecimals?: number;
 }) {
   if (data.length === 0) return null;
   const first = data[0].value;
@@ -92,7 +101,7 @@ export function PerfLine({
             axisLine={false}
             tickLine={false}
             width={34}
-            tickFormatter={(v: number) => v.toFixed(0)}
+            tickFormatter={(v: number) => v.toFixed(yTickDecimals)}
           />
           <Tooltip
             contentStyle={{
@@ -106,7 +115,7 @@ export function PerfLine({
             formatter={(val: number, name: string) => [
               val.toFixed(2),
               name === "value"
-                ? "Pilot"
+                ? valueLabel
                 : name === "macro"
                   ? "S&P 500"
                   : "Benchmark",
