@@ -69,7 +69,9 @@ class TestPilotHeadline:
         }
 
     def test_none_validation_id_all_none(self):
-        pilot = get_pilot("balanced-blend")  # validation_strategy_id is None
+        # news-catalyst is (as of 2026-07) the only Pilot still permanently
+        # validation_strategy_id=None.
+        pilot = get_pilot("news-catalyst")  # validation_strategy_id is None
         assert pilot is not None
         headline = pilot_headline(pilot, reports_dir=FIXTURES_DIR)
         assert headline == {
@@ -134,7 +136,10 @@ class TestPilotPerformance:
         assert perf["range"] == "2Y"
 
     def test_none_validation_id_is_honest_null(self):
-        pilot = get_pilot("balanced-blend")
+        # news-catalyst is (as of 2026-07) the only Pilot still permanently
+        # validation_strategy_id=None -- macro_regime_pit/forecast_direction_arima_hw/
+        # signal_replay_balanced_blend all shipped real backtests this quarter.
+        pilot = get_pilot("news-catalyst")
         perf = pilot_performance(pilot, reports_dir=FIXTURES_DIR)
         assert perf["metrics"] is None
         assert perf["curve"] is None

@@ -66,10 +66,16 @@ honest caveats baked into the catalog below:
   reconstructed from price/volume alone; forward-archiving to
   ``HistoricalStore.news_history`` started 2026-07 (see its own catalog
   entry) but no real backtest is possible for many months yet.
-* ``balanced-blend`` (an ensemble of all 17 signal modules, several needing
-  FRED/Finnhub/a trained-ML walk-forward) has **no** honest single-series
-  backtest, so ``validation_strategy_id=None`` (the UI shows "no backtest series
-  yet").
+* ``balanced-blend`` joins ``signal_replay_balanced_blend`` (2026-07) — the
+  first adapter in ``STRATEGY_REGISTRY`` to replay the REAL
+  ``SignalAggregator``/``SignalRegistry`` weighted-sum code path across
+  history rather than hand-writing a standalone proxy formula. 3 of the 17
+  modules are excluded for the whole backtest window (``news_catalyst``,
+  ``lgbm_ranker``, ``forecast_alignment`` — see its own catalog entry for
+  why each), and 2 of the surviving 14 (``graham_value``,
+  ``dividend_quality``) genuinely degrade to their own real "no data"
+  branches since EDGAR PIT fundamentals can't safely supply the inputs they
+  need. NOT a literal reconstruction of the full 17-module blend.
 * ``coppock_momentum`` exists in ``STRATEGY_REGISTRY`` but has no corresponding
   signal module in ``SIGNAL_WEIGHTS``, so it is deliberately NOT surfaced as a
   Pilot (a Pilot's weights must be real signal-module ids).
@@ -283,8 +289,28 @@ PILOTS: List[Pilot] = [
         ),
         weights=_full_blend_weights(),
         long_only=False,
-        # An ensemble of all modules; no single backtest honestly represents it.
-        validation_strategy_id=None,
+        # Real backtest (2026-07): signal_replay_balanced_blend replays the
+        # REAL SignalAggregator/SignalRegistry weighted-sum code path across
+        # history (not a hand-rolled proxy formula, unlike every other
+        # adapter in scripts/refresh_validations.py). NOT a literal
+        # reconstruction of the full 17-module blend above: 3 modules are
+        # excluded for the whole backtest window --
+        # news_catalyst (live Finnhub calls), lgbm_ranker (always loads the
+        # CURRENT persisted model regardless of historical date),
+        # forecast_alignment (only backtestable within forecast_direction_arima_hw's
+        # own bounded 5yr window -- excluded here to keep one consistent
+        # 14/17-module composition across the whole window). The 14
+        # surviving modules' weights are renormalized proportionally back to
+        # the original total mass. Two of the 14 survivors (graham_value,
+        # dividend_quality) genuinely degrade to their own real "no data"
+        # branches -- EDGAR PIT fundamentals don't safely carry a dollar
+        # book-value-per-share or payout ratio without repeating the
+        # mixed-price-vintage bug _build_deep_value_adapter's docstring
+        # already warns against, so those two fields are fed NaN rather than
+        # a fabricated derivation. See
+        # scripts/refresh_validations.py's _build_signal_replay_adapter
+        # docstring for the full honesty contract.
+        validation_strategy_id="signal_replay_balanced_blend",
     ),
     # ── Dedicated Pilots for the previously catalog-uncovered signal modules ──
     # Every ``weights`` key is a real signal module; the four price-only
