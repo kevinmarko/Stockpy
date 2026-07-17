@@ -4,9 +4,11 @@
 **Default weight:** 25.0  
 **Score range:** `[-1.0, +1.0]`  
 **Regime gate:** Always active  
-**Pilot:** Dividend Income (`dividend-income`, `pilots/catalog.py`) — no backtest curve
-(`validation_strategy_id=None`); the module needs point-in-time dividend-yield/payout-ratio
-history that no free vendor supplies (same honesty constraint as `graham_value`).
+**Pilot:** Dividend Income (`dividend-income`, `pilots/catalog.py`) — backed by a real,
+PBO/DSR-gated backtest (`dividend_yield_edgar_pit` in `scripts/refresh_validations.py`):
+a cross-sectional dividend-yield tilt over real SEC EDGAR point-in-time fundamentals
+(the raw `dividend_yield` PIT field, used directly). As of 2026-07 this backtest is real
+but `deployable=False` — see **Backtest Validation** below.
 
 ---
 
@@ -89,3 +91,38 @@ AND receive a HOLD floor from the overlay — two independent reinforcing mechan
   Robinhood account snapshot, so a long-held AGNC position accumulating real dividend
   income will have its HOLD bias reinforced every cycle, even if the paper price
   fluctuates below cost basis.
+
+---
+
+## Backtest Validation (`dividend_yield_edgar_pit`, 2026-07)
+
+The `dividend_yield_edgar_pit` adapter (same 10 fixed EDGAR-fixture-matched tickers as
+`deep_value_edgar_pit`, long-only top-half equal-weight `dividend_yield` tilt, 1
+variant) had its registry turnover corrected from 0.05 to 0.01, empirically measured at
+0.119%/day averaged over the full 20-year backtest (8 discrete rebalance events total).
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | -0.082 | 0.222 | needs > 0.50 — **still FAILS** |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ |
+| MaxDD | 25.7% | **12.2%** | < 30% ✅ (was already passing) |
+| `deployable` | False | **False (honest)** | |
+
+**Verdict:** MaxDD is fully fixed by the turnover correction alone. Sharpe stays
+honestly below the gate for the same class of reason as its sibling `graham_value` /
+`deep_value_edgar_pit` fix, but manifesting as a *time* gap rather than a *ticker* gap:
+real `dividend_yield` EDGAR point-in-time coverage only exists from 2024-02 onward —
+95.5% of the 20-year backtest window is forced-flat — and JNJ/XOM/GE have zero coverage
+of this field at any date. Restricted to only its genuinely covered ~11-month window,
+the strategy's raw Sharpe is a strong 1.40; the full-series number is a dilution
+artifact of backtest-window length against real, but recent-only, PIT coverage — not
+evidence the underlying yield-quality thesis is weak. A trend overlay (gated on the
+book's own trailing return, not an external SPY series) was tested across 4 lookback
+windows and measurably *hurt* performance every time — an already-thin 228-active-day
+sample means any additional filter removes real signal, not noise — so it was rejected
+with evidence rather than assumed to help.
+
+See [PR #314](https://github.com/kevinmarko/Stockpy/pull/314) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.

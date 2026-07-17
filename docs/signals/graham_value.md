@@ -4,9 +4,12 @@
 **Default weight:** 15.0  
 **Score range:** `[-1.0, +1.0]`  
 **Regime gate:** Always active  
-**Pilot:** Deep Value (`deep-value`, `pilots/catalog.py`) — no backtest curve
-(`validation_strategy_id=None`); Graham Number intrinsic value needs point-in-time EPS/book
-value history that no free vendor supplies (same honesty constraint as `dividend_quality`).
+**Pilot:** Deep Value (`deep-value`, `pilots/catalog.py`) — backed by a real,
+PBO/DSR-gated backtest (`deep_value_edgar_pit` in `scripts/refresh_validations.py`): a
+Price-to-Book "cheapness" tilt over real SEC EDGAR point-in-time fundamentals
+(`value_score = 1/pb_ratio`, deliberately not a literal Graham Number reconstruction —
+see the adapter's own docstring for why). As of 2026-07 this backtest is real but
+`deployable=False` — see **Backtest Validation** below.
 
 ---
 
@@ -109,3 +112,38 @@ Finnhub is no longer a fundamentals source. The DTO normalises any residual stri
 - Weight of 15.0 reflects that pure Graham value is a useful sanity check but not a
   primary driver in a modern multi-factor context where quality and momentum explain more
   return variation than raw cheapness alone.
+
+---
+
+## Backtest Validation (`deep_value_edgar_pit`, 2026-07)
+
+The `deep_value_edgar_pit` adapter (10 fixed EDGAR-fixture-matched tickers, long-only
+top-half equal-weight `1/pb_ratio` tilt, 1 variant) had its registry turnover corrected
+from 0.05 (a high-frequency-strategy number) to 0.01, empirically measured at
+~0.086%/day — this book only reweights when a new quarterly SEC filing moves a name's
+cheapness rank across the top-half median (5 rebalance events in the entire 20-year
+backtest).
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | -0.138 | 0.129 | needs > 0.50 — **still FAILS** |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ |
+| MaxDD | 25.7% | **13.1%** | < 30% ✅ (was already passing) |
+| `deployable` | False | **False (honest)** | |
+
+**Verdict:** the turnover fix alone provably cannot close the Sharpe gap — swept to
+turnover=0 (zero simulated transaction cost) as a diagnostic and even then Sharpe only
+reaches ~0.196. Root cause is a real data-coverage ceiling, not a cost-model or
+overfitting problem: `pb_ratio` EDGAR point-in-time coverage in the live DB only spans
+~2023+ for 7 of the 10 tickers and is entirely absent for T/PG/XOM, forcing zero
+exposure across 18 of the requested 20 backtest years. A SPY trend overlay was tested
+and *proven* to be a pure no-op before being rejected — 100% of the strategy's
+already-scarce active trading days already had SPY above its 200-day SMA, so the gate
+could only ever remove days, never add signal. Within its genuinely PIT-covered window
+alone, gross Sharpe is a respectable 0.622 — this is a backtest-history-length dilution
+artifact, not evidence the underlying Graham/deep-value signal is weak.
+
+See [PR #314](https://github.com/kevinmarko/Stockpy/pull/314) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.

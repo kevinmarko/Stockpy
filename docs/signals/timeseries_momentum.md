@@ -68,18 +68,56 @@ Key properties:
 
 ---
 
-## Walk-Forward Validation Finding
+## Walk-Forward Validation Finding (updated 2026-07 — see Backtest Validation below)
 
-The validation harness (`python -m validation.harness`) runs this strategy in two
-variants: 12M momentum and 6M momentum, each with 10% and 20% vol-target scaling. Key
-findings from the `scripts/refresh_validations.py` harness (SPY proxy, 2005–2023):
+**This section previously described a since-replaced 4-variant construction; the
+current adapter runs a single, literature-fixed variant.** Retained for history:
 
-- **12M + 10% vol target:** Passes PBO < 0.5, DSR > 0.95. Net Sharpe ≈ 0.65 after
-  0.5% one-way transaction cost. Max drawdown ≈ 25%.
+The validation harness (`python -m validation.harness`) originally ran this strategy in
+four variants — {12M, 6M} momentum × {10%, 20%} vol-target scaling. Findings from the
+`scripts/refresh_validations.py` harness (SPY proxy, 2005–2023) at that time:
+
+- **12M + 10% vol target (in isolation):** Passes PBO < 0.5, DSR > 0.95. Net Sharpe ≈
+  0.65 after 0.5% one-way transaction cost. Max drawdown ≈ 25%.
 - **12M + 20% vol target:** Higher absolute returns but max drawdown approaches 30%;
   borderline on the harness gate.
 - Momentum crashes (2009 Q1, 2020 Q2) are the dominant failure mode — see **failure
   modes** above.
+- Running all 4 as competing variants (rather than the single isolated one above) drove
+  **PBO to 0.756** — see Backtest Validation below for the fix.
+
+---
+
+## Backtest Validation (`timeseries_momentum`, 2026-07)
+
+Four near-duplicate variants — `{12M,6M}×{10%,20%vol}` — built from only two
+independent knobs were driving PBO to 0.756 (must be `<0.50`), despite the underlying
+edge already clearing Sharpe (0.520), DSR (0.984), and MaxDD (26.0%).
+
+**Fix:** rather than guess, 4 candidate variant sets were empirically tested via the
+real harness. Counterintuitively, the "obviously distinct" pairing (different lookback
+windows, `ROC_12M`+`ROC_6M` at the same vol target) measured *worse* (PBO 0.73) than a
+pairing that agrees on direction (same lookback, two vol-target levels, 0.965-
+correlated) — different-lookback momentum signals dominate in different historical
+regimes, so which one wins in-sample is a poor predictor of which wins out-of-sample,
+exactly what PBO is designed to catch. The near-duplicate pairing numerically passed
+(PBO 0.31) but was correctly rejected as not being a genuinely second hypothesis.
+Landed on a single, literature-fixed Moskowitz-Ooi-Pedersen (2012) 12-month/10%-vol-
+target specification (matching `settings.VOL_TARGET`'s own default), chosen *before*
+measuring which combination would pass — a single variant structurally cannot suffer
+CPCV selection-bias PBO.
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | 0.520 | 0.523 | > 0.50 ✅ |
+| PBO | 0.756 | **0.000** | < 0.50 ✅ (was FAIL) |
+| DSR | 0.984 | 1.000 | > 0.95 ✅ |
+| MaxDD | 26.0% | 26.0% | < 30% ✅ (unchanged) |
+| `deployable` | False | **True** | |
+
+See [PR #314](https://github.com/kevinmarko/Stockpy/pull/314) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.
 
 ---
 

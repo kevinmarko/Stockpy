@@ -78,3 +78,40 @@ stocks) that a linear scaling would add noise without improving signal quality.
 - For mREITs (e.g. AGNC), RSI extremes are often triggered by Fed rate-decision events
   rather than fundamental deterioration; in those cases the `macro_regime` module's
   NEUTRAL/CREDIT EVENT regime typically prevents a false BUY signal from the RSI bounce.
+
+---
+
+## Backtest Validation (`rsi14_extremes`, 2026-07)
+
+The `rsi14_extremes` adapter (3 variants: `RSI14_OversoldLong`, `RSI14_LongShort`,
+`RSI14_TrendFilteredLong`) had the weakest Sharpe in the entire `STRATEGY_REGISTRY`
+(0.154–0.22 across data snapshots), with DSR also failing (0.92, needs >0.95).
+
+**Investigation (no adapter logic changed — docstring only):** isolating the existing
+`RSI14_TrendFilteredLong` variant alone achieves a much better MaxDD (14.8% vs. 29.1%)
+but its net Sharpe goes **negative** (-0.11) — traced to a real mechanic of
+`validation/harness.py`'s cost model, which charges the turnover-derived cost against
+*every calendar day* regardless of whether a position is held that day. A low-exposure
+trend-filtered variant (active only a small fraction of days) absorbs the same absolute
+cost drag as a variant that trades far more often, structurally penalizing exactly the
+kind of whipsaw-suppression fix that worked for every other MaxDD-failing strategy in
+this series. A commonly-cited faster-exit variant (RSI recovery at 40 instead of 50)
+was also tested and did not help.
+
+| Metric | Value | Gate |
+|---|---|---|
+| Sharpe | 0.154 | needs > 0.50 — **FAILS** |
+| PBO | 0.289 | < 0.50 ✅ |
+| DSR | 0.923 | needs > 0.95 — **FAILS** |
+| MaxDD | 29.1% | < 30% ✅ |
+| `deployable` | **False (honest)** | |
+
+**Verdict:** classic Wilder RSI(14) 30/70 mean-reversion on SPY, net of realistic
+transaction costs, caps out around Sharpe 0.15 across every construction tried — a
+genuinely weak edge, not a fixable variant-selection artifact. Per this repo's honesty
+rules, the 30/70 thresholds themselves were never loosened (e.g. to 20/80) to chase a
+better number — that would defeat the point of testing this specific, well-known rule.
+
+See [PR #314](https://github.com/kevinmarko/Stockpy/pull/314) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.

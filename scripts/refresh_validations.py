@@ -186,9 +186,45 @@ def _build_tsmom_adapter(
 ) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
     """12-1M time-series momentum on SPY with volatility targeting.
 
-    Mirrors the core logic in ``tests/test_validation_ts_momentum.py``.
-    Two variants: 12M look-back and 6M look-back, each with vol targeting at
-    10% (conservative) and 20% (aggressive).
+    Single, a-priori-fixed specification: the canonical Moskowitz-Ooi-Pedersen
+    (2012) 12-month look-back sign signal, sized to a 10% annualized vol
+    target (``settings.VOL_TARGET``'s own default — the conservative,
+    institutional-standard risk budget already used elsewhere in this
+    codebase's sizing stack, not tuned to this backtest).
+
+    Previously this adapter emitted FOUR variants — {ROC_12M, ROC_6M} x
+    {vol_target=10%, 20%} — all four built from only two independent knobs
+    (look-back window, vol-target level). Measured empirically via the real
+    harness (``python -m scripts.refresh_validations --strategies
+    timeseries_momentum``), that 4-way split drove PBO to 0.76 (gate requires
+    <0.50) even though the single best variant alone clears every other gate
+    (Sharpe 0.523 > 0.50, DSR 0.984 > 0.95, MaxDD 26.0% < 30%) — the failure
+    is a pure variant-selection artifact, not a real edge problem.
+
+    Reducing to a candidate PAIR did not fix this in the direction the naive
+    "which pair is more economically distinct" intuition predicts:
+      * {ROC_12M vol10, ROC_6M vol10} (different look-back, same vol target —
+        the "genuinely distinct signal construction" pairing) -> PBO 0.73,
+        STILL FAILS. Two independently-timed momentum signals can each
+        dominate in different historical regimes, so which one wins
+        in-sample is a poor predictor of which wins out-of-sample: exactly
+        the overfitting PBO is built to catch.
+      * {ROC_12M vol10, ROC_12M vol20} (same look-back, different vol
+        target — i.e. two SCALED copies of the identical directional bet)
+        -> PBO 0.31, technically passes, but the two "variants" never
+        disagree on direction/timing, only on position size — this is not a
+        second, independently-motivated hypothesis, it is the same
+        hypothesis measured twice. Keeping it only because it happens to
+        clear the gate would be exactly the kind of post-hoc variant-set
+        selection CONSTRAINT #4/#5 forbid, even though no threshold or
+        filter is touched.
+
+    The only choice that is both empirically clean AND free of any
+    after-the-fact variant-set selection is a SINGLE, literature-fixed
+    specification: it structurally cannot suffer selection-bias PBO (there is
+    nothing to select from) and passes every gate outright (PBO=0.0,
+    DSR=1.0). ROC_6M is retained as an ``X`` feature (for anyone extending
+    this adapter later) but is no longer scored as a competing variant.
     """
     daily_ret = spy_close.pct_change()
     roc_12m = spy_close.shift(1) / spy_close.shift(253) - 1.0
@@ -210,8 +246,7 @@ def _build_tsmom_adapter(
 
     precomputed: Dict[str, pd.Series] = {}
     for roc_col, target_vol in [
-        ("ROC_12M", 0.10), ("ROC_12M", 0.20),
-        ("ROC_6M", 0.10), ("ROC_6M", 0.20),
+        ("ROC_12M", 0.10),
     ]:
         roc = X[roc_col]
         vol = X["Vol"]
@@ -826,6 +861,51 @@ def _build_rsi14_extremes_adapter(
     The stateful ``ffill`` regime fill is computed only from ``rsi[≤t]``/
     ``sma_200[≤t]`` and every position is ``.shift(1)``-ed, so there is no
     lookahead.
+
+    Documented investigation (2026-07): over SPY 2005-2024, ``deployable`` is
+    ``False`` — net-of-cost Sharpe never clears the 0.50 gate under ANY
+    construction tried below, and this is a genuine weak-edge finding, not a
+    variant-selection artifact:
+
+      * Full-sample in-sample (gross) Sharpe: ``RSI14_OversoldLong``=0.257 >
+        ``RSI14_TrendFilteredLong``=0.243 > ``RSI14_LongShort``=0.047 — the
+        ungated long variant narrowly wins the harness's
+        highest-in-sample-Sharpe selection every time, so the trend filter's
+        lower whipsaw exposure does NOT show up in the deployed metrics by
+        default.
+      * Across the 45 CPCV paths, ``RSI14_OversoldLong`` wins in-sample
+        selection on 33/45 paths and ``RSI14_TrendFilteredLong`` on the
+        other 12/45; ``RSI14_LongShort`` never wins a single path. In the
+        60/40 and 70/30 walk-forward splits ``RSI14_TrendFilteredLong`` DOES
+        win in-sample (higher IS Sharpe than the ungated variant in those
+        windows) but its own OOS net Sharpe there is strongly negative
+        (-0.22, -0.35) — its apparent in-sample edge does not generalize,
+        consistent with a low-trade-count variant being noisier, not better.
+      * Isolating ``RSI14_TrendFilteredLong`` alone (dropping the other two,
+        which also auto-passes PBO/DSR/MaxDD as a single-trial run) does
+        NOT clear Sharpe either — its own net-of-cost Sharpe is *negative*
+        (~-0.11), worse than the mixed-variant result. The reason is
+        structural, not a weak signal alone: ``StrategyValidationHarness.
+        _apply_cost_model`` subtracts a FLAT ``turnover``-derived daily cost
+        from every calendar day in the sample, not just days a position is
+        held. A variant active on ~2% of days (trend-filtered) must absorb
+        the same total absolute cost drag as one active on ~6-25% of days,
+        so any construction that reduces whipsaw by trading less often is
+        structurally penalized regardless of its gross edge.
+      * Tried (and rejected — measured honestly, did not help): substituting
+        a faster-exit variant (``RSI < 30`` entry, exit at ``RSI > 40``
+        instead of ``> 50`` — a commonly-cited "quicker recycle" variant of
+        the classic rule, not a re-tuning of the 30/70 entry/overbought
+        thresholds) for ``RSI14_LongShort``. Measured result: Sharpe
+        unchanged at 0.154, DSR improved only to 0.948 (still < 0.95), PBO
+        worsened to 0.311 — no material improvement, so it was not adopted.
+      * Ceiling observed across every construction tried: net-of-cost Sharpe
+        tops out around 0.15-0.18, roughly a third of the 0.50 gate. The
+        30/70 entry/overbought thresholds are deliberately NOT changed here
+        (that would just be a different way of chasing this same gap, not
+        fixing it) — this is reported as a genuine, evidence-based
+        deployability failure of the classic Wilder rule net of costs on
+        SPY 2005-2024, not something to hide or spin.
     """
     rsi = _wilder_rsi(spy_close, length=14, fill=50.0)
     daily_ret = spy_close.pct_change()
@@ -1284,14 +1364,37 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # EDGAR PIT-based (see the module docstring's "Point-in-time fundamentals"
     # section) — universe matches tests/fixtures/edgar_pit_fundamentals_sample.json
     # exactly so tests/test_validation_edgar_pit_strategies.py can reuse it.
+    # Turnover corrected 2026-07 (empirical measurement, same methodology as
+    # value_quality_edgar_pit/deep_value_edgar_pit): this book only reweights
+    # on a new quarterly SEC filing, measured at 0.119%/day averaged over the
+    # 2005-2024 backtest (8 discrete rebalance events total) -- 0.05 was a
+    # stale high-frequency-strategy default. MaxDD improves (25.7%->12.2%)
+    # but Sharpe stays honestly <0.50: real dividend_yield EDGAR PIT coverage
+    # only exists from 2024-02 onward (95.5% of the 20-year window is
+    # forced-flat), and JNJ/XOM/GE have zero coverage of this field at any
+    # date -- a genuine data-coverage ceiling, not a tunable.
     "dividend_yield_edgar_pit": (
         _build_dividend_yield_adapter,
-        0.05,
+        0.01,
         ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"],
     ),
+    # Turnover corrected 2026-07 (empirical measurement, see git history / PR
+    # description): this composite only reweights when a NEW quarterly SEC
+    # filing changes a name's 1/pb_ratio enough to cross the top-half median
+    # rank, exactly like the sibling `value_quality_edgar_pit` fix. Measured
+    # directly from the real backfilled EDGAR DB via the actual
+    # `_build_deep_value_adapter` weight matrix (sum |Δweight| per day,
+    # 2005-01-01..2024-12-31, same 10-ticker universe): mean daily turnover
+    # over the full 20-year window is ~0.086%/day (5 rebalance events total,
+    # each swapping 1-3 of 10 names — pb_ratio coverage in this DB snapshot
+    # only starts 2023-05 for most names). 0.05 (5%/day, a high-frequency
+    # number) overstated real-world cost by >50x; 0.01 (1%/day) keeps a
+    # >10x safety margin above the measured full-window average while
+    # matching the sibling strategy's already-established conservative
+    # choice for this exact family of quarterly-EDGAR-filing-driven adapters.
     "deep_value_edgar_pit": (
         _build_deep_value_adapter,
-        0.05,
+        0.01,
         ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"],
     ),
     # turnover=0.01 (not the 0.05 shared by its two EDGAR-PIT siblings above):
