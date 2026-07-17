@@ -15,7 +15,7 @@ the installed ``mcp`` SDK version returns the original function
 unmodified (verified by direct inspection), so every tool is called here
 as a plain Python function — no MCP transport/protocol layer is involved.
 
-Two genuine bugs were found and fixed while reading this file to write
+Three genuine bugs were found and fixed while reading this file to write
 these tests (not speculative — verified by direct execution before the
 fix):
   1. ``configure_alerts``/``send_test_alert`` imported from
@@ -35,9 +35,22 @@ fix):
      retired"). On any other machine this would fail outright or write
      to a nonsensical location. Fixed to use
      ``settings.OUTPUT_DIR / "artifacts"``, matching this codebase's
-     established output-directory convention (e.g.
-     ``get_execution_queue``'s ``output/execution_queue.json``).
+     established output-directory convention.
      ``TestArtifactDirectoryRegression`` in this file pins the fix.
+  3. ``get_execution_queue`` read a schema
+     (``orders``/``shares``/``price``/``gate_reason``) the queue builder
+     has NEVER emitted — ``execution.queue_builder.build_execution_queue``
+     writes ``intents``/``qty``/``target_notional``/``gate_reasons`` (a
+     list). ``queue.get("orders", [queue])`` silently fell through to
+     iterating the payload DICT itself as one fake order, rendering a row
+     of literal ``"?"``s for every real queue this tool was ever asked
+     about. It also hardcoded the relative path
+     ``"output/execution_queue.json"`` instead of ``settings.OUTPUT_DIR``
+     (cwd-dependent). Fixed to read the real schema and the correct path;
+     ``gui/robinhood_execution_panel.py::read_execution_queue`` (which
+     already read this correctly) is the reference this fix matches, and
+     ``TestGetExecutionQueue::test_parity_with_gui_reader_on_the_same_payload``
+     pins agreement between the two readers on a real builder payload.
 
 Testing approach
 -----------------
@@ -111,8 +124,10 @@ Coverage
   mocked ``validation.pit_fundamentals`` wiring and output formatting.
 * ``get_model_registry_status``: list-shaped and dict-shaped registries,
   staleness threshold, missing file.
-* ``get_execution_queue``: missing file, empty queue, list- and
-  dict-wrapped shapes, gated/blocked rendering.
+* ``get_execution_queue``: missing file, empty (real) queue, a real
+  builder-produced payload rendering correct columns, gate-reasons list
+  joining, ``settings.OUTPUT_DIR`` (not cwd) resolution, and parity with
+  ``gui.robinhood_execution_panel.read_execution_queue`` on the same file.
 * ``get_trade_journal``: symbol filter, win-rate/P&L summary.
 * ``configure_alerts`` / ``send_test_alert``: partial-update preserves
   existing config, event toggles, per-channel result rendering — also
@@ -1914,40 +1929,138 @@ class TestGetModelRegistryStatus:
 
 
 class TestGetExecutionQueue:
+    """Bug B fix: the tool used to read a schema
+    (``orders``/``shares``/``price``/``gate_reason``) the builder has NEVER
+    emitted -- ``execution.queue_builder.build_execution_queue`` writes
+    ``intents``/``qty``/``target_notional``/``gate_reasons`` (a list). The old
+    reader's ``queue.get("orders", [queue])`` fell through to iterating the
+    payload DICT itself as one fake order, rendering a row of literal "?"s on
+    every real queue. These tests exercise the REAL schema; the old
+    list-shaped/``orders``-wrapped fixtures below were testing the bug's own
+    behavior, not the actual contract, and have been replaced."""
+
+    def _real_payload(self, **overrides):
+        """A real payload shape via the actual builder, so these tests can't
+        drift from what build_execution_queue truly emits."""
+        from datetime import datetime, timezone
+        from execution.queue_builder import build_execution_queue
+
+        class _Rec:
+            def __init__(self, symbol, action, conviction, pct=0.0):
+                self.symbol = symbol
+                self.action = action
+                self.conviction = conviction
+                self.suggested_position_pct = pct
+                self.strategy = "advisory"
+                self.rationale = "Momentum broke down below the 200-day; forecast turned negative."
+
+        class _Pos:
+            def __init__(self, symbol, quantity, current_price, market_value):
+                self.symbol = symbol
+                self.quantity = quantity
+                self.current_price = current_price
+                self.market_value = market_value
+                self.average_cost = current_price
+                self.unrealized_pl = 0.0
+
+        class _Snap:
+            def __init__(self, positions, total_equity):
+                self.positions = positions
+                self.total_equity = total_equity
+                self.buying_power = total_equity
+
+        class _RR:
+            def __init__(self, recs, snap):
+                self.recommendations = recs
+                self.snapshot = snap
+
+        snap = _Snap({"NVDA": _Pos("NVDA", 10, 500.0, 5000.0)}, 100_000.0)
+        _SENTINEL = object()
+        recs = overrides.pop("recs", _SENTINEL)
+        if recs is _SENTINEL:
+            recs = [_Rec("NVDA", "SELL", 0.9), _Rec("AAPL", "BUY", 0.9, pct=0.05)]
+        return build_execution_queue(
+            _RR(recs, snap), mode="review",
+            now=datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc),
+        )
+
     def test_missing_file(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
         assert "No execution queue file found" in srv.get_execution_queue()
 
-    def test_empty_queue(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "output").mkdir()
-        (tmp_path / "output" / "execution_queue.json").write_text("[]", encoding="utf-8")
+    def test_empty_queue_is_a_real_empty_payload_not_a_bare_list(self, monkeypatch, tmp_path):
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        payload = self._real_payload(recs=[])
+        assert payload["intents"] == []  # confirms the real builder's empty shape
+        (tmp_path / "execution_queue.json").write_text(json.dumps(payload), encoding="utf-8")
 
         assert "Execution queue is empty" in srv.get_execution_queue()
 
-    def test_list_shaped_queue_renders_gate_status(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "output").mkdir()
-        orders = [
-            {"symbol": "AAPL", "side": "buy", "shares": 10, "price": 150.0, "allow_place": True, "gate_reason": "ok"},
-            {"symbol": "TSLA", "side": "sell", "shares": 5, "price": 200.0, "allow_place": False, "reason": "kill switch active"},
-        ]
-        (tmp_path / "output" / "execution_queue.json").write_text(json.dumps(orders), encoding="utf-8")
+    def test_real_queue_renders_correct_columns_never_question_marks(self, monkeypatch, tmp_path):
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        payload = self._real_payload()
+        (tmp_path / "execution_queue.json").write_text(json.dumps(payload), encoding="utf-8")
 
         result = srv.get_execution_queue()
 
-        assert "AAPL" in result and "✅" in result
-        assert "TSLA" in result and "🚫" in result and "kill switch active" in result
+        # The old bug rendered one row of "?" cells for the whole payload
+        # (iterating the dict as a fake order) -- neither real symbol appeared.
+        assert "NVDA" in result and "AAPL" in result
+        assert "| `?` |" not in result
+        # Real fields, not the old nonexistent shares/price/gate_reason keys.
+        assert "$5,000.00" in result  # NVDA's target_notional (held market value)
+        assert "Momentum broke down below the 200-day" in result  # Bug D's real rationale
+        for intent in payload["intents"]:
+            assert intent["symbol"] in result
 
-    def test_dict_wrapped_queue_shape(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "output").mkdir()
-        payload = {"orders": [{"symbol": "AAPL", "side": "buy", "shares": 1, "price": 1.0, "allow_place": True}]}
-        (tmp_path / "output" / "execution_queue.json").write_text(json.dumps(payload), encoding="utf-8")
+    def test_gate_reasons_list_is_joined_not_a_python_repr(self, monkeypatch, tmp_path):
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        payload = self._real_payload()
+        (tmp_path / "execution_queue.json").write_text(json.dumps(payload), encoding="utf-8")
 
         result = srv.get_execution_queue()
 
-        assert "AAPL" in result
+        # gate_reasons is a LIST in the real schema (plural) -- must render as
+        # joined text, never Python's str(['a', 'b']) list repr.
+        assert "['" not in result and '["' not in result
+
+    def test_output_dir_honored_not_a_hardcoded_relative_path(self, monkeypatch, tmp_path):
+        """Regression: the old tool hardcoded the relative string
+        "output/execution_queue.json", so it was silently cwd-dependent. It
+        must read settings.OUTPUT_DIR regardless of the process cwd."""
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        monkeypatch.chdir(tmp_path.parent)  # cwd is deliberately NOT tmp_path
+        payload = self._real_payload()
+        (tmp_path / "execution_queue.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        assert "NVDA" in srv.get_execution_queue()
+
+    def test_parity_with_gui_reader_on_the_same_payload(self, monkeypatch, tmp_path):
+        """Anti-drift guard (tests/test_state_snapshot_parity.py's pattern,
+        applied to the two execution-queue readers): a real builder payload
+        fed to BOTH the MCP tool and the GUI's read_execution_queue must
+        agree on the intent set. gui.robinhood_execution_panel.py already
+        reads this schema correctly -- it's the reference this fix matches."""
+        from settings import settings
+        from gui.robinhood_execution_panel import read_execution_queue
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        payload = self._real_payload()
+        queue_path = tmp_path / "execution_queue.json"
+        queue_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        mcp_result = srv.get_execution_queue()
+        gui_snapshot = read_execution_queue(queue_path)
+
+        assert gui_snapshot is not None
+        for intent in gui_snapshot.intents:
+            assert intent.symbol in mcp_result
+            assert intent.rationale in mcp_result
 
 
 # ---------------------------------------------------------------------------
