@@ -1872,8 +1872,12 @@ def get_options_directive(symbol: str) -> str:
         def _fmt(key, money=False, pct=False):
             nv = _num(directive.get(key))
             if nv is None:
-                # Non-numeric fields (Strategy, Action, Trend_Bias) pass through raw.
+                # Non-numeric fields (Strategy, Action, Trend_Bias) pass through raw;
+                # a NaN float (e.g. Realizable_Daily_Theta on a non-credit strategy,
+                # honestly "not computed" per CONSTRAINT #4) must not render as "nan".
                 raw = directive.get(key)
+                if isinstance(raw, float) and math.isnan(raw):
+                    return "N/A"
                 return str(raw) if raw not in (None, "") else "N/A"
             if money:
                 return f"${nv:,.2f}"

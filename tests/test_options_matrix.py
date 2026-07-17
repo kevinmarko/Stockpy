@@ -105,6 +105,30 @@ def test_low_ivr_bullish_yields_call_debit_spread():
     integrity = validate_directive_integrity(directive)
     assert integrity["ok"], integrity["issues"]
 
+    # Realizable_Daily_Theta is only ever computed for the CREDIT branches
+    # (Put/Call Credit Spread, Iron Condor). A debit spread never touches
+    # that key, so it must stay NaN — not a fabricated 0.0 (CONSTRAINT #4).
+    assert directive["Realizable_Daily_Theta"] != directive["Realizable_Daily_Theta"]
+
+
+def test_call_debit_spread_directive_carries_nan_not_zero_theta_in_full_row():
+    """End-to-end: build_premium_directive's hydrated row must not silently
+    coerce the engine's honest NaN theta into a fabricated 0.0 for any
+    non-credit strategy (debit spreads, Covered Call, Cash/Wait)."""
+    bars = _synthetic_bars(252, seed=11)
+    row = build_premium_directive(
+        "TEST",
+        bars,
+        spot_price=float(bars["Close"].iloc[-1]),
+        is_stale=False,
+        target_dte=30,
+        macro_dto=_MacroProxy(),
+        vrp=None,
+        ivr_buy_threshold=100.0,  # force the LOW-IVR regime (never a credit strategy)
+    )
+    assert row["Strategy"] not in {"Put Credit Spread", "Call Credit Spread", "Iron Condor"}
+    assert np.isnan(row["Realizable_Daily_Theta"])
+
 
 # --------------------------------------------------------------------------- #
 # Regime gate: VIX > 30 vetoes premium selling even with high IVR             #
