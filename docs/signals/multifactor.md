@@ -123,3 +123,31 @@ Microcap tickers:
   is equivalent to an effective multiplier that ranges from −15 to +15 pts. This was
   rescaled from a proposed 0.15 relative weight that would have been numerically inert
   at this codebase's scoring scale.
+
+---
+
+## Backtest Validation (`multifactor_lowvol_size`, 2026-07)
+
+The `multifactor_lowvol_size` adapter (Low-Vol + Size sleeve only) was previously a
+fully-invested, always-long book with no drawdown control — MaxDD 34.0%, failing the
+harness's `<30%` gate despite an already-passing Sharpe (0.669) and PBO (0.000).
+
+**Fix:** `SPY` was added to the adapter's `STRATEGY_REGISTRY` universe as a
+benchmark-only trend-filter input (excluded from the tradeable book and from `y`,
+mirroring `relative_strength_xsec`'s existing SPY-splitting pattern). The book now
+de-risks to cash whenever `SPY < SPY.rolling(200).mean()` (Faber 2007) — the same fixed
+rule already load-bearing in `macd_trend`'s passing `MACD_TrendFilter` variant. Degrades
+gracefully (byte-identical to before) when SPY is absent from the ticker set, so offline
+test fixtures are unaffected.
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | 0.617 | 0.621 | > 0.50 ✅ |
+| PBO | 0.000 | 0.000 | < 0.50 ✅ |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ |
+| MaxDD | 34.0% | **21.1%** | < 30% ✅ (was FAIL) |
+| `deployable` | False | **True** | |
+
+See [PR #310](https://github.com/kevinmarko/Stockpy/pull/310) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.

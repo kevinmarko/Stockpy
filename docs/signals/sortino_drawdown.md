@@ -76,3 +76,31 @@ deep current drawdown tells you about present capital damage.
 - This module's 10.0 weight makes it a tiebreaker / risk-quality overlay rather than a
   primary driver. In a balanced signal environment (all modules near zero), a high Sortino
   and low drawdown can tilt the final score from HOLD to BUY.
+
+---
+
+## Backtest Validation (`sortino_drawdown`, 2026-07)
+
+The `sortino_drawdown` adapter's own 504-day (2-year) trailing drawdown gate reacted
+too slowly — by the time a 2-year trailing drawdown hits -25%, most of the drawdown has
+already happened. MaxDD 38.5%, failing the harness's `<30%` gate despite already-passing
+Sharpe (0.608) and PBO (0.156).
+
+**Fix:** a Faber (2007) SMA-200 trend filter was ANDed into all 3 existing variants'
+long conditions (`SortinoDD_HighSortino`, `SortinoDD_DrawdownGate`,
+`SortinoDD_Combined`), on top of — not replacing — the existing Sortino/drawdown logic.
+A 200-day moving average reacts to a sustained downtrend within weeks, closing the
+structural blind spot of the 2-year trailing-drawdown gate. Variant names/count
+preserved unchanged (a pre-existing test suite pins those exact keys).
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | 0.608 | 0.668 | > 0.50 ✅ |
+| PBO | 0.156 | 0.178 | < 0.50 ✅ |
+| DSR | 0.984 | 0.982 | > 0.95 ✅ |
+| MaxDD | 38.5% | **26.6%** | < 30% ✅ (was FAIL) |
+| `deployable` | False | **True** | |
+
+See [PR #310](https://github.com/kevinmarko/Stockpy/pull/310) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.

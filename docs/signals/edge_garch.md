@@ -94,3 +94,33 @@ Volatility Risk Premium (VRP = realized_vol / implied_vol). The `edge_garch` sig
 firing negatively (extreme GARCH vol) should correlate with a high IVR reading that
 redirects the options engine toward debit strategies (hedged plays) rather than
 premium-selling (naked short vol). See `docs/signals/news_catalyst.md` for the IVR gate.
+
+---
+
+## Backtest Validation (`garch_vol_target`, 2026-07)
+
+The `garch_vol_target` adapter was a pure vol-targeting book (`exposure = min(1,
+target_vol/vol)`) with no drawdown control beyond the vol cap itself — in a
+calm-but-declining market, exposure sits near 1.0 because the EWMA vol forecast only
+rises *after* a drawdown is already underway. MaxDD 34.3%, failing the harness's
+`<30%` gate; PBO 0.867 (uncomfortably close to the `<0.50` line) from 4 near-duplicate
+vol-target variants.
+
+**Fix (two levers):** (1) a Faber (2007) SMA-200 trend gate applied multiplicatively to
+every variant, forcing exposure to 0 whenever `close < SMA_200` regardless of the vol
+forecast; (2) collapsed from 4 to 2 variants after finding `GARCH_GJR_Downside12` was a
+near-duplicate of `GARCH_VolTarget_10pct` in return-space (r=0.999 — a downside-weighted
+EWMA barely moves a daily vol estimate for a broad index like SPY) and `GARCH_InvVol`
+independently failed the CPCV PBO gate on its own merits.
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | 0.776 | 0.767 | > 0.50 ✅ |
+| PBO | 0.867 | **0.422** | < 0.50 ✅ (was FAIL) |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ |
+| MaxDD | 34.3% | **18.8%** | < 30% ✅ (was FAIL) |
+| `deployable` | False | **True** | |
+
+See [PR #310](https://github.com/kevinmarko/Stockpy/pull/310) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.
