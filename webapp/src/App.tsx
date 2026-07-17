@@ -15,6 +15,7 @@ import { SymbolDetail } from "./screens/SymbolDetail";
 import { Activity } from "./screens/Activity";
 import { Models } from "./screens/Models";
 import { PairsRadar } from "./screens/PairsRadar";
+import { OptionsMatrix } from "./screens/OptionsMatrix";
 import { Settings } from "./screens/Settings";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
@@ -30,7 +31,8 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   { to: "/compare", label: "Compare", ico: "⚖️", match: (p) => p.startsWith("/compare") },
   { to: "/models", label: "Models", ico: "🧠", match: (p) => p.startsWith("/models") },
   { to: "/pairs", label: "Pairs radar", ico: "🔗", match: (p) => p.startsWith("/pairs") },
-  // 8th item: Sidebar (desktop) renders all of NAV_ITEMS, so this shows up
+  { to: "/options", label: "Options", ico: "🎯", match: (p) => p.startsWith("/options") },
+  // Last item: Sidebar (desktop) renders all of NAV_ITEMS, so this shows up
   // there automatically. BottomNav (mobile) only ever renders
   // NAV_ITEMS.slice(0, 3) -- deliberately NOT reordering to force this in,
   // since that would evict Activity. On mobile the fixed gear button below
@@ -171,6 +173,7 @@ export default function App() {
           <Route path="/activity" element={<Activity />} />
           <Route path="/models" element={<Models />} />
           <Route path="/pairs" element={<PairsRadar />} />
+          <Route path="/options" element={<OptionsMatrix />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
