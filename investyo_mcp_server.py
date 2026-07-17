@@ -1562,31 +1562,64 @@ def get_execution_queue() -> str:
     Reads the latest execution_queue.json and returns the gated order intents
     with their risk-gate verdicts.
     """
-    queue_path = "output/execution_queue.json"
-    if not os.path.exists(queue_path):
-        return "No execution queue file found at output/execution_queue.json. The pipeline may not have generated orders yet."
+    from settings import settings
+
+    queue_path = settings.OUTPUT_DIR / "execution_queue.json"
+    if not queue_path.exists():
+        return (
+            f"No execution queue file found at {queue_path}. "
+            "The pipeline may not have generated orders yet."
+        )
 
     try:
-        with open(queue_path, "r") as f:
-            queue = json.load(f)
+        payload = json.loads(queue_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return f"Execution queue at {queue_path} is not a valid queue payload."
 
-        if not queue:
-            return "Execution queue is empty (no orders pending)."
+        # The builder emits `intents` (execution/queue_builder.py:build_execution_queue),
+        # never `orders` -- reading the wrong key here used to fall through to
+        # `[payload]`, iterating the payload DICT as a single fake order (every
+        # field missing, rendered as literal "?"s). Read the real schema.
+        intents = payload.get("intents") or []
+        if not intents:
+            return (
+                f"Execution queue is empty (0 intents, mode={payload.get('mode', '?')}). "
+                "No orders pending."
+            )
 
-        lines = ["# Execution Queue\n"]
+        mode = payload.get("mode", "?")
+        generated_at = payload.get("generated_at", "?")
+        kill_switch = "🔴 ACTIVE" if payload.get("kill_switch_active") else "🟢 inactive"
+        n_placeable = payload.get("n_placeable", sum(1 for i in intents if i.get("allow_place")))
 
-        orders = queue if isinstance(queue, list) else queue.get("orders", [queue])
-        lines.append("| Symbol | Side | Shares | Price | Gated | Reason |")
-        lines.append("|--------|------|--------|-------|-------|--------|")
+        lines = [
+            "# Execution Queue",
+            f"Mode: `{mode}` · Generated: {generated_at} · Kill switch: {kill_switch} · "
+            f"{n_placeable}/{len(intents)} placeable\n",
+            "| Symbol | Action | Side | Qty | Target Notional | Gated | Rationale | Gate Reasons |",
+            "|--------|--------|------|-----|------------------|-------|-----------|--------------|",
+        ]
 
-        for order in orders:
-            sym = order.get("symbol", "?")
-            side = order.get("side", "?")
-            shares = order.get("shares", "?")
-            price = order.get("price", "?")
-            allowed = "✅" if order.get("allow_place", False) else "🚫"
-            reason = order.get("gate_reason", order.get("reason", "N/A"))
-            lines.append(f"| `{sym}` | {side} | {shares} | {price} | {allowed} | {reason} |")
+        for intent in intents:
+            if not isinstance(intent, dict):
+                continue
+            sym = intent.get("symbol", "?")
+            action = intent.get("action", "?")
+            side = intent.get("side", "?")
+            # qty is null for a notional-sized BUY/partial-trim (resolved
+            # downstream from a live quote) -- render that honestly, not "?".
+            qty = intent.get("qty")
+            qty_str = f"{qty:g}" if isinstance(qty, (int, float)) else "resolved at review"
+            target_notional = intent.get("target_notional")
+            notional_str = f"${target_notional:,.2f}" if isinstance(target_notional, (int, float)) else "—"
+            allowed = "✅" if intent.get("allow_place", False) else "🚫"
+            rationale = str(intent.get("rationale", "")) or "—"
+            gate_reasons = intent.get("gate_reasons") or []
+            reasons_str = "; ".join(str(r) for r in gate_reasons) if gate_reasons else "—"
+            lines.append(
+                f"| `{sym}` | {action} | {side} | {qty_str} | {notional_str} | "
+                f"{allowed} | {rationale} | {reasons_str} |"
+            )
 
         return "\n".join(lines)
     except Exception as e:
