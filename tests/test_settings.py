@@ -166,3 +166,95 @@ def test_leaked_digest_constant_is_a_sha256():
     # Guard: the stored constant is a 64-char hex digest, not a raw key.
     assert len(LEAKED_FRED_KEY_SHA256) == 64
     assert all(c in "0123456789abcdef" for c in LEAKED_FRED_KEY_SHA256)
+
+
+# =============================================================================
+# Shared interval-validation policy (Piece 2 -- live daemon timer setter)
+# =============================================================================
+#
+# desktop/daemon_runtime.py's OrchestratorDaemon.set_interval,
+# api/control_api.py's PUT /interval body, and api/pilots_api.py's PUT
+# /automation/schedule/interval body all validate against THIS module's
+# validate_interval_seconds/INTERVAL_MIN_SECONDS/INTERVAL_MAX_SECONDS rather
+# than each defining their own rule -- these tests pin the policy itself
+# (each call site's own test suite pins that it actually delegates here,
+# not that the rule is correct).
+
+
+class TestIntervalValidationPolicy:
+    def test_min_and_max_constants(self):
+        from settings import INTERVAL_MAX_SECONDS, INTERVAL_MIN_SECONDS
+
+        assert INTERVAL_MIN_SECONDS == 60
+        assert INTERVAL_MAX_SECONDS == 86400
+
+    def test_zero_is_always_valid(self):
+        from settings import validate_interval_seconds
+
+        assert validate_interval_seconds(0) == 0
+
+    @pytest.mark.parametrize("value", [60, 300, 3600, 86400])
+    def test_in_range_values_pass_through_unchanged(self, value):
+        from settings import validate_interval_seconds
+
+        assert validate_interval_seconds(value) == value
+
+    @pytest.mark.parametrize("value", [-1, 1, 59, 86401])
+    def test_out_of_range_nonzero_values_raise(self, value):
+        from settings import validate_interval_seconds
+
+        with pytest.raises(ValueError):
+            validate_interval_seconds(value)
+
+    def test_error_message_names_the_bounds(self):
+        """Not load-bearing for behavior, but a caller (e.g. a pydantic
+        field_validator) surfaces this message verbatim to the operator --
+        it should be self-explanatory, not a bare 'invalid value'."""
+        from settings import validate_interval_seconds
+
+        with pytest.raises(ValueError, match=r"\[60, 86400\]"):
+            validate_interval_seconds(59)
+
+
+class TestIntervalValidationAntiDrift:
+    """The three real call sites (desktop.daemon_runtime.OrchestratorDaemon.
+    set_interval, api.control_api.IntervalUpdateRequest, api.pilots_api.
+    IntervalUpdateRequest) cannot import each other, so nothing at the type
+    level forces them to agree -- this test drives all three with the same
+    inputs and asserts they accept/reject identically. A future edit to any
+    one call site that stops delegating to settings.validate_interval_seconds
+    (e.g. reintroducing a bespoke ge/le Field bound) would show up here as a
+    disagreement, not as a silent drift discovered in production."""
+
+    @pytest.mark.parametrize("value", [-1, 0, 1, 59, 60, 86400, 86401])
+    def test_all_three_validators_agree(self, value):
+        import api.control_api as control_api
+        import api.pilots_api as pilots_api
+        from desktop.daemon_runtime import OrchestratorDaemon
+
+        results = {}
+
+        try:
+            control_api.IntervalUpdateRequest(interval_seconds=value)
+            results["control_api"] = True
+        except Exception:
+            results["control_api"] = False
+
+        try:
+            pilots_api.IntervalUpdateRequest(interval_seconds=value)
+            results["pilots_api"] = True
+        except Exception:
+            results["pilots_api"] = False
+
+        try:
+            d = OrchestratorDaemon()
+            d.set_interval(value)
+            results["daemon_runtime"] = True
+        except ValueError:
+            results["daemon_runtime"] = False
+        finally:
+            d.shutdown(timeout=2.0)
+
+        assert results["control_api"] == results["pilots_api"] == results["daemon_runtime"], (
+            f"validators disagree for interval_seconds={value}: {results}"
+        )

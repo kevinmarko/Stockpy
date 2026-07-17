@@ -248,3 +248,69 @@ def get_latest_run(timeout: float = 2.0) -> Optional[dict]:
     here identically.
     """
     return _get_json("/run/latest", timeout)
+
+
+@dataclass(frozen=True)
+class IntervalResponse:
+    """Result of a :func:`set_interval` call.
+
+    ``error`` is a stable, code-like tag callers can branch on without
+    string-parsing the human-readable detail message: one of
+    "invalid_interval", "unauthorized", "command_disabled", "unavailable",
+    "network_error", or "unexpected_response". ``None`` when ``ok`` is True.
+    """
+
+    ok: bool
+    interval_seconds: Optional[int]
+    error: Optional[str]
+
+
+def set_interval(interval_seconds: int, timeout: float = 5.0) -> IntervalResponse:
+    """PUT /interval — change the daemon's internal timer cadence LIVE.
+
+    The first PUT / body-sending function in this module (every other
+    function here is a bodyless GET or POST). Maps each documented status
+    code to an :class:`IntervalResponse`, mirroring :func:`trigger_run`'s
+    non-raising / stable-tag contract exactly:
+
+    - 200 -> ok=True, interval_seconds=<echoed by the Control API>, error=None
+    - 422 -> ok=False, error="invalid_interval" (the Control API's pydantic
+      validator rejected an out-of-[min, max]-and-nonzero value before it
+      ever reached the daemon — see ``settings.validate_interval_seconds``)
+    - 401 -> ok=False, error="unauthorized"
+    - 403 -> ok=False, error="command_disabled"
+    - 503 -> ok=False, error="unavailable"
+    - any other status / connection failure / timeout / malformed JSON ->
+      ok=False, error="network_error" (or "unexpected_response" for a
+      recognized-but-undocumented status code)
+
+    Never raises under any of these branches.
+    """
+    url = _base_url() + "/interval"
+    body = json.dumps({"interval_seconds": interval_seconds}).encode("utf-8")
+    headers = {**_auth_headers(), "Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=body, method="PUT", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            if resp.status == 200:
+                data = json.loads(raw)
+                return IntervalResponse(
+                    ok=True, interval_seconds=data.get("interval_seconds"), error=None,
+                )
+            logger.debug("daemon_client: PUT /interval -> unexpected status %s", resp.status)
+            return IntervalResponse(ok=False, interval_seconds=None, error="unexpected_response")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 422:
+            return IntervalResponse(ok=False, interval_seconds=None, error="invalid_interval")
+        if exc.code == 401:
+            return IntervalResponse(ok=False, interval_seconds=None, error="unauthorized")
+        if exc.code == 403:
+            return IntervalResponse(ok=False, interval_seconds=None, error="command_disabled")
+        if exc.code == 503:
+            return IntervalResponse(ok=False, interval_seconds=None, error="unavailable")
+        logger.debug("daemon_client: PUT /interval -> HTTP %s", exc.code)
+        return IntervalResponse(ok=False, interval_seconds=None, error="unexpected_response")
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        logger.debug("daemon_client: PUT /interval failed: %s", exc)
+        return IntervalResponse(ok=False, interval_seconds=None, error="network_error")
