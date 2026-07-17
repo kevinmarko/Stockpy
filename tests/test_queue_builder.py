@@ -268,6 +268,89 @@ class TestPayloadSchema:
         assert qb.emit_execution_queue(rr, mode="review", output_dir=tmp_path, now=_RTH) is None
 
 
+class TestRationaleField:
+    """Bug D: the queue's `rationale` field must carry the real 'why' a reviewer
+    reads before approving an order — NOT the strategy label. Historically
+    `rationale` was `rec.strategy or rec.rationale`, and a truthy label
+    short-circuited the `or`, discarding the engine's actual reasoning."""
+
+    def test_rationale_carries_the_reasoning_not_the_label(self, no_cap):
+        rec = _Rec("NVDA", "SELL", 0.9)
+        rec.strategy = "advisory"
+        rec.rationale = "Momentum broke down below the 200-day; forecast turned negative."
+        p = qb.build_execution_queue(_rr([rec]), mode="review", now=_RTH)
+        intent = p["intents"][0]
+        # The REGRESSION: rationale must be the paragraph, never the label.
+        assert intent["rationale"] == (
+            "Momentum broke down below the 200-day; forecast turned negative."
+        )
+        assert intent["rationale"] != "advisory"
+
+    def test_strategy_label_preserved_on_its_own_key(self, no_cap):
+        rec = _Rec("NVDA", "SELL", 0.9)
+        rec.strategy = "advisory"
+        rec.rationale = "some real reasoning"
+        intent = qb.build_execution_queue(_rr([rec]), mode="review", now=_RTH)["intents"][0]
+        # The label isn't lost — it moves to `strategy` (strategy_id is NOT in
+        # the emitted dict, so `rationale` was its only prior home).
+        assert intent["strategy"] == "advisory"
+
+    def test_falls_back_to_label_when_no_rationale(self, no_cap):
+        rec = _Rec("NVDA", "SELL", 0.9)
+        rec.strategy = "Follow:trend-following"
+        rec.rationale = ""  # a follow force-exit or a bare intent
+        intent = qb.build_execution_queue(_rr([rec]), mode="review", now=_RTH)["intents"][0]
+        # Never empty — a missing rationale falls back to the label rather than
+        # rendering a blank "why".
+        assert intent["rationale"] == "Follow:trend-following"
+
+    def test_verbose_rationale_truncates_on_a_word_boundary_with_a_marker(self, no_cap):
+        # A multi-section RATIONALE_VERBOSITY=verbose rationale can exceed the cap;
+        # the cut must be visible (…) and on a word boundary, never a silent
+        # mid-word chop (a silently truncated reason is worse than a short one).
+        rec = _Rec("NVDA", "SELL", 0.9)
+        rec.strategy = "advisory"
+        rec.rationale = "alpha bravo charlie delta echo foxtrot " * 60  # ~2280 chars
+        intent = qb.build_execution_queue(_rr([rec]), mode="review", now=_RTH)["intents"][0]
+        r = intent["rationale"]
+        assert len(r) <= 1200
+        assert r.endswith("…")
+        # Word boundary: the char before the ellipsis is a real word char, and
+        # the truncation didn't split a token (every token is a known word).
+        body = r[:-1].rstrip()
+        assert all(tok in {"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"}
+                   for tok in body.split())
+
+    def test_follow_intent_rationale_is_an_honest_ranking(self, no_cap):
+        # A follow intent's rationale must read as a RANKING built from real
+        # numbers (score/weight/target), never a fabricated thesis. Build a real
+        # follow intent through pilots.mirror and confirm it survives to the queue.
+        from pilots.mirror import _follow_rationale
+
+        class _P:
+            id = "trend-following"
+            name = "Trend Follower"
+
+        text = _follow_rationale(
+            _P(), rank=2, total=20, score=0.82, weight=0.25, target_notional=2500.0
+        )
+        assert "ranked #2 of 20" in text
+        assert "score 0.82" in text          # a REAL number, not invented
+        assert "25.0% target weight" in text
+        assert "$2,500 target" in text
+        # Never implies discretionary judgment.
+        assert "believe" not in text.lower()
+        assert "think" not in text.lower()
+
+        # And it flows through to the emitted queue unchanged (below the cap).
+        rec = _Rec("NVDA", "BUY", 0.9)
+        rec.suggested_position_pct = 0.05
+        rec.strategy = "Follow:trend-following"
+        rec.rationale = text
+        intent = qb.build_execution_queue(_rr([rec]), mode="review", now=_RTH)["intents"][0]
+        assert intent["rationale"] == text
+
+
 # ===========================================================================
 # gate_intent unit
 # ===========================================================================

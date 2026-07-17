@@ -138,6 +138,20 @@ class TestBuildFollowIntents:
         assert all(i.action == "BUY" for i in intents)
         assert all(i.strategy == f"Follow:{pilot.id}" for i in intents)
 
+    def test_rationale_is_an_honest_ranking_not_a_bare_label(self, pilot, account, snapshot):
+        """Bug D: a follow intent's rationale must be a per-name ranking built
+        from real numbers, not the strategy label (which lives on `.strategy`)."""
+        intents = build_follow_intents(pilot, _AMOUNT, account, snapshot=snapshot)
+        assert intents
+        for i in intents:
+            # The old behavior set rationale == the bare label; it must not.
+            assert i.rationale != i.strategy
+            assert "ranked #" in i.rationale
+            assert "target weight" in i.rationale
+            # Reads as a ranking, never a fabricated discretionary thesis.
+            assert "believe" not in i.rationale.lower()
+            assert "think" not in i.rationale.lower()
+
     def test_conviction_equals_normalized_weight(self, pilot, account, snapshot):
         """Decision D3: honest per-name conviction == the Pilot's target weight."""
         intents = build_follow_intents(pilot, _AMOUNT, account, snapshot=snapshot)

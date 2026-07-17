@@ -79,10 +79,41 @@ CONFIG: Dict[str, Any] = {
 
 _QUEUE_FILENAME = "execution_queue.json"
 
+# Max length of the per-intent ``rationale`` string in the emitted queue. Sized
+# for the operator-facing "why" a reviewer reads before approving an order —
+# NOT a terse label. A standard advisory rationale is ~120 chars, but
+# RATIONALE_VERBOSITY=verbose (engine/advisory._build_rationale) appends four
+# multi-part [A]/[B]/[C]/[D] sections that run 800-1500+ chars; 1200 keeps the
+# common verbose case whole while bounding a pathological one. When a rationale
+# does exceed this, ``_truncate_rationale`` cuts on a WORD boundary with an
+# explicit "…" marker — never a silent mid-sentence chop (a silently truncated
+# reason is worse than a short one).
+_RATIONALE_MAX_CHARS = 1200
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _truncate_rationale(text: str, limit: int = _RATIONALE_MAX_CHARS) -> str:
+    """Truncate ``text`` to at most ``limit`` chars on a WORD boundary, marking
+    a real cut with a trailing "…". Never chops mid-word/mid-sentence silently.
+
+    A cut always leaves visible evidence (the ellipsis) so a reader can tell the
+    reason is incomplete rather than mistaking a truncated fragment for the whole
+    thing (CONSTRAINT #4 in spirit — don't present a partial value as complete).
+    """
+    if len(text) <= limit:
+        return text
+    # Reserve one char for the ellipsis, then back up to the last whitespace so
+    # we never split a word. Fall back to a hard slice if there's no space
+    # (a single 1200-char token — pathological, but must still terminate).
+    head = text[: limit - 1]
+    cut = head.rfind(" ")
+    if cut > 0:
+        head = head[:cut]
+    return head.rstrip() + "…"
+
 
 def _f(x: Any, default: float = 0.0) -> float:
     """Coerce to a finite float; return ``default`` on failure / NaN / inf."""
@@ -350,7 +381,22 @@ def _intent_dict(
         "gate_allowed": gate_allowed,
         "gate_reasons": gate_reasons,
         "allow_place": allow_place,
-        "rationale": str(getattr(rec, "strategy", "") or getattr(rec, "rationale", ""))[:240],
+        # The operator-facing "why" a reviewer reads before approving. This USED
+        # to read `rec.strategy or rec.rationale` — but an advisory Recommendation
+        # carries BOTH a `strategy` label AND a `rationale` paragraph, and the
+        # truthy label short-circuited the `or`, so the real reasoning (the
+        # engine's plain-English "why", also written to state_snapshot.json) was
+        # silently discarded at the queue boundary and every reviewed order showed
+        # a bare label. Now `rationale` carries the actual reasoning; the owner
+        # label moves to its own `strategy` key so nothing is lost (`strategy_id`
+        # is NOT in this dict — `rationale` was the label's only home). Fall back
+        # to the label only when there's genuinely no rationale text, never empty.
+        "rationale": _truncate_rationale(
+            str(getattr(rec, "rationale", "") or getattr(rec, "strategy", ""))
+        ),
+        # The strategy/owner label (advisory: "advisory"; a follow: "Follow:<id>").
+        # Additive key — readers that don't know it (gui _coerce_intent) ignore it.
+        "strategy": str(getattr(rec, "strategy", "")),
     }
     if use_limit:
         # Only present on LIMIT intents — absent for MARKET so buffer==0 output
