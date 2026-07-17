@@ -731,5 +731,124 @@ class TestIntervalFallbackToSettings(BaseDaemonEntrypointTest):
         self.assertEqual(interval, 42)
 
 
+class TestPipelineModeThreading(unittest.TestCase):
+    """Exercises the real ``OrchestratorDaemon.trigger_run(mode=...)`` path:
+    ``mode`` is threaded into ``main_orchestrator._main_body(mode=...)`` and
+    recorded on the ``RunRecord``; ``status()`` exposes a most-recent-first
+    ``run_history``. The heavy pipeline body is stubbed with an async recorder,
+    so no real data fetch / engines run.
+    """
+
+    def _run_and_wait(self, daemon, *, mode_kwarg, recorder_holder):
+        import time
+        from desktop.daemon_runtime import RunState
+
+        if mode_kwarg is _SENTINEL:
+            result = daemon.trigger_run()
+        else:
+            result = daemon.trigger_run(mode=mode_kwarg)
+        run_id = result.run_id
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            rec = daemon.get_run(run_id)
+            if rec is not None and rec.state != RunState.RUNNING:
+                return run_id, rec
+            time.sleep(0.02)
+        self.fail("run did not complete within timeout")
+
+    def _make_daemon_with_recorder(self):
+        import main_orchestrator
+        from desktop.daemon_runtime import OrchestratorDaemon
+
+        recorded = {}
+
+        async def _fake_main_body(dry_run, strict=False, *, engines=None,
+                                  data_engine=None, mode="full"):
+            recorded["mode"] = mode
+
+        daemon = OrchestratorDaemon(interval_seconds=0)
+        patcher = patch.object(main_orchestrator, "_main_body", _fake_main_body)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return daemon, recorded
+
+    def test_mode_data_threaded_into_main_body_and_run_record(self):
+        daemon, recorded = self._make_daemon_with_recorder()
+        run_id, rec = self._run_and_wait(daemon, mode_kwarg="data", recorder_holder=recorded)
+        self.assertEqual(recorded["mode"], "data")
+        self.assertEqual(rec.mode, "data")
+
+    def test_mode_metrics_threaded_through(self):
+        daemon, recorded = self._make_daemon_with_recorder()
+        run_id, rec = self._run_and_wait(daemon, mode_kwarg="metrics", recorder_holder=recorded)
+        self.assertEqual(recorded["mode"], "metrics")
+        self.assertEqual(rec.mode, "metrics")
+
+    def test_default_mode_is_full(self):
+        daemon, recorded = self._make_daemon_with_recorder()
+        run_id, rec = self._run_and_wait(daemon, mode_kwarg=_SENTINEL, recorder_holder=recorded)
+        self.assertEqual(recorded["mode"], "full")
+        self.assertEqual(rec.mode, "full")
+
+    def test_status_run_history_most_recent_first_with_mode(self):
+        daemon, recorded = self._make_daemon_with_recorder()
+        self._run_and_wait(daemon, mode_kwarg="data", recorder_holder=recorded)
+        self._run_and_wait(daemon, mode_kwarg="metrics", recorder_holder=recorded)
+        history = daemon.status()["run_history"]
+        self.assertEqual(len(history), 2)
+        # Most-recent-first: the "metrics" run was triggered last.
+        self.assertEqual(history[0].mode, "metrics")
+        self.assertEqual(history[1].mode, "data")
+
+
+_SENTINEL = object()
+
+
+class TestMainBodyStepSelection(unittest.TestCase):
+    """Directly proves ``main_orchestrator._main_body_impl`` selects the right
+    pipeline steps per ``mode``. The AsyncPipelineRunner is faked to capture the
+    step list and no-op its ``run`` (no real data fetch / engines / broker)."""
+
+    def _capture_steps_for_mode(self, mode):
+        import asyncio
+        import main_orchestrator
+        import pipeline.runner
+
+        captured = {}
+
+        class _FakeRunner:
+            def __init__(self, steps):
+                captured["steps"] = [type(s).__name__ for s in steps]
+
+            async def run(self, ctx, progress):
+                return None
+
+        with patch.object(pipeline.runner, "AsyncPipelineRunner", _FakeRunner):
+            asyncio.run(
+                main_orchestrator._main_body_impl(False, mode=mode, progress=None)
+            )
+        return captured["steps"]
+
+    def test_data_mode_only_fetch_step(self):
+        self.assertEqual(self._capture_steps_for_mode("data"), ["AsyncDataFetchStep"])
+
+    def test_metrics_mode_fetch_plus_pipeline(self):
+        self.assertEqual(
+            self._capture_steps_for_mode("metrics"),
+            ["AsyncDataFetchStep", "RunPipelineStep"],
+        )
+
+    def test_full_mode_all_four_steps(self):
+        self.assertEqual(
+            self._capture_steps_for_mode("full"),
+            [
+                "AsyncDataFetchStep",
+                "RunPipelineStep",
+                "BrokerExecutionStep",
+                "StateSnapshotStep",
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

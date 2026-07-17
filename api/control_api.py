@@ -238,6 +238,10 @@ def _serialize_run(record: Optional[RunRecord]) -> Optional[Dict[str, Any]]:
     return {
         "run_id": record.run_id,
         "state": record.state.value,
+        # "full" | "data" | "metrics" -- getattr-guarded so a RunRecord from a
+        # pre-mode daemon build (should never happen post-deploy, but defensive)
+        # still serializes without KeyError, defaulting to the historical "full".
+        "mode": getattr(record, "mode", "full"),
         "started_at": record.started_at.isoformat() if record.started_at else None,
         "finished_at": record.finished_at.isoformat() if record.finished_at else None,
         "duration_seconds": record.duration_seconds,
@@ -278,6 +282,12 @@ def get_status() -> Dict[str, Any]:
         "engines_warm": daemon_status.get("engines_warm"),
         "started_at": started_at.isoformat() if started_at else None,
         "last_run": _serialize_run(daemon_status.get("last_run")),
+        # Bounded run history, most-recent-first (see the frozen GET /status
+        # contract). daemon.status() supplies the RunRecord list; a fake/legacy
+        # daemon status dict without the key degrades to [] (never fabricated).
+        "run_history": [
+            _serialize_run(r) for r in (daemon_status.get("run_history") or [])
+        ],
         "kill_switch_active": ks_active,
         "kill_switch_reason": ks.reason() if ks_active else None,
         "advisory_only": settings.ADVISORY_ONLY,
@@ -323,6 +333,57 @@ def trigger_run() -> JSONResponse:
         status_code=202,
         content={"run_id": result.run_id, "state": "queued"},
     )
+
+
+def _trigger_pipeline_mode(mode: str) -> JSONResponse:
+    """Shared body for the mode-scoped pipeline triggers.
+
+    Mirrors ``POST /run``'s posture exactly: auth is enforced by the endpoint
+    dependency FIRST, then the daemon/kill-switch checks. 423 when the kill
+    switch is active, 409 when a run is already in flight, 202 + run_id + mode
+    otherwise.
+    """
+    daemon = get_daemon()
+    if daemon is None:
+        raise HTTPException(status_code=503, detail="Daemon not available.")
+
+    ks = GlobalKillSwitch()
+    if ks.is_active():
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "detail": "Kill switch active — pipeline triggering is paused.",
+                "kill_switch_reason": ks.reason() or "",
+            },
+        )
+
+    result = daemon.trigger_run(reason="manual", mode=mode)
+
+    if result.outcome == TriggerOutcome.ALREADY_RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "detail": "A run is already in flight.",
+                "run_id": result.run_id,
+            },
+        )
+
+    return JSONResponse(
+        status_code=202,
+        content={"run_id": result.run_id, "state": "queued", "mode": mode},
+    )
+
+
+@app.post("/pipeline/data", dependencies=[Depends(require_command_token)])
+def trigger_pipeline_data() -> JSONResponse:
+    """Trigger a data-fetch-only pipeline sub-run (``mode="data"``)."""
+    return _trigger_pipeline_mode("data")
+
+
+@app.post("/pipeline/metrics", dependencies=[Depends(require_command_token)])
+def trigger_pipeline_metrics() -> JSONResponse:
+    """Trigger a data-fetch + indicator/forecast/signal sub-run (``mode="metrics"``)."""
+    return _trigger_pipeline_mode("metrics")
 
 
 @app.get("/run/{run_id}/status", dependencies=[Depends(require_read_token)])
