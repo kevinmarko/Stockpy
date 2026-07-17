@@ -18,6 +18,7 @@ import type {
   BrokerageConnectResult,
   BrokerageDisconnectResult,
   BrokerageStatus,
+  ControlStatus,
   Follow,
   FollowResult,
   ForecastSkill,
@@ -39,6 +40,7 @@ import type {
   CurvePoint,
   RealizedPerformance,
   RollingBeta,
+  RunRecord,
   StrategyMatrix,
   StrategyHealthRow,
   StrategyModulesUpdate,
@@ -166,6 +168,23 @@ const liveApi = {
     }),
   getAutomationStatus: () => http<AutomationStatus>("/automation/status"),
   getAutomationSchedule: () => http<AutomationSchedule>("/automation/schedule"),
+  // ---- Control API (orchestrator daemon, port 8601) — the Pipeline Dashboard's
+  // live daemon status + stage-scoped run triggers. A non-2xx (409 already
+  // running / 423 kill-switch-paused / 401/403 auth) throws ApiError the normal
+  // way; the screen branches on ApiError.status to render each honestly.
+  getControlStatus: () => http<ControlStatus>("/status"),
+  getControlRunStatus: (runId: string) =>
+    http<RunRecord>(`/run/${encodeURIComponent(runId)}/status`),
+  postControlRun: () =>
+    http<{ run_id: string; state: string }>("/run", { method: "POST" }),
+  postControlPipelineData: () =>
+    http<{ run_id: string; state: string; mode: string }>("/pipeline/data", {
+      method: "POST",
+    }),
+  postControlPipelineMetrics: () =>
+    http<{ run_id: string; state: string; mode: string }>("/pipeline/metrics", {
+      method: "POST",
+    }),
   /**
    * POST /automation/run. Mirrors gui/daemon_client.py's own non-raising
    * TriggerResponse contract: a documented RUNTIME outcome (queued, already
