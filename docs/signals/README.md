@@ -26,31 +26,43 @@ honestly reconstructed from price/volume alone, so the Pilot stays curveless
 these honestly fail the PBO/DSR/Sharpe/MaxDD gate on real data; the gate is never
 loosened to force a green check.
 
+The **Backtest** column's parenthetical `deployable=` status reflects the 2026-07
+strategy-validation-fixes series ([PR #310](https://github.com/kevinmarko/Stockpy/pull/310),
+[#311](https://github.com/kevinmarko/Stockpy/pull/311),
+[#314](https://github.com/kevinmarko/Stockpy/pull/314)); see
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full
+rollup and each linked `docs/signals/<name>.md`'s own **Backtest Validation** section
+for the before/after metrics and reasoning.
+
 | Module | Weight | File | Description | Pilot | Backtest |
 |--------|--------|------|--------------|-------|----------|
 | [`macro_regime`](macro_regime.md) | 45.0 | `signals/macro_regime.py` | Rules-based macro regime gate (RISK ON / NEUTRAL / RECESSION / CREDIT EVENT) + sector rotation | Regime Navigator (`regime-navigator`) | — (macro DTO, not price-only) |
-| [`edge_garch`](edge_garch.md) | 35.0 | `signals/edge_garch.py` | Mathematical edge ratio × GJR-GARCH tail-risk vol | Edge & Volatility (`edge-garch`) | `garch_vol_target` (covers the GARCH-veto half only) |
-| [`dividend_quality`](dividend_quality.md) | 25.0 | `signals/dividend_quality.py` | Dividend sustainability (payout ratio gate) | Dividend Income (`dividend-income`) | — (point-in-time fundamentals) |
-| [`rsi_extremes`](rsi_extremes.md) | 20.0 | `signals/rsi_extremes.py` | RSI-14 overbought / oversold | RSI Reversal (`rsi-reversal`) | `rsi14_extremes` |
-| [`graham_value`](graham_value.md) | 15.0 | `signals/graham_value.py` | Graham Number intrinsic value vs current price | Deep Value (`deep-value`) | — (point-in-time fundamentals) |
-| [`macd_momentum`](macd_momentum.md) | 15.0 | `signals/macd_momentum.py` | MACD crossover, gated by Aroon chop filter | MACD Trend (`macd-trend`, shared with `aroon_trend`) | `macd_trend` |
-| [`aroon_trend`](aroon_trend.md) | 15.0 | `signals/aroon_trend.py` | Aroon Oscillator trend direction + chop filter | MACD Trend (`macd-trend`, shared with `macd_momentum`) | `macd_trend` |
-| [`timeseries_momentum`](timeseries_momentum.md) | 15.0 | `signals/timeseries_momentum.py` | Moskowitz/Ooi/Pedersen 12-month TSMOM with vol scaling | Trend Follower (`trend-following`) | `timeseries_momentum` |
-| [`cross_sectional_momentum`](cross_sectional_momentum.md) | 15.0 | `signals/cross_sectional_momentum.py` | Jegadeesh-Titman 12−1M cross-sectional rank | Momentum Leaders (`cross-sectional-momentum`) | `cross_sectional_momentum` |
-| [`multifactor`](multifactor.md) | 15.0 | `signals/multifactor.py` | Fama-French Value + Quality + Low-Vol + Size composite | Multifactor (`multifactor`) | `multifactor_lowvol_size` (Low-Vol + Size sleeve only — see `docs/signals/multifactor.md`) |
+| [`edge_garch`](edge_garch.md) | 35.0 | `signals/edge_garch.py` | Mathematical edge ratio × GJR-GARCH tail-risk vol | Edge & Volatility (`edge-garch`) | `garch_vol_target` (covers the GARCH-veto half only; `deployable=True`) |
+| [`dividend_quality`](dividend_quality.md) | 25.0 | `signals/dividend_quality.py` | Dividend sustainability (payout ratio gate) | Dividend Income (`dividend-income`) | `dividend_yield_edgar_pit` (real SEC EDGAR PIT backtest; `deployable=False` — data-coverage ceiling, see doc) |
+| [`rsi_extremes`](rsi_extremes.md) | 20.0 | `signals/rsi_extremes.py` | RSI-14 overbought / oversold | RSI Reversal (`rsi-reversal`) | `rsi14_extremes` (`deployable=False` — genuinely weak net-of-cost edge, see doc) |
+| [`graham_value`](graham_value.md) | 15.0 | `signals/graham_value.py` | Graham Number intrinsic value vs current price | Deep Value (`deep-value`) | `deep_value_edgar_pit` (real SEC EDGAR PIT backtest; `deployable=False` — data-coverage ceiling, see doc) |
+| [`macd_momentum`](macd_momentum.md) | 15.0 | `signals/macd_momentum.py` | MACD crossover, gated by Aroon chop filter | MACD Trend (`macd-trend`, shared with `aroon_trend`) | `macd_trend` (`deployable=True`) |
+| [`aroon_trend`](aroon_trend.md) | 15.0 | `signals/aroon_trend.py` | Aroon Oscillator trend direction + chop filter | MACD Trend (`macd-trend`, shared with `macd_momentum`) | `macd_trend` (`deployable=True`) |
+| [`timeseries_momentum`](timeseries_momentum.md) | 15.0 | `signals/timeseries_momentum.py` | Moskowitz/Ooi/Pedersen 12-month TSMOM with vol scaling | Trend Follower (`trend-following`) | `timeseries_momentum` (`deployable=True`, 2026-07 fix) |
+| [`cross_sectional_momentum`](cross_sectional_momentum.md) | 15.0 | `signals/cross_sectional_momentum.py` | Jegadeesh-Titman 12−1M cross-sectional rank | Momentum Leaders (`cross-sectional-momentum`) | `cross_sectional_momentum` (`deployable=True`, 2026-07 fix) |
+| [`multifactor`](multifactor.md) | 15.0 | `signals/multifactor.py` | Fama-French Value + Quality + Low-Vol + Size composite | Multifactor (`multifactor`) | `multifactor_lowvol_size` (Low-Vol + Size sleeve only — see `docs/signals/multifactor.md`; `deployable=True`, 2026-07 fix) |
 | [`forecast_alignment`](forecast_alignment.md) | 10.0 | `signals/forecast_alignment.py` | ARIMA/MC/HW/CNN-LSTM ensemble directional consensus | Forecast Aligned (`forecast-aligned`) | — (external forecast target, not price-only) |
-| [`relative_strength`](relative_strength.md) | 10.0 | `signals/relative_strength.py` | Stock return vs SPY 12-month excess return | Relative Strength (`relative-strength`) | `relative_strength_xsec` |
-| [`sortino_drawdown`](sortino_drawdown.md) | 10.0 | `signals/sortino_drawdown.py` | Sortino Ratio quality reward + max drawdown penalty | Risk-Adjusted (`risk-adjusted`) | `sortino_drawdown` |
-| [`rsi2_mean_reversion`](rsi2_mean_reversion.md) | 10.0 | `signals/rsi2_mean_reversion.py` | Connors RSI(2) long-only mean reversion (regime-gated) | Dip Buyer (`dip-buyer`) | `rsi2_mean_reversion` |
+| [`relative_strength`](relative_strength.md) | 10.0 | `signals/relative_strength.py` | Stock return vs SPY 12-month excess return | Relative Strength (`relative-strength`) | `relative_strength_xsec` (`deployable=True`, 2026-07 fix) |
+| [`sortino_drawdown`](sortino_drawdown.md) | 10.0 | `signals/sortino_drawdown.py` | Sortino Ratio quality reward + max drawdown penalty | Risk-Adjusted (`risk-adjusted`) | `sortino_drawdown` (`deployable=True`, 2026-07 fix) |
+| [`rsi2_mean_reversion`](rsi2_mean_reversion.md) | 10.0 | `signals/rsi2_mean_reversion.py` | Connors RSI(2) long-only mean reversion (regime-gated) | Dip Buyer (`dip-buyer`) | `rsi2_mean_reversion` (`deployable=False` — genuinely weak net-of-cost edge, see doc) |
 | [`news_catalyst`](news_catalyst.md) | 10.0 | `signals/news_catalyst.py` | FinBERT / lexicon headline sentiment (earnings-proximity gated) | News Catalyst (`news-catalyst`) | — (point-in-time news, not price-only) |
 | [`lgbm_ranker`](lgbm_ranker.md) | 0.10 | `signals/lgbm_ranker.py` | LightGBM cross-sectional rank (dormant — contributes 0.0 until a model is trained) | — (dormant; no Pilot until it passes the model DSR gate) | — |
 | [`regime_multiplier`](regime_multiplier.md) | **0.0** | `signals/regime_multiplier.py` | HMM risk-on probability carried as Kelly-size scalar only | — (a sizing multiplier, not alpha — structurally can't back a Pilot) | — |
 
 Also see the ensemble/blend Pilots, which combine several modules rather than joining
 one: `Multifactor` above is single-module; `Balanced Blend` (`balanced-blend`, every
-module at its default weight) and `Value & Quality` (`value-quality`, `graham_value` +
-`dividend_quality` + `multifactor`) are curated multi-module blends with no
-single-module row here — see `pilots/catalog.py`.
+module at its default weight) has no single-module row here; `Value & Quality`
+(`value-quality`, `graham_value` + `dividend_quality` + `multifactor`) is likewise a
+curated multi-module blend, but its Pilot IS joined to a narrower honest proxy backtest
+— `value_quality_edgar_pit` (Value(1/PB) + Quality(ROE+OpMargin) over the same EDGAR PIT
+universe as `graham_value`/`dividend_quality` above, `deployable=False` — same
+data-coverage ceiling class, see `docs/VALIDATION_STRATEGY_FIX_LOG.md`) — see
+`pilots/catalog.py`.
 
 ---
 

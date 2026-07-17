@@ -30,6 +30,7 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
 | `docs/GO_LIVE_CHECKLIST.md` | Pre-live checklist (all automatable items covered by `preflight_check.py`) |
 | `docs/FEATURE_TIER_HISTORY.md` | Detailed dated changelog for every Tier/Task/Scope feature shipped since 2026-06 (ML Stage 4, GUI tab build-outs, Tier 1-9 advisory/LLM features, AI Control Center, Prompt Registry) — full backstory, test surface, and Gravity step numbers per subsystem |
 | `docs/test_coverage_analysis.md` | Test-coverage audit — suite inventory, module-level gap table, and prioritized roadmap for improving test coverage |
+| `docs/VALIDATION_STRATEGY_FIX_LOG.md` | Dated rollup of `STRATEGY_REGISTRY` deployability-gate fix attempts (`scripts/refresh_validations.py`) — before/after PBO/DSR/Sharpe/MaxDD per strategy, the causal lever used, and (for strategies that stayed honestly `deployable=False`) the measured, evidence-backed reason why. Cross-references the fixing PR and each strategy's `docs/signals/<name>.md` **Backtest Validation** section |
 
 ## Commands
 
@@ -268,6 +269,7 @@ Flat, modular "Engine" architecture using dependency injection — no package di
  - Gate deployable status of trading strategies on PBO < 0.5 AND DSR > 0.95 in verification audits.
 
 - Deployability gate for strategy harness strictly enforces PBO < 0.5, DSR > 0.95, net net-of-cost Sharpe > 0.5, and Max Drawdown < 30%.
+- **Documenting a deployability-gate fix or honest FAIL**: when a `STRATEGY_REGISTRY` adapter is changed to move a strategy toward (or honestly away from) `deployable=True`, add a **Backtest Validation** section (before/after PBO/DSR/Sharpe/MaxDD, the causal lever used, and — for a strategy that stays `deployable=False` — the measured, evidence-backed reason) to the corresponding `docs/signals/<name>.md` (where a live signal module exists) and append an entry to `docs/VALIDATION_STRATEGY_FIX_LOG.md`. See that log's 2026-07 entry for the full worked example (12 strategies, `garch_vol_target`/`multifactor_lowvol_size`/`cross_sectional_momentum`/etc.) and the reusable fix levers it documents (Faber SMA-200 trend gate, empirically-measured turnover correction, variant-count reduction backed by measurement).
 - **Options-selling strategies carry an additional tail-scenario stress gate** (`validation/stress_scenarios.py`): they are deployable only if max drawdown is < 50% AND the account survives (no blow-up) in EVERY dated shock window (OCT_2008, FEB_2018, MAR_2020, AUG_2024). Construct the harness with `is_options_selling=True` and a `stress_returns_fn(start, end) -> daily returns`; the gate fails closed if an options-selling strategy is never stress-tested. The stress summary is printed at the top of every options-selling validation report.
 - Strategy validation harness cost modeling scales linearly with average daily turnover.
 - Quantitative scoring in `StrategyEngine.evaluate_security` must be decoupled into pluggable signal modules under the `signals/` package, using the weighted-sum aggregator. Weights are defined in settings.SIGNAL_WEIGHTS.
