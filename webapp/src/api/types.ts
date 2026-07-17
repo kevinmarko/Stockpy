@@ -365,6 +365,67 @@ export interface RealizedPerformance {
   available: boolean; // false when nothing is cached yet (honest cold-start)
 }
 
+/**
+ * GET /portfolio/attribution — factor exposure section.
+ * Position-size-weighted average Value/Quality/LowVol/Size/Composite z-score
+ * (`signals/multifactor.py`) across HELD symbols matched in the latest
+ * pipeline snapshot. A factor is `null` when zero matched holdings carry it
+ * (never a fabricated 0 — CONSTRAINT #4).
+ */
+export interface FactorExposure {
+  value_z: number | null;
+  quality_z: number | null;
+  lowvol_z: number | null;
+  size_z: number | null;
+  multifactor_composite: number | null;
+}
+
+export interface FactorExposureCoverage {
+  held_count: number;
+  matched_count: number;
+  // Fraction of TOTAL held market value the exposure numbers actually
+  // describe; null when total held value is zero/unknown.
+  matched_value_pct: number | null;
+  // Held symbols with no entry in the latest pipeline snapshot -- contribute
+  // nothing to `exposures` (never zero-filled).
+  unmatched_symbols: string[];
+}
+
+export interface PortfolioFactorExposure {
+  as_of: string | null;
+  exposures: FactorExposure;
+  coverage: FactorExposureCoverage;
+  reason: string | null; // e.g. "no held positions" / "no pipeline snapshot yet"
+}
+
+/**
+ * One correlation cluster of held symbols (GET /portfolio/attribution).
+ * `cluster_id === 0` / `insufficient_history === true` is
+ * `research_engine.compute_correlation_clusters`'s "not enough return history"
+ * bucket -- NOT a real correlation grouping; render it distinctly.
+ */
+export interface CorrelationCluster {
+  cluster_id: number;
+  symbols: string[];
+  n_symbols: number;
+  avg_intra_corr: number | null; // null for a singleton cluster (no intra pair)
+  weight_pct: number | null; // fraction of total held market value in this cluster
+  insufficient_history: boolean;
+}
+
+export interface PortfolioCorrelationClusters {
+  clusters: CorrelationCluster[];
+  lookback_days: number;
+  reason: string | null; // e.g. "no held positions" / "no return history available..."
+}
+
+/** GET /portfolio/attribution — combined factor exposure + correlation clusters. */
+export interface PortfolioAttribution {
+  as_of: string | null;
+  factor_exposure: PortfolioFactorExposure;
+  correlation_clusters: PortfolioCorrelationClusters;
+}
+
 /** GET /alerts — tail of the structured alert JSONL. */
 export interface AlertEntry {
   timestamp: string | null;

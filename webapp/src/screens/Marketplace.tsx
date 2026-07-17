@@ -155,6 +155,13 @@ export function Marketplace() {
                 Per-symbol premium directives
               </div>
             </Link>
+            <Link to="/attribution" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🧮</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Attribution</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Factor tilts & correlation clusters
+              </div>
+            </Link>
           </div>
 
           <p

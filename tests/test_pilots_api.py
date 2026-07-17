@@ -656,6 +656,195 @@ class TestRealizedPerformance:
         assert s["profit_factor"] is None
 
 
+# ---------------------------------------------------------------------------
+# GET /portfolio/attribution
+# ---------------------------------------------------------------------------
+
+
+class _AttrPosition:
+    def __init__(self, quantity, market_value):
+        self.quantity = quantity
+        self.market_value = market_value
+
+
+class _AttrSnapshot:
+    def __init__(self, positions):
+        self.positions = positions
+
+
+def _bars_frame(closes):
+    idx = pd.date_range("2026-01-01", periods=len(closes), freq="D")
+    return pd.DataFrame(
+        {
+            "Open": closes, "High": closes, "Low": closes,
+            "Close": closes, "Volume": [1_000] * len(closes),
+        },
+        index=idx,
+    )
+
+
+class TestPortfolioAttribution:
+    def test_cold_start_no_account_snapshot(self, tmp_path):
+        class _EmptyStore:
+            def latest_account_snapshot(self):
+                return None
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/portfolio/attribution")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["as_of"] is None
+        assert body["factor_exposure"]["reason"] == "no held positions"
+        assert body["factor_exposure"]["exposures"] == {
+            "value_z": None, "quality_z": None, "lowvol_z": None,
+            "size_z": None, "multifactor_composite": None,
+        }
+        assert body["factor_exposure"]["coverage"] == {
+            "held_count": 0, "matched_count": 0,
+            "matched_value_pct": None, "unmatched_symbols": [],
+        }
+        assert body["correlation_clusters"]["clusters"] == []
+        assert body["correlation_clusters"]["reason"] == "no held positions"
+
+    def test_db_error_degrades_to_empty_book_never_500(self):
+        class _BoomStore:
+            def latest_account_snapshot(self):
+                raise RuntimeError("cold db")
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_BoomStore()):
+            resp = client.get("/portfolio/attribution")
+        assert resp.status_code == 200
+        assert resp.json()["factor_exposure"]["reason"] == "no held positions"
+
+    def test_factor_exposure_weights_matched_symbols_only(self):
+        """AAPL/MSFT are held AND in the fixture snapshot (with real value_z /
+        quality_z / ... fields); ZZZZ is held but absent from the snapshot and
+        must contribute nothing (never zero-filled) — it shows up only in
+        `unmatched_symbols`."""
+        positions = {
+            "AAPL": _AttrPosition(10.0, 1000.0),
+            "MSFT": _AttrPosition(5.0, 1000.0),
+            "ZZZZ": _AttrPosition(3.0, 500.0),
+        }
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return _AttrSnapshot(positions)
+
+            def get_bars(self, symbol, lookback_days=504, provider=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
+            with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+                resp = client.get("/portfolio/attribution")
+        assert resp.status_code == 200
+        body = resp.json()
+        fe = body["factor_exposure"]
+        assert fe["reason"] is None
+        assert fe["coverage"]["held_count"] == 3
+        assert fe["coverage"]["matched_count"] == 2
+        assert fe["coverage"]["unmatched_symbols"] == ["ZZZZ"]
+        # Equal market values (1000/1000) -> a straight average of AAPL/MSFT.
+        assert fe["exposures"]["value_z"] == pytest.approx((-0.42 + -0.55) / 2, abs=1e-6)
+        assert fe["exposures"]["quality_z"] == pytest.approx((1.15 + 1.42) / 2, abs=1e-6)
+        # matched_value_pct = matched (2000) / total held (2500).
+        assert fe["coverage"]["matched_value_pct"] == pytest.approx(2000.0 / 2500.0)
+
+    def test_factor_exposure_no_snapshot_yet(self, tmp_path):
+        positions = {"AAPL": _AttrPosition(10.0, 1000.0)}
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return _AttrSnapshot(positions)
+
+            def get_bars(self, symbol, lookback_days=504, provider=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/portfolio/attribution")
+        assert resp.status_code == 200
+        fe = resp.json()["factor_exposure"]
+        assert fe["reason"] == "no pipeline snapshot yet"
+        assert fe["exposures"]["value_z"] is None
+
+    def test_correlation_clusters_groups_correlated_symbols(self):
+        """AAPL and MSFT move in lockstep (MSFT = 3x AAPL's price, identical
+        returns); NVDA is an independent, uncorrelated random-ish walk. AAPL/MSFT
+        should land in the same cluster with a high avg_intra_corr."""
+        import random
+
+        n = 40
+        rng_a = random.Random(42)
+        aapl_closes = [100.0]
+        for _ in range(n - 1):
+            aapl_closes.append(aapl_closes[-1] * (1.0 + rng_a.uniform(-0.015, 0.02)))
+        msft_closes = [c * 3.0 for c in aapl_closes]
+        rng_b = random.Random(7)
+        nvda_closes = [200.0]
+        for _ in range(n - 1):
+            nvda_closes.append(nvda_closes[-1] * (1.0 + rng_b.uniform(-0.02, 0.02)))
+
+        bars_by_symbol = {
+            "AAPL": _bars_frame(aapl_closes),
+            "MSFT": _bars_frame(msft_closes),
+            "NVDA": _bars_frame(nvda_closes),
+        }
+
+        positions = {
+            "AAPL": _AttrPosition(10.0, 1000.0),
+            "MSFT": _AttrPosition(5.0, 1000.0),
+            "NVDA": _AttrPosition(2.0, 500.0),
+        }
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return _AttrSnapshot(positions)
+
+            def get_bars(self, symbol, lookback_days=504, provider=None):
+                return bars_by_symbol.get(symbol, pd.DataFrame())
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
+            with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+                resp = client.get("/portfolio/attribution?lookback_days=30")
+        assert resp.status_code == 200
+        cc = resp.json()["correlation_clusters"]
+        assert cc["reason"] is None
+        assert cc["lookback_days"] == 30
+        clusters = cc["clusters"]
+        assert clusters, "expected at least one cluster"
+        # AAPL and MSFT (perfectly correlated) must share a cluster.
+        aapl_cluster = next(c for c in clusters if "AAPL" in c["symbols"])
+        assert "MSFT" in aapl_cluster["symbols"]
+        # weight_pct values across clusters should not exceed 1.0 in total.
+        total_weight = sum(c["weight_pct"] or 0.0 for c in clusters)
+        assert total_weight <= 1.0 + 1e-6
+
+    def test_correlation_clusters_empty_when_no_bars(self):
+        positions = {"AAPL": _AttrPosition(10.0, 1000.0)}
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return _AttrSnapshot(positions)
+
+            def get_bars(self, symbol, lookback_days=504, provider=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
+            resp = client.get("/portfolio/attribution")
+        assert resp.status_code == 200
+        cc = resp.json()["correlation_clusters"]
+        assert cc["clusters"] == []
+        assert cc["reason"] == "no return history available for held positions"
+
+    def test_lookback_days_query_validation(self):
+        resp = client.get("/portfolio/attribution?lookback_days=5")
+        assert resp.status_code == 422
+        resp = client.get("/portfolio/attribution?lookback_days=1000")
+        assert resp.status_code == 422
+
+
 class TestAlertsFeed:
     def test_unconfigured_is_honest_empty(self, monkeypatch):
         monkeypatch.setattr(settings, "ALERT_FILE_PATH", None, raising=False)

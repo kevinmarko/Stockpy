@@ -16,6 +16,8 @@ import type {
   BrokerageConnectResult,
   BrokerageDisconnectResult,
   BrokerageStatus,
+  CorrelationCluster,
+  FactorExposure,
   Follow,
   FollowResult,
   ForecastSkill,
@@ -34,6 +36,7 @@ import type {
   PilotSummary,
   PilotTrade,
   Portfolio,
+  PortfolioAttribution,
   RealizedPerformance,
   RealizedTrade,
   SectorSlice,
@@ -1291,6 +1294,101 @@ function mockPairs(): PairsRadar {
   };
 }
 
+// Factor z-scores for a subset of PORTFOLIO's holdings, deliberately NOT
+// covering every symbol -- DUK (held) has no entry, exercising the "held
+// symbol never scored by the pipeline" honesty branch (unmatched_symbols).
+// Plain numbers (not `FactorExposure`'s nullable fields) -- this fixture
+// never has a missing factor for a matched symbol.
+const ATTRIBUTION_FACTORS: Record<string, Record<keyof FactorExposure, number>> = {
+  AAPL: { value_z: -0.3, quality_z: 1.1, lowvol_z: 0.2, size_z: -1.8, multifactor_composite: 0.25 },
+  MSFT: { value_z: -0.5, quality_z: 1.3, lowvol_z: 0.3, size_z: -1.9, multifactor_composite: 0.3 },
+  NVDA: { value_z: -0.9, quality_z: 0.8, lowvol_z: -1.1, size_z: -1.6, multifactor_composite: 0.15 },
+  V: { value_z: 0.4, quality_z: 1.6, lowvol_z: 0.6, size_z: -1.2, multifactor_composite: 0.55 },
+  COST: { value_z: -0.2, quality_z: 1.2, lowvol_z: 0.9, size_z: -0.3, multifactor_composite: 0.5 },
+};
+
+const ATTRIBUTION_FACTOR_KEYS: (keyof FactorExposure)[] = [
+  "value_z", "quality_z", "lowvol_z", "size_z", "multifactor_composite",
+];
+
+// Hand-grouped clusters over PORTFOLIO's six holdings: mega-cap tech
+// co-moves; the payments/staples pair moves together more loosely; DUK (a
+// single utility) is a genuine singleton -- avg_intra_corr null, no pair to
+// correlate against.
+const ATTRIBUTION_CLUSTER_GROUPS: {
+  id: number;
+  symbols: string[];
+  avg_intra_corr: number | null;
+}[] = [
+  { id: 1, symbols: ["AAPL", "MSFT", "NVDA"], avg_intra_corr: 0.71 },
+  { id: 2, symbols: ["V", "COST"], avg_intra_corr: 0.38 },
+  { id: 3, symbols: ["DUK"], avg_intra_corr: null },
+];
+
+function mockPortfolioAttribution(): PortfolioAttribution {
+  // PORTFOLIO's fixture positions always carry a real market_value; the `?? 0`
+  // only satisfies PortfolioPositionView's nullable typing (a real account
+  // position can lack a live quote) and is never exercised here.
+  const heldValues: Record<string, number> = Object.fromEntries(
+    PORTFOLIO.positions.map((p) => [p.symbol, p.market_value ?? 0])
+  );
+  const heldSymbols = Object.keys(heldValues);
+  const totalValue = Object.values(heldValues).reduce((a, b) => a + b, 0);
+
+  const matched = heldSymbols.filter((s) => s in ATTRIBUTION_FACTORS).sort();
+  const unmatched = heldSymbols.filter((s) => !(s in ATTRIBUTION_FACTORS)).sort();
+  const matchedValue = matched.reduce((a, s) => a + heldValues[s], 0);
+
+  const exposures = Object.fromEntries(
+    ATTRIBUTION_FACTOR_KEYS.map((k) => {
+      if (matchedValue <= 0) return [k, null];
+      const sum = matched.reduce(
+        (a, s) => a + ATTRIBUTION_FACTORS[s][k] * heldValues[s],
+        0
+      );
+      return [k, sum / matchedValue];
+    })
+  ) as unknown as FactorExposure;
+
+  const asOf = new Date(Date.now() - 5_400_000).toISOString();
+
+  const clusters: CorrelationCluster[] = ATTRIBUTION_CLUSTER_GROUPS
+    .map((g) => {
+      const symbolsHeld = g.symbols.filter((s) => heldSymbols.includes(s));
+      const clusterValue = symbolsHeld.reduce((a, s) => a + (heldValues[s] ?? 0), 0);
+      return {
+        cluster_id: g.id,
+        symbols: [...symbolsHeld].sort(),
+        n_symbols: symbolsHeld.length,
+        avg_intra_corr: g.avg_intra_corr,
+        weight_pct: totalValue > 0 ? clusterValue / totalValue : null,
+        insufficient_history: false,
+      };
+    })
+    .filter((c) => c.n_symbols > 0)
+    .sort((a, b) => (b.weight_pct ?? 0) - (a.weight_pct ?? 0));
+
+  return {
+    as_of: asOf,
+    factor_exposure: {
+      as_of: asOf,
+      exposures,
+      coverage: {
+        held_count: heldSymbols.length,
+        matched_count: matched.length,
+        matched_value_pct: totalValue > 0 ? matchedValue / totalValue : null,
+        unmatched_symbols: unmatched,
+      },
+      reason: null,
+    },
+    correlation_clusters: {
+      clusters,
+      lookback_days: 60,
+      reason: null,
+    },
+  };
+}
+
 async function delay<T>(v: T, ms = 260): Promise<T> {
   return new Promise((res) => setTimeout(() => res(v), ms));
 }
@@ -1745,6 +1843,10 @@ export const mockApi = {
       n_fills: REALIZED_TRADES.length * 2,
       available: true,
     });
+  },
+
+  async getPortfolioAttribution(_lookbackDays = 60): Promise<PortfolioAttribution> {
+    return delay(mockPortfolioAttribution());
   },
 
   async getAlerts(limit = 50): Promise<AlertsFeed> {
