@@ -1704,6 +1704,30 @@ class TestGetOptionsDirective:
         low = result.lower()
         assert "error" in low or "unavailable" in low or "fail" in low
 
+    def test_nan_realizable_theta_renders_as_na_not_literal_nan(self, monkeypatch):
+        """A debit-spread/Covered-Call/Cash directive never computes
+        Realizable_Daily_Theta (engine leaves it NaN, CONSTRAINT #4). The
+        markdown renderer must show 'N/A', not the literal string 'nan'."""
+        import technical_options_engine as toe_mod
+
+        directive = self._directive()
+        directive["Strategy"] = "Call Debit Spread"
+        directive["Realizable_Daily_Theta"] = float("nan")
+
+        monkeypatch.setattr(toe_mod, "build_premium_directive", lambda *a, **k: directive)
+        monkeypatch.setattr(
+            toe_mod,
+            "validate_directive_integrity",
+            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
+        )
+        _patch_advisory_inputs(monkeypatch)
+        self._patch_bars_provider(monkeypatch)
+
+        result = srv.get_options_directive("aapl")
+
+        assert "Realizable Daily Theta**: N/A" in result
+        assert "nan" not in result.lower().split("```json")[0]
+
 
 class TestGetRegimeStatus:
     def _write_snapshot(self, tmp_path, data):

@@ -51,4 +51,17 @@ describe("SymbolDetail screen (real mock API)", () => {
     expect(await screen.findByRole("heading", { name: "Forecast skill" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Options premium" })).toBeInTheDocument();
   });
+
+  it("a debit-spread symbol's options directive shows '—' for Realizable Daily Theta, never a fabricated $0.00", async () => {
+    // NVDA's mock directive is a Call Debit Spread carrying a raw
+    // Realizable_Daily_Theta of 0.0 (the pre-fix engine default) specifically
+    // to prove the shared optionsHonesty gate — not the raw field — drives
+    // this row.
+    renderSymbol("NVDA");
+    await screen.findByRole("heading", { name: "NVDA" });
+    await screen.findByText("Call Debit Spread");
+    const row = screen.getByText("Realizable θ/day").closest(".row") as HTMLElement;
+    const value = row.querySelector(".num") as HTMLElement;
+    expect(value.textContent).toBe("—");
+  });
 });

@@ -203,7 +203,12 @@ class OptionsPricingRecommender:
             "Action": "Wait",
             "Legs": [],
             "Net_Premium": 0.0,
-            "Realizable_Daily_Theta": 0.0
+            # NaN, not 0.0: only the CREDIT branches (Put/Call Credit Spread,
+            # Iron Condor) below ever compute a realizable theta. Debit
+            # spreads, Covered Call, and Cash never touch this key, so a 0.0
+            # initializer would read as "zero realizable theta" when the
+            # truth is "not computed for this strategy" (CONSTRAINT #4).
+            "Realizable_Daily_Theta": float("nan"),
         }
 
         # Defined Risk Parameters (Standard Target Deltas). ``delta_target_scale``
@@ -577,7 +582,7 @@ class TechnicalOptionsEngine:
             for leg in legs
         ])
         
-        if theta != 0.0:
+        if np.isfinite(theta) and theta != 0.0:
             return f"{action} {strategy}: {legs_str} (Net Premium: ${net_prem:.2f}, Realizable Daily Theta: ${theta:.4f})"
         else:
             return f"{action} {strategy}: {legs_str} (Net Premium: ${net_prem:.2f})"
