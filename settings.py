@@ -1026,6 +1026,25 @@ class Settings(BaseSettings):
             "follow write-path's existing risk posture)."
         ),
     )
+    # Master switch for the Pilots API's Strategy Matrix WRITE endpoint
+    # (api/pilots_api.py PUT /strategy/modules — signal weights + disabled-module
+    # set -> .env). A DEDICATED flag, not AUTOMATION_WRITES_ENABLED: that flag was
+    # scoped to the daemon interval and kill-switch resume; signal-weight tuning
+    # changes WHAT THE PLATFORM RECOMMENDS and must not ride in on it. Mirrors
+    # BROKERAGE_CONNECT_ENABLED exactly: default False, deliberately NOT in
+    # gui/env_io.py's ALLOWED_KEYS (a GUI bug must never flip it on; hand-set in
+    # .env only), and also requires FOLLOW_API_TOKEN. GET /strategy/matrix is
+    # read-only and NOT gated by this flag (require_read_token alone, matching
+    # GET /brokerage/status).
+    STRATEGY_WRITES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables PUT /strategy/modules on the Pilots API (signal weights + "
+            "disabled-module set -> .env). Off by default; also requires "
+            "FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so "
+            "signal tuning cannot ride in on AUTOMATION_WRITES_ENABLED."
+        ),
+    )
     # --- Pilots PWA: persisted analytics artifacts (options matrix + pairs radar) ---
     # The options premium matrix (technical_options_engine) and pairs radar
     # (pairs/ + signals.pairs_trading) are computed live in the Streamlit GUI but

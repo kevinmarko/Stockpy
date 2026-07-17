@@ -175,6 +175,7 @@ describe("client.ts — live client (mocked fetch)", () => {
       [() => mod.api.getOptions(), "http://example.test:9000/options"],
       [() => mod.api.getSymbolOptions("nvda"), "http://example.test:9000/symbols/nvda/options"],
       [() => mod.api.getPairs(), "http://example.test:9000/pairs"],
+      [() => mod.api.getStrategyMatrix(), "http://example.test:9000/strategy/matrix"],
     ];
     for (const [call, expectedUrl] of cases) {
       fetchMock.mockResolvedValueOnce(jsonResponse({}));
@@ -260,6 +261,30 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(url).toBe("http://localhost:8602/brokerage/disconnect");
     expect(init.method).toBe("POST");
     expect(result).toEqual({ connected: false });
+  });
+
+  it("setStrategyModules() PUTs the weights+disabled body as JSON", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        written: ["SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES"],
+        configured_weights: { macd_momentum: 20 },
+        disabled: [],
+        applies: "next_daemon_restart",
+        note: "Written to .env.",
+      })
+    );
+
+    await mod.api.setStrategyModules({ weights: { macd_momentum: 20 }, disabled: [] });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/strategy/modules");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({
+      weights: { macd_momentum: 20 },
+      disabled: [],
+    });
   });
 
   describe("offline localStorage cache fallback (Web App Resilience gap)", () => {

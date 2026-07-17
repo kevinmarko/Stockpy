@@ -34,6 +34,9 @@ import type {
   Portfolio,
   CurvePoint,
   RealizedPerformance,
+  StrategyMatrix,
+  StrategyModulesUpdate,
+  StrategyModulesUpdateResult,
   SymbolDetail,
   SymbolOptions,
   TriggerRunResult,
@@ -134,6 +137,12 @@ const liveApi = {
   getSymbolOptions: (ticker: string) =>
     http<SymbolOptions>(`/symbols/${encodeURIComponent(ticker)}/options`),
   getPairs: () => http<PairsRadar>("/pairs"),
+  getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
+  setStrategyModules: (body: StrategyModulesUpdate) =>
+    http<StrategyModulesUpdateResult>("/strategy/modules", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>
     http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {

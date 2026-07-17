@@ -36,6 +36,9 @@ import type {
   RealizedPerformance,
   RealizedTrade,
   SectorSlice,
+  StrategyMatrix,
+  StrategyModulesUpdate,
+  StrategyModulesUpdateResult,
   SymbolDetail,
   SymbolHeldBy,
   SymbolOptions,
@@ -775,6 +778,82 @@ function writeMockInterval(seconds: number) {
   } catch {
     /* ignore quota */
   }
+}
+
+// ---- Local strategy-matrix simulation. A Save persists weights/disabled to
+// localStorage AND sets a drift marker, so a subsequent GET honestly reports
+// env_drift.detected=true (a real .env write does NOT reach the running process
+// until restart — the mock mirrors that staleness rather than pretending the
+// write took effect live). ----
+const STRATEGY_KEY = "stockpy.mock.strategy_modules";
+const STRATEGY_DRIFT_KEY = "stockpy.mock.strategy_drift";
+
+// Base module table (a representative subset of the real 17). regime_multiplier
+// is pinned to weight 0 and cannot be edited.
+const STRATEGY_BASE: { name: string; weight: number; pinned: boolean; scored: number }[] = [
+  { name: "macro_regime", weight: 45, pinned: false, scored: 20 },
+  { name: "macd_momentum", weight: 20, pinned: false, scored: 20 },
+  { name: "aroon_trend", weight: 15, pinned: false, scored: 20 },
+  { name: "graham_value", weight: 20, pinned: false, scored: 18 },
+  { name: "dividend_quality", weight: 15, pinned: false, scored: 12 },
+  { name: "multifactor", weight: 15, pinned: false, scored: 19 },
+  { name: "cross_sectional_momentum", weight: 15, pinned: false, scored: 20 },
+  { name: "regime_multiplier", weight: 0, pinned: true, scored: 20 },
+];
+
+function readStrategyOverrides(): { weights: Record<string, number>; disabled: string[] } | null {
+  try {
+    const raw = localStorage.getItem(STRATEGY_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function mockStrategyMatrix(): StrategyMatrix {
+  const ov = readStrategyOverrides();
+  const disabled = ov?.disabled ?? [];
+  let drift = false;
+  try {
+    drift = localStorage.getItem(STRATEGY_DRIFT_KEY) === "1";
+  } catch {
+    /* ignore */
+  }
+  const modules = STRATEGY_BASE.map((b) => {
+    const weight = ov?.weights?.[b.name] ?? b.weight;
+    return {
+      name: b.name,
+      weight,
+      effective_weight: weight, // no regime overrides in the mock -> effective == configured
+      effective_weight_regime: null,
+      enabled: !disabled.includes(b.name),
+      source: "both" as const,
+      contributed_last_run: true,
+      symbols_scored: b.scored,
+      pinned_zero: b.pinned,
+    };
+  });
+  return {
+    as_of: new Date(Date.now() - 5_400_000).toISOString(),
+    market_regime: "RISK ON",
+    regime_overrides_active: false,
+    weights_source: "running_process_settings",
+    modules,
+    disabled,
+    max_weight: 100,
+    writable: true,
+    note: "Writes persist to .env and apply on the next daemon/pipeline launch.",
+    env_drift: drift
+      ? {
+          detected: true,
+          keys: ["SIGNAL_WEIGHTS"],
+          note:
+            "An .env write is pending — the API and daemon are still running the " +
+            "previous values. Restart to apply.",
+        }
+      : { detected: false, keys: [], note: "" },
+    reason: null,
+  };
 }
 
 // ---- Realized broker P&L fixture (FIFO round-trips) ----
@@ -1609,6 +1688,36 @@ export const mockApi = {
 
   async getPairs(): Promise<PairsRadar> {
     return delay(mockPairs());
+  },
+
+  async getStrategyMatrix(): Promise<StrategyMatrix> {
+    return delay(mockStrategyMatrix());
+  },
+
+  async setStrategyModules(
+    body: StrategyModulesUpdate
+  ): Promise<StrategyModulesUpdateResult> {
+    // Persist so a subsequent GET reflects the change, and set the drift marker
+    // (the .env write does not reach the "running process" until restart).
+    try {
+      localStorage.setItem(
+        STRATEGY_KEY,
+        JSON.stringify({ weights: body.weights, disabled: body.disabled })
+      );
+      localStorage.setItem(STRATEGY_DRIFT_KEY, "1");
+    } catch {
+      /* ignore quota */
+    }
+    return delay({
+      written: ["SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES"],
+      configured_weights: body.weights,
+      disabled: [...body.disabled].sort(),
+      applies: "next_daemon_restart",
+      note:
+        "Written to .env. settings is not patched in-process — this API, the " +
+        "running daemon, and any already-launched pipeline still use the " +
+        "previous values until restarted.",
+    });
   },
 };
 

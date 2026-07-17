@@ -56,6 +56,16 @@ Two independent bearer-token guards (both ``HTTPBearer(auto_error=False)`` +
     different risk than reading persisted state (mirrors
     ``api/control_api.py``'s ``ORCHESTRATOR_DAEMON_TOKEN`` posture).
 
+Three additional FAIL-CLOSED master-switch guards stack ON TOP of the command
+token for the writes with real persistence/rollback cost, each a dedicated
+``settings`` flag deliberately kept out of ``gui/env_io.py``'s ALLOWED_KEYS
+(hand-set in ``.env`` only): ``require_brokerage_connect_enabled``
+(``/brokerage/connect``), ``require_automation_writes_enabled``
+(``PUT /automation/schedule/interval``, ``POST /automation/resume``), and
+``require_strategy_writes_enabled`` (``PUT /strategy/modules`` — signal weights +
+disabled-module set to ``.env``; its own flag so signal tuning cannot ride in on
+the automation flag). ``GET /strategy/matrix`` is read-only (``require_read_token``).
+
 CORS mirrors ``state_api.py`` (``settings.CORS_ALLOWED_ORIGINS``) but allows
 GET, POST and PUT (state_api is GET-only).
 
@@ -67,7 +77,10 @@ figure.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
+import math
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -91,6 +104,7 @@ from pilots import (
     realized,
     run_status,
     scoring,
+    strategy_matrix as strategy_matrix_reader,
     symbols,
 )
 from pilots.follows_store import FollowsStore
@@ -255,6 +269,22 @@ def require_automation_writes_enabled() -> None:
         )
 
 
+def require_strategy_writes_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``PUT /strategy/modules`` (signal
+    weights + disabled-module set -> ``.env``). A DEDICATED flag
+    (``settings.STRATEGY_WRITES_ENABLED``), NOT ``AUTOMATION_WRITES_ENABLED``:
+    that one was scoped to the daemon interval and kill-switch resume, and
+    signal-weight tuning changes WHAT THE PLATFORM RECOMMENDS. Mirrors
+    ``require_brokerage_connect_enabled`` exactly — deliberately NOT GUI-writable,
+    hand-set in ``.env`` only. ``GET /strategy/matrix`` is read-only and NOT gated
+    by this flag (``require_read_token`` alone, matching ``/brokerage/status``)."""
+    if not settings.STRATEGY_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Strategy writes are disabled (STRATEGY_WRITES_ENABLED=false).",
+        )
+
+
 if not settings.STATE_API_TOKEN:
     logger.warning(
         "STATE_API_TOKEN not set — Pilots read endpoints are UNAUTHENTICATED. "
@@ -373,6 +403,27 @@ class BrokerageConnectRequest(BaseModel):
             "treated as a verification failure."
         ),
     )
+
+
+# Stable 422 tags for PUT /strategy/modules validation failures — the frontend
+# branches on these, never on a message string.
+_MODULE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+class StrategyModulesUpdateRequest(BaseModel):
+    """Body for ``PUT /strategy/modules``. Full idempotent replacement of the
+    two ``.env`` keys ``SIGNAL_WEIGHTS`` + ``DISABLED_SIGNAL_MODULES``.
+
+    ``weights`` MUST cover every currently-known module: ``write_setting`` replaces
+    the WHOLE ``SIGNAL_WEIGHTS`` JSON, so an omitted module would be silently zeroed
+    (``_effective_weights.get(name, 0.0)``). The PWA always echoes back the full set
+    it read, so full coverage is free. Validation raises ``ValueError`` with a
+    stable tag string (``incomplete_weights`` / ``weight_out_of_bounds`` /
+    ``pinned_zero_module`` / ``invalid_module_name`` / ``unknown_module``); the
+    ``/strategy/modules`` handler maps these to 422 with the tag preserved."""
+
+    weights: Dict[str, float] = Field(..., max_length=128)
+    disabled: List[str] = Field(default_factory=list, max_length=128)
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +800,66 @@ def get_pairs_radar() -> Dict[str, Any]:
     ``pairs`` + an honest ``reason`` when ``PAIRS_SNAPSHOT_ENABLED`` is off or the
     artifact hasn't been written yet (CONSTRAINT #4). Never 500s."""
     return pairs.pairs_radar(path=_pairs_snapshot_path())
+
+
+def _env_drift() -> Dict[str, Any]:
+    """Compare the on-disk ``.env`` SIGNAL_WEIGHTS/DISABLED_SIGNAL_MODULES against
+    the values the running process is actually using (``settings``). A ``.env``
+    write does NOT reach the live singleton, so after a successful PUT the API +
+    daemon keep serving the OLD values until restart — this surfaces that pending
+    change (mirrors ``GET /automation/schedule``'s ``drift`` field). Dead-letter:
+    any parse failure -> ``detected: False`` (a hand-mangled ``.env`` must never
+    500)."""
+    keys: List[str] = []
+    try:
+        for key, live in (
+            ("SIGNAL_WEIGHTS", dict(settings.SIGNAL_WEIGHTS or {})),
+            ("DISABLED_SIGNAL_MODULES", list(settings.DISABLED_SIGNAL_MODULES or [])),
+        ):
+            raw = env_io.get_value(key, "")
+            if not raw:
+                continue
+            on_disk = json.loads(raw)
+            if key == "DISABLED_SIGNAL_MODULES":
+                if sorted(on_disk) != sorted(live):
+                    keys.append(key)
+            elif on_disk != live:
+                keys.append(key)
+    except Exception as exc:  # noqa: BLE001 — dead-letter
+        logger.debug("strategy env_drift check failed: %s", exc)
+        return {"detected": False, "keys": [], "note": ""}
+    return {
+        "detected": bool(keys),
+        "keys": keys,
+        "note": (
+            "An .env write is pending — the API and daemon are still running the "
+            "previous values. Restart to apply."
+            if keys
+            else ""
+        ),
+    }
+
+
+@app.get("/strategy/matrix", dependencies=[Depends(require_read_token)])
+def get_strategy_matrix() -> Dict[str, Any]:
+    """The signal-module weight/enablement matrix the Strategy Matrix screen
+    renders — assembled from ``settings`` + the persisted
+    ``output/state_snapshot.json`` (never imports ``signals`` / any heavy engine;
+    see ``pilots/strategy_matrix.py``'s docstring for why).
+
+    Adds three API-layer fields to the pure reader's payload: ``writable`` (tracks
+    ``STRATEGY_WRITES_ENABLED``), ``note``, and ``env_drift`` (whether an ``.env``
+    write is pending against the running values). Never 500s (CONSTRAINT #6)."""
+    payload = strategy_matrix_reader.strategy_matrix(snapshot_path=_snapshot_path())
+    writable = bool(settings.STRATEGY_WRITES_ENABLED)
+    payload["writable"] = writable
+    payload["note"] = (
+        "Writes persist to .env and apply on the next daemon/pipeline launch."
+        if writable
+        else "Writes are disabled (STRATEGY_WRITES_ENABLED=false)."
+    )
+    payload["env_drift"] = _env_drift()
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -1267,4 +1378,88 @@ def set_automation_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
         "configured_value": body.interval_seconds,
         "written": encoded,
         "applies": "next_daemon_restart",
+    }
+
+
+def _validate_strategy_modules(body: StrategyModulesUpdateRequest) -> None:
+    """Validate a strategy-modules write, raising ``HTTPException(422)`` with a
+    STABLE tag (the frontend branches on the tag, never on the message). Enforces:
+    every weight key is a known module (union of configured SIGNAL_WEIGHTS +
+    last-run score_components), weights cover EVERY known module (an omitted key
+    would be silently zeroed on write), each weight is finite and in
+    [0, max_weight], the pinned ``regime_multiplier`` stays 0.0, and every
+    disabled entry is a known module."""
+    matrix = strategy_matrix_reader.strategy_matrix(snapshot_path=_snapshot_path())
+    known = {m["name"] for m in matrix["modules"]}
+    max_weight = float(matrix["max_weight"])
+
+    def _fail(tag: str, message: str, **extra: Any) -> None:
+        raise HTTPException(status_code=422, detail={"error": tag, "message": message, **extra})
+
+    for name in list(body.weights) + list(body.disabled):
+        if not _MODULE_NAME_RE.match(name):
+            _fail("invalid_module_name", f"'{name}' is not a valid module name.")
+        if name not in known:
+            _fail("unknown_module", f"'{name}' is not a known signal module.")
+
+    missing = sorted(known - set(body.weights))
+    if missing:
+        _fail(
+            "incomplete_weights",
+            "weights must cover every known module (an omitted module is silently "
+            "zeroed on write).",
+            missing=missing,
+        )
+
+    for name, value in body.weights.items():
+        if not math.isfinite(value) or value < 0.0 or value > max_weight:
+            _fail(
+                "weight_out_of_bounds",
+                f"weight for '{name}' must be a finite number in [0, {max_weight}].",
+            )
+        if name in strategy_matrix_reader._PINNED_ZERO_WEIGHT_MODULES and value != 0.0:
+            _fail(
+                "pinned_zero_module",
+                f"'{name}' is structurally pinned to weight 0.0 and cannot be changed.",
+            )
+
+
+@app.put(
+    "/strategy/modules",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_strategy_writes_enabled),
+    ],
+)
+def set_strategy_modules(body: StrategyModulesUpdateRequest) -> Dict[str, Any]:
+    """Replace ``SIGNAL_WEIGHTS`` + ``DISABLED_SIGNAL_MODULES`` in ``.env`` (full
+    idempotent replacement, hence PUT). Both keys are written ATOMICALLY via
+    ``env_io.write_many_atomic`` — they are one logical unit (new weights + a stale
+    disabled-set silently changes what the platform recommends), so a half-applied
+    write is not acceptable.
+
+    Like ``PUT /automation/schedule/interval`` this is an ``.env``-ONLY write: it
+    does NOT patch the running ``settings`` singleton (a process-lifetime object),
+    so the API + daemon keep using the previous values until restart. ``applies`` is
+    therefore always ``"next_daemon_restart"``, and the echoed ``configured_weights``
+    reflect the REQUEST BODY, not ``settings`` (which would return the stale values
+    and read as a failed write). Pair with ``GET /strategy/matrix``'s ``env_drift``."""
+    _validate_strategy_modules(body)
+    disabled = sorted(set(body.disabled))
+    env_io.write_many_atomic(
+        {
+            "SIGNAL_WEIGHTS": dict(body.weights),
+            "DISABLED_SIGNAL_MODULES": disabled,
+        }
+    )
+    return {
+        "written": ["SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES"],
+        "configured_weights": dict(body.weights),
+        "disabled": disabled,
+        "applies": "next_daemon_restart",
+        "note": (
+            "Written to .env. settings is not patched in-process — this API, the "
+            "running daemon, and any already-launched pipeline still use the "
+            "previous values until restarted."
+        ),
     }

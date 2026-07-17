@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -375,6 +377,71 @@ def write_many(updates: Dict[str, Any]) -> List[str]:
         write_setting(key, value)
         written.append(key)
     return written
+
+
+def write_many_atomic(updates: Dict[str, Any]) -> List[str]:
+    """All-or-nothing multi-key ``.env`` write.
+
+    :func:`write_many` validates each key lazily and applies ``set_key`` one at a
+    time, so a failure on key *N* leaves keys ``1..N-1`` written — a half-applied
+    config. That is tolerable for independent scalars, but NOT for a logical unit
+    like ``SIGNAL_WEIGHTS`` + ``DISABLED_SIGNAL_MODULES``: new weights paired with
+    a stale disabled-set silently changes what the platform recommends.
+
+    This variant validates EVERY key first (same :class:`SecretWriteError` /
+    :class:`DisallowedKeyError` rules as :func:`write_setting`), then applies each
+    ``set_key`` to a temporary COPY of ``.env`` and ``os.replace``\\ s it into place
+    — the same write-then-rename idiom as ``execution/kill_switch.py::activate`` and
+    ``reporting/options_snapshot.py``. ``python-dotenv``'s ``set_key`` is reused
+    verbatim (same quoting / comment preservation), only pointed at the temp path.
+    :func:`write_many` is left unchanged.
+
+    Residual limitation (documented, not fixed here): there is no file lock, so a
+    concurrent writer (e.g. the Streamlit Settings tab) can still last-writer-wins
+    clobber this write. That race pre-exists for every ``.env`` writer in the repo
+    and is not introduced by this function.
+
+    Returns
+    -------
+    list[str]
+        The keys written (in input order).
+
+    Raises
+    ------
+    SecretWriteError
+        If any key is a secret. Raised before any write; ``.env`` is untouched.
+    DisallowedKeyError
+        If any key is outside the allowlist. Raised before any write.
+    """
+    # Validate EVERY key up front — nothing is written unless all pass.
+    for key in updates:
+        if key in SECRET_KEYS:
+            raise SecretWriteError(
+                f"Refusing to write secret key '{key}' from the GUI. "
+                "Edit secrets directly in .env (CONSTRAINT #3)."
+            )
+        if key not in ALLOWED_KEYS:
+            raise DisallowedKeyError(
+                f"Key '{key}' is not in the GUI-writable allowlist (ALLOWED_KEYS)."
+            )
+
+    target = ENV_PATH.resolve()  # follow symlinks — replace the real file
+    target.touch(exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    # copy2 preserves mode/timestamps so a 0600 .env stays 0600.
+    shutil.copy2(target, tmp)
+    try:
+        for key, value in updates.items():
+            set_key(str(tmp), key, _encode_value(key, value), quote_mode="auto")
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    logger.info("Atomically wrote .env settings: %s", ", ".join(updates.keys()))
+    return list(updates.keys())
 
 
 def allowlisted_keys() -> Iterable[str]:

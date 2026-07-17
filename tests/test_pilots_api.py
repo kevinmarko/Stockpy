@@ -1581,3 +1581,179 @@ class TestAutomationWritesInvariants:
         secret-list (hand-set in .env only, like its sibling)."""
         assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
         assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
+
+# ===========================================================================
+# GET /strategy/matrix + PUT /strategy/modules
+# ===========================================================================
+
+
+def _full_weights_from_matrix():
+    """Fetch the matrix (read-only, fail-open) and build a full-coverage weight
+    map (every known module -> its weight, 0.0 where None), as the PWA would."""
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        matrix = client.get("/strategy/matrix").json()
+    return {m["name"]: (m["weight"] if m["weight"] is not None else 0.0) for m in matrix["modules"]}
+
+
+class TestStrategyMatrixRead:
+    def test_shape_and_modules(self):
+        with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+            resp = client.get("/strategy/matrix")
+        assert resp.status_code == 200
+        body = resp.json()
+        for key in ("modules", "disabled", "max_weight", "writable", "note", "env_drift", "reason"):
+            assert key in body
+        assert len(body["modules"]) > 0
+        row = body["modules"][0]
+        for key in ("name", "weight", "effective_weight", "enabled", "source", "pinned_zero"):
+            assert key in row
+
+    def test_fail_open_read_with_no_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+                resp = client.get("/strategy/matrix")
+        assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get(
+                "/strategy/matrix", headers={"Authorization": "Bearer wrong"}
+            )
+        assert resp.status_code == 401
+
+    def test_writable_tracks_the_flag(self):
+        with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+            with mock.patch.object(settings, "STRATEGY_WRITES_ENABLED", True):
+                on = client.get("/strategy/matrix").json()
+            with mock.patch.object(settings, "STRATEGY_WRITES_ENABLED", False):
+                off = client.get("/strategy/matrix").json()
+        assert on["writable"] is True
+        assert off["writable"] is False
+
+    def test_cold_start_reason_without_snapshot(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/matrix")
+        assert resp.status_code == 200
+        assert resp.json()["reason"] is not None
+
+    def test_env_drift_dead_letters_on_mangled_env_never_500(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("SIGNAL_WEIGHTS={not valid json\n", encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+            with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                resp = client.get("/strategy/matrix")
+        assert resp.status_code == 200  # never 500 on a hand-mangled .env
+        assert resp.json()["env_drift"]["detected"] is False
+
+
+class TestStrategyModulesWrite:
+    def test_fails_closed_when_strategy_writes_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "STRATEGY_WRITES_ENABLED", False):
+                resp = client.put(
+                    "/strategy/modules",
+                    json={"weights": {"a": 1.0}, "disabled": []},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 403
+
+    def test_fails_closed_when_follow_token_unset(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            with mock.patch.object(settings, "STRATEGY_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/strategy/modules",
+                    json={"weights": {"a": 1.0}, "disabled": []},
+                    headers={"Authorization": "Bearer anything"},
+                )
+        assert resp.status_code == 403
+
+    def test_happy_path_writes_both_keys_atomically(self):
+        full = _full_weights_from_matrix()
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "STRATEGY_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+                    with mock.patch.object(
+                        pilots_api.env_io, "write_many_atomic",
+                        return_value=["SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES"],
+                    ) as w:
+                        resp = client.put(
+                            "/strategy/modules",
+                            json={"weights": full, "disabled": []},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 200
+        # write_many_atomic called ONCE, with BOTH keys (one logical unit).
+        assert w.call_count == 1
+        assert set(w.call_args[0][0].keys()) == {"SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES"}
+        body = resp.json()
+        assert body["applies"] == "next_daemon_restart"
+        # Echoes the REQUEST BODY, not settings (which would be the stale values).
+        assert body["configured_weights"] == full
+
+    def _put_expecting_422(self, weights, disabled=None):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "STRATEGY_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+                    with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+                        resp = client.put(
+                            "/strategy/modules",
+                            json={"weights": weights, "disabled": disabled or []},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 422
+        assert w.call_count == 0  # never writes on a validation failure
+        return resp.json()["detail"]
+
+    def test_incomplete_weights_422(self):
+        full = _full_weights_from_matrix()
+        dropped = next(iter(full))
+        partial = {k: v for k, v in full.items() if k != dropped}
+        detail = self._put_expecting_422(partial)
+        assert detail["error"] == "incomplete_weights"
+        assert dropped in detail["missing"]
+
+    def test_unknown_module_422(self):
+        full = dict(_full_weights_from_matrix())
+        full["not_a_real_module"] = 5.0
+        detail = self._put_expecting_422(full)
+        assert detail["error"] == "unknown_module"
+
+    def test_weight_out_of_bounds_422(self):
+        full = dict(_full_weights_from_matrix())
+        full[next(iter(full))] = 150.0
+        detail = self._put_expecting_422(full)
+        assert detail["error"] == "weight_out_of_bounds"
+
+    def test_pinned_zero_module_422(self):
+        full = dict(_full_weights_from_matrix())
+        assert "regime_multiplier" in full
+        full["regime_multiplier"] = 5.0
+        detail = self._put_expecting_422(full)
+        assert detail["error"] == "pinned_zero_module"
+
+    def test_write_never_logs_token(self, caplog):
+        full = _full_weights_from_matrix()
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "STRATEGY_WRITES_ENABLED", True):
+                    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+                        with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
+                            client.put(
+                                "/strategy/modules",
+                                json={"weights": full, "disabled": []},
+                                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                            )
+        assert _CMD_TOKEN not in caplog.text
+
+
+class TestStrategyWritesInvariants:
+    def test_signal_weight_keys_are_allowlisted(self):
+        assert "SIGNAL_WEIGHTS" in pilots_api.env_io.ALLOWED_KEYS
+        assert "DISABLED_SIGNAL_MODULES" in pilots_api.env_io.ALLOWED_KEYS
+
+    def test_strategy_writes_enabled_is_not_gui_writable(self):
+        """Mirrors test_automation_writes_enabled_is_not_gui_writable: a GUI bug
+        must never flip this on. Neither allowlisted nor secret — hand-set only."""
+        assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
