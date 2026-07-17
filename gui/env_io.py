@@ -129,6 +129,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ADVISORY_REUSE_PIPELINE_COMPUTE",     # bool — OUTPUT-CHANGING: reuse pipeline GARCH/forecast in advisory overlay
     "FUNDAMENTALS_SOURCE",        # "yahoo" | "yfinance_info"
     "BETA_LOOKBACK_DAYS",         # int — beta computation lookback (days)
+    "ADVISORY_ONLY",              # bool — execution quarantine
     # Universe / signals (JSON-encoded)
     "DEFAULT_TICKERS",
     "SIGNAL_WEIGHTS",

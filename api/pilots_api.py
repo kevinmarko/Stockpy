@@ -405,12 +405,7 @@ class IntervalUpdateRequest(BaseModel):
     """Body for ``PUT /automation/schedule/interval``. ``0`` disables the
     daemon's internal timer (on-demand only); otherwise MUST be in
     ``[settings.INTERVAL_MIN_SECONDS, settings.INTERVAL_MAX_SECONDS]``
-    seconds — a sub-60s interval would trigger runs faster than a cycle can
-    complete (degenerate, not dangerous: trigger_run would just return
-    ALREADY_RUNNING every time — but there's no reason to allow it).
-
-    Validated via the SAME ``settings.validate_interval_seconds`` used by
-    ``desktop.daemon_runtime.OrchestratorDaemon.set_interval`` and by
+    """Body for ``PUT /automation/schedule/interval``. Validation bounds match
     ``api/control_api.py``'s equivalent body — the shared policy function is
     what keeps all three from drifting apart (see ``settings.py``'s
     docstring on it)."""
@@ -421,6 +416,12 @@ class IntervalUpdateRequest(BaseModel):
     @classmethod
     def _validate(cls, v: int) -> int:
         return _validate_interval_seconds(v)
+
+
+class ExecutionModeUpdateRequest(BaseModel):
+    """Body for ``PUT /automation/execution-mode``."""
+    mode: Literal["live", "paper", "simulation", "advisory"]
+    advisory_only: bool
 
 
 class BrokerageConnectRequest(BaseModel):
@@ -1454,6 +1455,7 @@ def get_automation_status() -> Dict[str, Any]:
         "errors": run_status.read_dead_letter(),
         "advisory_only": settings.ADVISORY_ONLY,
         "dry_run": settings.DRY_RUN,
+        "alpaca_paper": settings.ALPACA_PAPER,
     }
 
 
@@ -1756,4 +1758,30 @@ def set_strategy_modules(body: StrategyModulesUpdateRequest) -> Dict[str, Any]:
             "running daemon, and any already-launched pipeline still use the "
             "previous values until restarted."
         ),
+    }
+
+
+@app.put(
+    "/automation/execution-mode",
+    dependencies=[Depends(require_command_token)],
+)
+def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
+    """1-Click Go Live / Execution Mode Toggle. Sets ADVISORY_ONLY and the active execution mode."""
+    require_automation_writes_enabled()
+    
+    from gui import strategy_registry
+    
+    # 1. First, set ADVISORY_ONLY
+    env_io.write_setting("ADVISORY_ONLY", body.advisory_only)
+    
+    # 2. Then set the execution mode
+    if body.mode != "advisory":
+        strategy_registry.set_active_mode(body.mode)
+        
+    return {
+        "written": ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"],
+        "advisory_only": body.advisory_only,
+        "mode": body.mode,
+        "applies": "next_daemon_restart",
+        "note": "Execution mode updated."
     }

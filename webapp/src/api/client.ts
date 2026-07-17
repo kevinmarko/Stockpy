@@ -22,6 +22,8 @@ import type {
   FollowResult,
   ForecastSkill,
   IntervalUpdateResult,
+  ExecutionModeUpdateRequest,
+  ExecutionModeUpdateResult,
   KillSwitchActionResult,
   LlmStatus,
   ModelRow,
@@ -243,6 +245,11 @@ const liveApi = {
     http<IntervalUpdateResult>("/automation/schedule/interval", {
       method: "PUT",
       body: JSON.stringify({ interval_seconds: seconds }),
+    }),
+  setExecutionMode: (req: ExecutionModeUpdateRequest) =>
+    http<ExecutionModeUpdateResult>("/automation/execution-mode", {
+      method: "PUT",
+      body: JSON.stringify(req),
     }),
   getBrokerageStatus: () => http<BrokerageStatus>("/brokerage/status"),
   getLlmStatus: () => http<LlmStatus>("/llm/status"),

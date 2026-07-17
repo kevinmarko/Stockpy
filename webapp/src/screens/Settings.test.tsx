@@ -73,6 +73,7 @@ const HEALTHY_STATUS: AutomationStatus = {
   errors: { generated_at: "2026-07-16T19:05:00+00:00", entry_count: 0, entries: [] },
   advisory_only: true,
   dry_run: false,
+  alpaca_paper: false,
 };
 
 const HEALTHY_SCHEDULE: AutomationSchedule = {

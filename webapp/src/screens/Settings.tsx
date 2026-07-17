@@ -114,6 +114,15 @@ export function Settings() {
         />
       )}
 
+      {status && (
+        <ExecutionModeSection
+          advisoryOnly={status.advisory_only}
+          dryRun={status.dry_run}
+          alpacaPaper={status.alpaca_paper}
+          onChanged={reloadStatus}
+        />
+      )}
+
       <SignalModulesLink />
 
       <ActiveFollowsSection />
@@ -899,6 +908,105 @@ function SignalGenerationSection({
               style={{ flex: 2 }}
             >
               {confirmKind === "pause" ? "Pause" : "Resume"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </SectionCard>
+  );
+}
+
+function ExecutionModeSection({
+  advisoryOnly,
+  dryRun,
+  alpacaPaper,
+  onChanged,
+}: {
+  advisoryOnly: boolean;
+  dryRun: boolean;
+  alpacaPaper: boolean;
+  onChanged: () => void;
+}) {
+  const [selectedMode, setSelectedMode] = useState<"advisory" | "simulation" | "paper" | "live" | null>(null);
+  
+  const currentMode = advisoryOnly
+    ? "advisory"
+    : dryRun
+    ? "simulation"
+    : alpacaPaper
+    ? "paper"
+    : "live";
+
+  const modeMutation = useMutation((mode: "advisory" | "simulation" | "paper" | "live") => 
+    api.setExecutionMode({
+      mode: mode,
+      advisory_only: mode === "advisory"
+    })
+  );
+
+  const confirmChange = async () => {
+    if (!selectedMode) return;
+    await modeMutation.run(selectedMode);
+    setSelectedMode(null);
+    onChanged();
+  };
+
+  return (
+    <SectionCard title="Execution Mode">
+      <div style={{ marginBottom: 12, color: "var(--text-dim)" }}>
+        Controls whether the orchestrator is permitted to place live trades or is quarantined.
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        <Button
+          variant={currentMode === "advisory" ? "primary" : "neutral"}
+          onClick={() => setSelectedMode("advisory")}
+          disabled={currentMode === "advisory"}
+        >
+          🛑 Advisory Only
+        </Button>
+        <Button
+          variant={currentMode === "simulation" ? "primary" : "neutral"}
+          onClick={() => setSelectedMode("simulation")}
+          disabled={currentMode === "simulation"}
+        >
+          🧪 Simulation
+        </Button>
+        <Button
+          variant={currentMode === "paper" ? "primary" : "neutral"}
+          onClick={() => setSelectedMode("paper")}
+          disabled={currentMode === "paper"}
+        >
+          📝 Paper Trading
+        </Button>
+        <Button
+          variant={currentMode === "live" ? "primary" : "neutral"}
+          style={currentMode === "live" ? { backgroundColor: "var(--danger-color)" } : {}}
+          onClick={() => setSelectedMode("live")}
+          disabled={currentMode === "live"}
+        >
+          🔴 Live Production
+        </Button>
+      </div>
+      
+      {selectedMode && (
+        <Modal ariaLabel="Confirm Mode Change" onClose={() => setSelectedMode(null)}>
+          <div style={{ marginBottom: 16 }}>
+            <h3 style={{ margin: "0 0 16px 0" }}>Confirm Mode Change</h3>
+            You are changing the execution mode from <strong>{currentMode}</strong> to <strong>{selectedMode}</strong>.
+            <br/><br/>
+            {selectedMode === "live" && <strong style={{ color: "var(--danger-color)" }}>WARNING: This will allow the engine to execute real trades with real money.</strong>}
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Button variant="neutral" onClick={() => setSelectedMode(null)} style={{ flex: 1 }}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              style={selectedMode === "live" ? { backgroundColor: "var(--danger-color)", flex: 2 } : { flex: 2 }}
+              onClick={confirmChange}
+              pending={modeMutation.pending}
+            >
+              Confirm Change
             </Button>
           </div>
         </Modal>
