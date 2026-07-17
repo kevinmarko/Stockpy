@@ -31,6 +31,7 @@ import type {
   PerformanceResponse,
   PilotDetail,
   PilotSummary,
+  PilotTrade,
   Portfolio,
   CurvePoint,
   RealizedPerformance,
@@ -115,7 +116,7 @@ const liveApi = {
   getHoldings: (id: string) =>
     http<Holding[]>(`/pilots/${encodeURIComponent(id)}/holdings`),
   getTrades: (id: string, limit = 20) =>
-    http(`/pilots/${encodeURIComponent(id)}/trades?limit=${limit}`),
+    http<PilotTrade[]>(`/pilots/${encodeURIComponent(id)}/trades?limit=${limit}`),
   getSymbol: (ticker: string) =>
     http<SymbolDetail>(`/symbols/${encodeURIComponent(ticker)}`),
   getPortfolio: () => http<Portfolio>("/portfolio"),
