@@ -783,12 +783,27 @@ python3 main.py                          # queue now carries allow_place=true wh
 
 The end-to-end path has two actors and one hand-off file:
 
-1. **Platform (Python) writes the queue.** `python3 main.py` runs `run_once()`,
-   which calls `execution/queue_builder.py::emit_execution_queue`. That builds
-   each actionable Recommendation into an `OrderIntent`, runs it through the
-   **same** `PreTradeRiskGate` + `GlobalKillSwitch` stack the Alpaca path uses
-   (all in dry-run — no broker contact), stamps `allow_place`, and atomically
-   writes `output/execution_queue.json`. In `off` mode nothing is written.
+1. **Platform (Python) writes the queue.** `python3 main.py` runs `run_once()`, which writes
+   its own advisory source file (`output/queue_sources/advisory.json`) and calls
+   `execution/compose.py::compose_and_emit` — the single writer of `output/execution_queue.json`
+   (2026-07: previously `main.py` called `execution/queue_builder.py::emit_execution_queue`
+   directly; if you're following an older trace or log line referencing that call, this is why
+   it now goes through `compose.py` first). If any Pilot is being actively Followed via the
+   Pilots PWA/MCP (`POST /pilots/{id}/follow`), that follow's own source file
+   (`output/queue_sources/follow-<pilot_id>.json`) is UNIONED in too — a symbol both advisory
+   and a follow have an opinion on always resolves to advisory's own number (a deliberate,
+   conservative "risk wins" rule; the follow's own reasoning is still surfaced in that intent's
+   `overridden` field, never silently dropped), and two Pilots sharing a symbol are netted
+   together rather than each queuing a separate order for it. `compose_and_emit` then builds
+   each resulting intent into an `OrderIntent`, runs it through the **same** `PreTradeRiskGate`
+   + `GlobalKillSwitch` stack the Alpaca path uses (all in dry-run — no broker contact), stamps
+   `allow_place`, and atomically writes `output/execution_queue.json`. In `off` mode nothing is
+   written. **If the queue looks stale (unchanged across a cycle) and you have an active follow
+   that hasn't been re-planned in a while:** a source file older than
+   `settings.QUEUE_SOURCE_MAX_AGE_SECONDS` (default 7 days) makes `compose_and_emit` refuse the
+   WHOLE compose (nothing written, the PRIOR queue is left in place, logged as a warning) rather
+   than silently composing against a week-old Pilot ranking — re-follow that Pilot (or wait for
+   its next explicit re-plan) to refresh its source and unblock composition again.
 2. **Agent (the `robinhood-execution` skill) reads the queue and previews.**
    `/rh-execute` loads the queue, runs its hard-stops (below), calls
    `review_equity_order` for **every** intent, and — only in `live` mode, only
