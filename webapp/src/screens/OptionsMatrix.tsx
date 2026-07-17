@@ -12,27 +12,7 @@ import { ErrorState, Loading, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
-
-// The engine assigns Realizable_Daily_Theta only to credit structures; on debit
-// spreads / Covered Call / Cash it keeps the initializer 0.0 — a DEFAULT, not a
-// measurement. See technical_options_engine.py. Render "—" + a note for the rest.
-const THETA_ASSIGNED = new Set([
-  "Put Credit Spread",
-  "Call Credit Spread",
-  "Iron Condor",
-]);
-
-function realizableTheta(d: OptionsDirective): { value: number | null; note: string | null } {
-  if (d.Strategy && THETA_ASSIGNED.has(d.Strategy)) {
-    return { value: d.Realizable_Daily_Theta ?? null, note: null };
-  }
-  return {
-    value: null,
-    note:
-      "Not computed for this strategy — the engine assigns realizable theta only " +
-      "to credit structures. The persisted 0.0 is a default, not a measurement.",
-  };
-}
+import { realizableTheta } from "../optionsHonesty";
 
 function isCredit(d: OptionsDirective): boolean {
   return typeof d.Net_Premium === "number" && d.Net_Premium > 0;

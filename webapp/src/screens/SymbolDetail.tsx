@@ -11,6 +11,7 @@ import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, MetricBadge } from "../components/ui";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
+import { realizableTheta } from "../optionsHonesty";
 
 /** News sentiment (FinBERT, ~[-1,1]) → colored bullish/neutral/bearish badge. */
 function NewsBadge({ value }: { value: number | null }) {
@@ -314,6 +315,7 @@ export function SymbolDetail() {
 /** Renders one persisted options premium directive (advisory, read-only). */
 function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
   const legOk = d.Integrity_OK === true;
+  const theta = realizableTheta(d);
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -326,6 +328,10 @@ function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
         <StatRow label="Action" value={d.Action ?? "—"} />
         <StatRow label="Trend bias" value={d.Trend_Bias ?? "—"} />
         <StatRow label="Net premium" value={fmtUsd(d.Net_Premium ?? null)} />
+        <StatRow
+          label="Realizable θ/day"
+          value={theta.note ? "—" : fmtUsd(theta.value)}
+        />
         <StatRow
           label="Short strike / Δ"
           value={`${fmtUsd(d.Short_Strike ?? null)} / ${fmtNum(d.Short_Delta ?? null, 2)}`}
