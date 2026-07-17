@@ -48,6 +48,112 @@ the full detail, test surface, and Gravity step numbers behind each of those.
 
 ---
 
+## LLM key-misconfiguration surfacing — last-real-call telemetry, not a probe (2026-07-17)
+
+**Why.** Gap §4 of `docs/project_review_and_gap_analysis.md`: when `GEMINI_API_KEY` /
+`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` was missing or invalid, LLM analyst narratives
+degraded silently to `null` with zero UI visibility — the operator's only signal was a
+`logger.info` line. Presence checks alone couldn't close it: `llm/providers.py` swallows a
+401 into the identical `None` as a timeout, so a garbage-but-present key showed 🟢 ready in
+the AI Control Center and still produced `null` at runtime. Exposing presence alone would
+have put a green badge over a broken config — trading a silent failure for a confident wrong
+answer.
+
+**What shipped, and the deliberate NON-probe design.** The gap doc recommended a
+"connectivity status endpoint" — read as a live probe, that means *making an LLM call to test
+a key*, spending the operator's money on a call that produces no analyst value, on an endpoint
+reachable by anyone holding the fail-open read token. Instead, **`llm/status_store.py`** (new
+leaf module) records what actually happened on the last **real** call, written from
+`llm/providers.py`'s own except blocks: `record_failure(provider, exc)` in each call-except,
+`record_success(provider)` the instant the SDK call returns (BEFORE parsing — so a missing
+tool_use block / refusal / `parsed=None` still clears a stale auth verdict), and
+`record_failure(..., error_kind="schema")` in the parse handlers (16 call sites across the 3
+providers).
+
+**The honesty rule that governs every decision.** We never claim "your key is invalid *now*",
+only "the last real Claude call was rejected: authentication" — a past-tense, timestamped fact
+that stays true forever. So only `error_kind=="auth"` ever renders as `invalid_key`; a
+rate-limit / network / timeout is surfaced as telemetry but never as a key problem.
+
+**Classification imports NO SDK** (respecting the providers' lazy-import invariant, which —
+found during implementation — had *zero* test pin until now): by `type(exc).__name__` + an
+HTTP status read off the exception object (`data/robinhood_portfolio.verify_credentials`'s
+"only exception type names" convention). anthropic/openai are Stainless-generated and share
+class names (`AuthenticationError`, `RateLimitError`, …); **google.genai has no auth class** —
+a bad key is `ClientError(code=400, "API key not valid")`, matched by an exact documented-reason
+regex, and **every other 400 stays `unknown`, never a guessed auth**. Verified against the real
+installed SDKs (anthropic 0.112, openai 2.44, google-genai): `('auth', 401)` / `('rate_limit',
+429)` / bad-Gemini-key `('auth', 400)` / benign-400 `('unknown', 400)`.
+
+**Two staleness bounds, each scoped to the claim it governs.** Key-identity verdicts
+(`ok`/`auth`) are properties of the KEY, bounded by a truncated one-way SHA-256 **fingerprint**:
+a verdict whose fingerprint ≠ the current key is discarded as `source="key_rotated"` (every
+field nulled), so **fixing a key clears a false alarm INSTANTLY, with zero LLM calls** — the
+entire payoff a probe was supposed to buy. Transient verdicts are bounded by
+`settings.LLM_STATUS_MAX_AGE_HOURS` (default 24, `source="expired"`, fields retained). On
+CONSTRAINT #3: a 48-bit truncated digest of a 128+-bit uniform-random key is not "a secret"
+(no dictionary attack exists; it isn't even a unique identifier — cf. `brokerage_credentials`
+logging key *lengths*), but the argument isn't load-bearing because the digest is
+MODULE-PRIVATE — `read_status`/`read_all` strip it, so it cannot reach an API response by
+construction.
+
+**Surfaces.** (1) A 5th `invalid_key` state in the Streamlit AI Control Center
+(`gui/ai_control_center.py`), added **additively** via an optional `last_calls` kwarg — with it
+omitted, every input is status-identical to the pre-telemetry behavior, so the four-state
+truth-table tests and Gravity step_86 **check 4 are byte-for-byte unchanged** (their continued
+passing IS the additivity proof; ranked at position 4, mutually exclusive with `missing_key` by
+construction). Keyed by provider name (not a single `last_call`) so the non-flexible
+`gemini_vision` capability can still turn amber on a bad `GEMINI_API_KEY`. (2) `GET /llm/status`
+on `api/pilots_api.py` — fail-open read token, deliberately NOT gated by the LLM master switches
+(mirrors `/brokerage/status`: report, don't enforce), server-computed `attention` bool +
+`attention_reason` token, every field's source named, no network call, no provider construction.
+(3) The PWA `/settings` "AI providers" section (`webapp/`) with a past-tense amber notice naming
+the exact `.env` key, plus an attention dot on the global gear button (single fetch on mount, no
+poll; an absent dot is the ABSENCE of a claim — never a false alarm when the real problem is the
+network).
+
+**A latent hazard found and guarded.** `control_center_overview` calls
+`importlib.util.find_spec("engine.gravity_ai_runner")`, which imports the `engine` PACKAGE.
+`engine/__init__.py` is docstring-only today, but `engine/advisory.py` imports four
+deny-listed heavy engines — so a future real import in `engine/__init__.py` would silently
+smuggle them into `api/pilots_api.py` past the statement-only AST guard. Pinned by
+`tests/test_pilots_api.py::test_engine_package_init_stays_import_inert` (mirrors the existing
+`gui/__init__.py` guard one package over) AND, more strongly, by
+`test_control_center_overview_end_to_end_leaks_no_heavy_engine` — a subprocess-isolated test
+that actually DRIVES the runtime path (calls `control_center_overview(settings)`, the exact
+call `GET /llm/status` makes) rather than only parsing `engine/__init__.py`'s source. Both were
+verified during development to independently FAIL when a real import was temporarily injected
+into `engine/__init__.py`, then pass again once reverted — proving the guards actually catch
+the regression they exist for, not just that they trivially pass today.
+
+**Pre-launch hardening (same day, before merge).** Two follow-ups closed the gap between
+"verified once by hand in a chat" and "verified continuously by CI," ahead of this feature
+going live against real provider traffic: (1) `TestClassifyAgainstRealSDKs` in
+`tests/test_llm_status_store.py` constructs actual `anthropic.AuthenticationError` /
+`RateLimitError` / `APITimeoutError` / `APIConnectionError`, `openai.AuthenticationError` /
+`RateLimitError`, and `google.genai.errors.ClientError` / `ServerError` instances (all three
+SDKs are `requirements.txt` dependencies, not new test coupling) and asserts
+`classify_exception` reads them correctly — including the exact Risk C case (a real
+`ClientError(code=400, status="INVALID_ARGUMENT", message="API key not valid...")` → `auth`,
+and a benign-message 400 → `unknown`, the never-guess boundary) — so a future SDK upgrade that
+renames a status attribute or changes an error message format is caught by CI before it
+reaches a live key in production, not discovered against a real narrative outage. (2) the
+end-to-end engine-hazard test above.
+
+**Test surface.** `tests/test_llm_status_store.py` (classification incl. the never-guess pin,
+never-raises, fingerprint rotation, transient-only age bound, no-key-material-in-file,
+fingerprint-never-crosses-boundary, always-writes, **and `TestClassifyAgainstRealSDKs` — the
+real-SDK conformance suite above**); `tests/test_llm_providers.py::TestStatusRecording`
++ `TestSourceGuards` (the now-pinned lazy-SDK invariant); `tests/test_ai_control_center.py::TestInvalidKeyState`
+(rate-limit-is-not-invalid-key core pin, byte-identical additivity, gemini_vision static path);
+`tests/test_pilots_api.py::TestLlmStatus` + the engine/llm inertness guards **+
+`test_control_center_overview_end_to_end_leaks_no_heavy_engine`**; webapp
+`mock.test.ts` / `Settings.test.tsx` / `App.test.tsx`. Gravity **step_86 checks 12–14**
+(reachable+scoped, additive proof, secret-containment + no-SDK-reach). **New env var:**
+`LLM_STATUS_MAX_AGE_HOURS` (float, default 24.0; non-secret `gui/env_io.py` `ALLOWED_KEY`).
+
+---
+
 ## Autopilot "Pilots" makeover — consumer-style marketplace over Stockpy's own strategies (PRs #226/#227, #250, #252; 2026-07-12/13)
 
 **Why.** Stockpy's operator console exposes its 17 signal modules and their backtests as a

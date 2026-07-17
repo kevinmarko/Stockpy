@@ -23,6 +23,7 @@ import type {
   Holding,
   IntervalUpdateResult,
   KillSwitchActionResult,
+  LlmStatus,
   ModelRow,
   OptionsDirective,
   OptionsMatrix,
@@ -1625,6 +1626,105 @@ export const mockApi = {
       {
         connected: readBrokerageConnected(),
         has_account_snapshot: readBrokerageConnected(),
+      },
+      80
+    );
+  },
+
+  async getLlmStatus(): Promise<LlmStatus> {
+    // The HONEST default posture: LLM_COMMENTARY_ENABLED / OPAL_RESEARCH_ENABLED
+    // / GRAVITY_AI_RUNNER_ENABLED all default False (settings.py), so every
+    // capability is `disabled`, no provider has a recorded call (`source:
+    // "none"`), and there is nothing to warn about (`attention: false`). This
+    // models the real out-of-box state and keeps App.test.tsx dot-free.
+    const noCall = (provider: "claude" | "gemini" | "openai") => ({
+      provider,
+      ok: null,
+      error_kind: null,
+      exception_type: null,
+      http_status: null,
+      checked_at: null,
+      age_seconds: null,
+      source: "none" as const,
+    });
+    const disabledRow = (
+      key: string,
+      label: string,
+      trigger: "on_demand" | "scheduled",
+      toggle_key: string,
+      provider_keys: string[],
+      active_provider: "claude" | "gemini" | "openai" | null
+    ) => ({
+      key,
+      label,
+      trigger,
+      toggle_key,
+      provider_keys,
+      active_provider,
+      invalid_provider: null,
+      enabled: false,
+      key_present: false,
+      built: true,
+      status: "disabled" as const,
+    });
+    return delay(
+      {
+        capabilities: [
+          disabledRow(
+            "claude_commentary",
+            "Analyst rationale commentary",
+            "on_demand",
+            "LLM_COMMENTARY_ENABLED",
+            ["ANTHROPIC_API_KEY"],
+            "claude"
+          ),
+          disabledRow(
+            "gemini_alerts",
+            "Alert commentary",
+            "scheduled",
+            "LLM_COMMENTARY_ENABLED",
+            ["GEMINI_API_KEY"],
+            "gemini"
+          ),
+          disabledRow(
+            "gemini_vision",
+            "Gemini chart vision",
+            "on_demand",
+            "LLM_COMMENTARY_ENABLED",
+            ["GEMINI_API_KEY"],
+            null
+          ),
+          disabledRow(
+            "gravity_ai_runner",
+            "Gravity AI runner (Claude + Gemini)",
+            "on_demand",
+            "GRAVITY_AI_RUNNER_ENABLED",
+            ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"],
+            null
+          ),
+          disabledRow(
+            "opal_research",
+            "Opal research agent",
+            "on_demand",
+            "OPAL_RESEARCH_ENABLED",
+            ["OPENAI_API_KEY"],
+            "openai"
+          ),
+        ],
+        capabilities_source: "gui.ai_control_center.control_center_overview",
+        providers: {
+          claude: noCall("claude"),
+          gemini: noCall("gemini"),
+          openai: noCall("openai"),
+        },
+        providers_source: "llm.status_store.read_all",
+        telemetry_note:
+          "Verdicts are recorded from REAL LLM calls only — this platform never " +
+          "probes a provider to test a key. A null last-call record means no LLM " +
+          "call has been made with the current key, which is the EXPECTED state " +
+          "when LLM commentary is off by default — it does NOT mean the key is broken.",
+        attention: false,
+        attention_reason: null,
       },
       80
     );

@@ -384,3 +384,40 @@ describe("mock API — brokerage-connect contract", () => {
     expect(joined).not.toContain("JBSWY3DPEHPK3PXP");
   });
 });
+
+describe("mock API — /llm/status contract", () => {
+  it("returns the honest default posture (all off, no calls, no attention)", async () => {
+    const s = await mockApi.getLlmStatus();
+    expect(s.attention).toBe(false);
+    expect(s.attention_reason).toBeNull();
+    expect(typeof s.capabilities_source).toBe("string");
+    expect(typeof s.providers_source).toBe("string");
+    expect(typeof s.telemetry_note).toBe("string");
+    // three providers, each a full-shape "none" record — null, never 0/false.
+    expect(Object.keys(s.providers).sort()).toEqual(["claude", "gemini", "openai"]);
+    for (const p of Object.values(s.providers)) {
+      expect(p.source).toBe("none");
+      expect(p.ok).toBeNull();
+      expect(p.error_kind).toBeNull();
+      expect(p.checked_at).toBeNull();
+      expect(p.age_seconds).toBeNull();
+    }
+  });
+
+  it("every capability row carries the full types.ts shape", async () => {
+    const s = await mockApi.getLlmStatus();
+    expect(s.capabilities.length).toBe(5);
+    for (const c of s.capabilities) {
+      expect(typeof c.key).toBe("string");
+      expect(typeof c.label).toBe("string");
+      expect(["on_demand", "scheduled"]).toContain(c.trigger);
+      expect(Array.isArray(c.provider_keys)).toBe(true);
+      // active_provider / invalid_provider are provider-name-or-null.
+      expect(c.active_provider === null || typeof c.active_provider === "string").toBe(true);
+      expect(c.invalid_provider === null || typeof c.invalid_provider === "string").toBe(true);
+      expect(typeof c.enabled).toBe("boolean");
+      expect(typeof c.built).toBe("boolean");
+      expect(["ready", "disabled", "missing_key", "invalid_key", "not_built"]).toContain(c.status);
+    }
+  });
+});

@@ -21,6 +21,9 @@ import { StrategyMatrix } from "./screens/StrategyMatrix";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { usePwaStatus } from "./hooks/usePwaStatus";
+import { useApi } from "./hooks/useApi";
+import { api } from "./api/client";
+import type { LlmStatus } from "./api/types";
 import { theme } from "./theme";
 
 /** Shared between the mobile bottom tab bar and the desktop sidebar. */
@@ -53,6 +56,14 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
 function SettingsButton() {
   const nav = useNavigate();
   const pwa = usePwaStatus();
+  // ONE fetch per app load -- SettingsButton lives in App's shell (outside
+  // <Routes>), so it mounts once and does NOT re-mount on navigation. No
+  // usePoll: LLM config changes on an operator's .env edit, not on a timer.
+  // On failure `llm` stays undefined -> no dot: an absent dot is the ABSENCE
+  // of a claim, never a fabricated all-clear NOR a false key alarm when the
+  // real problem is the network (the Settings screen shows the honest error).
+  const { data: llm } = useApi<LlmStatus>(() => api.getLlmStatus(), []);
+  const llmAttention = llm?.attention === true;
   return (
     <button
       className="btn"
@@ -86,6 +97,23 @@ function SettingsButton() {
             position: "absolute",
             top: 2,
             right: 2,
+            width: 9,
+            height: 9,
+            borderRadius: "50%",
+            background: theme.caution,
+            border: `2px solid ${theme.base}`,
+          }}
+        />
+      )}
+      {llmAttention && (
+        <span
+          aria-hidden
+          data-testid="llm-config-dot"
+          title="An enabled AI capability is missing or was rejected a key"
+          style={{
+            position: "absolute",
+            top: 2,
+            left: 2,
             width: 9,
             height: 9,
             borderRadius: "50%",

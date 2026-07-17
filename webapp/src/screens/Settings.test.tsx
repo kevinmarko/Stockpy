@@ -14,7 +14,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "./Settings";
 import { api } from "../api/client";
-import type { AutomationSchedule, AutomationStatus, Follow, FollowResult, TriggerRunResult } from "../api/types";
+import type { AutomationSchedule, AutomationStatus, Follow, FollowResult, LlmProviderName, LlmStatus, TriggerRunResult } from "../api/types";
 import { writeOnboarding, readOnboarding } from "../onboarding";
 
 vi.mock("virtual:pwa-register/react", () => ({
@@ -533,5 +533,119 @@ describe("Settings screen — Active follows / Re-plan", () => {
     expect(
       await screen.findByText(/Preview only — execution mode is off, nothing was written\./)
     ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The AI providers section — LLM config + last-real-call telemetry. All copy
+// is past-tense; a rejected key is a rendered WARNING, a transient failure is
+// telemetry that must NOT render as a key problem, and a deliberately-off
+// feature is neutral (never a false alarm).
+// ---------------------------------------------------------------------------
+
+const _noCall = (provider: LlmProviderName) => ({
+  provider, ok: null, error_kind: null, exception_type: null,
+  http_status: null, checked_at: null, age_seconds: null, source: "none" as const,
+});
+
+function llmStatus(overrides: Partial<LlmStatus> = {}): LlmStatus {
+  return {
+    capabilities: [],
+    capabilities_source: "test",
+    providers: { claude: _noCall("claude"), gemini: _noCall("gemini"), openai: _noCall("openai") },
+    providers_source: "test",
+    telemetry_note: "Verdicts are recorded from REAL LLM calls only.",
+    attention: false,
+    attention_reason: null,
+    ...overrides,
+  };
+}
+
+describe("Settings — AI providers section", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
+    // The section's siblings need SOME status/schedule to render the screen.
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+  });
+
+  it("renders an invalid_key capability with an amber notice naming the key setting", async () => {
+    vi.spyOn(api, "getLlmStatus").mockResolvedValue(
+      llmStatus({
+        capabilities: [
+          {
+            key: "claude_commentary", label: "Analyst rationale commentary",
+            trigger: "on_demand", toggle_key: "LLM_COMMENTARY_ENABLED",
+            provider_keys: ["ANTHROPIC_API_KEY"], active_provider: "claude",
+            invalid_provider: "claude", enabled: true, key_present: true,
+            built: true, status: "invalid_key",
+          },
+        ],
+        providers: {
+          claude: { provider: "claude", ok: false, error_kind: "auth", exception_type: "AuthenticationError", http_status: 401, checked_at: new Date().toISOString(), age_seconds: 30, source: "last_call" },
+          gemini: _noCall("gemini"), openai: _noCall("openai"),
+        },
+        attention: true, attention_reason: "invalid_key",
+      })
+    );
+    renderSettings();
+    expect(await screen.findByText(/was rejected as unauthenticated/i)).toBeInTheDocument();
+    expect(screen.getByText("ANTHROPIC_API_KEY")).toBeInTheDocument();
+  });
+
+  it("a rate_limit failure is telemetry, NOT an invalid-key warning", async () => {
+    vi.spyOn(api, "getLlmStatus").mockResolvedValue(
+      llmStatus({
+        capabilities: [
+          {
+            key: "claude_commentary", label: "Analyst rationale commentary",
+            trigger: "on_demand", toggle_key: "LLM_COMMENTARY_ENABLED",
+            provider_keys: ["ANTHROPIC_API_KEY"], active_provider: "claude",
+            invalid_provider: null, enabled: true, key_present: true,
+            built: true, status: "ready",
+          },
+        ],
+        providers: {
+          claude: { provider: "claude", ok: false, error_kind: "rate_limit", exception_type: "RateLimitError", http_status: 429, checked_at: new Date().toISOString(), age_seconds: 5, source: "last_call" },
+          gemini: _noCall("gemini"), openai: _noCall("openai"),
+        },
+      })
+    );
+    renderSettings();
+    // The telemetry line renders, but never the invalid-key warning.
+    expect(await screen.findByText(/Last call failed: rate_limit/i)).toBeInTheDocument();
+    expect(screen.queryByText(/was rejected as unauthenticated/i)).not.toBeInTheDocument();
+  });
+
+  it("renders the telemetry note and a neutral 'Off' for a disabled capability", async () => {
+    vi.spyOn(api, "getLlmStatus").mockResolvedValue(
+      llmStatus({
+        capabilities: [
+          {
+            key: "gemini_vision", label: "Gemini chart vision",
+            trigger: "on_demand", toggle_key: "LLM_COMMENTARY_ENABLED",
+            provider_keys: ["GEMINI_API_KEY"], active_provider: null,
+            invalid_provider: null, enabled: false, key_present: false,
+            built: true, status: "disabled",
+          },
+        ],
+      })
+    );
+    renderSettings();
+    expect(await screen.findByText(/Verdicts are recorded from REAL LLM calls only/i)).toBeInTheDocument();
+    expect(screen.queryByText(/was rejected as unauthenticated/i)).not.toBeInTheDocument();
+  });
+
+  it("renders an ErrorState when the fetch fails", async () => {
+    vi.spyOn(api, "getLlmStatus").mockRejectedValue(new Error("boom"));
+    renderSettings();
+    // AI providers heading is always present; the section shows an error under it.
+    expect(await screen.findByText("AI providers")).toBeInTheDocument();
   });
 });

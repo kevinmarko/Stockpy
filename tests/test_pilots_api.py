@@ -16,6 +16,7 @@ performance loader at ``tests/fixtures`` by monkeypatching
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 from unittest import mock
 
@@ -1757,3 +1758,201 @@ class TestStrategyWritesInvariants:
         must never flip this on. Neither allowlisted nor secret — hand-set only."""
         assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
         assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
+
+# ---------------------------------------------------------------------------
+# GET /llm/status — LLM configuration + last-real-call telemetry.
+# Mirrors TestBrokerageStatus's four axes (tests/test_brokerage_connect.py):
+# unconfigured -> honest shape, configured -> reflected, NOT gated by the LLM
+# master switch, and a sub-read failure surfaces (non-raising is the store's
+# own contract, pinned in tests/test_llm_status_store.py).
+# ---------------------------------------------------------------------------
+
+
+def _clear_llm_keys(monkeypatch):
+    for k in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setattr(settings, k, None, raising=False)
+
+
+class TestLlmStatus:
+    def test_cold_start_honest_empty_shape(self, tmp_path, monkeypatch):
+        # Everything off + no keys + no recorded calls -> deterministic body.
+        _clear_llm_keys(monkeypatch)
+        monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", False, raising=False)
+        monkeypatch.setattr(settings, "OPAL_RESEARCH_ENABLED", False, raising=False)
+        monkeypatch.setattr(settings, "GRAVITY_AI_RUNNER_ENABLED", False, raising=False)
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/llm/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["attention"] is False
+        assert body["attention_reason"] is None
+        assert set(body["providers"]) == {"claude", "gemini", "openai"}
+        assert all(p["source"] == "none" for p in body["providers"].values())
+        assert all(row["status"] == "disabled" for row in body["capabilities"])
+        assert body["capabilities_source"]
+        assert body["providers_source"]
+        assert body["telemetry_note"]
+
+    def test_configured_auth_rejection_flags_attention(self, tmp_path, monkeypatch):
+        import llm.status_store as ss
+
+        monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", True, raising=False)
+        monkeypatch.setattr(settings, "LLM_COMMENTARY_RATIONALE_PROVIDER", "claude", raising=False)
+        monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-x", raising=False)
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            # Record a real auth failure for the current key.
+            exc = type("AuthenticationError", (Exception,), {})("bad key")
+            exc.status_code = 401
+            ss.record_failure("claude", exc)
+            resp = client.get("/llm/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["attention"] is True
+        assert body["attention_reason"] == "invalid_key"
+        claude_row = next(r for r in body["capabilities"] if r["key"] == "claude_commentary")
+        assert claude_row["status"] == "invalid_key"
+        assert claude_row["invalid_provider"] == "claude"
+
+    def test_not_gated_by_master_switch(self, tmp_path, monkeypatch):
+        # Reads even when the feature is OFF — the whole point is to explain a null.
+        _clear_llm_keys(monkeypatch)
+        monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", False, raising=False)
+        monkeypatch.setattr(settings, "OPAL_RESEARCH_ENABLED", False, raising=False)
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/llm/status")
+        assert resp.status_code == 200
+
+    def test_response_carries_no_key_material_or_fingerprint(self, tmp_path, monkeypatch):
+        import llm.status_store as ss
+
+        sentinel = "sk-ant-QWZXCVBNMASDFGHJKL987654321"
+        monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", sentinel, raising=False)
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            ss.record_success("claude")
+            on_disk = json.loads((tmp_path / ss.LLM_STATUS_FILENAME).read_text())
+            fingerprint = on_disk["providers"]["claude"]["key_fingerprint"]
+            resp = client.get("/llm/status")
+        assert sentinel not in resp.text
+        assert fingerprint not in resp.text
+
+    def test_makes_no_network_call_and_constructs_no_provider(self, tmp_path, monkeypatch):
+        # The endpoint reads settings directly — it must NEVER route through
+        # llm.router.get_*_provider() (which constructs a provider, firing an
+        # SDK import + a potential network call).
+        import llm.router as router
+
+        monkeypatch.setattr(
+            router, "get_rationale_provider", lambda: (_ for _ in ()).throw(AssertionError("constructed!"))
+        )
+        monkeypatch.setattr(
+            router, "get_alert_provider", lambda: (_ for _ in ()).throw(AssertionError("constructed!"))
+        )
+        monkeypatch.setattr(
+            router, "get_research_provider", lambda: (_ for _ in ()).throw(AssertionError("constructed!"))
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/llm/status")
+        assert resp.status_code == 200
+
+    def test_read_token_gates_the_endpoint(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/llm/status")
+        assert resp.status_code == 401
+
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/llm/status", headers={"Authorization": "Bearer read-tok"})
+        assert resp.status_code == 200
+
+    def test_read_token_unset_is_open(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", ""):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/llm/status")
+        assert resp.status_code == 200
+
+
+def test_engine_package_init_stays_import_inert():
+    """api/pilots_api.py imports gui.ai_control_center, whose
+    control_center_overview() calls importlib.util.find_spec on the backing
+    modules -- including ``engine.gravity_ai_runner``, which imports the
+    ``engine`` PACKAGE (executing engine/__init__.py) at runtime.
+
+    engine/__init__.py is docstring-only today, so that's inert. But
+    engine/advisory.py imports processing_engine / forecasting_engine /
+    technical_options_engine / strategy_engine -- FOUR of the heavy engines on
+    the deny-list of test_pilots_api_never_imports_heavy_engines above. If
+    anyone ever adds a real import to engine/__init__.py, api/pilots_api.py
+    would silently acquire those heavy engines at status-endpoint time, and the
+    AST guard (which walks import STATEMENTS only) would never catch it. This
+    pins engine/__init__.py import-inert, exactly like the gui/__init__.py
+    guard one package over."""
+    import engine
+
+    tree = ast.parse(pathlib.Path(engine.__file__).read_text(encoding="utf-8"))
+    real_imports = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        and getattr(node, "module", None) != "__future__"
+    ]
+    assert not real_imports, (
+        f"engine/__init__.py must stay import-inert (found: {real_imports}) — "
+        "gui.ai_control_center.control_center_overview find_spec's engine.* and "
+        "would pull any real import here into api/pilots_api.py at status time."
+    )
+
+
+def test_llm_package_import_reaches_no_sdk_and_no_heavy_engine():
+    """`import llm` (which api/pilots_api.py's `import llm.status_store` runs)
+    must not eagerly pull in any SDK or heavy engine. Subprocess-isolated
+    because sys.modules is polluted by sibling tests that install fake SDKs
+    (precedent: tests/test_backfill_edgar_fundamentals.py)."""
+    import subprocess
+    import sys
+
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    code = (
+        "import llm, llm.status_store, sys;"
+        "bad = {'anthropic','openai','google.genai','processing_engine',"
+        "'strategy_engine','forecasting_engine','macro_engine',"
+        "'technical_options_engine','main_orchestrator'} & set(sys.modules);"
+        "assert not bad, bad"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=str(repo_root), capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_control_center_overview_end_to_end_leaks_no_heavy_engine():
+    """Stronger than test_engine_package_init_stays_import_inert (which only
+    proves engine/__init__.py's SOURCE is currently empty): this actually
+    DRIVES the runtime path GET /llm/status exercises —
+    gui.ai_control_center.control_center_overview() —> _module_available() —>
+    importlib.util.find_spec("engine.gravity_ai_runner") —> imports the
+    `engine` package as a side effect — and confirms none of the four
+    deny-listed heavy engines (processing_engine / forecasting_engine /
+    technical_options_engine / strategy_engine, all imported by
+    engine/advisory.py) land in sys.modules as a result. Subprocess-isolated
+    for a clean sys.modules baseline. This is the live demonstration behind
+    test_engine_package_init_stays_import_inert's static guard — if that
+    guard is ever weakened, this test independently catches the actual leak."""
+    import subprocess
+    import sys
+
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    code = (
+        "from gui.ai_control_center import control_center_overview;"
+        "from settings import settings;"
+        "control_center_overview(settings);"  # the exact call GET /llm/status makes
+        "import sys;"
+        "bad = {'processing_engine','strategy_engine','forecasting_engine',"
+        "'technical_options_engine','macro_engine','main_orchestrator'} & set(sys.modules);"
+        "assert not bad, bad"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=str(repo_root), capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr

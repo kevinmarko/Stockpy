@@ -140,6 +140,17 @@ from reporting.progress import read_progress
 import data.robinhood_portfolio as robinhood_portfolio
 import data.brokerage_credentials as brokerage_credentials
 
+# LLM configuration status (GET /llm/status). `gui.ai_control_center` is
+# stdlib-only + Streamlit-free (the headless status logic); `llm.status_store`
+# is a leaf module that imports no SDK. Neither is on the AST-guard deny-list.
+# NOTE: control_center_overview() calls importlib.util.find_spec on the backing
+# modules (e.g. "engine.gravity_ai_runner"), which imports the `engine` package
+# — kept import-inert by tests precisely so this stays safe (see the
+# test_engine_package_init_stays_import_inert guard). Imported at module top so
+# tests can `mock.patch.object(pilots_api, ...)`.
+import gui.ai_control_center as ai_control_center
+import llm.status_store as llm_status_store
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -954,6 +965,64 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
         # Retained for back-compat with any client reading `note` directly.
         response["note"] = note
     return response
+
+
+# ---------------------------------------------------------------------------
+# LLM configuration status (read-only diagnostics — see module docstring)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/llm/status", dependencies=[Depends(require_read_token)])
+def get_llm_status() -> Dict[str, Any]:
+    """LLM provider configuration + last-real-call telemetry.
+
+    Read-only — deliberately NOT gated by ``LLM_COMMENTARY_ENABLED`` /
+    ``OPAL_RESEARCH_ENABLED`` / ``GRAVITY_AI_RUNNER_ENABLED`` (mirrors
+    ``GET /brokerage/status``'s posture exactly: a status endpoint REPORTS
+    configuration, it does not enforce it — and the whole point is to be
+    readable precisely WHEN a feature is off and the operator is working out
+    why the narratives are null).
+
+    NEVER probes a provider. Every verdict here was recorded from a REAL call
+    the platform already made (``llm/status_store.py``, written from
+    ``llm/providers.py``'s own except blocks) — this endpoint makes ZERO
+    network calls and constructs ZERO providers (constructing one is what fires
+    an SDK import; settings are read directly, never via
+    ``llm.router.get_*_provider()``).
+
+    Never returns a key, a key prefix, or a key fingerprint. The fingerprint is
+    module-private to ``llm/status_store.py`` and is stripped before any value
+    crosses that boundary (CONSTRAINT #3).
+
+    Sources are NAMED per-field (mirrors ``GET /automation/status``):
+    ``capabilities_source``, ``providers_source``, and each provider record's
+    own ``source``. A null telemetry record is the EXPECTED state, not a
+    failure — see ``telemetry_note``. No ``try/except``: both sub-reads are
+    non-raising by their own contracts (CONSTRAINT #6), a property pinned by
+    test rather than papered over here.
+    """
+    last_calls = llm_status_store.read_all()
+    rows = ai_control_center.control_center_overview(settings, last_calls=last_calls)
+    # attention = at least one ENABLED capability is misconfigured. invalid_key
+    # (a rejected key) outranks missing_key (an unset key) as the reason.
+    attention_reason: Optional[str] = None
+    for row in rows:
+        if not row.get("enabled"):
+            continue
+        if row.get("status") == "invalid_key":
+            attention_reason = "invalid_key"
+            break
+        if row.get("status") == "missing_key" and attention_reason is None:
+            attention_reason = "missing_key"
+    return {
+        "capabilities": rows,
+        "capabilities_source": "gui.ai_control_center.control_center_overview",
+        "providers": last_calls,
+        "providers_source": "llm.status_store.read_all",
+        "telemetry_note": llm_status_store.LLM_STATUS_ADVISORY_NOTE,
+        "attention": attention_reason is not None,
+        "attention_reason": attention_reason,
+    }
 
 
 # ---------------------------------------------------------------------------

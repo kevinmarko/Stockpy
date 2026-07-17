@@ -254,6 +254,77 @@ export interface BrokerageDisconnectResult {
 }
 
 // ---------------------------------------------------------------------------
+// GET /llm/status — LLM provider configuration + last-real-call telemetry.
+// Never probes a provider; never carries a key, prefix, or fingerprint. A null
+// verdict means "no call has been made with the current key yet" (the expected
+// state with LLM commentary off by default), NOT "broken". All copy the UI
+// renders from this is past-tense and timestamped.
+// ---------------------------------------------------------------------------
+
+export type LlmProviderName = "claude" | "gemini" | "openai";
+export type LlmErrorKind =
+  | "auth"
+  | "rate_limit"
+  | "network"
+  | "timeout"
+  | "schema"
+  | "unknown";
+/**
+ * "last_call" — a current, claimable verdict.
+ * "none"      — no call ever recorded for this provider.
+ * "key_rotated" — a verdict exists but for a DIFFERENT key; every field is
+ *   nulled (it isn't about the current key at all).
+ * "expired"   — a TRANSIENT verdict older than the age bound; fields are
+ *   RETAINED (same key, just old) and rendered muted, not as a current claim.
+ */
+export type LlmTelemetrySource = "last_call" | "none" | "key_rotated" | "expired";
+export type LlmCapabilityStatus =
+  | "ready"
+  | "disabled"
+  | "missing_key"
+  | "invalid_key"
+  | "not_built";
+
+/** One provider's last-real-call verdict. All fields null when source != "last_call". */
+export interface LlmProviderTelemetry {
+  provider: LlmProviderName;
+  ok: boolean | null;
+  error_kind: LlmErrorKind | null;
+  exception_type: string | null;
+  http_status: number | null;
+  checked_at: string | null;
+  age_seconds: number | null;
+  source: LlmTelemetrySource;
+}
+
+/** One AI capability's config + readiness row. */
+export interface LlmCapabilityRow {
+  key: string;
+  label: string;
+  trigger: "on_demand" | "scheduled";
+  toggle_key: string | null;
+  provider_keys: string[];
+  active_provider: LlmProviderName | null;
+  /** Non-null ⇒ this provider's key was rejected on the last REAL call. */
+  invalid_provider: LlmProviderName | null;
+  enabled: boolean;
+  key_present: boolean;
+  built: boolean;
+  status: LlmCapabilityStatus;
+}
+
+/** GET /llm/status full response. `attention` is server-computed. */
+export interface LlmStatus {
+  capabilities: LlmCapabilityRow[];
+  capabilities_source: string;
+  providers: Record<LlmProviderName, LlmProviderTelemetry>;
+  providers_source: string;
+  telemetry_note: string;
+  attention: boolean;
+  attention_reason: "invalid_key" | "missing_key" | null;
+}
+
+// ---------------------------------------------------------------------------
 // Backend analytics surfaces (zero-PWA-presence gap) — one interface per
 // api/pilots_api.py endpoint added in this effort. Every leaf the backend
 // cannot compute is `null` (NEVER 0) so the UI renders "—".

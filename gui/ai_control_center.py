@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-CapabilityStatus = Literal["ready", "disabled", "missing_key", "not_built"]
+CapabilityStatus = Literal["ready", "disabled", "missing_key", "invalid_key", "not_built"]
 
 
 @dataclass(frozen=True)
@@ -233,21 +233,85 @@ def _keys_present(settings_obj: Any, cap: AICapability) -> bool:
     return True
 
 
-def capability_status(settings_obj: Any, cap: AICapability) -> Dict[str, Any]:
+# Inverse of _PROVIDER_KEY_MAP: key-setting attribute -> provider name.
+_KEY_ATTR_TO_PROVIDER: Dict[str, str] = {v: k for k, v in _PROVIDER_KEY_MAP.items()}
+
+
+def _required_providers(settings_obj: Any, cap: AICapability) -> List[str]:
+    """The provider name(s) whose API key this capability actually needs.
+
+    For a flexible capability (``provider_selector_setting`` set) this is the
+    single LIVE choice; otherwise it's every provider named by the static
+    ``provider_key_settings`` tuple. This is the dual of :func:`_keys_present`,
+    reused to resolve which last-call verdict is relevant to the capability.
+    """
+    choice = _active_provider(settings_obj, cap)
+    if choice is not None:
+        return [choice] if choice in _PROVIDER_KEY_MAP else []
+    return [_KEY_ATTR_TO_PROVIDER[k] for k in cap.provider_key_settings if k in _KEY_ATTR_TO_PROVIDER]
+
+
+def _invalid_provider(
+    settings_obj: Any,
+    cap: AICapability,
+    last_calls: Optional[Dict[str, Dict[str, Any]]],
+) -> Optional[str]:
+    """The provider whose LAST REAL call was AUTH-rejected, or ``None``.
+
+    ``last_calls`` is ``llm.status_store.read_all()``'s output, keyed by
+    provider name. ONLY ``error_kind == "auth"`` on a current
+    (``source == "last_call"``) record counts: a rate_limit / network / timeout
+    / schema failure is a real problem worth surfacing as telemetry, but it is
+    NOT evidence the key is wrong and must never render as ``invalid_key``.
+    ANY required provider being auth-rejected marks the capability invalid (the
+    dual of ``_keys_present``'s ALL-must-be-present).
+    """
+    if not last_calls:
+        return None
+    for provider in _required_providers(settings_obj, cap):
+        lc = last_calls.get(provider)
+        if not isinstance(lc, dict):
+            continue
+        if (
+            lc.get("source") == "last_call"
+            and lc.get("ok") is False
+            and lc.get("error_kind") == "auth"
+        ):
+            return provider
+    return None
+
+
+def capability_status(
+    settings_obj: Any,
+    cap: AICapability,
+    *,
+    last_calls: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Classify a single capability's readiness.
 
-    Returns a dict: ``{enabled, key_present, built, status}`` where ``status``
-    is one of ``ready`` / ``disabled`` / ``missing_key`` / ``not_built``.
+    Returns a dict: ``{enabled, key_present, built, status, active_provider,
+    invalid_provider}`` where ``status`` is one of ``ready`` / ``disabled`` /
+    ``missing_key`` / ``invalid_key`` / ``not_built``.
 
     Ordering of the verdict (most-blocking first):
       1. ``not_built``    — backing module absent (e.g. Opal before its build).
       2. ``disabled``     — master switch off.
       3. ``missing_key``  — enabled but a provider key is unset.
-      4. ``ready``        — enabled + built + keys present.
+      4. ``invalid_key``  — enabled, key present, but the last REAL call to that
+         provider was auth-rejected (only reachable when ``last_calls`` is
+         supplied). Mutually exclusive with ``missing_key`` by construction
+         (that needs ``key_present=False``; this needs ``key_present=True``).
+      5. ``ready``        — enabled + built + keys present + no auth rejection.
+
+    ``last_calls`` (``llm.status_store.read_all()`` output) is OPTIONAL. When
+    omitted the ``invalid_key`` state is unreachable and every input produces a
+    byte-identical ``status`` to the pre-telemetry behavior — the additive
+    contract the truth-table tests and Gravity step_86 check 4 rely on.
     """
     built = _module_available(cap.module)
     enabled = _is_enabled(settings_obj, cap)
     key_present = _keys_present(settings_obj, cap)
+    invalid_provider = _invalid_provider(settings_obj, cap, last_calls) if key_present else None
 
     if not built:
         status: CapabilityStatus = "not_built"
@@ -255,6 +319,8 @@ def capability_status(settings_obj: Any, cap: AICapability) -> Dict[str, Any]:
         status = "disabled"
     elif not key_present:
         status = "missing_key"
+    elif invalid_provider is not None:
+        status = "invalid_key"
     else:
         status = "ready"
 
@@ -264,14 +330,26 @@ def capability_status(settings_obj: Any, cap: AICapability) -> Dict[str, Any]:
         "built": bool(built),
         "status": status,
         "active_provider": _active_provider(settings_obj, cap),
+        "invalid_provider": invalid_provider,
     }
 
 
-def control_center_overview(settings_obj: Any) -> List[Dict[str, Any]]:
-    """Return one status row per capability, in display order."""
+def control_center_overview(
+    settings_obj: Any,
+    *,
+    last_calls: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Return one status row per capability, in display order.
+
+    ``last_calls`` is threaded straight through to :func:`capability_status`;
+    the caller (the panel or the API) reads ``llm.status_store.read_all()`` and
+    passes it — this module never touches the store itself, so it stays
+    Streamlit-free AND filesystem-free (testable cold with a bare
+    ``SimpleNamespace``).
+    """
     rows: List[Dict[str, Any]] = []
     for cap in CAPABILITIES:
-        st = capability_status(settings_obj, cap)
+        st = capability_status(settings_obj, cap, last_calls=last_calls)
         active = st["active_provider"]
         required_key = _PROVIDER_KEY_MAP.get(active) if active else None
         rows.append({
@@ -289,6 +367,7 @@ STATUS_BADGE: Dict[str, str] = {
     "ready": "🟢 ready",
     "disabled": "⚪ disabled",
     "missing_key": "🟡 key missing",
+    "invalid_key": "🔴 key rejected",
     "not_built": "🚧 not built",
 }
 

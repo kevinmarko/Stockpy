@@ -411,3 +411,146 @@ class TestTabWiring:
         src = (_REPO_ROOT / "gui" / "ai_control_center.py").read_text(encoding="utf-8")
         for verb in ("submit_order", "place_order", "buy_order", "sell_order"):
             assert verb not in src
+
+
+# ---------------------------------------------------------------------------
+# The 5th state — invalid_key from last-real-call telemetry.
+# ADDITIVE contract: with last_calls omitted/None, every input is byte-identical
+# to the pre-telemetry status (the truth-table tests above and Gravity step_86
+# check 4 rely on this). invalid_key is ONLY ever reachable via `last_calls`.
+# ---------------------------------------------------------------------------
+class TestInvalidKeyState:
+    def _cap(self, key: str) -> AICapability:
+        return next(c for c in CAPABILITIES if c.key == key)
+
+    def _keyed_settings(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            LLM_COMMENTARY_ENABLED=True,
+            LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+            LLM_COMMENTARY_ALERT_PROVIDER="gemini",
+            ANTHROPIC_API_KEY="sk-ant-x",
+            GEMINI_API_KEY="sk-gem-x",
+            OPENAI_API_KEY="sk-openai-x",
+            GRAVITY_AI_RUNNER_ENABLED=True,
+            OPAL_RESEARCH_ENABLED=True,
+            OPAL_RESEARCH_PROVIDER="openai",
+        )
+
+    def test_auth_rejection_renders_invalid_key(self) -> None:
+        st = capability_status(
+            self._keyed_settings(),
+            self._cap("claude_commentary"),
+            last_calls={"claude": {"source": "last_call", "ok": False, "error_kind": "auth"}},
+        )
+        assert st["status"] == "invalid_key"
+        assert st["invalid_provider"] == "claude"
+
+    @pytest.mark.parametrize("kind", ["rate_limit", "network", "timeout", "schema", "unknown"])
+    def test_non_auth_failure_is_NOT_invalid_key(self, kind: str) -> None:
+        # The core honesty pin: a transient/schema failure is NOT a key problem.
+        st = capability_status(
+            self._keyed_settings(),
+            self._cap("claude_commentary"),
+            last_calls={"claude": {"source": "last_call", "ok": False, "error_kind": kind}},
+        )
+        assert st["status"] == "ready"
+        assert st["invalid_provider"] is None
+
+    def test_key_rotated_verdict_is_not_claimed(self) -> None:
+        st = capability_status(
+            self._keyed_settings(),
+            self._cap("claude_commentary"),
+            last_calls={"claude": {"source": "key_rotated", "ok": None, "error_kind": None}},
+        )
+        assert st["status"] == "ready"
+
+    def test_expired_auth_would_still_gate_but_store_never_expires_auth(self) -> None:
+        # Defensive: even a source="expired" record (which the store only ever
+        # produces for TRANSIENT kinds) must not render invalid_key, because
+        # only source=="last_call" counts.
+        st = capability_status(
+            self._keyed_settings(),
+            self._cap("claude_commentary"),
+            last_calls={"claude": {"source": "expired", "ok": False, "error_kind": "auth"}},
+        )
+        assert st["status"] == "ready"
+
+    def test_omitting_last_calls_is_status_identical(self) -> None:
+        # ADDITIVITY: for every capability across a settings matrix, the status
+        # with last_calls=None equals the status with no kwarg at all.
+        matrices = [
+            SimpleNamespace(),  # everything unset
+            self._keyed_settings(),  # everything enabled + keyed
+            SimpleNamespace(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                LLM_COMMENTARY_ALERT_PROVIDER="gemini",
+                ANTHROPIC_API_KEY="",  # missing key
+                GEMINI_API_KEY="",
+            ),
+        ]
+        for s in matrices:
+            for cap in CAPABILITIES:
+                a = capability_status(s, cap)["status"]
+                b = capability_status(s, cap, last_calls=None)["status"]
+                assert a == b, f"{cap.key}: {a!r} != {b!r}"
+
+    def test_missing_key_and_invalid_key_mutually_exclusive(self) -> None:
+        # A stale auth verdict must not override missing_key when the key is unset.
+        s = self._keyed_settings()
+        s.ANTHROPIC_API_KEY = ""
+        st = capability_status(
+            s,
+            self._cap("claude_commentary"),
+            last_calls={"claude": {"source": "last_call", "ok": False, "error_kind": "auth"}},
+        )
+        assert st["status"] == "missing_key"
+
+    def test_gemini_vision_invalid_key_via_static_provider_keys(self) -> None:
+        # gemini_vision is non-flexible (active_provider is None) — a bad
+        # GEMINI_API_KEY must STILL turn it invalid_key. This is the hole a
+        # single `last_call` param (vs. a provider-keyed dict) would leave.
+        st = capability_status(
+            self._keyed_settings(),
+            self._cap("gemini_vision"),
+            last_calls={"gemini": {"source": "last_call", "ok": False, "error_kind": "auth"}},
+        )
+        assert st["status"] == "invalid_key"
+        assert st["invalid_provider"] == "gemini"
+
+    def test_disabled_outranks_invalid_key(self) -> None:
+        s = self._keyed_settings()
+        s.LLM_COMMENTARY_ENABLED = False
+        st = capability_status(
+            s,
+            self._cap("claude_commentary"),
+            last_calls={"claude": {"source": "last_call", "ok": False, "error_kind": "auth"}},
+        )
+        assert st["status"] == "disabled"
+
+    def test_status_badge_has_invalid_key(self) -> None:
+        assert status_badge("invalid_key")
+
+    def test_all_four_original_badges_survive(self) -> None:
+        # Gravity step_86 check 13 analogue: the additive change must not drop
+        # any original badge token.
+        for token in ("ready", "disabled", "missing_key", "not_built"):
+            assert status_badge(token)
+
+
+def test_ai_control_center_never_imports_status_store() -> None:
+    """The headless status module must stay filesystem-free (no store import):
+    it must be testable cold with a bare SimpleNamespace, and control_center_
+    overview(SimpleNamespace()) must never read the real output/llm_status.json.
+    The panel and the API read the store and pass last_calls in."""
+    import ast
+
+    from gui import ai_control_center as acc
+
+    tree = ast.parse(Path(acc.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert "status_store" not in node.module
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert "status_store" not in alias.name

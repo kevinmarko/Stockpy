@@ -5,16 +5,26 @@ import type {
   AutomationSchedule,
   AutomationStatus,
   Follow,
+  LlmCapabilityRow,
+  LlmStatus,
   StrategyMatrix,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Input, Loading, MetricBadge } from "../components/ui";
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  Input,
+  Loading,
+  MetricBadge,
+  StaleDataNotice,
+} from "../components/ui";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { PwaStatusSection } from "../components/PwaStatusSection";
-import { fmtAge, fmtDate, fmtUsd } from "../format";
+import { fmtAge, fmtDate, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
 
@@ -106,6 +116,8 @@ export function Settings() {
 
       <ActiveFollowsSection />
 
+      <LlmStatusSection />
+
       <div style={{ marginTop: 16 }}>
         <PwaStatusSection />
       </div>
@@ -126,6 +138,108 @@ export function Settings() {
         unavailable.
       </p>
     </div>
+  );
+}
+
+/** Badge label per capability status (the Streamlit STATUS_BADGE analogue). */
+const LLM_BADGE_LABEL: Record<LlmCapabilityRow["status"], string> = {
+  ready: "Ready",
+  disabled: "Off",
+  missing_key: "Key missing",
+  invalid_key: "Key rejected",
+  not_built: "Not built",
+};
+
+/**
+ * AI provider status — presence + LAST-REAL-CALL telemetry over GET /llm/status.
+ * The platform never probes a provider to test a key, so a null verdict means
+ * "no call has been made with the current key yet" (the expected state with LLM
+ * commentary off by default), NOT "broken". All copy is past-tense + timestamped.
+ * No usePoll: config changes on an operator's .env edit, not on a timer.
+ */
+function LlmStatusSection() {
+  const { data, loading, error, status, stale, cachedAt, reload } = useApi<LlmStatus>(
+    () => api.getLlmStatus(),
+    []
+  );
+
+  return (
+    <SectionCard
+      title="AI providers"
+      sub="Which LLM capabilities are configured, and what happened on the last real call."
+    >
+      {loading && <Loading lines={3} />}
+      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+      {!loading && !error && data && (
+        <div className="list">
+          {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
+          {data.capabilities.map((c) => {
+            const tel = c.active_provider ? data.providers[c.active_provider] : null;
+            // disabled / not_built are a deliberate "off" -> neutral, never a warning.
+            const good =
+              c.status === "ready"
+                ? true
+                : c.status === "invalid_key" || c.status === "missing_key"
+                  ? false
+                  : null;
+            return (
+              <div key={c.key} style={{ marginBottom: 6 }}>
+                <div className="row">
+                  <span className="row-title">{c.label}</span>
+                  <MetricBadge
+                    label={LLM_BADGE_LABEL[c.status]}
+                    value={c.active_provider ?? c.provider_keys.join(", ")}
+                    good={good}
+                  />
+                </div>
+                {c.status === "invalid_key" && c.invalid_provider && (
+                  <div className="notice notice-warn" style={{ marginTop: 8 }}>
+                    <span aria-hidden>⚠️</span>
+                    <span>
+                      The last real {c.invalid_provider} call
+                      {tel?.checked_at ? ` (${timeAgo(tel.checked_at)})` : ""} was rejected as
+                      unauthenticated. Check <code>{c.provider_keys.join(", ")}</code> in{" "}
+                      <code>.env</code>. This clears automatically on the next successful call, or
+                      as soon as the key is changed.
+                    </span>
+                  </div>
+                )}
+                {c.status === "missing_key" && (
+                  <div className="notice notice-warn" style={{ marginTop: 8 }}>
+                    <span aria-hidden>⚠️</span>
+                    <span>
+                      Enabled, but <code>{c.provider_keys.join(", ")}</code> is unset in{" "}
+                      <code>.env</code>. Narratives fall back to the deterministic template.
+                    </span>
+                  </div>
+                )}
+                {tel?.source === "key_rotated" && (
+                  <p style={{ color: theme.textMuted, fontSize: 12, margin: "4px 0 0" }}>
+                    Key changed since the last recorded call — no telemetry for the current key yet.
+                  </p>
+                )}
+                {tel?.source === "last_call" && tel.ok === false && c.status !== "invalid_key" && (
+                  <p style={{ color: theme.textMuted, fontSize: 12, margin: "4px 0 0" }}>
+                    Last call failed: {tel.error_kind}
+                    {tel.checked_at ? ` · ${timeAgo(tel.checked_at)}` : ""} (not a key problem).
+                  </p>
+                )}
+              </div>
+            );
+          })}
+          <p
+            style={{
+              color: theme.textMuted,
+              fontSize: "var(--t-caption)",
+              marginTop: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            {data.telemetry_note}
+          </p>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 

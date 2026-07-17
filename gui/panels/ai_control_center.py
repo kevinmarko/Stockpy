@@ -107,6 +107,7 @@ def render_ai_control_center() -> None:
 
     try:
         from gui.ai_control_center import (
+            _PROVIDER_KEY_MAP,
             CAPABILITIES,
             control_center_overview,
             status_badge,
@@ -121,9 +122,23 @@ def render_ai_control_center() -> None:
     st.caption(
         "Toggles write to `.env` and take effect on the **next launch** (no "
         "hot-reload). Provider API keys are secret-only — set them by hand in "
-        "`.env` (CONSTRAINT #3)."
+        "`.env` (CONSTRAINT #3). Key status is presence + LAST-REAL-CALL "
+        "telemetry — the platform never probes a provider, so a 🔴 verdict is a "
+        "past call that was rejected, and it clears on the next call or a key "
+        "change."
     )
-    overview = control_center_overview(settings)
+    # Last-real-call telemetry (llm/status_store.py), lazily imported so the tab
+    # degrades rather than breaks if it is unavailable. This module (the panel)
+    # reads the store; gui.ai_control_center itself never does, staying
+    # filesystem-free.
+    try:
+        from llm.status_store import read_all as _read_llm_status  # noqa: PLC0415
+
+        _last_calls = _read_llm_status()
+    except Exception as exc:  # noqa: BLE001 - panel degrades, never breaks the tab
+        logger.debug("ai_control_center: LLM last-call telemetry unavailable: %s", exc)
+        _last_calls = None
+    overview = control_center_overview(settings, last_calls=_last_calls)
     cap_by_key = {c.key: c for c in CAPABILITIES}
     for rowinfo in overview:
         cap = cap_by_key[rowinfo["key"]]
@@ -137,6 +152,20 @@ def render_ai_control_center() -> None:
         active_provider = rowinfo.get("active_provider")
         if active_provider:
             c3.caption(f"via: **{active_provider}**")
+        # Last-real-call telemetry, rendered PAST-TENSE + timestamped (we never
+        # claim a key is invalid *now*, only that the last call was rejected).
+        inv = rowinfo.get("invalid_provider")
+        if inv:
+            inv_key = _PROVIDER_KEY_MAP.get(inv, inv)
+            c3.caption(f"⚠️ last real {inv} call was rejected — check `{inv_key}` in `.env`")
+        for prov in ((active_provider,) if active_provider else ()):
+            lc = (_last_calls or {}).get(prov) or {}
+            src = lc.get("source")
+            if src == "last_call":
+                verdict = "ok" if lc.get("ok") else f"failed: {lc.get('error_kind')}"
+                c3.caption(f"last call: {verdict} · {lc.get('checked_at')}")
+            elif src == "key_rotated":
+                c3.caption("key changed since the last recorded call — no telemetry yet")
         # Toggle (only for capabilities with a writable master switch that is built)
         tkey = rowinfo["toggle_key"]
         if tkey and rowinfo["built"]:

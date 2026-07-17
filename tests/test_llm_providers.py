@@ -363,3 +363,161 @@ class TestSoftFailContract:
         p._client.models.generate_content = MagicMock(side_effect=exc)
         out = p.call_structured(system="sys", user="usr", schema_model=_DemoSchema)
         assert out is None
+
+
+# ---------------------------------------------------------------------------
+# TestStatusRecording — last-real-call telemetry (llm/status_store.py) wiring.
+# The store is patched on the providers module object; we assert WHAT was
+# recorded, not that the file was written (that's the store's own suite).
+# ---------------------------------------------------------------------------
+
+
+class _RecordingStore:
+    """Stand-in for llm.status_store — records calls instead of writing a file."""
+
+    def __init__(self):
+        self.successes: list = []
+        self.failures: list = []
+
+    def record_success(self, provider):
+        self.successes.append(provider)
+
+    def record_failure(self, provider, exc=None, *, error_kind=None):
+        self.failures.append((provider, type(exc).__name__ if exc else None, error_kind))
+
+
+class TestStatusRecording:
+    def _patch_store(self):
+        import llm.providers as providers_mod
+
+        store = _RecordingStore()
+        return providers_mod, patch.object(providers_mod, "status_store", store), store
+
+    def test_call_failure_records_failure_once(self):
+        from llm.providers import ClaudeProvider
+
+        mod, ctx, store = self._patch_store()
+        with ctx:
+            p = ClaudeProvider(api_key="sk-test")
+            p._client.messages.create = MagicMock(side_effect=RuntimeError("network down"))
+            out = p.call_structured(system="s", user="u", schema_model=_DemoSchema)
+        assert out is None
+        assert store.failures == [("claude", "RuntimeError", None)]
+        assert store.successes == []
+
+    def test_happy_path_records_success_exactly_once(self):
+        from llm.providers import ClaudeProvider, _STRUCTURED_TOOL_NAME
+
+        mod, ctx, store = self._patch_store()
+        with ctx:
+            p = ClaudeProvider(api_key="sk-test")
+            p._client.messages.create = MagicMock(
+                return_value=_Response(
+                    [_BlockObject("tool_use", name=_STRUCTURED_TOOL_NAME, payload={"headline": "hi"})]
+                )
+            )
+            out = p.call_structured(system="s", user="u", schema_model=_DemoSchema)
+        assert isinstance(out, _DemoSchema)
+        assert store.successes == ["claude"]
+        assert store.failures == []
+
+    def test_schema_failure_records_success_then_schema(self):
+        from llm.providers import ClaudeProvider, _STRUCTURED_TOOL_NAME
+
+        mod, ctx, store = self._patch_store()
+        with ctx:
+            p = ClaudeProvider(api_key="sk-test")
+            p._client.messages.create = MagicMock(
+                return_value=_Response(
+                    [_BlockObject("tool_use", name=_STRUCTURED_TOOL_NAME, payload={"wrong": 1})]
+                )
+            )
+            out = p.call_structured(system="s", user="u", schema_model=_DemoSchema)
+        assert out is None
+        # Key was ACCEPTED (success recorded) then the payload failed the schema.
+        assert store.successes == ["claude"]
+        assert store.failures == [("claude", "ValidationError", "schema")]
+
+    def test_missing_block_still_records_success(self):
+        # A 200 with no tool_use block (`return None`) STILL proves the key was
+        # accepted — success must be recorded so a stale auth verdict clears.
+        from llm.providers import ClaudeProvider
+
+        mod, ctx, store = self._patch_store()
+        with ctx:
+            p = ClaudeProvider(api_key="sk-test")
+            p._client.messages.create = MagicMock(
+                return_value=_Response([_BlockObject("text", name=None, payload=None)])
+            )
+            out = p.call_structured(system="s", user="u", schema_model=_DemoSchema)
+        assert out is None
+        assert store.successes == ["claude"]
+        assert store.failures == []
+
+    def test_gemini_records_under_gemini_provider_name(self):
+        from llm.providers import GeminiProvider
+
+        mod, ctx, store = self._patch_store()
+        with ctx:
+            p = GeminiProvider(api_key="g-test")
+            p._client.models.generate_content = MagicMock(side_effect=RuntimeError("boom"))
+            p.call_structured(system="s", user="u", schema_model=_DemoSchema)
+        assert store.failures == [("gemini", "RuntimeError", None)]
+
+    def test_openai_records_success_before_parsing(self):
+        from llm.providers import OpenAIProvider
+
+        mod, ctx, store = self._patch_store()
+        with ctx:
+            p = OpenAIProvider(api_key="sk-test")
+            p._client = MagicMock()
+            # A refusal after a 200 → returns None but the key was accepted.
+            msg = types.SimpleNamespace(refusal="no", parsed=None)
+            completion = types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+            p._client.beta.chat.completions.parse = MagicMock(return_value=completion)
+            out = p.call_structured(system="s", user="u", schema_model=_DemoSchema)
+        assert out is None
+        assert store.successes == ["openai"]
+        assert store.failures == []
+
+    def test_real_store_under_adverse_fs_never_breaks_soft_fail(self):
+        # The REAL store is non-raising BY CONSTRUCTION (its own suite pins
+        # this), which is what makes providers.py's BARE store calls safe —
+        # no call-site wrapping needed (the plan's explicit decision). This
+        # verifies the end-to-end property: an unwritable OUTPUT_DIR makes the
+        # store degrade silently, and call_structured still soft-fails to None
+        # rather than propagating a write error into analyst commentary.
+        from llm.providers import ClaudeProvider
+        from settings import settings
+
+        with mock.patch.object(settings, "OUTPUT_DIR", "/proc/nonexistent/cannot/write"):
+            p = ClaudeProvider(api_key="sk-test")
+            p._client.messages.create = MagicMock(side_effect=RuntimeError("network"))
+            out = p.call_structured(system="s", user="u", schema_model=_DemoSchema)
+        assert out is None
+
+
+# ---------------------------------------------------------------------------
+# TestSourceGuards — the lazy-SDK-import invariant (convention-only until now).
+# ---------------------------------------------------------------------------
+
+
+class TestSourceGuards:
+    def test_no_top_level_sdk_import(self):
+        import pathlib
+
+        path = pathlib.Path(__file__).resolve().parents[1] / "llm" / "providers.py"
+        top = "\n".join(
+            ln
+            for ln in path.read_text(encoding="utf-8").splitlines()
+            if ln and not ln[0].isspace()
+        )
+        for forbidden in (
+            "import anthropic",
+            "from anthropic",
+            "import openai",
+            "from openai",
+            "import google",
+            "from google",
+        ):
+            assert forbidden not in top, f"{forbidden!r} must be lazy (inside __init__), not top-level"

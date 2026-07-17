@@ -40,6 +40,8 @@ from typing import Optional, Type
 
 from pydantic import BaseModel, ValidationError
 
+from llm import status_store
+
 logger = logging.getLogger(__name__)
 
 
@@ -119,7 +121,14 @@ class ClaudeProvider(LLMProvider):
             )
         except Exception as exc:
             logger.warning("ClaudeProvider call failed: %s", exc)
+            status_store.record_failure("claude", exc)
             return None
+
+        # The call was ACCEPTED (no exception) — record success BEFORE parsing so
+        # every downstream `return None` path (missing block, bad payload) still
+        # clears a stale auth verdict. A parse/schema failure below overwrites
+        # this with an error_kind="schema" record, which is NOT an auth verdict.
+        status_store.record_success("claude")
 
         # The forced-tool path guarantees the model emits at least one
         # tool_use block.  Defensive: skim for the first matching name.
@@ -143,9 +152,11 @@ class ClaudeProvider(LLMProvider):
                 return schema_model.model_validate(payload)
         except ValidationError as exc:
             logger.warning("ClaudeProvider schema validation failed: %s", exc)
+            status_store.record_failure("claude", exc, error_kind="schema")
             return None
         except Exception as exc:
             logger.warning("ClaudeProvider response parse failed: %s", exc)
+            status_store.record_failure("claude", exc, error_kind="schema")
             return None
         return None
 
@@ -217,8 +228,11 @@ class GeminiProvider(LLMProvider):
             )
         except Exception as exc:
             logger.warning("GeminiProvider call failed: %s", exc)
+            status_store.record_failure("gemini", exc)
             return None
 
+        # Call ACCEPTED — record before parsing (see ClaudeProvider note).
+        status_store.record_success("gemini")
         try:
             text = getattr(response, "text", None)
             if not text:
@@ -226,9 +240,11 @@ class GeminiProvider(LLMProvider):
             return schema_model.model_validate_json(text)
         except ValidationError as exc:
             logger.warning("GeminiProvider schema validation failed: %s", exc)
+            status_store.record_failure("gemini", exc, error_kind="schema")
             return None
         except Exception as exc:
             logger.warning("GeminiProvider response parse failed: %s", exc)
+            status_store.record_failure("gemini", exc, error_kind="schema")
             return None
 
     def call_structured_with_image(
@@ -268,8 +284,11 @@ class GeminiProvider(LLMProvider):
             )
         except Exception as exc:
             logger.warning("GeminiProvider multimodal call failed: %s", exc)
+            status_store.record_failure("gemini", exc)
             return None
 
+        # Call ACCEPTED — record before parsing (see ClaudeProvider note).
+        status_store.record_success("gemini")
         try:
             text = getattr(response, "text", None)
             if not text:
@@ -277,9 +296,11 @@ class GeminiProvider(LLMProvider):
             return schema_model.model_validate_json(text)
         except ValidationError as exc:
             logger.warning("GeminiProvider multimodal validation failed: %s", exc)
+            status_store.record_failure("gemini", exc, error_kind="schema")
             return None
         except Exception as exc:
             logger.warning("GeminiProvider multimodal response parse failed: %s", exc)
+            status_store.record_failure("gemini", exc, error_kind="schema")
             return None
 
 
@@ -345,8 +366,12 @@ class OpenAIProvider(LLMProvider):
             )
         except Exception as exc:
             logger.warning("OpenAIProvider call failed: %s", exc)
+            status_store.record_failure("openai", exc)
             return None
 
+        # Call ACCEPTED — record before parsing so a refusal / parsed=None still
+        # clears a stale auth verdict (the key WAS accepted).
+        status_store.record_success("openai")
         try:
             message = completion.choices[0].message
             if getattr(message, "refusal", None):
@@ -358,4 +383,5 @@ class OpenAIProvider(LLMProvider):
             return parsed
         except Exception as exc:
             logger.warning("OpenAIProvider response parse failed: %s", exc)
+            status_store.record_failure("openai", exc, error_kind="schema")
             return None
