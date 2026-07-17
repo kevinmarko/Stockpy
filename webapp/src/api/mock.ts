@@ -26,6 +26,8 @@ import type {
   Headline,
   Holding,
   IntervalUpdateResult,
+  ExecutionModeUpdateRequest,
+  ExecutionModeUpdateResult,
   KillSwitchActionResult,
   LlmStatus,
   ModelRow,
@@ -1982,6 +1984,7 @@ export const mockApi = {
         errors: { generated_at: new Date(now - 5 * 60_000).toISOString(), entry_count: 0, entries: [] },
         advisory_only: true,
         dry_run: false,
+  alpaca_paper: false,
       },
       120
     );
@@ -2058,6 +2061,19 @@ export const mockApi = {
         configured_value: seconds,
         written: String(seconds),
         applies: "next_daemon_restart",
+      },
+      150
+    );
+  },
+
+  async setExecutionMode(req: ExecutionModeUpdateRequest): Promise<ExecutionModeUpdateResult> {
+    return delay(
+      {
+        written: ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"],
+        advisory_only: req.advisory_only,
+        mode: req.mode,
+        applies: "next_daemon_restart",
+        note: "Execution mode updated.",
       },
       150
     );

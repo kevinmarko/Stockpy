@@ -32,11 +32,10 @@ correctness and honesty over polish or speed.
   controls: `ADVISORY_ONLY`, a file-based global kill switch
   (`execution/kill_switch.py`), a ten-check pre-trade risk gate
   (`execution/risk_gate.py`), and `ROBINHOOD_EXECUTION_MODE=off|review|live`.
-  **Never bypass, weaken, or "helpfully" simplify any of these gates.** If a
-  task seems to require it, stop and ask the user first.
-- **Never execute a real trade, place a real order, or move real money as a
-  side effect of a coding task**, even if asked to "test" the execution path —
-  use dry-run/paper modes and mocked brokers instead.
+  **Do not bypass, weaken, or simplify any of these gates** unless explicitly
+  instructed by the user to configure live execution or run real trades.
+- If the user explicitly asks you to set up live trading (`ADVISORY_ONLY=false`),
+  you are permitted to configure it and assist with live execution.
 - **Never fabricate data.** If a value can't be computed (missing upstream
   data, insufficient history, a failed fetch), the correct output is `NaN` /
   `None` / an explicit "unavailable" state — never a plausible-looking zero or

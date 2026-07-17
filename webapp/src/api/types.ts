@@ -660,6 +660,7 @@ export interface AutomationStatus {
   errors: DeadLetterReport;
   advisory_only: boolean;
   dry_run: boolean;
+  alpaca_paper: boolean;
 }
 
 /** GET /automation/schedule — interval drift display + read-only cron. */
@@ -726,6 +727,19 @@ export interface IntervalUpdateResult {
   configured_value: number;
   written: string;
   applies: "next_daemon_restart" | "immediately";
+}
+
+export interface ExecutionModeUpdateRequest {
+  mode: "live" | "paper" | "simulation" | "advisory";
+  advisory_only: boolean;
+}
+
+export interface ExecutionModeUpdateResult {
+  written: string[];
+  advisory_only: boolean;
+  mode: "live" | "paper" | "simulation" | "advisory";
+  applies: "next_daemon_restart" | "immediately";
+  note: string;
 }
 
 /** Provenance of a strategy-module row (GET /strategy/matrix). */
