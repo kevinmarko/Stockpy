@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type {
   AutomationSchedule,
   AutomationStatus,
+  BrokerageStatus,
   Follow,
   LlmCapabilityRow,
   LlmStatus,
@@ -24,6 +25,7 @@ import {
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { PwaStatusSection } from "../components/PwaStatusSection";
+import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { fmtAge, fmtDate, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
@@ -115,6 +117,8 @@ export function Settings() {
       <SignalModulesLink />
 
       <ActiveFollowsSection />
+
+      <BrokerageSection />
 
       <LlmStatusSection />
 
@@ -238,6 +242,128 @@ function LlmStatusSection() {
             {data.telemetry_note}
           </p>
         </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/**
+ * Brokerage connection — view status and connect/disconnect Robinhood AFTER
+ * onboarding, over GET /brokerage/status + POST /brokerage/{connect,disconnect}.
+ * Before this, connectBrokerage was reachable only during onboarding and
+ * disconnect/status had no UI at all. connect/disconnect fail closed
+ * server-side when their gates aren't set (BROKERAGE_CONNECT_ENABLED +
+ * FOLLOW_API_TOKEN + loopback-only -- see api/pilots_api.py); this UI renders
+ * whatever the server actually returned and never echoes credentials. Reuses
+ * the SAME RobinhoodConnectForm as onboarding so the intake path can't drift.
+ */
+function BrokerageSection() {
+  const { data, loading, error, status, reload } = useApi<BrokerageStatus>(
+    () => api.getBrokerageStatus(),
+    []
+  );
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  const disconnect = useMutation(() => api.disconnectBrokerage());
+
+  const doDisconnect = async () => {
+    await disconnect.run();
+    setConfirmingDisconnect(false);
+    reload();
+  };
+
+  return (
+    <SectionCard
+      title="Brokerage"
+      sub="Connect Robinhood for read-only portfolio snapshots, or disconnect to clear the stored credentials."
+    >
+      {loading && <Loading lines={2} />}
+      {!loading && error && (
+        <ErrorState message={error} status={status} onRetry={reload} />
+      )}
+      {!loading && !error && data && (
+        data.connected ? (
+          <div className="list">
+            <div className="row">
+              <span className="row-title">Robinhood</span>
+              <MetricBadge
+                label="Connected"
+                value={data.has_account_snapshot ? "snapshot ready" : "no snapshot yet"}
+                good={true}
+              />
+            </div>
+            <Button
+              variant="neutral"
+              onClick={() => setConfirmingDisconnect(true)}
+              style={{ marginTop: 12 }}
+            >
+              Disconnect
+            </Button>
+            {disconnect.error && (
+              <div className="notice notice-warn" style={{ marginTop: 10 }}>
+                <span>⚠️</span>
+                <span>{disconnect.error}</span>
+              </div>
+            )}
+            <p
+              style={{
+                color: theme.textMuted,
+                fontSize: "var(--t-caption)",
+                marginTop: 12,
+                lineHeight: 1.45,
+              }}
+            >
+              Credentials are stored only on this local machine and are never
+              shown here.
+            </p>
+          </div>
+        ) : (
+          <>
+            <p
+              style={{
+                color: theme.textSecondary,
+                fontSize: 13,
+                marginTop: 0,
+                marginBottom: 12,
+              }}
+            >
+              Not connected. Credentials go only to your local backend and are
+              verified with a read-only login before anything is saved.
+            </p>
+            <RobinhoodConnectForm onConnected={reload} />
+          </>
+        )
+      )}
+
+      {confirmingDisconnect && (
+        <Modal
+          ariaLabel="Disconnect brokerage"
+          onClose={() => setConfirmingDisconnect(false)}
+        >
+          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
+            Disconnect Robinhood?
+          </h2>
+          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+            Clears the stored Robinhood credentials from this machine. Portfolio
+            snapshots stop refreshing until you reconnect.
+          </p>
+          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+            <Button
+              variant="neutral"
+              onClick={() => setConfirmingDisconnect(false)}
+              style={{ flex: 1 }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={doDisconnect}
+              pending={disconnect.pending}
+              style={{ flex: 2 }}
+            >
+              Disconnect
+            </Button>
+          </div>
+        </Modal>
       )}
     </SectionCard>
   );
