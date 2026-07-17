@@ -352,6 +352,58 @@ class TestPreCompute:
 
 
 # ===========================================================================
+# TestNewsHistoryArchive -- forward-archive write hook (no backtest reads this yet)
+# ===========================================================================
+
+class TestNewsHistoryArchive:
+    def test_pre_compute_archives_scores_when_enabled(self):
+        """pre_compute() writes the cycle's scores via HistoricalStore.save_news_sentiment
+        when settings.NEWS_HISTORY_CAPTURE_ENABLED is True (the default)."""
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_client = MagicMock()
+        mock_client.company_news.return_value = [{"headline": "Apple beats"}]
+        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+
+        mock_store_instance = MagicMock()
+        mock_store_cls = MagicMock(return_value=mock_store_instance)
+
+        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.time.sleep"):
+                        with patch("data.historical_store.HistoricalStore", mock_store_cls):
+                            sig.pre_compute(universe, ctx)
+
+        mock_store_cls.assert_called_once()
+        mock_store_instance.save_news_sentiment.assert_called_once()
+        call_args = mock_store_instance.save_news_sentiment.call_args
+        assert call_args[0][0] == sig._news_scores
+
+    def test_archive_disabled_skips_write(self):
+        """settings.NEWS_HISTORY_CAPTURE_ENABLED=False must skip the write entirely."""
+        mock_store_cls = MagicMock()
+        with patch("settings.settings.NEWS_HISTORY_CAPTURE_ENABLED", False):
+            with patch("data.historical_store.HistoricalStore", mock_store_cls):
+                NewsCatalystSignal._archive_news_history({"AAPL": 0.5})
+        mock_store_cls.assert_not_called()
+
+    def test_archive_failure_never_propagates(self):
+        """CONSTRAINT #6: a HistoricalStore failure inside the archive hook must
+        never raise out of pre_compute (or the standalone helper)."""
+        mock_store_cls = MagicMock(side_effect=RuntimeError("db unavailable"))
+        with patch("data.historical_store.HistoricalStore", mock_store_cls):
+            NewsCatalystSignal._archive_news_history({"AAPL": 0.5})  # must not raise
+
+    def test_empty_scores_does_not_construct_store(self):
+        mock_store_cls = MagicMock()
+        with patch("data.historical_store.HistoricalStore", mock_store_cls):
+            NewsCatalystSignal._archive_news_history({})
+        mock_store_cls.assert_not_called()
+
+
+# ===========================================================================
 # TestRegistration
 # ===========================================================================
 

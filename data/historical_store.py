@@ -50,6 +50,9 @@ account_snapshots   — account-level snapshot (equity, buying power, dividends)
 account_positions   — per-symbol positions linked to a snapshot_id FK
 fundamentals_history — daily fundamentals snapshot per symbol + raw_json
 macro_history       — FRED series values keyed by (series_id, date)
+news_history        — forward-archived per-symbol news-sentiment score (write-only
+                       today; no backtest reader exists yet — see
+                       signals/news_catalyst.py and pilots/catalog.py)
 """
 
 from __future__ import annotations
@@ -213,6 +216,33 @@ CREATE INDEX IF NOT EXISTS idx_macro_history_series
     ON macro_history (series_id, date)
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — news_history (forward-archive only; see signals/news_catalyst.py)
+#
+# Persists each cycle's live FinBERT/lexicon news-sentiment score per symbol
+# going forward from whenever this ships. Deliberately NOT consumed by any
+# backtest today — there is no honest way to backtest a signal with zero
+# prior history. This table exists purely so that after ~6-12+ months of
+# real accumulated history, a genuine point-in-time backtest becomes
+# possible. See pilots/catalog.py's News Catalyst entry.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NEWS_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS news_history (
+    symbol      TEXT NOT NULL,
+    as_of       TEXT NOT NULL,
+    score       REAL,
+    source      TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (symbol, as_of)
+)
+"""
+
+_NEWS_HISTORY_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_news_history_symbol
+    ON news_history (symbol)
+"""
+
 # Column order returned by SELECT for price_bars reconstruction.
 _SELECT_COLS = "open, high, low, close, adj_close, volume"
 
@@ -329,6 +359,8 @@ class HistoricalStore:
                 conn.execute(_FUNDAMENTALS_HISTORY_INDEX_DDL)
                 conn.execute(_MACRO_HISTORY_DDL)
                 conn.execute(_MACRO_HISTORY_INDEX_DDL)
+                conn.execute(_NEWS_HISTORY_DDL)
+                conn.execute(_NEWS_HISTORY_INDEX_DDL)
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
             finally:
@@ -1393,6 +1425,52 @@ class HistoricalStore:
             "HistoricalStore: upserted %d macro rows (series: %s).",
             len(rows), list(macro_df.columns),
         )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public API — news_history (forward-archive only)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def save_news_sentiment(
+        self,
+        scores: Dict[str, float],
+        as_of: datetime,
+        source: str = "finbert",
+    ) -> None:
+        """Persist one cycle's live news-sentiment scores, one row per symbol.
+
+        Forward-archive only (see the ``news_history`` DDL comment above) —
+        no reader exists yet. Dead-letter resilient (CONSTRAINT #6): any
+        failure is logged and swallowed so a write here can never block the
+        live pipeline that computed these scores.
+        """
+        if not scores:
+            return
+        try:
+            date_str = pd.Timestamp(as_of).strftime("%Y-%m-%d")
+            now_ts = self._now_utc_iso()
+            rows = [
+                (symbol, date_str, None if (isinstance(score, float) and math.isnan(score)) else float(score), source, now_ts)
+                for symbol, score in scores.items()
+            ]
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO news_history
+                            (symbol, as_of, score, source, fetched_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+            logger.debug(
+                "HistoricalStore: upserted %d news_history rows (as_of=%s).",
+                len(rows), date_str,
+            )
+        except Exception as exc:
+            logger.warning("HistoricalStore.save_news_sentiment failed: %s", exc)
 
     @staticmethod
     def _resolve_data_engine(data_engine):

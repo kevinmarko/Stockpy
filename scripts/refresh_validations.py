@@ -1120,6 +1120,27 @@ def _download_shares(tickers: List[str]) -> Dict[str, float]:
     return out
 
 
+def _load_ticker_sectors() -> Dict[str, str]:
+    """Read ``forecasting/data/ticker_sectors.csv`` (symbol -> yfinance-style sector).
+
+    Used by the ``macro_regime_pit`` (and later ``signal_replay_*``) adapters
+    for sector-rotation scoring. A CURRENT sector snapshot applied across the
+    full backtest history is an accepted approximation — same class as
+    ``_download_shares``'s current-shares-outstanding-on-historical-prices
+    caveat — since GICS reclassifications are rare for this blue-chip
+    universe. A ticker absent from the CSV simply has no sector entry (never
+    fabricated); callers degrade exactly as ``signals/macro_regime.py``'s
+    ``row.get("sector")`` falsy-branch already does live.
+    """
+    path = Path(__file__).resolve().parent.parent / "forecasting" / "data" / "ticker_sectors.csv"
+    try:
+        df = pd.read_csv(path)
+        return dict(zip(df["symbol"].astype(str), df["sector"].astype(str)))
+    except Exception as exc:  # noqa: BLE001 — dead-letter: missing/malformed file
+        logger.warning("_load_ticker_sectors: failed to read %s: %s", path, exc)
+        return {}
+
+
 # =============================================================================
 # Validation runner
 # =============================================================================

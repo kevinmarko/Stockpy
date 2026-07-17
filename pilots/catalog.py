@@ -336,6 +336,11 @@ PILOTS: List[Pilot] = [
         weights={"news_catalyst": 1.0},
         long_only=False,
         # Point-in-time news/sentiment history isn't available to backtest honestly.
+        # As of the 2026-07 forward-archive change, NewsCatalystSignal.pre_compute()
+        # now persists each cycle's live score to HistoricalStore's news_history
+        # table (data/historical_store.py) -- this accumulates real history going
+        # forward but does NOT unblock a backtest today; validation_strategy_id
+        # stays None until enough real history exists (roughly 6-12+ months).
         validation_strategy_id=None,
     ),
     Pilot(

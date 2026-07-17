@@ -916,6 +916,19 @@ class Settings(BaseSettings):
             "pipeline. Set False to disable forward-going capture entirely."
         ),
     )
+    NEWS_HISTORY_CAPTURE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True, NewsCatalystSignal.pre_compute() writes each cycle's "
+            "live news-sentiment scores to HistoricalStore's news_history table "
+            "(via HistoricalStore.save_news_sentiment()), forward-archiving "
+            "real point-in-time history so a genuine backtest becomes possible "
+            "after enough history accumulates. No backtest reads this table "
+            "yet. Dead-lettered: any capture failure is logged and never "
+            "crashes the pipeline. Set False to disable forward-going capture "
+            "entirely."
+        ),
+    )
 
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /

@@ -8,7 +8,10 @@
 **Pilot:** News Catalyst (`news-catalyst`, `pilots/catalog.py`) — no backtest curve
 (`validation_strategy_id=None`); backtesting headline sentiment needs point-in-time news
 history no free vendor supplies historically — fabricating a headline archive would
-violate CONSTRAINT #4.
+violate CONSTRAINT #4. As of 2026-07, `pre_compute()` forward-archives each cycle's
+live score to `HistoricalStore.news_history` (`settings.NEWS_HISTORY_CAPTURE_ENABLED`,
+default on) so real point-in-time history accumulates going forward — a genuine
+backtest becomes possible after roughly 6-12+ months, but not before.
 
 ---
 
