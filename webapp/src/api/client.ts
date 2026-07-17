@@ -34,6 +34,7 @@ import type {
   PilotSummary,
   PilotTrade,
   Portfolio,
+  PortfolioAttribution,
   CurvePoint,
   RealizedPerformance,
   StrategyMatrix,
@@ -129,6 +130,10 @@ const liveApi = {
       `/portfolio/equity-curve?range=${range}`
     ),
   getRealized: () => http<RealizedPerformance>("/portfolio/realized"),
+  getPortfolioAttribution: (lookbackDays = 60) =>
+    http<PortfolioAttribution>(
+      `/portfolio/attribution?lookback_days=${lookbackDays}`
+    ),
   getAlerts: (limit = 50) => http<AlertsFeed>(`/alerts?limit=${limit}`),
   getForecast: (ticker: string, horizon = 30) =>
     http<ForecastSkill>(

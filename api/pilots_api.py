@@ -97,6 +97,7 @@ from settings import validate_interval_seconds as _validate_interval_seconds
 # Pilot layer (pure, persisted-state readers) + the gated follow write-path.
 from pilots import (
     alerts_feed,
+    attribution,
     catalog,
     forecast_skill,
     models,
@@ -773,6 +774,128 @@ def get_realized_performance() -> Dict[str, Any]:
     fabricated ``0.0`` (CONSTRAINT #4); ``available=false`` when nothing is cached
     yet. Never 500s (CONSTRAINT #6)."""
     return realized.realized_performance_view()
+
+
+# Bounds a pathologically large book's bars-fetch fanout for the correlation-
+# cluster section below. 40 comfortably covers any realistic retail portfolio;
+# symbols beyond this are simply not included in clustering (never fabricated).
+_ATTRIBUTION_MAX_SYMBOLS = 40
+
+
+def _held_market_values(account_snap: Any) -> Dict[str, float]:
+    """``{symbol: market_value}`` for every position with quantity > 0.
+
+    A non-positive or unparseable ``market_value`` is preserved as ``NaN``
+    (never coerced to a fabricated ``0.0``) so ``pilots.attribution`` can
+    honestly exclude it from weighting rather than silently zero-weighting a
+    real position (CONSTRAINT #4)."""
+    if account_snap is None:
+        return {}
+    positions = getattr(account_snap, "positions", None) or {}
+    out: Dict[str, float] = {}
+    for sym, p in positions.items():
+        try:
+            qty = float(getattr(p, "quantity", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0:
+            continue
+        try:
+            mv_f = float(getattr(p, "market_value", None))
+        except (TypeError, ValueError):
+            mv_f = float("nan")
+        out[str(sym).upper()] = mv_f
+    return out
+
+
+def _attribution_returns_df(symbols_list: List[str], lookback_days: int) -> Any:
+    """Build a daily-returns DataFrame from ``HistoricalStore``-cached bars.
+
+    Reuses the SAME incrementally-cached bars source the rest of the platform
+    reads (``HistoricalStore.get_bars()``) rather than a fresh live yfinance
+    download via ``research_engine.fetch_returns_for_clustering`` — a symbol
+    whose bars are already persisted from a prior advisory/orchestrator cycle
+    needs no network call at all. Per-symbol try/except (one bad symbol can't
+    abort the batch); returns an empty DataFrame on total failure
+    (CONSTRAINT #4 — no fabricated rows, CONSTRAINT #6 — never raises)."""
+    import pandas as pd
+
+    if not symbols_list:
+        return pd.DataFrame()
+    store = HistoricalStore(readonly=True)
+    fetch_days = lookback_days + 15  # small buffer so pct_change() keeps `lookback_days` rows
+    closes: Dict[str, Any] = {}
+    for sym in symbols_list[:_ATTRIBUTION_MAX_SYMBOLS]:
+        try:
+            bars = store.get_bars(sym, lookback_days=fetch_days)
+        except Exception as exc:  # noqa: BLE001 - dead-letter per symbol
+            logger.debug("attribution: get_bars(%s) failed: %s", sym, exc)
+            continue
+        if bars is None or bars.empty or "Close" not in bars.columns:
+            continue
+        closes[sym] = bars["Close"]
+    if not closes:
+        return pd.DataFrame()
+    prices = pd.DataFrame(closes).sort_index()
+    return prices.pct_change().dropna(how="all")
+
+
+@app.get("/portfolio/attribution", dependencies=[Depends(require_read_token)])
+def get_portfolio_attribution(
+    lookback_days: int = Query(60, ge=20, le=252),
+) -> Dict[str, Any]:
+    """Portfolio-level factor exposure + correlation-cluster attribution.
+
+    Two independent, honestly-degrading sections (see ``pilots/attribution.py``
+    for the full contract):
+
+    * ``factor_exposure`` — position-size-weighted average Value/Quality/LowVol/
+      Size/Composite z-score across HELD symbols matched in the latest pipeline
+      snapshot (``output/state_snapshot.json`` via ``pilots.scoring.load_snapshot``).
+      A held symbol absent from the snapshot contributes nothing (never
+      zero-filled — CONSTRAINT #4); ``coverage`` reports how much of portfolio
+      value the exposure numbers actually describe.
+    * ``correlation_clusters`` — hierarchical clustering
+      (``research_engine.compute_correlation_clusters``) of held symbols' daily
+      returns, built from ``HistoricalStore.get_bars()`` (the same
+      incrementally-cached bars source the rest of the platform uses — no
+      separate live yfinance download). Empty with an honest ``reason`` when
+      there are no held positions, no DB-backed price history, or clustering is
+      unavailable (e.g. scipy not installed).
+
+    Cold-start (no account snapshot, empty book, no pipeline snapshot yet)
+    degrades to the honest empty shape for both sections rather than a 404 —
+    this is a portfolio-level view, not a single-resource lookup
+    (CONSTRAINT #6)."""
+    try:
+        account_snap = HistoricalStore(readonly=True).latest_account_snapshot()
+    except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> empty book
+        logger.warning("pilots_api: attribution account snapshot read failed: %s", exc)
+        account_snap = None
+
+    held_market_values = _held_market_values(account_snap)
+
+    pipeline_snap = _load_snapshot()
+    factor_exposure = attribution.portfolio_factor_exposure(pipeline_snap, held_market_values)
+
+    try:
+        returns_df = _attribution_returns_df(sorted(held_market_values), lookback_days)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never crash the endpoint
+        logger.warning("pilots_api: attribution returns fetch failed: %s", exc)
+        returns_df = None
+
+    correlation_clusters = attribution.portfolio_correlation_clusters(
+        returns_df,
+        held_market_values,
+        distance_threshold=settings.CORRELATION_CLUSTER_THRESHOLD,
+    )
+    correlation_clusters["lookback_days"] = lookback_days
+
+    return {
+        "as_of": factor_exposure.get("as_of"),
+        "factor_exposure": factor_exposure,
+        "correlation_clusters": correlation_clusters,
+    }
 
 
 @app.get("/alerts", dependencies=[Depends(require_read_token)])

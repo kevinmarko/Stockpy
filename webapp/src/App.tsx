@@ -16,6 +16,7 @@ import { Activity } from "./screens/Activity";
 import { Models } from "./screens/Models";
 import { PairsRadar } from "./screens/PairsRadar";
 import { OptionsMatrix } from "./screens/OptionsMatrix";
+import { Attribution } from "./screens/Attribution";
 import { Settings } from "./screens/Settings";
 import { StrategyMatrix } from "./screens/StrategyMatrix";
 import { Onboarding } from "./screens/Onboarding";
@@ -44,6 +45,7 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   { to: "/models", label: "Models", ico: "🧠", match: (p) => p.startsWith("/models") },
   { to: "/pairs", label: "Pairs radar", ico: "🔗", match: (p) => p.startsWith("/pairs") },
   { to: "/options", label: "Options", ico: "🎯", match: (p) => p.startsWith("/options") },
+  { to: "/attribution", label: "Attribution", ico: "🧮", match: (p) => p.startsWith("/attribution") },
   // Last item: Sidebar (desktop) renders all of NAV_ITEMS, so this shows up
   // there automatically. BottomNav (mobile) shows only the first
   // MOBILE_PRIMARY_COUNT directly; everything after folds into the "More"
@@ -277,6 +279,7 @@ export default function App() {
           <Route path="/models" element={<Models />} />
           <Route path="/pairs" element={<PairsRadar />} />
           <Route path="/options" element={<OptionsMatrix />} />
+          <Route path="/attribution" element={<Attribution />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/strategy" element={<StrategyMatrix />} />
