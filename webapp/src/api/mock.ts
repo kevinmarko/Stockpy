@@ -16,6 +16,7 @@ import type {
   BrokerageConnectResult,
   BrokerageDisconnectResult,
   BrokerageStatus,
+  ControlStatus,
   CorrelationCluster,
   EquityDrawdownCurve,
   EquityDrawdownPoint,
@@ -50,6 +51,7 @@ import type {
   RiskGateBlockLog,
   RealizedTrade,
   RollingBeta,
+  RunRecord,
   SectorSlice,
   StrategyHealthGate,
   StrategyHealthRow,
@@ -1747,6 +1749,78 @@ function mockObservabilitySummary(range: PerfRange, horizon: number): Observabil
   };
 }
 
+// ---- Control API (orchestrator daemon) fixture ----
+// An IDLE daemon (is_running:false, current_run_id:null) with a populated,
+// most-recent-first run history. Hand-written to exercise the Pipeline
+// Dashboard's honesty branches, not just a clean happy path:
+//   - varied `mode` (full / data / metrics) rendered as distinct badges
+//   - a FAILED run carrying a real `error` string (never softened)
+//   - a record with NO `mode` (an interval run predating the param) -> the
+//     screen renders "—", never a fabricated "FULL"
+//   - terminal records carry finished_at + duration; a null duration only ever
+//     appears on a non-terminal (running/queued) record — see the running
+//     fixture the test injects, never fabricated here
+function controlRun(
+  run_id: string,
+  state: RunRecord["state"],
+  mode: RunRecord["mode"],
+  minsAgo: number,
+  durationSeconds: number | null,
+  reason: string,
+  error: string | null
+): RunRecord {
+  const now = Date.now();
+  const started = now - minsAgo * 60_000;
+  const terminal = state === "succeeded" || state === "failed";
+  return {
+    run_id,
+    state,
+    mode,
+    started_at: new Date(started).toISOString(),
+    finished_at:
+      terminal && durationSeconds != null
+        ? new Date(started + durationSeconds * 1000).toISOString()
+        : null,
+    duration_seconds: terminal ? durationSeconds : null,
+    error,
+    reason,
+    progress: null,
+  };
+}
+
+const CONTROL_RUN_HISTORY: RunRecord[] = [
+  controlRun("orch-mock-5f2a", "succeeded", "full", 5, 41.8, "manual", null),
+  controlRun("orch-mock-5e19", "succeeded", "data", 62, 12.4, "manual", null),
+  controlRun(
+    "orch-mock-5d07",
+    "failed",
+    "metrics",
+    128,
+    6.1,
+    "manual",
+    "ForecastingEngine: insufficient bars for NVDA (need >=22, got 9)"
+  ),
+  // An interval-triggered run with no `mode` recorded -> honest "—" in the UI.
+  controlRun("orch-mock-5c88", "succeeded", undefined, 305, 44.2, "interval", null),
+];
+
+function mockControlStatus(): ControlStatus {
+  return {
+    daemon_alive: true,
+    is_running: false,
+    current_run_id: null,
+    interval_seconds: 300,
+    engines_warm: true,
+    started_at: new Date(Date.now() - 6 * 3600_000).toISOString(),
+    last_run: CONTROL_RUN_HISTORY[0],
+    run_history: CONTROL_RUN_HISTORY,
+    kill_switch_active: false,
+    kill_switch_reason: null,
+    advisory_only: true,
+    dry_run: false,
+  };
+}
+
 async function delay<T>(v: T, ms = 260): Promise<T> {
   return new Promise((res) => setTimeout(() => res(v), ms));
 }
@@ -2024,6 +2098,57 @@ export const mockApi = {
         },
       },
       80
+    );
+  },
+
+  async getControlStatus(): Promise<ControlStatus> {
+    return delay(mockControlStatus(), 120);
+  },
+
+  async getControlRunStatus(runId: string): Promise<RunRecord> {
+    const known = CONTROL_RUN_HISTORY.find((r) => r.run_id === runId);
+    if (known) return delay(known, 80);
+    // An unknown id is treated as a just-triggered run still in flight: honest
+    // nulls for finished_at/duration (never fabricated) while it runs.
+    return delay(
+      {
+        run_id: runId,
+        state: "running",
+        mode: "full",
+        started_at: new Date(Date.now() - 4_000).toISOString(),
+        finished_at: null,
+        duration_seconds: null,
+        error: null,
+        reason: "manual",
+        progress: null,
+      },
+      80
+    );
+  },
+
+  async postControlRun(): Promise<{ run_id: string; state: string }> {
+    return delay({ run_id: `orch-mock-${Date.now()}`, state: "queued" }, 300);
+  },
+
+  async postControlPipelineData(): Promise<{
+    run_id: string;
+    state: string;
+    mode: string;
+  }> {
+    return delay(
+      { run_id: `orch-mock-${Date.now()}`, state: "queued", mode: "data" },
+      300
+    );
+  },
+
+  async postControlPipelineMetrics(): Promise<{
+    run_id: string;
+    state: string;
+    mode: string;
+  }> {
+    return delay(
+      { run_id: `orch-mock-${Date.now()}`, state: "queued", mode: "metrics" },
+      300
     );
   },
 

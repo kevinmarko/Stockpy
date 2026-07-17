@@ -607,6 +607,15 @@ export interface DaemonInfo {
 export interface RunRecord {
   run_id: string;
   state: "queued" | "running" | "succeeded" | "failed";
+  /**
+   * Pipeline stage-scope of the run. Present on Control-triggered runs
+   * (`api/control_api.py`): "full" = the whole cycle (POST /run), "data" =
+   * data-fetch stages only, "metrics" = indicator/forecast/signal precompute
+   * only. Absent (`undefined`) on records that predate the `mode` param or on
+   * the `pilots_api` /automation/status path — render "—" for an absent mode,
+   * never a fabricated default (CONSTRAINT #4).
+   */
+  mode?: "full" | "data" | "metrics" | null;
   started_at: string | null;
   finished_at: string | null;
   duration_seconds: number | null;
@@ -661,6 +670,30 @@ export interface AutomationStatus {
   advisory_only: boolean;
   dry_run: boolean;
   alpaca_paper: boolean;
+}
+
+/**
+ * GET /status (api/control_api.py — the orchestrator daemon's Control API,
+ * port 8601). The Pipeline Dashboard's live daemon snapshot. `run_history` is
+ * the daemon's bounded, most-recent-first RunRecord ring (reuses the same
+ * `RunRecord` shape AutomationStatus does; a Control-triggered run additionally
+ * carries `mode`). Deliberately DISTINCT from GET /automation/status
+ * (pilots_api.py), which composes this plus four other sources — this is the
+ * raw daemon status the dashboard's trigger buttons act against.
+ */
+export interface ControlStatus {
+  daemon_alive: boolean;
+  is_running: boolean;
+  current_run_id: string | null;
+  interval_seconds: number | null;
+  engines_warm: boolean;
+  started_at: string | null;
+  last_run: RunRecord | null;
+  run_history: RunRecord[];
+  kill_switch_active: boolean;
+  kill_switch_reason: string | null;
+  advisory_only: boolean;
+  dry_run: boolean;
 }
 
 /** GET /automation/schedule — interval drift display + read-only cron. */
