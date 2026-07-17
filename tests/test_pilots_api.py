@@ -2280,9 +2280,12 @@ class TestStrategyHealth:
         assert row["trend"] == []
 
     def test_pilot_without_backtest_is_honest_never_fabricated(self, monkeypatch):
+        # news-catalyst is the catalog's genuinely backtest-less pilot
+        # (validation_strategy_id=None). balanced-blend used to be, but gained a
+        # real signal-replay backtest (signal_replay_balanced_blend) in #321.
         _point_reports_at_fixtures(monkeypatch)
         resp = client.get("/strategy/health")
-        row = next(r for r in resp.json() if r["pilot_id"] == "balanced-blend")
+        row = next(r for r in resp.json() if r["pilot_id"] == "news-catalyst")
         assert row["strategy_id"] is None
         assert row["deployable"] is None
         assert row["gates"] == []

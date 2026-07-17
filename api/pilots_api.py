@@ -404,11 +404,10 @@ class ResumeRequest(BaseModel):
 class IntervalUpdateRequest(BaseModel):
     """Body for ``PUT /automation/schedule/interval``. ``0`` disables the
     daemon's internal timer (on-demand only); otherwise MUST be in
-    ``[settings.INTERVAL_MIN_SECONDS, settings.INTERVAL_MAX_SECONDS]``
-    """Body for ``PUT /automation/schedule/interval``. Validation bounds match
-    ``api/control_api.py``'s equivalent body — the shared policy function is
-    what keeps all three from drifting apart (see ``settings.py``'s
-    docstring on it)."""
+    ``[settings.INTERVAL_MIN_SECONDS, settings.INTERVAL_MAX_SECONDS]``.
+    Validation bounds match ``api/control_api.py``'s equivalent body — the
+    shared policy function is what keeps all three from drifting apart (see
+    ``settings.py``'s docstring on it)."""
 
     interval_seconds: int = Field(..., ge=0, le=_INTERVAL_MAX_SECONDS)
 
