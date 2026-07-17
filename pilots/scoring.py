@@ -15,14 +15,27 @@ The core arithmetic (Wave 1 handoff)
 Each snapshot ``signals[]`` entry carries
 ``score_components: dict[module -> weighted_contribution]`` where::
 
-    weighted_contribution = raw_score[-1, 1] * settings.SIGNAL_WEIGHTS[module]
+    weighted_contribution = raw_score[-1, 1] * effective_weight[module]
 
-so a module's raw score is backed out by dividing::
+``effective_weight`` is NOT always the flat ``settings.SIGNAL_WEIGHTS[module]``
+— ``strategy_engine.evaluate_security()`` resolves it per-cycle via
+``signals.aggregator.resolve_regime_weights(market_regime,
+settings.REGIME_SIGNAL_WEIGHTS, settings.SIGNAL_WEIGHTS)`` before computing
+``score_components`` (see ``strategy_engine.py`` around the
+``Score_Components`` build). When ``settings.REGIME_SIGNAL_WEIGHTS`` is empty
+(the project default), ``effective_weight == SIGNAL_WEIGHTS`` for every
+regime and the distinction is moot. This module reproduces that same
+resolution (:func:`_effective_signal_weights`) from the snapshot's own
+top-level ``market_regime`` field — WITHOUT importing the ``signals``
+package (this module stays import-light; see the parity test in
+``tests/test_pilots_scoring.py`` that pins it against the canonical
+``resolve_regime_weights`` implementation) — so a module's raw score is
+backed out by dividing::
 
-    raw_score[module] = score_components[module] / SIGNAL_WEIGHTS[module]
+    raw_score[module] = score_components[module] / effective_weight[module]
 
 **Divide-by-zero guard** — ``regime_multiplier`` (and any future module) can carry
-a ``SIGNAL_WEIGHTS`` weight of ``0.0``; those are skipped entirely (their raw
+an effective weight of ``0.0``; those are skipped entirely (their raw
 score is undefined, never fabricated). A module absent from a symbol's
 ``score_components`` contributes exactly ``0`` (never fabricated).
 
@@ -124,17 +137,48 @@ def _coerce_float(value: Any) -> Optional[float]:
     return f
 
 
-def _raw_score(components: Dict[str, Any], module: str) -> float:
+#: Reserved catch-all key, mirroring ``signals.aggregator._REGIME_DEFAULT_KEY``.
+_REGIME_DEFAULT_KEY = "_default"
+
+
+def _effective_signal_weights(market_regime: str) -> Dict[str, float]:
+    """Resolve the regime-conditional signal weights active for ``market_regime``.
+
+    Reproduces ``signals.aggregator.resolve_regime_weights()``'s merge
+    semantics (exact regime match -> ``"_default"`` catch-all -> unmodified
+    flat weights) WITHOUT importing the ``signals`` package — every other
+    ``pilots/`` module deliberately avoids that import so the Pilots API's
+    hot read path stays cheap (no other ``pilots/*.py`` file imports
+    ``signals``). Kept in lockstep with the canonical implementation by
+    ``tests/test_pilots_scoring.py``'s parity test, which asserts identical
+    output across representative regime configs.
+
+    When ``settings.REGIME_SIGNAL_WEIGHTS`` is empty (the project default),
+    returns ``settings.SIGNAL_WEIGHTS`` unchanged — byte-identical to every
+    Pilot's raw-score back-out before regime-conditional weights existed.
+    """
+    regime_weights = settings.REGIME_SIGNAL_WEIGHTS
+    default_weights = settings.SIGNAL_WEIGHTS
+    if not regime_weights:
+        return default_weights
+    regime_override = regime_weights.get(market_regime) or regime_weights.get(_REGIME_DEFAULT_KEY)
+    if not regime_override:
+        return default_weights
+    return {**default_weights, **regime_override}
+
+
+def _raw_score(components: Dict[str, Any], module: str, effective_weights: Dict[str, float]) -> float:
     """Back out a module's raw ``[-1, 1]`` score from its weighted contribution.
 
-    ``raw = score_components[module] / SIGNAL_WEIGHTS[module]``, with two guards:
+    ``raw = score_components[module] / effective_weights[module]``, with two
+    guards:
 
-    * a module whose ``SIGNAL_WEIGHTS`` weight is ``0.0`` (or is absent from
-      ``SIGNAL_WEIGHTS`` entirely) is un-backoutable → contributes ``0``;
+    * a module whose effective weight is ``0.0`` (or is absent from
+      ``effective_weights`` entirely) is un-backoutable → contributes ``0``;
     * a module absent from this symbol's ``score_components`` contributes ``0``
       (never fabricated).
     """
-    weight = settings.SIGNAL_WEIGHTS.get(module)
+    weight = effective_weights.get(module)
     if not weight:  # None or 0.0 → skip (divide-by-zero / not a real module)
         return 0.0
     contrib = _coerce_float(components.get(module))
@@ -146,7 +190,7 @@ def _raw_score(components: Dict[str, Any], module: str) -> float:
         return 0.0
 
 
-def _blended_score(sig: Dict[str, Any], pilot: Pilot) -> float:
+def _blended_score(sig: Dict[str, Any], pilot: Pilot, effective_weights: Dict[str, float]) -> float:
     """Compute a Pilot's blended score for one ``signals[]`` entry."""
     components = sig.get("score_components")
     if not isinstance(components, dict):
@@ -156,7 +200,7 @@ def _blended_score(sig: Dict[str, Any], pilot: Pilot) -> float:
         pw = _coerce_float(pilot_weight)
         if not pw:  # None or 0.0 pilot weight contributes nothing
             continue
-        total += _raw_score(components, module) * pw
+        total += _raw_score(components, module, effective_weights) * pw
     return total
 
 
@@ -190,6 +234,13 @@ def pilot_holdings(
     if not isinstance(signals, list):
         return []
 
+    # Resolved ONCE per snapshot (not per signal) — the macro regime is a
+    # cycle-wide value, identical for every symbol computed in this snapshot,
+    # so this exactly reproduces the effective weight strategy_engine.py used
+    # to build every entry's score_components this cycle.
+    market_regime = str(snapshot.get("market_regime") or "")
+    effective_weights = _effective_signal_weights(market_regime)
+
     scored: List[dict] = []
     for sig in signals:
         if not isinstance(sig, dict):
@@ -197,7 +248,7 @@ def pilot_holdings(
         symbol = str(sig.get("symbol") or "").upper().strip()
         if not symbol:
             continue
-        score = _blended_score(sig, pilot)
+        score = _blended_score(sig, pilot, effective_weights)
         if score <= 0.0:
             continue
         sector = str(sig.get("sector") or "").strip()
