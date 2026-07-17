@@ -24,6 +24,7 @@ import type {
   Holding,
   IntervalUpdateResult,
   KillSwitchActionResult,
+  LlmStatus,
   ModelRow,
   OptionsMatrix,
   PairsRadar,
@@ -233,6 +234,7 @@ const liveApi = {
       body: JSON.stringify({ interval_seconds: seconds }),
     }),
   getBrokerageStatus: () => http<BrokerageStatus>("/brokerage/status"),
+  getLlmStatus: () => http<LlmStatus>("/llm/status"),
   connectBrokerage: (creds: BrokerageConnectRequest) =>
     http<BrokerageConnectResult>("/brokerage/connect", {
       method: "POST",

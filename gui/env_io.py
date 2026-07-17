@@ -152,6 +152,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "LLM_COMMENTARY_ENABLED",            # bool master switch (default False)
     "LLM_COMMENTARY_RATIONALE_PROVIDER", # "claude" | "none"
     "LLM_COMMENTARY_ALERT_PROVIDER",     # "gemini" | "none"
+    # Age bound (hours) for TRANSIENT last-call verdicts in llm/status_store.py
+    # (non-secret scalar; auth/ok verdicts are fingerprint-bound, not age-bound).
+    "LLM_STATUS_MAX_AGE_HOURS",
     # AI Control Center toggles (non-secret).  These master switches were
     # previously settable only by hand-editing .env; the Control Center tab
     # surfaces them.  Provider credentials (ANTHROPIC/GEMINI/OPENAI keys) stay

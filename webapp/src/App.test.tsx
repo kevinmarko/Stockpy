@@ -6,13 +6,64 @@
  * shows exactly 3 items (Settings is NAV_ITEMS' 8th entry -- desktop Sidebar
  * only, per App.tsx's own comment on NAV_ITEMS).
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { api } from "./api/client";
+import type { LlmProviderName, LlmStatus } from "./api/types";
 import { writeOnboarding } from "./onboarding";
+
+const _noCall = (provider: LlmProviderName) => ({
+  provider,
+  ok: null,
+  error_kind: null,
+  exception_type: null,
+  http_status: null,
+  checked_at: null,
+  age_seconds: null,
+  source: "none" as const,
+});
+
+/** A minimal LlmStatus with one auth-rejected capability (attention: true). */
+const LLM_ATTENTION: LlmStatus = {
+  capabilities: [
+    {
+      key: "claude_commentary",
+      label: "Analyst rationale commentary",
+      trigger: "on_demand",
+      toggle_key: "LLM_COMMENTARY_ENABLED",
+      provider_keys: ["ANTHROPIC_API_KEY"],
+      active_provider: "claude",
+      invalid_provider: "claude",
+      enabled: true,
+      key_present: true,
+      built: true,
+      status: "invalid_key",
+    },
+  ],
+  capabilities_source: "test",
+  providers: {
+    claude: {
+      provider: "claude",
+      ok: false,
+      error_kind: "auth",
+      exception_type: "AuthenticationError",
+      http_status: 401,
+      checked_at: new Date().toISOString(),
+      age_seconds: 10,
+      source: "last_call",
+    },
+    gemini: _noCall("gemini"),
+    openai: _noCall("openai"),
+  },
+  providers_source: "test",
+  telemetry_note: "note",
+  attention: true,
+  attention_reason: "invalid_key",
+};
 
 let needRefresh = false;
 
@@ -75,6 +126,32 @@ describe("App — Settings gear + nav", () => {
 
   it("no update dot when the app is up to date", () => {
     renderApp("/");
+    expect(screen.queryByTestId("pwa-update-dot")).not.toBeInTheDocument();
+  });
+
+  it("shows the LLM-config dot when an enabled capability needs attention", async () => {
+    vi.spyOn(api, "getLlmStatus").mockResolvedValue(LLM_ATTENTION);
+    renderApp("/marketplace");
+    expect(await screen.findByTestId("llm-config-dot")).toBeInTheDocument();
+  });
+
+  it("no LLM-config dot in the honest default (attention: false)", async () => {
+    const spy = vi.spyOn(api, "getLlmStatus").mockResolvedValue({
+      ...LLM_ATTENTION,
+      attention: false,
+      attention_reason: null,
+    });
+    renderApp("/marketplace");
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(screen.queryByTestId("llm-config-dot")).not.toBeInTheDocument();
+  });
+
+  it("no LLM-config dot when the fetch fails (absence is not a false alarm)", async () => {
+    const spy = vi.spyOn(api, "getLlmStatus").mockRejectedValue(new Error("network down"));
+    renderApp("/marketplace");
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(screen.queryByTestId("llm-config-dot")).not.toBeInTheDocument();
+    // PWA dot mechanism stays independent and unaffected.
     expect(screen.queryByTestId("pwa-update-dot")).not.toBeInTheDocument();
   });
 

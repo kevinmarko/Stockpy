@@ -1253,6 +1253,18 @@ class Settings(BaseSettings):
             "as a soft failure (returns None; caller falls back to template)."
         ),
     )
+    LLM_STATUS_MAX_AGE_HOURS: float = Field(
+        default=24.0,
+        description=(
+            "Age bound for TRANSIENT last-call verdicts (rate_limit / network / "
+            "timeout / schema / unknown) recorded in output/llm_status.json by "
+            "llm/status_store.py.  Past this many hours a transient verdict is "
+            "reported with source='expired' and never claimed as current.  "
+            "Deliberately does NOT bound 'auth' or 'ok' verdicts — those are "
+            "properties of the KEY and are invalidated by a key change "
+            "(fingerprint mismatch), not by the clock."
+        ),
+    )
     ANTHROPIC_API_KEY: Optional[str] = Field(
         default=None,
         description=(

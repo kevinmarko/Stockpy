@@ -13911,12 +13911,16 @@ class GravityAIAuditor:
         self.report["step_85_opal_research_audit"] = audit
 
     def step_86_ai_control_center_audit(self) -> None:
-        """Step 86 — AI Control Center tab audit (2026-07-01, extended 2026-07-02, 2026-07-03).
+        """Step 86 — AI Control Center tab audit (2026-07-01, extended 2026-07-02, 2026-07-03, 2026-07-17).
 
-        11 checks pinning the single operator-facing surface for every AI
+        14 checks pinning the single operator-facing surface for every AI
         option (analyst rationale + alert commentary — both flexibly routed
         to Claude OR Gemini, Gemini chart vision, Gravity AI runner, Opal
-        research) — all operator-triggered, nothing autonomous:
+        research) — all operator-triggered, nothing autonomous. Checks 12-14
+        (2026-07-17) cover the additive 5th ``invalid_key`` state driven by
+        ``llm/status_store.py`` last-real-call telemetry; check 4 stays
+        byte-for-byte unchanged, and its continued passing IS the additivity
+        proof:
 
         1.  ``gui.ai_control_center`` importable; ``CAPABILITIES`` covers the
             five expected keys.
@@ -13952,6 +13956,19 @@ class GravityAIAuditor:
             ``gemini_alerts`` row resolves ``ready`` off ``ANTHROPIC_API_KEY``
             when ``LLM_COMMENTARY_ALERT_PROVIDER=claude`` — either provider
             serves either job.
+        12. ``invalid_key`` reachable + correctly SCOPED via ``last_calls``:
+            an ``auth`` verdict → ``invalid_key``; a ``rate_limit`` verdict →
+            ``ready`` (a rate limit is not a key problem); a ``key_rotated``
+            verdict → ``ready`` (not claimed); ``status_badge("invalid_key")``
+            truthy.
+        13. ADDITIVE proof — ``capability_status(s, c)`` == the
+            ``last_calls=None`` variant for every capability across a settings
+            matrix, and all four ORIGINAL badge tokens survive the 5th entry.
+        14. Secret containment + no-SDK reach — a sentinel-keyed failure leaks
+            neither the key (nor any ≥6-char substring) into
+            ``output/llm_status.json`` nor a fingerprint into ``read_all()``,
+            and a subprocess ``import llm`` leaves ``anthropic``/``openai``/
+            ``google.genai`` out of ``sys.modules``.
         """
         from pathlib import Path as _Path
         from types import SimpleNamespace as _NS
@@ -14183,6 +14200,108 @@ class GravityAIAuditor:
                 ),
             })
             all_pass = all_pass and c11
+
+            # ── 12. the additive 5th state — invalid_key from last-real-call
+            #        telemetry, correctly SCOPED: ONLY an auth rejection renders
+            #        invalid_key; a rate-limit is NOT a key problem; a rotated
+            #        verdict is not claimed. (Check 4 above stays byte-for-byte
+            #        unchanged — its passing IS the additivity proof.)
+            from gui.ai_control_center import status_badge as _status_badge
+            _keyed = _NS(
+                LLM_COMMENTARY_ENABLED=True,
+                LLM_COMMENTARY_RATIONALE_PROVIDER="claude",
+                ANTHROPIC_API_KEY="sk-ant-x",
+            )
+            inv_auth = capability_status(
+                _keyed, claude_cap,
+                last_calls={"claude": {"source": "last_call", "ok": False, "error_kind": "auth"}},
+            )
+            inv_rl = capability_status(
+                _keyed, claude_cap,
+                last_calls={"claude": {"source": "last_call", "ok": False, "error_kind": "rate_limit"}},
+            )
+            inv_rot = capability_status(
+                _keyed, claude_cap,
+                last_calls={"claude": {"source": "key_rotated", "ok": None, "error_kind": None}},
+            )
+            c12 = (
+                inv_auth["status"] == "invalid_key"
+                and inv_auth["invalid_provider"] == "claude"
+                and inv_rl["status"] == "ready"
+                and inv_rot["status"] == "ready"
+                and bool(_status_badge("invalid_key"))
+            )
+            audit["checks"].append({
+                "check": "invalid_key reachable + scoped (auth only; rate_limit/key_rotated stay ready)",
+                "passed": bool(c12),
+                "detail": f"auth={inv_auth['status']} rate_limit={inv_rl['status']} rotated={inv_rot['status']}",
+            })
+            all_pass = all_pass and c12
+
+            # ── 13. ADDITIVE proof — status with last_calls=None is identical
+            #        to the no-kwarg status for every capability, and all four
+            #        ORIGINAL badge tokens survive the 5th entry.
+            from gui.ai_control_center import STATUS_BADGE as _BADGES
+            _matrix = (_NS(), _keyed)
+            additive = all(
+                capability_status(s, c)["status"] == capability_status(s, c, last_calls=None)["status"]
+                for s in _matrix for c in CAPABILITIES
+            )
+            badges_survive = all(
+                t in _BADGES for t in ("ready", "disabled", "missing_key", "not_built")
+            )
+            c13 = additive and badges_survive
+            audit["checks"].append({
+                "check": "last_calls=None is status-identical (additive) + 4 original badges survive",
+                "passed": bool(c13),
+                "detail": f"additive={additive} badges_survive={badges_survive}",
+            })
+            all_pass = all_pass and c13
+
+            # ── 14. secret containment + no-SDK reach. Record a failure with a
+            #        sentinel key under a temp OUTPUT_DIR; assert no key material
+            #        (nor its >=6-char substrings) reaches the file and read_all
+            #        carries no fingerprint. Then a subprocess `import llm`
+            #        leaves anthropic/openai/google.genai out of sys.modules.
+            import json as _json
+            import subprocess as _subprocess
+            import sys as _sys
+            import tempfile as _tempfile
+            from unittest import mock as _mock
+            from settings import settings as _settings
+            import llm.status_store as _ss
+
+            sentinel = "ZZQWXKP7M9N4VB8TR6YU3JH5GD1FS0LA"
+            with _tempfile.TemporaryDirectory() as _tmp:
+                with _mock.patch.object(_settings, "OUTPUT_DIR", _tmp):
+                    with _mock.patch.object(_settings, "ANTHROPIC_API_KEY", sentinel):
+                        _exc = type("AuthenticationError", (Exception,), {})("bad")
+                        _exc.status_code = 401
+                        _ss.record_failure("claude", _exc)
+                        _raw = (_Path(_tmp) / _ss.LLM_STATUS_FILENAME).read_text(encoding="utf-8")
+                        _read = _ss.read_all()
+                no_key = sentinel not in _raw and all(
+                    sentinel[i:i + 6] not in _raw for i in range(len(sentinel) - 5)
+                )
+                no_fp = "key_fingerprint" not in _json.dumps(_read)
+            _code = (
+                "import llm, llm.status_store, sys;"
+                "bad={'anthropic','openai','google.genai','processing_engine',"
+                "'strategy_engine','forecasting_engine','main_orchestrator'} & set(sys.modules);"
+                "assert not bad, bad"
+            )
+            _proc = _subprocess.run(
+                [_sys.executable, "-c", _code], cwd=str(repo_root),
+                capture_output=True, text=True,
+            )
+            no_sdk = _proc.returncode == 0
+            c14 = no_key and no_fp and no_sdk
+            audit["checks"].append({
+                "check": "status_store: no key material or fingerprint persisted/returned + import llm pulls no SDK",
+                "passed": bool(c14),
+                "detail": f"no_key={no_key} no_fingerprint={no_fp} no_sdk={no_sdk}",
+            })
+            all_pass = all_pass and c14
 
             audit["overall_pass"] = bool(all_pass)
             audit["status"] = "PASSED" if all_pass else "FAILED"
