@@ -21,7 +21,6 @@ import type {
   Follow,
   FollowResult,
   ForecastSkill,
-  Holding,
   IntervalUpdateResult,
   KillSwitchActionResult,
   LlmStatus,
@@ -32,7 +31,6 @@ import type {
   PerformanceResponse,
   PilotDetail,
   PilotSummary,
-  PilotTrade,
   Portfolio,
   CurvePoint,
   RealizedPerformance,
@@ -117,10 +115,6 @@ const liveApi = {
     http<PerformanceResponse>(
       `/pilots/${encodeURIComponent(id)}/performance?range=${range}`
     ),
-  getHoldings: (id: string) =>
-    http<Holding[]>(`/pilots/${encodeURIComponent(id)}/holdings`),
-  getTrades: (id: string, limit = 20) =>
-    http<PilotTrade[]>(`/pilots/${encodeURIComponent(id)}/trades?limit=${limit}`),
   getSymbol: (ticker: string) =>
     http<SymbolDetail>(`/symbols/${encodeURIComponent(ticker)}`),
   getPortfolio: () => http<Portfolio>("/portfolio"),

@@ -1348,18 +1348,6 @@ export const mockApi = {
     });
   },
 
-  async getHoldings(id: string): Promise<Holding[]> {
-    const p = findPilot(id);
-    if (!p) throw notFound(id);
-    return delay(p.holdings);
-  },
-
-  async getTrades(id: string, limit = 20): Promise<PilotTrade[]> {
-    const p = findPilot(id);
-    if (!p) throw notFound(id);
-    return delay(trades(p.holdings).slice(0, limit));
-  },
-
   async getSymbol(ticker: string): Promise<SymbolDetail> {
     const sym = ticker.trim().toUpperCase();
     if (!SYMBOL_UNIVERSE.has(sym)) throw notFoundSymbol(sym);
