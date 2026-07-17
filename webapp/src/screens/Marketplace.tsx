@@ -133,19 +133,26 @@ export function Marketplace() {
           <div className="rail-head" style={{ marginTop: 24 }}>
             <h2>Explore</h2>
           </div>
-          <div style={{ display: "flex", gap: 12 }}>
-            <Link to="/models" className="card card-pad" style={{ flex: 1, textDecoration: "none" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+            <Link to="/models" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: 22 }} aria-hidden>🧠</div>
               <div style={{ fontWeight: 700, marginTop: 6 }}>The models</div>
               <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
                 CPCV-gated ML registry
               </div>
             </Link>
-            <Link to="/pairs" className="card card-pad" style={{ flex: 1, textDecoration: "none" }}>
+            <Link to="/pairs" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: 22 }} aria-hidden>🔗</div>
               <div style={{ fontWeight: 700, marginTop: 6 }}>Pairs radar</div>
               <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
                 Cointegrated stat-arb candidates
+              </div>
+            </Link>
+            <Link to="/options" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🎯</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Options premium</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Per-symbol premium directives
               </div>
             </Link>
           </div>

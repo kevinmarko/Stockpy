@@ -339,24 +339,57 @@ export interface ModelRow {
 }
 
 /**
+ * One leg of a persisted options structure (technical_options_engine leg dict).
+ * An Iron Condor carries 4 legs; a Covered Call carries 1. `Delta` is ABSENT
+ * (→ undefined) on Iron Condor and both debit spreads — the engine builds those
+ * legs without it — so never coerce a missing Delta to 0.
+ */
+export interface OptionsLeg {
+  Side: "Short" | "Long";
+  Type: "Put" | "Call";
+  Strike: number | null;
+  Price: number | null;
+  Delta?: number | null;
+}
+
+/**
  * One options premium-selling directive (technical_options_engine.build_premium_directive,
- * persisted to output/options_matrix.json). Loosely typed — only the fields the
- * UI renders are named; uncomputable numeric legs are `null`, never 0.
+ * persisted to output/options_matrix.json). Uncomputable numeric legs are `null`,
+ * never 0. The `[key: string]: unknown` index signature keeps the type
+ * forward-compatible with the writer, but every field the screen renders is
+ * declared explicitly — otherwise the index signature widens it to `unknown`
+ * and it won't render/map without a cast.
+ *
+ * `Legs[]` is the authoritative leg payload. `Short_Strike`/`Long_Strike` are a
+ * lossy first-short/first-long projection (an Iron Condor's 4 legs collapse to
+ * 2 here); render `Legs` for the full structure.
+ *
+ * `ATM_*` Greeks are always computed for a hypothetical at-the-money CALL at the
+ * symbol's spot and σ, regardless of `Strategy` — they describe the symbol's ATM
+ * sensitivity, not this structure's exposure.
  */
 export interface OptionsDirective {
   Symbol: string;
   Price?: number | null;
+  Stale?: boolean | null;
   Strategy?: string | null;
   Action?: string | null;
   Trend_Bias?: string | null;
   Sigma_GARCH?: number | null;
   IVR_Proxy?: number | null;
+  Aroon_Oscillator?: number | null;
+  Coppock_Curve?: number | null;
   Net_Premium?: number | null;
   Realizable_Daily_Theta?: number | null;
+  ATM_Delta?: number | null;
+  ATM_Gamma?: number | null;
+  ATM_Vega?: number | null;
+  ATM_Theta_Daily?: number | null;
   Short_Strike?: number | null;
   Long_Strike?: number | null;
   Short_Delta?: number | null;
   Long_Delta?: number | null;
+  Legs?: OptionsLeg[] | null;
   Integrity_OK?: boolean | null;
   Integrity_Issues?: string[] | null;
   [key: string]: unknown;

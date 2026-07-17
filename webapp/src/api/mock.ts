@@ -945,38 +945,231 @@ const MODELS: ModelRow[] = [
 ];
 
 // ---- Options premium matrix fixture ----
-function optDirective(symbol: string): OptionsDirective {
-  const rng = seeded([...symbol].reduce((a, c) => a + c.charCodeAt(0), 0) + 7);
-  const price = +(80 + rng() * 300).toFixed(2);
-  const shortK = +(Math.round((price * 0.95) / 0.5) * 0.5).toFixed(2);
-  const longK = +(shortK - 5).toFixed(2);
-  return {
-    Symbol: symbol,
-    Price: price,
+// Hand-written to exercise every honesty branch the screen must handle. The
+// previous seeded fixture emitted only clean Put Credit Spreads with
+// Integrity_OK=true and a non-zero theta, so it could not surface a single one:
+//   - Iron Condor: 4 Legs, no per-leg Delta -> Short_Delta/Long_Delta null
+//   - Call Debit Spread: Realizable_Daily_Theta 0.0 is a DEFAULT, not a value
+//     (the engine only assigns theta on credit structures); Net_Premium < 0
+//   - Covered Call: 1 leg, no long leg -> Long_Strike null
+//   - Cash/Wait: Net_Premium 0.0 is a REAL zero (no position, no premium)
+//   - Integrity_OK=false + Integrity_Issues (off-grid / delta-tolerance)
+//   - error stub: Strategy null, the writer's per-symbol dead-letter row
+// ATM_* Greeks are for a hypothetical ATM CALL regardless of Strategy (engine
+// invariant) — present on actionable rows, null on Cash/error rows.
+const OPTIONS_DIRECTIVES: OptionsDirective[] = [
+  {
+    Symbol: "AAPL",
+    Price: 214.9,
+    Stale: false,
     Strategy: "Put Credit Spread",
-    Action: "Sell to open",
-    Trend_Bias: rng() > 0.5 ? "Bullish" : "Neutral",
-    Sigma_GARCH: +(0.18 + rng() * 0.3).toFixed(3),
-    IVR_Proxy: +(40 + rng() * 45).toFixed(1),
-    Net_Premium: +(0.6 + rng() * 1.8).toFixed(2),
-    Realizable_Daily_Theta: +(0.02 + rng() * 0.05).toFixed(3),
-    Short_Strike: shortK,
-    Long_Strike: longK,
+    Action: "Sell to Open",
+    Trend_Bias: "Bullish",
+    Sigma_GARCH: 0.243,
+    IVR_Proxy: 58.4,
+    Aroon_Oscillator: 64.3,
+    Coppock_Curve: 11.2,
+    Net_Premium: 1.24,
+    Realizable_Daily_Theta: 0.031,
+    ATM_Delta: 0.512,
+    ATM_Gamma: 0.021,
+    ATM_Vega: 0.184,
+    ATM_Theta_Daily: -0.052,
+    Short_Strike: 204.0,
+    Long_Strike: 199.0,
     Short_Delta: -0.3,
     Long_Delta: -0.15,
+    Legs: [
+      { Side: "Short", Type: "Put", Strike: 204.0, Price: 2.68, Delta: -0.3 },
+      { Side: "Long", Type: "Put", Strike: 199.0, Price: 1.44, Delta: -0.15 },
+    ],
     Integrity_OK: true,
     Integrity_Issues: [],
-  };
-}
+  },
+  {
+    // 4 legs, engine omits per-leg Delta -> Short_Delta/Long_Delta null.
+    Symbol: "MSFT",
+    Price: 431.2,
+    Stale: false,
+    Strategy: "Iron Condor",
+    Action: "Sell to Open",
+    Trend_Bias: "Neutral",
+    Sigma_GARCH: 0.201,
+    IVR_Proxy: 51.7,
+    Aroon_Oscillator: -7.1,
+    Coppock_Curve: 3.4,
+    Net_Premium: 2.06,
+    Realizable_Daily_Theta: 0.048,
+    ATM_Delta: 0.503,
+    ATM_Gamma: 0.011,
+    ATM_Vega: 0.221,
+    ATM_Theta_Daily: -0.061,
+    Short_Strike: 410.0,
+    Long_Strike: 405.0,
+    Short_Delta: null,
+    Long_Delta: null,
+    Legs: [
+      { Side: "Short", Type: "Put", Strike: 410.0, Price: 3.1 },
+      { Side: "Long", Type: "Put", Strike: 405.0, Price: 1.9 },
+      { Side: "Short", Type: "Call", Strike: 452.0, Price: 3.4 },
+      { Side: "Long", Type: "Call", Strike: 457.0, Price: 2.1 },
+    ],
+    Integrity_OK: true,
+    Integrity_Issues: [],
+  },
+  {
+    // Debit spread: theta is the initializer default 0.0, NOT a measurement.
+    // Net_Premium negative = debit. Stale quote. Legs omit Delta.
+    Symbol: "NVDA",
+    Price: 132.6,
+    Stale: true,
+    Strategy: "Call Debit Spread",
+    Action: "Buy to Open",
+    Trend_Bias: "Bullish",
+    Sigma_GARCH: 0.462,
+    IVR_Proxy: 24.1,
+    Aroon_Oscillator: 78.6,
+    Coppock_Curve: 22.8,
+    Net_Premium: -2.15,
+    Realizable_Daily_Theta: 0.0,
+    ATM_Delta: 0.537,
+    ATM_Gamma: 0.033,
+    ATM_Vega: 0.142,
+    ATM_Theta_Daily: -0.071,
+    Short_Strike: 140.0,
+    Long_Strike: 132.5,
+    Short_Delta: null,
+    Long_Delta: null,
+    Legs: [
+      { Side: "Long", Type: "Call", Strike: 132.5, Price: 6.4 },
+      { Side: "Short", Type: "Call", Strike: 140.0, Price: 4.25 },
+    ],
+    Integrity_OK: true,
+    Integrity_Issues: [],
+  },
+  {
+    // Covered Call: 1 short leg, no long leg -> Long_Strike null. Theta default.
+    Symbol: "V",
+    Price: 279.8,
+    Stale: false,
+    Strategy: "Covered Call",
+    Action: "Sell to Open",
+    Trend_Bias: "Neutral",
+    Sigma_GARCH: 0.176,
+    IVR_Proxy: 44.2,
+    Aroon_Oscillator: 14.3,
+    Coppock_Curve: -1.9,
+    Net_Premium: 3.05,
+    Realizable_Daily_Theta: 0.0,
+    ATM_Delta: 0.498,
+    ATM_Gamma: 0.014,
+    ATM_Vega: 0.163,
+    ATM_Theta_Daily: -0.044,
+    Short_Strike: 290.0,
+    Long_Strike: null,
+    Short_Delta: 0.3,
+    Long_Delta: null,
+    Legs: [{ Side: "Short", Type: "Call", Strike: 290.0, Price: 3.05, Delta: 0.3 }],
+    Integrity_OK: true,
+    Integrity_Issues: [],
+  },
+  {
+    // Cash/Wait: Net_Premium 0.0 is a REAL zero. No legs, no ATM greeks.
+    Symbol: "XOM",
+    Price: 118.4,
+    Stale: false,
+    Strategy: "Cash",
+    Action: "Wait",
+    Trend_Bias: "Bearish",
+    Sigma_GARCH: 0.229,
+    IVR_Proxy: 33.5,
+    Aroon_Oscillator: -42.9,
+    Coppock_Curve: -8.7,
+    Net_Premium: 0.0,
+    Realizable_Daily_Theta: 0.0,
+    ATM_Delta: null,
+    ATM_Gamma: null,
+    ATM_Vega: null,
+    ATM_Theta_Daily: null,
+    Short_Strike: null,
+    Long_Strike: null,
+    Short_Delta: null,
+    Long_Delta: null,
+    Legs: [],
+    Integrity_OK: true,
+    Integrity_Issues: [],
+  },
+  {
+    // Failing integrity: off-grid strike + delta out of tolerance.
+    Symbol: "KO",
+    Price: 62.35,
+    Stale: false,
+    Strategy: "Put Credit Spread",
+    Action: "Sell to Open",
+    Trend_Bias: "Bullish",
+    Sigma_GARCH: 0.153,
+    IVR_Proxy: 61.2,
+    Aroon_Oscillator: 35.7,
+    Coppock_Curve: 6.1,
+    Net_Premium: 0.42,
+    Realizable_Daily_Theta: 0.012,
+    ATM_Delta: 0.506,
+    ATM_Gamma: 0.041,
+    ATM_Vega: 0.088,
+    ATM_Theta_Daily: -0.019,
+    Short_Strike: 59.37,
+    Long_Strike: 57.0,
+    Short_Delta: -0.41,
+    Long_Delta: -0.15,
+    Legs: [
+      { Side: "Short", Type: "Put", Strike: 59.37, Price: 0.71, Delta: -0.41 },
+      { Side: "Long", Type: "Put", Strike: 57.0, Price: 0.29, Delta: -0.15 },
+    ],
+    Integrity_OK: false,
+    Integrity_Issues: [
+      "Short leg strike 59.37 is not on the $0.50 grid",
+      "Short leg delta -0.41 exceeds tolerance of target -0.30 (±0.05)",
+    ],
+  },
+  {
+    // Writer's per-symbol dead-letter row: Strategy null, error captured.
+    Symbol: "ZZZ",
+    Price: null,
+    Stale: false,
+    Strategy: null,
+    Action: null,
+    Trend_Bias: null,
+    Sigma_GARCH: null,
+    IVR_Proxy: null,
+    Aroon_Oscillator: null,
+    Coppock_Curve: null,
+    Net_Premium: null,
+    Realizable_Daily_Theta: null,
+    ATM_Delta: null,
+    ATM_Gamma: null,
+    ATM_Vega: null,
+    ATM_Theta_Daily: null,
+    Short_Strike: null,
+    Long_Strike: null,
+    Short_Delta: null,
+    Long_Delta: null,
+    Legs: [],
+    Integrity_OK: false,
+    Integrity_Issues: ["insufficient bars to compute directive"],
+  },
+];
 
-const OPTIONS_SYMBOLS = ["AAPL", "MSFT", "NVDA", "V"];
+const OPTIONS_BY_SYMBOL: Record<string, OptionsDirective> = Object.fromEntries(
+  OPTIONS_DIRECTIVES.map((d) => [d.Symbol, d]),
+);
+
 function mockOptionsMatrix(): OptionsMatrix {
   return {
     as_of: new Date(Date.now() - 5_400_000).toISOString(),
     target_dte: 30,
     vix: 15.2,
     market_regime: "RISK ON",
-    directives: OPTIONS_SYMBOLS.map(optDirective),
+    directives: OPTIONS_DIRECTIVES,
     reason: null,
   };
 }
@@ -1406,7 +1599,7 @@ export const mockApi = {
 
   async getSymbolOptions(ticker: string): Promise<SymbolOptions> {
     const sym = ticker.trim().toUpperCase();
-    const directive = OPTIONS_SYMBOLS.includes(sym) ? optDirective(sym) : null;
+    const directive = OPTIONS_BY_SYMBOL[sym] ?? null;
     return delay({
       symbol: sym,
       directive,
