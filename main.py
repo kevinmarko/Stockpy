@@ -1224,10 +1224,21 @@ def main() -> None:
         # ROBINHOOD_EXECUTION_MODE=off (the default) nothing is written and this
         # block is a no-op.  The kill-switch advisory-pause gate above already
         # short-circuits run_once(), so a paused cycle emits nothing.
+        #
+        # Routes through execution.compose (the cross-Pilot + advisory queue
+        # composer) rather than calling emit_execution_queue directly: this
+        # advisory cycle writes its OWN source file (queue_sources/advisory.json)
+        # and then composes it together with every actively-followed Pilot's
+        # own source file into ONE queue, instead of silently overwriting
+        # whatever a follow may have written (or vice versa) — the two writers
+        # already shared this one file. In the default advisory-only posture
+        # (no active follows) this is a no-op change: the composed output for
+        # every symbol is byte-identical to advisory alone.
         try:
-            from execution.queue_builder import emit_execution_queue  # noqa: PLC0415
+            from execution.compose import compose_and_emit, write_advisory_source  # noqa: PLC0415
 
-            _queue_path = emit_execution_queue(result)
+            write_advisory_source(result.recommendations)
+            _queue_path = compose_and_emit(result.snapshot)
             if _queue_path is not None:
                 logger.info("Robinhood execution queue emitted → %s", _queue_path)
         except Exception as _queue_exc:

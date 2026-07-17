@@ -97,6 +97,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "FollowIntent",
     "FollowRunResult",
+    "build_follow_targets",
     "build_follow_intents",
     "plan_follow",
     "FOLLOW_MIN_CONVICTION",
@@ -296,19 +297,32 @@ def _follow_rationale(
     )
 
 
-def _current_target_holdings(
+def build_follow_targets(
     pilot: Pilot,
     amount: float,
     snapshot: Optional[dict],
     top_n: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Return the Pilot's CURRENT target holding set for persistence.
+    """Pure target-notional math for a Pilot follow — the shared primitive
+    both the legacy single-pilot preview path (:func:`build_follow_intents`,
+    via ``execution.compose``) and the multi-source composer
+    (``execution.compose.compose_and_emit``) build on.
 
-    ``[{"symbol", "weight", "target_notional"}]`` where ``target_notional`` is
-    the follow's TARGET position notional in that name (``amount * weight``,
-    clamped by the per-order cap) — the exact quantity :func:`build_follow_intents`
-    rebalances toward. This is what ``FollowsStore.set_mirrored`` records so a
-    future follow can attribute (and force-exit) a name the Pilot later drops.
+    ``[{"symbol", "weight", "target_notional", "score", "price", "rationale"}]``
+    where ``target_notional`` is the follow's TARGET POSITION SIZE in that name
+    (``amount * weight``, clamped by the per-order notional cap) — this is what
+    ``FollowsStore.set_mirrored`` records so a future follow can attribute (and
+    force-exit) a name the Pilot later drops, and what a per-source
+    ``queue_sources/follow-<pilot_id>.json`` file carries for composition.
+
+    Deliberately takes NO account snapshot and does NO rebalance-to-current
+    netting and decides NO BUY/SELL direction — netting against actual account
+    holdings happens exactly ONCE, downstream (never here): summing two
+    ALREADY-netted per-Pilot deltas for the same symbol double-counts the same
+    held position (the queue-composition design's "net targets, not deltas"
+    proof — two Pilots wanting $3750/$2000 of a $6000 holding nets to a $250
+    trim, not the ($3750-$6000)+($2000-$6000) = -$6250 that summing deltas
+    would produce).
 
     Empty on a non-positive ``amount``, a missing snapshot, or no Pilot holdings.
     Never raises (CONSTRAINT #6); no fabricated positions (CONSTRAINT #4).
@@ -321,8 +335,9 @@ def _current_target_holdings(
         if not holdings:
             return []
         cap = _max_notional_cap()
+        total_holdings = len(holdings)
         out: List[Dict[str, Any]] = []
-        for h in holdings:
+        for rank0, h in enumerate(holdings):
             symbol = str(h.get("symbol") or "").upper().strip()
             weight = _coerce_float(h.get("weight"))
             if not symbol or weight is None or weight <= 0:
@@ -332,14 +347,24 @@ def _current_target_holdings(
                 target = min(target, cap)
             if target <= 0:
                 continue
+            score = _coerce_float(h.get("score"))
             out.append({
                 "symbol": symbol,
                 "weight": round(float(weight), 6),
                 "target_notional": round(float(target), 2),
+                "score": score,
+                "price": _coerce_float(h.get("price")),
+                # Bug D-style honest ranking rationale, precomputed here (not
+                # at compose time) so a per-source file is a self-contained
+                # record of what this Pilot claimed and why, at write time.
+                "rationale": _follow_rationale(
+                    pilot, rank=rank0 + 1, total=total_holdings,
+                    score=score, weight=float(weight), target_notional=float(target),
+                ),
             })
         return out
     except Exception as exc:  # pragma: no cover - defensive dead-letter
-        logger.debug("mirror: _current_target_holdings failed for %s: %s",
+        logger.debug("mirror: build_follow_targets failed for %s: %s",
                      getattr(pilot, "id", "?"), exc)
         return []
 
@@ -393,25 +418,26 @@ def build_follow_intents(
         One ``FollowIntent`` per Pilot holding that is outside the no-trade band:
         a **BUY** (underweight vs. target) or a **SELL** partial trim (overweight),
         ``target_notional`` = the |delta| clamped by the per-order cap. Holdings
-        already within ``_REBALANCE_BAND_FRACTION`` of target are omitted. Plus, when
+        already within the no-trade band of target are omitted. Plus, when
         ``prior_mirrored`` is supplied, one **SELL** force-exit per dropped name the
         follow still holds. Empty on any failure, on a non-positive ``amount``, on a
         non-positive account equity, or when the Pilot has no holdings AND there is
         nothing to force-exit. Never raises (CONSTRAINT #6). Pure — writes nothing.
+
+    Implementation note (queue-composition refactor): this is now a thin
+    single-source wrapper over ``execution.compose``'s shared netting engine —
+    the SAME per-symbol "net targets, then net once against current holdings,
+    capped by attribution" logic the multi-source composer uses for a follow
+    unioned with other Pilots/advisory. Composing exactly one follow source
+    and no advisory source reproduces this function's pre-refactor output
+    byte-for-byte (the safety net the whole composer refactor leans on — see
+    ``tests/test_compose.py``'s single-source byte-identity tests and
+    ``tests/test_pilots_mirror.py``'s existing coverage, both unchanged).
     """
     try:
         amt = _coerce_float(amount)
         if amt is None or amt <= 0:
             logger.debug("mirror: non-positive amount (%r); no intents", amount)
-            return []
-
-        equity = _coerce_float(getattr(account_snapshot, "total_equity", None))
-        if equity is None or equity <= 0:
-            logger.info(
-                "mirror: account snapshot has no positive total_equity; cannot "
-                "build proportional follow intents for pilot %s",
-                getattr(pilot, "id", "?"),
-            )
             return []
 
         if snapshot is None:
@@ -421,134 +447,55 @@ def build_follow_intents(
             logger.info("mirror: no usable state snapshot; no follow intents.")
             return []
 
-        holdings = pilot_holdings(pilot, snapshot, top_n=top_n)
+        from execution.compose import (
+            FollowSourceClaims,
+            compose_targets,
+            follow_source_id,
+        )
+
+        targets = build_follow_targets(pilot, amount, snapshot, top_n=top_n)
         prior = prior_mirrored or []
-        if not holdings and not prior:
+        if not targets and not prior:
             logger.info(
                 "mirror: pilot %s produced no holdings from the current snapshot.",
                 getattr(pilot, "id", "?"),
             )
             return []
 
-        cap = _max_notional_cap()
-        strategy_label = f"Follow:{getattr(pilot, 'id', 'unknown')}"
-
-        intents: List[FollowIntent] = []
-        _total_holdings = len(holdings)
-        for _rank0, h in enumerate(holdings):
-            symbol = str(h.get("symbol") or "").upper().strip()
-            weight = _coerce_float(h.get("weight"))
-            if not symbol or weight is None or weight <= 0:
+        target_symbols = {t["symbol"] for t in targets}
+        dropped: List[Dict[str, Any]] = []
+        for m in prior:
+            if not isinstance(m, dict):
                 continue
-
-            target = amt * weight
-            if cap is not None:
-                target = min(target, cap)
-            if target <= 0:
+            sym = str(m.get("symbol") or "").upper().strip()
+            if not sym or sym in target_symbols:
                 continue
-
-            # Rebalance to target: net off the follower's CURRENT market value in
-            # this name and size the order to the delta. BUY when underweight, SELL
-            # (partial trim) when overweight, skip within the no-trade band.
-            current = _current_market_value(account_snapshot, symbol)
-            delta = target - current
-            band = max(_REBALANCE_MIN_DELTA_USD, _REBALANCE_BAND_FRACTION * target)
-            if abs(delta) < band:
+            attributed = _coerce_float(m.get("target_notional"))
+            if attributed is None or attributed <= 0:
                 continue
+            dropped.append({"symbol": sym, "target_notional": round(float(attributed), 2)})
 
-            action = "BUY" if delta > 0 else "SELL"
-            order_notional = abs(delta)
-            if cap is not None:
-                order_notional = min(order_notional, cap)
-            if order_notional <= 0:
-                continue
-
-            pct = order_notional / equity  # equity > 0 guaranteed above
-            _score = _coerce_float(h.get("score"))
-            intents.append(FollowIntent(
-                symbol=symbol,
-                action=action,
-                strategy=strategy_label,
-                # Decision D3: honest per-name conviction == normalized weight.
-                conviction=float(weight),
-                suggested_position_pct=float(pct),
-                target_notional=round(float(order_notional), 2),
-                weight=float(weight),
-                price=_coerce_float(h.get("price")),
-                score=_score,
-                # Bug D: a real per-name "why" (an honest ranking, not a thesis)
-                # instead of the bare owner label. `target` is the position
-                # target (amt*weight, cap-clamped), NOT the order delta — the
-                # rationale describes why this NAME is in the Pilot, sized by the
-                # weight that put it there, not the mechanics of this one order.
-                rationale=_follow_rationale(
-                    pilot,
-                    rank=_rank0 + 1,
-                    total=_total_holdings,
-                    score=_score,
-                    weight=float(weight),
-                    target_notional=float(target),
-                ),
-            ))
-
-        # -------------------------------------------------------------------
-        # Force-exit of dropped names (requires per-follow attribution).
-        # For each symbol this follow previously mirrored that is NO LONGER a
-        # current Pilot holding, emit a SELL sized to the follow-attributed
-        # quantity only: min(last target notional, currently held market value),
-        # further clamped by the per-order cap. A positive suggested_position_pct
-        # makes the queue builder treat this as a partial trim (qty resolved
-        # downstream and capped at the held quantity — never an oversell, never
-        # the follower's whole unrelated position). Skipped entirely when
-        # `prior` is empty (legacy/first follow → honest no-op).
-        # -------------------------------------------------------------------
-        if prior:
-            current_symbols = {
-                str(h.get("symbol") or "").upper().strip() for h in holdings
-            }
-            already = {i.symbol for i in intents}
-            for m in prior:
-                if not isinstance(m, dict):
-                    continue
-                sym = str(m.get("symbol") or "").upper().strip()
-                if not sym or sym in current_symbols or sym in already:
-                    continue
-                attributed = _coerce_float(m.get("target_notional"))
-                if attributed is None or attributed <= 0:
-                    # No usable attribution for this name (e.g. a legacy row that
-                    # stored no target_notional) — never fabricate one.
-                    continue
-                held_mv = _current_market_value(account_snapshot, sym)
-                if held_mv <= 0:
-                    # The attributed position is not actually held anymore —
-                    # nothing to sell (no fabricated position, CONSTRAINT #4).
-                    continue
-                order_notional = min(attributed, held_mv)
-                if cap is not None:
-                    order_notional = min(order_notional, cap)
-                if order_notional <= 0:
-                    continue
-                pct = order_notional / equity  # equity > 0 guaranteed above
-                intents.append(FollowIntent(
-                    symbol=sym,
-                    action="SELL",
-                    strategy=strategy_label,
-                    # Honest per-name conviction: a dropped name's target weight
-                    # is 0.0 (Decision D3 — never inflate to clear a gate).
-                    conviction=0.0,
-                    suggested_position_pct=float(pct),
-                    target_notional=round(float(order_notional), 2),
-                    weight=0.0,
-                    price=None,
-                    score=None,
-                    rationale=(
-                        f"{strategy_label} — exit: this name is no longer in the "
-                        f"Pilot's ranked holdings; trimming the follow-attributed "
-                        f"${order_notional:,.0f} back out."
-                    ),
-                ))
-
-        return intents
+        source = FollowSourceClaims(
+            source_id=follow_source_id(str(getattr(pilot, "id", "unknown"))),
+            targets=targets,
+            dropped_targets=dropped,
+        )
+        composed = compose_targets(advisory=None, follows=[source], account_snapshot=account_snapshot)
+        return [
+            FollowIntent(
+                symbol=ci.symbol,
+                action=ci.action,
+                strategy=ci.strategy,
+                conviction=ci.conviction,
+                suggested_position_pct=ci.suggested_position_pct,
+                target_notional=ci.target_notional,
+                weight=ci.weight,
+                price=ci.price,
+                score=ci.score,
+                rationale=ci.rationale,
+            )
+            for ci in composed
+        ]
     except Exception as exc:  # pragma: no cover - defensive dead-letter
         logger.debug("mirror: build_follow_intents failed for %s: %s",
                      getattr(pilot, "id", "?"), exc)
@@ -671,23 +618,38 @@ def plan_follow(
 
     planned = [i.to_dict() for i in intents]
 
-    if intents:
+    # Write this follow's per-source file (its pure current targets, plus any
+    # prior_mirrored row just detected as dropped) and hand off to the
+    # cross-Pilot + advisory composer — the SINGLE writer of
+    # output/execution_queue.json (execution/compose.py). This REPLACES a
+    # direct emit_execution_queue(FollowRunResult(...)) call that used to
+    # write (or clobber) the queue from THIS follow alone: two writers
+    # already shared that one file (main.py's advisory cycle and this
+    # function), and whichever ran last silently overwrote the other. The
+    # source write happens even when `intents` (this follow's OWN rebalance
+    # preview) is empty — an empty targets list is itself meaningful input
+    # to the composer (e.g. this Pilot currently holds nothing, so any
+    # previously-attributed name must be force-exited under the union, not
+    # silently skipped because this cycle produced no preview intents).
+    # `queue_written` now answers "did the actual execution queue file get
+    # written/updated as a result of this action" — which may also reflect
+    # OTHER sources' claims, not only this pilot's own, since composition is
+    # a union. That is the more honest question for an operator to ask.
+    if store is not None:
         try:
-            from execution.queue_builder import emit_execution_queue
+            from execution.compose import compose_and_emit, write_follow_source
 
-            run_result = FollowRunResult(recommendations=intents, snapshot=account_snapshot)
-            config = {
-                "strategy_id": f"follow-{pilot_id}",
-                "min_conviction": FOLLOW_MIN_CONVICTION,
-            }
-            kwargs: Dict[str, Any] = {"config": config}
-            if output_dir is not None:
-                from pathlib import Path
-                kwargs["output_dir"] = Path(output_dir)
-            written_path = emit_execution_queue(run_result, **kwargs)
+            write_follow_source(
+                pilot, amount, snapshot,
+                prior_mirrored=prior_mirrored, output_dir=output_dir,
+            )
+            written_path = compose_and_emit(
+                account_snapshot, output_dir=output_dir,
+                extra_follow_pilot_ids=[pilot_id],
+            )
             queue_written = written_path is not None
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("mirror: emit_execution_queue failed for %s (%s); "
+            logger.warning("mirror: compose_and_emit failed for %s (%s); "
                            "returning preview only", pilot_id, exc)
             queue_written = False
 
@@ -704,9 +666,15 @@ def plan_follow(
     # UNCHANGED (its original weight/target_notional, not recomputed) since it
     # still represents this follow's original claim on that name; it drops out
     # on its own the next time this runs once the held market value hits zero.
+    #
+    # Deliberately AFTER the write_follow_source/compose_and_emit block above:
+    # write_follow_source's own dropped-name detection reads `prior_mirrored`
+    # (captured earlier in this function, before any update) -- if this
+    # persistence step ran first and overwrote the store, there would be
+    # nothing left to detect as "just dropped" on this same call.
     if store is not None:
         try:
-            current_set = _current_target_holdings(pilot, amount, snapshot)
+            current_set = build_follow_targets(pilot, amount, snapshot)
             if current_set:
                 current_symbols = {row.get("symbol") for row in current_set}
                 retained: List[Dict[str, Any]] = []
