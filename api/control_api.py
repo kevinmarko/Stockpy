@@ -50,6 +50,14 @@ Endpoints
   GET  /run/{run_id}/status  -> read-token guarded. Status of a specific run.
   GET  /run/latest           -> read-token guarded. Status of the most
                                 recent run (may still be RUNNING).
+  PUT  /interval              -> command-token guarded (same posture as
+                                POST /run — no separate master-switch flag;
+                                see the docstring on the endpoint itself for
+                                why this is the right posture even though
+                                api/pilots_api.py's equivalent write also
+                                requires AUTOMATION_WRITES_ENABLED). Changes
+                                the daemon's internal timer cadence LIVE, no
+                                restart required.
 
 Auth
 ----
@@ -71,8 +79,8 @@ CONSTRAINT #3):
     on the command endpoint.
 
 CORS mirrors ``api/state_api.py`` (``settings.CORS_ALLOWED_ORIGINS``) but
-additionally allows POST (state_api.py is GET-only; this module needs POST
-for ``/run``).
+additionally allows POST and PUT (state_api.py is GET-only; this module
+needs POST for ``/run`` and PUT for ``/interval``).
 """
 
 from __future__ import annotations
@@ -85,8 +93,9 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field, field_validator
 
-from settings import settings
+from settings import INTERVAL_MAX_SECONDS, settings, validate_interval_seconds
 from desktop.daemon_runtime import OrchestratorDaemon, RunRecord, TriggerOutcome
 from execution.kill_switch import GlobalKillSwitch
 
@@ -108,7 +117,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -181,9 +190,33 @@ if not settings.STATE_API_TOKEN:
     )
 if not settings.ORCHESTRATOR_DAEMON_TOKEN:
     logger.warning(
-        "ORCHESTRATOR_DAEMON_TOKEN not set — POST /run is DISABLED (fail-closed, "
-        "403 on every call). Set ORCHESTRATOR_DAEMON_TOKEN to enable it."
+        "ORCHESTRATOR_DAEMON_TOKEN not set — POST /run and PUT /interval are "
+        "DISABLED (fail-closed, 403 on every call). Set ORCHESTRATOR_DAEMON_TOKEN "
+        "to enable them."
     )
+
+
+# ---------------------------------------------------------------------------
+# Request bodies
+# ---------------------------------------------------------------------------
+
+
+class IntervalUpdateRequest(BaseModel):
+    """Body for ``PUT /interval``. ``0`` disables the daemon's internal timer
+    (on-demand only); otherwise MUST be in
+    ``[settings.INTERVAL_MIN_SECONDS, settings.INTERVAL_MAX_SECONDS]``
+    seconds. Validated via the SAME ``settings.validate_interval_seconds``
+    used by ``desktop.daemon_runtime.OrchestratorDaemon.set_interval`` and by
+    ``api/pilots_api.py``'s equivalent body — the shared policy function is
+    what keeps all three from drifting apart (see ``settings.py``'s
+    docstring on it)."""
+
+    interval_seconds: int = Field(..., ge=0, le=INTERVAL_MAX_SECONDS)
+
+    @field_validator("interval_seconds")
+    @classmethod
+    def _validate(cls, v: int) -> int:
+        return validate_interval_seconds(v)
 
 
 # ---------------------------------------------------------------------------
@@ -320,3 +353,31 @@ def get_latest_run() -> Dict[str, Any]:
         )
 
     return _serialize_run(record)
+
+
+@app.put("/interval", dependencies=[Depends(require_command_token)])
+def set_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
+    """Change the daemon's internal timer cadence LIVE, without a restart.
+
+    Guarded by ``require_command_token`` ALONE — unlike
+    ``api/pilots_api.py``'s ``PUT /automation/schedule/interval`` (which adds
+    ``AUTOMATION_WRITES_ENABLED`` on top of its own command token because
+    that write persists to ``.env``), a live ``set_interval`` call has NO
+    persistence — it dies with the process, exactly like ``POST /run``'s
+    "run now" trigger, which sits behind the command token alone. Gating a
+    "run more often" cadence change more strictly than "run right now" would
+    invert that risk ordering. The operator-facing write path is already
+    gated at ``pilots_api``; this endpoint is loopback-bound and
+    token-gated, one layer further from the browser.
+
+    A rejected (out-of-range) ``interval_seconds`` never reaches the daemon
+    at all — pydantic's ``field_validator`` (via the same
+    ``settings.validate_interval_seconds`` the daemon itself uses) rejects
+    it with 422 before this function body runs.
+    """
+    daemon = get_daemon()
+    if daemon is None:
+        raise HTTPException(status_code=503, detail="Daemon not available.")
+
+    daemon.set_interval(body.interval_seconds)
+    return {"interval_seconds": body.interval_seconds}

@@ -45,7 +45,7 @@ from enum import Enum
 from typing import Any, Optional
 
 import main_orchestrator
-from settings import settings
+from settings import settings, validate_interval_seconds
 from data_engine import DataEngine, MockDataEngine
 from reporting.progress import read_progress
 
@@ -101,11 +101,24 @@ class OrchestratorDaemon:
 
     Thread-safety: a single ``threading.Lock`` (``self._lock``) guards
     ``self._current_run_id``, ``self._run_history`` (and its insertion-order
-    list), and the derived "is a run in flight" state. Every read or mutation
-    of those fields takes the lock; the single-flight check-and-claim in
-    ``trigger_run`` happens atomically inside one lock acquisition so two
-    near-simultaneous callers can never both observe ``_current_run_id is
-    None`` and both proceed to ACCEPTED.
+    list), the derived "is a run in flight" state, and (as of the live
+    interval setter) ``self._interval_seconds``/``self._timer_thread`` too.
+    Every read or mutation of those fields takes the lock; the single-flight
+    check-and-claim in ``trigger_run`` happens atomically inside one lock
+    acquisition so two near-simultaneous callers can never both observe
+    ``_current_run_id is None`` and both proceed to ACCEPTED.
+
+    The timer loop additionally uses TWO ``threading.Event``s (not a
+    ``Condition`` -- zero precedent for that primitive in this codebase):
+    ``self._stop_event`` (set once, at shutdown, never cleared again) and
+    ``self._wake_event`` (cleared and set repeatedly across the timer
+    thread's lifetime -- set by ``set_interval()`` to wake a sleeping/parked
+    loop immediately so a cadence change takes effect without waiting out
+    the old interval, and by ``shutdown()`` so a PARKED loop, which is
+    blocked on ``self._wake_event.wait()`` with no timeout when
+    ``interval_seconds <= 0``, actually wakes -- ``_stop_event`` alone would
+    never reach it). See ``_timer_loop`` for the exact clear-before-read
+    ordering this depends on.
     """
 
     def __init__(self, *, interval_seconds: int = 0, strict: bool = False,
@@ -126,6 +139,7 @@ class OrchestratorDaemon:
         self._started_at: Optional[datetime] = None
 
         self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
         self._timer_thread: Optional[threading.Thread] = None
         self._worker_threads: dict[str, threading.Thread] = {}
 
@@ -151,19 +165,30 @@ class OrchestratorDaemon:
 
         if self._interval_seconds > 0:
             self._stop_event.clear()
-            self._timer_thread = threading.Thread(
-                target=self._timer_loop, name="OrchestratorDaemon-timer", daemon=True,
-            )
-            self._timer_thread.start()
+            self._wake_event.clear()
+            thread = self._new_timer_thread()
+            with self._lock:
+                self._timer_thread = thread
+            thread.start()
 
     def shutdown(self, *, timeout: float = 10.0) -> None:
         """Stop the timer thread and wait (without forcibly killing) for any
         in-flight run to finish, up to ``timeout`` seconds. Idempotent."""
-        self._stop_event.set()  # wakes the timer thread's Event.wait() immediately
+        self._stop_event.set()  # wakes a WAITING (interval > 0) timer loop immediately
+        self._wake_event.set()  # ALSO required: a PARKED (interval <= 0) loop is
+        # blocked on _wake_event.wait() with no timeout -- _stop_event alone
+        # would never reach it.
 
-        if self._timer_thread is not None:
-            self._timer_thread.join(timeout=5.0)
+        # Read + clear the thread reference under the lock, but join() OUTSIDE
+        # it: _timer_loop may call self.trigger_run(), which itself acquires
+        # self._lock -- holding the lock across join() here would deadlock
+        # against a timer thread that's mid-trigger_run() when shutdown() is
+        # called.
+        with self._lock:
+            thread = self._timer_thread
             self._timer_thread = None
+        if thread is not None:
+            thread.join(timeout=5.0)
 
         deadline = time.monotonic() + timeout
         while self.is_running and time.monotonic() < deadline:
@@ -331,8 +356,66 @@ class OrchestratorDaemon:
     # Interval timer
     # ------------------------------------------------------------------
 
+    def _new_timer_thread(self) -> threading.Thread:
+        return threading.Thread(
+            target=self._timer_loop, name="OrchestratorDaemon-timer", daemon=True,
+        )
+
+    def set_interval(self, interval_seconds: int) -> None:
+        """Change the daemon's internal timer cadence LIVE, without a
+        restart. Raises ``ValueError`` (via ``settings.validate_interval_seconds``)
+        on an invalid value -- callers translate that into their own error
+        response (e.g. HTTP 422); no daemon state is mutated on a rejected
+        value.
+
+        ``start()`` only creates the timer thread when ``interval_seconds >
+        0`` at startup, so a daemon started at 0 (on-demand only) has no
+        thread to wake -- this method creates one on demand if none exists
+        yet, for either a zero or nonzero target value, so a later
+        ``set_interval`` call always has a thread to signal.
+
+        Thread creation happens under ``self._lock`` (so two concurrent
+        ``set_interval`` calls can never both create a thread), but
+        ``thread.start()`` itself happens OUTSIDE the lock, mirroring
+        ``trigger_run``'s own worker-thread pattern.
+        """
+        interval_seconds = validate_interval_seconds(interval_seconds)
+        thread_to_start: Optional[threading.Thread] = None
+        with self._lock:
+            self._interval_seconds = interval_seconds
+            if self._timer_thread is None:
+                self._stop_event.clear()
+                thread_to_start = self._new_timer_thread()
+                self._timer_thread = thread_to_start
+        if thread_to_start is not None:
+            thread_to_start.start()
+        # Wake a loop that's already parked/waiting on the OLD interval so
+        # the new cadence takes effect immediately rather than after the old
+        # interval elapses. A no-op if the thread was just created above
+        # (its first action is to clear this event and re-read the interval
+        # anyway).
+        self._wake_event.set()
+        logger.info("OrchestratorDaemon interval changed to %s seconds.", interval_seconds)
+
     def _timer_loop(self) -> None:
-        while not self._stop_event.wait(self._interval_seconds):
+        while not self._stop_event.is_set():
+            # Clear BEFORE reading the interval. If set_interval() fires
+            # between this clear and the read below, we read its NEW value
+            # AND observe the event already set -> one harmless spurious
+            # loop iteration, never a lost wake. Clearing AFTER the read
+            # would instead risk dropping that wake and sleeping out the
+            # OLD interval -- that ordering bug is exactly what this
+            # comment exists to prevent from being "cleaned up" later.
+            self._wake_event.clear()
+            with self._lock:
+                interval = self._interval_seconds
+            if self._stop_event.is_set():
+                break
+            if interval <= 0:
+                self._wake_event.wait()  # park; _stop_event.wait(0) would spin a core
+                continue
+            if self._wake_event.wait(timeout=interval):
+                continue  # interval changed OR shutting down -- re-check at the top
             if self._stop_event.is_set():
                 break
             # ALREADY_RUNNING (previous interval cycle still in flight) is
@@ -347,10 +430,11 @@ class OrchestratorDaemon:
         with self._lock:
             current_run_id = self._current_run_id
             last_run = self._run_history[self._run_order[-1]] if self._run_order else None
+            interval_seconds = self._interval_seconds
         return {
             "is_running": current_run_id is not None,
             "current_run_id": current_run_id,
-            "interval_seconds": self._interval_seconds,
+            "interval_seconds": interval_seconds,
             "last_run": last_run,
             "engines_warm": self._engines is not None,
             "started_at": self._started_at,

@@ -10,6 +10,7 @@ out of scope for these tests.
 """
 from __future__ import annotations
 
+import signal
 import threading
 import time
 
@@ -434,3 +435,269 @@ class TestShutdownWaitsForInFlightRun:
         assert record is not None
         assert record.state == RunState.SUCCEEDED
         assert d.is_running is False
+
+
+# =============================================================================
+# Live interval setter (Piece 2)
+# =============================================================================
+
+
+class TestSetIntervalStateMutation:
+    def test_state_and_wake_event_updated_without_wall_clock(self, monkeypatch):
+        """set_interval() updates _interval_seconds and signals _wake_event
+        synchronously -- proven without any wall-clock wait, by pre-seeding a
+        dummy (never-started) _timer_thread so set_interval() sees a thread
+        already "exists" and doesn't spawn a real one that would immediately
+        race-consume the event via its own clear()."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d._timer_thread = threading.Thread(target=lambda: None)  # pre-seeded stand-in
+
+        d.set_interval(300)
+
+        assert d._interval_seconds == 300
+        assert d._wake_event.is_set()
+        assert d.status()["interval_seconds"] == 300
+
+
+class TestSetIntervalValidation:
+    @pytest.mark.parametrize("bad_value", [-1, 1, 59, 86401])
+    def test_invalid_values_raise_and_do_not_mutate_state(self, bad_value):
+        d = OrchestratorDaemon(interval_seconds=42)
+        with pytest.raises(ValueError):
+            d.set_interval(bad_value)
+        assert d._interval_seconds == 42  # unchanged -- rejected before mutation
+        assert d._timer_thread is None  # no thread spun up for a rejected value
+
+    @pytest.mark.parametrize("good_value", [0, 60, 86400])
+    def test_boundary_values_are_accepted(self, monkeypatch, good_value):
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        try:
+            d.set_interval(good_value)
+            assert d._interval_seconds == good_value
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestSetIntervalCreatesThreadWhenNoneExists:
+    def test_zero_to_nonzero_creates_the_thread(self, monkeypatch):
+        """start() only creates the timer thread when interval_seconds > 0
+        at startup -- a daemon started at the default (0, on-demand only)
+        has no thread. set_interval() must create one on demand so a later
+        cadence change actually has something to signal."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()  # interval_seconds=0 by default
+        d.start()
+        try:
+            assert d._timer_thread is None
+
+            d.set_interval(60)
+
+            assert d._timer_thread is not None
+            assert d._timer_thread.is_alive()
+            assert d.status()["interval_seconds"] == 60
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestNoSpinAtIntervalZero:
+    def test_transitioning_to_zero_parks_instead_of_spinning(self, monkeypatch):
+        """The bug this design exists to prevent: the OLD timer loop used
+        ``self._stop_event.wait(self._interval_seconds)``, which for
+        interval_seconds == 0 becomes Event.wait(0) -- returning almost
+        instantly and busy-looping trigger_run() thousands of times a
+        second. Starting a daemon AT interval=0 never hit this (start() does
+        not create a thread for interval_seconds <= 0), but transitioning a
+        LIVE thread from a positive interval down to 0 via set_interval()
+        does exercise the exact code path that must now park instead."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon(interval_seconds=60)
+        d.start()
+        try:
+            assert d._timer_thread is not None
+
+            d.set_interval(0)
+            time.sleep(0.3)  # bounded window -- see module docstring re: :391-413
+
+            interval_runs = [
+                rid for rid in list(d._run_order)
+                if (rec := d.get_run(rid)) is not None and rec.reason == "interval"
+            ]
+            assert len(interval_runs) == 0, (
+                f"expected zero interval-triggered runs while parked at "
+                f"interval=0, got {len(interval_runs)} -- the timer loop is "
+                f"spinning instead of parking"
+            )
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestTimerLoopRaceOrdering:
+    """Pins the clear-BEFORE-read ordering _timer_loop's comment depends on,
+    deterministically -- via the same Event-handshake pattern as
+    TestSingleFlight, not a sleep-and-hope race."""
+
+    def test_set_interval_during_clear_to_read_window_is_observed(self, monkeypatch):
+        _fast_ok_main_body(monkeypatch)
+
+        entered_clear = threading.Event()
+        release_clear = threading.Event()
+        observed_timeouts: list = []
+
+        d = OrchestratorDaemon(interval_seconds=100_000)  # effectively "never fires"
+        original_clear = d._wake_event.clear
+        original_wait = d._wake_event.wait
+        call_count = {"clear": 0}
+        # clear() is called 3 times before the window we want to land in:
+        # (1) start()'s own defensive clear, on the MAIN/test thread, before
+        #     the timer thread even exists; (2) the timer thread's first
+        #     loop iteration, right before its first (real, long) wait();
+        #     (3) the timer thread's SECOND iteration -- reached only after
+        #     we wake iteration 1's wait() below -- which is the exact
+        #     "clear() has run, read hasn't yet" window the ordering
+        #     invariant is about.
+        INTERCEPT_AT = 3
+
+        def _clear_wrapper():
+            call_count["clear"] += 1
+            original_clear()
+            if call_count["clear"] == INTERCEPT_AT:
+                entered_clear.set()
+                assert release_clear.wait(timeout=3.0), "test never released clear()"
+
+        def _wait_wrapper(timeout=None):
+            observed_timeouts.append(timeout)
+            return original_wait(timeout)
+
+        monkeypatch.setattr(d._wake_event, "clear", _clear_wrapper)
+        monkeypatch.setattr(d._wake_event, "wait", _wait_wrapper)
+
+        d.start()
+        try:
+            # Let iteration 1 reach its (real) first wait(timeout=100_000)
+            # call, then wake it directly so the loop proceeds to
+            # iteration 2's clear() call -- call #3, where we've arranged
+            # to intercept.
+            reached_first_wait = _poll_until(lambda: len(observed_timeouts) >= 1, timeout=3.0)
+            assert reached_first_wait, "timer loop never reached its first wait() call"
+            d._wake_event.set()
+
+            assert entered_clear.wait(timeout=3.0), (
+                "timer loop never reached the targeted (second-iteration) clear() call"
+            )
+
+            # Fire set_interval() from here -- exactly between the loop's
+            # clear() and its read of self._interval_seconds.
+            d.set_interval(300)
+            release_clear.set()
+
+            # The loop must read interval=300 (not the stale 100_000), see
+            # wake_event already set (by set_interval), and take one
+            # harmless spurious pass before parking again on the NEW value.
+            saw_second_wait = _poll_until(lambda: len(observed_timeouts) >= 2, timeout=3.0)
+            assert saw_second_wait, "timer loop never reached its second wait() call"
+            assert observed_timeouts[1] == 300, (
+                f"expected the loop's second wait() to use the NEW interval "
+                f"(300), got {observed_timeouts[1]} -- it read a stale "
+                f"value, proving clear() ran AFTER the interval read "
+                f"instead of before it"
+            )
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestShutdownWhileParked:
+    def test_shutdown_exits_promptly_from_parked_state(self, monkeypatch):
+        """A PARKED loop (interval <= 0) blocks on an UNTIMED
+        wake_event.wait() -- only _wake_event, not _stop_event, can reach
+        it. shutdown() must set both, or this test would hang until its own
+        internal deadline/poll loop gives up."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()  # interval_seconds=0 -> no thread yet
+
+        wait_calls: list = []
+        original_wait = d._wake_event.wait
+
+        def _wait_wrapper(timeout=None):
+            wait_calls.append(timeout)
+            return original_wait(timeout)
+
+        monkeypatch.setattr(d._wake_event, "wait", _wait_wrapper)
+
+        d.set_interval(0)  # creates + starts the thread; it will park
+
+        reached_park = _poll_until(lambda: len(wait_calls) >= 1, timeout=2.0)
+        assert reached_park, "timer thread never reached its parked wait() call"
+        assert all(c is None for c in wait_calls), (
+            "a parked (interval<=0) loop must call wake_event.wait() with no "
+            "timeout, never a timed wait"
+        )
+
+        start = time.monotonic()
+        d.shutdown(timeout=2.0)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.5, (
+            f"shutdown() took {elapsed:.2f}s to return a PARKED timer thread -- "
+            f"shutdown() must set _wake_event (not just _stop_event) so an "
+            f"untimed wake_event.wait() actually wakes"
+        )
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "pthread_sigmask"), reason="pthread_sigmask is POSIX-only"
+)
+class TestTimerThreadSignalMaskInheritance:
+    """desktop/orchestrator_daemon.py blocks SIGTERM/SIGINT on the main
+    thread via signal.pthread_sigmask(SIG_BLOCK, ...) BEFORE any thread is
+    created, specifically so every thread spawned afterward inherits the
+    blocked mask (POSIX: a new thread inherits the CALLING thread's mask at
+    the moment it is created, not the process's mask). A timer thread
+    created LATE by set_interval() -- e.g. from a live uvicorn
+    request-handler thread, long after startup -- must inherit that mask
+    too, transitively, through whichever thread happens to call
+    set_interval(). This test proves that inheritance actually holds for a
+    thread created well after daemon startup, not just for one created at
+    daemon.start() time (see tests/test_orchestrator_daemon.py's
+    TestSignalHandling for the *ordering* half of this property; neither
+    test alone covers both halves)."""
+
+    def test_thread_created_by_set_interval_inherits_blocked_sigterm(self, monkeypatch):
+        _fast_ok_main_body(monkeypatch)
+        prior_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        try:
+            d = OrchestratorDaemon()
+            d.start()  # interval_seconds=0 -> no thread yet
+            try:
+                assert d._timer_thread is None
+
+                observed_mask: dict = {}
+                captured = threading.Event()
+                original_timer_loop = d._timer_loop
+
+                def _instrumented_timer_loop():
+                    observed_mask["mask"] = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+                    captured.set()
+                    original_timer_loop()
+
+                monkeypatch.setattr(d, "_timer_loop", _instrumented_timer_loop)
+
+                # Simulates a request-handler thread calling set_interval()
+                # well after the process-startup SIGTERM block -- the mask
+                # is already blocked on THIS (the calling/test) thread, so
+                # the new timer thread it spawns must inherit it.
+                d.set_interval(60)
+
+                assert captured.wait(timeout=3.0), "timer thread never started"
+                assert signal.SIGTERM in observed_mask["mask"], (
+                    "timer thread created by set_interval() did not inherit "
+                    "the SIGTERM-blocked mask from the thread that created "
+                    "it -- this is the property desktop/orchestrator_daemon.py's "
+                    "startup ordering depends on"
+                )
+            finally:
+                d.shutdown(timeout=2.0)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, prior_mask)

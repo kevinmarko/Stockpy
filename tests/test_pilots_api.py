@@ -1481,21 +1481,90 @@ class TestAutomationResume:
 # ---------------------------------------------------------------------------
 
 
+def _interval_response(**overrides):
+    from gui.daemon_client import IntervalResponse
+
+    base = dict(ok=False, interval_seconds=None, error="network_error")
+    base.update(overrides)
+    return IntervalResponse(**base)
+
+
 class TestAutomationIntervalWrite:
-    def test_writes_via_env_io_allowlist(self, tmp_path):
+    """``.env`` is always written first and unconditionally; the LIVE apply
+    (``daemon_client.set_interval``) is explicitly stubbed in every test here
+    -- an unstubbed test would otherwise make a REAL loopback HTTP call to
+    ``http://127.0.0.1:<ORCHESTRATOR_API_PORT>/interval``, which happens to
+    fail (connection refused) in an ordinary offline test run but is a latent
+    flake: nothing prevents some other process/test from actually binding
+    that port and flipping the assertion. Stubbing makes ``applies``
+    deterministic regardless of what else is running on the machine."""
+
+    def test_writes_via_env_io_allowlist_daemon_unreachable(self, tmp_path):
         env_file = tmp_path / ".env"
         env_file.write_text("", encoding="utf-8")
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
-                    resp = client.put(
-                        "/automation/schedule/interval", json={"interval_seconds": 300},
-                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                    )
+                    with mock.patch.object(
+                        pilots_api.daemon_client, "set_interval",
+                        return_value=_interval_response(),
+                    ):
+                        resp = client.put(
+                            "/automation/schedule/interval", json={"interval_seconds": 300},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["configured_value"] == 300
         assert body["applies"] == "next_daemon_restart"
+        assert "ORCHESTRATOR_INTERVAL_SECONDS=300" in env_file.read_text(encoding="utf-8")
+
+    def test_applies_immediately_when_daemon_confirms(self, tmp_path):
+        """The honesty contract: ``applies`` is ``"immediately"`` ONLY when
+        the live daemon actually confirms -- never inferred from the .env
+        write, which always succeeds regardless of whether a daemon is
+        listening."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    with mock.patch.object(
+                        pilots_api.daemon_client, "set_interval",
+                        return_value=_interval_response(ok=True, interval_seconds=300, error=None),
+                    ) as mock_set_interval:
+                        resp = client.put(
+                            "/automation/schedule/interval", json={"interval_seconds": 300},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["configured_value"] == 300
+        assert body["applies"] == "immediately"
+        # .env is still written even though the live apply also succeeded --
+        # it is never conditional on the live outcome.
+        assert "ORCHESTRATOR_INTERVAL_SECONDS=300" in env_file.read_text(encoding="utf-8")
+        mock_set_interval.assert_called_once_with(300)
+
+    def test_env_written_even_when_live_apply_fails(self, tmp_path):
+        """The durable .env record must land regardless of the live outcome
+        -- a down/unreachable daemon must never block the operator's
+        configured-value write."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    with mock.patch.object(
+                        pilots_api.daemon_client, "set_interval",
+                        return_value=_interval_response(error="unavailable"),
+                    ):
+                        resp = client.put(
+                            "/automation/schedule/interval", json={"interval_seconds": 300},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 200
+        assert resp.json()["applies"] == "next_daemon_restart"
         assert "ORCHESTRATOR_INTERVAL_SECONDS=300" in env_file.read_text(encoding="utf-8")
 
     def test_zero_is_valid(self, tmp_path):
@@ -1504,10 +1573,14 @@ class TestAutomationIntervalWrite:
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
-                    resp = client.put(
-                        "/automation/schedule/interval", json={"interval_seconds": 0},
-                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                    )
+                    with mock.patch.object(
+                        pilots_api.daemon_client, "set_interval",
+                        return_value=_interval_response(),
+                    ):
+                        resp = client.put(
+                            "/automation/schedule/interval", json={"interval_seconds": 0},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
         assert resp.status_code == 200
 
     def test_59_is_rejected(self):
@@ -1525,10 +1598,14 @@ class TestAutomationIntervalWrite:
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
-                    resp = client.put(
-                        "/automation/schedule/interval", json={"interval_seconds": 60},
-                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                    )
+                    with mock.patch.object(
+                        pilots_api.daemon_client, "set_interval",
+                        return_value=_interval_response(),
+                    ):
+                        resp = client.put(
+                            "/automation/schedule/interval", json={"interval_seconds": 60},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
         assert resp.status_code == 200
 
     def test_86400_is_accepted_86401_is_rejected(self, tmp_path):
@@ -1537,16 +1614,20 @@ class TestAutomationIntervalWrite:
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
-                    resp = client.put(
-                        "/automation/schedule/interval", json={"interval_seconds": 86400},
-                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                    )
-                    assert resp.status_code == 200
-                    resp2 = client.put(
-                        "/automation/schedule/interval", json={"interval_seconds": 86401},
-                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                    )
-                    assert resp2.status_code == 422
+                    with mock.patch.object(
+                        pilots_api.daemon_client, "set_interval",
+                        return_value=_interval_response(),
+                    ):
+                        resp = client.put(
+                            "/automation/schedule/interval", json={"interval_seconds": 86400},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+                        assert resp.status_code == 200
+                        resp2 = client.put(
+                            "/automation/schedule/interval", json={"interval_seconds": 86401},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+                        assert resp2.status_code == 422
 
     def test_negative_is_rejected(self):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):

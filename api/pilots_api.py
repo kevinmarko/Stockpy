@@ -91,6 +91,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
 from settings import settings
+from settings import INTERVAL_MAX_SECONDS as _INTERVAL_MAX_SECONDS
+from settings import validate_interval_seconds as _validate_interval_seconds
 
 # Pilot layer (pure, persisted-state readers) + the gated follow write-path.
 from pilots import (
@@ -386,18 +388,23 @@ class ResumeRequest(BaseModel):
 class IntervalUpdateRequest(BaseModel):
     """Body for ``PUT /automation/schedule/interval``. ``0`` disables the
     daemon's internal timer (on-demand only); otherwise MUST be in
-    [60, 86400] seconds — a sub-60s interval would trigger runs faster than a
-    cycle can complete (degenerate, not dangerous: trigger_run would just
-    return ALREADY_RUNNING every time — but there's no reason to allow it)."""
+    ``[settings.INTERVAL_MIN_SECONDS, settings.INTERVAL_MAX_SECONDS]``
+    seconds — a sub-60s interval would trigger runs faster than a cycle can
+    complete (degenerate, not dangerous: trigger_run would just return
+    ALREADY_RUNNING every time — but there's no reason to allow it).
 
-    interval_seconds: int = Field(..., ge=0, le=86400)
+    Validated via the SAME ``settings.validate_interval_seconds`` used by
+    ``desktop.daemon_runtime.OrchestratorDaemon.set_interval`` and by
+    ``api/control_api.py``'s equivalent body — the shared policy function is
+    what keeps all three from drifting apart (see ``settings.py``'s
+    docstring on it)."""
+
+    interval_seconds: int = Field(..., ge=0, le=_INTERVAL_MAX_SECONDS)
 
     @field_validator("interval_seconds")
     @classmethod
-    def _zero_or_at_least_60(cls, v: int) -> int:
-        if v != 0 and v < 60:
-            raise ValueError("interval_seconds must be 0 or >= 60")
-        return v
+    def _validate(cls, v: int) -> int:
+        return _validate_interval_seconds(v)
 
 
 class BrokerageConnectRequest(BaseModel):
@@ -1435,18 +1442,32 @@ def set_automation_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
     """Write ``ORCHESTRATOR_INTERVAL_SECONDS`` to ``.env`` via the SAME
     allowlist-bounded writer (``gui.env_io.write_setting``) the GUI Settings
     tab uses — not a bespoke file write, so it inherits CONSTRAINT #3's
-    enforcement for free.
+    enforcement for free. THEN attempts a LIVE apply against a running
+    daemon over loopback HTTP (``gui.daemon_client.set_interval`` ->
+    ``api/control_api.py``'s ``PUT /interval`` ->
+    ``desktop.daemon_runtime.OrchestratorDaemon.set_interval``).
 
-    This is an ``.env``-ONLY write in this build: it does NOT reach a live
-    daemon (no runtime setter exists yet — a later phase). ``applies`` is
-    always ``"next_daemon_restart"``, never a lie of ``"immediately"``; pair
-    this with ``GET /automation/schedule``'s ``drift`` field so the operator
-    SEES the pending change rather than assuming it already took effect."""
+    The ``.env`` write happens FIRST and UNCONDITIONALLY — it is the durable
+    record of operator intent and must land even when no daemon is
+    reachable (daemon mode off, daemon down, wrong
+    ``ORCHESTRATOR_DAEMON_TOKEN``, network error). ``applies`` is
+    ``"immediately"`` ONLY when the live apply actually confirms success
+    (``live.ok``) — it is NEVER inferred from the ``.env`` write succeeding,
+    which says nothing about whether a daemon is even running. Any
+    live-apply failure degrades to ``"next_daemon_restart"``, the exact
+    honest fallback this endpoint always returned before a live setter
+    existed. Pair with ``GET /automation/schedule``'s ``drift`` field so the
+    operator SEES a pending live-apply failure rather than assuming the
+    change already took effect."""
     encoded = env_io.write_setting("ORCHESTRATOR_INTERVAL_SECONDS", body.interval_seconds)
+
+    live = daemon_client.set_interval(body.interval_seconds)
+    applies = "immediately" if live.ok else "next_daemon_restart"
+
     return {
         "configured_value": body.interval_seconds,
         "written": encoded,
-        "applies": "next_daemon_restart",
+        "applies": applies,
     }
 
 

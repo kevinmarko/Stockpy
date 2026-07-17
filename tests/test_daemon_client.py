@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import gui.daemon_client as daemon_client
-from gui.daemon_client import TriggerResponse
+from gui.daemon_client import IntervalResponse, TriggerResponse
 from settings import settings
 
 
@@ -290,6 +290,175 @@ class TestTriggerRun:
 
 
 # ---------------------------------------------------------------------------
+# set_interval() -- the first PUT / body-sending function in this module.
+# ---------------------------------------------------------------------------
+
+
+class TestSetInterval:
+    def test_ok_on_200(self):
+        resp = _make_response(200, {"interval_seconds": 300})
+        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+            result = daemon_client.set_interval(300)
+        assert result == IntervalResponse(ok=True, interval_seconds=300, error=None)
+
+    def test_invalid_interval_on_422(self):
+        body = {"detail": "interval_seconds must be 0 or in [60, 86400], got 59"}
+        with patch(
+            "gui.daemon_client.urllib.request.urlopen",
+            side_effect=_http_error(422, body),
+        ):
+            result = daemon_client.set_interval(59)
+        assert result.ok is False
+        assert result.error == "invalid_interval"
+        assert result.interval_seconds is None
+
+    def test_unauthorized_on_401(self):
+        body = {"detail": "Invalid or missing bearer token"}
+        with patch(
+            "gui.daemon_client.urllib.request.urlopen",
+            side_effect=_http_error(401, body),
+        ):
+            result = daemon_client.set_interval(300)
+        assert result.ok is False
+        assert result.error == "unauthorized"
+
+    def test_command_disabled_on_403(self):
+        body = {
+            "detail": "Command endpoint disabled: ORCHESTRATOR_DAEMON_TOKEN not configured."
+        }
+        with patch(
+            "gui.daemon_client.urllib.request.urlopen",
+            side_effect=_http_error(403, body),
+        ):
+            result = daemon_client.set_interval(300)
+        assert result.ok is False
+        assert result.error == "command_disabled"
+
+    def test_unavailable_on_503(self):
+        body = {"detail": "Daemon not available."}
+        with patch(
+            "gui.daemon_client.urllib.request.urlopen",
+            side_effect=_http_error(503, body),
+        ):
+            result = daemon_client.set_interval(300)
+        assert result.ok is False
+        assert result.error == "unavailable"
+
+    def test_network_error_on_connection_failure(self):
+        with patch(
+            "gui.daemon_client.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("connection refused"),
+        ):
+            # No surrounding try/except: must not raise.
+            result = daemon_client.set_interval(300)
+        assert result.ok is False
+        assert result.error == "network_error"
+
+    def test_network_error_on_timeout(self):
+        import socket
+
+        with patch(
+            "gui.daemon_client.urllib.request.urlopen",
+            side_effect=socket.timeout("timed out"),
+        ):
+            result = daemon_client.set_interval(300)
+        assert result.ok is False
+        assert result.error == "network_error"
+
+    def test_never_raises_on_malformed_json_success_body(self):
+        resp = _make_response(200, b"not json at all")
+        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+            result = daemon_client.set_interval(300)
+        assert result.ok is False
+        assert result.error == "network_error"
+
+    def test_unexpected_2xx_status_is_unexpected_response(self):
+        resp = _make_response(201, {"interval_seconds": 300})
+        with patch("gui.daemon_client.urllib.request.urlopen", return_value=resp):
+            result = daemon_client.set_interval(300)
+        assert result.ok is False
+        assert result.error == "unexpected_response"
+
+    def test_uses_put_method(self):
+        resp = _make_response(200, {"interval_seconds": 300})
+        captured = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return resp
+
+        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+            daemon_client.set_interval(300)
+        assert captured["req"].get_method() == "PUT"
+
+    def test_sends_json_content_type_and_encoded_body(self):
+        resp = _make_response(200, {"interval_seconds": 300})
+        captured = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return resp
+
+        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+            daemon_client.set_interval(300)
+        req = captured["req"]
+        assert req.headers.get("Content-type") == "application/json"
+        assert json.loads(req.data) == {"interval_seconds": 300}
+
+    def test_url_is_interval_endpoint(self):
+        resp = _make_response(200, {"interval_seconds": 300})
+        captured = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return resp
+
+        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+            daemon_client.set_interval(300)
+        assert captured["req"].full_url.endswith("/interval")
+
+    def test_bearer_header_present_when_token_set(self):
+        settings.ORCHESTRATOR_DAEMON_TOKEN = "my-secret-token"
+        resp = _make_response(200, {"interval_seconds": 300})
+        captured = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return resp
+
+        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+            daemon_client.set_interval(300)
+        assert captured["req"].headers.get("Authorization") == "Bearer my-secret-token"
+
+    def test_bearer_header_absent_when_token_unset(self):
+        settings.ORCHESTRATOR_DAEMON_TOKEN = None
+        resp = _make_response(200, {"interval_seconds": 300})
+        captured = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return resp
+
+        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+            daemon_client.set_interval(300)
+        assert "Authorization" not in captured["req"].headers
+        assert "authorization" not in captured["req"].headers
+
+    def test_url_uses_configured_port(self):
+        settings.ORCHESTRATOR_API_PORT = 7777
+        resp = _make_response(200, {"interval_seconds": 300})
+        captured = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return resp
+
+        with patch("gui.daemon_client.urllib.request.urlopen", side_effect=_fake_urlopen):
+            daemon_client.set_interval(300)
+        assert "127.0.0.1:7777" in captured["req"].full_url
+
+
+# ---------------------------------------------------------------------------
 # get_run_status() / get_latest_run()
 # ---------------------------------------------------------------------------
 
@@ -486,6 +655,8 @@ class TestNeverRaises:
             assert result.ok is False and result.error == "network_error"
             assert daemon_client.get_run_status("any-id") is None
             assert daemon_client.get_latest_run() is None
+            interval_result = daemon_client.set_interval(300)
+            assert interval_result.ok is False and interval_result.error == "network_error"
 
     def test_malformed_json_across_all_functions(self):
         def _malformed(*args, **kwargs):
@@ -496,6 +667,8 @@ class TestNeverRaises:
             assert daemon_client.get_status() is None
             assert daemon_client.get_run_status("any-id") is None
             assert daemon_client.get_latest_run() is None
+            interval_result = daemon_client.set_interval(300)
+            assert interval_result.ok is False
 
         def _malformed_202(*args, **kwargs):
             return _make_response(202, b"totally not json {{{")

@@ -271,6 +271,95 @@ class TestTriggerRun:
 
 
 # ---------------------------------------------------------------------------
+# PUT /interval
+# ---------------------------------------------------------------------------
+
+
+class TestSetInterval:
+    def test_403_when_command_token_unset(self):
+        control_api.set_daemon(_make_fake_daemon())
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", None):
+            resp = client.put("/interval", json={"interval_seconds": 300})
+        assert resp.status_code == 403
+        assert "ORCHESTRATOR_DAEMON_TOKEN" in resp.json()["detail"]
+
+    def test_401_with_wrong_token_when_set(self):
+        control_api.set_daemon(_make_fake_daemon())
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.put(
+                "/interval", json={"interval_seconds": 300},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_read_token_never_authorizes_put_interval(self):
+        """Same invariant as POST /run: the read token must never substitute
+        for the command token."""
+        control_api.set_daemon(_make_fake_daemon())
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.put(
+                "/interval", json={"interval_seconds": 300},
+                headers={"Authorization": "Bearer read-tok"},
+            )
+        assert resp.status_code == 401
+
+    def test_200_calls_daemon_set_interval_with_correct_value(self):
+        daemon = _make_fake_daemon()
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.put(
+                "/interval", json={"interval_seconds": 300},
+                headers={"Authorization": "Bearer cmd-tok"},
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"interval_seconds": 300}
+        daemon.set_interval.assert_called_once_with(300)
+
+    def test_zero_is_accepted(self):
+        daemon = _make_fake_daemon()
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.put(
+                "/interval", json={"interval_seconds": 0},
+                headers={"Authorization": "Bearer cmd-tok"},
+            )
+        assert resp.status_code == 200
+        daemon.set_interval.assert_called_once_with(0)
+
+    @pytest.mark.parametrize("bad_value", [-1, 1, 59, 86401])
+    def test_out_of_range_values_are_422_and_daemon_never_called(self, bad_value):
+        daemon = _make_fake_daemon()
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.put(
+                "/interval", json={"interval_seconds": bad_value},
+                headers={"Authorization": "Bearer cmd-tok"},
+            )
+        assert resp.status_code == 422
+        daemon.set_interval.assert_not_called()
+
+    def test_503_when_no_daemon_set(self):
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.put(
+                "/interval", json={"interval_seconds": 300},
+                headers={"Authorization": "Bearer cmd-tok"},
+            )
+        assert resp.status_code == 503
+
+    def test_auth_rejected_before_any_daemon_check(self):
+        """No daemon set at all, bad token -> still 401, never 503 -- proves
+        the auth dependency runs before the handler body (which is where the
+        503-on-no-daemon check lives)."""
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.put(
+                "/interval", json={"interval_seconds": 300},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # Token-never-logged assertions
 # ---------------------------------------------------------------------------
 
@@ -401,6 +490,22 @@ class TestCORS:
         assert resp.status_code == 200
         allow_methods = resp.headers.get("access-control-allow-methods", "")
         assert "POST" in allow_methods
+
+    def test_put_is_allowed_method(self):
+        # Preflight (OPTIONS) request for a PUT from an allowed origin --
+        # CORSMiddleware captures allow_methods at app-construction time, so
+        # this is a REAL preflight against the real app, not a monkeypatch.
+        resp = client.options(
+            "/interval",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "PUT",
+                "Access-Control-Request-Headers": "Authorization, Content-Type",
+            },
+        )
+        assert resp.status_code == 200
+        allow_methods = resp.headers.get("access-control-allow-methods", "")
+        assert "PUT" in allow_methods
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,42 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+# Shared interval-validation policy for the persistent orchestrator daemon's
+# live timer setter (Piece 2 of the queue-composition/live-interval-setter
+# work). Three independent call sites need the SAME [min, max]-or-zero rule
+# and must never drift apart: desktop/daemon_runtime.py's
+# OrchestratorDaemon.set_interval (the actual runtime setter),
+# api/control_api.py's PUT /interval pydantic body, and
+# api/pilots_api.py's PUT /automation/schedule/interval pydantic body. They
+# can't share a validator by importing each other (control_api.py must not
+# import pilots_api.py; importing desktop.daemon_runtime into pilots_api.py
+# would drag main_orchestrator into a module whose own AST guard forbids the
+# heavy engines) -- but all three already import this module, so the shared
+# policy lives here instead. 0 always means "disabled" (no timer, on-demand
+# only); any nonzero value must fall in [INTERVAL_MIN_SECONDS,
+# INTERVAL_MAX_SECONDS] -- a sub-60s interval would fire faster than a cycle
+# can complete (degenerate, not dangerous: trigger_run() just returns
+# ALREADY_RUNNING every time), and there's no reason to allow it.
+INTERVAL_MIN_SECONDS = 60
+INTERVAL_MAX_SECONDS = 86400
+
+
+def validate_interval_seconds(v: int) -> int:
+    """Shared validation for a daemon-timer interval value in seconds.
+
+    Raises ``ValueError`` (not a bespoke exception type) so it can be reused
+    verbatim inside a pydantic ``field_validator`` (pydantic wraps a
+    ``ValueError`` raised inside a validator into its own ``ValidationError``
+    automatically) as well as from a plain setter with no pydantic involved.
+    """
+    if v != 0 and not (INTERVAL_MIN_SECONDS <= v <= INTERVAL_MAX_SECONDS):
+        raise ValueError(
+            f"interval_seconds must be 0 or in [{INTERVAL_MIN_SECONDS}, "
+            f"{INTERVAL_MAX_SECONDS}], got {v}"
+        )
+    return v
+
+
 class Settings(BaseSettings):
     """Single source of truth for runtime configuration.
 
