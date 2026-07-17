@@ -76,3 +76,32 @@ RS = stock_return_12M - spy_return_12M
   advisory. A negative RS score (`−10 pts`) reduces the aggregate toward HOLD or
   RISK REDUCE, not a short signal. Never interpret a negative RS as a recommendation
   to go short.
+
+---
+
+## Backtest Validation (`relative_strength_xsec`, 2026-07)
+
+The `relative_strength_xsec` adapter was a fully-invested, always-long cross-sectional
+book with no drawdown control — MaxDD 46.9% (the worst in the entire registry) and
+PBO 0.64, both failing their gates, despite an already-passing Sharpe (0.707).
+
+**Fix:** a Faber (2007) SMA-200 trend gate was applied via SPY (already a
+benchmark-only input in this adapter). Before committing to a variant set, the two
+pre-existing variants (`RS_BeatSPY_Absolute`, `RS_TopHalf`) were *measured*, not
+assumed: adding the gate alone pushed PBO to 0.956, because under a shared market-wide
+gate the two variants become 0.98-correlated — genuinely the same strategy wearing two
+names. Collapsed to the single surviving `RS_BeatSPY_Absolute` variant, which is what
+actually earns the clean PBO=0.0/DSR=1.0 (a true single-variant book cannot suffer
+selection-bias PBO).
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | 0.707 | 0.745 | > 0.50 ✅ |
+| PBO | 0.64 | **0.000** | < 0.50 ✅ (was FAIL) |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ |
+| MaxDD | 46.9% | **21.3%** | < 30% ✅ (was FAIL) |
+| `deployable` | False | **True** | |
+
+See [PR #311](https://github.com/kevinmarko/Stockpy/pull/311) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.

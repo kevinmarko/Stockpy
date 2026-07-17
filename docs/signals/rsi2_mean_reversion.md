@@ -104,6 +104,41 @@ the regime gate — but both are required for full coverage of historical stress
 
 ---
 
+## STRATEGY_REGISTRY Backtest Validation (`rsi2_mean_reversion`, 2026-07)
+
+Distinct from the `tests/test_validation_rsi2.py` finding above (a different code path
+that reimplements similar logic inline): the production `_build_rsi2_adapter` in
+`scripts/refresh_validations.py`, joined to the Dip Buyer Pilot's `rsi2_mean_reversion`
+`STRATEGY_REGISTRY` entry, previously emitted **2 variants** (`RSI2_Gated`,
+`RSI2_Ungated`) that were near-duplicates of each other — measured at 0.886 return
+correlation, differing on only 10 of 4833 trading days (2005–2024) — driving PBO to
+0.67 on top of an already-failing net Sharpe (0.41).
+
+**Fix:** dropped `RSI2_Ungated`, keeping only `RSI2_Gated` (the empirically more robust
+of the two: higher full-sample Sharpe, shallower drawdown). A single variant cannot
+suffer CPCV selection-bias PBO by construction (PBO=0.0, DSR=1.0).
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | 0.41 | 0.276 | needs > 0.50 — **still FAILS** |
+| PBO | 0.67 | **0.000** | < 0.50 ✅ (was FAIL) |
+| DSR | 0.998 | 1.000 | > 0.95 ✅ |
+| MaxDD | 8.3% | 8.3% | < 30% ✅ (unchanged) |
+| `deployable` | False | **False (honest)** | |
+
+**Verdict:** PBO is genuinely fixed, but net Sharpe on the sole surviving variant
+(0.276) is honestly below the gate — this is a genuinely weak short-horizon SPY
+mean-reversion edge net of realistic transaction costs. Per this repo's honesty rules
+(never loosen a gate or a filter to force a pass), the RSI<10 entry threshold and the
+SMA-200/crash-recession risk-off filters that keep the strategy causal and conservative
+were left untouched rather than tuned to chase a higher number.
+
+See [PR #311](https://github.com/kevinmarko/Stockpy/pull/311) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.
+
+---
+
 ## Position-Level Notes
 
 The module scores the **entry** condition. Exit conditions are position-management rules:

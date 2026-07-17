@@ -98,3 +98,29 @@ These are written by `main_orchestrator.py` after `run_pre_compute()` is called.
   (AAPL, MSFT, JNJ, AGNC) is below this threshold; XS momentum with this universe should
   be treated as a tiebreaker, not a primary driver. Expand the universe via `WATCHLIST`
   or `watchlist.txt` for better cross-sectional signal.
+
+---
+
+## Backtest Validation (`cross_sectional_momentum`, 2026-07)
+
+The `cross_sectional_momentum` adapter (30-name universe, top-half/top-tertile
+equal-weight book) was fully invested at full market beta with no drawdown control —
+MaxDD 37.9%, failing the harness's `<30%` gate despite already-passing Sharpe (0.848)
+and PBO (0.067).
+
+**Fix:** `SPY` was added to the adapter's `STRATEGY_REGISTRY` universe as a
+benchmark-only trend-filter input (excluded from the tradeable book and from `y`,
+mirroring `relative_strength_xsec`'s existing SPY-splitting pattern). The book now
+de-risks to cash whenever `SPY < SPY.rolling(200).mean()` (Faber 2007).
+
+| Metric | Before | After | Gate |
+|---|---|---|---|
+| Sharpe | 0.848 | 0.872 | > 0.50 ✅ |
+| PBO | 0.067 | 0.156 | < 0.50 ✅ |
+| DSR | 1.000 | 1.000 | > 0.95 ✅ |
+| MaxDD | 37.9% | **20.2%** | < 30% ✅ (was FAIL) |
+| `deployable` | False | **True** | |
+
+See [PR #311](https://github.com/kevinmarko/Stockpy/pull/311) and
+[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
+full 12-strategy series this fix was part of.
