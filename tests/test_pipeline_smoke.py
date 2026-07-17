@@ -603,6 +603,7 @@ class TestNoOrderFunctions:
     _EXECUTION_ZONE_GUARDED_FILES = (
         "execution/queue_builder.py",
         "execution/options_queue_builder.py",
+        "execution/compose.py",
     )
 
     _STRICT_FORBIDDEN_EXACT = frozenset({

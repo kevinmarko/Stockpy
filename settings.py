@@ -363,6 +363,36 @@ class Settings(BaseSettings):
             "(0 = MARKET orders; >0 = LIMIT orders, price resolved downstream)."
         ),
     )
+    # execution/compose.py (cross-Pilot + advisory queue composer) reads a
+    # per-source JSON file (output/queue_sources/<source_id>.json) for the
+    # advisory pipeline and for every actively-followed Pilot. A follow's
+    # source file is written only when the operator explicitly (re-)follows
+    # via plan_follow -- there is no background job that keeps it fresh
+    # (the "re-plan all follows" auto-refresh idea was deliberately cut from
+    # this feature -- see docs/AUTOPILOT_PLAN.md). Left unchecked, a
+    # weeks-old target netted against today's account holdings would be
+    # computed from a dead snapshot. Rather than silently netting against
+    # arbitrarily stale data (or picking a threshold nobody chose), a single
+    # source older than this is treated as CORRUPT for composition purposes:
+    # the whole compose_and_emit() call is refused (nothing is written; the
+    # last known-good execution_queue.json is left in place) rather than
+    # emitting an order sized from a stale claim. 7 days is a conservative,
+    # explicitly-owned default -- not a "correct" number, a judgment call:
+    # long enough that a follow set once doesn't need re-confirming daily,
+    # short enough that month-old Pilot rankings can never silently drive an
+    # order. Applies uniformly to every source, including the advisory one
+    # (freshly written every main.py cycle in normal operation, so this only
+    # ever bites the advisory source when the pipeline itself hasn't run in
+    # a week).
+    QUEUE_SOURCE_MAX_AGE_SECONDS: float = Field(
+        default=604800.0,
+        description=(
+            "Max age (seconds) of a queue_sources/*.json file before "
+            "execution.compose.compose_and_emit refuses to compose (writes "
+            "nothing, leaves the last queue in place). Default 7 days -- a "
+            "deliberate, conservative judgment call, not a derived constant."
+        ),
+    )
 
     # Slack / Discord incoming-webhook URL for reconciliation drift alerts.
     ALERT_WEBHOOK_URL: Optional[str] = Field(

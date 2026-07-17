@@ -341,11 +341,22 @@ def _intent_dict(
     use_limit = limit_buffer_bps > 0
     order_type = OrderType.LIMIT if use_limit else OrderType.MARKET
 
+    # Per-intent strategy_id override (execution/compose.py): a composed rec
+    # genuinely owned by a single source (advisory-alone, or exactly one
+    # follow with no netting needed) carries its OWN strategy_id
+    # ("advisory" / "follow-<pilot_id>") so client_order_id stays
+    # byte-identical to what that source's own direct call would have
+    # produced; a rec netted across multiple sources carries "composed"
+    # instead. Recs with no such attribute (every existing caller — a plain
+    # `Recommendation` or `FollowIntent`) fall through to the batch-level
+    # `strategy_id` cfg value, unchanged from before this override existed.
+    intent_strategy_id = str(getattr(rec, "strategy_id", "") or strategy_id)
+
     client_order_id = make_client_order_id(
-        strategy_id, symbol, side.value, gate_qty, timestamp=now,
+        intent_strategy_id, symbol, side.value, gate_qty, timestamp=now,
     )
     intent = OrderIntent(
-        strategy_id=strategy_id,
+        strategy_id=intent_strategy_id,
         symbol=symbol,
         side=side,
         qty=gate_qty,
@@ -397,6 +408,20 @@ def _intent_dict(
         # The strategy/owner label (advisory: "advisory"; a follow: "Follow:<id>").
         # Additive key — readers that don't know it (gui _coerce_intent) ignore it.
         "strategy": str(getattr(rec, "strategy", "")),
+        # Attribution for a composed (execution/compose.py) intent: which
+        # source(s) contributed to this symbol's netted claim, and their own
+        # raw target notional. Always present (defaults to []) — a plain
+        # Recommendation/FollowIntent carries no `.sources` attribute, so
+        # every existing caller emits an empty list here, never a KeyError.
+        # Additive key, same "unknown keys ignored" contract as `strategy`.
+        "sources": list(getattr(rec, "sources", None) or []),
+        # Populated only when advisory's presence on this symbol overrode one
+        # or more follow claims (execution/compose.py's "advisory always
+        # wins outright" rule) — each entry names the overridden source, its
+        # own target notional, and its own real rationale, so a reviewer can
+        # see BOTH sides' reasoning, not just the winning number. [] (never
+        # omitted) when there was nothing to override.
+        "overridden": list(getattr(rec, "overridden", None) or []),
     }
     if use_limit:
         # Only present on LIMIT intents — absent for MARKET so buffer==0 output
