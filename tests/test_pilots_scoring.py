@@ -159,6 +159,103 @@ class TestRawScoreBackout:
 
 
 # ---------------------------------------------------------------------------
+# Regime-conditional weight back-out (regression: score_components is
+# persisted under strategy_engine's REGIME-RESOLVED weight, not the flat
+# settings.SIGNAL_WEIGHTS dict; the back-out divisor must match).
+# ---------------------------------------------------------------------------
+
+class TestRegimeConditionalWeights:
+    """Coverage for the dormant regime-weight back-out bug.
+
+    ``strategy_engine.evaluate_security()`` builds
+    ``score_components[module] = output.score * effective_weight`` where
+    ``effective_weight`` comes from ``signals.aggregator.resolve_regime_weights(
+    market_regime, REGIME_SIGNAL_WEIGHTS, SIGNAL_WEIGHTS)`` — NOT always the
+    flat ``SIGNAL_WEIGHTS`` dict. Dividing by the flat weight regardless (the
+    pre-fix behavior) is only correct while ``REGIME_SIGNAL_WEIGHTS == {}``
+    (the project default). These tests set a non-empty override and prove the
+    back-out — and therefore every Pilot's holdings — stays correct.
+    """
+
+    def test_effective_weights_matches_aggregator_parity(self, monkeypatch):
+        """``_effective_signal_weights`` is a reimplementation of
+        ``signals.aggregator.resolve_regime_weights`` (kept import-light —
+        see the module docstring), not a wrapper around it, so drift between
+        the two is a real risk. Pin byte-identical output across a range of
+        regime/override configs so any future change to the canonical
+        merge semantics is caught here too.
+        """
+        from signals.aggregator import resolve_regime_weights
+        from pilots.scoring import _effective_signal_weights
+
+        flat = dict(settings.SIGNAL_WEIGHTS)
+        configs = [
+            {},  # default: no overrides configured
+            {"RECESSION": {"rsi2_mean_reversion": 0.0, "macro_regime": 60.0}},
+            {"_default": {"timeseries_momentum": 99.0}},
+            {"RISK ON": {"timeseries_momentum": 25.0},
+             "_default": {"timeseries_momentum": 1.0}},
+        ]
+        regimes = ["RISK ON", "RECESSION", "NEUTRAL", "CREDIT EVENT", "", "BOGUS"]
+
+        for cfg in configs:
+            monkeypatch.setattr(settings, "REGIME_SIGNAL_WEIGHTS", cfg)
+            for regime in regimes:
+                expected = resolve_regime_weights(regime, cfg, flat)
+                actual = _effective_signal_weights(regime)
+                assert actual == expected, (cfg, regime)
+
+    def test_regime_override_for_active_regime_changes_backout_divisor(
+        self, snapshot, monkeypatch
+    ):
+        """A REGIME_SIGNAL_WEIGHTS override active for the snapshot's own
+        ``market_regime`` ("RISK ON" in the fixture) must be used as the
+        back-out divisor instead of the flat SIGNAL_WEIGHTS value.
+
+        Simulates what strategy_engine.evaluate_security() actually persists:
+        if ``timeseries_momentum``'s effective weight this cycle was 3x the
+        flat weight, every symbol's persisted weighted contribution is 3x
+        larger for the SAME underlying raw [-1, 1] score. Backing that out
+        with the correct (regime-resolved) 3x divisor must recover the exact
+        same raw scores as the flat-weight baseline — proving the fix, not
+        just that *some* number changed.
+        """
+        pilot = get_pilot("trend-following")  # weights={"timeseries_momentum": 1.0}
+        flat_w = settings.SIGNAL_WEIGHTS["timeseries_momentum"]
+        baseline = {h["symbol"]: h["score"] for h in pilot_holdings(pilot, snapshot)}
+
+        rescaled = json.loads(json.dumps(snapshot))  # deep copy
+        for sig in rescaled["signals"]:
+            comp = sig.get("score_components") or {}
+            if "timeseries_momentum" in comp:
+                comp["timeseries_momentum"] *= 3.0
+
+        monkeypatch.setattr(
+            settings, "REGIME_SIGNAL_WEIGHTS",
+            {"RISK ON": {"timeseries_momentum": flat_w * 3.0}},
+        )
+        rescaled_scores = {h["symbol"]: h["score"] for h in pilot_holdings(pilot, rescaled)}
+        assert rescaled_scores == pytest.approx(baseline)
+
+    def test_no_matching_override_leaves_holdings_unaffected(self, snapshot, monkeypatch):
+        """A REGIME_SIGNAL_WEIGHTS override configured for a regime OTHER
+        than the snapshot's own ``market_regime`` ("RISK ON"), with no
+        ``"_default"`` catch-all, must leave ``pilot_holdings`` byte-identical
+        to the flat-weight baseline (``resolve_regime_weights`` falls back to
+        the flat dict when nothing matches).
+        """
+        pilot = get_pilot("trend-following")
+        baseline = pilot_holdings(pilot, snapshot)
+
+        monkeypatch.setattr(
+            settings, "REGIME_SIGNAL_WEIGHTS",
+            {"RECESSION": {"timeseries_momentum": 999.0}},
+        )
+        overridden = pilot_holdings(pilot, snapshot)
+        assert overridden == baseline
+
+
+# ---------------------------------------------------------------------------
 # top-N truncation + normalization
 # ---------------------------------------------------------------------------
 
