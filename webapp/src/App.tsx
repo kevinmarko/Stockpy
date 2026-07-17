@@ -24,7 +24,15 @@ import { usePwaStatus } from "./hooks/usePwaStatus";
 import { useApi } from "./hooks/useApi";
 import { api } from "./api/client";
 import type { LlmStatus } from "./api/types";
+import { Modal } from "./components/Modal";
 import { theme } from "./theme";
+
+/**
+ * How many NAV_ITEMS the mobile bottom bar shows directly before the rest fold
+ * into the "More" sheet. Kept at 3 (Dashboard/Pilots/Activity) so the primary
+ * three never get evicted — see the NAV_ITEMS comment below.
+ */
+const MOBILE_PRIMARY_COUNT = 3;
 
 /** Shared between the mobile bottom tab bar and the desktop sidebar. */
 const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) => boolean }[] = [
@@ -37,10 +45,10 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   { to: "/pairs", label: "Pairs radar", ico: "🔗", match: (p) => p.startsWith("/pairs") },
   { to: "/options", label: "Options", ico: "🎯", match: (p) => p.startsWith("/options") },
   // Last item: Sidebar (desktop) renders all of NAV_ITEMS, so this shows up
-  // there automatically. BottomNav (mobile) only ever renders
-  // NAV_ITEMS.slice(0, 3) -- deliberately NOT reordering to force this in,
-  // since that would evict Activity. On mobile the fixed gear button below
-  // (SettingsButton) is the entry point instead.
+  // there automatically. BottomNav (mobile) shows only the first
+  // MOBILE_PRIMARY_COUNT directly; everything after folds into the "More"
+  // sheet -- EXCEPT /settings, which the fixed gear button (SettingsButton)
+  // already covers, so the sheet omits it to avoid two paths to one screen.
   { to: "/settings", label: "Settings", ico: "⚙", match: (p) => p.startsWith("/settings") },
 ];
 
@@ -131,22 +139,88 @@ function BottomNav() {
   const loc = useLocation();
   const nav = useNavigate();
   const path = loc.pathname;
-  const items = NAV_ITEMS.slice(0, 3);
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  const primary = NAV_ITEMS.slice(0, MOBILE_PRIMARY_COUNT);
+  // Everything after the primary three, minus /settings (the gear covers it) --
+  // Portfolio, Compare, Models, Pairs, Options. Driven off NAV_ITEMS so the
+  // sheet can never drift from the desktop sidebar.
+  const secondary = NAV_ITEMS.slice(MOBILE_PRIMARY_COUNT).filter(
+    (it) => it.to !== "/settings"
+  );
+  const moreActive = secondary.some((it) => it.match(path));
+
+  const go = (to: string) => {
+    setMoreOpen(false);
+    nav(to);
+  };
+
   return (
-    <nav className="bottom-nav">
-      {items.map((it) => (
+    <>
+      <nav className="bottom-nav">
+        {primary.map((it) => (
+          <button
+            key={it.to}
+            className={`nav-item ${it.match(path) ? "active" : ""}`}
+            onClick={() => nav(it.to)}
+          >
+            <span className="nav-ico" aria-hidden>
+              {it.ico}
+            </span>
+            {it.label}
+          </button>
+        ))}
         <button
-          key={it.to}
-          className={`nav-item ${it.match(path) ? "active" : ""}`}
-          onClick={() => nav(it.to)}
+          className={`nav-item ${moreActive ? "active" : ""}`}
+          onClick={() => setMoreOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={moreOpen}
+          data-testid="more-nav-button"
         >
           <span className="nav-ico" aria-hidden>
-            {it.ico}
+            ☰
           </span>
-          {it.label}
+          More
         </button>
-      ))}
-    </nav>
+      </nav>
+      {moreOpen && (
+        <Modal ariaLabel="More sections" onClose={() => setMoreOpen(false)}>
+          <h2 style={{ margin: "0 0 12px", fontSize: "var(--t-title)" }}>More</h2>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {secondary.map((it) => {
+              const active = it.match(path);
+              return (
+                <button
+                  key={it.to}
+                  onClick={() => go(it.to)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    width: "100%",
+                    justifyContent: "flex-start",
+                    padding: "12px 14px",
+                    minHeight: 48,
+                    background: active ? theme.surface2 : "transparent",
+                    border: `1px solid ${active ? theme.borderStrong : theme.border}`,
+                    borderRadius: 10,
+                    color: active ? theme.textPrimary : theme.textSecondary,
+                    fontSize: 15,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span aria-hidden style={{ fontSize: 20 }}>
+                    {it.ico}
+                  </span>
+                  <span>{it.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 
