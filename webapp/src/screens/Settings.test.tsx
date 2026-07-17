@@ -8,7 +8,7 @@
  * whatever the server actually returned, never assumes success client-side.
  */
 import { useEffect } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -533,6 +533,100 @@ describe("Settings screen — Active follows / Re-plan", () => {
     expect(
       await screen.findByText(/Preview only — execution mode is off, nothing was written\./)
     ).toBeInTheDocument();
+  });
+});
+
+describe("Settings screen — Brokerage", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+  });
+
+  it("disconnected: renders the Robinhood connect form, no Disconnect button", async () => {
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: false,
+      has_account_snapshot: false,
+    });
+    renderSettings();
+
+    expect(await screen.findByLabelText(/robinhood email/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/totp secret/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Disconnect" })).not.toBeInTheDocument();
+  });
+
+  it("connected: renders status + Disconnect, and never the credential form", async () => {
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: true,
+      has_account_snapshot: true,
+    });
+    renderSettings();
+
+    expect(await screen.findByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+    expect(screen.getByText(/snapshot ready/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^password$/i)).not.toBeInTheDocument();
+  });
+
+  it("a successful connect flips the section to the connected state", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus")
+      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false })
+      .mockResolvedValue({ connected: true, has_account_snapshot: true });
+    const connectSpy = vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
+      connected: true,
+      verified: true,
+      has_account_snapshot: true,
+    });
+    renderSettings();
+
+    await user.type(await screen.findByLabelText(/robinhood email/i), "user@example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "sUp3rS3cr3t!!");
+    await user.type(screen.getByLabelText(/totp secret/i), "JBSWY3DPEHPK3PXP");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    // Reloaded /brokerage/status now reports connected -> Disconnect appears,
+    // the form (and the submitted password) is gone.
+    expect(await screen.findByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+    expect(connectSpy).toHaveBeenCalledWith({
+      username: "user@example.com",
+      password: "sUp3rS3cr3t!!",
+      mfa_secret: "JBSWY3DPEHPK3PXP",
+    });
+    expect(document.body.textContent).not.toContain("sUp3rS3cr3t!!");
+  });
+
+  it("Disconnect (after confirm) calls the API and returns to the connect form", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus")
+      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true })
+      .mockResolvedValue({ connected: false, has_account_snapshot: false });
+    const disconnectSpy = vi
+      .spyOn(api, "disconnectBrokerage")
+      .mockResolvedValueOnce({ connected: false });
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Disconnect" }));
+
+    // Confirm modal: disambiguate the modal's Disconnect from the section's.
+    const dialog = await screen.findByRole("dialog", { name: "Disconnect brokerage" });
+    await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+
+    await waitFor(() => expect(disconnectSpy).toHaveBeenCalledTimes(1));
+    // Reloaded status now reports disconnected -> the connect form is back.
+    expect(await screen.findByLabelText(/robinhood email/i)).toBeInTheDocument();
+  });
+
+  it("a status-fetch failure shows an ErrorState, not a crash", async () => {
+    vi.spyOn(api, "getBrokerageStatus").mockRejectedValueOnce(new Error("brokerage down"));
+    renderSettings();
+
+    expect(await screen.findByText("brokerage down")).toBeInTheDocument();
   });
 });
 
