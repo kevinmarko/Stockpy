@@ -1819,6 +1819,69 @@ export const mockApi = {
         "previous values until restarted.",
     });
   },
+  
+  // ---- Data API Endpoints ----
+  async getDataBars(_symbol: string, _lookbackDays: number = 252): Promise<any[]> {
+    return delay([]);
+  },
+  async getDataFundamentals(_symbol: string): Promise<Record<string, number>> {
+    return delay({});
+  },
+  async getDataFundamentalsHistory(_symbol: string): Promise<Record<string, Record<string, number>>> {
+    return delay({});
+  },
+  async getDataMacro(): Promise<Record<string, any>> {
+    return delay({});
+  },
+  async getDataUniverse(): Promise<{ symbols: string[]; count: number }> {
+    return delay({ symbols: ["AAPL", "MSFT", "GOOGL"], count: 3 });
+  },
+  async updateDataUniverse(symbols: string[]): Promise<{ status: string; symbols: string[] }> {
+    return delay({ status: "updated", symbols });
+  },
+  async getDataQuotes(_symbols: string[]): Promise<Record<string, any>> {
+    return delay({});
+  },
+  async getDataSyncReport(): Promise<Record<string, any>> {
+    return delay({});
+  },
+  async getDataAccount(): Promise<Record<string, any>> {
+    return delay({});
+  },
+
+  // ---- Metrics API Endpoints ----
+  async getMetricsTechnicals(_symbol: string): Promise<Record<string, any>> {
+    return delay({});
+  },
+  async getMetricsForecast(_symbol: string): Promise<Record<string, any>> {
+    return delay({});
+  },
+  async getMetricsOptions(_symbol: string): Promise<Record<string, any>> {
+    return delay({});
+  },
+  async getMetricsSignalsRegistry(): Promise<{ registry: any[]; count: number }> {
+    return delay({ registry: [], count: 0 });
+  },
+  async getMetricsSignals(_symbol: string): Promise<Record<string, any>> {
+    return delay({});
+  },
+
+  // ---- Control API Endpoints ----
+  async getControlStatus(): Promise<Record<string, any>> {
+    return delay({ is_running: false, current_run_id: null, run_history: [] });
+  },
+  async getControlRunStatus(_runId: string): Promise<Record<string, any>> {
+    return delay({ run_id: _runId, state: "succeeded", mode: "full" });
+  },
+  async postControlRun(): Promise<Record<string, any>> {
+    return delay({ run_id: "mock_run_id", state: "queued" });
+  },
+  async postControlPipelineData(): Promise<Record<string, any>> {
+    return delay({ run_id: "mock_run_id", state: "queued", mode: "data" });
+  },
+  async postControlPipelineMetrics(): Promise<Record<string, any>> {
+    return delay({ run_id: "mock_run_id", state: "queued", mode: "metrics" });
+  },
 };
 
 function notFound(id: string) {

@@ -325,6 +325,74 @@ def trigger_run() -> JSONResponse:
     )
 
 
+@app.post("/pipeline/data", dependencies=[Depends(require_command_token)])
+def trigger_pipeline_data() -> JSONResponse:
+    """Trigger just the DataFetch step."""
+    daemon = get_daemon()
+    if daemon is None:
+        raise HTTPException(status_code=503, detail="Daemon not available.")
+        
+    ks = GlobalKillSwitch()
+    if ks.is_active():
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "detail": "Kill switch active — pipeline triggering is paused.",
+                "kill_switch_reason": ks.reason() or "",
+            },
+        )
+        
+    result = daemon.trigger_run(reason="manual", mode="data")
+
+    if result.outcome == TriggerOutcome.ALREADY_RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "detail": "A run is already in flight.",
+                "run_id": result.run_id,
+            },
+        )
+
+    return JSONResponse(
+        status_code=202,
+        content={"run_id": result.run_id, "state": "queued", "mode": "data"},
+    )
+
+
+@app.post("/pipeline/metrics", dependencies=[Depends(require_command_token)])
+def trigger_pipeline_metrics() -> JSONResponse:
+    """Trigger DataFetch + RunPipeline steps."""
+    daemon = get_daemon()
+    if daemon is None:
+        raise HTTPException(status_code=503, detail="Daemon not available.")
+        
+    ks = GlobalKillSwitch()
+    if ks.is_active():
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "detail": "Kill switch active — pipeline triggering is paused.",
+                "kill_switch_reason": ks.reason() or "",
+            },
+        )
+        
+    result = daemon.trigger_run(reason="manual", mode="metrics")
+
+    if result.outcome == TriggerOutcome.ALREADY_RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "detail": "A run is already in flight.",
+                "run_id": result.run_id,
+            },
+        )
+
+    return JSONResponse(
+        status_code=202,
+        content={"run_id": result.run_id, "state": "queued", "mode": "metrics"},
+    )
+
+
 @app.get("/run/{run_id}/status", dependencies=[Depends(require_read_token)])
 def get_run_status(run_id: str) -> Dict[str, Any]:
     """Status of a specific run (including one still RUNNING)."""

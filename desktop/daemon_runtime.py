@@ -63,6 +63,7 @@ class RunState(str, Enum):
 class RunRecord:
     run_id: str
     state: RunState
+    mode: str                       # "full", "data", "metrics"
     started_at: datetime            # UTC-aware
     finished_at: Optional[datetime]  # None while RUNNING
     duration_seconds: Optional[float]
@@ -230,7 +231,7 @@ class OrchestratorDaemon:
     # Triggering runs
     # ------------------------------------------------------------------
 
-    def trigger_run(self, *, reason: str = "manual") -> TriggerResult:
+    def trigger_run(self, *, reason: str = "manual", mode: str = "full") -> TriggerResult:
         """Non-blocking, single-flight run trigger."""
         with self._lock:
             if self._current_run_id is not None:
@@ -248,9 +249,10 @@ class OrchestratorDaemon:
             # overwrites this record in place (same run_id, no second append)
             # once the cycle finishes.
             self._run_history[run_id] = RunRecord(
-                run_id=run_id, state=RunState.RUNNING,
+                run_id=run_id, state=RunState.RUNNING, mode=mode,
                 started_at=datetime.now(timezone.utc), finished_at=None,
                 duration_seconds=None, error=None, reason=reason,
+                progress=None,
             )
             self._run_order.append(run_id)
             while len(self._run_order) > self._run_history_size:
@@ -258,14 +260,14 @@ class OrchestratorDaemon:
                 self._run_history.pop(oldest, None)
 
         thread = threading.Thread(
-            target=self._run_one_cycle, args=(run_id, reason),
+            target=self._run_one_cycle, args=(run_id, reason, mode),
             name=f"OrchestratorDaemon-run-{run_id[:8]}", daemon=True,
         )
         self._worker_threads[run_id] = thread
         thread.start()
         return TriggerResult(outcome=TriggerOutcome.ACCEPTED, run_id=run_id)
 
-    def _run_one_cycle(self, run_id: str, reason: str) -> None:
+    def _run_one_cycle(self, run_id: str, reason: str, mode: str = "full") -> None:
         started_at = datetime.now(timezone.utc)
         state: RunState
         error: Optional[str]
@@ -276,6 +278,7 @@ class OrchestratorDaemon:
                     strict=self._strict,
                     engines=self._engines,
                     data_engine=self._data_engine,
+                    mode=mode,
                 )
             )
             state = RunState.SUCCEEDED
@@ -335,6 +338,7 @@ class OrchestratorDaemon:
         record = RunRecord(
             run_id=run_id,
             state=state,
+            mode=mode,
             started_at=started_at,
             finished_at=finished_at,
             duration_seconds=duration_seconds,

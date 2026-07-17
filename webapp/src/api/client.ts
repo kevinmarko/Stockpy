@@ -47,6 +47,12 @@ import type {
 const BASE_URL = (
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8602"
 ).replace(/\/+$/, "");
+const DATA_BASE_URL = (
+  import.meta.env.VITE_DATA_API_BASE_URL ?? "http://localhost:8603"
+).replace(/\/+$/, "");
+const METRICS_BASE_URL = (
+  import.meta.env.VITE_METRICS_API_BASE_URL ?? "http://localhost:8604"
+).replace(/\/+$/, "");
 const TOKEN = import.meta.env.VITE_API_TOKEN ?? "";
 
 // Default to MOCK unless explicitly told to go live. This means a fresh checkout
@@ -70,10 +76,12 @@ async function http<T>(
 
   let resp: Response;
   try {
-    resp = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+    const urlBase = path.startsWith("/data/") ? DATA_BASE_URL : path.startsWith("/metrics/") ? METRICS_BASE_URL : BASE_URL;
+    resp = await fetch(`${urlBase}${path}`, { ...init, headers });
   } catch (e) {
+    const urlBase = path.startsWith("/data/") ? DATA_BASE_URL : path.startsWith("/metrics/") ? METRICS_BASE_URL : BASE_URL;
     const err = new ApiError(
-      `Network error reaching Pilots API at ${BASE_URL}. Is it running (uvicorn api.pilots_api:app --port 8602)?`,
+      `Network error reaching API at ${urlBase}. Is it running?`,
       0
     );
     // Offline fallback (Web App Resilience gap): the network is genuinely
@@ -134,6 +142,34 @@ const liveApi = {
     http<ForecastSkill>(
       `/symbols/${encodeURIComponent(ticker)}/forecast?horizon=${horizon}`
     ),
+  getDataSyncReport: () =>
+    http<Record<string, any>>("/data/sync-report"),
+  getDataAccount: () =>
+    http<Record<string, any>>("/data/account"),
+    
+  // ---- Metrics API Endpoints ----
+  getMetricsTechnicals: (symbol: string) =>
+    http<Record<string, any>>(`/metrics/technicals/${encodeURIComponent(symbol)}`),
+  getMetricsForecast: (symbol: string) =>
+    http<Record<string, any>>(`/metrics/forecast/${encodeURIComponent(symbol)}`),
+  getMetricsOptions: (symbol: string) =>
+    http<Record<string, any>>(`/metrics/options/${encodeURIComponent(symbol)}`),
+  getMetricsSignalsRegistry: () =>
+    http<{ registry: any[]; count: number }>("/metrics/signals/registry"),
+  getMetricsSignals: (symbol: string) =>
+    http<Record<string, any>>(`/metrics/signals/${encodeURIComponent(symbol)}`),
+
+  // ---- Control API Endpoints ----
+  getControlStatus: () =>
+    http<Record<string, any>>("/status"),
+  getControlRunStatus: (runId: string) =>
+    http<Record<string, any>>(`/run/${encodeURIComponent(runId)}/status`),
+  postControlRun: () =>
+    http<Record<string, any>>("/run", { method: "POST" }),
+  postControlPipelineData: () =>
+    http<Record<string, any>>("/pipeline/data", { method: "POST" }),
+  postControlPipelineMetrics: () =>
+    http<Record<string, any>>("/pipeline/metrics", { method: "POST" }),
   getModels: () => http<ModelRow[]>("/models"),
   getOptions: () => http<OptionsMatrix>("/options"),
   getSymbolOptions: (ticker: string) =>

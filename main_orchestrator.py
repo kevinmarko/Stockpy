@@ -737,7 +737,7 @@ def _dispatch_daily_summary(ctx) -> None:
 
 async def _main_body(effective_dry_run: bool, strict: bool = False,
                       *, engines: Optional[EngineContext] = None,
-                      data_engine: Optional[Any] = None) -> None:
+                      data_engine: Optional[Any] = None, mode: str = "full") -> None:
     """Thin progress-instrumentation wrapper around ``_main_body_impl``.
 
     Constructs ONE ``ProgressReporter`` per cycle (reporting/progress.py),
@@ -764,7 +764,7 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
     try:
         await _main_body_impl(
             effective_dry_run, strict, engines=engines, data_engine=data_engine,
-            progress=_progress,
+            progress=_progress, mode=mode
         )
     except Exception:
         _progress.finish("failed")
@@ -776,7 +776,8 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
 async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
                            *, engines: Optional[EngineContext] = None,
                            data_engine: Optional[Any] = None,
-                           progress: Optional[ProgressReporter] = None) -> None:
+                           progress: Optional[ProgressReporter] = None,
+                           mode: str = "full") -> None:
     """Core pipeline logic using the modular Pipeline framework."""
     from pipeline.context import RunContext
     from pipeline.runner import AsyncPipelineRunner
@@ -803,12 +804,20 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
     ctx.market = data_engine
     ctx.engine_context = engines
 
-    runner = AsyncPipelineRunner([
-        AsyncDataFetchStep(),
-        RunPipelineStep(),
-        BrokerExecutionStep(),
-        StateSnapshotStep()
-    ])
+    
+    if mode == "data":
+        steps = [AsyncDataFetchStep()]
+    elif mode == "metrics":
+        steps = [AsyncDataFetchStep(), RunPipelineStep()]
+    else:
+        steps = [
+            AsyncDataFetchStep(),
+            RunPipelineStep(),
+            BrokerExecutionStep(),
+            StateSnapshotStep()
+        ]
+
+    runner = AsyncPipelineRunner(steps)
     await runner.run(ctx, progress)
 
 

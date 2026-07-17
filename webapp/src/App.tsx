@@ -18,6 +18,7 @@ import { PairsRadar } from "./screens/PairsRadar";
 import { OptionsMatrix } from "./screens/OptionsMatrix";
 import { Settings } from "./screens/Settings";
 import { StrategyMatrix } from "./screens/StrategyMatrix";
+import { PipelineDashboard } from "./screens/PipelineDashboard";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { usePwaStatus } from "./hooks/usePwaStatus";
@@ -29,6 +30,7 @@ import { theme } from "./theme";
 /** Shared between the mobile bottom tab bar and the desktop sidebar. */
 const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) => boolean }[] = [
   { to: "/", label: "Dashboard", ico: "⚡", match: (p) => p === "/" },
+  { to: "/pipeline", label: "Pipeline", ico: "🚀", match: (p) => p.startsWith("/pipeline") },
   { to: "/marketplace", label: "Pilots", ico: "🧭", match: (p) => p.startsWith("/marketplace") || p.startsWith("/pilots") },
   { to: "/activity", label: "Activity", ico: "🔔", match: (p) => p.startsWith("/activity") },
   { to: "/portfolio", label: "Portfolio", ico: "📊", match: (p) => p.startsWith("/portfolio") },
@@ -195,6 +197,7 @@ export default function App() {
       <div className="app-main">
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/pipeline" element={<PipelineDashboard />} />
           <Route path="/marketplace" element={<Marketplace />} />
           <Route path="/compare" element={<Comparison />} />
           <Route path="/pilots/:id" element={<PilotDetail />} />
