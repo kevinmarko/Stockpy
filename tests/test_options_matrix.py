@@ -124,7 +124,13 @@ def test_call_debit_spread_directive_carries_nan_not_zero_theta_in_full_row():
         target_dte=30,
         macro_dto=_MacroProxy(),
         vrp=None,
-        ivr_buy_threshold=100.0,  # force the LOW-IVR regime (never a credit strategy)
+        # Force the LOW-IVR (debit) regime deterministically regardless of the
+        # synthetic bars' randomly-generated realized-vol IVR proxy: the engine
+        # checks ivr_sell_threshold FIRST (`if true_ivr > ivr_sell_threshold`),
+        # so overriding only ivr_buy_threshold left this test flaky whenever
+        # the seed happened to produce an IVR proxy above the default 50.
+        ivr_sell_threshold=100.0,
+        ivr_buy_threshold=100.0,
     )
     assert row["Strategy"] not in {"Put Credit Spread", "Call Credit Spread", "Iron Condor"}
     assert np.isnan(row["Realizable_Daily_Theta"])
