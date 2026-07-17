@@ -17,6 +17,8 @@ import type {
   BrokerageDisconnectResult,
   BrokerageStatus,
   CorrelationCluster,
+  EquityDrawdownCurve,
+  EquityDrawdownPoint,
   FactorExposure,
   Follow,
   FollowResult,
@@ -27,6 +29,7 @@ import type {
   KillSwitchActionResult,
   LlmStatus,
   ModelRow,
+  ObservabilitySummary,
   OptionsDirective,
   OptionsMatrix,
   PairsRadar,
@@ -37,7 +40,12 @@ import type {
   PilotTrade,
   Portfolio,
   PortfolioAttribution,
+  PortfolioForecastSkill,
+  PortfolioRiskMetrics,
   RealizedPerformance,
+  RegimeOverlay,
+  RiskGateBlockEntry,
+  RiskGateBlockLog,
   RealizedTrade,
   SectorSlice,
   StrategyMatrix,
@@ -1389,6 +1397,123 @@ function mockPortfolioAttribution(): PortfolioAttribution {
   };
 }
 
+// ---- Observability / Mission Control fixture ----
+// Portfolio-level risk stats: a healthy, plausible track record (not
+// deployable-badge territory — this is account risk, not a strategy gate).
+function mockPortfolioRisk(): PortfolioRiskMetrics {
+  return {
+    sharpe_ratio: 1.18,
+    calmar_ratio: 2.4,
+    max_drawdown: -0.146,
+    max_drawdown_duration_days: 34,
+    cagr: 0.187,
+    n_snapshots: 87,
+    min_snapshots_required: 20,
+    reason: null,
+  };
+}
+
+// Drawdown is derived FROM the same synthesized equity series (running-peak
+// math), not an independent random series — keeps the fixture internally
+// consistent the way the real endpoint's numbers are.
+function mockEquityDrawdownCurve(range: PerfRange): EquityDrawdownCurve {
+  const raw = synthCurve("account-equity-drawdown", range, 0.12, 0.09, 44000);
+  let peak = -Infinity;
+  const points: EquityDrawdownPoint[] = raw.map((p) => {
+    peak = Math.max(peak, p.value);
+    const drawdown = peak > 0 ? (p.value - peak) / peak : 0;
+    return { date: p.date, equity: p.value, drawdown: +drawdown.toFixed(4) };
+  });
+  return { range, points, reason: null };
+}
+
+function mockRegimeOverlay(): RegimeOverlay {
+  // kill_switch_active reflects the SAME mock kill-switch state Settings'
+  // pause/resume automation controls (readKillSwitch/writeKillSwitch, shared
+  // with getAutomationStatus) rather than a hardcoded false — so pausing
+  // automation actually flips the "Kill switch ACTIVE" badge here too,
+  // making that honesty branch reachable in a live mock session, not just
+  // via a test-only override.
+  const ks = readKillSwitch();
+  return {
+    as_of: new Date(Date.now() - 5 * 60_000).toISOString(),
+    market_regime: "RISK ON",
+    vix: 14.8,
+    sahm_rule: 0.13,
+    high_yield_oas: 3.21,
+    yield_curve: 0.42,
+    hmm_risk_on_probability: 0.78,
+    kill_switch_active: ks.active,
+    macro_regime_gate_enabled: true,
+    reason: null,
+  };
+}
+
+function mockPortfolioForecastSkill(horizon: number): PortfolioForecastSkill {
+  const rng = seeded(horizon * 7919 + 13);
+  const models = ["arima", "monte_carlo", "holt_winters", "cnn_lstm"];
+  const curve = models.flatMap((m) =>
+    [-0.3, -0.1, 0.1, 0.3].map((center) => ({
+      model_name: m,
+      horizon_days: horizon,
+      bin_center: center,
+      // Some bins honestly null (too few samples in that bucket) — matches
+      // the per-symbol mockForecast's same convention.
+      mean_pct_error: rng() < 0.15 ? null : +((rng() - 0.5) * 0.1).toFixed(4),
+      count: Math.floor(rng() * 40) + 5,
+    }))
+  );
+  const raw = models.map(() => 0.1 + rng());
+  const tot = raw.reduce((a, b) => a + b, 0);
+  const skill_weights: Record<string, number> = {};
+  models.forEach((m, i) => (skill_weights[m] = +(raw[i] / tot).toFixed(3)));
+  return {
+    horizon_days: horizon,
+    window_days: 180,
+    min_obs: 30,
+    reliability_curve: curve,
+    skill_weights,
+    pending: Math.floor(rng() * 12) + 2,
+    completed: Math.floor(rng() * 300) + 120,
+    reason: null,
+  };
+}
+
+function mockRiskGateBlocks(): RiskGateBlockLog {
+  const now = Date.now();
+  const entries: RiskGateBlockEntry[] = [
+    {
+      ts: new Date(now - 40 * 60_000).toISOString(),
+      check: "max_correlation",
+      reason: "Correlation with the existing NVDA position (0.86) exceeds the 0.80 threshold.",
+      symbol: "AMD",
+      side: "buy",
+      qty: 12,
+      strategy_id: "cross-sectional-momentum",
+    },
+    {
+      ts: new Date(now - 6 * 3600_000).toISOString(),
+      check: "portfolio_heat",
+      reason: "Adding this position would raise portfolio heat to 6.4%, above the 5% cap.",
+      symbol: "TSLA",
+      side: "buy",
+      qty: 5,
+      strategy_id: "trend-following",
+    },
+  ];
+  return { entries, count: entries.length, reason: null };
+}
+
+function mockObservabilitySummary(range: PerfRange, horizon: number): ObservabilitySummary {
+  return {
+    portfolio_risk: mockPortfolioRisk(),
+    equity_curve: mockEquityDrawdownCurve(range),
+    regime: mockRegimeOverlay(),
+    forecast_skill: mockPortfolioForecastSkill(horizon),
+    risk_gate_blocks: mockRiskGateBlocks(),
+  };
+}
+
 async function delay<T>(v: T, ms = 260): Promise<T> {
   return new Promise((res) => setTimeout(() => res(v), ms));
 }
@@ -1878,6 +2003,13 @@ export const mockApi = {
 
   async getPairs(): Promise<PairsRadar> {
     return delay(mockPairs());
+  },
+
+  async getObservabilitySummary(
+    range: PerfRange,
+    horizon = 30
+  ): Promise<ObservabilitySummary> {
+    return delay(mockObservabilitySummary(range, horizon));
   },
 
   async getStrategyMatrix(): Promise<StrategyMatrix> {

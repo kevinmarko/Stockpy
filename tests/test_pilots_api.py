@@ -982,6 +982,113 @@ class TestPairsRadar:
         assert body["universe"] == ["XOM", "CVX"]
 
 
+class TestObservabilitySummary:
+    """Endpoint-level wiring/shape tests for GET /observability/summary. The
+    substantive per-section logic (drawdown math, portfolio-wide skill weight
+    formula, honest degradation) is unit-tested directly against
+    pilots/observability.py in tests/test_pilots_observability.py; these tests
+    only confirm the FastAPI wiring — auth, query params, snapshot threading,
+    and the composite shape — is correct end-to-end."""
+
+    def test_cold_start_shape(self, tmp_path):
+        class _EmptyStore:
+            def account_snapshot_history(self, since=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "data.historical_store.HistoricalStore", return_value=_EmptyStore()
+            ):
+                with mock.patch(
+                    "forecasting.forecast_tracker.ForecastTracker",
+                    side_effect=RuntimeError("unavailable"),
+                ):
+                    resp = client.get("/observability/summary")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {
+            "portfolio_risk", "equity_curve", "regime", "forecast_skill", "risk_gate_blocks",
+        }
+        assert body["portfolio_risk"]["sharpe_ratio"] is None
+        assert body["portfolio_risk"]["n_snapshots"] == 0
+        assert body["portfolio_risk"]["reason"]
+        assert body["equity_curve"]["range"] == "1Y"
+        assert body["equity_curve"]["points"] == []
+        assert body["regime"]["market_regime"] is None
+        assert body["regime"]["reason"]
+        assert body["forecast_skill"]["horizon_days"] == 30
+        assert body["forecast_skill"]["reliability_curve"] == []
+        assert body["risk_gate_blocks"]["entries"] == []
+        assert body["risk_gate_blocks"]["count"] == 0
+
+    def test_reads_regime_from_persisted_snapshot_fixture(self, tmp_path):
+        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
+
+        class _EmptyStore:
+            def account_snapshot_history(self, since=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "data.historical_store.HistoricalStore", return_value=_EmptyStore()
+            ):
+                resp = client.get("/observability/summary")
+
+        assert resp.status_code == 200
+        regime = resp.json()["regime"]
+        assert regime["market_regime"] == "RISK ON"
+        assert regime["sahm_rule"] == pytest.approx(0.13)
+        assert regime["hmm_risk_on_probability"] == pytest.approx(0.78)
+        assert regime["reason"] is None
+
+    def test_query_params_thread_through(self, tmp_path):
+        class _EmptyStore:
+            def account_snapshot_history(self, since=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "data.historical_store.HistoricalStore", return_value=_EmptyStore()
+            ):
+                with mock.patch(
+                    "forecasting.forecast_tracker.ForecastTracker",
+                    side_effect=RuntimeError("unavailable"),
+                ):
+                    resp = client.get("/observability/summary?range=1M&horizon=60")
+
+        body = resp.json()
+        assert body["equity_curve"]["range"] == "1M"
+        assert body["forecast_skill"]["horizon_days"] == 60
+
+    def test_bad_horizon_422(self):
+        resp = client.get("/observability/summary?horizon=0")
+        assert resp.status_code == 422
+
+    def test_read_token_gates_endpoint(self, tmp_path):
+        class _EmptyStore:
+            def account_snapshot_history(self, since=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                with mock.patch(
+                    "data.historical_store.HistoricalStore", return_value=_EmptyStore()
+                ):
+                    no_auth = client.get("/observability/summary")
+                    wrong = client.get(
+                        "/observability/summary",
+                        headers={"Authorization": "Bearer WRONG"},
+                    )
+                    ok = client.get(
+                        "/observability/summary",
+                        headers={"Authorization": "Bearer read-tok"},
+                    )
+        assert no_auth.status_code == 401
+        assert wrong.status_code == 401
+        assert ok.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # Architectural guard: no heavy-engine imports in api/pilots_api.py
 # ---------------------------------------------------------------------------

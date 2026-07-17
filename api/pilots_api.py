@@ -101,6 +101,7 @@ from pilots import (
     catalog,
     forecast_skill,
     models,
+    observability,
     options,
     pairs,
     performance,
@@ -896,6 +897,33 @@ def get_portfolio_attribution(
         "factor_exposure": factor_exposure,
         "correlation_clusters": correlation_clusters,
     }
+
+
+@app.get("/observability/summary", dependencies=[Depends(require_read_token)])
+def get_observability_summary(
+    range: str = Query("1Y"),  # noqa: A002 - matches the ?range= query param name
+    horizon: int = Query(30, ge=1, le=365),
+) -> Dict[str, Any]:
+    """Composite Mission-Control summary — the PWA's port of the retired
+    Streamlit Command Center's Observability tab (bounded to four sections):
+    portfolio risk metrics (Sharpe/Calmar/MaxDD/MaxDD-duration/CAGR), the
+    account equity curve + drawdown, the current macro-regime overlay, the
+    portfolio-wide forecast-skill reliability curve + weights, and the last
+    ~100 risk-gate block-log entries.
+
+    Composes FOUR independently-degrading sections (``pilots.observability
+    .observability_summary`` — see that module's docstring for the full
+    per-section contract); one section's cold-start/failure never blocks the
+    other three, and every section carries its own honest ``reason`` when
+    empty. ``range`` zooms the equity curve only (risk metrics always use the
+    full history — Sharpe/CAGR need enough samples to be meaningful);
+    ``horizon`` selects the forecast-skill horizon (10/30/60/90 are the
+    horizons the pipeline actually forecasts, but any 1-365 is accepted
+    leniently, matching ``GET /symbols/{ticker}/forecast``). Never raises
+    (CONSTRAINT #6); never fabricates a metric (CONSTRAINT #4)."""
+    return observability.observability_summary(
+        equity_range=range, horizon_days=horizon, snapshot=_load_snapshot(),
+    )
 
 
 @app.get("/alerts", dependencies=[Depends(require_read_token)])
