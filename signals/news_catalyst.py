@@ -365,12 +365,32 @@ class NewsCatalystSignal(SignalModule):
             for sym, dt in self._earnings_dt.items()
         }
 
+        self._archive_news_history(self._news_scores)
+
         logger.info(
             "NewsCatalystSignal.pre_compute: scored %d symbols "
             "(FinBERT=%s).",
             len(self._news_scores),
             pipeline is not None,
         )
+
+    @staticmethod
+    def _archive_news_history(scores: Dict[str, float]) -> None:
+        """Forward-archive this cycle's news-sentiment scores (best-effort).
+
+        No backtest reads this data yet (see HistoricalStore's news_history
+        DDL comment) — this purely accumulates real point-in-time history so
+        one becomes possible later. Gated by settings.NEWS_HISTORY_CAPTURE_ENABLED;
+        a write failure is logged and never propagated (CONSTRAINT #6).
+        """
+        try:
+            from settings import settings as _settings
+            if not _settings.NEWS_HISTORY_CAPTURE_ENABLED or not scores:
+                return
+            from data.historical_store import HistoricalStore
+            HistoricalStore().save_news_sentiment(scores, datetime.now(timezone.utc))
+        except Exception as exc:
+            logger.warning("NewsCatalystSignal: news_history archive failed: %s", exc)
 
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         """Return the pre-computed sentiment score for this symbol."""

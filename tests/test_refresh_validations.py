@@ -152,6 +152,7 @@ class TestRegistryStructure:
             "macd_trend", "coppock_momentum", "multifactor_lowvol_size",
             "garch_vol_target", "cross_sectional_momentum",
             "relative_strength_xsec", "rsi14_extremes", "sortino_drawdown",
+            "macro_regime_pit", "forecast_direction_arima_hw",
         ):
             assert name in STRATEGY_REGISTRY, f"{name} missing from STRATEGY_REGISTRY"
 
@@ -715,6 +716,38 @@ class TestBuildSortinoDrawdownAdapter:
         perturbed.loc[perturbed.index > cutoff] *= 5.0
         _, _, pre_pert = _build_sortino_drawdown_adapter(perturbed)
         assert val_orig == pytest.approx(pre_pert["SortinoDD_Combined"].loc[cutoff])
+
+
+# ---------------------------------------------------------------------------
+# TestLoadTickerSectors
+# ---------------------------------------------------------------------------
+
+class TestLoadTickerSectors:
+    def test_reads_committed_csv(self) -> None:
+        from scripts.refresh_validations import _load_ticker_sectors
+
+        mapping = _load_ticker_sectors()
+        assert isinstance(mapping, dict)
+        assert mapping.get("AAPL") == "Technology"
+
+    def test_covers_the_full_xsec_universe_30(self) -> None:
+        """Regression guard for the Phase 0b sector-map backfill: every ticker
+        in _XSEC_UNIVERSE_30 must resolve to a real sector (needed by the
+        macro_regime_pit / signal_replay adapters' sector-rotation scoring)."""
+        from scripts.refresh_validations import _load_ticker_sectors, _XSEC_UNIVERSE_30
+
+        mapping = _load_ticker_sectors()
+        missing = [t for t in _XSEC_UNIVERSE_30 if t not in mapping]
+        assert missing == [], f"missing sector coverage for: {missing}"
+
+    def test_missing_file_degrades_to_empty_dict(self, monkeypatch) -> None:
+        import scripts.refresh_validations as rv
+
+        monkeypatch.setattr(
+            rv.pd, "read_csv",
+            lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("nope")),
+        )
+        assert rv._load_ticker_sectors() == {}
 
 
 # ---------------------------------------------------------------------------

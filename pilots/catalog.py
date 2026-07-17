@@ -52,10 +52,20 @@ honest caveats baked into the catalog below:
   same scope-narrowing precedent as the ``multifactor`` Pilot's own backtest.
 * ``rsi-reversal``/``relative-strength``/``risk-adjusted`` join real price-only
   backtests (``rsi14_extremes`` / ``relative_strength_xsec`` / ``sortino_drawdown``).
-* ``regime-navigator`` (macro DTO), ``news-catalyst`` (point-in-time news), and
-  ``forecast-aligned`` (external forecast target) stay
-  ``validation_strategy_id=None`` — their signals can't be honestly reconstructed
-  from price/volume alone.
+* ``regime-navigator`` joins ``macro_regime_pit`` (2026-07) — a real
+  point-in-time reconstruction of the live ``dto_models.MacroEconomicDTO``
+  regime classification from persisted FRED history, NOT price/volume alone;
+  see its own catalog entry below for the two documented v1 caveats (no HMM
+  overlay replay, current-snapshot sector).
+* ``forecast-aligned`` joins ``forecast_direction_arima_hw`` (2026-07) — a
+  NARROWER ARIMA+Holt-Winters-only proxy of the live 5-model forecast
+  ensemble, bounded to the last 5 years with weekly (not daily) refits (the
+  full ensemble re-fit at every historical date is computationally
+  infeasible). ``news-catalyst`` (point-in-time news) still stays
+  ``validation_strategy_id=None`` — its signal can't yet be honestly
+  reconstructed from price/volume alone; forward-archiving to
+  ``HistoricalStore.news_history`` started 2026-07 (see its own catalog
+  entry) but no real backtest is possible for many months yet.
 * ``balanced-blend`` (an ensemble of all 17 signal modules, several needing
   FRED/Finnhub/a trained-ML walk-forward) has **no** honest single-series
   backtest, so ``validation_strategy_id=None`` (the UI shows "no backtest series
@@ -291,13 +301,23 @@ PILOTS: List[Pilot] = [
         ),
         weights={"macro_regime": 1.0},
         long_only=False,
-        # Macro-DTO driven (yield curve, HY spreads, VIX, Sahm) — not price-only,
-        # so validation_strategy_id stays None. Honest caveat: the live signal's
-        # only per-row input beyond the shared macro state is `sector`, so within
-        # a given regime every stock in the same sector scores identically. This
-        # Pilot is deliberately a top-down, macro+sector-driven read (as its
-        # description already states) — not a claim of stock-specific analysis.
-        validation_strategy_id=None,
+        # Real point-in-time backtest (2026-07): macro_regime_pit reconstructs
+        # the REAL dto_models.MacroEconomicDTO.market_regime/.killSwitch
+        # classification at every historical date from real FRED series
+        # (VIXCLS/T10Y2Y/BAMLH0A0HYM2/UNRATE persisted in HistoricalStore),
+        # reusing the live DTO class directly -- not a re-implementation.
+        # TWO documented v1 caveats (see scripts/refresh_validations.py's
+        # _build_macro_regime_adapter docstring): (1) the HMM regime-downgrade
+        # overlay is NOT replayed -- correctly replaying its calendar-gated
+        # expanding-window refit is a materially larger task, deferred to a
+        # future v2; (2) sector is a CURRENT snapshot applied across the full
+        # backtest history (GICS reclassifications are rare for this universe
+        # but not impossible). Honest caveat carried from before: the live
+        # signal's only per-row input beyond the shared macro state is
+        # `sector`, so within a given regime every stock in the same sector
+        # scores identically -- this Pilot is deliberately a top-down,
+        # macro+sector-driven read, not a claim of stock-specific analysis.
+        validation_strategy_id="macro_regime_pit",
     ),
     Pilot(
         id="rsi-reversal",
@@ -336,6 +356,11 @@ PILOTS: List[Pilot] = [
         weights={"news_catalyst": 1.0},
         long_only=False,
         # Point-in-time news/sentiment history isn't available to backtest honestly.
+        # As of the 2026-07 forward-archive change, NewsCatalystSignal.pre_compute()
+        # now persists each cycle's live score to HistoricalStore's news_history
+        # table (data/historical_store.py) -- this accumulates real history going
+        # forward but does NOT unblock a backtest today; validation_strategy_id
+        # stays None until enough real history exists (roughly 6-12+ months).
         validation_strategy_id=None,
     ),
     Pilot(
@@ -348,8 +373,16 @@ PILOTS: List[Pilot] = [
         ),
         weights={"forecast_alignment": 1.0},
         long_only=False,
-        # Needs the external multi-model forecast target — not a price-only signal.
-        validation_strategy_id=None,
+        # Real backtest (2026-07): forecast_direction_arima_hw. A NARROWER
+        # proxy of the live 5-model ensemble (ARIMA + Holt-Winters only --
+        # CNN-LSTM/Prophet re-fits at every historical date are computationally
+        # infeasible), bounded to the last 5 years with WEEKLY (not daily)
+        # refits, over the same 10-ticker universe as the EDGAR PIT adapters.
+        # Reuses the REAL ForecastAlignmentSignal().compute() scoring, not a
+        # reimplementation. See scripts/refresh_validations.py's
+        # _build_forecast_direction_adapter docstring for the full cost
+        # accounting and honesty contract.
+        validation_strategy_id="forecast_direction_arima_hw",
     ),
     Pilot(
         id="risk-adjusted",

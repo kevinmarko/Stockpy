@@ -4,10 +4,14 @@
 **Default weight:** 45.0 (highest of all modules)  
 **Score range:** `[-1.0, +1.0]`  
 **Regime gate:** Always active (this module *defines* the regime context for all others)  
-**Pilot:** Regime Navigator (`regime-navigator`, `pilots/catalog.py`) — no backtest curve
-(`validation_strategy_id=None`); the module's inputs (yield curve, HY spreads, VIX, Sahm
-Rule) aren't price/volume-only, so an honest backtest would require fabricating a macro-DTO
-history (CONSTRAINT #4). See `docs/AUTOPILOT_PLAN.md`.
+**Pilot:** Regime Navigator (`regime-navigator`, `pilots/catalog.py`) — as of 2026-07, joins
+`macro_regime_pit` (`validation_strategy_id="macro_regime_pit"`, `scripts/refresh_validations.py`),
+a real point-in-time backtest that reconstructs the live `dto_models.MacroEconomicDTO.market_regime`/
+`.killSwitch` classification at every historical date from persisted FRED history (VIXCLS, T10Y2Y,
+BAMLH0A0HYM2, UNRATE) — the module's inputs (yield curve, HY spreads, VIX, Sahm Rule) are no longer
+"not price/volume-only, so no honest backtest exists"; two v1 caveats remain documented in the
+adapter's own docstring: the HMM regime-downgrade overlay is not replayed, and sector is a current
+snapshot applied across the full backtest history. See `docs/AUTOPILOT_PLAN.md`.
 
 ---
 

@@ -1,32 +1,50 @@
 symbol,sector
 AAPL,Technology
-MSFT,Technology
-NVDA,Technology
-AMZN,Consumer Cyclical
-TSLA,Consumer Cyclical
-HD,Consumer Cyclical
-META,Communication Services
-GOOGL,Communication Services
-NFLX,Communication Services
-JNJ,Healthcare
-UNH,Healthcare
-PFE,Healthcare
-XOM,Energy
-CVX,Energy
-JPM,Financial Services
-BAC,Financial Services
-GS,Financial Services
-HON,Industrials
-UPS,Industrials
-CAT,Industrials
-PLD,Real Estate
+ABT,Healthcare
 AMT,Real Estate
-SPG,Real Estate
-NEE,Utilities
+AMZN,Consumer Cyclical
+AXP,Financial Services
+BA,Industrials
+BAC,Financial Services
+CAT,Industrials
+COST,Consumer Defensive
+CSCO,Technology
+CVX,Energy
+DIS,Communication Services
 DUK,Utilities
-SO,Utilities
-PG,Consumer Defensive
+GE,Industrials
+GOOGL,Communication Services
+GS,Financial Services
+HD,Consumer Cyclical
+HON,Industrials
+IBM,Technology
+INTC,Technology
+JNJ,Healthcare
+JPM,Financial Services
 KO,Consumer Defensive
-WMT,Consumer Defensive
 LIN,Basic Materials
+MCD,Consumer Cyclical
+META,Communication Services
+MMM,Industrials
+MO,Consumer Defensive
+MRK,Healthcare
+MSFT,Technology
+NEE,Utilities
+NFLX,Communication Services
+NKE,Consumer Cyclical
+NVDA,Technology
+ORCL,Technology
+PFE,Healthcare
+PG,Consumer Defensive
+PLD,Real Estate
 SHW,Basic Materials
+SO,Utilities
+SPG,Real Estate
+T,Communication Services
+TSLA,Consumer Cyclical
+TXN,Technology
+UNH,Healthcare
+UPS,Industrials
+VZ,Communication Services
+WMT,Consumer Defensive
+XOM,Energy
