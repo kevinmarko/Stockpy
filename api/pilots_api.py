@@ -108,6 +108,7 @@ from pilots import (
     realized,
     run_status,
     scoring,
+    strategy_health,
     strategy_matrix as strategy_matrix_reader,
     symbols,
 )
@@ -345,6 +346,18 @@ def _reports_dir() -> Optional[str]:
     monkeypatch this to point at ``tests/fixtures``.
     """
     return None
+
+
+def _validation_history_dir() -> str:
+    """Directory of ``*_validation_history.jsonl`` run-over-run files.
+
+    Independent of ``_history_dir()`` (the rotated STATE-SNAPSHOT history used
+    by ``scoring.pilot_trades`` — a different concept entirely) and of
+    ``_reports_dir()`` (the CURRENT validation summary, not its history).
+    Defaults to the real ``reports/history`` dir; tests monkeypatch this to
+    point at a fixture directory.
+    """
+    return "reports/history"
 
 
 def _load_snapshot() -> Optional[dict]:
@@ -1029,6 +1042,27 @@ def get_strategy_matrix() -> Dict[str, Any]:
     )
     payload["env_drift"] = _env_drift()
     return payload
+
+
+@app.get("/strategy/health", dependencies=[Depends(require_read_token)])
+def get_strategy_health() -> List[Dict[str, Any]]:
+    """Deployability-gate breakdown for EVERY catalog Pilot — a bird's-eye view
+    across the whole marketplace of WHY each Pilot's underlying validated
+    strategy is or isn't deployable, not just the pass/fail badge
+    ``GET /pilots/{id}/performance`` already surfaces for one Pilot at a time.
+
+    Each entry carries the actual per-gate value vs. required threshold (PBO,
+    DSR, net Sharpe, Max Drawdown — thresholds read live from
+    ``validation.thresholds``, never re-typed here), the aggregate
+    ``stress_gate_passed`` for options-selling Pilots, and a best-effort
+    run-over-run ``trend`` from the persisted validation history. A Pilot with
+    no validated backtest, or whose summary file is missing/unreadable, reports
+    ``deployable=None`` + empty ``gates`` + an honest ``reason`` — never a
+    fabricated gate result (CONSTRAINT #4). Never 500s (CONSTRAINT #6)."""
+    return strategy_health.strategy_health_rows(
+        reports_dir=_reports_dir(),
+        history_dir=_validation_history_dir(),
+    )
 
 
 # ---------------------------------------------------------------------------

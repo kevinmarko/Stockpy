@@ -8,10 +8,11 @@ Covers: the SIGNAL_WEIGHTS ∪ snapshot-score_components module union and per-ro
 ``source`` provenance; graceful degradation on a missing / corrupt snapshot;
 PARITY of the duplicated ``_resolve_effective_weights`` / ``_MAX_WEIGHT`` against
 the real ``signals.aggregator`` originals (tests are NOT AST-guarded, so importing
-``signals`` here is fine); and a dependency-light ALLOWLIST guard over BOTH
-``pilots/strategy_matrix.py`` and ``pilots/options.py`` (each promises stdlib +
-settings only, and until now nothing pinned that — see the module docstring for
-why ``import signals`` on the API import path is the trap the guard exists for).
+``signals`` here is fine); and a dependency-light ALLOWLIST guard over
+``pilots/strategy_matrix.py``, ``pilots/options.py``, and
+``pilots/strategy_health.py`` (each promises a narrow, specific import surface —
+see the guard test's own docstring for why ``import signals`` on the API import
+path is the trap the guard exists for).
 """
 
 from __future__ import annotations
@@ -214,17 +215,31 @@ def _import_roots(source: str) -> set:
     return roots
 
 
-@pytest.mark.parametrize("module_name", ["strategy_matrix", "options"])
+@pytest.mark.parametrize("module_name", ["strategy_matrix", "options", "strategy_health"])
 def test_pilots_read_helpers_stay_dependency_light(module_name):
-    """api/pilots_api.py imports both pilots.strategy_matrix and pilots.options.
-    The AST guard on pilots_api.py walks THAT file only, first-segment-only and
-    NON-transitively — so ``import signals`` here would pass the guard while
-    pulling ~700 modules and every signal module's own future imports onto the
-    API import path (the trap the guard's ``desktop`` entry exists for). This is
-    an ALLOWLIST (stronger than a denylist): both modules' docstrings promise
-    stdlib + settings only, and nothing pinned that until now.
+    """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
+    pilots.strategy_health. The AST guard on pilots_api.py walks THAT file
+    only, first-segment-only and NON-transitively — so ``import signals`` here
+    would pass the guard while pulling ~700 modules and every signal module's
+    own future imports onto the API import path (the trap the guard's
+    ``desktop`` entry exists for). This is an ALLOWLIST (stronger than a
+    denylist): each module's docstring promises a specific, narrow import
+    surface, and nothing pinned that until now.
+
+    ``pilots`` and ``validation`` are additionally allowed roots (beyond pure
+    stdlib + ``settings``) for ``pilots.strategy_health`` specifically — it
+    reuses ``pilots.catalog``/``pilots.performance`` (both independently
+    confirmed dependency-light by their own docstrings) and
+    ``validation.thresholds`` (a pure-constants module with zero imports of its
+    own — confirmed by inspection, not just its docstring). Deliberately NOT
+    ``validation.harness`` — that module's top-level imports (``yfinance``,
+    ``universe_engine``, ``execution.cost_model``, ...) are far heavier, which
+    is why ``pilots/strategy_health.py`` PORTS its tiny JSONL history-read
+    logic locally instead of importing it (see that module's docstring).
     """
     path = pathlib.Path(__file__).resolve().parent.parent / "pilots" / f"{module_name}.py"
     roots = _import_roots(path.read_text(encoding="utf-8"))
     allowed = {"__future__", "json", "logging", "math", "pathlib", "typing", "settings"}
+    if module_name == "strategy_health":
+        allowed = allowed | {"pilots", "validation"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"

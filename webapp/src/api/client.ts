@@ -37,6 +37,7 @@ import type {
   CurvePoint,
   RealizedPerformance,
   StrategyMatrix,
+  StrategyHealthRow,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
   SymbolDetail,
@@ -144,6 +145,7 @@ const liveApi = {
       `/observability/summary?range=${range}&horizon=${horizon}`
     ),
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
+  getStrategyHealth: () => http<StrategyHealthRow[]>("/strategy/health"),
   setStrategyModules: (body: StrategyModulesUpdate) =>
     http<StrategyModulesUpdateResult>("/strategy/modules", {
       method: "PUT",

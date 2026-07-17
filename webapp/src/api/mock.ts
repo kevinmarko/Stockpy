@@ -48,6 +48,9 @@ import type {
   RiskGateBlockLog,
   RealizedTrade,
   SectorSlice,
+  StrategyHealthGate,
+  StrategyHealthRow,
+  StrategyHealthTrendPoint,
   StrategyMatrix,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
@@ -1035,6 +1038,203 @@ const MODELS: ModelRow[] = [
   },
 ];
 
+// ---- Strategy Health (deployability-gate breakdown) fixture ----
+// Hand-written to exercise every honesty branch pilots/strategy_health.py can
+// produce, not just the clean-pass happy path:
+//   - all four gates pass (trend-following) with a run-over-run trend
+//   - all four gates pass, no history persisted yet (dip-buyer) -> trend: []
+//   - a single failing gate blocks an otherwise-clean strategy (edge-garch:
+//     Max Drawdown fails; PBO/DSR/Sharpe all pass)
+//   - options-selling: every numeric gate passes but the SEPARATE tail-
+//     scenario stress gate fails (premium-harvester) -> still not deployable
+//   - a genuinely uncomputed gate value (regime-navigator: max_drawdown is
+//     null) -> that gate's `passed` stays null (unknown), never guessed
+//   - every gate fails (momentum-burst) -- shown honestly, never softened
+//   - no validated backtest at all (balanced-blend: strategy_id null)
+//   - a real strategy_id whose summary file hasn't been generated yet
+//     (forecast-aligned) -- a DIFFERENT honest reason than "no backtest"
+const HEALTH_THRESHOLDS: Record<StrategyHealthGate["key"], number> = {
+  pbo: 0.5,
+  dsr: 0.95,
+  sharpe: 0.5,
+  max_drawdown: 0.3,
+};
+
+const HEALTH_GATE_LABELS: Record<StrategyHealthGate["key"], string> = {
+  pbo: "Probability of Backtest Overfitting",
+  dsr: "Deflated Sharpe Ratio",
+  sharpe: "Net Sharpe Ratio",
+  max_drawdown: "Max Drawdown",
+};
+
+const HEALTH_GATE_DIRECTIONS: Record<StrategyHealthGate["key"], "above" | "below"> = {
+  pbo: "below",
+  dsr: "above",
+  sharpe: "above",
+  max_drawdown: "below",
+};
+
+function healthGate(key: StrategyHealthGate["key"], value: number | null): StrategyHealthGate {
+  const threshold = HEALTH_THRESHOLDS[key];
+  const direction = HEALTH_GATE_DIRECTIONS[key];
+  const passed =
+    value == null || Number.isNaN(value)
+      ? null
+      : direction === "below"
+        ? value < threshold
+        : value > threshold;
+  return { key, label: HEALTH_GATE_LABELS[key], value, threshold, direction, passed };
+}
+
+/** Order matches the real backend's PBO/DSR/Sharpe/MaxDD gate ordering. */
+function healthGates(
+  sharpe: number | null,
+  dsr: number | null,
+  pbo: number | null,
+  maxDrawdown: number | null
+): StrategyHealthGate[] {
+  return [
+    healthGate("pbo", pbo),
+    healthGate("dsr", dsr),
+    healthGate("sharpe", sharpe),
+    healthGate("max_drawdown", maxDrawdown),
+  ];
+}
+
+function healthTrend(
+  points: [string, number, number, number, number, boolean][]
+): StrategyHealthTrendPoint[] {
+  return points.map(([report_date, pbo, dsr, sharpe, max_drawdown, deployable]) => ({
+    report_date,
+    pbo,
+    dsr,
+    sharpe,
+    max_drawdown,
+    deployable,
+  }));
+}
+
+const STRATEGY_HEALTH_ROWS: StrategyHealthRow[] = [
+  {
+    pilot_id: "trend-following",
+    pilot_name: "Trend Follower",
+    strategy_id: "timeseries_momentum",
+    deployable: true,
+    gates: healthGates(1.12, 0.972, 0.31, 0.19),
+    is_options_selling: false,
+    stress_gate_passed: true, // gate does not apply to non-options strategies -> trivially true
+    report_date: "2026-07-11",
+    trend: healthTrend([
+      ["2026-05-04", 0.34, 0.951, 0.94, 0.21, true],
+      ["2026-06-01", 0.24, 0.964, 1.03, 0.2, true],
+      ["2026-07-06", 0.31, 0.972, 1.12, 0.19, true],
+    ]),
+    reason: null,
+  },
+  {
+    pilot_id: "dip-buyer",
+    pilot_name: "Dip Buyer",
+    strategy_id: "rsi2_mean_reversion",
+    deployable: true,
+    gates: healthGates(0.83, 0.961, 0.38, 0.14),
+    is_options_selling: false,
+    stress_gate_passed: true,
+    report_date: "2026-07-09",
+    trend: [], // honest "no run-over-run history persisted yet"
+    reason: null,
+  },
+  {
+    pilot_id: "edge-garch",
+    pilot_name: "Edge & Volatility",
+    strategy_id: "garch_vol_target",
+    // PBO/DSR/Sharpe all pass; Max Drawdown alone genuinely fails -> the
+    // whole strategy is not deployable. A realistic "one gate blocks it" case.
+    deployable: false,
+    gates: healthGates(0.62, 0.958, 0.44, 0.34),
+    is_options_selling: false,
+    stress_gate_passed: true,
+    report_date: "2026-07-08",
+    trend: [],
+    reason: null,
+  },
+  {
+    pilot_id: "premium-harvester",
+    pilot_name: "Premium Harvester",
+    strategy_id: "short_vol_condor_pit",
+    // All FOUR numeric gates pass, but the options-selling tail-scenario
+    // stress gate fails (a real Lehman/Volmageddon-style blow-up) -> not
+    // deployable despite the clean headline numbers. The stress gate is a
+    // SEPARATE, additional requirement for options-selling strategies.
+    deployable: false,
+    gates: healthGates(1.34, 0.981, 0.11, 0.09),
+    is_options_selling: true,
+    stress_gate_passed: false,
+    report_date: "2026-07-05",
+    trend: [],
+    reason: null,
+  },
+  {
+    pilot_id: "regime-navigator",
+    pilot_name: "Regime Navigator",
+    strategy_id: "macro_regime_pit",
+    // Max Drawdown was genuinely uncomputable for this run -> that gate's
+    // `passed` stays null (unknown, never guessed); the strategy fails closed
+    // (not deployable) because of it, same as the real harness's own AND gate.
+    deployable: false,
+    gates: healthGates(0.58, 0.957, 0.42, null),
+    is_options_selling: false,
+    stress_gate_passed: true,
+    report_date: "2026-07-02",
+    trend: [],
+    reason: null,
+  },
+  {
+    pilot_id: "momentum-burst",
+    pilot_name: "Momentum Burst",
+    strategy_id: "momentum_burst_intraday",
+    // Every gate genuinely fails -> not deployable, shown honestly, never
+    // loosened to force a green badge.
+    deployable: false,
+    gates: healthGates(0.41, 0.72, 0.63, 0.34),
+    is_options_selling: false,
+    stress_gate_passed: true,
+    report_date: "2026-06-20",
+    trend: [],
+    reason: null,
+  },
+  {
+    pilot_id: "balanced-blend",
+    pilot_name: "Balanced Blend",
+    // Ensemble of all 17 signal modules -- no single validated backtest
+    // honestly represents it (mirrors pilots/catalog.py's own documented
+    // caveat), so there is no strategy_id at all.
+    strategy_id: null,
+    deployable: null,
+    gates: [],
+    is_options_selling: null,
+    stress_gate_passed: null,
+    report_date: null,
+    trend: [],
+    reason: "no validated backtest for this pilot",
+  },
+  {
+    pilot_id: "forecast-aligned",
+    pilot_name: "Forecast Aligned",
+    // Has a real validation_strategy_id, but the summary file itself hasn't
+    // been generated on this install yet -- a DEAD-LETTER degrade, distinct
+    // from "no validated backtest" above (different, honest reason text).
+    strategy_id: "forecast_direction_arima_hw",
+    deployable: null,
+    gates: [],
+    is_options_selling: null,
+    stress_gate_passed: null,
+    report_date: null,
+    trend: [],
+    reason:
+      "no validation summary found for 'forecast_direction_arima_hw' (run the validation pipeline first)",
+  },
+];
+
 // ---- Options premium matrix fixture ----
 // Hand-written to exercise every honesty branch the screen must handle. The
 // previous seeded fixture emitted only clean Put Credit Spreads with
@@ -2014,6 +2214,10 @@ export const mockApi = {
 
   async getStrategyMatrix(): Promise<StrategyMatrix> {
     return delay(mockStrategyMatrix());
+  },
+
+  async getStrategyHealth(): Promise<StrategyHealthRow[]> {
+    return delay(STRATEGY_HEALTH_ROWS);
   },
 
   async setStrategyModules(
