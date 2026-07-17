@@ -782,6 +782,62 @@ export interface StrategyModulesUpdateResult {
 }
 
 // ---------------------------------------------------------------------------
+// GET /strategy/health — catalog-wide deployability-gate breakdown. A bird's-
+// eye view across EVERY Pilot of WHY its underlying validated strategy is or
+// isn't deployable (the actual per-gate value vs. required threshold), not
+// just the pass/fail badge Headline already surfaces for one Pilot at a time.
+// ---------------------------------------------------------------------------
+
+/** One deployability gate (PBO/DSR/Sharpe/MaxDD) for one Pilot's strategy. */
+export interface StrategyHealthGate {
+  key: "pbo" | "dsr" | "sharpe" | "max_drawdown";
+  label: string;
+  /** null when the underlying summary field is absent — never fabricated. */
+  value: number | null;
+  /** Read live from validation/thresholds.py — never re-typed on this side. */
+  threshold: number;
+  direction: "above" | "below";
+  /**
+   * null (unknown) when `value` is null/non-numeric — NEVER guessed. Distinct
+   * from `false` (a real, known gate failure).
+   */
+  passed: boolean | null;
+}
+
+/** One past validation run's headline metrics (reports/history/*.jsonl row). */
+export interface StrategyHealthTrendPoint {
+  report_date: string | null;
+  pbo: number | null;
+  dsr: number | null;
+  sharpe: number | null;
+  max_drawdown: number | null;
+  deployable: boolean | null;
+}
+
+/**
+ * One Pilot's deployability-gate breakdown (GET /strategy/health).
+ *
+ * `gates` is `[]` and `deployable`/`is_options_selling`/`stress_gate_passed`/
+ * `report_date` are all `null` (with an honest `reason`) when the Pilot has no
+ * validated backtest (`strategy_id: null`) or its summary file is missing/
+ * unreadable — NEVER a fabricated gate result (CONSTRAINT #4). `trend` is a
+ * best-effort run-over-run series; an empty array is the honest "no history
+ * yet" case, not an error.
+ */
+export interface StrategyHealthRow {
+  pilot_id: string;
+  pilot_name: string;
+  strategy_id: string | null;
+  deployable: boolean | null;
+  gates: StrategyHealthGate[];
+  is_options_selling: boolean | null;
+  stress_gate_passed: boolean | null;
+  report_date: string | null;
+  trend: StrategyHealthTrendPoint[];
+  reason: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // GET /observability/summary — Mission Control composite: portfolio risk
 // metrics, the account equity curve + drawdown, the current macro-regime
 // overlay, portfolio-wide forecast skill, and the risk-gate block log. Every

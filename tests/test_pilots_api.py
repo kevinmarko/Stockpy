@@ -25,6 +25,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from settings import settings
+from pilots import catalog
 import api.pilots_api as pilots_api
 
 client = TestClient(pilots_api.app)
@@ -2246,6 +2247,104 @@ class TestStrategyWritesInvariants:
         must never flip this on. Neither allowlisted nor secret — hand-set only."""
         assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
         assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
+
+# ===========================================================================
+# GET /strategy/health — catalog-wide deployability-gate breakdown
+# ===========================================================================
+
+
+class TestStrategyHealth:
+    def test_shape_and_all_gates_pass_for_fixture_backed_pilot(self, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        resp = client.get("/strategy/health")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) == len(catalog.list_pilots())
+        row = next(r for r in body if r["pilot_id"] == "trend-following")
+        for key in (
+            "pilot_id", "pilot_name", "strategy_id", "deployable", "gates",
+            "is_options_selling", "stress_gate_passed", "report_date", "trend", "reason",
+        ):
+            assert key in row
+        assert row["strategy_id"] == "timeseries_momentum"
+        assert row["deployable"] is True
+        assert row["reason"] is None
+        assert row["is_options_selling"] is False
+        assert row["stress_gate_passed"] is True
+        gate_keys = {g["key"] for g in row["gates"]}
+        assert gate_keys == {"pbo", "dsr", "sharpe", "max_drawdown"}
+        assert all(g["passed"] is True for g in row["gates"])
+        # No reports/history fixture wired for this test -> honest empty trend.
+        assert row["trend"] == []
+
+    def test_pilot_without_backtest_is_honest_never_fabricated(self, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        resp = client.get("/strategy/health")
+        row = next(r for r in resp.json() if r["pilot_id"] == "balanced-blend")
+        assert row["strategy_id"] is None
+        assert row["deployable"] is None
+        assert row["gates"] == []
+        assert row["is_options_selling"] is None
+        assert row["stress_gate_passed"] is None
+        assert row["trend"] == []
+        assert row["reason"] == "no validated backtest for this pilot"
+
+    def test_missing_summary_degrades_never_500(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(tmp_path))
+        resp = client.get("/strategy/health")
+        assert resp.status_code == 200
+        row = next(r for r in resp.json() if r["pilot_id"] == "trend-following")
+        assert row["deployable"] is None
+        assert row["gates"] == []
+        assert row["reason"] and "timeseries_momentum" in row["reason"]
+
+    def test_trend_populated_from_history_fixture_oldest_first(self, tmp_path, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        history_dir = tmp_path / "history"
+        history_dir.mkdir()
+        rows = [
+            {
+                "report_date": "2026-06-01", "pbo": 0.4, "dsr": 0.90,
+                "sharpe": 0.40, "max_drawdown": 0.20, "deployable": False,
+            },
+            {
+                "report_date": "2026-06-15", "pbo": 0.18, "dsr": 0.972,
+                "sharpe": 1.14, "max_drawdown": 0.176, "deployable": True,
+            },
+        ]
+        (history_dir / "timeseries_momentum_validation_history.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(pilots_api, "_validation_history_dir", lambda: str(history_dir))
+        resp = client.get("/strategy/health")
+        row = next(r for r in resp.json() if r["pilot_id"] == "trend-following")
+        assert [t["report_date"] for t in row["trend"]] == ["2026-06-01", "2026-06-15"]
+
+    def test_fail_open_read_with_no_token(self, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/strategy/health")
+        assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/strategy/health", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
+
+    def test_gate_thresholds_are_read_from_validation_thresholds_module(self, monkeypatch):
+        from validation import thresholds
+
+        _point_reports_at_fixtures(monkeypatch)
+        resp = client.get("/strategy/health")
+        row = next(r for r in resp.json() if r["pilot_id"] == "trend-following")
+        by_key = {g["key"]: g["threshold"] for g in row["gates"]}
+        assert by_key["pbo"] == thresholds.PBO_MAX
+        assert by_key["dsr"] == thresholds.DSR_MIN
+        assert by_key["sharpe"] == thresholds.NET_SHARPE_MIN
+        assert by_key["max_drawdown"] == thresholds.MAX_DRAWDOWN_MAX
 
 
 # ---------------------------------------------------------------------------

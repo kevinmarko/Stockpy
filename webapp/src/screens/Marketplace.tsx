@@ -169,6 +169,13 @@ export function Marketplace() {
                 Risk, equity curve, regime &amp; forecast skill
               </div>
             </Link>
+            <Link to="/strategy-health" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🛡️</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Strategy health</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Deployability gates, pilot by pilot
+              </div>
+            </Link>
           </div>
 
           <p
