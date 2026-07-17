@@ -210,12 +210,62 @@ stayed green throughout.
   "re-plan everything at once" endpoint was designed and rejected: `execution/queue_builder.py`
   overwrites the single `output/execution_queue.json` file per call, so a naive loop over
   active follows would leave only the LAST pilot's intents on disk; worse, two Pilots holding
-  the same symbol would emit two separate intents for it (`_intent_key` dedupes for
+  the same symbol would emit two separate intents for it (`_intent_notify_key` dedupes for
   *notification* purposes, not order-sizing), and `pilots/mirror.py::plan_follow`'s
   `set_mirrored` side effect means an earlier pilot's force-exit drop-attribution gets
   consumed and then silently overwritten before ever reaching disk. None of that is fixable
   without designing real cross-Pilot position netting first — a genuine quant decision in the
   broker-adjacent quarantined code, out of scope for a settings-screen convenience button.
+  **Superseded by D8 — that netting now exists.**
+- **D8 — cross-Pilot + advisory netting shipped as `execution/compose.py`, resolving D7
+  (2026-07-17).** Every source (the advisory pipeline, and each actively-followed Pilot)
+  writes its own small JSON file under `output/queue_sources/`; `compose_and_emit()` is now
+  the SINGLE writer of `output/execution_queue.json` — `main.py`'s advisory cycle and
+  `pilots/mirror.py::plan_follow` both route through it instead of calling
+  `execution.queue_builder.emit_execution_queue` directly, closing D7's clobber. Three design
+  decisions worth recording:
+    - **Net TARGETS, not already-netted deltas.** Two Pilots wanting $3750/$2000 of a symbol
+      the follower holds $8000 of net to a single, correctly-sized $2250 trim; summing each
+      Pilot's own already-netted delta would instead compute -$10,250 against an $8,000
+      position — not just wrong, not even a valid sell size. `pilots/mirror.py`'s
+      `_current_target_holdings` was renamed to public `build_follow_targets` (pure
+      target-notional math, no account snapshot, no BUY/SELL decision) specifically so this
+      netting happens exactly once, centrally, never per-Pilot.
+    - **Force-exit under the union is capped by `source_claim`** — the sum, across every
+      follow source, of whichever of its current-target or dropped-target row exists for a
+      symbol — so a dropped Pilot's force-exit can never sell shares the operator holds for
+      reasons unrelated to that follow (manually purchased, or attributed to a Pilot that
+      still wants the name).
+    - **Advisory always wins outright when present on a symbol** (a product decision, not a
+      derived one — confirmed with the operator before implementing): its own recommendation
+      is emitted byte-identical to advisory-alone in either direction (BUY or SELL), never
+      additively netted with a follow's claim on the same symbol. The overridden follow
+      claim's own real rationale is still surfaced (the emitted intent's new `overridden`
+      field), so a reviewer sees BOTH sides' reasoning, not just the winning number — but the
+      sizing is never blended. This is deliberately the conservative choice: summing two
+      independent signals risks stacking into an oversized position, which is never the safe
+      direction for money-sizing code.
+  A corrupt or stale (`settings.QUEUE_SOURCE_MAX_AGE_SECONDS`, default 7 days) source refuses
+  the WHOLE compose (nothing written, the last known-good queue stays in place) rather than
+  silently composing on a subset of trustworthy data; a merely MISSING source (a Pilot never
+  explicitly followed yet) is excluded and composition proceeds normally.
+- **D9 — the daemon's timer interval can be changed live, without a restart
+  (2026-07-17).** `PUT /automation/schedule/interval` previously wrote `.env` only and
+  always reported `applies: "next_daemon_restart"` — honest, but the docstring itself
+  flagged "no runtime setter exists yet — a later phase." That phase shipped:
+  `desktop/daemon_runtime.py::OrchestratorDaemon.set_interval()` changes the running
+  daemon's cadence directly (creating its timer thread on demand if the daemon started at
+  `interval_seconds=0`), reachable over loopback HTTP via `api/control_api.py`'s new
+  `PUT /interval` (command-token-gated alone, same posture as `POST /run` — a live setter has
+  no persistence to protect, unlike the `.env` write) and `gui/daemon_client.py::set_interval()`.
+  `PUT /automation/schedule/interval` now writes `.env` first, UNCONDITIONALLY, then attempts
+  the live apply; `applies` is `"immediately"` ONLY when the live daemon actually confirms,
+  never inferred from the `.env` write succeeding. All three validators (the daemon setter,
+  and both API bodies) delegate to one shared `settings.validate_interval_seconds` /
+  `INTERVAL_MIN_SECONDS` (60) / `INTERVAL_MAX_SECONDS` (86400) so they cannot silently drift
+  apart — they live in `settings.py` specifically because `control_api.py` and `pilots_api.py`
+  can't import each other, and importing `desktop.daemon_runtime` into `pilots_api.py` would
+  drag `main_orchestrator` into a module whose own AST guard forbids the heavy engines.
 
 ## Running it
 

@@ -15073,10 +15073,16 @@ class GravityAIAuditor:
         * **Broker quarantine.** No new order code, no ``place_*``/``submit_order``/
           ``*_order`` function names, and no direct broker/order-manager import —
           all placement stays the sole job of the downstream ``robinhood-execution``
-          skill. mirror.py reaches execution ONLY through
-          ``execution.queue_builder.emit_execution_queue``, reusing its
+          skill. mirror.py reaches execution ONLY through the sanctioned
+          ``execution/`` zone — either ``execution.queue_builder`` (mode
+          resolution, and the underlying gating every composed intent still
+          flows through) or ``execution.compose`` (2026-07, D8 — the single
+          writer of ``output/execution_queue.json``; ``plan_follow`` now
+          writes its own source file and calls ``compose_and_emit`` instead
+          of calling ``emit_execution_queue`` directly, since that queue is
+          no longer this module's alone to write) — reusing
           ``PreTradeRiskGate`` / ``GlobalKillSwitch`` / ``allow_place`` gating
-          verbatim.
+          verbatim either way.
         * **Decision D3.** A deliberate Follow keeps every chosen name:
           ``FOLLOW_MIN_CONVICTION == 0.0`` and ``plan_follow`` passes it as
           ``config["min_conviction"]`` so the queue builder's default 0.85
@@ -15094,8 +15100,10 @@ class GravityAIAuditor:
             (``submit_order`` / ``buy_order`` / ``sell_order`` / ``place_order`` /
             ``place_equity_order`` / ``place_option_order`` / ``def place_*``).
         3.  No direct broker/order path: mirror.py reaches execution only via
-            ``from execution.queue_builder import emit_execution_queue`` and never
-            imports a concrete broker / order-manager (``alpaca_broker`` /
+            ``from execution.queue_builder import ...`` and/or
+            ``from execution.compose import ...`` (both are inside the sanctioned
+            ``execution/`` zone; D8 moved the actual emit call to the latter) and
+            never imports a concrete broker / order-manager (``alpaca_broker`` /
             ``order_manager`` / ``AlpacaBroker`` / ``submit_order_with_idempotency``).
         4.  Decision D3: ``FOLLOW_MIN_CONVICTION == 0.0`` AND ``plan_follow`` source
             passes ``"min_conviction": FOLLOW_MIN_CONVICTION`` to the builder.
@@ -15157,17 +15165,21 @@ class GravityAIAuditor:
                 ok2, f"forbidden_defs={present}",
             ) and all_pass
 
-            # ── 3: no direct broker/order path (reach execution via builder)
-            reaches_builder = "from execution.queue_builder import" in src
+            # ── 3: no direct broker/order path (reach execution only via the
+            #      sanctioned execution/ zone -- queue_builder and/or compose)
+            reaches_execution_layer = (
+                "from execution.queue_builder import" in src
+                or "from execution.compose import" in src
+            )
             broker_tokens = ["alpaca_broker", "order_manager", "AlpacaBroker",
                              "submit_order_with_idempotency", "BrokerBase"]
             # ignore comment lines so an explanatory note can't trip the guard
             code_only = "\n".join( l for l in src.splitlines() if not l.strip().startswith("#"))
             direct_broker = [t for t in broker_tokens if t in code_only]
-            ok3 = reaches_builder and direct_broker == []
+            ok3 = reaches_execution_layer and direct_broker == []
             all_pass = _chk(
-                "reaches execution only via queue_builder; no direct broker/order import",
-                ok3, f"reaches_builder={reaches_builder} direct_broker={direct_broker}",
+                "reaches execution only via queue_builder/compose; no direct broker/order import",
+                ok3, f"reaches_execution_layer={reaches_execution_layer} direct_broker={direct_broker}",
             ) and all_pass
 
             # ── 4: Decision D3 — min_conviction floor is 0.0 and plumbed ──
