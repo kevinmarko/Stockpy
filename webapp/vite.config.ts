@@ -70,6 +70,26 @@ export default defineConfig({
     host: true,
     port: 5173,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("recharts") || id.includes("d3-")) {
+              return "vendor-charts";
+            }
+            if (
+              id.includes("react-router-dom") ||
+              id.includes("/react-dom/") ||
+              id.includes("/react/")
+            ) {
+              return "vendor-react";
+            }
+          }
+        },
+      },
+    },
+  },
   // Vitest: offline, deterministic unit tests — the mock API contract plus
   // screen/component tests (Testing Library) and the live client (mocked fetch).
   // jsdom gives the mock layer a localStorage (follows persistence) to run against.
