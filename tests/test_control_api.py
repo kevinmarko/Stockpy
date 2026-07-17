@@ -456,6 +456,120 @@ class TestRunLatest:
 
 
 # ---------------------------------------------------------------------------
+# POST /pipeline/data and POST /pipeline/metrics (mode-scoped triggers)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path,mode", [("/pipeline/data", "data"), ("/pipeline/metrics", "metrics")])
+class TestPipelineModeEndpoints:
+    def test_403_when_command_token_unset(self, path, mode):
+        control_api.set_daemon(_make_fake_daemon())
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", None):
+            resp = client.post(path)
+        assert resp.status_code == 403
+
+    def test_401_with_wrong_token(self, path, mode):
+        control_api.set_daemon(_make_fake_daemon())
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post(path, headers={"Authorization": "Bearer WRONG"})
+        assert resp.status_code == 401
+
+    def test_read_token_never_authorizes(self, path, mode):
+        control_api.set_daemon(_make_fake_daemon())
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post(path, headers={"Authorization": "Bearer read-tok"})
+        assert resp.status_code == 401
+
+    def test_202_with_mode_and_calls_trigger_run(self, path, mode):
+        trigger_result = TriggerResult(outcome=TriggerOutcome.ACCEPTED, run_id="new-run-9")
+        daemon = _make_fake_daemon(trigger_result=trigger_result)
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(control_api, "GlobalKillSwitch") as mock_ks_cls:
+            mock_ks_cls.return_value.is_active.return_value = False
+            resp = client.post(path, headers={"Authorization": "Bearer cmd-tok"})
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["run_id"] == "new-run-9"
+        assert body["state"] == "queued"
+        assert body["mode"] == mode
+        daemon.trigger_run.assert_called_once_with(reason="manual", mode=mode)
+
+    def test_409_when_already_running(self, path, mode):
+        trigger_result = TriggerResult(outcome=TriggerOutcome.ALREADY_RUNNING, run_id="existing")
+        daemon = _make_fake_daemon(trigger_result=trigger_result)
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(control_api, "GlobalKillSwitch") as mock_ks_cls:
+            mock_ks_cls.return_value.is_active.return_value = False
+            resp = client.post(path, headers={"Authorization": "Bearer cmd-tok"})
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["run_id"] == "existing"
+
+    def test_423_when_kill_switch_active(self, path, mode):
+        daemon = _make_fake_daemon()
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(control_api, "GlobalKillSwitch") as mock_ks_cls:
+            mock_ks_cls.return_value.is_active.return_value = True
+            mock_ks_cls.return_value.reason.return_value = "halt"
+            resp = client.post(path, headers={"Authorization": "Bearer cmd-tok"})
+        assert resp.status_code == 423
+        assert resp.json()["detail"]["kill_switch_reason"] == "halt"
+        daemon.trigger_run.assert_not_called()
+
+    def test_503_when_no_daemon(self, path, mode):
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post(path, headers={"Authorization": "Bearer cmd-tok"})
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# GET /status — run_history + mode (added to the frozen contract)
+# ---------------------------------------------------------------------------
+
+
+class TestStatusRunHistory:
+    def test_status_includes_serialized_run_history_with_mode(self):
+        last = _make_run_record(run_id="run-2")
+        older = _make_run_record(run_id="run-1")
+        daemon = _make_fake_daemon(
+            status={
+                "is_running": False,
+                "current_run_id": None,
+                "interval_seconds": 60,
+                "last_run": last,
+                "run_history": [last, older],  # most-recent-first
+                "engines_warm": True,
+                "started_at": None,
+            }
+        )
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+             mock.patch.object(control_api, "GlobalKillSwitch") as mock_ks_cls:
+            mock_ks_cls.return_value.is_active.return_value = False
+            resp = client.get("/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [r["run_id"] for r in body["run_history"]] == ["run-2", "run-1"]
+        # mode is serialized on every RunRecord (default "full" via _make_run_record).
+        assert body["run_history"][0]["mode"] == "full"
+        assert body["last_run"]["mode"] == "full"
+
+    def test_status_run_history_defaults_to_empty_list(self):
+        # A legacy/fake daemon status dict without the key must degrade to [].
+        daemon = _make_fake_daemon()  # default status has no run_history key
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+             mock.patch.object(control_api, "GlobalKillSwitch") as mock_ks_cls:
+            mock_ks_cls.return_value.is_active.return_value = False
+            resp = client.get("/status")
+        assert resp.status_code == 200
+        assert resp.json()["run_history"] == []
+
+
+# ---------------------------------------------------------------------------
 # CORS policy
 # ---------------------------------------------------------------------------
 #

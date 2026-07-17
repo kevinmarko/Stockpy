@@ -68,6 +68,12 @@ class RunRecord:
     duration_seconds: Optional[float]
     error: Optional[str]            # str(exception) on FAILED, else None
     reason: str                     # "manual" | "interval"
+    # Which pipeline sub-run this cycle executed: "full" (whole cycle, the
+    # default and every pre-existing caller), "data" (data-fetch stages only),
+    # or "metrics" (data-fetch + indicator/forecast/signal precompute, no broker
+    # execution / state-snapshot). Additive with a default so existing
+    # RunRecord(...) constructions (e.g. tests/test_control_api.py) stay valid.
+    mode: str = "full"
     # Progress instrumentation (reporting/progress.py) -- a plain-dict snapshot
     # of the pipeline's live 0-100% progress telemetry (output/progress.json)
     # taken at the moment this record is written (i.e. cycle completion; see
@@ -230,8 +236,15 @@ class OrchestratorDaemon:
     # Triggering runs
     # ------------------------------------------------------------------
 
-    def trigger_run(self, *, reason: str = "manual") -> TriggerResult:
-        """Non-blocking, single-flight run trigger."""
+    def trigger_run(self, *, reason: str = "manual", mode: str = "full") -> TriggerResult:
+        """Non-blocking, single-flight run trigger.
+
+        ``mode`` selects which pipeline sub-run to execute: "full" (default,
+        unchanged whole cycle), "data" (data-fetch stages only), or "metrics"
+        (data-fetch + indicator/forecast/signal precompute). It is threaded
+        through to ``main_orchestrator._main_body(..., mode=mode)`` and recorded
+        on the ``RunRecord``.
+        """
         with self._lock:
             if self._current_run_id is not None:
                 return TriggerResult(
@@ -248,7 +261,7 @@ class OrchestratorDaemon:
             # overwrites this record in place (same run_id, no second append)
             # once the cycle finishes.
             self._run_history[run_id] = RunRecord(
-                run_id=run_id, state=RunState.RUNNING,
+                run_id=run_id, state=RunState.RUNNING, mode=mode,
                 started_at=datetime.now(timezone.utc), finished_at=None,
                 duration_seconds=None, error=None, reason=reason,
             )
@@ -258,14 +271,14 @@ class OrchestratorDaemon:
                 self._run_history.pop(oldest, None)
 
         thread = threading.Thread(
-            target=self._run_one_cycle, args=(run_id, reason),
+            target=self._run_one_cycle, args=(run_id, reason, mode),
             name=f"OrchestratorDaemon-run-{run_id[:8]}", daemon=True,
         )
         self._worker_threads[run_id] = thread
         thread.start()
         return TriggerResult(outcome=TriggerOutcome.ACCEPTED, run_id=run_id)
 
-    def _run_one_cycle(self, run_id: str, reason: str) -> None:
+    def _run_one_cycle(self, run_id: str, reason: str, mode: str = "full") -> None:
         started_at = datetime.now(timezone.utc)
         state: RunState
         error: Optional[str]
@@ -276,6 +289,7 @@ class OrchestratorDaemon:
                     strict=self._strict,
                     engines=self._engines,
                     data_engine=self._data_engine,
+                    mode=mode,
                 )
             )
             state = RunState.SUCCEEDED
@@ -335,6 +349,7 @@ class OrchestratorDaemon:
         record = RunRecord(
             run_id=run_id,
             state=state,
+            mode=mode,
             started_at=started_at,
             finished_at=finished_at,
             duration_seconds=duration_seconds,
@@ -431,11 +446,17 @@ class OrchestratorDaemon:
             current_run_id = self._current_run_id
             last_run = self._run_history[self._run_order[-1]] if self._run_order else None
             interval_seconds = self._interval_seconds
+            # Bounded run history, most-recent-first (matches the frozen
+            # GET /status contract). _run_order is oldest->newest (append), so
+            # reverse it. Records are snapshotted under the lock; the caller
+            # (api/control_api.py) serializes each RunRecord.
+            run_history = [self._run_history[rid] for rid in reversed(self._run_order)]
         return {
             "is_running": current_run_id is not None,
             "current_run_id": current_run_id,
             "interval_seconds": interval_seconds,
             "last_run": last_run,
+            "run_history": run_history,
             "engines_warm": self._engines is not None,
             "started_at": self._started_at,
         }
