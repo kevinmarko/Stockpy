@@ -3,6 +3,9 @@ credentials.json
 secrets.py
 .env
 
+# Operator-local ticker list (personal, not shared codebase state)
+watchlist.txt
+
 # Python caching
 __pycache__/
 *.pyc
