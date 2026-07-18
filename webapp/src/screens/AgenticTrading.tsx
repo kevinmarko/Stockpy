@@ -4,7 +4,12 @@ import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { usePoll } from "../hooks/usePoll";
-import type { AgenticDiscovery, AgenticStatus, DecisionEntry } from "../api/types";
+import type {
+  AgenticDiscovery,
+  AgenticStatus,
+  DecisionEntry,
+  DiscoveryCandidate,
+} from "../api/types";
 import {
   Button,
   EmptyState,
@@ -14,6 +19,7 @@ import {
   StaleDataNotice,
 } from "../components/ui";
 import { Chip, ExecutionQueueSection, ModeBadge } from "../components/ExecutionQueueSection";
+import { DecisionModal } from "../components/DecisionModal";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { Toggle } from "../components/Toggle";
@@ -197,53 +203,7 @@ function DiscoverySection() {
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
               {discovery.data.candidates.map((c) => (
-                <Link
-                  key={c.symbol}
-                  to={`/symbol/${encodeURIComponent(c.symbol)}`}
-                  style={{ textDecoration: "none" }}
-                >
-                  <div
-                    data-testid="discovery-candidate-row"
-                    style={{
-                      padding: "10px 12px",
-                      background: theme.surface,
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                      <span style={{ fontWeight: 700, color: theme.textPrimary }}>{c.symbol}</span>
-                      {c.action ? (
-                        <span
-                          style={{
-                            color: c.action === "BUY" ? theme.growth : theme.decline,
-                            fontWeight: 600,
-                            fontSize: 12,
-                          }}
-                        >
-                          {c.action}
-                        </span>
-                      ) : (
-                        <span style={{ color: theme.textMuted, fontSize: 12 }}>not scored</span>
-                      )}
-                      {c.conviction !== null && (
-                        <span style={{ color: theme.textMuted, fontSize: 12 }}>
-                          conviction {(c.conviction * 100).toFixed(0)}%
-                        </span>
-                      )}
-                      {c.scan_name && (
-                        <span style={{ marginLeft: "auto", color: theme.textMuted, fontSize: 11 }}>
-                          {c.scan_name}
-                        </span>
-                      )}
-                    </div>
-                    {c.scan_reason && (
-                      <div style={{ color: theme.textSecondary, fontSize: 12, marginTop: 6 }}>
-                        {c.scan_reason}
-                      </div>
-                    )}
-                  </div>
-                </Link>
+                <CandidateRow key={c.symbol} c={c} />
               ))}
             </div>
           )}
@@ -288,6 +248,110 @@ function DiscoverySection() {
         </>
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * One discovered candidate: identity + advisory read (a Link to its symbol
+ * page) plus a "Watch" action that appends it to watchlist.txt so the pipeline
+ * starts evaluating it. The Watch button is a SIBLING of the Link, never nested
+ * inside it (nested interactive elements are invalid/ a11y-hostile). The button
+ * degrades honestly — a 409 (WATCHLIST env precedence) or 422 (bad symbol)
+ * surfaces the server's message rather than a fake success.
+ */
+function CandidateRow({ c }: { c: DiscoveryCandidate }) {
+  const watch = useMutation(() => api.watchCandidate(c.symbol));
+  const [logging, setLogging] = useState(false);
+  // A successful call that only reports `already_present` is not an error, but
+  // it's also not a fresh add — reflect both honestly.
+  const added = watch.result?.added.length ? watch.result.added : null;
+  const alreadyWatching =
+    watch.result != null && watch.result.added.length === 0 && watch.result.already_present.length > 0;
+
+  return (
+    <div
+      data-testid="discovery-candidate-row"
+      style={{
+        padding: "10px 12px",
+        background: theme.surface,
+        border: `1px solid ${theme.border}`,
+        borderRadius: 8,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Link
+          to={`/symbol/${encodeURIComponent(c.symbol)}`}
+          style={{ textDecoration: "none", flex: 1, minWidth: 0 }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 700, color: theme.textPrimary }}>{c.symbol}</span>
+            {c.action ? (
+              <span
+                style={{
+                  color: c.action === "BUY" ? theme.growth : theme.decline,
+                  fontWeight: 600,
+                  fontSize: 12,
+                }}
+              >
+                {c.action}
+              </span>
+            ) : (
+              <span style={{ color: theme.textMuted, fontSize: 12 }}>not scored</span>
+            )}
+            {c.conviction !== null && (
+              <span style={{ color: theme.textMuted, fontSize: 12 }}>
+                conviction {(c.conviction * 100).toFixed(0)}%
+              </span>
+            )}
+            {c.scan_name && (
+              <span style={{ color: theme.textMuted, fontSize: 11 }}>{c.scan_name}</span>
+            )}
+          </div>
+        </Link>
+        <Button
+          variant="neutral"
+          onClick={() => setLogging(true)}
+          style={{ padding: "4px 10px", fontSize: 12 }}
+        >
+          Log
+        </Button>
+        {added || alreadyWatching ? (
+          <span
+            data-testid="watch-status"
+            style={{ color: theme.textMuted, fontSize: 12, whiteSpace: "nowrap" }}
+          >
+            {added ? "✓ Watching" : "Already watching"}
+          </span>
+        ) : (
+          <Button
+            variant="neutral"
+            onClick={() => watch.run()}
+            pending={watch.pending}
+            style={{ padding: "4px 10px", fontSize: 12 }}
+          >
+            Watch
+          </Button>
+        )}
+      </div>
+      {c.scan_reason && (
+        <div style={{ color: theme.textSecondary, fontSize: 12, marginTop: 6 }}>{c.scan_reason}</div>
+      )}
+      {added && (
+        <div style={{ color: theme.growth, fontSize: 12, marginTop: 6 }}>
+          Added to your watchlist — the pipeline will evaluate it on the next run. No order was placed.
+        </div>
+      )}
+      {watch.error && (
+        <div style={{ color: theme.caution, fontSize: 12, marginTop: 6 }}>{watch.error}</div>
+      )}
+      {logging && (
+        <DecisionModal
+          signal={{ symbol: c.symbol, action: c.action, conviction: c.conviction }}
+          onClose={() => setLogging(false)}
+          onLogged={() => setLogging(false)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -372,30 +436,50 @@ function DecisionJournalSection() {
       )}
       {!decisions.loading && !decisions.error && decisions.data && decisions.data.length > 0 && (
         <div className="list">
-          {decisions.data.map((d, i) => (
-            <div key={`${d.timestamp}-${i}`} className="row">
-              <div className="row-main">
-                <span className="row-title" style={{ fontWeight: 500 }}>
-                  {d.symbol ?? "—"}{" "}
-                  {d.action_taken === "acted"
-                    ? "✅ Acted"
-                    : d.action_taken === "passed"
-                    ? "⏭ Passed"
-                    : d.action_taken === "modified"
-                    ? "🔁 Modified"
-                    : "—"}
-                </span>
-                {d.notes && (
-                  <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>{d.notes}</div>
-                )}
+          {decisions.data.map((d, i) => {
+            const label = (
+              <>
+                {d.symbol ?? "—"}{" "}
+                {d.action_taken === "acted"
+                  ? "✅ Acted"
+                  : d.action_taken === "passed"
+                  ? "⏭ Passed"
+                  : d.action_taken === "modified"
+                  ? "🔁 Modified"
+                  : "—"}
+              </>
+            );
+            return (
+              <div key={`${d.timestamp}-${i}`} className="row">
+                <div className="row-main">
+                  {/* Link to the symbol page when we have a symbol, matching the
+                      Discovery candidate rows; a null-symbol decision stays plain
+                      text (never a link to /symbol/—). */}
+                  {d.symbol ? (
+                    <Link
+                      to={`/symbol/${encodeURIComponent(d.symbol)}`}
+                      className="row-title"
+                      style={{ fontWeight: 500, textDecoration: "none", color: theme.textPrimary }}
+                    >
+                      {label}
+                    </Link>
+                  ) : (
+                    <span className="row-title" style={{ fontWeight: 500 }}>
+                      {label}
+                    </span>
+                  )}
+                  {d.notes && (
+                    <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>{d.notes}</div>
+                  )}
+                </div>
+                <div className="row-end">
+                  <span style={{ color: theme.textMuted, fontSize: 12 }}>
+                    {d.timestamp ? timeAgo(d.timestamp) : "—"}
+                  </span>
+                </div>
               </div>
-              <div className="row-end">
-                <span style={{ color: theme.textMuted, fontSize: 12 }}>
-                  {d.timestamp ? timeAgo(d.timestamp) : "—"}
-                </span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </SectionCard>

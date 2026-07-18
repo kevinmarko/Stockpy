@@ -135,6 +135,9 @@ describe("StrategyHealth screen (real mock API)", () => {
       stress_max_drawdown: 0.44,
       kelly_fraction: 0.5,
       kelly_cap: 0.2,
+      robinhood_max_notional_per_order: 0.0,
+      follow_min_amount: 100.0,
+      agentic_max_candidates: 25,
     });
     renderScreen();
     await screen.findByText("Trend Follower");
@@ -163,6 +166,9 @@ describe("StrategyHealth screen (real mock API)", () => {
       stress_max_drawdown: 0.44,
       kelly_fraction: 0.5,
       kelly_cap: 0.2,
+      robinhood_max_notional_per_order: 0.0,
+      follow_min_amount: 100.0,
+      agentic_max_candidates: 25,
     });
     renderScreen();
     const chip = await screen.findByText("Stress ✗ failed");

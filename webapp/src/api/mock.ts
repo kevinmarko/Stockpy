@@ -24,6 +24,7 @@ import type {
   ScanConfig,
   ScanConfigRequest,
   ScanConfigResult,
+  WatchResult,
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
@@ -2399,6 +2400,29 @@ function writeScanConfigs(cs: ScanConfig[]) {
   }
 }
 
+// ---- Local watchlist simulation (localStorage) so a repeated "Watch" of the
+// same candidate honestly returns already_present, mirroring the real
+// pilots.watchlist_writer dedup. The mock has no WATCHLIST-env concept, so the
+// 409 precedence branch is not simulated here (exercised in the Python tests). --
+const WATCHLIST_KEY = "stockpy.mock.watchlist";
+// Same conservative ticker shape as pilots/watchlist_writer.py's _SYMBOL_RE.
+const MOCK_SYMBOL_RE = /^[A-Z]{1,6}([.\-][A-Z]{1,4})?$/;
+function readWatched(): string[] {
+  try {
+    const raw = localStorage.getItem(WATCHLIST_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+function writeWatched(syms: string[]) {
+  try {
+    localStorage.setItem(WATCHLIST_KEY, JSON.stringify(syms));
+  } catch {
+    /* ignore quota */
+  }
+}
+
 /**
  * Honest fixture for GET /agentic/discovery. Exercises a scored candidate
  * (action/conviction populated from an advisory cross-reference) alongside
@@ -3369,6 +3393,31 @@ export const mockApi = {
         applies: "next_discovery_run",
         note:
           "Saved to output/scan_configs.json. Takes effect the next time the agentic-discovery skill runs a scan — it is not applied automatically.",
+      },
+      150
+    );
+  },
+
+  async watchCandidate(symbol: string): Promise<WatchResult> {
+    const sym = (symbol ?? "").trim().toUpperCase();
+    // Mirror the writer's strict validation → 422 invalid_symbol (thrown
+    // synchronously, like getEquityFundamentals' bad-input branch above).
+    if (!MOCK_SYMBOL_RE.test(sym)) {
+      throw new ApiError(`invalid_symbol: '${symbol}' is not a valid ticker symbol.`, 422);
+    }
+    const watched = readWatched();
+    const already = watched.includes(sym);
+    if (!already) writeWatched([...watched, sym]);
+    return delay(
+      {
+        symbol: sym,
+        added: already ? [] : [sym],
+        already_present: already ? [sym] : [],
+        watchlist_file: "watchlist.txt",
+        applies: "next_pipeline_run",
+        note: already
+          ? `${sym} is already on the watchlist.`
+          : "Added to watchlist.txt — the pipeline will evaluate it on the next run. No order was placed.",
       },
       150
     );

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import pathlib
 from unittest import mock
 
@@ -3440,6 +3441,103 @@ class TestAgenticScanConfigWrite:
                             json={"name": "x", "filters": {}, "enabled": True},
                             headers=self._auth(),
                         )
+        assert _CMD_TOKEN not in caplog.text
+
+
+class TestAgenticWatchWrite:
+    """POST /agentic/watch — appends a discovered candidate to watchlist.txt.
+
+    Same auth tier as the scan-config write (require_command_token +
+    AGENTIC_DISCOVERY_ENABLED). Patches watchlist_writer.DEFAULT_WATCHLIST_PATH
+    to a tmp file (the endpoint writes the CWD-relative watchlist.txt otherwise)
+    and forces WATCHLIST unset unless a test is exercising the precedence guard.
+    """
+
+    def _auth(self):
+        return {"Authorization": f"Bearer {_CMD_TOKEN}"}
+
+    def _patch_path(self, tmp_path):
+        return mock.patch(
+            "pilots.watchlist_writer.DEFAULT_WATCHLIST_PATH", tmp_path / "watchlist.txt"
+        )
+
+    def _post(self, symbol, tmp_path, env_watchlist=""):
+        with mock.patch.dict(os.environ, {"WATCHLIST": env_watchlist}):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                    with self._patch_path(tmp_path):
+                        return client.post(
+                            "/agentic/watch", json={"symbol": symbol}, headers=self._auth()
+                        )
+
+    def test_fails_closed_when_agentic_discovery_disabled(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", False):
+                resp = client.post("/agentic/watch", json={"symbol": "NVDA"}, headers=self._auth())
+        assert resp.status_code == 403
+
+    def test_fails_closed_when_follow_token_unset(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                resp = client.post(
+                    "/agentic/watch", json={"symbol": "NVDA"},
+                    headers={"Authorization": "Bearer anything"},
+                )
+        assert resp.status_code == 403
+
+    def test_401_on_wrong_command_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                resp = client.post(
+                    "/agentic/watch", json={"symbol": "NVDA"},
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+    def test_happy_path_appends_and_echoes(self, tmp_path):
+        resp = self._post("NVDA", tmp_path)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "NVDA"
+        assert body["added"] == ["NVDA"]
+        assert body["already_present"] == []
+        assert body["applies"] == "next_pipeline_run"
+        # Actually written to disk.
+        contents = (tmp_path / "watchlist.txt").read_text(encoding="utf-8")
+        assert "NVDA" in contents.splitlines()
+
+    def test_uppercases_symbol_before_writing(self, tmp_path):
+        resp = self._post("nvda", tmp_path)
+        assert resp.status_code == 200
+        assert resp.json()["added"] == ["NVDA"]
+        assert "NVDA" in (tmp_path / "watchlist.txt").read_text().splitlines()
+
+    def test_dedup_reports_already_present_and_does_not_double_write(self, tmp_path):
+        wl = tmp_path / "watchlist.txt"
+        wl.write_text("AAPL\nNVDA\n", encoding="utf-8")
+        resp = self._post("NVDA", tmp_path)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["added"] == []
+        assert body["already_present"] == ["NVDA"]
+        # NVDA still appears exactly once.
+        assert wl.read_text().split().count("NVDA") == 1
+
+    def test_watchlist_env_precedence_returns_409(self, tmp_path):
+        resp = self._post("NVDA", tmp_path, env_watchlist="AAPL,MSFT")
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error"] == "watchlist_env_precedence"
+        # Nothing was written when the env var takes precedence.
+        assert not (tmp_path / "watchlist.txt").exists()
+
+    def test_invalid_symbol_returns_422(self, tmp_path):
+        resp = self._post("NOT A TICKER!", tmp_path)
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "invalid_symbol"
+
+    def test_write_never_logs_token(self, tmp_path, caplog):
+        with caplog.at_level("DEBUG"):
+            self._post("NVDA", tmp_path)
         assert _CMD_TOKEN not in caplog.text
 
 

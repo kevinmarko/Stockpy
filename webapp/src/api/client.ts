@@ -71,6 +71,7 @@ import type {
   ExecutionQueue,
   ScanConfigRequest,
   ScanConfigResult,
+  WatchResult,
 } from "./types";
 
 const BASE_URL = (
@@ -419,6 +420,11 @@ const liveApi = {
     http<ScanConfigResult>("/agentic/scan-config", {
       method: "PUT",
       body: JSON.stringify(req),
+    }),
+  watchCandidate: (symbol: string) =>
+    http<WatchResult>("/agentic/watch", {
+      method: "POST",
+      body: JSON.stringify({ symbol }),
     }),
 };
 
