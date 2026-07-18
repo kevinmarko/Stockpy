@@ -219,7 +219,7 @@ describe("client.ts — live client (mocked fetch)", () => {
     await mod.api.connectBrokerage({
       username: "user@example.com",
       password: "hunter2",
-      mfa_secret: "SECRET",
+      mfa_code: "123456",
     });
 
     const [url, init] = fetchMock.mock.calls[0];
@@ -228,7 +228,7 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       username: "user@example.com",
       password: "hunter2",
-      mfa_secret: "SECRET",
+      mfa_code: "123456",
     });
   });
 
@@ -243,7 +243,7 @@ describe("client.ts — live client (mocked fetch)", () => {
     );
 
     await expect(
-      mod.api.connectBrokerage({ username: "u", password: "wrong", mfa_secret: "s" })
+      mod.api.connectBrokerage({ username: "u", password: "wrong", mfa_code: "123456" })
     ).rejects.toMatchObject({
       status: 401,
       message: "Could not verify Robinhood credentials.",

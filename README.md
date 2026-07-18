@@ -44,7 +44,7 @@ Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never co
 | `ADVISORY_ONLY` | Optional | `true` (default) — broker execution surface is quarantined. Flip to `false` only after a deliberate readiness review (see "Advisory-only mode") |
 | `RH_USERNAME` | Optional | Robinhood read-only snapshot (held symbols always included) |
 | `RH_PASSWORD` | Optional | — |
-| `RH_MFA_SECRET` | Optional | Base32 TOTP secret (Robinhood → Settings → Security → Authenticator) |
+| `RH_MFA_SECRET` | Optional | Base32 TOTP secret (Robinhood → Settings → Security → Authenticator) for this main pipeline's own unattended login. The Pilots PWA's "connect Robinhood" flow is separate and never asks for or stores this secret — it verifies with a one-time 6-digit authenticator code instead |
 | `ALPACA_API_KEY` | Optional | Broker execution (no-op while `ADVISORY_ONLY=true`) |
 | `ALPACA_SECRET_KEY` | Optional | — |
 | `ALPACA_PAPER` | Optional | `true` (default) = paper trading. Has no effect while `ADVISORY_ONLY=true` |

@@ -455,12 +455,14 @@ class BrokerageConnectRequest(BaseModel):
 
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
-    mfa_secret: str = Field(
+    mfa_code: str = Field(
         default="",
         description=(
-            "Base32 TOTP secret. Required — interactive MFA prompting is not "
-            "available over HTTP, so a login attempt with no MFA secret is "
-            "treated as a verification failure."
+            "Current 6-digit code from the user's authenticator app. "
+            "Required — interactive MFA prompting is not available over "
+            "HTTP, so a login attempt with no MFA code is treated as a "
+            "verification failure. Used once to verify the login, then "
+            "discarded — never persisted to .env or anywhere else."
         ),
     )
 
@@ -1465,16 +1467,22 @@ def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
     or echoed back in the response (CONSTRAINT #3) — on failure this returns a
     plain 401 with no detail about which field was wrong (username vs.
     password vs. MFA), since that distinction itself would leak information
-    about a candidate credential."""
+    about a candidate credential.
+
+    ``body.mfa_code`` (a one-time 6-digit authenticator code) is used only to
+    verify the login and is never persisted — only username/password are
+    written to ``.env`` on success. Ongoing unattended re-fetches rely on
+    ``robin_stocks``' own device-session pickle established by this verify
+    call, not a stored MFA secret."""
     verified = robinhood_portfolio.verify_credentials(
-        body.username, body.password, body.mfa_secret
+        body.username, body.password, body.mfa_code
     )
     if not verified:
         raise HTTPException(
             status_code=401,
             detail="Could not verify Robinhood credentials.",
         )
-    brokerage_credentials.write_rh_credentials(body.username, body.password, body.mfa_secret)
+    brokerage_credentials.write_rh_credentials(body.username, body.password)
     account_present = False
     try:
         account_present = HistoricalStore(readonly=True).latest_account_snapshot() is not None
@@ -1493,8 +1501,10 @@ def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
 )
 def disconnect_brokerage() -> Dict[str, Any]:
     """Log out of the active Robinhood session (best-effort) and clear
-    RH_USERNAME/RH_PASSWORD/RH_MFA_SECRET from ``.env`` and the process
-    environment. Idempotent — safe to call when nothing is connected."""
+    RH_USERNAME/RH_PASSWORD from ``.env`` and the process environment
+    (RH_MFA_SECRET, if the operator has set one for the main pipeline, is
+    never touched by this webapp-facing flow). Idempotent — safe to call when
+    nothing is connected."""
     try:
         robinhood_portfolio.logout()
     except Exception as exc:  # noqa: BLE001 - logout failure must not block disconnect

@@ -8,8 +8,8 @@ type RobinhoodConnectStatus = "idle" | "connecting" | "connected" | "error";
 /**
  * RobinhoodConnectForm — the credential-intake form for POST /brokerage/connect,
  * extracted from Onboarding so the onboarding wizard and the Settings brokerage
- * section share ONE implementation (username / password / TOTP-secret inputs +
- * the connecting -> connected/error state machine) and can't drift.
+ * section share ONE implementation (username / password / one-time authenticator
+ * code inputs + the connecting -> connected/error state machine) and can't drift.
  *
  * Owns only the transient form fields + connecting/error status. It does NOT own
  * the durable "connected" fact: on a verified connect it calls `onConnected()`
@@ -20,13 +20,15 @@ type RobinhoodConnectStatus = "idle" | "connecting" | "connected" | "error";
  * a brief confirmation rather than the still-filled form.
  *
  * Honesty: credentials go only to the local backend (loopback + read-only
- * verification server-side — see api/pilots_api.py); the submitted password is
- * never echoed back and the fields unmount the moment the parent swaps views.
+ * verification server-side — see api/pilots_api.py); the submitted password and
+ * one-time code are never echoed back, and the fields unmount the moment the
+ * parent swaps views. The 6-digit code is used once to verify the login and is
+ * never persisted — only username/password are written to .env on success.
  */
 export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [mfaSecret, setMfaSecret] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
   const [status, setStatus] = useState<RobinhoodConnectStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +39,7 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
       await api.connectBrokerage({
         username,
         password,
-        mfa_secret: mfaSecret,
+        mfa_code: mfaCode,
       });
       setStatus("connected");
       onConnected?.();
@@ -84,20 +86,22 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
         value={password}
         onChange={(e) => setPassword(e.target.value)}
       />
-      <label className="tile-label" htmlFor="rh-mfa" style={{ marginTop: 10 }}>
-        Authenticator app TOTP secret
+      <label className="tile-label" htmlFor="rh-mfa-code" style={{ marginTop: 10 }}>
+        Authenticator app code
       </label>
       <input
-        id="rh-mfa"
+        id="rh-mfa-code"
         className="field"
         type="password"
+        inputMode="numeric"
         autoComplete="off"
-        value={mfaSecret}
-        onChange={(e) => setMfaSecret(e.target.value)}
+        maxLength={6}
+        value={mfaCode}
+        onChange={(e) => setMfaCode(e.target.value)}
       />
       <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 6 }}>
-        From Robinhood: Settings → Security → Two-Factor Authentication →
-        Authenticator App → the 32-character setup code.
+        Open your authenticator app and enter the current 6-digit code. It's
+        used once to verify the login — nothing beyond that is stored.
       </div>
 
       {status === "error" && error && (
@@ -111,7 +115,7 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
           status === "connecting" ||
           !username.trim() ||
           !password.trim() ||
-          !mfaSecret.trim()
+          mfaCode.trim().length !== 6
         }
         onClick={connect}
       >
