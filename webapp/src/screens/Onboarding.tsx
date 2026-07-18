@@ -132,6 +132,28 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           >
             Continue
           </button>
+
+          <button
+            type="button"
+            data-testid="onboarding-data-explorer-link"
+            onClick={() => {
+              completeOnboarding({ brokerage: "skip" });
+              onDone();
+              nav("/data-explorer");
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              color: theme.textMuted,
+              width: "100%",
+              marginTop: 16,
+              fontSize: 13,
+              textAlign: "center",
+            }}
+          >
+            Prefer picking individual stocks instead of following a Pilot? Try
+            Data Explorer →
+          </button>
         </>
       )}
 

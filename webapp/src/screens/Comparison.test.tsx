@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Comparison } from "./Comparison";
@@ -24,6 +24,12 @@ describe("Comparison screen (R2)", () => {
     renderComparison();
     expect(await screen.findByTestId("comparison-title")).toBeInTheDocument();
     expect(screen.getByText(/Select at least one pilot strategy above/i)).toBeInTheDocument();
+  });
+
+  it("renders the recommended-stocks list", async () => {
+    renderComparison();
+    const recs = await screen.findByTestId("recommended-stocks");
+    expect(await within(recs).findByTestId("rec-row-NVDA")).toBeInTheDocument();
   });
 
   // T1.2: Toggle Pilot Checkbox

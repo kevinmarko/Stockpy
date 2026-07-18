@@ -1,8 +1,11 @@
 /**
- * DataExplorer.test.tsx — raw bars + fundamentals + macro for a symbol. Covers
- * the happy path, a null fundamental rendering "—", and the empty-bars state.
+ * DataExplorer.test.tsx — raw bars + fundamentals + macro for a symbol, plus the
+ * recommended-stocks list. Covers the happy path, a null fundamental rendering
+ * "—", the empty-bars state, and the recommendations list. Universe add/remove
+ * lives in Settings now (see UniverseManager.test.tsx) — this screen only
+ * points there.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DataExplorer } from "./DataExplorer";
@@ -38,5 +41,18 @@ describe("DataExplorer screen (real mock API)", () => {
     expect(
       await screen.findByText(/No bars in the store for this symbol/)
     ).toBeInTheDocument();
+  });
+
+  it("shows the recommended-stocks list", async () => {
+    renderScreen();
+    const recs = await screen.findByTestId("recommended-stocks");
+    expect(await within(recs).findByTestId("rec-row-NVDA")).toBeInTheDocument();
+  });
+
+  it("points to Settings for tracked-universe management (no inline control here)", async () => {
+    renderScreen();
+    const link = await screen.findByRole("link", { name: "Settings" });
+    expect(link).toHaveAttribute("href", "/settings");
+    expect(screen.queryByTestId("universe-manager")).not.toBeInTheDocument();
   });
 });

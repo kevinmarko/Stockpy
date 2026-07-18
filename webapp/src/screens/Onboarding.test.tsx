@@ -93,6 +93,29 @@ describe("Onboarding — step 0 (choose a Pilot)", () => {
   });
 });
 
+describe("Onboarding — Data Explorer nudge (step 0)", () => {
+  it("lets an operator skip straight to Data Explorer without picking a Pilot", async () => {
+    const onDone = vi.fn();
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Onboarding onDone={onDone} />} />
+          <Route path="/data-explorer" element={<div>DATA EXPLORER PAGE</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Choose a Pilot");
+    // No Pilot selected -- Continue is disabled, but the alternate path works anyway.
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("onboarding-data-explorer-link"));
+
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("DATA EXPLORER PAGE")).toBeInTheDocument();
+    expect(readOnboarding()).toMatchObject({ completed: true, brokerage: "skip" });
+  });
+});
+
 describe("Onboarding — step 1 (connect brokerage)", () => {
   it("states the advisory / paper-first / gated-queue contract plainly", async () => {
     renderOnboarding();
