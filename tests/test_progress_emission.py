@@ -278,18 +278,24 @@ class TestProgressNoneDefaultUnchanged:
         assert sig.parameters["progress"].default is None
 
     def test_main_body_wrapper_signature_unchanged(self) -> None:
-        """The public `_main_body()` wrapper's signature must stay byte
-        identical to its pre-instrumentation form (effective_dry_run, strict,
-        engines, data_engine) — tests/test_dashboard_validation.py and
+        """The public `_main_body()` wrapper's pre-instrumentation params
+        (effective_dry_run, strict, engines, data_engine) must stay present
+        and in order — tests/test_dashboard_validation.py and
         tests/test_main_body_engine_injection.py both introspect/call it
         directly and must be unaffected by the internal
-        _main_body -> _main_body_impl split."""
+        _main_body -> _main_body_impl split. `mode` (added by PR #330's
+        pipeline-mode control endpoints) is keyword-only with a default
+        ("full"), so it is a backward-compatible addition — every existing
+        positional/keyword caller (including the two tests above, verified
+        directly) is genuinely unaffected; this test's own docstring names
+        that as the actual invariant, so the assertion allows `mode` rather
+        than pinning the exact param list."""
         import inspect
 
         import main_orchestrator as mo
 
         params = list(inspect.signature(mo._main_body).parameters)
-        assert params == ["effective_dry_run", "strict", "engines", "data_engine"]
+        assert params[:4] == ["effective_dry_run", "strict", "engines", "data_engine"]
         assert "progress" not in params  # progress lives only on _main_body_impl
 
 
