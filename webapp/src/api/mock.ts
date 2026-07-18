@@ -15,6 +15,8 @@ import type {
   BrinsonFachlerResult,
   BrinsonFachlerRow,
   BrinsonFachlerSectorDetail,
+  CommandManifest,
+  ExecutionQueue,
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
@@ -2161,6 +2163,159 @@ const MOCK_DECISION_LOG: DecisionEntry[] = [
   },
 ];
 
+/**
+ * Honest fixture for the CLI command manifest (GET /commands). Deliberately
+ * exercises every branch the command bar must handle: a required option
+ * (`validation.harness --strategy`), a variadic option (`preflight --skip`), a
+ * flag with no value (`--json`), an option with `choices` (`snapshot_diff
+ * --format`), a `null` description, and a subcommand command with an alias and
+ * a required positional (`prompt_registry get <id>`). Mirrors the real shape
+ * emitted by scripts/build_command_manifest.py.
+ */
+const MOCK_COMMAND_MANIFEST: CommandManifest = {
+  generated_at: "2026-07-17T12:00:00+00:00",
+  command_count: 5,
+  dead_letters: [],
+  reason: null,
+  commands: [
+    {
+      name: "main.py",
+      invocation: "python3 main.py",
+      aliases: [],
+      description: "Clean advisory orchestrator — one full cycle (or loop with --interval).",
+      positionals: [],
+      subcommands: [],
+      options: [
+        { name: "--interval", aliases: ["--interval"], description: "refresh cadence in seconds (0 = run once)", default: 0, choices: null, required: false, arg_kind: "optional", metavar: "SECONDS", takes_value: true },
+        { name: "--refresh-account", aliases: ["--refresh-account"], description: "force a fresh Robinhood login this run", default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
+        { name: "--agent", aliases: ["--agent"], description: null, default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
+      ],
+    },
+    {
+      name: "validation.harness",
+      invocation: "python -m validation.harness",
+      aliases: [],
+      description: "Run the strategy validation harness (PBO/DSR/Sharpe/MaxDD gates).",
+      positionals: [],
+      subcommands: [],
+      options: [
+        { name: "--strategy", aliases: ["--strategy"], description: "registered strategy name", default: null, choices: null, required: true, arg_kind: "required", metavar: null, takes_value: true },
+        { name: "--start", aliases: ["--start"], description: "backtest start date", default: "2020-01-01", choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: true },
+        { name: "--end", aliases: ["--end"], description: "backtest end date", default: "2023-12-31", choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: true },
+      ],
+    },
+    {
+      name: "preflight_check.py",
+      invocation: "python scripts/preflight_check.py",
+      aliases: [],
+      description: "Pre-live readiness gate (exit 0 = all pass).",
+      positionals: [],
+      subcommands: [],
+      options: [
+        { name: "--json", aliases: ["--json"], description: "machine-readable JSON output", default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
+        { name: "--skip", aliases: ["--skip"], description: "checks to skip", default: null, choices: null, required: false, arg_kind: "variadic", metavar: "CHECK", takes_value: true },
+        { name: "--fire-alerts", aliases: ["--fire-alerts"], description: "send alerts on failure", default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
+      ],
+    },
+    {
+      name: "snapshot_diff.py",
+      invocation: "python scripts/snapshot_diff.py",
+      aliases: [],
+      description: "Diff two state snapshots.",
+      positionals: [
+        { name: "prev", description: "earlier snapshot", default: null, choices: null, arg_kind: "optional", metavar: null },
+        { name: "curr", description: "later snapshot", default: null, choices: null, arg_kind: "optional", metavar: null },
+      ],
+      subcommands: [],
+      options: [
+        { name: "--format", aliases: ["--format"], description: "output format", default: "markdown", choices: ["markdown", "json"], required: false, arg_kind: "optional", metavar: null, takes_value: true },
+      ],
+    },
+    {
+      name: "prompt_registry",
+      invocation: "python -m prompt_registry",
+      aliases: [],
+      description: "Manage the LLM prompt registry.",
+      positionals: [],
+      options: [],
+      subcommands: [
+        {
+          name: "get",
+          invocation: "python -m prompt_registry get",
+          aliases: ["g"],
+          description: "fetch one prompt",
+          positionals: [
+            { name: "id", description: "prompt id", default: null, choices: null, arg_kind: "required", metavar: null },
+          ],
+          subcommands: [],
+          options: [
+            { name: "--version", aliases: ["--version", "-v"], description: "pin a specific version", default: null, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: true },
+            { name: "--raw", aliases: ["--raw"], description: "print the raw template", default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
+          ],
+        },
+        {
+          name: "list",
+          invocation: "python -m prompt_registry list",
+          aliases: [],
+          description: "show all prompts",
+          positionals: [],
+          subcommands: [],
+          options: [],
+        },
+      ],
+    },
+  ],
+};
+
+/**
+ * Honest fixture for GET /execution-queue. Exercises: a placeable order
+ * (allow_place=true, no gate_reasons), a blocked order (allow_place=false,
+ * gate_reasons populated), a null `qty` (BUY sized by target_notional only —
+ * the queue never fabricates a share count without a live quote), and
+ * `mode: "review"` (the queue is populated but nothing can be placed without
+ * ROBINHOOD_EXECUTION_MODE=live) — mirrors execution/queue_builder.py's
+ * actual output shape.
+ */
+const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
+  generated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+  mode: "review",
+  kill_switch_active: false,
+  max_notional_per_order: 500,
+  n_intents: 2,
+  n_placeable: 1,
+  stale: false,
+  age_seconds: 300,
+  reason: null,
+  intents: [
+    {
+      symbol: "AAPL",
+      action: "BUY",
+      side: "buy",
+      qty: null,
+      target_notional: 250,
+      conviction: 0.8,
+      gate_allowed: true,
+      gate_reasons: [],
+      allow_place: true,
+      rationale: "Strong momentum, low realized vol, HMM risk-on regime.",
+      client_order_id: "advisory-AAPL-buy-1",
+    },
+    {
+      symbol: "TSLA",
+      action: "SELL",
+      side: "sell",
+      qty: 3,
+      target_notional: 600,
+      conviction: 0.6,
+      gate_allowed: false,
+      gate_reasons: ["macro_kill_switch"],
+      allow_place: false,
+      rationale: "Advisory risk-reduce exit.",
+      client_order_id: "advisory-TSLA-sell-1",
+    },
+  ],
+};
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
   async health() {
@@ -2812,6 +2967,14 @@ export const mockApi = {
       rows = rows.filter((r) => r.symbol === sym);
     }
     return delay(rows.slice(0, opts?.limit ?? 20));
+  },
+
+  async getCommands(): Promise<CommandManifest> {
+    return delay(MOCK_COMMAND_MANIFEST);
+  },
+
+  async getExecutionQueue(): Promise<ExecutionQueue> {
+    return delay(MOCK_EXECUTION_QUEUE);
   },
 
   async setStrategyModules(

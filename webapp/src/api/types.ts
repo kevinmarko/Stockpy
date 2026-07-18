@@ -1268,6 +1268,93 @@ export interface DecisionCreateResult {
   trade_linked: boolean;
 }
 
+/** How an argument is supplied — mirrors cli_introspect's arg_kind. */
+export type ArgKind = "required" | "optional" | "variadic";
+
+/** An optional/flag argument of a CLI command (from the command manifest). */
+export interface CommandOption {
+  name: string; // canonical, e.g. "--interval"
+  aliases: string[]; // every option string, e.g. ["-v", "--version"]
+  description: string | null;
+  default: string | number | boolean | null;
+  choices: string[] | null;
+  required: boolean;
+  arg_kind: ArgKind;
+  metavar: string | null;
+  takes_value: boolean; // false for store_true/false/count/const flags
+}
+
+/** A positional argument of a CLI command. */
+export interface CommandArg {
+  name: string;
+  description: string | null;
+  default: string | number | boolean | null;
+  choices: string[] | null;
+  arg_kind: ArgKind;
+  metavar: string | null;
+}
+
+/** A CLI command — a top-level entry point, or one subcommand (recursive). */
+export interface CommandSpec {
+  name: string; // typed name, e.g. "main.py" / "validation.harness" / "get"
+  invocation: string; // full run prefix, e.g. "python -m validation.harness"
+  aliases: string[]; // subcommand aliases (top-level commands: [])
+  description: string | null;
+  options: CommandOption[];
+  positionals: CommandArg[];
+  subcommands: CommandSpec[];
+}
+
+/**
+ * GET /commands — the CLI command manifest that powers the command bar's
+ * autocomplete + validation. `commands` is empty (with a `reason`) on a cold
+ * start where the manifest hasn't been generated yet — never a fabricated list
+ * (CONSTRAINT #4).
+ */
+export interface CommandManifest {
+  generated_at: string | null;
+  command_count: number;
+  dead_letters?: string[];
+  commands: CommandSpec[];
+  reason: string | null;
+}
+
+/** One proposed order from the gated Robinhood execution queue. */
+export interface ExecutionQueueIntent {
+  symbol: string;
+  action: "BUY" | "SELL" | string;
+  side: string;
+  qty: number | null;
+  target_notional: number | null;
+  conviction: number | null;
+  gate_allowed: boolean;
+  gate_reasons: string[];
+  allow_place: boolean;
+  rationale: string;
+  client_order_id: string;
+}
+
+/**
+ * GET /execution-queue — a READ-ONLY view of `output/execution_queue.json`.
+ * This is not an order-placement API: per execution/queue_builder.py's module
+ * contract, only a live Claude Code agent session (the robinhood-execution
+ * skill) ever calls the Robinhood MCP's place_equity_order tool. `intents` is
+ * empty (with a `reason`) on a cold start — never a fabricated queue
+ * (CONSTRAINT #4).
+ */
+export interface ExecutionQueue {
+  generated_at: string | null;
+  mode: "off" | "review" | "live" | string;
+  kill_switch_active: boolean;
+  max_notional_per_order: number;
+  n_intents: number;
+  n_placeable: number;
+  stale: boolean;
+  age_seconds: number | null;
+  intents: ExecutionQueueIntent[];
+  reason: string | null;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

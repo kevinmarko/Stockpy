@@ -168,6 +168,31 @@ python3 -m validation.harness --strategy <name> --start YYYY-MM-DD --end YYYY-MM
 
 ---
 
+## Command-line autocomplete
+
+The platform's CLIs (flags, subcommands, aliases) are introspected into a static
+manifest that powers both shell tab-completion and the Pilots PWA command bar.
+
+```bash
+# One-time: regenerate the manifest + completion scripts (after adding/changing a CLI flag)
+python scripts/build_command_manifest.py        # → cli_introspect/command_manifest.json
+python scripts/generate_shell_completion.py      # → completions/investyo.{zsh,bash}
+
+# Enable in your shell (add to ~/.zshrc or ~/.bashrc to persist):
+source completions/investyo.zsh                  # zsh — shows flag descriptions inline
+source completions/investyo.bash                 # bash
+
+# Then tab-complete any known entry point, e.g.:
+#   python main.py --<TAB>            → --interval  --refresh-account  --agent
+#   python -m prompt_registry <TAB>   → list  get  sync  pin  rollback  diff  verify  publish
+```
+
+The completion hooks `python`/`python3` and falls back to normal file completion
+for any command it doesn't recognize, so it never gets in the way. In the Pilots
+PWA the same manifest drives the **Commands** screen's autocomplete + validation.
+
+---
+
 ## Configuration
 
 All runtime configuration is centralized in [`settings.py`](settings.py) and loaded

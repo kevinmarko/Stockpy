@@ -61,6 +61,8 @@ import type {
   MacroSnapshot,
   SignalBreakdown,
   ForecastResult,
+  CommandManifest,
+  ExecutionQueue,
 } from "./types";
 
 const BASE_URL = (
@@ -215,6 +217,8 @@ const liveApi = {
     params.set("limit", String(opts?.limit ?? 20));
     return http<DecisionEntry[]>(`/decisions?${params.toString()}`);
   },
+  getCommands: () => http<CommandManifest>("/commands"),
+  getExecutionQueue: () => http<ExecutionQueue>("/execution-queue"),
   // ---- Data API (data_api.py, :8603) + Metrics API (metrics_api.py, :8604) ----
   // Routed by path prefix (see baseFor); these are the Phase-4 Data Explorer,
   // Signal Breakdown, and Forecast Viewer screens' data sources.
