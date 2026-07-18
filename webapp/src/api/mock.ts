@@ -1132,13 +1132,28 @@ function mockStrategyMatrix(): StrategyMatrix {
 }
 
 // ---- General runtime tunables editor fixture (GET/PUT /settings/tunables) ----
-// A representative multi-group payload covering every widget type (number,
-// boolean, enum, string). Honesty branches baked in: MACRO_REFRESH_HOURS has
-// value:null (absent — its input must render empty, never 0). Accepted writes
-// persist to localStorage so a later GET reflects them; the PUT does NOT reach
-// a "running process" (applies:"next_daemon_restart"), so a value out of its
-// declared bounds is rejected with a reason rather than silently written.
+// Mirrors api/pilots_api.py's REAL _TUNABLE_GROUPS exactly (same 7 group names,
+// same ~39-key field set, including the 7 "Advanced / Config" keys the backend
+// previously omitted) -- every field the mock's TUNABLE_DEFS below matches the
+// live backend field-for-field, no orphans either direction. Values/defaults/
+// descriptions are pulled from settings.py's real pydantic Field(description=)
+// (verified via `python3 -c "from settings import Settings; ..."`), not
+// invented placeholders -- 10 fields genuinely have no description in
+// settings.py (RISK_FREE_RATE, MARKET_RISK_PREMIUM, REQUIRED_RETURN_RATE,
+// MAX_PORTFOLIO_HEAT, KELLY_FRACTION, KELLY_CAP, VOL_TARGET, MAX_LEVERAGE,
+// MAX_POSITION_WEIGHT, LOG_LEVEL) and stay `null` here, never fabricated
+// (CONSTRAINT #4). MARKET_DATA_PROVIDER is honestly `value: null, default:
+// null` too -- its real settings.py default IS None (auto-select; unset until
+// an operator forces "alpaca"/"yfinance"). Accepted writes persist to
+// localStorage so a later GET reflects them AND marks those keys as env_drift
+// (a real .env write does not reach the running process until restart --
+// mirrors mockStrategyMatrix's STRATEGY_DRIFT_KEY convention above). A value
+// out of its declared bounds is rejected with a reason rather than silently
+// written. `kind: "json"` fields (SECTOR_FORECAST_CONFIGS, CORS_ALLOWED_ORIGINS)
+// surface as TunableFieldType "string" (a JSON blob is still a string on the
+// wire) -- the screen's own content-sniffing renders them as a textarea.
 const TUNABLES_KEY = "stockpy.mock.tunables";
+const TUNABLES_DRIFT_KEY = "stockpy.mock.tunables_drift";
 
 interface MockTunableDef {
   group: string;
@@ -1146,7 +1161,7 @@ interface MockTunableDef {
   type: TunableFieldType;
   value: number | boolean | string | null;
   default: number | boolean | string | null;
-  description: string;
+  description: string | null;
   min?: number;
   max?: number;
   step?: number;
@@ -1154,59 +1169,211 @@ interface MockTunableDef {
 }
 
 const TUNABLE_DEFS: MockTunableDef[] = [
-  // Position Sizing
+  // ---- Financial Constants ----
+  {
+    group: "Financial Constants", key: "RISK_FREE_RATE", type: "number",
+    value: 0.045, default: 0.045, min: 0, max: 1, step: 0.005,
+    description: null,
+  },
+  {
+    group: "Financial Constants", key: "MARKET_RISK_PREMIUM", type: "number",
+    value: 0.055, default: 0.055, min: 0, max: 1, step: 0.005,
+    description: null,
+  },
+  {
+    group: "Financial Constants", key: "REQUIRED_RETURN_RATE", type: "number",
+    value: 0.08, default: 0.08, min: 0, max: 1, step: 0.005,
+    description: null,
+  },
+  {
+    group: "Financial Constants", key: "MAX_PORTFOLIO_HEAT", type: "number",
+    value: 0.06, default: 0.06, min: 0, max: 1, step: 0.01,
+    description: null,
+  },
+  // ---- Position Sizing ----
   {
     group: "Position Sizing", key: "KELLY_FRACTION", type: "number",
     value: 0.5, default: 0.5, min: 0, max: 1, step: 0.05,
-    description: "Fraction of full-Kelly used when sizing a position.",
+    description: null,
   },
   {
     group: "Position Sizing", key: "KELLY_CAP", type: "number",
     value: 0.2, default: 0.2, min: 0, max: 1, step: 0.01,
-    description: "Hard ceiling on any single Kelly-derived position weight.",
+    description: null,
   },
   {
     group: "Position Sizing", key: "VOL_TARGET", type: "number",
     value: 0.1, default: 0.1, min: 0, max: 1, step: 0.01,
-    description: "Annualized volatility target for the vol-target sizer.",
+    description: null,
   },
   {
     group: "Position Sizing", key: "MAX_LEVERAGE", type: "number",
-    value: 2.0, default: 2.0, min: 1, max: 4, step: 0.25,
-    description: "Maximum gross leverage the vol-target fallback may compute.",
+    value: 2.0, default: 2.0, min: 0, max: 10, step: 0.1,
+    description: null,
   },
-  // Forecasting
+  {
+    group: "Position Sizing", key: "MAX_POSITION_WEIGHT", type: "number",
+    value: 1.0, default: 1.0, min: 0, max: 5, step: 0.05,
+    description: null,
+  },
+  // ---- Risk Gate ----
+  {
+    group: "Risk Gate", key: "MAX_CORRELATION", type: "number",
+    value: 0.85, default: 0.85, min: 0, max: 1, step: 0.05,
+    description: "Max absolute pairwise return correlation before a new position is blocked.",
+  },
+  {
+    group: "Risk Gate", key: "DAILY_LOSS_LIMIT_PCT", type: "number",
+    value: 0.02, default: 0.02, min: 0, max: 1, step: 0.005,
+    description: "Halt new BUY orders when intraday P&L drops below this fraction of start-of-day equity.",
+  },
+  {
+    group: "Risk Gate", key: "MAX_ORDER_RATE_PER_MIN", type: "number",
+    value: 10, default: 10, min: 1, max: 1000, step: 1,
+    description: "Maximum order submissions in any 60-second rolling window.",
+  },
+  {
+    group: "Risk Gate", key: "HMM_RISK_OFF_BLOCK_THRESHOLD", type: "number",
+    value: 0.8, default: 0.8, min: 0, max: 1, step: 0.05,
+    description: "Block new long orders when HMM risk-off probability exceeds this.",
+  },
+  {
+    group: "Risk Gate", key: "RISK_GATE_ENFORCE_MARKET_HOURS", type: "boolean",
+    value: true, default: true,
+    description: "Block orders outside NYSE RTH (09:30–16:00 ET).",
+  },
+  {
+    group: "Risk Gate", key: "META_LABEL_MIN_CONFIDENCE", type: "number",
+    value: 0.4, default: 0.4, min: 0, max: 1, step: 0.05,
+    description: "Minimum meta-label probability for a primary signal to contribute to sizing. If predict_proba < META_LABEL_MIN_CONFIDENCE, the meta_label_composite is forced to 0.0 (position zeroed for the cycle).",
+  },
+  {
+    group: "Risk Gate", key: "DRY_RUN", type: "boolean",
+    value: false, default: false,
+    description: "Log orders but do not submit to broker.",
+  },
+  // ---- Forecasting ----
   {
     group: "Forecasting", key: "FORECAST_USE_GARCH_SIGMA", type: "boolean",
     value: true, default: true,
-    description: "Use GJR-GARCH sigma for the Monte-Carlo forecast (else rollback).",
+    description: "Use the GJR-GARCH(1,1) volatility estimate (annualized, converted to daily via /sqrt(252)) as the Monte Carlo sigma instead of naive historical stdev. False restores the pre-GARCH log-return-std behavior.",
   },
   {
     group: "Forecasting", key: "FORECAST_PROPHET_WEIGHT", type: "number",
-    value: 0.3, default: 0.0, min: 0, max: 1, step: 0.05,
-    description: "Weight of the Prophet overlay in the forecast ensemble.",
+    value: 0.25, default: 0.25, min: 0, max: 1, step: 0.05,
+    description: "Weight given to the Prophet 30-day forecast when blending it into the static ensemble at the 30-day horizon: final = base*(1-w) + prophet*w. 0.0 disables Prophet's influence on the blend.",
   },
   {
-    group: "Forecasting", key: "FUNDAMENTALS_SOURCE", type: "enum",
-    value: "yahoo", default: "yahoo", options: ["yahoo", "yfinance_info"],
-    description: "Primary fundamentals provider.",
+    group: "Forecasting", key: "FORECAST_SKILL_WEIGHTING_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in activation of inverse-RMSE skill-weighted multi-model forecast blending (ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM weighted by recent realized accuracy via forecasting.forecast_tracker.ForecastTracker). When False (the default) the static sector-preference blend is used unchanged.",
+  },
+  {
+    group: "Forecasting", key: "FORECAST_SKILL_WINDOW_DAYS", type: "number",
+    value: 180, default: 180, min: 1, max: 3650, step: 1,
+    description: "Rolling window (calendar days) over which per-model RMSE is computed for inverse-skill forecast blending. Increase for stability; decrease for faster adaptation.",
+  },
+  {
+    group: "Forecasting", key: "FORECAST_MODEL_PERSISTENCE_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in: persist the trained CNN-LSTM (.keras + both MinMaxScalers) and Prophet model to disk per ticker instead of retraining from scratch every cycle.",
+  },
+  {
+    group: "Forecasting", key: "FORECAST_MODEL_RETRAIN_DAYS", type: "number",
+    value: 7, default: 7, min: 1, max: 3650, step: 1,
+    description: "Days a persisted CNN-LSTM/Prophet model artifact remains valid before the next generate_forecast() call for that ticker triggers a fresh fit. Only consulted when FORECAST_MODEL_PERSISTENCE_ENABLED=True.",
   },
   {
     group: "Forecasting", key: "BETA_LOOKBACK_DAYS", type: "number",
-    value: 504, default: 504, min: 30, max: 2000, step: 1,
-    description: "Lookback window (trading days) for the beta computation.",
+    value: 504, default: 504, min: 1, max: 3650, step: 1,
+    description: "Trailing calendar days of daily returns used to compute beta in the Yahoo-derived fundamentals engine (Cov(stock,SPY)/Var(SPY)). ~2 years.",
   },
-  // Data & Universe
+  // ---- Market Data ----
   {
-    group: "Data & Universe", key: "DEFAULT_TICKERS", type: "string",
-    value: "AAPL,MSFT,NVDA,SPY", default: "",
-    description: "Comma-separated universe evaluated when no watchlist is set.",
+    // Honest absent value: settings.py's real default IS None (auto-select
+    // by key availability) -- never fabricated as "alpaca"/"yfinance".
+    group: "Market Data", key: "MARKET_DATA_PROVIDER", type: "enum",
+    value: null, default: null, options: ["alpaca", "yfinance"],
+    description: "Force a specific market-data backend: 'alpaca' or 'yfinance'. When unset the platform auto-selects based on key availability.",
   },
   {
-    // Honest absent value: not currently set in .env -> input renders empty.
-    group: "Data & Universe", key: "MACRO_REFRESH_HOURS", type: "number",
-    value: null, default: 12, min: 1, max: 168, step: 1,
-    description: "Hours before the cached FRED macro series are re-fetched.",
+    group: "Market Data", key: "MARKET_DATA_QUOTE_TTL_SECONDS", type: "number",
+    value: 30, default: 30, min: 0, max: 86400, step: 1,
+    description: "In-process quote cache TTL in seconds (never persisted to disk).",
+  },
+  {
+    group: "Market Data", key: "MARKET_DATA_BARS_TTL_SECONDS", type: "number",
+    value: 900, default: 900, min: 0, max: 86400, step: 1,
+    description: "In-process OHLCV intraday-bars cache TTL in seconds (never persisted to disk).",
+  },
+  {
+    group: "Market Data", key: "FUNDAMENTALS_SOURCE", type: "enum",
+    value: "yahoo", default: "yahoo", options: ["yahoo", "yfinance_info"],
+    description: "Primary fundamentals backend: 'yahoo' (statement-derived, default) or 'yfinance_info' (raw .info fallback). Finnhub is no longer a fundamentals source.",
+  },
+  // ---- Runtime & Ops ----
+  {
+    group: "Runtime & Ops", key: "DASHBOARD_REFRESH_SECONDS", type: "number",
+    value: 1800, default: 1800, min: 1, max: 86400, step: 1,
+    description: "Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min.",
+  },
+  {
+    group: "Runtime & Ops", key: "PROGRESS_POLL_SECONDS", type: "number",
+    value: 5, default: 5, min: 1, max: 3600, step: 1,
+    description: "Poll interval (seconds) for the Launcher pipeline-progress indicator.",
+  },
+  {
+    group: "Runtime & Ops", key: "LOG_LEVEL", type: "enum",
+    value: "INFO", default: "INFO", options: ["DEBUG", "INFO", "WARNING", "ERROR"],
+    description: null,
+  },
+  {
+    group: "Runtime & Ops", key: "ADVISORY_REUSE_PIPELINE_COMPUTE", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in, OUTPUT-CHANGING: main_orchestrator.py's advisory overlay reuses run_pipeline's already-computed GARCH/forecast values for that ticker instead of independently refitting a second time. When False (the default), every advisory-overlay call refits independently, reproducing the exact pre-dedup behavior.",
+  },
+  {
+    group: "Runtime & Ops", key: "ADVISORY_ONLY", type: "boolean",
+    value: true, default: true,
+    description: "When True, ALL broker order submission is suppressed. The pipeline still runs end-to-end (signals, sizing, HTML report, JSON payload) but order execution returns immediately. Set False ONLY when broker execution is intentionally re-enabled.",
+  },
+  // ---- Advanced / Config (the 7 keys the real Streamlit tab's own
+  // _SETTINGS_LAYOUT, gui/panels/settings_manager.py:36-77, already served) ----
+  {
+    group: "Advanced / Config", key: "SECTOR_FORECAST_CONFIG_PATH", type: "string",
+    value: "forecasting/sector_configs.json", default: "forecasting/sector_configs.json",
+    description: "Path to the committed per-sector forecast config artifact (model+horizon per sector, derived from an offline walk-forward backtest). Loaded once at ForecastingEngine init; the hardcoded default dict is used as fallback when the file is missing or invalid.",
+  },
+  {
+    group: "Advanced / Config", key: "SECTOR_FORECAST_CONFIGS", type: "string",
+    value: "{}", default: "{}",
+    description: 'Optional per-sector override merged OVER the artifact/hardcoded default. JSON dict in .env, e.g. {"Technology": {"days": 30, "model": "MC"}}. Empty dict (the default) leaves the artifact/hardcoded default unchanged (fully backward-compatible).',
+  },
+  {
+    group: "Advanced / Config", key: "PROMPT_REGISTRY_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch. False (default) → baseline-only, zero network calls. Set True to enable remote manifest fetch and cache.",
+  },
+  {
+    group: "Advanced / Config", key: "PROMPT_REGISTRY_BACKEND", type: "string",
+    value: "http", default: "http",
+    description: "Storage backend: 'http' (default, protected HTTPS endpoint), 'local' (LocalJSONStore from a file path), or 'firestore' (lazy import).",
+  },
+  {
+    group: "Advanced / Config", key: "ORCHESTRATOR_DAEMON_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Route the desktop shell's always-on refresh loop and the Launcher tab's manual run trigger through the persistent orchestrator daemon instead of spawning a fresh subprocess per cycle. False (default) preserves today's exact subprocess behavior everywhere.",
+  },
+  {
+    group: "Advanced / Config", key: "PILOTS_API_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Host the Pilots API inside the persistent orchestrator daemon process, alongside the existing Control API. False (default) preserves today's exact behavior -- pilots_api.py remains a manually-launched standalone service.",
+  },
+  {
+    group: "Advanced / Config", key: "CORS_ALLOWED_ORIGINS", type: "string",
+    value: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    default: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    description: 'Allowed browser origins for the read-only State API / Pilots API CORS policy. JSON array in .env, e.g. ["http://localhost:3000", "https://app.example.com"].',
   },
 ];
 
@@ -1216,6 +1383,15 @@ function readTunableOverrides(): Record<string, number | boolean | string> {
     return raw ? (JSON.parse(raw) as Record<string, number | boolean | string>) : {};
   } catch {
     return {};
+  }
+}
+
+function readTunablesDrift(): string[] {
+  try {
+    const raw = localStorage.getItem(TUNABLES_DRIFT_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -1241,7 +1417,20 @@ function mockTunables(): TunablesResponse {
     if (def.options !== undefined) field.options = def.options;
     group.fields.push(field);
   }
-  return { applies: "next_daemon_restart", groups };
+  const driftKeys = readTunablesDrift();
+  return {
+    applies: "next_daemon_restart",
+    groups,
+    env_drift: driftKeys.length
+      ? {
+          detected: true,
+          keys: driftKeys,
+          note:
+            "An .env write is pending — the API and daemon are still running the " +
+            "previous values. Restart to apply.",
+        }
+      : { detected: false, keys: [], note: "" },
+  };
 }
 
 function applyTunables(
@@ -1279,12 +1468,19 @@ function applyTunables(
       }
       written[key] = String(val);
     } else {
+      // "string" (including JSON-blob fields, e.g. CORS_ALLOWED_ORIGINS) --
+      // the mock doesn't re-validate JSON shape server-side; that's the real
+      // backend's job (invalid_json), exercised in the Python test suite.
       written[key] = String(val);
     }
   }
   if (Object.keys(written).length > 0) {
     try {
       localStorage.setItem(TUNABLES_KEY, JSON.stringify({ ...readTunableOverrides(), ...written }));
+      // A .env write does NOT reach the running process until restart --
+      // mark every written key as drifted (mirrors STRATEGY_DRIFT_KEY above).
+      const drift = new Set([...readTunablesDrift(), ...Object.keys(written)]);
+      localStorage.setItem(TUNABLES_DRIFT_KEY, JSON.stringify([...drift]));
     } catch {
       /* ignore quota */
     }

@@ -1038,6 +1038,14 @@ export interface TunableGroup {
 export interface TunablesResponse {
   applies: "next_daemon_restart";
   groups: TunableGroup[];
+  /**
+   * Whether an `.env` write is pending against the running (in-process)
+   * values — mirrors `StrategyMatrix.env_drift`'s shape exactly (GET
+   * /strategy/matrix). A `.env` write does NOT reach the live `settings`
+   * singleton, so after a successful PUT this stays `detected: true` until the
+   * daemon/pipeline restarts.
+   */
+  env_drift: { detected: boolean; keys: string[]; note: string };
 }
 
 /**

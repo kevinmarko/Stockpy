@@ -85,12 +85,20 @@ export function SettingsManager() {
           hint="The backend returned no editable settings. Nothing here is fabricated when a value is unavailable."
         />
       )}
-      {!loading && !error && data && hasFields && <TunablesEditor data={data} />}
+      {!loading && !error && data && hasFields && (
+        <TunablesEditor data={data} onReload={reload} />
+      )}
     </div>
   );
 }
 
-function TunablesEditor({ data }: { data: TunablesResponse }) {
+function TunablesEditor({
+  data,
+  onReload,
+}: {
+  data: TunablesResponse;
+  onReload: () => void;
+}) {
   const flatFields = useMemo(
     () => data.groups.flatMap((g) => g.fields),
     [data],
@@ -161,11 +169,23 @@ function TunablesEditor({ data }: { data: TunablesResponse }) {
         }
         return next;
       });
+      onReload(); // refresh so env_drift.detected surfaces the pending write
     }
   };
 
   return (
     <>
+      {data.env_drift.detected && (
+        <div className="notice notice-info" style={{ marginBottom: 12 }} data-testid="env-drift-notice">
+          <span>ℹ️</span>
+          <span>
+            {data.env_drift.keys.length} setting{data.env_drift.keys.length === 1 ? "" : "s"}{" "}
+            differ{data.env_drift.keys.length === 1 ? "s" : ""} from the running process
+            ({data.env_drift.keys.join(", ")}). {data.env_drift.note}
+          </span>
+        </div>
+      )}
+
       {writtenKeys.length > 0 && (
         <div className="notice notice-info" style={{ marginBottom: 12 }} data-testid="written-notice">
           <span>✅</span>
@@ -228,6 +248,29 @@ function defaultLabel(f: TunableField): string {
   return String(f.default);
 }
 
+/**
+ * Wire type "string" covers two very different widgets: a plain scalar
+ * (SECTOR_FORECAST_CONFIG_PATH, PROMPT_REGISTRY_BACKEND, DEFAULT_TICKERS) and
+ * a JSON blob (SECTOR_FORECAST_CONFIGS, CORS_ALLOWED_ORIGINS) — the backend
+ * deliberately does NOT add a 5th TunableFieldType for the latter ("a JSON
+ * blob is still a string on the wire"), so the frontend tells them apart by
+ * content: a "string" field whose value/default parses as a JSON object or
+ * array renders as a multi-line textarea instead of a single-line input.
+ * Content-based (not key-name-based) so any future JSON-kind field the
+ * backend adds picks up the right widget with zero frontend changes.
+ */
+function isJsonBlob(f: TunableField): boolean {
+  if (f.type !== "string") return false;
+  const probe = f.value ?? f.default;
+  if (typeof probe !== "string" || probe === "") return false;
+  try {
+    const parsed = JSON.parse(probe);
+    return parsed !== null && typeof parsed === "object";
+  } catch {
+    return false;
+  }
+}
+
 function FieldRow({
   field: f,
   value,
@@ -287,6 +330,36 @@ function FieldRow({
               </option>
             ))}
           </select>
+          <p style={{ color: theme.textSecondary, fontSize: 12.5, margin: "6px 0 0" }}>
+            {f.description}
+          </p>
+        </label>
+      ) : isJsonBlob(f) ? (
+        <label style={{ display: "block" }}>
+          <span
+            className="tile-label"
+            style={{ display: "block", marginBottom: 6 }}
+          >
+            {f.key}
+          </span>
+          <textarea
+            aria-label={f.key}
+            value={value as string}
+            onChange={(e) => onChange(e.target.value)}
+            rows={4}
+            spellCheck={false}
+            style={{
+              fontSize: "var(--t-input)",
+              padding: "10px 12px",
+              width: "100%",
+              borderRadius: "var(--r-md)",
+              background: theme.surface2,
+              color: theme.textPrimary,
+              border: `1px solid ${invalid ? theme.decline : theme.border}`,
+              fontFamily: "var(--font-mono, monospace)",
+              resize: "vertical",
+            }}
+          />
           <p style={{ color: theme.textSecondary, fontSize: 12.5, margin: "6px 0 0" }}>
             {f.description}
           </p>

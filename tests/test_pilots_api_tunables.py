@@ -5,12 +5,19 @@ Tests for ``GET/PUT /settings/tunables`` on ``api/pilots_api.py`` — the PWA's
 non-secret runtime-tunables editor, backed by ``gui.env_io``'s allowlist-bounded
 write layer.
 
-Covers: GET shape/grouping + live-from-settings value/default/description; the
-anti-drift invariant (every served key ∈ ``env_io.ALLOWED_KEYS`` and ∉
-``SECRET_KEYS``); editor scope excludes keys owned by other screens; PUT happy
-path writes via ``env_io.write_many_atomic``; PUT rejects secret/unknown/
-out-of-range/wrong-type keys with per-key reasons (never silently dropped); PUT
-echoes the written values; fail-closed command auth; and that the token is never
+Covers: GET shape/grouping + live-from-settings value/default/description
+(including ``kind == "json"`` fields, whose value/default are JSON-stringified,
+and the ``default_factory`` fields whose real default is NOT the
+``PydanticUndefined`` sentinel); the anti-drift invariant (every served key ∈
+``env_io.ALLOWED_KEYS`` and ∉ ``SECRET_KEYS``); editor scope excludes keys owned
+by other screens; ``env_drift`` (GET) mirrors Strategy Matrix's shape and
+dead-letters per-key on a mangled ``.env``; PUT happy path writes via
+``env_io.write_many_atomic``; PUT rejects secret/unknown/out-of-range/
+wrong-type/invalid-JSON keys with per-key reasons (never silently dropped); PUT
+echoes the written values (the ORIGINAL STRING for JSON fields, not the parsed
+object — env_io receives the parsed object instead, so it doesn't double
+JSON-encode); PUT is gated on BOTH the fail-closed command token AND the
+dedicated ``GENERAL_SETTINGS_WRITES_ENABLED`` flag; and that the token is never
 logged (CONSTRAINT #3). ``env_io.write_many_atomic`` is patched so no test ever
 touches a real ``.env``.
 """
@@ -18,6 +25,8 @@ touches a real ``.env``.
 from __future__ import annotations
 
 import ast
+import contextlib
+import json
 import pathlib
 from unittest import mock
 
@@ -38,8 +47,46 @@ _EXPECTED_GROUPS = [
     "Forecasting",
     "Market Data",
     "Runtime & Ops",
+    "Advanced / Config",
 ]
 _VALID_TYPES = {"number", "boolean", "enum", "string"}
+
+_NEW_ADVANCED_KEYS = {
+    "SECTOR_FORECAST_CONFIG_PATH",
+    "SECTOR_FORECAST_CONFIGS",
+    "PROMPT_REGISTRY_ENABLED",
+    "PROMPT_REGISTRY_BACKEND",
+    "ORCHESTRATOR_DAEMON_ENABLED",
+    "PILOTS_API_ENABLED",
+    "CORS_ALLOWED_ORIGINS",
+}
+_JSON_KIND_KEYS = {"SECTOR_FORECAST_CONFIGS", "CORS_ALLOWED_ORIGINS"}
+
+
+@contextlib.contextmanager
+def _writes_enabled(token: "str | None" = _CMD_TOKEN, enabled: bool = True):
+    """Patch both auth tiers PUT /settings/tunables stacks: the fail-closed
+    command token AND the dedicated GENERAL_SETTINGS_WRITES_ENABLED flag."""
+    with mock.patch.object(settings, "FOLLOW_API_TOKEN", token):
+        with mock.patch.object(settings, "GENERAL_SETTINGS_WRITES_ENABLED", enabled):
+            yield
+
+
+def _put(values: dict, token: "str | None" = _CMD_TOKEN, enabled: bool = True):
+    with _writes_enabled(token=token, enabled=enabled):
+        return client.put(
+            "/settings/tunables",
+            json={"values": values},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+
+def _put_and_get_rejected(values: dict) -> dict:
+    with _writes_enabled():
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
+            resp = _put(values)
+    assert resp.status_code == 200
+    return resp.json()["rejected"]
 
 
 # ---------------------------------------------------------------------------
@@ -81,10 +128,16 @@ class TestGetTunables:
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
             body = client.get("/settings/tunables").json()
         model_fields = type(settings).model_fields
-        for key in pilots_api._TUNABLE_INDEX:
+        for key, (kind, _extras) in pilots_api._TUNABLE_INDEX.items():
             field = _find_field(body, key)
-            assert field["value"] == getattr(settings, key)
-            assert field["default"] == model_fields[key].default
+            live = getattr(settings, key)
+            default = pilots_api._tunable_default(model_fields[key])
+            if kind == "json":
+                assert json.loads(field["value"]) == live
+                assert json.loads(field["default"]) == default
+            else:
+                assert field["value"] == live
+                assert field["default"] == default
 
     def test_description_from_settings_field_or_null(self):
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
@@ -109,6 +162,65 @@ class TestGetTunables:
                 headers={"Authorization": "Bearer nope"},
             )
         assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# "json" kind fields (Advanced / Config: SECTOR_FORECAST_CONFIGS, CORS_ALLOWED_ORIGINS)
+# ---------------------------------------------------------------------------
+
+
+class TestJsonKindFields:
+    def test_json_fields_present_with_string_wire_type(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            body = client.get("/settings/tunables").json()
+        for key in _JSON_KIND_KEYS:
+            field = _find_field(body, key)
+            assert field["type"] == "string"  # JSON-in-a-string wire contract
+            assert json.loads(field["value"]) == getattr(settings, key)
+
+    def test_default_factory_fields_surface_a_real_default_not_null(self):
+        """Regression guard: SECTOR_FORECAST_CONFIGS/CORS_ALLOWED_ORIGINS use
+        pydantic ``default_factory=`` rather than ``default=``, so
+        ``fi.default`` is the ``PydanticUndefined`` sentinel, not the real
+        dict/list default. ``_tunable_default()`` must resolve the factory."""
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            body = client.get("/settings/tunables").json()
+        sector_default = _find_field(body, "SECTOR_FORECAST_CONFIGS")["default"]
+        assert sector_default is not None
+        assert json.loads(sector_default) == {}
+        cors_field = _find_field(body, "CORS_ALLOWED_ORIGINS")
+        assert cors_field["default"] is not None
+        factory = type(settings).model_fields["CORS_ALLOWED_ORIGINS"].default_factory
+        assert json.loads(cors_field["default"]) == factory()
+
+    def test_put_json_valid_accepted_written_as_original_string_env_io_gets_native_object(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"CORS_ALLOWED_ORIGINS": '["https://example.com"]'})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rejected"] == {}
+        # `written` echoes the ORIGINAL STRING submitted (matches the request).
+        assert body["written"] == {"CORS_ALLOWED_ORIGINS": '["https://example.com"]'}
+        # env_io gets the PARSED native object -- env_io._JSON_KEYS does its own
+        # json.dumps(), so handing it the already-encoded string would double-encode.
+        assert w.call_args[0][0] == {"CORS_ALLOWED_ORIGINS": ["https://example.com"]}
+
+    def test_put_json_invalid_json_rejected(self):
+        rejected = _put_and_get_rejected({"CORS_ALLOWED_ORIGINS": "{not valid json"})
+        assert rejected["CORS_ALLOWED_ORIGINS"] == "invalid_json"
+
+    def test_put_json_non_string_rejected(self):
+        rejected = _put_and_get_rejected({"CORS_ALLOWED_ORIGINS": ["already", "a", "list"]})
+        assert rejected["CORS_ALLOWED_ORIGINS"] == "expected_string"
+
+    def test_put_json_object_dict_shape_accepted(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"SECTOR_FORECAST_CONFIGS": '{"Technology": {"days": 30, "model": "MC"}}'})
+        assert resp.status_code == 200
+        assert resp.json()["rejected"] == {}
+        assert w.call_args[0][0] == {
+            "SECTOR_FORECAST_CONFIGS": {"Technology": {"days": 30, "model": "MC"}}
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -139,16 +251,98 @@ class TestTunablesScopeInvariants:
             "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
             "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
             "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
-        }
+        } | _NEW_ADVANCED_KEYS
         assert set(pilots_api._TUNABLE_INDEX) == expected
 
     def test_excludes_other_screens_keys(self):
         for key in (
             "SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES", "DEFAULT_TICKERS",
-            "LLM_COMMENTARY_ENABLED", "OPAL_RESEARCH_PROVIDER", "PROMPT_REGISTRY_ENABLED",
+            "LLM_COMMENTARY_ENABLED", "OPAL_RESEARCH_PROVIDER",
             "MACRO_REGIME_GATE_ENABLED", "ALPACA_PAPER",
         ):
             assert key not in pilots_api._TUNABLE_INDEX, f"{key} leaked into tunables scope"
+
+    def test_new_advanced_keys_are_in_scope(self):
+        """The 7 keys the real Streamlit tab (gui/panels/settings_manager.py:36-77)
+        served that this editor previously omitted."""
+        for key in _NEW_ADVANCED_KEYS:
+            assert key in pilots_api._TUNABLE_INDEX, f"{key} still missing from tunables scope"
+        advanced_group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Advanced / Config")
+        assert {k for k, _kind, _extras in advanced_group[1]} == _NEW_ADVANCED_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Bounds sanity (Fix 2: bounds are NEW guardrails, not ported from settings.py)
+# ---------------------------------------------------------------------------
+
+
+class TestTunableBoundsSanity:
+    def test_no_numeric_bound_rejects_its_own_settings_default(self):
+        for key, (kind, extras) in pilots_api._TUNABLE_INDEX.items():
+            if kind not in ("float", "int"):
+                continue
+            default = getattr(settings, key)
+            lo, hi = extras.get("min"), extras.get("max")
+            if lo is not None:
+                assert default >= lo, f"{key}: default {default} < min {lo}"
+            if hi is not None:
+                assert default <= hi, f"{key}: default {default} > max {hi}"
+
+    def test_max_position_weight_bound_permits_a_2x_move_from_default(self):
+        """Regression guard: the old max (1.0) sat exactly at the field's own
+        default (1.0), so a 2x fat-finger check (2.0) was rejected even though
+        it's a legitimate leveraged-position config, not a typo."""
+        _kind, extras = pilots_api._TUNABLE_INDEX["MAX_POSITION_WEIGHT"]
+        assert extras["max"] >= settings.MAX_POSITION_WEIGHT * 2
+
+    def test_new_advanced_keys_carry_no_invented_numeric_bounds(self):
+        """All 7 new keys are bool/text/json -- none numeric, so none should
+        carry min/max/step (nothing to guardrail)."""
+        for key in _NEW_ADVANCED_KEYS:
+            _kind, extras = pilots_api._TUNABLE_INDEX[key]
+            assert "min" not in extras and "max" not in extras
+
+
+# ---------------------------------------------------------------------------
+# GET /settings/tunables — env_drift
+# ---------------------------------------------------------------------------
+
+
+class TestTunablesEnvDrift:
+    def test_env_drift_present_and_shaped(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            body = client.get("/settings/tunables").json()
+        assert set(body["env_drift"]) == {"detected", "keys", "note"}
+        assert isinstance(body["env_drift"]["keys"], list)
+
+    def test_env_drift_detected_when_env_disagrees_with_live(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            f"KELLY_FRACTION={settings.KELLY_FRACTION + 0.1}\n", encoding="utf-8"
+        )
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                body = client.get("/settings/tunables").json()
+        assert body["env_drift"]["detected"] is True
+        assert "KELLY_FRACTION" in body["env_drift"]["keys"]
+        assert body["env_drift"]["note"]
+
+    def test_env_drift_false_when_env_matches_live(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"KELLY_FRACTION={settings.KELLY_FRACTION}\n", encoding="utf-8")
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                body = client.get("/settings/tunables").json()
+        assert "KELLY_FRACTION" not in body["env_drift"]["keys"]
+
+    def test_env_drift_dead_letters_a_malformed_json_key_never_500(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("CORS_ALLOWED_ORIGINS={not valid json\n", encoding="utf-8")
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                resp = client.get("/settings/tunables")
+        assert resp.status_code == 200  # never 500 on a hand-mangled .env
+        assert "CORS_ALLOWED_ORIGINS" not in resp.json()["env_drift"]["keys"]
 
 
 # ---------------------------------------------------------------------------
@@ -158,16 +352,11 @@ class TestTunablesScopeInvariants:
 
 class TestPutTunables:
     def test_happy_path_writes_via_env_io_and_echoes(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(
-                pilots_api.env_io, "write_many_atomic",
-                return_value=["KELLY_FRACTION", "LOG_LEVEL", "DRY_RUN"],
-            ) as w:
-                resp = client.put(
-                    "/settings/tunables",
-                    json={"values": {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True}},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
+        with mock.patch.object(
+            pilots_api.env_io, "write_many_atomic",
+            return_value=["KELLY_FRACTION", "LOG_LEVEL", "DRY_RUN"],
+        ) as w:
+            resp = _put({"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True})
         assert resp.status_code == 200
         body = resp.json()
         assert body["applies"] == "next_daemon_restart"
@@ -179,26 +368,16 @@ class TestPutTunables:
         assert w.call_args[0][0] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True}
 
     def test_int_field_coerced_to_int(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-                resp = client.put(
-                    "/settings/tunables",
-                    json={"values": {"BETA_LOOKBACK_DAYS": 300.0}},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"BETA_LOOKBACK_DAYS": 300.0})
         assert resp.status_code == 200
         written = w.call_args[0][0]
         assert written == {"BETA_LOOKBACK_DAYS": 300}
         assert isinstance(written["BETA_LOOKBACK_DAYS"], int)
 
     def test_rejects_secret_key_never_written(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-                resp = client.put(
-                    "/settings/tunables",
-                    json={"values": {"FRED_API_KEY": "leak"}},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"FRED_API_KEY": "leak"})
         assert resp.status_code == 200
         body = resp.json()
         assert "FRED_API_KEY" in body["rejected"]
@@ -212,29 +391,19 @@ class TestPutTunables:
         drifted = dict(pilots_api._TUNABLE_INDEX)
         drifted["FRED_API_KEY"] = ("str", {})
         with mock.patch.object(pilots_api, "_TUNABLE_INDEX", drifted):
-            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-                with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-                    resp = client.put(
-                        "/settings/tunables",
-                        json={"values": {"FRED_API_KEY": "leak"}},
-                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                    )
+            with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+                resp = _put({"FRED_API_KEY": "leak"})
         assert resp.status_code == 200
         assert resp.json()["rejected"]["FRED_API_KEY"] == "forbidden_key"
         assert w.call_count == 0
 
     def test_rejects_unknown_key(self):
-        rejected = self._put_and_get_rejected({"NOT_A_KEY": 1})
+        rejected = _put_and_get_rejected({"NOT_A_KEY": 1})
         assert rejected["NOT_A_KEY"] == "unknown_key"
 
     def test_rejects_out_of_range_but_writes_valid_sibling(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-                resp = client.put(
-                    "/settings/tunables",
-                    json={"values": {"KELLY_FRACTION": 5.0, "KELLY_CAP": 0.25}},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"KELLY_FRACTION": 5.0, "KELLY_CAP": 0.25})
         assert resp.status_code == 200
         body = resp.json()
         assert body["rejected"]["KELLY_FRACTION"] == "out_of_range"
@@ -242,7 +411,7 @@ class TestPutTunables:
         assert w.call_args[0][0] == {"KELLY_CAP": 0.25}
 
     def test_rejects_wrong_types(self):
-        rejected = self._put_and_get_rejected(
+        rejected = _put_and_get_rejected(
             {
                 "DRY_RUN": "yes",                 # bool field, string value
                 "KELLY_FRACTION": "high",         # number field, string value
@@ -258,28 +427,18 @@ class TestPutTunables:
         assert rejected["MARKET_DATA_PROVIDER"] == "invalid_option"
 
     def test_all_rejected_does_not_call_writer(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-                resp = client.put(
-                    "/settings/tunables",
-                    json={"values": {"NOPE": 1, "ALSO_NOPE": 2}},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"NOPE": 1, "ALSO_NOPE": 2})
         assert resp.status_code == 200
         assert resp.json()["written"] == {}
         assert w.call_count == 0
 
     def test_fail_closed_when_command_token_unset(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
-            resp = client.put(
-                "/settings/tunables",
-                json={"values": {"KELLY_FRACTION": 0.6}},
-                headers={"Authorization": "Bearer anything"},
-            )
+        resp = _put({"KELLY_FRACTION": 0.6}, token=None)
         assert resp.status_code == 403
 
     def test_401_on_wrong_command_token(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+        with _writes_enabled():
             resp = client.put(
                 "/settings/tunables",
                 json={"values": {"KELLY_FRACTION": 0.6}},
@@ -287,27 +446,39 @@ class TestPutTunables:
             )
         assert resp.status_code == 401
 
+    def test_fails_closed_when_general_settings_writes_disabled(self):
+        """Fix 3: PUT is gated on GENERAL_SETTINGS_WRITES_ENABLED in addition to
+        the command token, mirroring PUT /strategy/modules's
+        STRATEGY_WRITES_ENABLED stacking."""
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"KELLY_FRACTION": 0.6}, enabled=False)
+        assert resp.status_code == 403
+        assert w.call_count == 0
+
     def test_write_never_logs_token(self, caplog):
         with caplog.at_level("DEBUG"):
-            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-                with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
-                    client.put(
-                        "/settings/tunables",
-                        json={"values": {"KELLY_FRACTION": 0.6}},
-                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                    )
+            with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
+                _put({"KELLY_FRACTION": 0.6})
         assert _CMD_TOKEN not in caplog.text
 
-    def _put_and_get_rejected(self, values: dict) -> dict:
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
-                resp = client.put(
-                    "/settings/tunables",
-                    json={"values": values},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
-        assert resp.status_code == 200
-        return resp.json()["rejected"]
+
+# ---------------------------------------------------------------------------
+# GENERAL_SETTINGS_WRITES_ENABLED invariants (Fix 3)
+# ---------------------------------------------------------------------------
+
+
+class TestGeneralSettingsWritesEnabledInvariants:
+    def test_flag_defaults_to_false(self):
+        from settings import Settings
+        assert Settings.model_fields["GENERAL_SETTINGS_WRITES_ENABLED"].default is False
+
+    def test_flag_is_not_gui_writable(self):
+        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
+        must never flip this on. Neither allowlisted nor secret — hand-set only,
+        exactly like STRATEGY_WRITES_ENABLED/LLM_WRITES_ENABLED/
+        AGENTIC_DISCOVERY_ENABLED."""
+        assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
 
 
 # ---------------------------------------------------------------------------

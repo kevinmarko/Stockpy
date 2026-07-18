@@ -1207,6 +1207,35 @@ class Settings(BaseSettings):
             "cannot ride in on any other writes-enabled flag."
         ),
     )
+    # Master switch for the Pilots API's general Settings Manager WRITE endpoint
+    # (api/pilots_api.py PUT /settings/tunables -- the ~30+ non-secret runtime
+    # tunables this editor owns, including KELLY_FRACTION/MAX_LEVERAGE/
+    # DAILY_LOSS_LIMIT_PCT and other sizing/risk-gate/forecasting knobs). A
+    # DEDICATED flag, not AUTOMATION_WRITES_ENABLED/STRATEGY_WRITES_ENABLED/
+    # LLM_WRITES_ENABLED/AGENTIC_DISCOVERY_ENABLED: those were scoped to the
+    # daemon interval/kill-switch resume, signal-weight tuning, AI-capability
+    # selection, and discovery-scan configuration respectively — sizing and
+    # risk-gate tunables are their own risk class (they change how large a
+    # position gets and when the risk gate blocks an order, not just what gets
+    # scanned or which LLM narrates) and must not ride in on any of those.
+    # Mirrors BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED /
+    # LLM_WRITES_ENABLED / AGENTIC_DISCOVERY_ENABLED exactly: default False,
+    # deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug must never
+    # flip it on; hand-set in .env only), and also requires FOLLOW_API_TOKEN.
+    # GET /settings/tunables is read-only and NOT gated by this flag
+    # (require_read_token alone, matching GET /brokerage/status, GET
+    # /strategy/matrix, GET /llm/status, and GET /agentic/status).
+    GENERAL_SETTINGS_WRITES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables PUT /settings/tunables on the Pilots API (general runtime "
+            "tunables -- Kelly sizing, risk gate, forecasting, market data, "
+            "runtime/ops -> .env). Off by default; also requires "
+            "FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so "
+            "sizing/risk-gate tuning cannot ride in on any other writes-enabled "
+            "flag."
+        ),
+    )
     # Cap on candidates GET /agentic/discovery returns (and on what the
     # agentic-discovery skill is expected to write per scan) — keeps the Discovery
     # section of the Agentic Trading tab bounded regardless of how many symbols a

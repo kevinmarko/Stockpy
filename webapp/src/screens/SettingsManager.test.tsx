@@ -6,7 +6,7 @@
  * changed keys on Save, surfaces per-key `rejected` reasons without swallowing
  * them, and shows an honest empty state when the backend exposes no tunables.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -52,7 +52,20 @@ function baseTunables(overrides: Partial<TunablesResponse> = {}): TunablesRespon
           },
         ],
       },
+      {
+        name: "Advanced / Config",
+        fields: [
+          {
+            // "string" wire type carrying a JSON blob -> renders as a textarea
+            // (content-sniffed), not a single-line input.
+            key: "CORS_ALLOWED_ORIGINS", value: '["http://localhost:5173"]', type: "string",
+            default: '["http://localhost:5173"]',
+            description: "Allowed browser origins for the CORS policy.",
+          },
+        ],
+      },
     ],
+    env_drift: { detected: false, keys: [], note: "" },
     ...overrides,
   };
 }
@@ -166,5 +179,53 @@ describe("SettingsManager screen", () => {
     await userEvent.type(input, "5"); // > max 1
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("button", { name: /Save/ })).toBeDisabled();
+  });
+
+  it("env_drift.detected renders a pending-write notice with the differing keys", async () => {
+    vi.spyOn(api, "getTunables").mockResolvedValue(
+      baseTunables({
+        env_drift: {
+          detected: true,
+          keys: ["KELLY_FRACTION"],
+          note: "An .env write is pending — restart to apply.",
+        },
+      }),
+    );
+    renderScreen();
+    const notice = await screen.findByTestId("env-drift-notice");
+    expect(notice).toHaveTextContent("KELLY_FRACTION");
+  });
+
+  it("no env_drift notice when nothing has drifted", async () => {
+    vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+    renderScreen();
+    await screen.findByRole("heading", { name: "Runtime tunables" });
+    expect(screen.queryByTestId("env-drift-notice")).not.toBeInTheDocument();
+  });
+
+  it("a JSON-blob 'string' field renders as a multi-line textarea, not a single-line input", async () => {
+    vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+    renderScreen();
+    const field = (await screen.findByLabelText("CORS_ALLOWED_ORIGINS")) as HTMLTextAreaElement;
+    expect(field.tagName).toBe("TEXTAREA");
+    expect(field.value).toBe('["http://localhost:5173"]');
+  });
+
+  it("editing the JSON textarea and saving sends the raw string, not a re-parsed object", async () => {
+    vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+    const spy = vi.spyOn(api, "updateTunables").mockResolvedValue({
+      written: { CORS_ALLOWED_ORIGINS: '["https://example.com"]' },
+      rejected: {},
+      applies: "next_daemon_restart",
+    });
+    renderScreen();
+    const field = (await screen.findByLabelText("CORS_ALLOWED_ORIGINS")) as HTMLTextAreaElement;
+    // fireEvent (not userEvent.type) -- userEvent's keystroke simulation
+    // treats "[" / "]" as special key-sequence delimiters, which would mangle
+    // a literal JSON-array string typed keystroke-by-keystroke.
+    fireEvent.change(field, { target: { value: '["https://example.com"]' } });
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(spy.mock.calls[0][0]).toEqual({ CORS_ALLOWED_ORIGINS: '["https://example.com"]' });
   });
 });
