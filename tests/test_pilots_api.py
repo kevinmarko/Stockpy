@@ -2795,3 +2795,108 @@ class TestDecisionsWrite:
                     headers={"Authorization": "Bearer WRONG"},
                 )
         assert resp.status_code == 401
+
+
+class TestDecisionsRead:
+    """GET /decisions — the standalone, paginated, symbol-filterable read a
+    symbol detail page needs (distinct from GET /calibration/summary's
+    fixed-size bundled recent_decisions preview)."""
+
+    def test_empty_log_returns_empty_list_never_404(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/decisions")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_post_then_get_round_trip(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch(
+                    "transactions_store.TransactionsStore", return_value=_NoTradeStore()
+                ):
+                    post_resp = client.post(
+                        "/decisions",
+                        json={
+                            "symbol": "aapl",
+                            "action_taken": "acted",
+                            "signal_action": "BUY",
+                            "conviction": 0.8,
+                            "notes": "took it",
+                        },
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+            assert post_resp.status_code == 200
+
+            get_resp = client.get("/decisions")
+        assert get_resp.status_code == 200
+        body = get_resp.json()
+        assert len(body) == 1
+        assert body[0]["symbol"] == "AAPL"
+        assert body[0]["action_taken"] == "acted"
+        assert body[0]["notes"] == "took it"
+        assert body[0]["trade_id"] is None  # never fabricated
+
+    def test_symbol_filter(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch(
+                    "transactions_store.TransactionsStore", return_value=_NoTradeStore()
+                ):
+                    for sym in ("AAPL", "MSFT"):
+                        client.post(
+                            "/decisions",
+                            json={
+                                "symbol": sym,
+                                "action_taken": "passed",
+                                "signal_action": "HOLD",
+                            },
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+
+            resp = client.get("/decisions", params={"symbol": "aapl"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body) == 1
+        assert body[0]["symbol"] == "AAPL"
+
+    def test_limit_caps_result_count(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch(
+                    "transactions_store.TransactionsStore", return_value=_NoTradeStore()
+                ):
+                    for i in range(3):
+                        client.post(
+                            "/decisions",
+                            json={
+                                "symbol": "AAPL",
+                                "action_taken": "passed",
+                                "signal_action": "HOLD",
+                                "notes": f"entry {i}",
+                            },
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+
+            resp = client.get("/decisions", params={"limit": 2})
+        assert resp.status_code == 200
+        assert len(resp.json()) == 2
+
+    def test_unreadable_log_degrades_to_empty_list(self, tmp_path):
+        """A read failure (e.g. read_decisions raising unexpectedly) must
+        degrade to [], never a 500 (CONSTRAINT #6)."""
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "gui.decision_log.read_decisions", side_effect=OSError("boom")
+            ):
+                resp = client.get("/decisions")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_no_auth_token_required_read_tier(self, tmp_path):
+        """GET /decisions is fail-open (require_read_token), unlike the
+        fail-closed POST — reading your own decision history carries no
+        order/money/config risk."""
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "STATE_API_TOKEN", "some-token"):
+                resp = client.get("/decisions")  # no Authorization header
+        assert resp.status_code == 401  # requires the READ token, not the command token
