@@ -818,6 +818,30 @@ def get_universe() -> Dict[str, Any]:
     return {"symbols": symbols.list_universe(_load_snapshot())}
 
 
+@app.get("/recommendations", dependencies=[Depends(require_read_token)])
+def get_recommendations(
+    limit: int = Query(25, ge=1, le=200),
+) -> Dict[str, Any]:
+    """The platform's current BUY picks, ranked by conviction (then score).
+
+    Reads only persisted state (the snapshot's ``signals[]``) — never calls an
+    engine. Reflects the LATEST pipeline run: a symbol added to the universe
+    only appears here after the next run rewrites the snapshot. Returns
+    ``{"recommendations": [], "count": 0, "as_of": None, "reason": ...}`` on a
+    cold start (no snapshot yet) — never 404s, never 500s (CONSTRAINT #6). Each
+    numeric leaf is ``null`` when absent, never a fabricated ``0.0``
+    (CONSTRAINT #4)."""
+    snapshot = _load_snapshot()
+    recs = symbols.list_recommendations(snapshot, limit=limit)
+    as_of = snapshot.get("timestamp") if isinstance(snapshot, dict) else None
+    return {
+        "recommendations": recs,
+        "count": len(recs),
+        "as_of": as_of,
+        "reason": None if recs else "No BUY-rated recommendations in the latest snapshot yet.",
+    }
+
+
 @app.get("/symbols/{ticker}", dependencies=[Depends(require_read_token)])
 def get_symbol_detail(ticker: str) -> Any:
     """Per-symbol detail for one ticker from the latest persisted snapshot, plus

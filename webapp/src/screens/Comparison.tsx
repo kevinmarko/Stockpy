@@ -5,6 +5,7 @@ import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading } from "../components/ui";
 import { ActivityFeed } from "../components/ActivityFeed";
+import { RecommendedStocks } from "../components/RecommendedStocks";
 import { FollowModal } from "./FollowModal";
 import { theme } from "../theme";
 import { fmtNum, fmtPct, fmtUsd } from "../format";
@@ -224,6 +225,9 @@ export function Comparison() {
           </div>
         )}
       </section>
+
+      {/* Recommended stocks — the platform's current BUY picks (click → detail). */}
+      <RecommendedStocks />
 
       {/* Row Error Banner for fetch failures */}
       {Object.keys(fetchErrors).length > 0 && (

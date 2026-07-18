@@ -187,6 +187,46 @@ export interface UniverseResponse {
 }
 
 /**
+ * GET /recommendations — the platform's current BUY picks from the latest
+ * snapshot, ranked by conviction (then score). One clickable "here's what we'd
+ * buy" row per pick. Every numeric leaf is `null` when the snapshot couldn't
+ * compute it (NEVER a fabricated 0 — CONSTRAINT #4): `conviction` is a [0,1]
+ * fraction, `score` the composite signal score, `price` the last close (a
+ * non-positive placeholder is nulled server-side), `buy_range` a pre-formatted
+ * display string (e.g. "Buy Zone: $210.00 - $222.00").
+ */
+export interface Recommendation {
+  symbol: string;
+  action: string | null;
+  conviction: number | null;
+  score: number | null;
+  buy_range: string | null;
+  sector: string | null;
+  price: number | null;
+}
+
+export interface RecommendationsResponse {
+  recommendations: Recommendation[];
+  count: number;
+  /** Snapshot timestamp the picks reflect; `null` on a cold start. */
+  as_of: string | null;
+  /** Honest "nothing yet" note when `recommendations` is empty, else `null`. */
+  reason: string | null;
+}
+
+/**
+ * GET /data/universe — the operator's raw configured ticker universe
+ * (`settings.DEFAULT_TICKERS`) from the data API. A plain string list, distinct
+ * from the pilots `UniverseResponse` (which decorates each symbol with an
+ * advisory action for autocomplete). This is what the Data Explorer's
+ * add/remove control reads and PUTs back.
+ */
+export interface UniverseListResponse {
+  symbols: string[];
+  count: number;
+}
+
+/**
  * GET /thresholds — deployability-gate and position-sizing thresholds,
  * live-imported on the backend from `validation.thresholds` / `settings`
  * (never re-typed as literals there). Powers the education panels'
