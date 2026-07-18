@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { Portfolio, PilotSummary, PerfRange, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
+import { TabGuide } from "../components/TabGuide";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { NotebookMLExport } from "../components/NotebookMLExport";
 import { PerfLine } from "../components/charts";
@@ -183,6 +184,8 @@ export function Dashboard() {
           Reset Layout
         </button>
       </div>
+
+      <TabGuide tabKey="dashboard" />
 
       <div 
         style={{

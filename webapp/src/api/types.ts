@@ -171,6 +171,22 @@ export interface SymbolHeldBy {
 }
 
 /**
+ * One row of the tracked-symbol universe (`GET /universe`) that powers the
+ * symbol autocomplete. `action` is the latest holding-aware advisory action
+ * (falling back to the raw signal action) — `null` when the snapshot carries
+ * neither (NEVER fabricated). It only decorates the suggestion; every `symbol`
+ * resolves to a real `GET /symbols/{ticker}` detail page.
+ */
+export interface UniverseSymbol {
+  symbol: string;
+  action: string | null;
+}
+
+export interface UniverseResponse {
+  symbols: UniverseSymbol[];
+}
+
+/**
  * GET /symbols/{ticker} — grouped per-symbol data from the persisted state
  * snapshot, plus the reverse cross-link. Every factor/risk leaf the active
  * snapshot writer could not compute is `null` (NEVER a fabricated 0) so the UI

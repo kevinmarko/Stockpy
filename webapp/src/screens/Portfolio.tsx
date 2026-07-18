@@ -12,6 +12,7 @@ import type {
 import { useApi } from "../hooks/useApi";
 import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
+import { TabGuide } from "../components/TabGuide";
 import { ErrorState, Loading, Tile } from "../components/ui";
 import { fmtNum, fmtPct, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -61,6 +62,8 @@ export function Portfolio() {
           {p.source} · {timeAgo(p.fetched_at)}
         </span>
       </div>
+
+      <TabGuide tabKey="portfolio" />
 
       <div style={{ marginBottom: 4 }}>
         <div className="tile-label">Total equity</div>

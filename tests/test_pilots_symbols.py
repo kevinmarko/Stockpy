@@ -16,7 +16,7 @@ import pytest
 
 from pilots.catalog import get_pilot
 from pilots.scoring import load_snapshot
-from pilots.symbols import find_signal, held_by_pilots, symbol_detail
+from pilots.symbols import find_signal, held_by_pilots, list_universe, symbol_detail
 
 FIXTURE = Path(__file__).parent / "fixtures" / "state_snapshot.json"
 
@@ -264,3 +264,69 @@ class TestHeldByPilots:
         assert held_by_pilots(None, None) == []
         assert held_by_pilots("AAPL", None) == []
         assert held_by_pilots("AAPL", {"signals": "bad"}) == []
+
+
+# ---------------------------------------------------------------------------
+# list_universe — the symbol-autocomplete source (GET /universe)
+# ---------------------------------------------------------------------------
+
+class TestListUniverse:
+    def test_all_eight_fixture_symbols_present_sorted(self, snapshot):
+        rows = list_universe(snapshot)
+        symbols = [r["symbol"] for r in rows]
+        assert symbols == sorted(symbols)
+        assert set(symbols) == {"AAPL", "MSFT", "NVDA", "JPM", "XOM", "JNJ", "PG", "T"}
+
+    def test_row_shape(self, snapshot):
+        rows = list_universe(snapshot)
+        for r in rows:
+            assert set(r) == {"symbol", "action"}
+
+    def test_action_prefers_advisory_action_over_raw_action(self):
+        # advisory_action and action disagree → advisory_action (holding-aware
+        # overlay) wins, matching symbol_detail's precedence.
+        snap = {"signals": [{"symbol": "AAPL", "advisory_action": "HOLD", "action": "BUY"}]}
+        assert list_universe(snap) == [{"symbol": "AAPL", "action": "HOLD"}]
+
+    def test_action_falls_back_to_raw_action(self):
+        snap = {"signals": [{"symbol": "AAPL", "action": "BUY"}]}
+        assert list_universe(snap) == [{"symbol": "AAPL", "action": "BUY"}]
+
+    def test_action_null_when_neither_present(self):
+        # Honest null (CONSTRAINT #4) — never a fabricated default like "HOLD".
+        snap = {"signals": [{"symbol": "AAPL"}]}
+        assert list_universe(snap) == [{"symbol": "AAPL", "action": None}]
+
+    def test_dedupes_symbol_first_entry_wins(self):
+        snap = {"signals": [
+            {"symbol": "AAPL", "action": "BUY"},
+            {"symbol": "aapl", "action": "SELL"},  # case-insensitive dup, later entry
+        ]}
+        assert list_universe(snap) == [{"symbol": "AAPL", "action": "BUY"}]
+
+    def test_uppercases_and_strips(self):
+        snap = {"signals": [{"symbol": "  nvda  ", "action": "BUY"}]}
+        assert list_universe(snap) == [{"symbol": "NVDA", "action": "BUY"}]
+
+    def test_skips_blank_and_malformed_signal_entries(self):
+        snap = {"signals": [
+            {"symbol": "", "action": "BUY"},
+            {"symbol": "   ", "action": "BUY"},
+            {"not_a": "symbol_field"},
+            "garbage",
+            123,
+            {"symbol": "MSFT", "action": "HOLD"},
+        ]}
+        assert list_universe(snap) == [{"symbol": "MSFT", "action": "HOLD"}]
+
+    def test_cold_start_empty(self):
+        assert list_universe(None) == []
+
+    def test_no_signals_key_empty(self):
+        assert list_universe({}) == []
+
+    def test_malformed_never_raises(self):
+        assert list_universe("not a dict") == []
+        assert list_universe({"signals": "nope"}) == []
+        assert list_universe({"signals": None}) == []
+        assert list_universe(123) == []

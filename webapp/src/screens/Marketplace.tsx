@@ -5,6 +5,7 @@ import type { PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { PilotCard, PopularCard } from "../components/PilotCard";
 import { ErrorState, Loading, StaleDataNotice } from "../components/ui";
+import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
 
 function Rail({
@@ -100,6 +101,8 @@ export function Marketplace() {
           </span>
         )}
       </div>
+
+      <TabGuide tabKey="pilots" />
 
       {loading && <Loading lines={3} />}
 

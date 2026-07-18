@@ -222,6 +222,37 @@ def test_symbol_detail_cold_start_404(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# GET /universe — the symbol-autocomplete source
+# ---------------------------------------------------------------------------
+
+
+def test_universe_shape_and_values():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/universe")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"symbols"}
+    rows = body["symbols"]
+    symbols = [r["symbol"] for r in rows]
+    assert symbols == sorted(symbols)
+    assert set(symbols) == {"AAPL", "MSFT", "NVDA", "JPM", "XOM", "JNJ", "PG", "T"}
+    for r in rows:
+        assert set(r) == {"symbol", "action"}
+    aapl = next(r for r in rows if r["symbol"] == "AAPL")
+    assert aapl["action"] == "BUY"
+
+
+def test_universe_cold_start_empty_not_404(tmp_path):
+    # Unlike /symbols/{ticker}, /universe never 404s — a cold start is an
+    # honestly empty suggestion list, not an error (this endpoint only ever
+    # backs an autocomplete UI, so "nothing to suggest yet" is a normal state).
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        resp = client.get("/universe")
+    assert resp.status_code == 200
+    assert resp.json() == {"symbols": []}
+
+
+# ---------------------------------------------------------------------------
 # GET /pilots/{id}/performance
 # ---------------------------------------------------------------------------
 

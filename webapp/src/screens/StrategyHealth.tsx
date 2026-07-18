@@ -5,6 +5,7 @@ import type { CurvePoint, StrategyHealthGate, StrategyHealthRow } from "../api/t
 import { useApi } from "../hooks/useApi";
 import { DeployableBadge, ErrorState, Loading } from "../components/ui";
 import { Sparkline } from "../components/charts";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
 
@@ -155,6 +156,8 @@ export function StrategyHealth() {
         Every Pilot's underlying validated strategy, and the actual per-gate
         value behind its deployable badge — never just the pass/fail verdict.
       </p>
+
+      <TabGuide tabKey="strategy-health" />
 
       {loading && <Loading lines={4} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
