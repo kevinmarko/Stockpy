@@ -10,9 +10,15 @@ is Claude Code's to edit).
 
 ### Start-of-session checklist
 1. `git fetch origin && git rebase origin/main` — sync from main before starting.
-2. `git checkout -b <short-description>` (lowercase-kebab, e.g. `fix-hmm-lookahead`).
-3. Never commit directly to `main` — always open a PR from a feature branch.
-4. Open a PR when the feature is complete; do not squash or amend published commits.
+2. **Low-risk changes** — docs, `.claude/` config (settings, hooks, skills, agents), comments,
+   test-only additions, and other non-behavioral edits — may be committed directly to `main`
+   after a self-review pass (re-read the full diff, confirm it does what it's supposed to and
+   touches nothing else). No branch or PR required for these.
+3. **Everything else** — anything touching engines, signals, execution, sizing, validation,
+   orchestrators, or other runtime/trading logic — always goes through
+   `git checkout -b <short-description>` (lowercase-kebab, e.g. `fix-hmm-lookahead`) and a PR.
+   Never commit these directly to `main`.
+4. Open a PR when a feature-branch change is complete; do not squash or amend published commits.
 
 ## Project
 
