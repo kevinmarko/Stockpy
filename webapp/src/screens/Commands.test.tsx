@@ -9,6 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Commands } from "./Commands";
 import { api, ApiError } from "../api/client";
+import { theme } from "../theme";
 
 function renderCommands() {
   return render(
@@ -111,6 +112,23 @@ describe("Robinhood execution queue section (real mock API)", () => {
     // Compose-only invariant: this section never renders a place/execute button.
     expect(screen.queryByRole("button", { name: /place/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
+  });
+
+  it("renders the Blocked chip in a caution tone, visually distinct from a muted chip", async () => {
+    renderCommands();
+    const rows = await screen.findAllByTestId("execution-intent-row");
+
+    // The Blocked chip is amber (caution), so a blocked intent reads as blocked
+    // at a glance — not the low-emphasis muted grey it used to render as.
+    const tsla = rows.find((r) => r.textContent?.includes("TSLA"))!;
+    const blocked = within(tsla).getByText("Blocked");
+    expect(blocked).toHaveStyle({ color: theme.caution });
+
+    // ...and it is visibly distinct from a genuinely muted/neutral chip on the
+    // page (the "n/n placeable" summary chip still uses tone="muted").
+    const placeableSummary = screen.getByText("1/2 placeable");
+    expect(placeableSummary).toHaveStyle({ color: theme.textMuted });
+    expect(blocked.style.color).not.toBe(placeableSummary.style.color);
   });
 
   it("an empty queue renders the honest reason, never a fabricated order", async () => {
