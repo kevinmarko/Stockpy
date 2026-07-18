@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import type { PairRow, PairsRadar as PairsRadarT } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading } from "../components/ui";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum, timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -82,6 +83,8 @@ export function PairsRadar() {
         Cointegrated stat-arb candidates and their current spread state. Advisory
         only — no orders are placed.
       </p>
+
+      <TabGuide tabKey="pairs" />
 
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}

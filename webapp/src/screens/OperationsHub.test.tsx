@@ -1,14 +1,15 @@
 /**
  * OperationsHub.test.tsx — the "Operations" nav-section hub renders one card
  * per screen (icon, label, description) and each card navigates to its
- * route. Neither screen has a TAB_HELP entry, so both descriptions are
- * asserted against the exact static prose the spec calls for.
+ * route. Descriptions are asserted against the LIVE TAB_HELP text (not a
+ * hard-coded duplicate) so the test catches drift.
  */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { OperationsHub } from "./OperationsHub";
+import { TAB_HELP } from "../help/helpContent";
 
 function renderHub(initialPath = "/operations") {
   return render(
@@ -38,18 +39,10 @@ describe("OperationsHub screen", () => {
     }
   });
 
-  it("renders both card descriptions", () => {
+  it("renders both card descriptions, never a hard-coded duplicate", () => {
     renderHub();
-    expect(
-      screen.getByText(
-        "Recession telemetry and risk-gate status — Sahm Rule, HY OAS, yield curve, and forecast horizons."
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "The orchestrator daemon's live status and manual pipeline run triggers."
-      )
-    ).toBeInTheDocument();
+    expect(screen.getByText(TAB_HELP.observability.description)).toBeInTheDocument();
+    expect(screen.getByText(TAB_HELP.pipeline.description)).toBeInTheDocument();
   });
 
   it("clicking the Mission Control card navigates to /observability", async () => {

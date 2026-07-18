@@ -1,8 +1,8 @@
 /**
  * TradingHub.test.tsx — the "Trading Tools" nav-section hub renders one card
  * per screen (icon, label, description) and each card navigates to its
- * route. Calibration/Agent descriptions are asserted against the LIVE
- * TAB_HELP text (not a hard-coded duplicate) so the test catches drift.
+ * route. Descriptions are asserted against the LIVE TAB_HELP text (not a
+ * hard-coded duplicate) so the test catches drift.
  */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -41,24 +41,12 @@ describe("TradingHub screen", () => {
     }
   });
 
-  it("renders the live TAB_HELP descriptions for Calibration and Agent, never a hard-coded duplicate", () => {
+  it("renders the live TAB_HELP descriptions for all 4 cards, never a hard-coded duplicate", () => {
     renderHub();
+    expect(screen.getByText(TAB_HELP.attribution.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.calibration.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.agentic.description)).toBeInTheDocument();
-  });
-
-  it("renders the own-text descriptions for Attribution and Commands", () => {
-    renderHub();
-    expect(
-      screen.getByText(
-        "Brinson-Fachler performance decomposition — allocation, selection, and interaction effects on your holdings."
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "A command palette for scans and the gated dry-run execution queue."
-      )
-    ).toBeInTheDocument();
+    expect(screen.getByText(TAB_HELP.commands.description)).toBeInTheDocument();
   });
 
   it("clicking the Attribution card navigates to /attribution", async () => {

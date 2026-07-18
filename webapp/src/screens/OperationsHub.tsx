@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
 
 /**
@@ -7,8 +8,8 @@ import { theme } from "../theme";
  * screens as clickable cards; someone else wires the section-header tap that
  * routes here. This screen owns only its own content and navigation.
  *
- * Neither Mission Control nor Pipeline has a TAB_HELP entry yet, so both
- * descriptions below are static prose (not sourced from help/helpContent.ts).
+ * Both descriptions are sourced live from `TAB_HELP` (`help/helpContent.ts`)
+ * so they can never drift from the real in-app help content.
  */
 interface HubCard {
   to: string;
@@ -18,20 +19,8 @@ interface HubCard {
 }
 
 const CARDS: HubCard[] = [
-  {
-    to: "/observability",
-    label: "Mission Control",
-    ico: "🛰️",
-    description:
-      "Recession telemetry and risk-gate status — Sahm Rule, HY OAS, yield curve, and forecast horizons.",
-  },
-  {
-    to: "/pipeline",
-    label: "Pipeline",
-    ico: "🚀",
-    description:
-      "The orchestrator daemon's live status and manual pipeline run triggers.",
-  },
+  { to: "/observability", label: "Mission Control", ico: "🛰️", description: TAB_HELP.observability.description },
+  { to: "/pipeline", label: "Pipeline", ico: "🚀", description: TAB_HELP.pipeline.description },
 ];
 
 export function OperationsHub() {

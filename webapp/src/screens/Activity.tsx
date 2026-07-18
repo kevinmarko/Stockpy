@@ -1,5 +1,6 @@
 import { apiMeta } from "../api/client";
 import { ActivityFeed } from "../components/ActivityFeed";
+import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
 
 export function Activity() {
@@ -16,6 +17,8 @@ export function Activity() {
           </span>
         )}
       </div>
+
+      <TabGuide tabKey="activity" />
 
       {/*
         The feed component owns loading / error / honest empty-state (reason)

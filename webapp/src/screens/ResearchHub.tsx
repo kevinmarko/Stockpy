@@ -22,38 +22,14 @@ interface HubCard {
 
 const CARDS: HubCard[] = [
   { to: "/marketplace", label: "Pilots", ico: "🧭", description: TAB_HELP.pilots.description },
-  {
-    to: "/compare",
-    label: "Compare",
-    ico: "⚖️",
-    description:
-      "Side-by-side performance charts and stats for choosing between Pilots you're considering following.",
-  },
-  {
-    to: "/models",
-    label: "Models",
-    ico: "🧠",
-    description:
-      "The ML model registry — every model's deployability gates, DSR/PBO, and training lineage.",
-  },
+  { to: "/compare", label: "Compare", ico: "⚖️", description: TAB_HELP.compare.description },
+  { to: "/models", label: "Models", ico: "🧠", description: TAB_HELP.models.description },
   { to: "/strategy-health", label: "Strategy Health", ico: "🛡️", description: TAB_HELP["strategy-health"].description },
-  {
-    to: "/pairs",
-    label: "Pairs radar",
-    ico: "🔗",
-    description:
-      "Cointegration-based pairs trading signals — entry/exit z-scores and half-life per pair.",
-  },
+  { to: "/pairs", label: "Pairs radar", ico: "🔗", description: TAB_HELP.pairs.description },
   { to: "/options", label: "Options", ico: "🎯", description: TAB_HELP.options.description },
   { to: "/signals", label: "Signal Breakdown", ico: "🧬", description: TAB_HELP.signals.description },
   { to: "/forecast", label: "Forecast Viewer", ico: "📈", description: TAB_HELP.forecast.description },
-  {
-    to: "/data-explorer",
-    label: "Data Explorer",
-    ico: "🗂️",
-    description:
-      "Raw price bars, fundamentals, and macro series for any symbol, straight from the pipeline.",
-  },
+  { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", description: TAB_HELP["data-explorer"].description },
 ];
 
 export function ResearchHub() {

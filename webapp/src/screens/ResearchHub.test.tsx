@@ -62,41 +62,23 @@ describe("ResearchHub screen", () => {
     }
   });
 
-  it("renders live TAB_HELP descriptions, not a hard-coded duplicate", () => {
+  it("renders live TAB_HELP descriptions for all 9 cards, not a hard-coded duplicate", () => {
     renderHub();
     // Asserts against the actual TAB_HELP.* text at runtime -- a change to
     // helpContent.ts's prose would break this test if ResearchHub still
     // showed stale copy, which a hand-copied string would not catch.
     expect(screen.getByText(TAB_HELP.pilots.description)).toBeInTheDocument();
+    expect(screen.getByText(TAB_HELP.compare.description)).toBeInTheDocument();
+    expect(screen.getByText(TAB_HELP.models.description)).toBeInTheDocument();
     expect(
       screen.getByText(TAB_HELP["strategy-health"].description)
     ).toBeInTheDocument();
+    expect(screen.getByText(TAB_HELP.pairs.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.options.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.signals.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.forecast.description)).toBeInTheDocument();
-  });
-
-  it("renders the own-text (non-TAB_HELP) descriptions", () => {
-    renderHub();
     expect(
-      screen.getByText(
-        "Side-by-side performance charts and stats for choosing between Pilots you're considering following."
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "The ML model registry — every model's deployability gates, DSR/PBO, and training lineage."
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Cointegration-based pairs trading signals — entry/exit z-scores and half-life per pair."
-      )
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Raw price bars, fundamentals, and macro series for any symbol, straight from the pipeline."
-      )
+      screen.getByText(TAB_HELP["data-explorer"].description)
     ).toBeInTheDocument();
   });
 

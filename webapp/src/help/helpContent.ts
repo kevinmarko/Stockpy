@@ -99,6 +99,24 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     `The smallest dollar amount the Follow modal accepts for a Pilot allocation: ${fmtUsd(t?.follow_min_amount)}. A UX floor, not a broker constraint — the gated queue itself is bounded by the per-order notional cap.`,
   "opportunity scan": (t) =>
     `A Robinhood broker scan run by the agentic-discovery skill, cross-referenced against this platform's own advisory engine — never run automatically. Results are capped at ${fmtNum(t?.agentic_max_candidates, 0)} candidates regardless of how many the scan matches; a candidate with no computed action shows '—', never a guessed one.`,
+  cointegration:
+    "Two symbols whose price spread is stationary — it mean-reverts instead of wandering — tested via the Engle-Granger method. The basis for every pair on the Pairs radar screen; a broken cointegration (rolling ADF p-value > 0.10) exits the trade.",
+  "half-life":
+    // Fixed algorithm parameter (signals/pairs_trading.py-equivalent), not a
+    // Thresholds API field — same "documented literal" precedent as "iv rank"/vrp below.
+    "How many trading days a pair's spread takes to close half the distance back to its rolling mean, from an Ornstein-Uhlenbeck fit. Pairs radar only surfaces pairs with a half-life between 5 and 60 days — too fast is noise, too slow ties up capital.",
+  "z-score":
+    "How many standard deviations the current spread sits from its rolling mean. Pairs radar enters at |z| > 2, exits on a 0-cross, and stops out at |z| > 4.",
+  "correlation cluster":
+    // 30% concentration flag is a local frontend constant (Attribution.tsx's
+    // HEAVY_CONCENTRATION_THRESHOLD), not a Thresholds API field.
+    "A group of your holdings that move together, from realized return correlation — not sector labels. A cluster making up more than 30% of book value is flagged as a hidden-concentration risk even if it looks diversified by sector.",
+  "risk gate":
+    // Sahm/VIX/HY-OAS trigger levels are fixed constants in the macro kill-switch
+    // check, not Thresholds API fields — same documented-literal precedent as above.
+    "The pre-trade check that vetoes a new BUY when the macro regime looks dangerous (Sahm Rule ≥ 0.5, VIX > 30, or HY OAS > 6%). Mission Control's block log lists every order it actually stopped, and why. Operators can switch it off for hybrid mode, in which technical signals run without the macro override.",
+  "orchestrator daemon":
+    "The always-on background process that keeps the platform's heavy engines warm between cycles instead of paying full startup cost on every run. Its own internal timer can run cycles on a schedule independent of a manual trigger from the Pipeline screen.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -174,6 +192,66 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "opportunity scan",
       "follow minimum",
     ],
+  },
+  activity: {
+    title: "Activity",
+    description:
+      "A chronological feed of the pipeline's own alerts — Info, Warning, and Critical severities — read straight from the structured alert log. An unrecognized severity is shown as-is, never upgraded to a fabricated level.",
+    keyConcepts: [],
+  },
+  compare: {
+    title: "Pilot Strategy Comparison",
+    description:
+      "Pick up to 5 Pilots to overlay their performance curves and compare Sharpe, PBO, DSR, and follower count side by side — the same honesty metrics as the Pilots screen, just side by side. Also surfaces the platform's current recommended-stock picks.",
+    keyConcepts: ["sharpe ratio", "pbo", "dsr", "follow minimum"],
+  },
+  models: {
+    title: "The models",
+    description:
+      "The ML model registry behind the platform's forecasts — each model's honest CPCV-validated DSR and PBO, training date, and sample size. A model that fails a gate is shown as not deployable, never loosened to force a green badge.",
+    keyConcepts: ["deployable", "dsr", "pbo"],
+  },
+  pairs: {
+    title: "Pairs radar",
+    description:
+      "Cointegrated stat-arb pairs and their current spread state — z-score, half-life, hedge ratio, and cointegration p-value per pair. A cointegration break (rolling ADF p-value > 0.10) exits the trade even without a stop. Advisory only.",
+    keyConcepts: ["cointegration", "z-score", "half-life"],
+  },
+  "data-explorer": {
+    title: "Data explorer",
+    description:
+      "The platform's recommended-stock picks, plus the raw data layer for any symbol — daily price bars, current fundamentals, and the macro snapshot (VIX, 10y-2y curve, Sahm Rule, HY OAS). Manage which tickers are tracked from Settings.",
+    keyConcepts: [],
+  },
+  attribution: {
+    title: "Portfolio attribution",
+    description:
+      "Decomposes your book's return versus a benchmark into Allocation, Selection, and Interaction (Brinson-Fachler), plus multifactor exposure (Value/Quality/Low-Vol/Size) and correlation clusters that flag hidden concentration — a cluster over 30% of book value gets called out even if it looks diversified by sector.",
+    keyConcepts: ["brinson-fachler", "multifactor", "correlation cluster"],
+  },
+  commands: {
+    title: "Commands",
+    description:
+      "An autocomplete composer over the platform's full CLI manifest — type or pick a command, resolve its options, and copy the exact string to run in your own terminal. This screen never executes anything itself, by design: running platform CLIs from a browser would bypass the advisory quarantine. Also hosts the read-only Robinhood execution queue below it.",
+    keyConcepts: ["advisory only", "kill switch", "notional cap"],
+  },
+  observability: {
+    title: "Mission Control",
+    description:
+      "The platform's single risk-telemetry surface: macro regime (VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on probability), portfolio-wide equity/drawdown history, forecast-model skill weights, and the risk-gate block log — every order the pre-trade gate actually vetoed, and why.",
+    keyConcepts: ["hmm regime", "risk gate"],
+  },
+  pipeline: {
+    title: "Pipeline",
+    description:
+      "The orchestrator daemon's live status and manual run triggers — full pipeline, data-only, or metrics-only — plus run history. Distinct from Settings' automation summary: this is the raw daemon the trigger buttons act directly against. A run with no recorded outcome shows '—', never a fabricated success.",
+    keyConcepts: ["orchestrator daemon"],
+  },
+  settings: {
+    title: "Data & Automation",
+    description:
+      "Operate the platform without SSHing into the host: pipeline status and manual triggers, the automated run schedule, the kill switch and execution mode, which tickers are tracked, your brokerage connection, active Pilot follows, and app/update status — all in one place.",
+    keyConcepts: ["kill switch", "execution mode", "advisory only"],
   },
 };
 

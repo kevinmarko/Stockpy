@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { ModelRow, Thresholds } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { DeployableBadge, ErrorState, Loading, MetricBadge } from "../components/ui";
+import { TabGuide } from "../components/TabGuide";
 import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum } from "../format";
 import { theme } from "../theme";
@@ -96,6 +97,8 @@ export function Models() {
         The ML models behind the platform, with their honest CPCV validation
         metrics. A model that fails a gate is shown as not deployable.
       </p>
+
+      <TabGuide tabKey="models" />
 
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
