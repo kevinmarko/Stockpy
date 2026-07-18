@@ -81,7 +81,7 @@ export function FollowModal({
                 type="number"
                 inputMode="decimal"
                 min={minAmount}
-                step={50}
+                step={0.01}
                 value={amount}
                 onChange={(e) => setAmount(Math.max(0, Number(e.target.value)))}
               />

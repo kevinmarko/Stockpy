@@ -259,7 +259,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               type="number"
               inputMode="decimal"
               min={100}
-              step={50}
+              step={0.01}
               value={amount}
               onChange={(e) => setAmount(Math.max(0, Number(e.target.value)))}
             />
