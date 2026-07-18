@@ -1,17 +1,20 @@
 import {
   Area,
   AreaChart,
+  Bar as RBar,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
   Line,
 } from "recharts";
-import type { CurvePoint, EquityDrawdownPoint, SectorSlice } from "../api/types";
+import type { Bar, CurvePoint, EquityDrawdownPoint, SectorSlice } from "../api/types";
 import { sectorColor, theme } from "../theme";
 import { fmtDate, fmtPct } from "../format";
 
@@ -323,6 +326,279 @@ export function DrawdownArea({ data }: { data: EquityDrawdownPoint[] }) {
             isAnimationActive={false}
           />
         </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * Candle — custom shape for one OHLC bar inside a Recharts `<Bar dataKey="range">`
+ * whose value is the `[low, high]` pair. Recharts hands this shape `y = pixel(high)`
+ * and `height = pixel(low) - pixel(high)` (see recharts Bar.js: for an array value
+ * it maps `[scale(low), scale(high)]`), so we reconstruct the local value→pixel
+ * transform from that known pair and place the open→close body inside it.
+ *
+ * Rows without a full OHLC payload (the "now" anchor + forecast rows carry no
+ * o/h/l/c) render nothing — nulls are never drawn as a zero-height bar at the
+ * axis floor (CONSTRAINT #4).
+ */
+function Candle(props: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  payload?: {
+    o?: number | null;
+    h?: number | null;
+    l?: number | null;
+    c?: number | null;
+  };
+}) {
+  const { x, y, width, height, payload } = props;
+  const o = payload?.o;
+  const h = payload?.h;
+  const l = payload?.l;
+  const c = payload?.c;
+  if (
+    o == null ||
+    h == null ||
+    l == null ||
+    c == null ||
+    typeof x !== "number" ||
+    typeof y !== "number" ||
+    typeof width !== "number" ||
+    typeof height !== "number" ||
+    Number.isNaN(y) ||
+    Number.isNaN(height)
+  ) {
+    return null;
+  }
+  const span = h - l;
+  // pixel(h) = y (top of the wick), pixel(l) = y + height (bottom of the wick).
+  const pxOf = (v: number) => (span > 0 ? y + (height * (h - v)) / span : y);
+  const cx = x + width / 2;
+  const up = c >= o;
+  const color = up ? theme.growth : theme.decline;
+  const bodyTop = pxOf(Math.max(o, c));
+  const bodyBottom = pxOf(Math.min(o, c));
+  const bodyH = Math.max(1, bodyBottom - bodyTop); // >= 1px so a doji stays visible
+  const bodyW = Math.max(1, width * 0.6);
+  return (
+    <g>
+      {/* wick: high → low, at the band center */}
+      <line x1={cx} y1={y} x2={cx} y2={y + height} stroke={color} strokeWidth={1} />
+      {/* body: open → close */}
+      <rect x={cx - bodyW / 2} y={bodyTop} width={bodyW} height={bodyH} fill={color} />
+    </g>
+  );
+}
+
+/**
+ * ForecastCandleChart — price history as candlesticks + a forward projection
+ * line + a confidence cone that widens per horizon, all on ONE continuous date
+ * axis. History and future share a single merged data array keyed by `date`.
+ *
+ * `bars`     — OHLCV history; rows with any null O/H/L/C are skipped, never
+ *              plotted at 0 (CONSTRAINT #4).
+ * `forecast` — one entry per horizon: `day` = calendar days AFTER the last bar,
+ *              `mid` = projected close, `lower`/`upper` = the band (null → the
+ *              projection point still draws but adds no cone at that horizon).
+ * `height`   — chart height in px (default 260).
+ *
+ * Renders null when there is nothing priced AND no forecast (the caller shows
+ * its own empty state).
+ */
+export function ForecastCandleChart({
+  bars,
+  forecast,
+  height = 260,
+}: {
+  bars: Bar[];
+  forecast: { day: number; mid: number; lower: number | null; upper: number | null }[];
+  height?: number;
+}) {
+  const priced = bars.filter(
+    (b) => b.Open != null && b.High != null && b.Low != null && b.Close != null
+  );
+  if (priced.length === 0 && forecast.length === 0) return null;
+
+  type Row = {
+    date: string;
+    o?: number;
+    h?: number;
+    l?: number;
+    c?: number;
+    range?: [number, number];
+    mid?: number | null;
+    coneLower?: number | null;
+    coneUpper?: number | null;
+    coneBand?: number | null;
+  };
+
+  // 1) history candles (OHLC guaranteed non-null by the filter above)
+  const rows: Row[] = priced.map((b) => ({
+    date: b.date,
+    o: b.Open as number,
+    h: b.High as number,
+    l: b.Low as number,
+    c: b.Close as number,
+    range: [b.Low as number, b.High as number],
+  }));
+
+  const last = priced.length > 0 ? priced[priced.length - 1] : null;
+  const lastDate = last ? last.date : new Date().toISOString().slice(0, 10);
+  const lastClose = last ? (last.Close as number) : null;
+
+  // 2) "now" anchor so the projection + cone begin exactly at the last close
+  //    (cone half-width 0 here → the fan opens from a point).
+  if (lastClose != null) {
+    rows.push({
+      date: lastDate,
+      mid: lastClose,
+      coneLower: lastClose,
+      coneUpper: lastClose,
+      coneBand: 0,
+    });
+  }
+
+  // 3) forecast rows, dated lastDate + `day` CALENDAR days (UTC, same ISO
+  //    YYYY-MM-DD shape Bar.date uses).
+  const sortedFc = [...forecast].sort((a, b) => a.day - b.day);
+  const lastDateMs = new Date(lastDate).getTime();
+  for (const f of sortedFc) {
+    const date = new Date(lastDateMs + f.day * 86_400_000).toISOString().slice(0, 10);
+    const hasBand = f.lower != null && f.upper != null;
+    rows.push({
+      date,
+      mid: f.mid,
+      coneLower: hasBand ? f.lower : null,
+      coneUpper: hasBand ? f.upper : null,
+      coneBand: hasBand ? (f.upper as number) - (f.lower as number) : null,
+    });
+  }
+
+  // padded y-domain over every priced value: highs/closes/coneUpper/mid up top,
+  // lows/coneLower/mid at the floor (same padding idiom as PerfLine).
+  const hi: number[] = [];
+  const lo: number[] = [];
+  for (const b of priced) {
+    hi.push(b.High as number);
+    lo.push(b.Low as number);
+  }
+  if (lastClose != null) {
+    hi.push(lastClose);
+    lo.push(lastClose);
+  }
+  for (const f of sortedFc) {
+    if (f.mid != null) {
+      hi.push(f.mid);
+      lo.push(f.mid);
+    }
+    if (f.upper != null) hi.push(f.upper);
+    if (f.lower != null) lo.push(f.lower);
+  }
+  if (hi.length === 0 || lo.length === 0) return null;
+  const max = Math.max(...hi);
+  const min = Math.min(...lo);
+  const pad = (max - min) * 0.08 || 1;
+
+  return (
+    <div style={{ width: "100%", height }}>
+      <ResponsiveContainer>
+        <ComposedChart data={rows} margin={{ top: 8, right: 6, left: 6, bottom: 0 }}>
+          <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.06)" strokeDasharray="0" />
+          <XAxis
+            dataKey="date"
+            tickFormatter={fmtDate}
+            tick={{ fill: theme.textMuted, fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+            minTickGap={44}
+          />
+          <YAxis
+            domain={[min - pad, max + pad]}
+            // Without this, recharts pulls the axis down to include a 0
+            // baseline for the candlestick <Bar> series regardless of the
+            // explicit domain above, squashing the real price range into a
+            // thin band at the top of the chart.
+            allowDataOverflow
+            tick={{ fill: theme.textMuted, fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+            width={44}
+            tickFormatter={(v: number) => v.toFixed(0)}
+          />
+          <Tooltip
+            contentStyle={{
+              background: theme.surface3,
+              border: `1px solid ${theme.borderStrong}`,
+              borderRadius: 10,
+              color: theme.textPrimary,
+              fontSize: 12,
+            }}
+            labelFormatter={(l) => fmtDate(String(l))}
+            formatter={(val: number, name: string, entry: { payload?: Row }) => {
+              const p: Row = entry?.payload ?? { date: "" };
+              if (name === "range")
+                return [typeof p.c === "number" ? p.c.toFixed(2) : "—", "Close"];
+              if (name === "mid")
+                return [typeof val === "number" ? val.toFixed(2) : "—", "Forecast"];
+              if (name === "coneLower")
+                return [typeof val === "number" ? val.toFixed(2) : "—", "Cone low"];
+              if (name === "coneBand")
+                return [
+                  typeof p.coneUpper === "number" ? p.coneUpper.toFixed(2) : "—",
+                  "Cone high",
+                ];
+              return [typeof val === "number" ? val.toFixed(2) : "—", name];
+            }}
+          />
+          {/* Confidence cone — stacked-area trick: an invisible baseline at
+              `coneLower` plus a visible band of `coneBand = upper - lower`
+              stacked on top. The band grows with horizon, so the cone fans out
+              automatically. History rows carry no cone keys → break points
+              (recharts treats a null raw value as a gap), so the band draws
+              only across the anchor + forecast region. */}
+          <Area
+            dataKey="coneLower"
+            stackId="cone"
+            stroke="none"
+            fill="transparent"
+            connectNulls
+            isAnimationActive={false}
+            activeDot={false}
+          />
+          <Area
+            dataKey="coneBand"
+            stackId="cone"
+            stroke={theme.accent}
+            strokeOpacity={0.22}
+            strokeWidth={1}
+            fill={theme.accent}
+            fillOpacity={0.12}
+            connectNulls
+            isAnimationActive={false}
+            activeDot={false}
+          />
+          {/* Candles */}
+          <RBar
+            dataKey="range"
+            shape={<Candle />}
+            isAnimationActive={false}
+            legendType="none"
+          />
+          {/* Forward projection */}
+          <Line
+            dataKey="mid"
+            stroke={theme.accent}
+            strokeWidth={2}
+            dot={{ r: 2.5, fill: theme.accent, stroke: "none" }}
+            connectNulls
+            isAnimationActive={false}
+          />
+          {/* "Now" divider at the last real bar */}
+          <ReferenceLine x={lastDate} stroke={theme.textMuted} strokeDasharray="3 3" />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );

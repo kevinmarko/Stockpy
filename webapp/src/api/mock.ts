@@ -3312,15 +3312,29 @@ export const mockApi = {
   async getForecastResult(symbol: string): Promise<ForecastResult> {
     if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol); // 404 branch
     const base = 100 + symbol.charCodeAt(0);
+    const mid10 = base * 1.01;
+    const mid30 = base * 1.03;
+    const mid60 = base * 1.05;
     return delay<ForecastResult>({
-      Forecast_10: round2(base * 1.01),
-      Forecast_30: round2(base * 1.03),
-      Forecast_60: round2(base * 1.05),
+      Forecast_10: round2(mid10),
+      Forecast_30: round2(mid30),
+      Forecast_60: round2(mid60),
       // honest null: the h=90 fit didn't converge this run
       Forecast_90: null,
       ARIMA: round2(base * 1.028),
       MC_Lower: round2(base * 0.94),
       MC_Upper: round2(base * 1.12),
+      // Confidence bands WIDEN with horizon (±2% @10d → ±5% @30d → ±8% @60d)
+      // so the cone visibly fans out. h=90 has no band (its mid is null).
+      Forecast_10_Lower: round2(mid10 * 0.98),
+      Forecast_10_Upper: round2(mid10 * 1.02),
+      Forecast_30_Lower: round2(mid30 * 0.95),
+      Forecast_30_Upper: round2(mid30 * 1.05),
+      Forecast_60_Lower: round2(mid60 * 0.92),
+      Forecast_60_Upper: round2(mid60 * 1.08),
+      // null horizon → null band (never a fabricated 0 — CONSTRAINT #4)
+      Forecast_90_Lower: null,
+      Forecast_90_Upper: null,
     });
   },
 
