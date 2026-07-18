@@ -365,6 +365,25 @@ class OrchestratorDaemon:
             progress=progress_snapshot,
         )
 
+        # Best-effort persist to the durable pipeline_runs table (desktop/
+        # run_history_store.py) so the Pipeline Dashboard's run-history table
+        # survives a daemon restart instead of being capped at the in-memory
+        # ring below. Lazy import (matches HistoricalStore's convention
+        # elsewhere in this codebase -- avoids a DB import at module load
+        # time). A DB hiccup here must never crash the daemon or affect this
+        # run's already-decided SUCCEEDED/FAILED state -- only the durable
+        # table lags, exactly like the progress_snapshot capture above.
+        try:
+            from desktop.run_history_store import RunHistoryStore
+
+            RunHistoryStore().record_run(record)
+        except Exception as exc:  # pragma: no cover - defensive only
+            logger.warning(
+                "Run %s: failed to persist run history to DB (%s); "
+                "the run's %s state is unaffected -- only the durable "
+                "history table lags.", run_id, exc, state.value,
+            )
+
         with self._lock:
             # Overwrite the RUNNING placeholder inserted by trigger_run() in
             # place -- run_id is already in _run_order from that call, so no

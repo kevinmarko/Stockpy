@@ -50,6 +50,13 @@ Endpoints
   GET  /run/{run_id}/status  -> read-token guarded. Status of a specific run.
   GET  /run/latest           -> read-token guarded. Status of the most
                                 recent run (may still be RUNNING).
+  GET  /runs/history         -> read-token guarded. Durable run history read
+                                from the pipeline_runs DB table (desktop/
+                                run_history_store.py), independent of the
+                                daemon's in-memory run_history ring on
+                                GET /status -- survives a daemon restart.
+                                Degrades to [] (never a 500) on a DB read
+                                failure.
   PUT  /interval              -> command-token guarded (same posture as
                                 POST /run — no separate master-switch flag;
                                 see the docstring on the endpoint itself for
@@ -87,7 +94,7 @@ from __future__ import annotations
 
 import hmac
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,6 +104,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from settings import INTERVAL_MAX_SECONDS, settings, validate_interval_seconds
 from desktop.daemon_runtime import OrchestratorDaemon, RunRecord, TriggerOutcome
+from desktop.run_history_store import RunHistoryStore
 from execution.kill_switch import GlobalKillSwitch
 
 logger = logging.getLogger(__name__)
@@ -414,6 +422,27 @@ def get_latest_run() -> Dict[str, Any]:
         )
 
     return _serialize_run(record)
+
+
+@app.get("/runs/history", dependencies=[Depends(require_read_token)])
+def get_runs_history(limit: int = 50) -> List[Dict[str, Any]]:
+    """Durable run history read straight from the ``pipeline_runs`` DB table
+    (``desktop/run_history_store.py``).
+
+    Deliberately independent of ``get_daemon()`` -- unlike every other
+    endpoint here, this one has no daemon-not-attached branch, since the
+    whole point is to keep working (and keep showing history) across a
+    daemon restart, which is exactly when ``GET /status``'s in-memory
+    ``run_history`` ring is empty. ``limit`` is clamped to ``[1, 200]``.
+    Degrades to ``[]`` (never a 500) on a DB read failure -- CONSTRAINT #6.
+    """
+    limit = max(1, min(limit, 200))
+    try:
+        store = RunHistoryStore(readonly=True)
+        return store.get_recent(limit=limit)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: DB errors degrade to []
+        logger.warning("control_api: failed to read run history from DB: %s", exc)
+        return []
 
 
 @app.put("/interval", dependencies=[Depends(require_command_token)])

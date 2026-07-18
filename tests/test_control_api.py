@@ -456,6 +456,70 @@ class TestRunLatest:
 
 
 # ---------------------------------------------------------------------------
+# GET /runs/history -- durable run history (desktop/run_history_store.py),
+# independent of the daemon's in-memory ring GET /status returns.
+# ---------------------------------------------------------------------------
+
+
+class TestRunsHistory:
+    def test_returns_recent_runs_from_store(self, monkeypatch):
+        rows = [{"run_id": "orch-1", "state": "succeeded"}]
+        fake_store = MagicMock()
+        fake_store.get_recent.return_value = rows
+        monkeypatch.setattr(control_api, "RunHistoryStore", lambda *a, **k: fake_store)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/runs/history")
+        assert resp.status_code == 200
+        assert resp.json() == rows
+
+    def test_works_without_a_daemon_attached(self, monkeypatch):
+        """Unlike every other GET here, this endpoint has no daemon-not-
+        attached branch -- the whole point is to keep serving history across
+        a daemon restart, exactly when no daemon is attached yet."""
+        fake_store = MagicMock()
+        fake_store.get_recent.return_value = []
+        monkeypatch.setattr(control_api, "RunHistoryStore", lambda *a, **k: fake_store)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/runs/history")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_degrades_to_empty_list_on_store_construction_failure(self, monkeypatch):
+        def _boom(*a, **k):
+            raise RuntimeError("db unreachable")
+
+        monkeypatch.setattr(control_api, "RunHistoryStore", _boom)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/runs/history")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_limit_is_clamped_to_200(self, monkeypatch):
+        fake_store = MagicMock()
+        fake_store.get_recent.return_value = []
+        monkeypatch.setattr(control_api, "RunHistoryStore", lambda *a, **k: fake_store)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            client.get("/runs/history?limit=9999")
+        fake_store.get_recent.assert_called_once_with(limit=200)
+
+    def test_limit_below_one_is_clamped_to_one(self, monkeypatch):
+        fake_store = MagicMock()
+        fake_store.get_recent.return_value = []
+        monkeypatch.setattr(control_api, "RunHistoryStore", lambda *a, **k: fake_store)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            client.get("/runs/history?limit=0")
+        fake_store.get_recent.assert_called_once_with(limit=1)
+
+    def test_401_when_read_token_wrong(self, monkeypatch):
+        fake_store = MagicMock()
+        fake_store.get_recent.return_value = []
+        monkeypatch.setattr(control_api, "RunHistoryStore", lambda *a, **k: fake_store)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/runs/history", headers={"Authorization": "Bearer WRONG"})
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # POST /pipeline/data and POST /pipeline/metrics (mode-scoped triggers)
 # ---------------------------------------------------------------------------
 
