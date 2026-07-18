@@ -11,7 +11,7 @@
  *  - a trigger-button click calls the POST endpoint (mutation) and surfaces
  *    whatever the server returned
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -57,14 +57,24 @@ describe("PipelineDashboard (real mock API)", () => {
 
   it("renders the run-history table with honest mode/error branches", async () => {
     renderScreen();
+    // Scoped to the LIVE "Run history" section specifically -- the page also
+    // renders a second, independent "Full run history" table (GET
+    // /runs/history) whose fixture (RUN_HISTORY_DURABLE) deliberately
+    // reuses/extends this same data, so an unscoped screen.getByText("DATA")
+    // is flaky by construction: it passes only while the durable table's own
+    // async fetch hasn't resolved yet, and fails once both tables have
+    // rendered their own "DATA" chips (multiple matches, not zero).
+    const liveHistory = (
+      await screen.findByRole("heading", { name: "Run history" })
+    ).closest("section")!;
     // A run WITHOUT a recorded mode renders "—", never a fabricated "FULL".
-    expect(await screen.findByText("FULL")).toBeInTheDocument();
-    expect(screen.getByText("DATA")).toBeInTheDocument();
-    expect(screen.getByText("METRICS")).toBeInTheDocument();
+    expect(within(liveHistory).getByText("FULL")).toBeInTheDocument();
+    expect(within(liveHistory).getByText("DATA")).toBeInTheDocument();
+    expect(within(liveHistory).getByText("METRICS")).toBeInTheDocument();
     // The failed run surfaces its real error, never softened.
-    expect(screen.getByText(/insufficient bars/)).toBeInTheDocument();
+    expect(within(liveHistory).getByText(/insufficient bars/)).toBeInTheDocument();
     // The mode-less interval record renders an em-dash somewhere in the table.
-    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(within(liveHistory).getAllByText("—").length).toBeGreaterThan(0);
   });
 
   it("a running run renders 'Running' + its id, and null duration as '—'", async () => {
