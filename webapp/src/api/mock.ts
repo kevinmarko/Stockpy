@@ -63,6 +63,12 @@ import type {
   SymbolHeldBy,
   SymbolOptions,
   TriggerRunResult,
+  Bar,
+  Fundamentals,
+  MacroSnapshot,
+  SignalBreakdown,
+  SignalModuleScore,
+  ForecastResult,
 } from "./types";
 
 const SECTORS = [
@@ -2421,7 +2427,110 @@ export const mockApi = {
         "previous values until restarted.",
     });
   },
+
+  // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----
+  // "ZZZZ" is the honest cold-start / no-coverage fixture symbol across all
+  // three: [] bars, 404 fundamentals/forecast, all-null signal breakdown.
+  async getDataBars(symbol: string, lookbackDays = 252): Promise<Bar[]> {
+    if (symbol.toUpperCase() === "ZZZZ") return delay([]); // empty-state branch
+    const n = Math.min(lookbackDays, 120);
+    const rng = seeded(symbol.length * 7 + 13);
+    const bars: Bar[] = [];
+    let close = 100 + symbol.charCodeAt(0);
+    const start = Date.now() - n * 86_400_000;
+    for (let i = 0; i < n; i++) {
+      close = Math.max(1, close * (1 + (rng() - 0.48) * 0.03));
+      const open = close * (1 + (rng() - 0.5) * 0.01);
+      const high = Math.max(open, close) * (1 + rng() * 0.01);
+      const low = Math.min(open, close) * (1 - rng() * 0.01);
+      bars.push({
+        date: new Date(start + i * 86_400_000).toISOString().slice(0, 10),
+        Open: round2(open),
+        High: round2(high),
+        Low: round2(low),
+        Close: round2(close),
+        // one honest null-volume row so the table exercises "—", not "0"
+        Volume: i === n - 1 ? null : Math.round(1e6 + rng() * 5e6),
+      });
+    }
+    return delay(bars);
+  },
+
+  async getDataFundamentals(symbol: string): Promise<Fundamentals> {
+    if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol); // 404 branch
+    return delay<Fundamentals>({
+      shortName: `${symbol.toUpperCase()} Mock Corp`,
+      sector: "Technology",
+      trailingPE: 24.6,
+      priceToBook: 7.1,
+      returnOnEquity: 0.34,
+      dividendYield: 0.0057,
+      debtToEquity: 152.0,
+      trailingEps: 6.42,
+      // honest null: this symbol's provider didn't compute a payout ratio
+      payoutRatio: null,
+    });
+  },
+
+  async getMacro(): Promise<MacroSnapshot> {
+    return delay<MacroSnapshot>({
+      VIXCLS: 17.3,
+      T10Y2Y: -0.38,
+      sahm_rule: 0.13,
+      high_yield_oas: 3.42,
+      // honest null: FRED hadn't published today's real yield yet
+      real_yield_10y: null,
+    });
+  },
+
+  async getSignalBreakdown(symbol: string): Promise<SignalBreakdown> {
+    const s = symbol.toUpperCase();
+    if (s === "ZZZZ") {
+      // cold-start honesty: no bars → all-null, empty modules (never fabricated)
+      return delay<SignalBreakdown>({
+        symbol: s,
+        action: null,
+        conviction: null,
+        final_score: null,
+        modules: [],
+      });
+    }
+    const modules: SignalModuleScore[] = [
+      { name: "timeseries_momentum", score: 0.62, weight: 20, contribution: 12.4 },
+      { name: "cross_sectional_momentum", score: 0.31, weight: 15, contribution: 4.65 },
+      { name: "multifactor", score: -0.18, weight: 15, contribution: -2.7 },
+      { name: "macd_momentum", score: 0.44, weight: 12, contribution: 5.28 },
+      // honest null: this module didn't run for the symbol this cycle
+      { name: "rsi2_mean_reversion", score: null, weight: 10, contribution: null },
+    ];
+    return delay<SignalBreakdown>({
+      symbol: s,
+      action: "BUY",
+      conviction: 0.58,
+      final_score: 20,
+      modules,
+    });
+  },
+
+  async getForecastResult(symbol: string): Promise<ForecastResult> {
+    if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol); // 404 branch
+    const base = 100 + symbol.charCodeAt(0);
+    return delay<ForecastResult>({
+      Forecast_10: round2(base * 1.01),
+      Forecast_30: round2(base * 1.03),
+      Forecast_60: round2(base * 1.05),
+      // honest null: the h=90 fit didn't converge this run
+      Forecast_90: null,
+      ARIMA: round2(base * 1.028),
+      MC_Lower: round2(base * 0.94),
+      MC_Upper: round2(base * 1.12),
+    });
+  },
 };
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 function notFound(id: string) {
   return new ApiError(`Pilot '${id}' not found (run the pipeline first).`, 404);

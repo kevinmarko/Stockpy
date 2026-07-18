@@ -974,6 +974,80 @@ export interface ObservabilitySummary {
   risk_gate_blocks: RiskGateBlockLog;
 }
 
+// ---------------------------------------------------------------------------
+// Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer
+// (data_api.py :8603, metrics_api.py :8604)
+// ---------------------------------------------------------------------------
+
+/** GET /data/bars/{symbol} — one daily OHLCV row (`[]` when no bars). */
+export interface Bar {
+  date: string; // ISO date
+  Open: number | null;
+  High: number | null;
+  Low: number | null;
+  Close: number | null;
+  Volume: number | null;
+}
+
+/**
+ * GET /data/fundamentals/{symbol} — a yfinance `.info`-shaped metric dict.
+ * Keys are provider-defined (trailingPE, priceToBook, returnOnEquity, ...);
+ * a value is `null` when the provider omitted/couldn't compute it (never a
+ * fabricated 0 — CONSTRAINT #4). 404 when the symbol has no coverage at all.
+ */
+export type Fundamentals = Record<string, number | string | null>;
+
+/**
+ * GET /data/macro — raw current-snapshot macro dict from `fetch_macro_raw`
+ * (VIXCLS, T10Y2Y, Sahm, credit spread, ...). Keys are source-defined and a
+ * value may be `null`; the screen labels the ones it knows and lists the rest.
+ */
+export type MacroSnapshot = Record<string, number | string | null>;
+
+/** One signal module's contribution within a symbol's blended score. */
+export interface SignalModuleScore {
+  name: string;
+  // `score` is the module's raw [-1,1] (long-only modules [0,1]) output;
+  // `null` when the module didn't run for this symbol (never fabricated 0).
+  score: number | null;
+  weight: number;
+  // contribution = score * weight; `null` when score is null.
+  contribution: number | null;
+}
+
+/**
+ * GET /metrics/signals/{symbol} — per-module breakdown of a symbol's blended
+ * signal. `action`/`conviction` come from `engine.advisory.evaluate`;
+ * `final_score` + `modules` from a direct `SignalAggregator.aggregate`.
+ * Any field is `null` on a cold start / no bars (honest, never fabricated).
+ */
+export interface SignalBreakdown {
+  symbol: string;
+  action: "BUY" | "SELL" | "HOLD" | null;
+  conviction: number | null;
+  final_score: number | null;
+  modules: SignalModuleScore[];
+}
+
+/**
+ * GET /metrics/forecast/{symbol} — multi-horizon blended forecast + Monte
+ * Carlo bands from `ForecastingEngine.generate_forecast`. Every field is a
+ * price level and may be `null` (NaN→null); the backend 404s when there are
+ * no bars at all, so a rendered response always has *some* horizon populated.
+ */
+export interface ForecastResult {
+  Forecast_10: number | null;
+  Forecast_30: number | null;
+  Forecast_60: number | null;
+  Forecast_90: number | null;
+  ARIMA: number | null;
+  MC_Lower: number | null;
+  MC_Upper: number | null;
+  // Prophet overlay (present only when Prophet ran); index signature carries
+  // any additional model columns the engine emits without silently dropping them.
+  [key: string]: number | null;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

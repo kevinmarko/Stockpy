@@ -48,12 +48,36 @@ import type {
   SymbolDetail,
   SymbolOptions,
   TriggerRunResult,
+  Bar,
+  Fundamentals,
+  MacroSnapshot,
+  SignalBreakdown,
+  ForecastResult,
 } from "./types";
 
 const BASE_URL = (
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8602"
 ).replace(/\/+$/, "");
+// The Phase-4 data/metrics engines are SEPARATE FastAPI processes on their own
+// ports (data_api :8603, metrics_api :8604) — they cannot be mounted into the
+// Pilots API (its AST guard forbids the heavy-engine imports they require). So
+// the client routes by path prefix to the right origin; each falls back to the
+// Pilots base's host if unset (i.e. a single-origin reverse-proxy deployment
+// where one host proxies /data/* and /metrics/* works with zero extra config).
+const DATA_BASE_URL = (
+  import.meta.env.VITE_DATA_API_BASE_URL ?? "http://localhost:8603"
+).replace(/\/+$/, "");
+const METRICS_BASE_URL = (
+  import.meta.env.VITE_METRICS_API_BASE_URL ?? "http://localhost:8604"
+).replace(/\/+$/, "");
 const TOKEN = import.meta.env.VITE_API_TOKEN ?? "";
+
+/** Route a request path to its owning service's base URL by prefix. */
+function baseFor(path: string): string {
+  if (path.startsWith("/data/")) return DATA_BASE_URL;
+  if (path.startsWith("/metrics/")) return METRICS_BASE_URL;
+  return BASE_URL;
+}
 
 // Default to MOCK unless explicitly told to go live. This means a fresh checkout
 // runs fully offline with zero config; flip VITE_USE_MOCK=false to hit the API.
@@ -74,12 +98,13 @@ async function http<T>(
   };
   if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
+  const base = baseFor(path);
   let resp: Response;
   try {
-    resp = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+    resp = await fetch(`${base}${path}`, { ...init, headers });
   } catch (e) {
     const err = new ApiError(
-      `Network error reaching Pilots API at ${BASE_URL}. Is it running (uvicorn api.pilots_api:app --port 8602)?`,
+      `Network error reaching the API at ${base}. Is the owning service running (Pilots :8602, data :8603, metrics :8604)?`,
       0
     );
     // Offline fallback (Web App Resilience gap): the network is genuinely
@@ -155,6 +180,20 @@ const liveApi = {
     ),
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
   getStrategyHealth: () => http<StrategyHealthRow[]>("/strategy/health"),
+  // ---- Data API (data_api.py, :8603) + Metrics API (metrics_api.py, :8604) ----
+  // Routed by path prefix (see baseFor); these are the Phase-4 Data Explorer,
+  // Signal Breakdown, and Forecast Viewer screens' data sources.
+  getDataBars: (symbol: string, lookbackDays = 252) =>
+    http<Bar[]>(
+      `/data/bars/${encodeURIComponent(symbol)}?lookback_days=${lookbackDays}`
+    ),
+  getDataFundamentals: (symbol: string) =>
+    http<Fundamentals>(`/data/fundamentals/${encodeURIComponent(symbol)}`),
+  getMacro: () => http<MacroSnapshot>("/data/macro"),
+  getSignalBreakdown: (symbol: string) =>
+    http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
+  getForecastResult: (symbol: string) =>
+    http<ForecastResult>(`/metrics/forecast/${encodeURIComponent(symbol)}`),
   setStrategyModules: (body: StrategyModulesUpdate) =>
     http<StrategyModulesUpdateResult>("/strategy/modules", {
       method: "PUT",
