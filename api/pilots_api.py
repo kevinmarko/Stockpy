@@ -99,12 +99,14 @@ from settings import validate_interval_seconds as _validate_interval_seconds
 
 # Pilot layer (pure, persisted-state readers) + the gated follow write-path.
 from pilots import (
+    agentic,
     alerts_feed,
     attribution,
     brinson,
     calibration,
     catalog,
     commands as commands_reader,
+    discovery as discovery_reader,
     forecast_skill,
     models,
     observability,
@@ -121,6 +123,7 @@ from pilots import (
 )
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
+from pilots.scan_config_store import ScanConfigStore
 
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
 # forbidden only for the heavy calculation engines (see this module's AST guard
@@ -335,6 +338,26 @@ def require_llm_writes_enabled() -> None:
         raise HTTPException(
             status_code=403,
             detail="LLM writes are disabled (LLM_WRITES_ENABLED=false).",
+        )
+
+
+def require_agentic_discovery_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``PUT /agentic/scan-config`` (Robinhood
+    broker-scan config -> ``output/scan_configs.json``, consumed by the
+    ``agentic-discovery`` skill). A DEDICATED flag
+    (``settings.AGENTIC_DISCOVERY_ENABLED``), NOT ``AUTOMATION_WRITES_ENABLED``,
+    ``STRATEGY_WRITES_ENABLED``, or ``LLM_WRITES_ENABLED``: this changes WHAT THE
+    AGENT DISCOVERS (which symbols get scanned and fed toward the gated order
+    queue) and must not ride in on any of those. Mirrors
+    ``require_strategy_writes_enabled`` exactly — deliberately NOT GUI-writable,
+    hand-set in ``.env`` only. ``GET /agentic/status`` and ``GET
+    /agentic/discovery`` are read-only and NOT gated by this flag
+    (``require_read_token`` alone, matching ``GET /strategy/matrix`` and ``GET
+    /llm/status``)."""
+    if not settings.AGENTIC_DISCOVERY_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Agentic discovery writes are disabled (AGENTIC_DISCOVERY_ENABLED=false).",
         )
 
 
@@ -557,6 +580,22 @@ class LlmSettingUpdateRequest(BaseModel):
 
     key: str = Field(..., min_length=1)
     value: Union[bool, str]
+
+
+class ScanConfigRequest(BaseModel):
+    """Body for ``PUT /agentic/scan-config``. Create/replace ONE named Robinhood
+    broker-scan config in ``output/scan_configs.json`` (``pilots.scan_config_store.
+    ScanConfigStore``), consumed by the ``agentic-discovery`` Claude Code skill —
+    NOT an ``.env`` write (scan configs are structured, multi-row, operator-editable
+    data, same shape as a Pilot follow, not a global tunable). ``filters`` is stored
+    verbatim; this API has no knowledge of the Robinhood scanner's filter schema
+    (``get_scanner_filter_specs`` on the Robinhood MCP is the source of truth for
+    that — only the discovery skill calls it), so nothing here validates filter
+    keys/values beyond basic JSON-ability."""
+
+    name: str = Field(..., min_length=1, max_length=64)
+    filters: Dict[str, Any] = Field(default_factory=dict, max_length=64)
+    enabled: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -1540,6 +1579,119 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
         # Retained for back-compat with any client reading `note` directly.
         response["note"] = note
     return response
+
+
+# ---------------------------------------------------------------------------
+# Agentic Trading tab — composite status + scan-based discovery (read + gated write)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/agentic/status", dependencies=[Depends(require_read_token)])
+def get_agentic_status() -> Dict[str, Any]:
+    """Composite "what is the agent doing" answer for the Agentic Trading tab.
+
+    Composes FOUR already-imported, dependency-light sources exactly like
+    ``GET /automation/status`` does (no monolithic ``pilots/*.py`` helper
+    needed — each piece already has one): ``gui.robinhood_execution_panel``
+    for the gated execution queue, ``pilots.follows_store.FollowsStore`` for
+    active Pilot follows, ``execution.kill_switch.GlobalKillSwitch`` for the
+    kill switch, and ``pilots.agentic.agent_loop_status`` (the one piece with
+    no existing reader) for the advisory-loop agent's persisted cadence state.
+
+    Never raises, never 500s (CONSTRAINT #6) — every sub-read already degrades
+    to an honest empty/``None`` shape on its own failure."""
+    queue = execution_panel.read_execution_queue()
+    if queue is None:
+        queue_summary: Dict[str, Any] = {
+            "mode": "off",
+            "generated_at": None,
+            "n_intents": 0,
+            "n_placeable": 0,
+            "stale": False,
+            "age_seconds": None,
+        }
+    else:
+        queue_summary = {
+            "mode": queue.mode,
+            "generated_at": queue.generated_at or None,
+            "n_intents": queue.n_intents,
+            "n_placeable": queue.n_placeable,
+            "stale": execution_panel.is_queue_stale(queue),
+            "age_seconds": _safe_float(execution_panel.queue_age_seconds(queue)),
+        }
+
+    ks = GlobalKillSwitch()
+    ks_active = ks.is_active()
+    active_follows = FollowsStore().list_active()
+
+    return {
+        "mode": queue_summary["mode"],
+        "advisory_only": settings.ADVISORY_ONLY,
+        "kill_switch": {
+            "active": ks_active,
+            "reason": ks.reason() if ks_active else None,
+        },
+        "queue": queue_summary,
+        "follows": {
+            "n_active": len(active_follows),
+            "total_amount": float(sum(f.get("amount", 0.0) for f in active_follows)),
+        },
+        "agent_loop": agentic.agent_loop_status(),
+    }
+
+
+@app.get("/agentic/discovery", dependencies=[Depends(require_read_token)])
+def get_agentic_discovery() -> Dict[str, Any]:
+    """Scan-discovered candidates for the Agentic Trading tab's Discovery
+    section — READ ONLY. Populated by the ``agentic-discovery`` Claude Code
+    skill; this API never contacts the Robinhood MCP itself (mirrors ``GET
+    /execution-queue``'s module contract — see ``pilots.discovery``'s module
+    docstring). Empty ``candidates`` + an honest ``reason`` when no scan has
+    run yet (CONSTRAINT #4). Never 500s.
+
+    Adds ``writable`` (tracks ``AGENTIC_DISCOVERY_ENABLED``) on top of the pure
+    reader's payload — same pattern as ``GET /strategy/matrix`` — so the PWA
+    knows whether to render the scan-config write form before the operator
+    hits a 403 on ``PUT /agentic/scan-config``."""
+    payload = discovery_reader.discovery()
+    writable = bool(settings.AGENTIC_DISCOVERY_ENABLED)
+    payload["writable"] = writable
+    payload["note"] = (
+        "Scan configs are saved immediately and take effect on the agentic-discovery "
+        "skill's next run."
+        if writable
+        else "Scan-config writes are disabled (AGENTIC_DISCOVERY_ENABLED=false)."
+    )
+    return payload
+
+
+@app.put(
+    "/agentic/scan-config",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_agentic_discovery_enabled),
+    ],
+)
+def put_agentic_scan_config(body: ScanConfigRequest) -> Dict[str, Any]:
+    """Create/replace one named Robinhood broker-scan config
+    (``output/scan_configs.json`` via ``pilots.scan_config_store.ScanConfigStore``
+    — NOT an ``.env`` write, see ``ScanConfigRequest``'s docstring for why).
+
+    Unlike the ``.env``-backed write endpoints, this takes effect the NEXT TIME
+    the ``agentic-discovery`` skill runs a scan (there is no daemon restart
+    involved), so ``applies`` is ``"next_discovery_run"``, not
+    ``"next_daemon_restart"``. Echoes the STORE'S RETURNED ROW (which already
+    reflects exactly what was written, including timestamps) rather than the
+    raw request body."""
+    row = ScanConfigStore().upsert(body.name, body.filters, enabled=body.enabled)
+    return {
+        "scan_config": row,
+        "applies": "next_discovery_run",
+        "note": (
+            "Saved to output/scan_configs.json. Takes effect the next time the "
+            "agentic-discovery skill runs a scan — it is not applied automatically."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -1355,6 +1355,106 @@ export interface ExecutionQueue {
   reason: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Agentic Trading tab — GET /agentic/status, GET /agentic/discovery,
+// PUT /agentic/scan-config.
+// ---------------------------------------------------------------------------
+
+/** GET /agentic/status -> queue sub-section. Mirrors ExecutionQueue's summary
+ *  fields (never the full intents list -- that's ExecutionQueueSection's job). */
+export interface AgenticQueueSummary {
+  mode: "off" | "review" | "live" | string;
+  generated_at: string | null;
+  n_intents: number;
+  n_placeable: number;
+  stale: boolean;
+  age_seconds: number | null;
+}
+
+/** GET /agentic/status -> follows sub-section (active Pilot follows only). */
+export interface AgenticFollowsSummary {
+  n_active: number;
+  total_amount: number;
+}
+
+/** GET /agentic/status -> agent_loop sub-section, from
+ *  engine/advisory_agent.py's persisted AgentState (output/agent_state.json).
+ *  `reason` is set (and the numeric fields are honest zeros, not fabricated)
+ *  when the advisory-loop agent hasn't completed a cycle yet. */
+export interface AgentLoopStatus {
+  cycle_count: number;
+  last_cycle_iso: string | null;
+  backlog_count: number;
+  reason: string | null;
+}
+
+/**
+ * GET /agentic/status — composite "what is the agent doing" answer for the
+ * Agentic Trading tab's header. Read-only; never places an order (see
+ * ExecutionQueue's docstring for why this API can't and doesn't).
+ */
+export interface AgenticStatus {
+  mode: "off" | "review" | "live" | string;
+  advisory_only: boolean;
+  kill_switch: { active: boolean; reason: string | null };
+  queue: AgenticQueueSummary;
+  follows: AgenticFollowsSummary;
+  agent_loop: AgentLoopStatus;
+}
+
+/**
+ * One scan-discovered candidate (output/scan_candidates.json, written by the
+ * `.claude/skills/agentic-discovery/` Claude Code skill — this API never
+ * contacts the Robinhood MCP itself). `action`/`conviction` are null when the
+ * skill couldn't cross-reference the symbol against the advisory engine —
+ * never a fabricated score (CONSTRAINT #4).
+ */
+export interface DiscoveryCandidate {
+  symbol: string;
+  scan_name: string | null;
+  scan_reason: string | null;
+  action: string | null;
+  conviction: number | null;
+  discovered_at: string | null;
+}
+
+/** One operator-defined Robinhood broker-scan config (output/scan_configs.json). */
+export interface ScanConfig {
+  name: string;
+  filters: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** GET /agentic/discovery — the Discovery section's data. Empty `candidates`
+ *  + an honest `reason` when no scan has run yet (CONSTRAINT #4). `writable`
+ *  tracks AGENTIC_DISCOVERY_ENABLED -- false means PUT /agentic/scan-config
+ *  is disabled (mirrors StrategyMatrix's `writable`). */
+export interface AgenticDiscovery {
+  generated_at: string | null;
+  candidates: DiscoveryCandidate[];
+  scan_configs: ScanConfig[];
+  reason: string | null;
+  writable: boolean;
+  note: string;
+}
+
+/** Body for PUT /agentic/scan-config. Create/replace ONE named scan config. */
+export interface ScanConfigRequest {
+  name: string;
+  filters: Record<string, unknown>;
+  enabled: boolean;
+}
+
+/** PUT /agentic/scan-config response. `scan_config` echoes the store's
+ *  returned row (with resolved timestamps), not the raw request body. */
+export interface ScanConfigResult {
+  scan_config: ScanConfig;
+  applies: "next_discovery_run";
+  note: string;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

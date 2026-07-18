@@ -2900,3 +2900,285 @@ class TestDecisionsRead:
             with mock.patch.object(settings, "STATE_API_TOKEN", "some-token"):
                 resp = client.get("/decisions")  # no Authorization header
         assert resp.status_code == 401  # requires the READ token, not the command token
+
+
+# ===========================================================================
+# GET /agentic/status, GET /agentic/discovery, PUT /agentic/scan-config —
+# the Agentic Trading tab's composite status, scan-discovered candidates, and
+# gated scan-config write.
+# ===========================================================================
+
+
+def _fake_queue_snapshot(**overrides):
+    """A real ExecutionQueueSnapshot (not a Mock) so the REAL
+    is_queue_stale/queue_age_seconds functions can process it — only
+    read_execution_queue itself is mocked (it ignores settings.OUTPUT_DIR;
+    see gui/robinhood_execution_panel.py's module-top EXECUTION_QUEUE_PATH)."""
+    from datetime import datetime, timezone
+
+    from gui.robinhood_execution_panel import ExecutionQueueSnapshot
+
+    base = dict(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        mode="review",
+        kill_switch_active=False,
+        max_notional_per_order=500.0,
+        n_intents=2,
+        n_placeable=1,
+        intents=[],
+    )
+    base.update(overrides)
+    return ExecutionQueueSnapshot(**base)
+
+
+class TestAgenticStatus:
+    def test_shape_and_composition(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(
+                pilots_api.execution_panel, "read_execution_queue",
+                return_value=_fake_queue_snapshot(),
+            ):
+                with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                    resp = client.get("/agentic/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        for key in ("mode", "advisory_only", "kill_switch", "queue", "follows", "agent_loop"):
+            assert key in body
+        assert body["mode"] == "review"
+        assert body["kill_switch"] == {"active": False, "reason": None}
+        assert body["queue"]["n_intents"] == 2
+        assert body["queue"]["n_placeable"] == 1
+        assert body["follows"] == {"n_active": 0, "total_amount": 0.0}
+        # No agent_state.json in tmp_path -> honest cold-start, never fabricated.
+        assert body["agent_loop"]["cycle_count"] == 0
+        assert body["agent_loop"]["reason"] is not None
+
+    def test_cold_start_no_queue_file(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(
+                pilots_api.execution_panel, "read_execution_queue", return_value=None
+            ):
+                with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                    resp = client.get("/agentic/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["mode"] == "off"
+        assert body["queue"]["generated_at"] is None
+        assert body["queue"]["n_intents"] == 0
+
+    def test_kill_switch_active_reflected(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(
+                pilots_api.execution_panel, "read_execution_queue", return_value=None
+            ):
+                with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_ActiveKS()):
+                    resp = client.get("/agentic/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["kill_switch"] == {"active": True, "reason": "test halt"}
+
+    def test_active_follows_counted_and_summed(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                client.put(
+                    "/follows", json={"pilot_id": "trend-following", "amount": 250.0},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+                client.put(
+                    "/follows", json={"pilot_id": "dip-buyer", "amount": 100.0},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+                with mock.patch.object(
+                    pilots_api.execution_panel, "read_execution_queue", return_value=None
+                ):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                        resp = client.get("/agentic/status")
+        assert resp.status_code == 200
+        assert resp.json()["follows"] == {"n_active": 2, "total_amount": 350.0}
+
+    def test_fail_open_read_with_no_token(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                with mock.patch.object(
+                    pilots_api.execution_panel, "read_execution_queue", return_value=None
+                ):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                        resp = client.get("/agentic/status")
+        assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/agentic/status", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
+
+    def test_never_500_on_corrupt_agent_state(self, tmp_path):
+        (tmp_path / "agent_state.json").write_text("{ not valid json", encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(
+                pilots_api.execution_panel, "read_execution_queue", return_value=None
+            ):
+                with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                    resp = client.get("/agentic/status")
+        assert resp.status_code == 200
+        assert resp.json()["agent_loop"]["reason"] is not None
+
+
+class TestAgenticDiscoveryRead:
+    def test_cold_start_shape(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/agentic/discovery")
+        assert resp.status_code == 200
+        body = resp.json()
+        for key in ("generated_at", "candidates", "scan_configs", "reason", "writable", "note"):
+            assert key in body
+        assert body["candidates"] == []
+        assert body["reason"] is not None
+
+    def test_writable_tracks_the_flag(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                on = client.get("/agentic/discovery").json()
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", False):
+                off = client.get("/agentic/discovery").json()
+        assert on["writable"] is True
+        assert off["writable"] is False
+        assert "AGENTIC_DISCOVERY_ENABLED=false" in off["note"]
+
+    def test_fail_open_read_with_no_token(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                resp = client.get("/agentic/discovery")
+        assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/agentic/discovery", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
+
+    def test_never_500_on_corrupt_candidates_file(self, tmp_path):
+        (tmp_path / "scan_candidates.json").write_text("{ not valid json", encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/agentic/discovery")
+        assert resp.status_code == 200
+        assert resp.json()["candidates"] == []
+
+    def test_populated_candidates_and_configs(self, tmp_path):
+        (tmp_path / "scan_candidates.json").write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-07-18T00:00:00+00:00",
+                    "candidates": [
+                        {"symbol": "NVDA", "action": "BUY", "conviction": 0.7},
+                        {"symbol": "PLTR", "action": None, "conviction": None},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/agentic/discovery")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["reason"] is None
+        symbols = {c["symbol"]: c for c in body["candidates"]}
+        assert symbols["NVDA"]["action"] == "BUY"
+        assert symbols["PLTR"]["action"] is None  # never fabricated
+
+
+class TestAgenticScanConfigWrite:
+    def _auth(self):
+        return {"Authorization": f"Bearer {_CMD_TOKEN}"}
+
+    def test_fails_closed_when_agentic_discovery_disabled(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", False):
+                resp = client.put(
+                    "/agentic/scan-config",
+                    json={"name": "breakout", "filters": {"min_price": 5}, "enabled": True},
+                    headers=self._auth(),
+                )
+        assert resp.status_code == 403
+
+    def test_fails_closed_when_follow_token_unset(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                resp = client.put(
+                    "/agentic/scan-config",
+                    json={"name": "breakout", "filters": {}, "enabled": True},
+                    headers={"Authorization": "Bearer anything"},
+                )
+        assert resp.status_code == 403
+
+    def test_401_on_wrong_command_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                resp = client.put(
+                    "/agentic/scan-config",
+                    json={"name": "breakout", "filters": {}, "enabled": True},
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+    def test_happy_path_persists_and_echoes_stored_row(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                    resp = client.put(
+                        "/agentic/scan-config",
+                        json={
+                            "name": "high_momentum_breakout",
+                            "filters": {"min_price": 5, "min_volume": 1000000},
+                            "enabled": True,
+                        },
+                        headers=self._auth(),
+                    )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["applies"] == "next_discovery_run"
+        row = body["scan_config"]
+        assert row["name"] == "high_momentum_breakout"
+        assert row["filters"] == {"min_price": 5, "min_volume": 1000000}
+        assert row["enabled"] is True
+        assert "created_at" in row and "updated_at" in row
+        # Actually persisted to disk (not just echoed).
+        on_disk = json.loads((tmp_path / "scan_configs.json").read_text(encoding="utf-8"))
+        assert on_disk["scan_configs"][0]["name"] == "high_momentum_breakout"
+
+    def test_upsert_calls_store_exactly_once_with_full_payload(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                    with mock.patch.object(
+                        pilots_api.ScanConfigStore, "upsert",
+                        return_value={
+                            "name": "x", "filters": {"a": 1}, "enabled": True,
+                            "created_at": "t0", "updated_at": "t0",
+                        },
+                    ) as up:
+                        resp = client.put(
+                            "/agentic/scan-config",
+                            json={"name": "x", "filters": {"a": 1}, "enabled": True},
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        up.assert_called_once_with("x", {"a": 1}, enabled=True)
+
+    def test_write_never_logs_token(self, tmp_path, caplog):
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "AGENTIC_DISCOVERY_ENABLED", True):
+                    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                        client.put(
+                            "/agentic/scan-config",
+                            json={"name": "x", "filters": {}, "enabled": True},
+                            headers=self._auth(),
+                        )
+        assert _CMD_TOKEN not in caplog.text
+
+
+class TestAgenticDiscoveryInvariants:
+    def test_agentic_discovery_enabled_is_not_gui_writable(self):
+        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
+        must never flip this on. Neither allowlisted nor secret — hand-set only."""
+        assert "AGENTIC_DISCOVERY_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "AGENTIC_DISCOVERY_ENABLED" not in pilots_api.env_io.SECRET_KEYS

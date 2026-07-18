@@ -11,6 +11,8 @@ import { mockApi, MOCK_META } from "./mock";
 import { ApiError } from "./types";
 import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type {
+  AgenticDiscovery,
+  AgenticStatus,
   AlertsFeed,
   AutomationSchedule,
   AutomationStatus,
@@ -63,6 +65,8 @@ import type {
   ForecastResult,
   CommandManifest,
   ExecutionQueue,
+  ScanConfigRequest,
+  ScanConfigResult,
 } from "./types";
 
 const BASE_URL = (
@@ -381,6 +385,14 @@ const liveApi = {
     http<BrokerageDisconnectResult>("/brokerage/disconnect", {
       method: "POST",
       body: JSON.stringify({}),
+    }),
+  // ---- Agentic Trading tab ----
+  getAgenticStatus: () => http<AgenticStatus>("/agentic/status"),
+  getAgenticDiscovery: () => http<AgenticDiscovery>("/agentic/discovery"),
+  putScanConfig: (req: ScanConfigRequest) =>
+    http<ScanConfigResult>("/agentic/scan-config", {
+      method: "PUT",
+      body: JSON.stringify(req),
     }),
 };
 
