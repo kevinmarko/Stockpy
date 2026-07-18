@@ -15,6 +15,7 @@ import {
 } from "../components/ui";
 import { Chip, ExecutionQueueSection, ModeBadge } from "../components/ExecutionQueueSection";
 import { Modal } from "../components/Modal";
+import { TabGuide } from "../components/TabGuide";
 import { Toggle } from "../components/Toggle";
 import { theme } from "../theme";
 import { timeAgo } from "../format";
@@ -48,6 +49,8 @@ export function AgenticTrading() {
         drive it. Placing a real order always requires a separate,
         human-confirmed step in Claude Code — nothing on this screen does that.
       </p>
+
+      <TabGuide tabKey="agentic" />
 
       {status.stale && <StaleDataNotice cachedAt={status.cachedAt} onRetry={status.reload} />}
       {status.loading && <Loading lines={3} />}
