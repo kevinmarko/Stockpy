@@ -176,6 +176,27 @@ export function Marketplace() {
                 Deployability gates, pilot by pilot
               </div>
             </Link>
+            <Link to="/data-explorer" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🗂️</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Data explorer</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Raw bars, fundamentals &amp; macro
+              </div>
+            </Link>
+            <Link to="/signals" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🧬</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Signal breakdown</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Per-module contributions by symbol
+              </div>
+            </Link>
+            <Link to="/forecast" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>📈</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Forecast viewer</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Multi-horizon price forecast &amp; MC band
+              </div>
+            </Link>
           </div>
 
           <p

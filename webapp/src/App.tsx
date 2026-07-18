@@ -22,6 +22,9 @@ import { StrategyHealth } from "./screens/StrategyHealth";
 import { PipelineDashboard } from "./screens/PipelineDashboard";
 import { Settings } from "./screens/Settings";
 import { StrategyMatrix } from "./screens/StrategyMatrix";
+import { DataExplorer } from "./screens/DataExplorer";
+import { SignalBreakdown } from "./screens/SignalBreakdown";
+import { ForecastViewer } from "./screens/ForecastViewer";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { usePwaStatus } from "./hooks/usePwaStatus";
@@ -52,6 +55,9 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   { to: "/observability", label: "Mission Control", ico: "🛰️", match: (p) => p.startsWith("/observability") },
   { to: "/strategy-health", label: "Strategy Health", ico: "🛡️", match: (p) => p.startsWith("/strategy-health") },
   { to: "/pipeline", label: "Pipeline", ico: "🚀", match: (p) => p.startsWith("/pipeline") },
+  { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", match: (p) => p.startsWith("/data-explorer") },
+  { to: "/signals", label: "Signal Breakdown", ico: "🧬", match: (p) => p.startsWith("/signals") },
+  { to: "/forecast", label: "Forecast Viewer", ico: "📈", match: (p) => p.startsWith("/forecast") },
   // Last item: Sidebar (desktop) renders all of NAV_ITEMS, so this shows up
   // there automatically. BottomNav (mobile) shows only the first
   // MOBILE_PRIMARY_COUNT directly; everything after folds into the "More"
@@ -289,6 +295,9 @@ export default function App() {
           <Route path="/observability" element={<Observability />} />
           <Route path="/strategy-health" element={<StrategyHealth />} />
           <Route path="/pipeline" element={<PipelineDashboard />} />
+          <Route path="/data-explorer" element={<DataExplorer />} />
+          <Route path="/signals" element={<SignalBreakdown />} />
+          <Route path="/forecast" element={<ForecastViewer />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/strategy" element={<StrategyMatrix />} />
