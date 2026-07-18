@@ -1,9 +1,13 @@
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type {
   CorrelationCluster,
+  EdgeRatioByStrategyRow,
   FactorExposure,
   PortfolioAttribution as PortfolioAttributionT,
+  PortfolioTradeQuality as PortfolioTradeQualityT,
+  TradeQualityPoint,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { EmptyState, ErrorState, Loading, StaleDataNotice } from "../components/ui";
@@ -116,6 +120,183 @@ function ClusterCard({ c }: { c: CorrelationCluster }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Trade Quality — MFE/MAE scatter (current signals) + Edge Ratio by strategy
+// (closed trades). A separate section fed by its own endpoint
+// (GET /portfolio/trade-quality), independent of the factor-exposure /
+// correlation-cluster sections above -- a failure or cold-start here never
+// blocks those.
+// ---------------------------------------------------------------------------
+
+type ScatterSort = "edge_ratio" | "mfe" | "mae" | "symbol";
+
+/** Nulls always sort last, regardless of direction -- mirrors OptionsMatrix's
+ * `byNum` convention (never treat "unknown" as "zero"). */
+function byNumDesc<T>(sel: (row: T) => number | null | undefined) {
+  return (a: T, b: T) => {
+    const av = sel(a);
+    const bv = sel(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return bv - av;
+  };
+}
+
+const SCATTER_HEADERS: { key: ScatterSort; label: string }[] = [
+  { key: "symbol", label: "Symbol" },
+  { key: "mfe", label: "MFE" },
+  { key: "mae", label: "MAE" },
+  { key: "edge_ratio", label: "Edge ratio" },
+];
+
+function MfeMaeScatterTable({ points }: { points: TradeQualityPoint[] }) {
+  const [sort, setSort] = useState<ScatterSort>("edge_ratio");
+
+  const sorted = useMemo(() => {
+    const rows = [...points];
+    if (sort === "symbol") rows.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    else if (sort === "mfe") rows.sort(byNumDesc((r: TradeQualityPoint) => r.mfe));
+    else if (sort === "mae") rows.sort(byNumDesc((r: TradeQualityPoint) => r.mae));
+    else rows.sort(byNumDesc((r: TradeQualityPoint) => r.edge_ratio));
+    return rows;
+  }, [points, sort]);
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+        <thead>
+          <tr style={{ textAlign: "left" }}>
+            {SCATTER_HEADERS.map((h) => (
+              <th
+                key={h.key}
+                onClick={() => setSort(h.key)}
+                style={{
+                  padding: "4px 8px",
+                  cursor: "pointer",
+                  userSelect: "none",
+                  fontWeight: sort === h.key ? 700 : 400,
+                  color: sort === h.key ? theme.textPrimary : theme.textMuted,
+                }}
+              >
+                {h.label}
+                {sort === h.key ? " ▾" : ""}
+              </th>
+            ))}
+            <th style={{ padding: "4px 8px", color: theme.textMuted }}>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r) => (
+            <tr key={r.symbol} style={{ borderTop: `1px solid ${theme.border}` }}>
+              <td style={{ padding: "4px 8px", fontWeight: 600 }}>{r.symbol}</td>
+              <td className="num" style={{ padding: "4px 8px" }}>
+                {fmtPct(r.mfe, 1, { fromFraction: true })}
+              </td>
+              <td className="num" style={{ padding: "4px 8px" }}>
+                {fmtPct(r.mae, 1, { fromFraction: true })}
+              </td>
+              <td className="num" style={{ padding: "4px 8px" }}>
+                {r.edge_ratio == null ? "—" : fmtNum(r.edge_ratio, 2)}
+              </td>
+              <td style={{ padding: "4px 8px", color: theme.textSecondary }}>
+                {r.action ?? "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function EdgeRatioByStrategyTable({ rows }: { rows: EdgeRatioByStrategyRow[] }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+        <thead>
+          <tr style={{ color: theme.textMuted, textAlign: "left" }}>
+            <th style={{ padding: "4px 8px" }}>Strategy</th>
+            <th style={{ padding: "4px 8px" }}>Trades</th>
+            <th style={{ padding: "4px 8px" }}>Avg MFE</th>
+            <th style={{ padding: "4px 8px" }}>Avg MAE</th>
+            <th style={{ padding: "4px 8px" }}>Avg edge ratio</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.strategy} style={{ borderTop: `1px solid ${theme.border}` }}>
+              <td style={{ padding: "4px 8px", fontWeight: 600 }}>{r.strategy}</td>
+              <td className="num" style={{ padding: "4px 8px" }}>{r.n_trades}</td>
+              <td className="num" style={{ padding: "4px 8px" }}>
+                {fmtPct(r.avg_mfe, 1, { fromFraction: true })}
+              </td>
+              <td className="num" style={{ padding: "4px 8px" }}>
+                {fmtPct(r.avg_mae, 1, { fromFraction: true })}
+              </td>
+              <td className="num" style={{ padding: "4px 8px" }}>
+                {r.avg_edge_ratio == null ? "—" : fmtNum(r.avg_edge_ratio, 2)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TradeQualitySection({ data }: { data: PortfolioTradeQualityT }) {
+  const byStrategy = data.edge_ratio_by_strategy;
+  return (
+    <>
+      <h2 style={{ fontSize: 15, marginBottom: 4 }}>Trade quality</h2>
+      <p className="screen-sub" style={{ marginTop: 0 }}>
+        Maximum favorable/adverse excursion and edge ratio -- how much upside a
+        position captured relative to the drawdown it survived along the way.
+      </p>
+
+      <section className="card card-pad" style={{ marginBottom: 16 }}>
+        <h3 style={{ fontSize: 13, margin: "0 0 4px", color: theme.textSecondary }}>
+          MFE vs. MAE — current signals
+        </h3>
+        {data.scatter.length === 0 ? (
+          <EmptyState
+            title="No excursion data yet"
+            hint="These populate once a symbol has enough trade history to compute MFE/MAE."
+          />
+        ) : (
+          <>
+            <MfeMaeScatterTable points={data.scatter} />
+            <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>
+              Tap a column to sort. MFE/MAE are fractions of entry price.
+            </p>
+          </>
+        )}
+      </section>
+
+      <section className="card card-pad" style={{ marginBottom: 16 }}>
+        <h3 style={{ fontSize: 13, margin: "0 0 4px", color: theme.textSecondary }}>
+          Edge ratio by strategy — closed trades
+        </h3>
+        {byStrategy.by_strategy.length === 0 ? (
+          <EmptyState
+            title="No closed trades yet"
+            hint={byStrategy.reason ?? "This populates once trades close and price history is cached."}
+          />
+        ) : (
+          <EdgeRatioByStrategyTable rows={byStrategy.by_strategy} />
+        )}
+      </section>
+
+      {data.as_of && (
+        <p style={{ color: theme.textMuted, fontSize: 11, marginTop: -8, marginBottom: 16 }}>
+          As of {timeAgo(data.as_of)}
+        </p>
+      )}
+    </>
+  );
+}
+
 function AttributionBody({ data }: { data: PortfolioAttributionT }) {
   const fe = data.factor_exposure;
   const cc = data.correlation_clusters;
@@ -186,6 +367,11 @@ export function Attribution() {
   const nav = useNavigate();
   const { data, loading, error, status, stale, cachedAt, reload } =
     useApi<PortfolioAttributionT>(() => api.getPortfolioAttribution(), []);
+  // Independent fetch: a Trade Quality failure/cold-start never blocks the
+  // factor exposure / correlation cluster sections above (own loading/error
+  // handling, no shared ErrorState -- mirrors Portfolio.tsx's secondary
+  // `realized`/`equity` sections).
+  const tq = useApi<PortfolioTradeQualityT>(() => api.getPortfolioTradeQuality(), []);
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
   return (
@@ -217,6 +403,17 @@ export function Attribution() {
           {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
           <AttributionBody data={data} />
         </>
+      )}
+
+      {tq.loading ? (
+        <Loading lines={2} />
+      ) : tq.data ? (
+        <TradeQualitySection data={tq.data} />
+      ) : (
+        <EmptyState
+          title="No trade quality data yet"
+          hint={tq.error ?? "Run the pipeline and record a closed trade to see this section."}
+        />
       )}
     </div>
   );

@@ -18,6 +18,7 @@ import type {
   BrokerageStatus,
   ControlStatus,
   CorrelationCluster,
+  EdgeRatioByStrategyRow,
   EquityDrawdownCurve,
   EquityDrawdownPoint,
   FactorExposure,
@@ -43,6 +44,7 @@ import type {
   PilotTrade,
   Portfolio,
   PortfolioAttribution,
+  PortfolioTradeQuality,
   PortfolioForecastSkill,
   PortfolioRiskMetrics,
   RealizedPerformance,
@@ -62,6 +64,7 @@ import type {
   SymbolDetail,
   SymbolHeldBy,
   SymbolOptions,
+  TradeQualityPoint,
   TriggerRunResult,
   Bar,
   Fundamentals,
@@ -1638,6 +1641,40 @@ function mockPortfolioAttribution(): PortfolioAttribution {
   };
 }
 
+// ---- Trade Quality (MFE/MAE + Edge Ratio) fixture ----
+// One scatter point per PORTFOLIO symbol with recoverable excursion history.
+// COST is a deliberate HONEST partial record -- mfe/mae present but
+// edge_ratio/conviction/action null (mirrors a signal dict that legitimately
+// lacks those fields), never fabricated as 0/"—" upstream. DUK is
+// deliberately OMITTED entirely (no excursion history for it yet -- the
+// backend drops a symbol missing mfe/mae rather than plotting a fake origin
+// point; see pilots/trade_quality.py::mfe_mae_scatter).
+const TRADE_QUALITY_SCATTER: TradeQualityPoint[] = [
+  { symbol: "AAPL", mfe: 0.09, mae: 0.03, edge_ratio: 3.0, conviction: 0.72, action: "BUY" },
+  { symbol: "MSFT", mfe: 0.06, mae: 0.05, edge_ratio: 1.2, conviction: 0.55, action: "HOLD" },
+  { symbol: "NVDA", mfe: 0.15, mae: 0.04, edge_ratio: 3.75, conviction: 0.81, action: "BUY" },
+  { symbol: "V", mfe: 0.04, mae: 0.06, edge_ratio: 0.67, conviction: 0.4, action: "HOLD" },
+  { symbol: "COST", mfe: 0.05, mae: 0.02, edge_ratio: null, conviction: null, action: null },
+];
+
+// Grouped by the `strategy` tag TransactionsStore.Trade carries at entry.
+// "(untagged)" is a deliberate HONEST null-average branch: none of its 2
+// trades had a computable Edge Ratio (e.g. a zero-MAE hold period), so
+// avg_edge_ratio is null -- never averaged over a fabricated 0.
+const EDGE_RATIO_BY_STRATEGY: EdgeRatioByStrategyRow[] = [
+  { strategy: "trend-following", n_trades: 8, avg_mfe: 0.086, avg_mae: 0.041, avg_edge_ratio: 2.35 },
+  { strategy: "dip-buyer", n_trades: 5, avg_mfe: 0.052, avg_mae: 0.061, avg_edge_ratio: 0.94 },
+  { strategy: "(untagged)", n_trades: 2, avg_mfe: 0.03, avg_mae: 0.045, avg_edge_ratio: null },
+];
+
+function mockPortfolioTradeQuality(): PortfolioTradeQuality {
+  return {
+    as_of: new Date(Date.now() - 5_400_000).toISOString(),
+    scatter: TRADE_QUALITY_SCATTER,
+    edge_ratio_by_strategy: { by_strategy: EDGE_RATIO_BY_STRATEGY, reason: null },
+  };
+}
+
 // ---- Observability / Mission Control fixture ----
 // Portfolio-level risk stats: a healthy, plausible track record (not
 // deployable-badge territory — this is account risk, not a strategy gate).
@@ -2350,6 +2387,10 @@ export const mockApi = {
 
   async getPortfolioAttribution(_lookbackDays = 60): Promise<PortfolioAttribution> {
     return delay(mockPortfolioAttribution());
+  },
+
+  async getPortfolioTradeQuality(_lookbackDays = 756): Promise<PortfolioTradeQuality> {
+    return delay(mockPortfolioTradeQuality());
   },
 
   async getAlerts(limit = 50): Promise<AlertsFeed> {

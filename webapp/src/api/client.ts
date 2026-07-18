@@ -37,6 +37,7 @@ import type {
   PilotSummary,
   Portfolio,
   PortfolioAttribution,
+  PortfolioTradeQuality,
   CurvePoint,
   RealizedPerformance,
   RollingBeta,
@@ -159,6 +160,10 @@ const liveApi = {
   getPortfolioAttribution: (lookbackDays = 60) =>
     http<PortfolioAttribution>(
       `/portfolio/attribution?lookback_days=${lookbackDays}`
+    ),
+  getPortfolioTradeQuality: (lookbackDays = 756) =>
+    http<PortfolioTradeQuality>(
+      `/portfolio/trade-quality?lookback_days=${lookbackDays}`
     ),
   getAlerts: (limit = 50) => http<AlertsFeed>(`/alerts?limit=${limit}`),
   getForecast: (ticker: string, horizon = 30) =>

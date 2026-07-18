@@ -112,6 +112,7 @@ from pilots import (
     strategy_health,
     strategy_matrix as strategy_matrix_reader,
     symbols,
+    trade_quality,
 )
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
@@ -120,8 +121,12 @@ from pilots.mirror import plan_follow
 # forbidden only for the heavy calculation engines (see this module's AST guard
 # test). ``data.historical_store`` and ``execution.kill_switch`` are imported at
 # module top so tests can ``mock.patch.object(pilots_api, "HistoricalStore", ...)``.
+# ``transactions_store`` is likewise explicitly allowed (used by
+# GET /portfolio/trade-quality to read closed trades) — it is not one of the
+# heavy calculation engines the AST guard denies.
 from data.historical_store import HistoricalStore
 from execution.kill_switch import GlobalKillSwitch
+from transactions_store import TransactionsStore
 
 # The Data & Automation surface (GET/POST/PUT /automation/*) reaches the
 # orchestrator daemon ONLY over loopback HTTP via gui.daemon_client — never by
@@ -928,6 +933,92 @@ def get_portfolio_attribution(
         "as_of": factor_exposure.get("as_of"),
         "factor_exposure": factor_exposure,
         "correlation_clusters": correlation_clusters,
+    }
+
+
+# Bounds the batch-recompute work of the Edge-Ratio-by-Strategy section below
+# (an on-demand-button-style computation, per the legacy Streamlit UX —
+# expensive but acceptable): most-recent-N closed trades, and a cap on the
+# number of DISTINCT symbols whose bars get fetched (the actual expensive
+# part — one HistoricalStore.get_bars() round trip per symbol, not per trade).
+_TRADE_QUALITY_MAX_TRADES = 500
+_TRADE_QUALITY_MAX_SYMBOLS = 60
+
+
+@app.get("/portfolio/trade-quality", dependencies=[Depends(require_read_token)])
+def get_portfolio_trade_quality(
+    lookback_days: int = Query(756, ge=30, le=2000),
+) -> Dict[str, Any]:
+    """Trade Quality attribution: MFE/MAE scatter (current signals) + Edge
+    Ratio by strategy (closed trades).
+
+    Two independent, honestly-degrading sections (see ``pilots/trade_quality.py``
+    for the full contract):
+
+    * ``scatter`` — one point per symbol carrying both ``mfe``/``mae`` in the
+      latest pipeline snapshot (``output/state_snapshot.json`` via
+      ``pilots.scoring.load_snapshot``). A symbol missing either field is
+      dropped, never plotted with a fabricated 0.0 (CONSTRAINT #4). This is
+      the PORTFOLIO-WIDE view — distinct from
+      ``GET /symbols/{ticker}/detail``, which already surfaces one symbol's
+      own MFE/MAE/edge_ratio.
+    * ``edge_ratio_by_strategy`` — recomputes MFE/MAE/Edge Ratio for every
+      CLOSED trade in ``transactions_store.TransactionsStore`` (most recent
+      ``_TRADE_QUALITY_MAX_TRADES`` by exit time, to bound work for an
+      operator with a very long paper-trading history), fetching each
+      DISTINCT symbol's bars (capped at ``_TRADE_QUALITY_MAX_SYMBOLS``) via
+      ``HistoricalStore.get_bars()`` — the same incrementally-cached bars
+      source the rest of the platform reads, not a fresh live download — and
+      averages by the ``strategy`` tag recorded on each trade at entry. A
+      trade whose symbol has no recoverable OHLC history is skipped, never
+      fabricated.
+
+    Cold-start (no pipeline snapshot yet, no closed trades yet) degrades to
+    the honest empty shape for both sections rather than a 404 — this is a
+    portfolio-level view, not a single-resource lookup (CONSTRAINT #6)."""
+    pipeline_snap = _load_snapshot()
+    signals = pipeline_snap.get("signals", []) if isinstance(pipeline_snap, dict) else []
+    scatter = trade_quality.mfe_mae_scatter(signals)
+
+    try:
+        closed = TransactionsStore(readonly=True).closed_trades_df()
+    except Exception as exc:  # noqa: BLE001 - dead-letter: DB unavailable -> no trades
+        logger.warning("pilots_api: trade-quality closed_trades_df failed: %s", exc)
+        closed = None
+
+    if closed is None or getattr(closed, "empty", True):
+        edge_by_strategy: Dict[str, Any] = {"by_strategy": [], "reason": "no closed trades yet"}
+    else:
+        try:
+            if "exit_ts" in closed.columns:
+                closed = closed.sort_values("exit_ts", ascending=False)
+            closed = closed.head(_TRADE_QUALITY_MAX_TRADES)
+        except Exception as exc:  # noqa: BLE001 - defensive; fall through with unsorted/uncapped df
+            logger.debug("pilots_api: trade-quality trade cap/sort failed: %s", exc)
+
+        symbols_needed = sorted({
+            str(sym).upper().strip()
+            for sym in closed.get("symbol", [])
+            if str(sym or "").strip()
+        })[:_TRADE_QUALITY_MAX_SYMBOLS]
+
+        bars_by_symbol: Dict[str, Any] = {}
+        try:
+            store = HistoricalStore(readonly=True)
+            for sym in symbols_needed:
+                try:
+                    bars_by_symbol[sym] = store.get_bars(sym, lookback_days=lookback_days)
+                except Exception as exc:  # noqa: BLE001 - dead-letter per symbol
+                    logger.debug("pilots_api: trade-quality get_bars(%s) failed: %s", sym, exc)
+        except Exception as exc:  # noqa: BLE001 - dead-letter: HistoricalStore construction failed
+            logger.warning("pilots_api: trade-quality HistoricalStore unavailable: %s", exc)
+
+        edge_by_strategy = trade_quality.edge_ratio_by_strategy(closed, bars_by_symbol)
+
+    return {
+        "as_of": pipeline_snap.get("timestamp") if isinstance(pipeline_snap, dict) else None,
+        "scatter": scatter,
+        "edge_ratio_by_strategy": edge_by_strategy,
     }
 
 

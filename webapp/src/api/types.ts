@@ -426,6 +426,48 @@ export interface PortfolioAttribution {
   correlation_clusters: PortfolioCorrelationClusters;
 }
 
+/**
+ * GET /portfolio/trade-quality — one row per symbol carrying BOTH `mfe` and
+ * `mae` in the latest pipeline snapshot (a symbol missing either is dropped
+ * upstream, never fabricated as a zero point — CONSTRAINT #4). This is the
+ * PORTFOLIO-WIDE view; `SymbolDetail`'s `risk` block already surfaces one
+ * symbol's own mfe/mae/edge_ratio.
+ */
+export interface TradeQualityPoint {
+  symbol: string;
+  mfe: number;
+  mae: number;
+  edge_ratio: number | null;
+  conviction: number | null;
+  action: string | null;
+}
+
+/**
+ * GET /portfolio/trade-quality — one strategy's averaged MFE/MAE/Edge Ratio
+ * across its CLOSED trades (`transactions_store.TransactionsStore`), recomputed
+ * on demand from historical OHLC bars. A trade tagged with no strategy is
+ * grouped under `"(untagged)"`.
+ */
+export interface EdgeRatioByStrategyRow {
+  strategy: string;
+  n_trades: number;
+  avg_mfe: number;
+  avg_mae: number;
+  avg_edge_ratio: number | null; // null when no trade in the group had a computable Edge Ratio
+}
+
+export interface EdgeRatioByStrategy {
+  by_strategy: EdgeRatioByStrategyRow[];
+  reason: string | null; // e.g. "no closed trades yet"
+}
+
+/** GET /portfolio/trade-quality — MFE/MAE scatter + Edge Ratio by strategy. */
+export interface PortfolioTradeQuality {
+  as_of: string | null;
+  scatter: TradeQualityPoint[];
+  edge_ratio_by_strategy: EdgeRatioByStrategy;
+}
+
 /** GET /alerts — tail of the structured alert JSONL. */
 export interface AlertEntry {
   timestamp: string | null;

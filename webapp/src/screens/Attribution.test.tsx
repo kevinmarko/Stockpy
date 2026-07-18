@@ -1,8 +1,9 @@
 /**
- * Attribution.test.tsx — factor exposure + correlation cluster attribution
- * screen. Verifies the real mock renders both sections, and that every
- * honesty branch (no holdings, no matched factor data, null factor value,
- * unmatched symbols, empty clusters, heavy-concentration warning) degrades to
+ * Attribution.test.tsx — factor exposure + correlation cluster attribution +
+ * trade quality screen. Verifies the real mock renders every section, and
+ * that every honesty branch (no holdings, no matched factor data, null
+ * factor value, unmatched symbols, empty clusters, heavy-concentration
+ * warning, no excursion data, no closed trades, null edge ratio) degrades to
  * an explicit honest message rather than a fabricated 0 or blank chart.
  */
 import { render, screen } from "@testing-library/react";
@@ -10,7 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Attribution } from "./Attribution";
 import { api } from "../api/client";
-import type { PortfolioAttribution } from "../api/types";
+import type { PortfolioAttribution, PortfolioTradeQuality } from "../api/types";
 
 function renderScreen() {
   return render(
@@ -191,5 +192,94 @@ describe("Attribution screen (real mock API)", () => {
     renderScreen();
     await screen.findByText("Correlation clusters");
     expect(screen.queryByText(/High concentration/)).not.toBeInTheDocument();
+  });
+});
+
+const TQ_BASE: PortfolioTradeQuality = {
+  as_of: "2026-07-17T00:00:00Z",
+  scatter: [
+    { symbol: "AAPL", mfe: 0.09, mae: 0.03, edge_ratio: 3.0, conviction: 0.72, action: "BUY" },
+    // Honest partial record: mfe/mae present, everything else null -- never
+    // fabricated into a fake edge ratio / conviction / action.
+    { symbol: "COST", mfe: 0.05, mae: 0.02, edge_ratio: null, conviction: null, action: null },
+  ],
+  edge_ratio_by_strategy: {
+    by_strategy: [
+      { strategy: "trend-following", n_trades: 8, avg_mfe: 0.086, avg_mae: 0.041, avg_edge_ratio: 2.35 },
+      // Honest null-average branch: no trade in this group had a computable
+      // Edge Ratio -- never averaged over a fabricated 0.
+      { strategy: "(untagged)", n_trades: 2, avg_mfe: 0.03, avg_mae: 0.045, avg_edge_ratio: null },
+    ],
+    reason: null,
+  },
+};
+
+describe("Attribution screen — Trade Quality section", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders the MFE/MAE scatter and edge-ratio-by-strategy tables from the real mock", async () => {
+    renderScreen();
+    expect(await screen.findByText("Trade quality")).toBeInTheDocument();
+    expect(await screen.findByText("MFE vs. MAE — current signals")).toBeInTheDocument();
+    expect(await screen.findByText("Edge ratio by strategy — closed trades")).toBeInTheDocument();
+    expect((await screen.findAllByText(/AAPL/)).length).toBeGreaterThan(0);
+    expect(screen.getByText("trend-following")).toBeInTheDocument();
+  });
+
+  it("a scatter row with null edge_ratio/action renders an em dash, never a fabricated value", async () => {
+    vi.spyOn(api, "getPortfolioTradeQuality").mockResolvedValueOnce(TQ_BASE);
+    renderScreen();
+    await screen.findByText("COST");
+    // Both AAPL's real 3.0 and COST's honest "—" edge ratio must render.
+    expect(screen.getByText("3.00")).toBeInTheDocument();
+    const dashes = screen.getAllByText("—");
+    expect(dashes.length).toBeGreaterThan(0);
+  });
+
+  it("a strategy group with null avg_edge_ratio renders an em dash, not 0", async () => {
+    vi.spyOn(api, "getPortfolioTradeQuality").mockResolvedValueOnce(TQ_BASE);
+    renderScreen();
+    const untaggedRow = await screen.findByText("(untagged)");
+    expect(untaggedRow).toBeInTheDocument();
+    expect(screen.queryByText("0.00")).not.toBeInTheDocument();
+  });
+
+  it("no scatter data yet renders the honest empty state", async () => {
+    vi.spyOn(api, "getPortfolioTradeQuality").mockResolvedValueOnce({
+      ...TQ_BASE,
+      scatter: [],
+    });
+    renderScreen();
+    expect(await screen.findByText("No excursion data yet")).toBeInTheDocument();
+  });
+
+  it("no closed trades yet renders the honest empty state with the server's reason", async () => {
+    vi.spyOn(api, "getPortfolioTradeQuality").mockResolvedValueOnce({
+      ...TQ_BASE,
+      edge_ratio_by_strategy: { by_strategy: [], reason: "no closed trades yet" },
+    });
+    renderScreen();
+    expect(await screen.findByText("No closed trades yet")).toBeInTheDocument();
+    expect(screen.getByText("no closed trades yet")).toBeInTheDocument();
+  });
+
+  it("a Trade Quality fetch failure never blocks the factor exposure / correlation sections", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    vi.spyOn(api, "getPortfolioTradeQuality").mockRejectedValueOnce(new Error("network down"));
+    renderScreen();
+    expect(await screen.findByText("Factor exposure")).toBeInTheDocument();
+    expect(await screen.findByText("Correlation clusters")).toBeInTheDocument();
+    expect(await screen.findByText("No trade quality data yet")).toBeInTheDocument();
+  });
+
+  it("clicking a scatter column header re-sorts the table", async () => {
+    vi.spyOn(api, "getPortfolioTradeQuality").mockResolvedValueOnce(TQ_BASE);
+    renderScreen();
+    await screen.findByText("MFE vs. MAE — current signals");
+    const symbolHeader = screen.getByText("Symbol");
+    symbolHeader.click();
+    // Sorting by symbol (alphabetical) should still render both symbols.
+    expect(await screen.findByText("AAPL")).toBeInTheDocument();
+    expect(screen.getByText("COST")).toBeInTheDocument();
   });
 });
