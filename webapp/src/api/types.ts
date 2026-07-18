@@ -1210,6 +1210,17 @@ export interface ForecastResult {
   ARIMA: number | null;
   MC_Lower: number | null;
   MC_Upper: number | null;
+  // Per-horizon confidence band (price levels). A band is `null` when the
+  // matching `Forecast_{h}` horizon didn't converge — a null horizon has no
+  // band (never a fabricated 0 — CONSTRAINT #4). Bands widen with horizon.
+  Forecast_10_Lower: number | null;
+  Forecast_10_Upper: number | null;
+  Forecast_30_Lower: number | null;
+  Forecast_30_Upper: number | null;
+  Forecast_60_Lower: number | null;
+  Forecast_60_Upper: number | null;
+  Forecast_90_Lower: number | null;
+  Forecast_90_Upper: number | null;
   // Prophet overlay (present only when Prophet ran); index signature carries
   // any additional model columns the engine emits without silently dropping them.
   [key: string]: number | null;

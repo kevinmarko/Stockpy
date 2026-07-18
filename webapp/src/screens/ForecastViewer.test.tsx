@@ -1,8 +1,11 @@
 /**
- * ForecastViewer.test.tsx — multi-horizon forecast + MC band. Covers the happy
- * path, a null horizon rendering "—", and the 404 cold-start honest state.
+ * ForecastViewer.test.tsx — multi-horizon forecast + MC band + price/forecast
+ * candle chart. Covers the happy path, a null horizon rendering "—", the 404
+ * cold-start honest state, the chart section appearing once both fetches
+ * resolve, the range toggle re-fetching bars at a new lookback, and the
+ * bars-empty fallback not blocking the forecast tiles.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForecastViewer } from "./ForecastViewer";
@@ -38,5 +41,33 @@ describe("ForecastViewer screen (real mock API)", () => {
     );
     renderScreen();
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+  });
+
+  it("renders the price & forecast chart section once both fetches resolve", async () => {
+    renderScreen();
+    expect(await screen.findByText("Price & forecast")).toBeInTheDocument();
+    // Model detail (the second card) confirms the forecast fetch resolved too.
+    expect(await screen.findByText("Model detail")).toBeInTheDocument();
+  });
+
+  it("changing the range toggle re-fetches bars with the new lookback", async () => {
+    const spy = vi.spyOn(api, "getDataBars");
+    renderScreen();
+    await screen.findByText("Price & forecast");
+    // Default range is 3M -> 63 days.
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("AAPL", 63));
+
+    fireEvent.click(screen.getByText("1M"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("AAPL", 21));
+  });
+
+  it("bars-empty fallback: forecast tiles still render when the store has no history for this symbol", async () => {
+    vi.spyOn(api, "getDataBars").mockResolvedValueOnce([]);
+    renderScreen();
+    expect(await screen.findByText("Model detail")).toBeInTheDocument();
+    expect(screen.getByText("Price & forecast")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No price history in the store for this symbol/)
+    ).toBeInTheDocument();
   });
 });
