@@ -19,8 +19,12 @@ import type {
   BrokerageConnectResult,
   BrokerageDisconnectResult,
   BrokerageStatus,
+  CalibrationSummary,
   ControlStatus,
   CorrelationCluster,
+  DecisionCreateRequest,
+  DecisionCreateResult,
+  EdgeByStrategy,
   EquityDrawdownCurve,
   EquityDrawdownPoint,
   FactorExposure,
@@ -2507,6 +2511,143 @@ export const mockApi = {
 
   async getStrategyHealth(): Promise<StrategyHealthRow[]> {
     return delay(STRATEGY_HEALTH_ROWS);
+  },
+
+  // ---- Recommendation Tracking & Calibration ----
+  // Honest fixture: exercises EVERY null/empty branch the screen must handle —
+  // an under-min calibration bin (win_rate: null), an incomplete rec-tracking
+  // row (model/actual_return null, trade_id null), an MFE/MAE point with a
+  // null edge_ratio, and a decision journal entry with an unlinked trade
+  // (trade_id: null). None of these are fabricated defaults (CONSTRAINT #4).
+  async getCalibrationSummary(horizon = 30): Promise<CalibrationSummary> {
+    return delay<CalibrationSummary>({
+      calibration: {
+        bins: [
+          {
+            bin_low: 0.4, bin_high: 0.5, bin_center: 0.45, conviction_mean: 0.46,
+            win_rate: 0.42, count: 12, perfect_calibration: 0.45,
+          },
+          {
+            bin_low: 0.5, bin_high: 0.6, bin_center: 0.55, conviction_mean: 0.55,
+            win_rate: 0.58, count: 18, perfect_calibration: 0.55,
+          },
+          {
+            bin_low: 0.6, bin_high: 0.7, bin_center: 0.65, conviction_mean: 0.66,
+            win_rate: 0.71, count: 9, perfect_calibration: 0.65,
+          },
+          {
+            // under min_trades_per_bin -> win_rate null (insufficient data)
+            bin_low: 0.9, bin_high: 1.0, bin_center: 0.95, conviction_mean: 0.95,
+            win_rate: null, count: 2, perfect_calibration: 0.95,
+          },
+        ],
+        total: 41,
+        // count-weighted over the 3 scored bins
+        overall_win_rate: (0.42 * 12 + 0.58 * 18 + 0.71 * 9) / 39,
+        // mean(|0.42-0.45|, |0.58-0.55|, |0.71-0.65|) = 0.04
+        calibration_error: (0.03 + 0.03 + 0.06) / 3,
+        n_scored_bins: 3,
+        n_bins: 10,
+        min_trades_per_bin: 5,
+        reason: null,
+      },
+      recommendation_tracking: {
+        horizon_days: horizon,
+        model_return: 0.041,
+        operator_return: 0.028,
+        delta: -0.013,
+        n_signals: 3,
+        n_acted: 1,
+        n_completed: 2,
+        n_with_exit: 1,
+        rows: [
+          {
+            symbol: "AAPL", signal_ts: "2026-06-20T14:00:00Z", signal_action: "BUY",
+            conviction: 0.72, action_taken: "acted", model_return: 0.055,
+            actual_return: 0.028, days_held: 14, trade_id: 42, completed: true,
+          },
+          {
+            symbol: "MSFT", signal_ts: "2026-06-22T14:00:00Z", signal_action: "STRONG BUY",
+            conviction: 0.81, action_taken: "passed", model_return: 0.031,
+            actual_return: null, days_held: null, trade_id: null, completed: true,
+          },
+          {
+            // horizon not elapsed -> model_return null, not completed
+            symbol: "NVDA", signal_ts: "2026-07-15T14:00:00Z", signal_action: "BUY",
+            conviction: 0.66, action_taken: "passed", model_return: null,
+            actual_return: null, days_held: null, trade_id: null, completed: false,
+          },
+        ],
+        reason: null,
+      },
+      mfe_mae: {
+        points: [
+          { symbol: "AAPL", mfe: 0.082, mae: 0.031, edge_ratio: 2.65, conviction: 0.72, action: "BUY" },
+          { symbol: "MSFT", mfe: 0.054, mae: 0.048, edge_ratio: 1.13, conviction: 0.81, action: "HOLD" },
+          // honest null edge_ratio (MAE was 0 -> undefined ratio, not fabricated)
+          { symbol: "XOM", mfe: 0.026, mae: 0.061, edge_ratio: null, conviction: null, action: "SELL" },
+        ],
+        reason: null,
+      },
+      recent_decisions: {
+        decisions: [
+          {
+            symbol: "AAPL", action_taken: "acted", signal_action: "BUY", conviction: 0.72,
+            notes: "took full size", timestamp: "2026-07-16T15:12:00Z",
+            signal_ts: "2026-06-20T14:00:00Z", trade_id: 42,
+          },
+          {
+            // unlinked: no trade matched within 24h -> trade_id null, never fabricated
+            symbol: "MSFT", action_taken: "passed", signal_action: "STRONG BUY", conviction: 0.81,
+            notes: "", timestamp: "2026-07-15T09:03:00Z",
+            signal_ts: "2026-06-22T14:00:00Z", trade_id: null,
+          },
+        ],
+        reason: null,
+      },
+    });
+  },
+
+  async getEdgeByStrategy(): Promise<EdgeByStrategy> {
+    return delay<EdgeByStrategy>({
+      rows: [
+        {
+          strategy: "trend-following", n_trades: 8, mean_edge_ratio: 2.31,
+          median_edge_ratio: 2.05, mean_mfe: 0.074, mean_mae: 0.033,
+        },
+        {
+          strategy: "dip-buyer", n_trades: 5, mean_edge_ratio: 1.42,
+          median_edge_ratio: 1.28, mean_mfe: 0.051, mean_mae: 0.041,
+        },
+        {
+          strategy: "(untagged)", n_trades: 3, mean_edge_ratio: 0.88,
+          median_edge_ratio: 0.9, mean_mfe: 0.029, mean_mae: 0.036,
+        },
+      ],
+      reason: null,
+    });
+  },
+
+  async logDecision(body: DecisionCreateRequest): Promise<DecisionCreateResult> {
+    // Mock trade-link resolution: only an "acted" AAPL decision matches a
+    // (mock) trade within 24h -> trade_id set, trade_linked true. Every other
+    // case is honestly unlinked (trade_id null) — exercising BOTH render paths
+    // ("linked to trade #N" vs "no trade match within 24h").
+    const linked = body.action_taken === "acted" && body.symbol.toUpperCase() === "AAPL";
+    return delay<DecisionCreateResult>(
+      {
+        symbol: body.symbol.toUpperCase(),
+        action_taken: body.action_taken,
+        signal_action: body.signal_action,
+        conviction: body.conviction,
+        notes: body.notes,
+        timestamp: new Date().toISOString(),
+        signal_ts: body.signal_ts ?? "",
+        trade_id: linked ? 42 : null,
+        trade_linked: linked,
+      },
+      150
+    );
   },
 
   async setStrategyModules(

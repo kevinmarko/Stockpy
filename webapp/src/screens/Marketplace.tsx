@@ -176,6 +176,13 @@ export function Marketplace() {
                 Deployability gates, pilot by pilot
               </div>
             </Link>
+            <Link to="/calibration" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🎚️</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Calibration</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Did our actual calls work?
+              </div>
+            </Link>
             <Link to="/data-explorer" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: 22 }} aria-hidden>🗂️</div>
               <div style={{ fontWeight: 700, marginTop: 6 }}>Data explorer</div>

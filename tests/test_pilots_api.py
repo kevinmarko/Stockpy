@@ -2546,3 +2546,252 @@ def test_control_center_overview_end_to_end_leaks_no_heavy_engine():
         [sys.executable, "-c", code], cwd=str(repo_root), capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
+
+
+# ---------------------------------------------------------------------------
+# GET /calibration/summary + /calibration/edge-by-strategy + POST /decisions
+# ---------------------------------------------------------------------------
+
+
+_EMPTY_TRACKING_REPORT = {
+    "rows": [],
+    "model_return_30d": float("nan"),
+    "operator_return_30d": float("nan"),
+    "delta": float("nan"),
+    "n_signals": 0,
+    "n_acted": 0,
+    "n_completed": 0,
+    "n_with_exit": 0,
+    "horizon_days": 30,
+}
+
+
+class _EmptyClosedStore:
+    """A TransactionsStore stand-in with no closed trades and no trade history."""
+
+    def closed_trades_df(self):
+        return pd.DataFrame()
+
+    def get_trade_history(self, symbol):
+        return pd.DataFrame()
+
+
+class TestCalibrationSummaryEndpoint:
+    """Endpoint-level wiring for GET /calibration/summary. The substantive
+    per-section logic is unit-tested against pilots/calibration.py in
+    tests/test_pilots_calibration.py; these confirm the FastAPI wiring — auth,
+    query params, snapshot threading, and the composite shape — end-to-end."""
+
+    def test_cold_start_shape(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
+            ):
+                with mock.patch(
+                    "evaluation_engine.recommendation_tracking_report",
+                    return_value=_EMPTY_TRACKING_REPORT,
+                ):
+                    with mock.patch(
+                        "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                    ):
+                        resp = client.get("/calibration/summary")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {
+            "calibration",
+            "recommendation_tracking",
+            "mfe_mae",
+            "recent_decisions",
+        }
+        assert body["calibration"]["bins"] == []
+        assert body["calibration"]["overall_win_rate"] is None
+        assert body["calibration"]["reason"]
+        assert body["recommendation_tracking"]["n_signals"] == 0
+        assert body["recommendation_tracking"]["model_return"] is None
+        assert body["mfe_mae"]["points"] == []
+        assert body["recent_decisions"]["decisions"] == []
+
+    def test_reads_mfe_mae_from_persisted_snapshot_fixture(self, tmp_path):
+        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
+            ):
+                with mock.patch(
+                    "evaluation_engine.recommendation_tracking_report",
+                    return_value=_EMPTY_TRACKING_REPORT,
+                ):
+                    with mock.patch(
+                        "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                    ):
+                        resp = client.get("/calibration/summary")
+
+        assert resp.status_code == 200
+        # mfe_mae is a pure snapshot read — its shape must always be present
+        # (points may be empty if the fixture carries no mfe/mae, which is honest).
+        assert "points" in resp.json()["mfe_mae"]
+
+    def test_horizon_threads_through(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
+            ):
+                with mock.patch(
+                    "evaluation_engine.recommendation_tracking_report",
+                    return_value={**_EMPTY_TRACKING_REPORT, "horizon_days": 60},
+                ) as mock_report:
+                    with mock.patch(
+                        "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                    ):
+                        resp = client.get("/calibration/summary?horizon=60")
+
+        assert resp.status_code == 200
+        assert resp.json()["recommendation_tracking"]["horizon_days"] == 60
+        # The horizon query param reached the report call.
+        assert mock_report.call_args.kwargs["horizon_days"] == 60
+
+    def test_bad_horizon_422(self):
+        assert client.get("/calibration/summary?horizon=0").status_code == 422
+        assert client.get("/calibration/summary?horizon=999").status_code == 422
+
+    def test_read_token_gates_endpoint(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+                with mock.patch(
+                    "transactions_store.TransactionsStore",
+                    return_value=_EmptyClosedStore(),
+                ):
+                    with mock.patch(
+                        "evaluation_engine.recommendation_tracking_report",
+                        return_value=_EMPTY_TRACKING_REPORT,
+                    ):
+                        with mock.patch(
+                            "gui.decision_log.decisions_df", return_value=pd.DataFrame()
+                        ):
+                            no_auth = client.get("/calibration/summary")
+                            ok = client.get(
+                                "/calibration/summary",
+                                headers={"Authorization": "Bearer read-tok"},
+                            )
+        assert no_auth.status_code == 401
+        assert ok.status_code == 200
+
+
+class TestEdgeByStrategyEndpoint:
+    def test_no_trades_honest_empty(self):
+        with mock.patch(
+            "transactions_store.TransactionsStore", return_value=_EmptyClosedStore()
+        ):
+            resp = client.get("/calibration/edge-by-strategy")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rows"] == []
+        assert body["reason"]
+
+    def test_happy_path_groups_by_strategy(self):
+        closed = pd.DataFrame(
+            {
+                "symbol": ["AAPL"],
+                "entry_price": [100.0],
+                "entry_ts": [pd.Timestamp("2026-01-01")],
+                "exit_ts": [pd.Timestamp("2026-01-10")],
+                "strategy": ["trend"],
+            }
+        )
+
+        class _Store:
+            def closed_trades_df(self):
+                return closed
+
+        class _HStore:
+            def get_bars(self, sym, lookback_days=756):
+                idx = pd.date_range("2026-01-01", periods=30, freq="D")
+                return pd.DataFrame(
+                    {"Open": 100.0, "High": 112.0, "Low": 96.0, "Close": 105.0, "Volume": 1},
+                    index=idx,
+                )
+
+        edge_ret = {"MFE": 0.12, "MAE": 0.04, "Edge Ratio": 3.0, "Return Std Dev": 0.01}
+        with mock.patch("transactions_store.TransactionsStore", return_value=_Store()):
+            with mock.patch("data.historical_store.HistoricalStore", return_value=_HStore()):
+                with mock.patch("evaluation_engine.EvaluationEngine") as MockEE:
+                    MockEE.return_value.calculate_edge_ratio.return_value = edge_ret
+                    resp = client.get("/calibration/edge-by-strategy")
+
+        assert resp.status_code == 200
+        rows = resp.json()["rows"]
+        assert len(rows) == 1
+        assert rows[0]["strategy"] == "trend"
+        assert rows[0]["n_trades"] == 1
+        assert rows[0]["mean_edge_ratio"] == pytest.approx(3.0)
+
+
+class _NoTradeStore:
+    """A TransactionsStore stand-in whose trade-history join finds nothing —
+    so an 'acted' decision's trade_id stays null (best-effort, never fabricated)."""
+
+    def get_trade_history(self, symbol):
+        return pd.DataFrame()
+
+
+class TestDecisionsWrite:
+    def test_write_happy_acted_no_trade_match(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch(
+                    "transactions_store.TransactionsStore", return_value=_NoTradeStore()
+                ):
+                    resp = client.post(
+                        "/decisions",
+                        json={
+                            "symbol": "aapl",
+                            "action_taken": "acted",
+                            "signal_action": "BUY",
+                            "conviction": 0.8,
+                            "notes": "took it",
+                        },
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"  # normalized upper
+        assert body["action_taken"] == "acted"
+        assert body["signal_action"] == "BUY"
+        assert body["conviction"] == pytest.approx(0.8)
+        assert body["trade_id"] is None  # no match within 24h -> null, never fabricated
+        assert body["trade_linked"] is False
+        # The entry was actually appended to the tmp OUTPUT_DIR log.
+        log_file = tmp_path / "decision_log.jsonl"
+        assert log_file.exists()
+        assert "AAPL" in log_file.read_text(encoding="utf-8")
+
+    def test_bad_action_422_with_stable_tag(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = client.post(
+                    "/decisions",
+                    json={"symbol": "AAPL", "action_taken": "yolo", "signal_action": "BUY"},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "invalid_action"
+
+    def test_fail_closed_403_when_follow_token_unset(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+                resp = client.post(
+                    "/decisions",
+                    json={"symbol": "AAPL", "action_taken": "passed", "signal_action": "BUY"},
+                )
+        assert resp.status_code == 403
+
+    def test_wrong_command_token_401(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = client.post(
+                    "/decisions",
+                    json={"symbol": "AAPL", "action_taken": "passed", "signal_action": "BUY"},
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401

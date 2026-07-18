@@ -20,7 +20,11 @@ import type {
   BrokerageConnectResult,
   BrokerageDisconnectResult,
   BrokerageStatus,
+  CalibrationSummary,
   ControlStatus,
+  DecisionCreateRequest,
+  DecisionCreateResult,
+  EdgeByStrategy,
   Follow,
   FollowResult,
   ForecastSkill,
@@ -190,6 +194,16 @@ const liveApi = {
     ),
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
   getStrategyHealth: () => http<StrategyHealthRow[]>("/strategy/health"),
+  // ---- Recommendation Tracking & Calibration (default pilots base, :8602) ----
+  getCalibrationSummary: (horizon = 30) =>
+    http<CalibrationSummary>(`/calibration/summary?horizon=${horizon}`),
+  getEdgeByStrategy: () =>
+    http<EdgeByStrategy>("/calibration/edge-by-strategy"),
+  logDecision: (body: DecisionCreateRequest) =>
+    http<DecisionCreateResult>("/decisions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   // ---- Data API (data_api.py, :8603) + Metrics API (metrics_api.py, :8604) ----
   // Routed by path prefix (see baseFor); these are the Phase-4 Data Explorer,
   // Signal Breakdown, and Forecast Viewer screens' data sources.

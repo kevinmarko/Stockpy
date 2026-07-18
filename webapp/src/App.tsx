@@ -19,6 +19,7 @@ import { OptionsMatrix } from "./screens/OptionsMatrix";
 import { Attribution } from "./screens/Attribution";
 import { Observability } from "./screens/Observability";
 import { StrategyHealth } from "./screens/StrategyHealth";
+import { Calibration } from "./screens/Calibration";
 import { PipelineDashboard } from "./screens/PipelineDashboard";
 import { Settings } from "./screens/Settings";
 import { StrategyMatrix } from "./screens/StrategyMatrix";
@@ -54,6 +55,7 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   { to: "/attribution", label: "Attribution", ico: "🧮", match: (p) => p.startsWith("/attribution") },
   { to: "/observability", label: "Mission Control", ico: "🛰️", match: (p) => p.startsWith("/observability") },
   { to: "/strategy-health", label: "Strategy Health", ico: "🛡️", match: (p) => p.startsWith("/strategy-health") },
+  { to: "/calibration", label: "Calibration", ico: "🎚️", match: (p) => p.startsWith("/calibration") },
   { to: "/pipeline", label: "Pipeline", ico: "🚀", match: (p) => p.startsWith("/pipeline") },
   { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", match: (p) => p.startsWith("/data-explorer") },
   { to: "/signals", label: "Signal Breakdown", ico: "🧬", match: (p) => p.startsWith("/signals") },
@@ -294,6 +296,7 @@ export default function App() {
           <Route path="/attribution" element={<Attribution />} />
           <Route path="/observability" element={<Observability />} />
           <Route path="/strategy-health" element={<StrategyHealth />} />
+          <Route path="/calibration" element={<Calibration />} />
           <Route path="/pipeline" element={<PipelineDashboard />} />
           <Route path="/data-explorer" element={<DataExplorer />} />
           <Route path="/signals" element={<SignalBreakdown />} />
