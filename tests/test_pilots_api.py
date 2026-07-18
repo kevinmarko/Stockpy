@@ -2073,6 +2073,140 @@ class TestAutomationWritesInvariants:
         assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
 
 
+class TestExecutionModeWrite:
+    """PUT /automation/execution-mode -- 1-Click Go Live toggle. Tests stub
+    ``gui.strategy_registry.set_active_mode`` (its own DRY_RUN/ALPACA_PAPER
+    writes are covered by that module's own tests) and redirect
+    ``env_io.ENV_PATH`` at a scratch file for the ADVISORY_ONLY write, mirroring
+    ``TestAutomationIntervalWrite``."""
+
+    def test_happy_path_writes_advisory_only_and_delegates_mode(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    with mock.patch(
+                        "gui.strategy_registry.set_active_mode"
+                    ) as mock_set_mode:
+                        resp = client.put(
+                            "/automation/execution-mode",
+                            json={"mode": "paper", "advisory_only": False},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["written"] == ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"]
+        assert body["advisory_only"] is False
+        assert body["mode"] == "paper"
+        assert body["applies"] == "next_daemon_restart"
+        assert "ADVISORY_ONLY=false" in env_file.read_text(encoding="utf-8")
+        mock_set_mode.assert_called_once_with("paper")
+
+    def test_advisory_mode_never_calls_set_active_mode(self, tmp_path):
+        """``mode == "advisory"`` carries no DRY_RUN/ALPACA_PAPER pairing --
+        ``written`` must say so rather than claiming a write that never
+        happened (CONSTRAINT #4)."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    with mock.patch(
+                        "gui.strategy_registry.set_active_mode"
+                    ) as mock_set_mode:
+                        resp = client.put(
+                            "/automation/execution-mode",
+                            json={"mode": "advisory", "advisory_only": True},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 200
+        assert resp.json()["written"] == ["ADVISORY_ONLY"]
+        mock_set_mode.assert_not_called()
+
+    def test_response_echoes_body_not_stale_settings(self, tmp_path):
+        """Mirrors PUT /strategy/modules's echo contract: the .env write never
+        patches the process-lifetime ``settings`` singleton, so the response
+        must reflect the REQUEST BODY, not a stale ``settings.ADVISORY_ONLY``."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "ADVISORY_ONLY", True):
+                    with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                        with mock.patch("gui.strategy_registry.set_active_mode"):
+                            resp = client.put(
+                                "/automation/execution-mode",
+                                json={"mode": "live", "advisory_only": False},
+                                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                            )
+        assert resp.status_code == 200
+        assert resp.json()["advisory_only"] is False
+
+    def test_invalid_mode_422(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/automation/execution-mode",
+                    json={"mode": "not-a-real-mode", "advisory_only": True},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 422
+
+    def test_missing_advisory_only_422(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/automation/execution-mode",
+                    json={"mode": "paper"},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 422
+
+    def test_fails_closed_when_automation_writes_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
+                resp = client.put(
+                    "/automation/execution-mode",
+                    json={"mode": "paper", "advisory_only": False},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 403
+
+    def test_command_token_required(self):
+        with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+            resp = client.put(
+                "/automation/execution-mode",
+                json={"mode": "paper", "advisory_only": False},
+            )
+        assert resp.status_code == 403
+
+    def test_401_on_wrong_command_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/automation/execution-mode",
+                    json={"mode": "paper", "advisory_only": False},
+                    headers={"Authorization": "Bearer wrong"},
+                )
+        assert resp.status_code == 401
+
+    def test_write_never_logs_token(self, caplog, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                    with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                        with mock.patch("gui.strategy_registry.set_active_mode"):
+                            client.put(
+                                "/automation/execution-mode",
+                                json={"mode": "paper", "advisory_only": False},
+                                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                            )
+        assert _CMD_TOKEN not in caplog.text
+
+
 # ===========================================================================
 # GET /strategy/matrix + PUT /strategy/modules
 # ===========================================================================
