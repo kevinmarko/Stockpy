@@ -55,6 +55,8 @@ import type {
   StrategyHealthRow,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
+  TunablesResponse,
+  TunablesUpdateResult,
   SymbolDetail,
   UniverseResponse,
   RecommendationsResponse,
@@ -277,6 +279,16 @@ const liveApi = {
     http<StrategyModulesUpdateResult>("/strategy/modules", {
       method: "PUT",
       body: JSON.stringify(body),
+    }),
+  // ---- General runtime tunables editor (pilots base, :8602) ----
+  // Read the allowlisted, non-secret settings grouped for display; write only
+  // the changed keys back. The PUT does NOT reach the running process — see
+  // TunablesResponse.applies ("next_daemon_restart").
+  getTunables: () => http<TunablesResponse>("/settings/tunables"),
+  updateTunables: (values: Record<string, number | boolean | string>) =>
+    http<TunablesUpdateResult>("/settings/tunables", {
+      method: "PUT",
+      body: JSON.stringify({ values }),
     }),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>

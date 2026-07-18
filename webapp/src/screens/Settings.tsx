@@ -8,6 +8,7 @@ import type {
   Follow,
   LlmStatus,
   StrategyMatrix,
+  TunablesResponse,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
@@ -133,6 +134,8 @@ export function Settings() {
       </SectionCard>
 
       <SignalModulesLink />
+
+      <TunablesLink />
 
       <ActiveFollowsSection />
 
@@ -371,6 +374,38 @@ function SignalModulesLink() {
             {count == null
               ? "Signal weights & enabled modules"
               : `${count} modules · ${disabledCount} disabled`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: 20 }}>›</span>
+      </div>
+    </Link>
+  );
+}
+
+/**
+ * Entry point to the Settings Manager (runtime tunables) screen — a `.env`-write
+ * surface (PUT /settings/tunables), so it lives under /settings alongside every
+ * other write surface, not in top-level nav. Shows a live "N tunables · M
+ * groups" summary and links to the editor.
+ */
+function TunablesLink() {
+  const { data } = useApi<TunablesResponse>(() => api.getTunables(), []);
+  const groupCount = data?.groups.length ?? null;
+  const fieldCount =
+    data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
+  return (
+    <Link
+      to="/settings/tunables"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none", marginTop: 16 }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Runtime tunables</div>
+          <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 2 }}>
+            {fieldCount == null
+              ? "Sizing, forecasting & data settings"
+              : `${fieldCount} tunables · ${groupCount} groups`}
           </div>
         </div>
         <span style={{ color: theme.textMuted, fontSize: 20 }}>›</span>

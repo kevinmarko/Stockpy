@@ -81,6 +81,10 @@ import type {
   StrategyMatrix,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
+  TunableField,
+  TunableFieldType,
+  TunablesResponse,
+  TunablesUpdateResult,
   SymbolDetail,
   UniverseResponse,
   RecommendationsResponse,
@@ -1125,6 +1129,167 @@ function mockStrategyMatrix(): StrategyMatrix {
       : { detected: false, keys: [], note: "" },
     reason: null,
   };
+}
+
+// ---- General runtime tunables editor fixture (GET/PUT /settings/tunables) ----
+// A representative multi-group payload covering every widget type (number,
+// boolean, enum, string). Honesty branches baked in: MACRO_REFRESH_HOURS has
+// value:null (absent — its input must render empty, never 0). Accepted writes
+// persist to localStorage so a later GET reflects them; the PUT does NOT reach
+// a "running process" (applies:"next_daemon_restart"), so a value out of its
+// declared bounds is rejected with a reason rather than silently written.
+const TUNABLES_KEY = "stockpy.mock.tunables";
+
+interface MockTunableDef {
+  group: string;
+  key: string;
+  type: TunableFieldType;
+  value: number | boolean | string | null;
+  default: number | boolean | string | null;
+  description: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+}
+
+const TUNABLE_DEFS: MockTunableDef[] = [
+  // Position Sizing
+  {
+    group: "Position Sizing", key: "KELLY_FRACTION", type: "number",
+    value: 0.5, default: 0.5, min: 0, max: 1, step: 0.05,
+    description: "Fraction of full-Kelly used when sizing a position.",
+  },
+  {
+    group: "Position Sizing", key: "KELLY_CAP", type: "number",
+    value: 0.2, default: 0.2, min: 0, max: 1, step: 0.01,
+    description: "Hard ceiling on any single Kelly-derived position weight.",
+  },
+  {
+    group: "Position Sizing", key: "VOL_TARGET", type: "number",
+    value: 0.1, default: 0.1, min: 0, max: 1, step: 0.01,
+    description: "Annualized volatility target for the vol-target sizer.",
+  },
+  {
+    group: "Position Sizing", key: "MAX_LEVERAGE", type: "number",
+    value: 2.0, default: 2.0, min: 1, max: 4, step: 0.25,
+    description: "Maximum gross leverage the vol-target fallback may compute.",
+  },
+  // Forecasting
+  {
+    group: "Forecasting", key: "FORECAST_USE_GARCH_SIGMA", type: "boolean",
+    value: true, default: true,
+    description: "Use GJR-GARCH sigma for the Monte-Carlo forecast (else rollback).",
+  },
+  {
+    group: "Forecasting", key: "FORECAST_PROPHET_WEIGHT", type: "number",
+    value: 0.3, default: 0.0, min: 0, max: 1, step: 0.05,
+    description: "Weight of the Prophet overlay in the forecast ensemble.",
+  },
+  {
+    group: "Forecasting", key: "FUNDAMENTALS_SOURCE", type: "enum",
+    value: "yahoo", default: "yahoo", options: ["yahoo", "yfinance_info"],
+    description: "Primary fundamentals provider.",
+  },
+  {
+    group: "Forecasting", key: "BETA_LOOKBACK_DAYS", type: "number",
+    value: 504, default: 504, min: 30, max: 2000, step: 1,
+    description: "Lookback window (trading days) for the beta computation.",
+  },
+  // Data & Universe
+  {
+    group: "Data & Universe", key: "DEFAULT_TICKERS", type: "string",
+    value: "AAPL,MSFT,NVDA,SPY", default: "",
+    description: "Comma-separated universe evaluated when no watchlist is set.",
+  },
+  {
+    // Honest absent value: not currently set in .env -> input renders empty.
+    group: "Data & Universe", key: "MACRO_REFRESH_HOURS", type: "number",
+    value: null, default: 12, min: 1, max: 168, step: 1,
+    description: "Hours before the cached FRED macro series are re-fetched.",
+  },
+];
+
+function readTunableOverrides(): Record<string, number | boolean | string> {
+  try {
+    const raw = localStorage.getItem(TUNABLES_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, number | boolean | string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function mockTunables(): TunablesResponse {
+  const ov = readTunableOverrides();
+  const groups: TunablesResponse["groups"] = [];
+  for (const def of TUNABLE_DEFS) {
+    let group = groups.find((g) => g.name === def.group);
+    if (!group) {
+      group = { name: def.group, fields: [] };
+      groups.push(group);
+    }
+    const field: TunableField = {
+      key: def.key,
+      value: def.key in ov ? ov[def.key] : def.value,
+      type: def.type,
+      default: def.default,
+      description: def.description,
+    };
+    if (def.min !== undefined) field.min = def.min;
+    if (def.max !== undefined) field.max = def.max;
+    if (def.step !== undefined) field.step = def.step;
+    if (def.options !== undefined) field.options = def.options;
+    group.fields.push(field);
+  }
+  return { applies: "next_daemon_restart", groups };
+}
+
+function applyTunables(
+  values: Record<string, number | boolean | string>
+): TunablesUpdateResult {
+  const written: Record<string, number | boolean | string> = {};
+  const rejected: Record<string, string> = {};
+  const byKey = new Map(TUNABLE_DEFS.map((d) => [d.key, d]));
+  for (const [key, val] of Object.entries(values)) {
+    const def = byKey.get(key);
+    if (!def) {
+      rejected[key] = "unknown_key: not a recognized tunable.";
+      continue;
+    }
+    if (def.type === "number") {
+      const n = typeof val === "number" ? val : Number(val);
+      if (!Number.isFinite(n)) {
+        rejected[key] = "type_mismatch: expected a number.";
+        continue;
+      }
+      if (
+        (def.min !== undefined && n < def.min) ||
+        (def.max !== undefined && n > def.max)
+      ) {
+        rejected[key] = `out_of_range: must be within [${def.min}, ${def.max}].`;
+        continue;
+      }
+      written[key] = n;
+    } else if (def.type === "boolean") {
+      written[key] = Boolean(val);
+    } else if (def.type === "enum") {
+      if (def.options && !def.options.includes(String(val))) {
+        rejected[key] = `invalid_option: must be one of ${def.options.join(", ")}.`;
+        continue;
+      }
+      written[key] = String(val);
+    } else {
+      written[key] = String(val);
+    }
+  }
+  if (Object.keys(written).length > 0) {
+    try {
+      localStorage.setItem(TUNABLES_KEY, JSON.stringify({ ...readTunableOverrides(), ...written }));
+    } catch {
+      /* ignore quota */
+    }
+  }
+  return { written, rejected, applies: "next_daemon_restart" };
 }
 
 // ---- Realized broker P&L fixture (FIFO round-trips) ----
@@ -3187,6 +3352,16 @@ export const mockApi = {
         "running daemon, and any already-launched pipeline still use the " +
         "previous values until restarted.",
     });
+  },
+
+  async getTunables(): Promise<TunablesResponse> {
+    return delay(mockTunables());
+  },
+
+  async updateTunables(
+    values: Record<string, number | boolean | string>
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyTunables(values));
   },
 
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----
