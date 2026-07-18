@@ -282,6 +282,12 @@ class OrchestratorDaemon:
         started_at = datetime.now(timezone.utc)
         state: RunState
         error: Optional[str]
+        # Only the automatic interval timer honors the cross-cycle
+        # data-freshness gate (DATA_FRESHNESS_TTL_SECONDS). Every other trigger
+        # -- a manual "Run Pipeline", an on-demand API call, a dry-run -- forces
+        # a real refresh so the operator's explicit action is never silently
+        # skipped as "data still fresh".
+        force = reason != "interval"
         try:
             asyncio.run(
                 main_orchestrator._main_body(
@@ -290,6 +296,7 @@ class OrchestratorDaemon:
                     engines=self._engines,
                     data_engine=self._data_engine,
                     mode=mode,
+                    force=force,
                 )
             )
             state = RunState.SUCCEEDED

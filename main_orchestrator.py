@@ -81,6 +81,48 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("MasterOrchestrator")
 
 
+# =============================================================================
+# CROSS-CYCLE DATA-FRESHNESS MARKER (settings.DATA_FRESHNESS_TTL_SECONDS)
+# =============================================================================
+# A tiny persisted marker file recording the UTC timestamp of the last
+# SUCCESSFUL (real, non-mock) data pull. The daemon's interval timer consults
+# _data_is_fresh() before pulling: if the last pull is younger than the TTL, the
+# whole cycle is skipped ("check the DB before pulling"). Persisted (not
+# in-process) so a freshly-restarted daemon does not immediately re-pull. All
+# helpers are dead-letter safe (CONSTRAINT #6): a marker read/write failure must
+# NEVER fail — or gate — a pipeline cycle, so a read failure degrades to "not
+# fresh" (pull) and a write failure is swallowed.
+_DATA_REFRESH_MARKER = os.path.join(str(settings.OUTPUT_DIR), "last_data_refresh.txt")
+
+
+def _mark_data_refreshed() -> None:
+    """Record 'now' as the last successful data-pull time. Never raises."""
+    try:
+        os.makedirs(str(settings.OUTPUT_DIR), exist_ok=True)
+        with open(_DATA_REFRESH_MARKER, "w", encoding="utf-8") as fh:
+            fh.write(datetime.now(timezone.utc).isoformat())
+    except Exception as exc:  # pragma: no cover - defensive only
+        logger.debug("Could not write data-refresh marker (non-fatal): %s", exc)
+
+
+def _data_is_fresh(ttl_seconds: int) -> bool:
+    """True iff the last successful data pull is younger than ``ttl_seconds``.
+
+    ``ttl_seconds <= 0`` disables the gate (always False → always pull). A
+    missing/unparseable marker also returns False so we fail toward pulling
+    rather than silently starving on stale data.
+    """
+    if ttl_seconds <= 0:
+        return False
+    try:
+        with open(_DATA_REFRESH_MARKER, encoding="utf-8") as fh:
+            ts = datetime.fromisoformat(fh.read().strip())
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        return 0 <= age < ttl_seconds
+    except Exception:
+        return False
+
+
 class PipelineFatalError(RuntimeError):
     """A fatal error in a single pipeline cycle (data-fetch crash, pipeline
     crash, or strict-mode schema validation failure).
@@ -737,7 +779,8 @@ def _dispatch_daily_summary(ctx) -> None:
 
 async def _main_body(effective_dry_run: bool, strict: bool = False,
                       *, engines: Optional[EngineContext] = None,
-                      data_engine: Optional[Any] = None, mode: str = "full") -> None:
+                      data_engine: Optional[Any] = None, mode: str = "full",
+                      force: bool = True) -> None:
     """Thin progress-instrumentation wrapper around ``_main_body_impl``.
 
     Constructs ONE ``ProgressReporter`` per cycle (reporting/progress.py),
@@ -764,7 +807,7 @@ async def _main_body(effective_dry_run: bool, strict: bool = False,
     try:
         await _main_body_impl(
             effective_dry_run, strict, engines=engines, data_engine=data_engine,
-            progress=_progress, mode=mode,
+            progress=_progress, mode=mode, force=force,
         )
     except Exception:
         _progress.finish("failed")
@@ -777,7 +820,7 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
                            *, engines: Optional[EngineContext] = None,
                            data_engine: Optional[Any] = None,
                            progress: Optional[ProgressReporter] = None,
-                           mode: str = "full") -> None:
+                           mode: str = "full", force: bool = True) -> None:
     """Core pipeline logic using the modular Pipeline framework.
 
     ``mode`` selects which pipeline steps run:
@@ -787,7 +830,24 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
                       (``AsyncDataFetchStep`` + ``RunPipelineStep``);
     * ``"full"``    — the whole cycle (default, unchanged): data fetch, run
                       pipeline, broker execution, state snapshot.
+
+    ``force`` (default ``True``) bypasses the cross-cycle data-freshness gate.
+    Only the daemon's automatic interval timer passes ``force=False``; when it
+    does AND the last successful data pull is younger than
+    ``settings.DATA_FRESHNESS_TTL_SECONDS``, this cycle is SKIPPED (no network
+    refresh, no recompute) — the whole point of "check the DB before pulling".
+    Every manual/CLI/on-demand caller keeps the default ``force=True`` and is
+    unaffected.
     """
+    if not force and _data_is_fresh(settings.DATA_FRESHNESS_TTL_SECONDS):
+        telemetry.info(
+            "⏭  Skipping interval refresh — last data pull is younger than "
+            "DATA_FRESHNESS_TTL_SECONDS (%ss). DB is already fresh; next pull "
+            "after the TTL elapses.",
+            settings.DATA_FRESHNESS_TTL_SECONDS,
+        )
+        return
+
     from pipeline.context import RunContext
     from pipeline.runner import AsyncPipelineRunner
     from pipeline.production_steps import (

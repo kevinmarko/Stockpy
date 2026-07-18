@@ -72,6 +72,38 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(result).toEqual([{ id: "trend-following" }]);
   });
 
+  it("routes control-API paths (/status, /run, /pipeline/*) to the control base (:8601 default)", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ state: "started" }));
+    await mod.api.getControlStatus();
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:8601/status");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ run_id: "r1", state: "queued" }));
+    await mod.api.postControlPipelineData();
+    expect(fetchMock.mock.calls[1][0]).toBe("http://localhost:8601/pipeline/data");
+  });
+
+  it("honors VITE_CONTROL_API_BASE_URL for control paths but leaves Pilots /automation/run on the Pilots base", async () => {
+    const mod = await importLiveClient({
+      VITE_CONTROL_API_BASE_URL: "http://ctrl.test:9601",
+    });
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ state: "started" }));
+    await mod.api.getControlStatus();
+    expect(fetchMock.mock.calls[0][0]).toBe("http://ctrl.test:9601/status");
+
+    // triggerRun() hits the PILOTS endpoint /automation/run — must NOT be
+    // rerouted to the control base by the "/run" prefix check. 202 = queued.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ run_id: "r1", state: "queued" }, { status: 202 })
+    );
+    await mod.api.triggerRun();
+    expect(fetchMock.mock.calls[1][0]).toBe("http://localhost:8602/automation/run");
+  });
+
   it("attaches Authorization: Bearer <token> when VITE_API_TOKEN is set", async () => {
     const mod = await importLiveClient({ VITE_API_TOKEN: "secret-token" });
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;

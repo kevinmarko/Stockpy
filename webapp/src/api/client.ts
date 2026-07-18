@@ -70,12 +70,29 @@ const DATA_BASE_URL = (
 const METRICS_BASE_URL = (
   import.meta.env.VITE_METRICS_API_BASE_URL ?? "http://localhost:8604"
 ).replace(/\/+$/, "");
+// The Control API (orchestrator daemon: live status + stage-scoped run
+// triggers) is ALSO a separate origin (:8601), not part of the Pilots API. The
+// Pipeline Dashboard's /status, /run, /run/{id}/status and /pipeline/* calls
+// must route here, or they 404 against the Pilots base in live mode. Falls back
+// to the Pilots host if unset (single-origin reverse-proxy deployment).
+const CONTROL_BASE_URL = (
+  import.meta.env.VITE_CONTROL_API_BASE_URL ?? "http://localhost:8601"
+).replace(/\/+$/, "");
 const TOKEN = import.meta.env.VITE_API_TOKEN ?? "";
 
 /** Route a request path to its owning service's base URL by prefix. */
 function baseFor(path: string): string {
   if (path.startsWith("/data/")) return DATA_BASE_URL;
   if (path.startsWith("/metrics/")) return METRICS_BASE_URL;
+  // Control API (:8601): daemon status + stage-scoped run triggers. Note
+  // "/automation/run" is a PILOTS endpoint and correctly does NOT match here.
+  if (
+    path === "/status" ||
+    path.startsWith("/run") ||
+    path.startsWith("/pipeline/")
+  ) {
+    return CONTROL_BASE_URL;
+  }
   return BASE_URL;
 }
 

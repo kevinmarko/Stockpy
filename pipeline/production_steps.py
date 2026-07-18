@@ -82,6 +82,13 @@ class AsyncDataFetchStep(PipelineStep):
             ctx.macro_raw = de.fetch_macro_raw()
             ctx.fund_raw = de.fetch_fundamentals_raw(ctx.symbols)
             ctx.tech_raw = de.fetch_technical_raw(ctx.symbols)
+        else:
+            # Real (non-mock) data landed — stamp the cross-cycle freshness
+            # marker so the daemon's interval gate (DATA_FRESHNESS_TTL_SECONDS)
+            # can skip the next few pulls. The mock fallback above deliberately
+            # does NOT stamp it, so an offline blip re-tries on the next cycle
+            # rather than being treated as a fresh pull.
+            main_orchestrator._mark_data_refreshed()
 
         # Kill-switch check
         ks = main_orchestrator.GlobalKillSwitch()
