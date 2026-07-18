@@ -37,7 +37,7 @@ from pilots import catalog, scoring
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["find_signal", "held_by_pilots", "symbol_detail"]
+__all__ = ["find_signal", "held_by_pilots", "list_universe", "symbol_detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +97,44 @@ def find_signal(snapshot: Any, ticker: str) -> Optional[dict]:
     except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
         logger.debug("find_signal(%s) failed: %s", ticker, exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Tracked universe (symbol autocomplete source)
+# ---------------------------------------------------------------------------
+
+def list_universe(snapshot: Any) -> List[dict]:
+    """Return ``[{"symbol", "action"}]`` for every ticker the latest snapshot
+    tracks, sorted by symbol.
+
+    The tracked universe is exactly the snapshot's ``signals[]`` (held positions
+    ∪ watchlist — the same set every per-symbol read serves), so every returned
+    symbol resolves to a real ``GET /symbols/{ticker}`` detail page (no dead-end
+    suggestions). ``action`` is the holding-aware ``advisory_action`` when present,
+    else the raw signal ``action``, else ``None`` (never fabricated — CONSTRAINT
+    #4); it only decorates the autocomplete row. Symbols are upper-cased and
+    de-duplicated (first entry wins for ``action``). ``[]`` on a cold start (no
+    snapshot) or a malformed snapshot. Never raises (CONSTRAINT #6).
+    """
+    try:
+        if not isinstance(snapshot, dict):
+            return []
+        signals = snapshot.get("signals") or []
+        if not isinstance(signals, list):
+            return []
+        seen: Dict[str, Optional[str]] = {}
+        for sig in signals:
+            if not isinstance(sig, dict):
+                continue
+            symbol = str(sig.get("symbol") or "").upper().strip()
+            if not symbol or symbol in seen:
+                continue
+            action = _clean_str(sig.get("advisory_action")) or _clean_str(sig.get("action"))
+            seen[symbol] = action
+        return [{"symbol": s, "action": seen[s]} for s in sorted(seen)]
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("list_universe failed: %s", exc)
+        return []
 
 
 # ---------------------------------------------------------------------------

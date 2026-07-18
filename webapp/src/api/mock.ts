@@ -74,6 +74,8 @@ import type {
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
   SymbolDetail,
+  UniverseResponse,
+  UniverseSymbol,
   SymbolHeldBy,
   SymbolOptions,
   TriggerRunResult,
@@ -2367,6 +2369,25 @@ export const mockApi = {
         ? synthCurve("SPY-macro", range, 0.08, 0.1)
         : null,
     });
+  },
+
+  async getUniverse(): Promise<UniverseResponse> {
+    // The tracked universe = the same union the mock symbol-detail endpoint
+    // recognizes, so every autocomplete suggestion resolves to a real detail
+    // page (mirrors the backend's snapshot signals[]). `action` decorates only
+    // some rows on purpose — the rest are `null` so the UI's undecorated path is
+    // exercised too (honesty fixture, never a fabricated action for all).
+    const ACTIONS: Record<string, string> = {
+      AAPL: "BUY",
+      MSFT: "HOLD",
+      NVDA: "STRONG BUY",
+      COST: "HOLD",
+      DUK: "SELL",
+    };
+    const symbols: UniverseSymbol[] = [...SYMBOL_UNIVERSE]
+      .sort()
+      .map((symbol) => ({ symbol, action: ACTIONS[symbol] ?? null }));
+    return delay({ symbols });
   },
 
   async getSymbol(ticker: string): Promise<SymbolDetail> {

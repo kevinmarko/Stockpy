@@ -54,6 +54,7 @@ import type {
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
   SymbolDetail,
+  UniverseResponse,
   SymbolOptions,
   TriggerRunResult,
   Bar,
@@ -175,6 +176,7 @@ const liveApi = {
     http<PerformanceResponse>(
       `/pilots/${encodeURIComponent(id)}/performance?range=${range}`
     ),
+  getUniverse: () => http<UniverseResponse>("/universe"),
   getSymbol: (ticker: string) =>
     http<SymbolDetail>(`/symbols/${encodeURIComponent(ticker)}`),
   getPortfolio: () => http<Portfolio>("/portfolio"),

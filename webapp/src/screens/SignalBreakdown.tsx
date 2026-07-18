@@ -5,6 +5,7 @@ import type { SignalBreakdown as SignalBreakdownData, SignalModuleScore } from "
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -143,6 +144,8 @@ export function SignalBreakdown() {
         driving the call, and by how much. The action and conviction come from the
         advisory engine; the module split from the signal aggregator.
       </p>
+
+      <TabGuide tabKey="signals" />
 
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={loading} />
 

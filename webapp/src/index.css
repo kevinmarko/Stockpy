@@ -248,6 +248,135 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Combobox (symbol autocomplete) ---- */
+.combobox-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px;
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  max-height: 288px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-card);
+}
+.combobox-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--tap);
+  padding: 8px 10px;
+  border-radius: var(--r-sm, 8px);
+  cursor: pointer;
+}
+.combobox-option.is-active {
+  background: var(--surface-3);
+}
+.combobox-symbol {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.combobox-action {
+  margin-left: auto;
+  font-size: var(--t-caption);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+/* ---- Tab guide ("How this works" education panel) ---- */
+.tab-guide {
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.tab-guide-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  min-height: var(--tap);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 14px;
+  text-align: left;
+}
+.tab-guide-q {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tab-guide-title {
+  flex: 1 1 auto;
+}
+.tab-guide-chevron {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.tab-guide-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+}
+.tab-guide-desc {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.tab-guide-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.tab-guide-term {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  cursor: pointer;
+  text-transform: capitalize;
+}
+.tab-guide-term.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tab-guide-def {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--r-sm, 8px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.tab-guide-def strong {
+  color: var(--text-primary);
+  text-transform: capitalize;
+}
+
 /* ---- Buttons ---- */
 .btn {
   min-height: var(--tap);

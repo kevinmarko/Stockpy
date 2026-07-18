@@ -753,6 +753,20 @@ def get_pilot_trades(
     return trades[-limit:]
 
 
+@app.get("/universe", dependencies=[Depends(require_read_token)])
+def get_universe() -> Dict[str, Any]:
+    """The tracked-symbol universe (held positions ∪ watchlist) for the PWA's
+    symbol autocomplete — every entry resolves to a real ``GET /symbols/{ticker}``
+    detail page.
+
+    Reads only persisted state (the snapshot's ``signals[]``) — never calls an
+    engine. Returns ``{"symbols": []}`` on a cold start (no snapshot yet); never
+    404s and never 500s (CONSTRAINT #6). Each row's ``action`` is the holding-aware
+    advisory action when present, else the raw signal action, else ``null`` — it
+    only decorates the suggestion and is never fabricated (CONSTRAINT #4)."""
+    return {"symbols": symbols.list_universe(_load_snapshot())}
+
+
 @app.get("/symbols/{ticker}", dependencies=[Depends(require_read_token)])
 def get_symbol_detail(ticker: str) -> Any:
     """Per-symbol detail for one ticker from the latest persisted snapshot, plus

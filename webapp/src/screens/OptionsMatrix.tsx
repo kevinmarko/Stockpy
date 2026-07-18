@@ -9,6 +9,7 @@ import type {
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { realizableTheta } from "../optionsHonesty";
@@ -570,6 +571,8 @@ export function OptionsMatrix() {
           <span style={{ fontSize: 12, color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
         )}
       </div>
+
+      <TabGuide tabKey="options" />
 
       {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
 

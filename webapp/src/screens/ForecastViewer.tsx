@@ -6,6 +6,7 @@ import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
 import { PerfLine } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -97,6 +98,8 @@ export function ForecastViewer() {
         levels and the Monte-Carlo band. This is the forecast itself; the model
         skill/accuracy history lives on each symbol's detail page.
       </p>
+
+      <TabGuide tabKey="forecast" />
 
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={loading} />
 

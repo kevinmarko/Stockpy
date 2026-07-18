@@ -11,6 +11,7 @@ import type {
 import { useApi } from "../hooks/useApi";
 import { Button, EmptyState, ErrorState, Loading, Tile } from "../components/ui";
 import { DecisionModal } from "../components/DecisionModal";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
 
@@ -590,6 +591,8 @@ export function Calibration() {
         Did our actual calls work? Model confidence vs. real outcomes, your decisions vs. the
         model's baseline, and post-trade excursion quality — never a fabricated number.
       </p>
+
+      <TabGuide tabKey="calibration" />
 
       {loading && <Loading lines={4} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
