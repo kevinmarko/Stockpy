@@ -260,4 +260,86 @@ describe("App — Settings gear + nav", () => {
       screen.queryByRole("dialog", { name: "More sections" })
     ).not.toBeInTheDocument();
   });
+
+  it.each([
+    ["Research", "Research"],
+    ["Trading Tools", "Trading Tools"],
+    ["Operations", "Operations"],
+  ])(
+    "clicking the %s section header in the More sheet navigates to its hub and closes the sheet",
+    async (sectionLabel, hubHeading) => {
+      const user = userEvent.setup();
+      renderApp("/");
+
+      await user.click(screen.getByTestId("more-nav-button"));
+      const dialog = await screen.findByRole("dialog", { name: "More sections" });
+      await user.click(
+        within(dialog).getByRole("heading", { name: sectionLabel, level: 3 })
+      );
+
+      expect(
+        await screen.findByRole("heading", { name: hubHeading })
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("dialog", { name: "More sections" })
+      ).not.toBeInTheDocument();
+    }
+  );
+
+  it("clicking the Settings section header in the More sheet has no navigation side effect (no hub screen)", async () => {
+    const user = userEvent.setup();
+    renderApp("/");
+
+    await user.click(screen.getByTestId("more-nav-button"));
+    const dialog = await screen.findByRole("dialog", { name: "More sections" });
+    const settingsHeading = within(dialog).getByRole("heading", {
+      name: "Settings",
+      level: 3,
+    });
+    await user.click(settingsHeading);
+
+    // Still on Dashboard, sheet still open -- the header did nothing.
+    expect(
+      await screen.findByRole("dialog", { name: "More sections" })
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Data & Automation")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["Research", "Research"],
+    ["Trading Tools", "Trading Tools"],
+    ["Operations", "Operations"],
+  ])(
+    "desktop Sidebar's %s section header is clickable and navigates to its hub",
+    async (sectionLabel, hubHeading) => {
+      const user = userEvent.setup();
+      const { container } = renderApp("/");
+
+      const sidebar = container.querySelector(".sidebar");
+      expect(sidebar).not.toBeNull();
+      // getAllByText(...)[0]: the section header div renders before its item
+      // buttons in the DOM. Only "Settings" collides with an item label
+      // (the lone Settings nav item shares its section's name) -- [0] always
+      // resolves to the header itself, which is what should be clicked.
+      const header = within(sidebar as HTMLElement).getAllByText(sectionLabel)[0];
+      await user.click(header);
+
+      expect(
+        await screen.findByRole("heading", { name: hubHeading })
+      ).toBeInTheDocument();
+    }
+  );
+
+  it("desktop Sidebar's Settings section header is not clickable (no hub screen)", async () => {
+    const user = userEvent.setup();
+    const { container } = renderApp("/");
+
+    const sidebar = container.querySelector(".sidebar");
+    expect(sidebar).not.toBeNull();
+    const header = within(sidebar as HTMLElement).getAllByText("Settings")[0];
+    await user.click(header);
+
+    // Still on Dashboard -- clicking the plain-text header did nothing.
+    expect(screen.queryByText("Data & Automation")).not.toBeInTheDocument();
+  });
 });
