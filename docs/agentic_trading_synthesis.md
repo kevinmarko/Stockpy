@@ -171,8 +171,8 @@ fix the discovery loop → polish.
 | 1 | Discovery candidates were display-only — no way to watch/track from the tab | `AgenticTrading.tsx` `DiscoverySection` | Action loop | **Fixed** — [#360](https://github.com/kevinmarko/Stockpy/pull/360) added a "Watch" button (`POST /agentic/watch`) |
 | 2 | Decision Journal couldn't log a decision from the tab | `AgenticTrading.tsx` `DecisionJournalSection` | Action loop | **Fixed** — #360 added a "Log" button reusing `DecisionModal` |
 | 3 | Blocked queue intents, journal rows, and candidates weren't linked to their symbol page | `ExecutionQueueSection.tsx`, `AgenticTrading.tsx` | Action loop | **Fixed** — #360 |
-| 4 | No "run scan" affordance — a saved scan config can't be triggered from the tab; config→results is a manual Claude Code hop | `AgenticTrading.tsx` `ScanConfigModal` | Discovery loop | Not started |
-| 5 | Candidate list age (`generated_at`/`discovered_at`) is fetched but never rendered — a stale list looks current | `api/types.ts` `AgenticDiscovery`/`DiscoveryCandidate` | Discovery loop | Not started |
+| 4 | No "run scan" affordance — a saved scan config can't be triggered from the tab; config→results is a manual Claude Code hop | `AgenticTrading.tsx` `ScanConfigModal` | Discovery loop | **Fixed** — [#367](https://github.com/kevinmarko/Stockpy/pull/367) added a per-scan-config `CopyCommandBlock` (extracted from `Commands.tsx` in [#364](https://github.com/kevinmarko/Stockpy/pull/364)) with the exact skill-invocation phrasing, verified against `.claude/skills/agentic-discovery/SKILL.md`'s actual "runs every enabled scan" default behavior |
+| 5 | Candidate list age (`generated_at`/`discovered_at`) is fetched but never rendered — a stale list looks current | `api/types.ts` `AgenticDiscovery`/`DiscoveryCandidate` | Discovery loop | **Fixed** — [#365](https://github.com/kevinmarko/Stockpy/pull/365) added an "As of {time}" line + per-candidate "discovered {time}"; confirmed `generated_at` is sourced from the scan-candidates file's own write time, never fabricated at read time |
 | 6 | Pause control duplicates Settings' kill-switch toggle under a *different* label ("Agent: Running" vs "Signal generation: Running") | `AgenticTrading.tsx` `ControlsSection` vs `Settings.tsx` | Polish | Not started |
 | 7 | Redundant Refresh button (the 30s poll already covers it); "Blocked" chip uses low-emphasis muted grey | `AgenticTrading.tsx`, `ExecutionQueueSection.tsx` | Polish | Not started |
 | 8 | On mobile the tab is 2 taps + a scroll to the bottom of the "More" sheet (last of 15 items) | `App.tsx` `NAV_ITEMS`/`MOBILE_PRIMARY_COUNT` | Cross-cutting | Not started |
@@ -201,3 +201,24 @@ a gap to fix (instrumenting a solo local app isn't worth the added surface).
 **Cross-cutting — mobile reachability** (finding #8): promote `/agentic` out of the bottom of the
 "More" sheet — reorder `NAV_ITEMS` and/or bump `MOBILE_PRIMARY_COUNT` (currently 3) or evict a
 lower-priority primary tab. Needs an explicit operator decision on which tab to evict, if any.
+
+### Candidate Phase 4 — same bug class, found elsewhere (not yet scoped as a phase)
+
+A backstop audit run alongside the Phase 2 build (verifying #365/#367 before they landed) swept the
+rest of the webapp for the SAME two bug classes finding #5 fixes here — a fetched field that's never
+rendered — and found five more instances, all outside the Agentic Trading tab and out of scope for
+this doc's phasing:
+
+- `Portfolio.tsx:62` — renders `fetched_at` but never `is_stale`/`age_hours` (the type's own comment
+  calls these out as the dedicated freshness fields).
+- `RecommendedStocks.tsx:37,55` (shared by Dashboard/DataExplorer/Comparison) — never renders
+  `RecommendationsResponse.as_of`.
+- `ExecutionQueueSection.tsx:22,49` (shared by Commands.tsx and this tab) — surfaces the boolean
+  `stale` chip but never the actual `generated_at`/`age_seconds`.
+- `Observability.tsx:63-100` (`RegimeBadgeRow`) — never renders `regime.as_of`.
+- `Settings.tsx:559-591` (`ErrorsSubsection`) and `Commands.tsx` — never render
+  `DeadLetterReport.generated_at` / `CommandManifest.generated_at` respectively.
+
+The audit also confirmed `ScanConfigModal`'s "Add scan config" was already honest (states "nothing
+runs automatically" — no action-overclaim bug there) and found no other misleading "Run/Execute"
+affordance elsewhere in the app. Not scoped into a phase yet — listed here so it isn't lost.
