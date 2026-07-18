@@ -302,7 +302,7 @@ function FieldRow({
           value={value as string}
           onChange={(e) => onChange(e.target.value)}
           invalid={invalid}
-          hint={invalid ? rangeMsg : f.description}
+          hint={invalid ? rangeMsg : f.description ?? undefined}
         />
       )}
 

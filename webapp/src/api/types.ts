@@ -1018,7 +1018,8 @@ export interface TunableField {
   type: TunableFieldType;
   /** The platform's fallback value; `null` when not applicable. */
   default: number | boolean | string | null;
-  description: string;
+  /** `null` when the settings field has no pydantic `Field(description=...)`. */
+  description: string | null;
   /** number fields only. */
   min?: number;
   max?: number;
