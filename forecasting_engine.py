@@ -945,7 +945,7 @@ class ForecastingEngine:
                     a_res = self.forecast_from_arima_fit(arima_fit, h)
                     h_res = self.forecast_from_hw_fit(hw_fit, h, close_prices)
 
-                m_res, _, _ = self.run_monte_carlo(current_price, mu, mc_sigma, days_forward=h)
+                m_res, mc_lo, mc_hi = self.run_monte_carlo(current_price, mu, mc_sigma, days_forward=h)
 
                 # Collect per-model prices for skill tracking and skill-weighted blend.
                 # Only include models that produced a positive price (CONSTRAINT #4).
@@ -987,6 +987,18 @@ class ForecastingEngine:
                         logger.debug("ForecastTracker.record_forecasts skipped for %s h=%d: %s", symbol, h, _exc)
 
                 results[f'Forecast_{h}'] = blended
+
+                # Surface the per-horizon Monte-Carlo p5/p95 confidence band so
+                # downstream (the webapp forecast chart) can draw a cone that
+                # widens with the forecast horizon. These are the SAME bounds
+                # already discarded above; the blended mean is untouched. Honesty
+                # guard (CONSTRAINT #4): only write a band key when the bound is
+                # valid/positive -- a missing/invalid band leaves the key UNSET
+                # (JSON null downstream), never a fabricated 0.0.
+                if mc_lo > 0:
+                    results[f'Forecast_{h}_Lower'] = mc_lo
+                if mc_hi > 0:
+                    results[f'Forecast_{h}_Upper'] = mc_hi
 
             # Surface the Facebook Prophet 30-day baseline forecasts (already computed
             # ONCE before the horizon loop and folded into the h=30 blend above).
