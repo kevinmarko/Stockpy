@@ -81,8 +81,9 @@ import json
 import logging
 import math
 import re
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -156,6 +157,16 @@ import data.brokerage_credentials as brokerage_credentials
 # tests can `mock.patch.object(pilots_api, ...)`.
 import gui.ai_control_center as ai_control_center
 import llm.status_store as llm_status_store
+
+# Decision Journal (GET/POST /decisions) — ports gui/panels/report_viewer.py's
+# ``_render_decision_journal_section`` to the PWA. ``gui.decision_log`` is
+# ALREADY fully headless (zero streamlit import, stdlib + pandas only — see its
+# own module docstring), so it is imported directly rather than routed through
+# a new pilots/*.py reader. ``transactions_store`` is imported at module top
+# (not the forbidden-list) so the trade-join lookup in ``POST /decisions`` can
+# mock.patch.object(pilots_api, "TransactionsStore", ...) in tests.
+from gui.decision_log import decisions_df, log_decision
+from transactions_store import TransactionsStore
 
 logger = logging.getLogger(__name__)
 
@@ -366,6 +377,26 @@ def _load_snapshot() -> Optional[dict]:
     return scoring.load_snapshot(_snapshot_path())
 
 
+def _clean_nan(obj: Any) -> Any:
+    """Recursively convert NaN/inf floats to ``None`` (JSON ``null``).
+
+    Mirrors ``api/metrics_api.py``'s helper of the same name (this module has
+    its own copy rather than importing that standalone app). Used by
+    ``GET /decisions`` to sanitize the ``conviction``/``trade_id`` columns of
+    ``gui.decision_log.decisions_df``'s DataFrame, whose nullable ``Int64``
+    ``trade_id`` column surfaces missing values as ``pandas.NA`` (not a plain
+    ``float``) once ``.where(pd.notna(df), None)`` has already converted
+    everything else — this is a defensive second pass, never fabricating a
+    value (CONSTRAINT #4)."""
+    if isinstance(obj, dict):
+        return {k: _clean_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clean_nan(x) for x in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    return obj
+
+
 # ---------------------------------------------------------------------------
 # Request bodies
 # ---------------------------------------------------------------------------
@@ -382,6 +413,29 @@ class FollowRequest(BaseModel):
     """Body for ``POST /pilots/{id}/follow``. Must allocate a positive amount."""
 
     amount: float = Field(..., gt=0.0)
+
+
+class DecisionLogRequest(BaseModel):
+    """Body for ``POST /decisions`` — the Decision Journal entry form (ports
+    ``gui/panels/report_viewer.py::_render_decision_journal_section``'s three
+    decision buttons + notes field to the PWA).
+
+    No dedicated master flag: a journal append is a UI-only annotation with
+    zero persistence/config/execution side effects (it never touches
+    ``.env``, ``SIGNAL_WEIGHTS``, or the order queue) — the same risk class as
+    ``POST /pilots/{id}/follow``, which is gated by ``require_command_token``
+    alone. ``notes`` has no server-side "required for modified" rule: the
+    Streamlit UI only enforces that client-side (a soft nudge, not a
+    correctness constraint — see ``_do_log``'s ``st.warning`` in
+    ``report_viewer.py``), and there is no honesty reason to make an empty
+    note a 422 here."""
+
+    symbol: str = Field(..., min_length=1)
+    action_taken: Literal["acted", "passed", "modified"]
+    signal_action: str = Field(...)
+    conviction: Optional[float] = None
+    notes: str = ""
+    signal_ts: str = ""
 
 
 class PauseRequest(BaseModel):
@@ -1784,3 +1838,94 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
         "applies": "next_daemon_restart",
         "note": "Execution mode updated."
     }
+
+
+# ---------------------------------------------------------------------------
+# Decision Journal (GET/POST /decisions)
+# ---------------------------------------------------------------------------
+#
+# Ports gui/panels/report_viewer.py::_render_decision_journal_section to the
+# Pilots API. gui.decision_log is already fully headless (zero streamlit
+# import — stdlib + pandas only) so its DecisionEntry/log_decision/decisions_df
+# are used verbatim; no new logic lives here. This is a per-symbol journal of
+# whether the operator acted on / passed on / modified an advisory signal, not
+# a config or execution write — POST is guarded by require_command_token
+# ALONE (no dedicated master flag), the same risk tier as
+# POST /pilots/{id}/follow, since an append here has zero persistence/config/
+# execution side effects.
+
+
+@app.get("/decisions", dependencies=[Depends(require_read_token)])
+def get_decisions(
+    limit: int = Query(50, ge=1, le=500),
+    symbol: Optional[str] = Query(None),
+) -> List[Dict[str, Any]]:
+    """Decision Journal history, most-recent-first, optionally filtered to one
+    symbol. This is a COLLECTION view, not a single-resource lookup — an
+    empty or not-yet-created log degrades to ``[]``, never a 404
+    (CONSTRAINT #6). ``gui.decision_log.decisions_df`` already tolerates a
+    missing file / corrupt lines internally; the ``try/except`` here is a
+    second dead-letter layer in case of an unexpected read failure (e.g. a
+    permissions error)."""
+    try:
+        df = decisions_df(settings.OUTPUT_DIR / "decision_log.jsonl")
+    except Exception as exc:  # noqa: BLE001 - dead-letter: unreadable log -> empty
+        logger.warning("pilots_api: decisions_df failed: %s", exc)
+        return []
+
+    if df is None or df.empty:
+        return []
+
+    if symbol:
+        df = df[df["symbol"].astype(str).str.upper() == symbol.strip().upper()]
+        if df.empty:
+            return []
+
+    df = df.sort_values("timestamp", ascending=False).head(limit)
+
+    import pandas as pd  # local import — matches this module's existing convention
+    # object-dtype .where() converts pandas.NA/NaT (the nullable Int64
+    # `trade_id` column, and a missing `conviction`) to plain `None` before
+    # to_dict(); _clean_nan is a defensive second pass for any remaining
+    # native float NaN (CONSTRAINT #4 — never fabricate a value).
+    df = df.astype(object).where(pd.notna(df), None)
+    return _clean_nan(df.to_dict(orient="records"))
+
+
+@app.post("/decisions", dependencies=[Depends(require_command_token)])
+def post_decision(body: DecisionLogRequest) -> Dict[str, Any]:
+    """Log one Decision Journal entry (ports ``_do_log`` from
+    ``gui/panels/report_viewer.py``'s Streamlit form).
+
+    ``TransactionsStore()`` construction is best-effort: on failure (e.g. an
+    unreachable Postgres/Supabase ``DATABASE_URL`` host) this degrades to
+    ``transactions_store=None`` and ``log_decision`` simply skips the
+    "acted" -> nearest-trade join step, rather than 500ing — the identical
+    try/except-to-``None`` fallback the Streamlit form itself already uses
+    (``report_viewer.py``'s ``_do_log``), chosen over
+    ``transactions_store._OfflineTransactionsStore`` (the stub
+    ``engine/advisory.py`` falls back to) because a journal entry has no
+    sizing/Kelly computation downstream that needs a non-``None`` store —
+    ``log_decision`` already treats ``transactions_store=None`` as "skip the
+    join" (CONSTRAINT #6)."""
+    try:
+        transactions_store: Optional[Any] = TransactionsStore()
+    except Exception as exc:  # noqa: BLE001 - dead-letter: no store -> skip join
+        logger.warning(
+            "pilots_api: TransactionsStore unavailable for decision join (%s: %s)",
+            type(exc).__name__,
+            exc,
+        )
+        transactions_store = None
+
+    entry = log_decision(
+        symbol=body.symbol,
+        action_taken=body.action_taken,
+        signal_action=body.signal_action,
+        conviction=body.conviction,
+        notes=body.notes,
+        signal_ts=body.signal_ts,
+        transactions_store=transactions_store,
+        log_path=settings.OUTPUT_DIR / "decision_log.jsonl",
+    )
+    return _clean_nan(asdict(entry))

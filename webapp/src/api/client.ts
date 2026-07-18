@@ -19,6 +19,8 @@ import type {
   BrokerageDisconnectResult,
   BrokerageStatus,
   ControlStatus,
+  Decision,
+  DecisionLogRequest,
   Follow,
   FollowResult,
   ForecastSkill,
@@ -180,6 +182,15 @@ const liveApi = {
     ),
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
   getStrategyHealth: () => http<StrategyHealthRow[]>("/strategy/health"),
+  getDecisions: (symbol?: string, limit = 50) =>
+    http<Decision[]>(
+      `/decisions?limit=${limit}${symbol ? `&symbol=${encodeURIComponent(symbol)}` : ""}`
+    ),
+  logDecision: (body: DecisionLogRequest) =>
+    http<Decision>("/decisions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   // ---- Data API (data_api.py, :8603) + Metrics API (metrics_api.py, :8604) ----
   // Routed by path prefix (see baseFor); these are the Phase-4 Data Explorer,
   // Signal Breakdown, and Forecast Viewer screens' data sources.

@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
+  Decision,
   ForecastSkill,
   OptionsDirective,
   RollingBeta,
@@ -9,7 +10,8 @@ import type {
   SymbolOptions,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, MetricBadge } from "../components/ui";
+import { useMutation } from "../hooks/useMutation";
+import { Button, ErrorState, Loading, MetricBadge } from "../components/ui";
 import { PerfLine } from "../components/charts";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -154,6 +156,17 @@ export function SymbolDetail() {
           </p>
         )}
       </section>
+
+      {/* Decision journal — log + review whether the operator acted on,
+          passed on, or modified this signal (ports gui/decision_log.py's
+          Streamlit form). Reuses the advisory data already loaded above
+          rather than re-fetching it. */}
+      <DecisionJournalSection
+        ticker={data.symbol}
+        asOf={data.as_of}
+        advisoryAction={advisory.action}
+        advisoryConviction={advisory.conviction}
+      />
 
       {/* Identity */}
       <section className="card card-pad" style={{ marginBottom: 16 }}>
@@ -341,6 +354,143 @@ export function SymbolDetail() {
         )}
       </section>
     </div>
+  );
+}
+
+type DecisionAction = "acted" | "passed" | "modified";
+
+const DECISION_LABEL: Record<DecisionAction, string> = {
+  acted: "✅ Acted",
+  passed: "⏭ Passed",
+  modified: "🔁 Modified",
+};
+
+/**
+ * Log + review Decision Journal entries for one symbol — ports
+ * gui/panels/report_viewer.py::_render_decision_journal_section's three
+ * decision buttons + notes field + past-decisions list to the PWA. Reuses
+ * the advisory action/conviction already loaded by the parent screen rather
+ * than issuing a second fetch for the same data.
+ */
+function DecisionJournalSection({
+  ticker,
+  asOf,
+  advisoryAction,
+  advisoryConviction,
+}: {
+  ticker: string;
+  asOf: string | null;
+  advisoryAction: string | null;
+  advisoryConviction: number | null;
+}) {
+  const [notes, setNotes] = useState("");
+  const decisions = useApi<Decision[]>(() => api.getDecisions(ticker, 10), [ticker]);
+  const logMutation = useMutation((action: DecisionAction) =>
+    api.logDecision({
+      symbol: ticker,
+      action_taken: action,
+      signal_action: advisoryAction ?? "",
+      conviction: advisoryConviction,
+      notes: notes.trim(),
+      signal_ts: asOf ?? "",
+    })
+  );
+
+  const handleLog = async (action: DecisionAction) => {
+    const entry = await logMutation.run(action);
+    if (entry) {
+      setNotes("");
+      decisions.reload();
+    }
+  };
+
+  return (
+    <section className="card card-pad" style={{ marginBottom: 16 }}>
+      <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Decision journal</h2>
+      <p style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+        Log what you decided to do with this signal.
+      </p>
+
+      <div className="list" style={{ marginBottom: 12 }}>
+        <StatRow label="System recommendation" value={<ActionBadge action={advisoryAction} />} />
+        <StatRow
+          label="Conviction"
+          value={fmtPct(advisoryConviction, 0, { fromFraction: true })}
+        />
+      </div>
+
+      <label
+        htmlFor="decision-journal-notes"
+        className="tile-label"
+        style={{ display: "block", marginBottom: 6 }}
+      >
+        Notes (optional)
+      </label>
+      <textarea
+        id="decision-journal-notes"
+        className="input"
+        rows={3}
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        placeholder="e.g. 'Sized half — position already large', 'Used a limit instead of market'"
+        style={{ resize: "vertical", fontFamily: "inherit", width: "100%" }}
+      />
+
+      {logMutation.error && (
+        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+          <span>⚠️</span>
+          <span>{logMutation.error}</span>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        {(["acted", "passed", "modified"] as const).map((action) => (
+          <Button
+            key={action}
+            variant="neutral"
+            pending={logMutation.pending}
+            onClick={() => handleLog(action)}
+            style={{ flex: 1 }}
+          >
+            {DECISION_LABEL[action]}
+          </Button>
+        ))}
+      </div>
+
+      <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "18px 0 8px" }}>
+        Past decisions
+      </h3>
+      {decisions.loading ? (
+        <Loading lines={2} />
+      ) : !decisions.data || decisions.data.length === 0 ? (
+        <div className="empty" style={{ padding: 18 }}>
+          No decisions logged yet for {ticker}.
+        </div>
+      ) : (
+        <div className="list">
+          {decisions.data.map((d, i) => (
+            <div className="row" key={`${d.timestamp}-${i}`}>
+              <div className="row-main">
+                <span className="row-title">{DECISION_LABEL[d.action_taken]}</span>
+                {d.notes && (
+                  <span className="row-sub" style={{ whiteSpace: "normal" }}>
+                    {d.notes}
+                  </span>
+                )}
+              </div>
+              <div className="row-end">
+                <div style={{ fontSize: 12, color: theme.textMuted }}>{timeAgo(d.timestamp)}</div>
+                {d.trade_id != null && (
+                  <div style={{ fontSize: 11, color: theme.textMuted }}>
+                    trade #{d.trade_id}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

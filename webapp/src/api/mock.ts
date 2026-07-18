@@ -18,6 +18,8 @@ import type {
   BrokerageStatus,
   ControlStatus,
   CorrelationCluster,
+  Decision,
+  DecisionLogRequest,
   EquityDrawdownCurve,
   EquityDrawdownPoint,
   FactorExposure,
@@ -734,6 +736,59 @@ function writeFollows(fs: Follow[]) {
 const MOCK_MODE = "review" as const; // paper-first: nothing is ever placed
 const NOTIONAL_CAP = 2500;
 const MIN_AMOUNT = 100;
+
+// ---- Local Decision Journal store (persisted to localStorage so the mock
+// feels live) -- ports gui/decision_log.py's JSONL append log to the mock
+// layer. Seeded once with a couple of honest example entries for AAPL only;
+// EVERY OTHER symbol (MSFT included) starts with zero decisions on purpose,
+// so the "No decisions logged yet for this symbol" empty state is exercised
+// by picking any symbol other than AAPL rather than being faked as a special
+// case (CONSTRAINT #4 -- these are clearly-labeled example entries, not a
+// claim that the operator actually made these decisions).
+const DECISIONS_KEY = "stockpy.mock.decisions";
+
+const SEED_DECISIONS: Decision[] = [
+  {
+    symbol: "AAPL",
+    action_taken: "acted",
+    signal_action: "BUY",
+    conviction: 0.78,
+    notes: "Sized normally, matched the suggested position.",
+    timestamp: new Date(Date.now() - 6 * 86_400_000).toISOString(),
+    signal_ts: new Date(Date.now() - 6 * 86_400_000 - 3_600_000).toISOString(),
+    trade_id: 4821,
+  },
+  {
+    symbol: "AAPL",
+    action_taken: "modified",
+    signal_action: "HOLD",
+    conviction: 0.55,
+    notes: "Trimmed 20% instead of a full exit -- earnings the following week.",
+    timestamp: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    signal_ts: new Date(Date.now() - 2 * 86_400_000 - 3_600_000).toISOString(),
+    trade_id: null,
+  },
+];
+
+function readDecisions(): Decision[] {
+  try {
+    const raw = localStorage.getItem(DECISIONS_KEY);
+    if (raw) return JSON.parse(raw) as Decision[];
+  } catch {
+    return [];
+  }
+  // First run in this browser: seed once so the journal isn't empty for
+  // every symbol out of the box. Best-effort write; readable either way.
+  writeDecisions(SEED_DECISIONS);
+  return SEED_DECISIONS;
+}
+function writeDecisions(ds: Decision[]) {
+  try {
+    localStorage.setItem(DECISIONS_KEY, JSON.stringify(ds));
+  } catch {
+    /* ignore quota */
+  }
+}
 
 // ---- Local brokerage-connect simulation (localStorage; never stores the
 // actual credential strings — only a boolean "connected" marker, matching the
@@ -2400,6 +2455,35 @@ export const mockApi = {
 
   async getStrategyHealth(): Promise<StrategyHealthRow[]> {
     return delay(STRATEGY_HEALTH_ROWS);
+  },
+
+  async getDecisions(symbol?: string, limit = 50): Promise<Decision[]> {
+    let rows = readDecisions();
+    if (symbol) {
+      const target = symbol.toUpperCase();
+      rows = rows.filter((d) => d.symbol.toUpperCase() === target);
+    }
+    rows = [...rows]
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, limit);
+    return delay(rows, 80);
+  },
+
+  async logDecision(body: DecisionLogRequest): Promise<Decision> {
+    const entry: Decision = {
+      symbol: body.symbol.toUpperCase(),
+      action_taken: body.action_taken,
+      signal_action: body.signal_action,
+      conviction: body.conviction ?? null,
+      notes: body.notes ?? "",
+      timestamp: new Date().toISOString(),
+      signal_ts: body.signal_ts ?? "",
+      // The mock never fabricates a TransactionsStore trade match --
+      // matches log_decision()'s honest null on "no match found" (CONSTRAINT #4).
+      trade_id: null,
+    };
+    writeDecisions([entry, ...readDecisions()]);
+    return delay(entry, 120);
   },
 
   async setStrategyModules(

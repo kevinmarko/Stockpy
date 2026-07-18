@@ -223,6 +223,36 @@ export interface SymbolDetail {
   held_by_pilots: SymbolHeldBy[];
 }
 
+/**
+ * One Decision Journal entry — ports gui/decision_log.py::DecisionEntry (the
+ * headless module behind the legacy Streamlit
+ * `_render_decision_journal_section`) to the API. Logs whether the operator
+ * acted on / passed on / modified an advisory signal for a symbol, with
+ * optional free-text notes. `trade_id` is set only when the "acted" path was
+ * successfully joined to a TransactionsStore trade within the match window —
+ * `null` otherwise; never fabricated (CONSTRAINT #4).
+ */
+export interface Decision {
+  symbol: string;
+  action_taken: "acted" | "passed" | "modified";
+  signal_action: string; // the system's recommendation at the time, e.g. "BUY"
+  conviction: number | null; // advisory conviction [0, 1] at the time; null if unavailable
+  notes: string; // free text; "" when not provided
+  timestamp: string; // ISO-8601 UTC — server-stamped when the decision was logged
+  signal_ts: string; // ISO-8601 UTC of the originating snapshot; "" if unknown
+  trade_id: number | null;
+}
+
+/** Body for POST /decisions. */
+export interface DecisionLogRequest {
+  symbol: string;
+  action_taken: "acted" | "passed" | "modified";
+  signal_action: string;
+  conviction?: number | null;
+  notes?: string;
+  signal_ts?: string;
+}
+
 /** GET /brokerage/status — whether local RH credentials are configured. */
 export interface BrokerageStatus {
   connected: boolean;
