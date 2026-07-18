@@ -5,13 +5,49 @@
  * couldn't score it — never a fabricated action/conviction), the shared
  * execution queue, the decision journal, and the gated pause/resume control.
  */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgenticTrading } from "./AgenticTrading";
 import { api, ApiError } from "../api/client";
-import type { AgenticDiscovery, AgenticStatus, DiscoveryCandidate } from "../api/types";
+import type {
+  AgenticDiscovery,
+  AgenticStatus,
+  DiscoveryCandidate,
+  ScanConfig,
+} from "../api/types";
+
+const originalClipboard = navigator.clipboard;
+
+function mockClipboard() {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    value: { writeText },
+    writable: true,
+    configurable: true,
+  });
+  return writeText;
+}
+
+function restoreClipboard() {
+  Object.defineProperty(navigator, "clipboard", {
+    value: originalClipboard,
+    writable: true,
+    configurable: true,
+  });
+}
+
+function scanConfig(overrides: Partial<ScanConfig>): ScanConfig {
+  return {
+    name: "high_momentum_breakout",
+    filters: { min_price: 5, min_volume: 1_000_000 },
+    enabled: true,
+    created_at: new Date(Date.now() - 86_400_000).toISOString(),
+    updated_at: new Date(Date.now() - 86_400_000).toISOString(),
+    ...overrides,
+  };
+}
 
 function renderScreen() {
   return render(
@@ -38,7 +74,10 @@ const BASE_STATUS: AgenticStatus = {
 };
 
 describe("Agentic Trading screen (real mock API)", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    restoreClipboard();
+  });
 
   it("renders the agent status header with mode, kill switch, and follows", async () => {
     renderScreen();
@@ -305,5 +344,93 @@ describe("Agentic Trading screen (real mock API)", () => {
     const intentRows = await screen.findAllByTestId("execution-intent-row");
     const firstIntentLink = within(intentRows[0]).getByRole("link");
     expect(firstIntentLink.getAttribute("href")).toMatch(/^\/symbol\//);
+  });
+
+  // Phase 2 UX backlog finding #4: a saved scan config gets a copyable
+  // Claude Code command scoped to just that one config -- never a fake "Run
+  // scan" button (the webapp/API architecturally cannot call the Robinhood
+  // MCP). See docs/agentic_trading_synthesis.md's appendix.
+  describe("scan config copy-command affordance", () => {
+    it("each scan config row renders a copy-command block with the correctly-interpolated scan name", async () => {
+      vi.spyOn(api, "getAgenticDiscovery").mockResolvedValueOnce({
+        generated_at: new Date().toISOString(),
+        candidates: [],
+        scan_configs: [
+          scanConfig({ name: "high_momentum_breakout" }),
+          scanConfig({ name: "earnings_pop", enabled: false }),
+        ],
+        reason: null,
+        writable: true,
+        note: "",
+      } satisfies AgenticDiscovery);
+      renderScreen();
+
+      const momentumBlock = await screen.findByTestId("scan-cmd-high_momentum_breakout-composed");
+      expect(momentumBlock).toHaveTextContent(
+        "Run the agentic-discovery skill for just the 'high_momentum_breakout' scan config in output/scan_configs.json — don't run the other enabled scans."
+      );
+      const popBlock = screen.getByTestId("scan-cmd-earnings_pop-composed");
+      expect(popBlock).toHaveTextContent(
+        "Run the agentic-discovery skill for just the 'earnings_pop' scan config in output/scan_configs.json — don't run the other enabled scans."
+      );
+      // Each row gets its own copy button, namespaced by scan name.
+      expect(screen.getByTestId("scan-cmd-high_momentum_breakout-copy")).toBeInTheDocument();
+      expect(screen.getByTestId("scan-cmd-earnings_pop-copy")).toBeInTheDocument();
+    });
+
+    it("clicking Copy calls navigator.clipboard.writeText with the exact expected string", async () => {
+      const writeText = mockClipboard();
+      vi.spyOn(api, "getAgenticDiscovery").mockResolvedValueOnce({
+        generated_at: new Date().toISOString(),
+        candidates: [],
+        scan_configs: [scanConfig({ name: "high_momentum_breakout" })],
+        reason: null,
+        writable: true,
+        note: "",
+      } satisfies AgenticDiscovery);
+      renderScreen();
+
+      const copyBtn = await screen.findByTestId("scan-cmd-high_momentum_breakout-copy");
+      fireEvent.click(copyBtn);
+
+      expect(writeText).toHaveBeenCalledWith(
+        "Run the agentic-discovery skill for just the 'high_momentum_breakout' scan config in output/scan_configs.json — don't run the other enabled scans."
+      );
+    });
+
+    it("shows the 'nothing runs automatically' framing so pasting into Claude Code reads as a separate, deliberate step", async () => {
+      vi.spyOn(api, "getAgenticDiscovery").mockResolvedValueOnce({
+        generated_at: new Date().toISOString(),
+        candidates: [],
+        scan_configs: [scanConfig({ name: "high_momentum_breakout" })],
+        reason: null,
+        writable: true,
+        note: "",
+      } satisfies AgenticDiscovery);
+      renderScreen();
+
+      expect(
+        await screen.findByText(
+          /Copy a command below into a separate Claude Code session to run just that scan/
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByText(/nothing on this screen runs it for you/)).toBeInTheDocument();
+    });
+
+    it("no scan configs: renders neither the copy-command framing nor any copy block", async () => {
+      vi.spyOn(api, "getAgenticDiscovery").mockResolvedValueOnce({
+        generated_at: null,
+        candidates: [],
+        scan_configs: [],
+        reason: "No scan candidates yet, and no scan configs are enabled.",
+        writable: true,
+        note: "",
+      } satisfies AgenticDiscovery);
+      renderScreen();
+
+      expect(await screen.findByText("None configured yet.")).toBeInTheDocument();
+      expect(screen.queryByText(/nothing on this screen runs it for you/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(/scan-cmd-.*-copy/)).not.toBeInTheDocument();
+    });
   });
 });
