@@ -6,9 +6,9 @@ import { theme } from "../theme";
  * TradingHub.tsx — landing screen for the "Trading Tools" nav section
  * (Attribution / Calibration / Agent / Commands). Purely static content: a
  * card per screen with an icon, label, and one-line description, tapped to
- * navigate. Descriptions for Calibration and Agent are sourced live from
- * `TAB_HELP` (`help/helpContent.ts`) rather than hand-copied, so they can
- * never drift from the real in-app help content.
+ * navigate. Every description is sourced live from `TAB_HELP`
+ * (`help/helpContent.ts`) rather than hand-copied, so it can never drift
+ * from the real in-app help content.
  */
 interface HubCard {
   to: string;
@@ -18,32 +18,10 @@ interface HubCard {
 }
 
 const CARDS: HubCard[] = [
-  {
-    to: "/attribution",
-    label: "Attribution",
-    icon: "🧮",
-    description:
-      "Brinson-Fachler performance decomposition — allocation, selection, and interaction effects on your holdings.",
-  },
-  {
-    to: "/calibration",
-    label: "Calibration",
-    icon: "🎚️",
-    description: TAB_HELP.calibration.description,
-  },
-  {
-    to: "/agentic",
-    label: "Agent",
-    icon: "🤖",
-    description: TAB_HELP.agentic.description,
-  },
-  {
-    to: "/commands",
-    label: "Commands",
-    icon: "⌨️",
-    description:
-      "A command palette for scans and the gated dry-run execution queue.",
-  },
+  { to: "/attribution", label: "Attribution", icon: "🧮", description: TAB_HELP.attribution.description },
+  { to: "/calibration", label: "Calibration", icon: "🎚️", description: TAB_HELP.calibration.description },
+  { to: "/agentic", label: "Agent", icon: "🤖", description: TAB_HELP.agentic.description },
+  { to: "/commands", label: "Commands", icon: "⌨️", description: TAB_HELP.commands.description },
 ];
 
 function HubCardRow({ card, onOpen }: { card: HubCard; onOpen: () => void }) {

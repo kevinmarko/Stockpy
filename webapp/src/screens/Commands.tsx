@@ -9,6 +9,7 @@ import {
   Loading,
   StaleDataNotice,
 } from "../components/ui";
+import { TabGuide } from "../components/TabGuide";
 import { ExecutionQueueSection } from "../components/ExecutionQueueSection";
 import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { theme } from "../theme";
@@ -36,6 +37,8 @@ export function Commands() {
         Autocomplete for the platform's command-line tools. Compose a command,
         then copy it to run in your terminal — this screen never executes anything.
       </p>
+
+      <TabGuide tabKey="commands" />
 
       {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
 

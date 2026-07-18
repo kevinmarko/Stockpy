@@ -7,6 +7,7 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { PerfLine } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { RecommendedStocks } from "../components/RecommendedStocks";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -126,6 +127,8 @@ export function DataExplorer() {
         a symbol — daily bars, current fundamentals, and the macro snapshot.{" "}
         Manage which stocks are tracked in <Link to="/settings">Settings</Link>.
       </p>
+
+      <TabGuide tabKey="data-explorer" />
 
       <RecommendedStocks onSelect={setSymbol} />
 

@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { ObservabilitySummary, PerfRange, RiskGateBlockEntry } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
+import { TabGuide } from "../components/TabGuide";
 import { RangeToggle } from "../components/RangeToggle";
 import { DrawdownArea, PerfLine } from "../components/charts";
 import { fmtNum, fmtPct, timeAgo } from "../format";
@@ -239,6 +240,8 @@ export function Observability() {
         skill, and blocked orders — one read-only view over what the engine
         already computed.
       </p>
+
+      <TabGuide tabKey="observability" />
 
       {loading && <Loading lines={4} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}

@@ -11,6 +11,7 @@ import type {
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, EmptyState, ErrorState, Loading, StaleDataNotice, Tile } from "../components/ui";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -479,6 +480,8 @@ export function Attribution() {
         What factor tilts and hidden concentration your actual holdings carry
         -- a read of your current book, not a backtest.
       </p>
+
+      <TabGuide tabKey="attribution" />
 
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}

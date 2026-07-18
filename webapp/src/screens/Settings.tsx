@@ -25,6 +25,7 @@ import { Toggle } from "../components/Toggle";
 import { PwaStatusSection } from "../components/PwaStatusSection";
 import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { UniverseManager } from "../components/UniverseManager";
+import { TabGuide } from "../components/TabGuide";
 import { fmtAge, fmtDate, fmtUsd } from "../format";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
@@ -87,6 +88,8 @@ export function Settings() {
         Pipeline run status and the automated schedule, without SSHing into
         the host.
       </p>
+
+      <TabGuide tabKey="settings" />
 
       <PipelineStatusSection
         status={status}

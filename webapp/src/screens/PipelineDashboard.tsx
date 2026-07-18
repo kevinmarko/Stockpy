@@ -24,6 +24,7 @@ import {
   Loading,
   StaleDataNotice,
 } from "../components/ui";
+import { TabGuide } from "../components/TabGuide";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -407,6 +408,8 @@ export function PipelineDashboard() {
       <p className="screen-sub">
         The orchestrator daemon's live status and stage-scoped run triggers.
       </p>
+
+      <TabGuide tabKey="pipeline" />
 
       {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
 

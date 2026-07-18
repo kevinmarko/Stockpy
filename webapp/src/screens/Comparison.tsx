@@ -6,6 +6,7 @@ import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading } from "../components/ui";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
+import { TabGuide } from "../components/TabGuide";
 import { FollowModal } from "./FollowModal";
 import { theme } from "../theme";
 import { fmtNum, fmtPct, fmtUsd } from "../format";
@@ -173,6 +174,8 @@ export function Comparison() {
   return (
     <div className="screen" data-testid="comparison-screen">
       <h1 className="screen-title" data-testid="comparison-title">Pilot Strategy Comparison</h1>
+
+      <TabGuide tabKey="compare" />
 
       {/* Pilot Checklist */}
       <section className="card card-pad" style={{ marginBottom: 16 }}>
