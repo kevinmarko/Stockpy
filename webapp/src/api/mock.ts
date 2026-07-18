@@ -2325,7 +2325,7 @@ export const mockApi = {
     // Simulated verification only — the mock never contacts a real broker and
     // never persists the credential strings themselves, only a boolean marker.
     const verified = Boolean(
-      creds.username.trim() && creds.password.trim() && creds.mfa_secret.trim()
+      creds.username.trim() && creds.password.trim() && creds.mfa_code.trim()
     );
     if (!verified) {
       throw new ApiError("Could not verify Robinhood credentials.", 401);

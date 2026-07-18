@@ -53,37 +53,41 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.delenv("RH_PASSWORD", raising=False)
         monkeypatch.delenv("RH_MFA_SECRET", raising=False)
 
-        brokerage_credentials.write_rh_credentials("someone@example.com", "hunter2", "JBSWY3DPEHPK3PXP")
+        brokerage_credentials.write_rh_credentials("someone@example.com", "hunter2")
 
         contents = env_path.read_text(encoding="utf-8")
         assert "RH_USERNAME" in contents
         assert "RH_PASSWORD" in contents
-        assert "RH_MFA_SECRET" in contents
+        assert "RH_MFA_SECRET" not in contents
         assert "UNRELATED_KEY=untouched" in contents
         # Mirrored into the live process environment.
         assert os.environ["RH_USERNAME"] == "someone@example.com"
         assert os.environ["RH_PASSWORD"] == "hunter2"
-        assert os.environ["RH_MFA_SECRET"] == "JBSWY3DPEHPK3PXP"
-
-        monkeypatch.delenv("RH_USERNAME", raising=False)
-        monkeypatch.delenv("RH_PASSWORD", raising=False)
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
-
-    def test_write_rh_credentials_empty_mfa_clears_that_key_only(self, tmp_path, monkeypatch):
-        env_path = tmp_path / ".env"
-        monkeypatch.setattr(brokerage_credentials, "ENV_PATH", env_path)
-        monkeypatch.delenv("RH_USERNAME", raising=False)
-        monkeypatch.delenv("RH_PASSWORD", raising=False)
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
-
-        brokerage_credentials.write_rh_credentials("user@example.com", "pw", "")
-
-        assert os.environ["RH_USERNAME"] == "user@example.com"
-        assert os.environ["RH_PASSWORD"] == "pw"
         assert "RH_MFA_SECRET" not in os.environ
 
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
+
+    def test_write_rh_credentials_never_touches_existing_mfa_secret(self, tmp_path, monkeypatch):
+        """A webapp (re)connect must never clobber an operator-set RH_MFA_SECRET
+        used by the main pipeline's own unattended login — this module doesn't
+        manage that key at all, write or clear."""
+        env_path = tmp_path / ".env"
+        env_path.write_text("RH_MFA_SECRET=OPERATORSECRET\n", encoding="utf-8")
+        monkeypatch.setattr(brokerage_credentials, "ENV_PATH", env_path)
+        monkeypatch.delenv("RH_USERNAME", raising=False)
+        monkeypatch.delenv("RH_PASSWORD", raising=False)
+        monkeypatch.setenv("RH_MFA_SECRET", "OPERATORSECRET")
+
+        brokerage_credentials.write_rh_credentials("user@example.com", "pw")
+
+        assert os.environ["RH_MFA_SECRET"] == "OPERATORSECRET"
+        contents = env_path.read_text(encoding="utf-8")
+        assert "RH_MFA_SECRET=OPERATORSECRET" in contents
+
+        monkeypatch.delenv("RH_USERNAME", raising=False)
+        monkeypatch.delenv("RH_PASSWORD", raising=False)
+        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
 
     def test_write_rh_credentials_never_logs_values(self, tmp_path, monkeypatch, caplog):
         env_path = tmp_path / ".env"
@@ -94,28 +98,31 @@ class TestBrokerageCredentialsWriter:
 
         secret_password = "sUp3rS3cr3tPassw0rd!!"
         with caplog.at_level(logging.DEBUG):
-            brokerage_credentials.write_rh_credentials("user@example.com", secret_password, "")
+            brokerage_credentials.write_rh_credentials("user@example.com", secret_password)
 
         assert secret_password not in caplog.text
 
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
 
-    def test_clear_rh_credentials_removes_all_three(self, tmp_path, monkeypatch):
+    def test_clear_rh_credentials_removes_username_and_password_only(self, tmp_path, monkeypatch):
         env_path = tmp_path / ".env"
         monkeypatch.setattr(brokerage_credentials, "ENV_PATH", env_path)
         monkeypatch.setenv("RH_USERNAME", "user@example.com")
         monkeypatch.setenv("RH_PASSWORD", "pw")
-        monkeypatch.setenv("RH_MFA_SECRET", "SECRET")
-        brokerage_credentials.write_rh_credentials("user@example.com", "pw", "SECRET")
+        monkeypatch.setenv("RH_MFA_SECRET", "OPERATORSECRET")
+        brokerage_credentials.write_rh_credentials("user@example.com", "pw")
 
         brokerage_credentials.clear_rh_credentials()
 
         assert "RH_USERNAME" not in os.environ
         assert "RH_PASSWORD" not in os.environ
-        assert "RH_MFA_SECRET" not in os.environ
+        # RH_MFA_SECRET is out of scope for this module — never cleared by it.
+        assert os.environ["RH_MFA_SECRET"] == "OPERATORSECRET"
         contents = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
         assert "RH_PASSWORD=pw" not in contents
+
+        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
 
     def test_clear_rh_credentials_idempotent_when_nothing_set(self, tmp_path, monkeypatch):
         env_path = tmp_path / ".env"
@@ -157,15 +164,15 @@ class TestVerifyCredentials:
         monkeypatch.setattr(robinhood_portfolio.r, "logout", mock_logout)
 
         result = robinhood_portfolio.verify_credentials(
-            "user@example.com", "pw", "JBSWY3DPEHPK3PXP"
+            "user@example.com", "pw", "123456"
         )
         assert result is True
         assert calls["login"][0] == "user@example.com"
         assert calls["login"][1] == "pw"
-        assert calls["login"][2] is not None  # a real TOTP code was generated
+        assert calls["login"][2] == "123456"  # the code is passed through unchanged, no derivation
         assert calls["logout"] is True
 
-    def test_missing_mfa_secret_fails_without_interactive_prompt(self, monkeypatch):
+    def test_missing_mfa_code_fails_without_interactive_prompt(self, monkeypatch):
         def boom_login(*args, **kwargs):
             raise AssertionError("r.login must not be called without an MFA secret")
 
@@ -185,7 +192,7 @@ class TestVerifyCredentials:
         monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
 
         result = robinhood_portfolio.verify_credentials(
-            "user@example.com", "wrongpw", "JBSWY3DPEHPK3PXP"
+            "user@example.com", "wrongpw", "123456"
         )
         assert result is False
 
@@ -196,7 +203,7 @@ class TestVerifyCredentials:
         monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
 
         result = robinhood_portfolio.verify_credentials(
-            "user@example.com", "pw", "JBSWY3DPEHPK3PXP"
+            "user@example.com", "pw", "123456"
         )
         assert result is False
 
@@ -210,7 +217,7 @@ class TestVerifyCredentials:
 
         with caplog.at_level(logging.DEBUG):
             result = robinhood_portfolio.verify_credentials(
-                "user@example.com", secret_password, "JBSWY3DPEHPK3PXP"
+                "user@example.com", secret_password, "123456"
             )
         assert result is False
         # The exception message embeds the password, but verify_credentials
@@ -228,7 +235,7 @@ class TestVerifyCredentials:
         monkeypatch.setattr(robinhood_portfolio.r, "logout", boom_logout)
 
         result = robinhood_portfolio.verify_credentials(
-            "user@example.com", "pw", "JBSWY3DPEHPK3PXP"
+            "user@example.com", "pw", "123456"
         )
         assert result is True
 
@@ -329,7 +336,7 @@ class TestBrokerageConnectGating:
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 resp = loopback_client.post(
                     "/brokerage/connect",
-                    json={"username": "u", "password": "p", "mfa_secret": "s"},
+                    json={"username": "u", "password": "p", "mfa_code": "s"},
                     headers=_auth(),
                 )
         assert resp.status_code == 403
@@ -339,7 +346,7 @@ class TestBrokerageConnectGating:
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
                 resp = loopback_client.post(
                     "/brokerage/connect",
-                    json={"username": "u", "password": "p", "mfa_secret": "s"},
+                    json={"username": "u", "password": "p", "mfa_code": "s"},
                 )
         assert resp.status_code == 403
 
@@ -348,7 +355,7 @@ class TestBrokerageConnectGating:
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 resp = loopback_client.post(
                     "/brokerage/connect",
-                    json={"username": "u", "password": "p", "mfa_secret": "s"},
+                    json={"username": "u", "password": "p", "mfa_code": "s"},
                     headers={"Authorization": "Bearer WRONG"},
                 )
         assert resp.status_code == 401
@@ -360,7 +367,7 @@ class TestBrokerageConnectGating:
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 resp = client.post(
                     "/brokerage/connect",
-                    json={"username": "u", "password": "p", "mfa_secret": "s"},
+                    json={"username": "u", "password": "p", "mfa_code": "s"},
                     headers=_auth(),
                 )
         assert resp.status_code == 403
@@ -368,15 +375,18 @@ class TestBrokerageConnectGating:
 
 class TestBrokerageConnectHappyPath:
     def test_connect_success_persists_credentials(self, monkeypatch):
+        verify_args = {}
         written = {}
 
-        def fake_verify(username, password, mfa_secret=""):
+        def fake_verify(username, password, mfa_code=""):
+            verify_args["username"] = username
+            verify_args["password"] = password
+            verify_args["mfa_code"] = mfa_code
             return True
 
-        def fake_write(username, password, mfa_secret=""):
+        def fake_write(username, password):
             written["username"] = username
             written["password"] = password
-            written["mfa_secret"] = mfa_secret
 
         monkeypatch.setattr(pilots_api.robinhood_portfolio, "verify_credentials", fake_verify)
         monkeypatch.setattr(pilots_api.brokerage_credentials, "write_rh_credentials", fake_write)
@@ -393,26 +403,32 @@ class TestBrokerageConnectHappyPath:
                         json={
                             "username": "user@example.com",
                             "password": "hunter2",
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
+                            "mfa_code": "123456",
                         },
                         headers=_auth(),
                     )
         assert resp.status_code == 200
         body = resp.json()
         assert body == {"connected": True, "verified": True, "has_account_snapshot": False}
+        # The one-time code reaches verify_credentials but is NOT part of what
+        # gets persisted — write_rh_credentials only ever receives username/password.
+        assert verify_args == {
+            "username": "user@example.com",
+            "password": "hunter2",
+            "mfa_code": "123456",
+        }
         assert written == {
             "username": "user@example.com",
             "password": "hunter2",
-            "mfa_secret": "JBSWY3DPEHPK3PXP",
         }
 
     def test_connect_failure_never_persists_credentials(self, monkeypatch):
         write_called = {"count": 0}
 
-        def fake_verify(username, password, mfa_secret=""):
+        def fake_verify(username, password, mfa_code=""):
             return False
 
-        def fake_write(username, password, mfa_secret=""):
+        def fake_write(username, password):
             write_called["count"] += 1
 
         monkeypatch.setattr(pilots_api.robinhood_portfolio, "verify_credentials", fake_verify)
@@ -422,7 +438,7 @@ class TestBrokerageConnectHappyPath:
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 resp = loopback_client.post(
                     "/brokerage/connect",
-                    json={"username": "user@example.com", "password": "wrong", "mfa_secret": "SECRET"},
+                    json={"username": "user@example.com", "password": "wrong", "mfa_code": "654321"},
                     headers=_auth(),
                 )
         assert resp.status_code == 401
@@ -452,13 +468,13 @@ class TestBrokerageConnectHappyPath:
                         json={
                             "username": "user@example.com",
                             "password": secret_password,
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
+                            "mfa_code": "123456",
                         },
                         headers=_auth(),
                     )
         assert resp.status_code == 200
         assert secret_password not in resp.text
-        assert "JBSWY3DPEHPK3PXP" not in resp.text
+        assert "123456" not in resp.text
 
 
 # ---------------------------------------------------------------------------

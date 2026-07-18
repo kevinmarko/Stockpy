@@ -558,7 +558,7 @@ describe("Settings screen — Brokerage", () => {
 
     expect(await screen.findByLabelText(/robinhood email/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/totp secret/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/authenticator app code/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Disconnect" })).not.toBeInTheDocument();
   });
 
@@ -588,7 +588,7 @@ describe("Settings screen — Brokerage", () => {
 
     await user.type(await screen.findByLabelText(/robinhood email/i), "user@example.com");
     await user.type(screen.getByLabelText(/^password$/i), "sUp3rS3cr3t!!");
-    await user.type(screen.getByLabelText(/totp secret/i), "JBSWY3DPEHPK3PXP");
+    await user.type(screen.getByLabelText(/authenticator app code/i), "123456");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
     // Reloaded /brokerage/status now reports connected -> Disconnect appears,
@@ -597,7 +597,7 @@ describe("Settings screen — Brokerage", () => {
     expect(connectSpy).toHaveBeenCalledWith({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
-      mfa_secret: "JBSWY3DPEHPK3PXP",
+      mfa_code: "123456",
     });
     expect(document.body.textContent).not.toContain("sUp3rS3cr3t!!");
   });

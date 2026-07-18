@@ -189,7 +189,7 @@ class AccountSnapshot:
 def _login_with(
     username: str,
     password: str,
-    mfa_secret: str,
+    mfa_code: str,
     *,
     allow_interactive: bool = False,
 ) -> dict:
@@ -199,17 +199,17 @@ def _login_with(
     and ``verify_credentials()`` (explicit-args path used only by the
     brokerage-connect intake flow). Never logs credential values.
 
-    When ``mfa_secret`` is supplied, generates the current TOTP code via
-    ``pyotp.TOTP(mfa_secret).now()`` (RFC 6238) and passes ``mfa_code=``.
-    When absent and ``allow_interactive=True``, falls through to
-    ``robin_stocks``' interactive terminal MFA prompt (only safe for the
-    env-var CLI/GUI path — never for an HTTP request, which must not block on
-    stdin). When absent and ``allow_interactive=False``, raises immediately
-    rather than risking a hang.
+    ``mfa_code`` is an already-generated 6-digit MFA code (the caller is
+    responsible for producing it — ``_login()`` derives it from
+    ``RH_MFA_SECRET`` via ``pyotp``; ``verify_credentials()`` takes it
+    verbatim from its caller). This function has no TOTP/pyotp knowledge of
+    its own. When ``mfa_code`` is absent and ``allow_interactive=True``,
+    falls through to ``robin_stocks``' interactive terminal MFA prompt (only
+    safe for the env-var CLI/GUI path — never for an HTTP request, which must
+    not block on stdin). When absent and ``allow_interactive=False``, raises
+    immediately rather than risking a hang.
     """
-    if mfa_secret:
-        # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
-        mfa_code = pyotp.TOTP(mfa_secret).now()
+    if mfa_code:
         result = r.login(
             username,
             password,
@@ -224,14 +224,14 @@ def _login_with(
         )
     else:
         raise ValueError(
-            "An MFA secret is required (interactive MFA prompting is not "
+            "An MFA code is required (interactive MFA prompting is not "
             "available in this context)."
         )
 
     if not isinstance(result, dict) or "access_token" not in result:
         raise RuntimeError(
             "Robinhood login failed — no access_token in login response. "
-            "Check the username, password, and MFA secret."
+            "Check the username, password, and MFA code."
         )
     return result
 
@@ -259,10 +259,14 @@ def _login() -> None:
     password = _require_env("RH_PASSWORD")
     mfa_secret = os.environ.get("RH_MFA_SECRET", "").strip()
 
-    if not mfa_secret:
+    if mfa_secret:
+        # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
+        mfa_code = pyotp.TOTP(mfa_secret).now()
+    else:
+        mfa_code = ""
         logger.info("RH_MFA_SECRET is missing or empty. Falling back to interactive MFA login.")
 
-    _login_with(username, password, mfa_secret, allow_interactive=True)
+    _login_with(username, password, mfa_code, allow_interactive=True)
     logger.info("Robinhood login succeeded.")
 
 
@@ -270,22 +274,28 @@ def _login() -> None:
 # Credential verification (public — brokerage-connect intake)
 # ---------------------------------------------------------------------------
 
-def verify_credentials(username: str, password: str, mfa_secret: str = "") -> bool:
+def verify_credentials(username: str, password: str, mfa_code: str = "") -> bool:
     """Attempt a read-only Robinhood login with EXPLICIT credentials, then log out.
 
     Used ONLY by the brokerage-connect intake flow
     (``api/pilots_api.py::POST /brokerage/connect``) to verify a candidate
-    username/password/TOTP-secret BEFORE they are ever persisted to ``.env`` —
-    never after. Unlike ``_login()``, this never falls back to interactive MFA
-    prompting: a headless HTTP request must not block on stdin, so a missing
-    or empty ``mfa_secret`` is treated as a verification failure, not an
-    invitation to prompt.
+    username/password/one-time-authenticator-code BEFORE they are ever
+    persisted to ``.env`` — never after. ``mfa_code`` is the CURRENT 6-digit
+    code shown by the user's authenticator app, passed straight through to
+    ``robin_stocks`` — this function has no TOTP/pyotp knowledge and never
+    receives (or persists) the underlying secret. A successful verification
+    relies on ``robin_stocks``' own ``store_session=True`` device-pickle
+    (``~/.tokens``) to carry ongoing unattended re-fetches forward without
+    needing another code. Unlike ``_login()``, this never falls back to
+    interactive MFA prompting: a headless HTTP request must not block on
+    stdin, so a missing or empty ``mfa_code`` is treated as a verification
+    failure, not an invitation to prompt.
 
     This function establishes no lasting session beyond whatever
     ``robin_stocks``' own ``store_session=True`` pickle does, and immediately
     logs out on success. It NEVER raises — any failure (bad credentials,
-    missing MFA secret, network error) returns ``False`` — and NEVER logs the
-    username/password/mfa_secret values themselves, only exception *types*
+    missing MFA code, network error) returns ``False`` — and NEVER logs the
+    username/password/mfa_code values themselves, only exception *types*
     (CONSTRAINT #3).
 
     Returns
@@ -295,14 +305,14 @@ def verify_credentials(username: str, password: str, mfa_secret: str = "") -> bo
     """
     username = (username or "").strip()
     password = (password or "").strip()
-    mfa_secret = (mfa_secret or "").strip()
+    mfa_code = (mfa_code or "").strip()
 
     if not username or not password:
         logger.info("Brokerage credential verification failed: username/password missing.")
         return False
 
     try:
-        _login_with(username, password, mfa_secret, allow_interactive=False)
+        _login_with(username, password, mfa_code, allow_interactive=False)
     except Exception as exc:
         logger.info(
             "Brokerage credential verification failed: %s", type(exc).__name__

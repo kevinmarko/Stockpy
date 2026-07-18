@@ -238,7 +238,8 @@ export interface BrokerageStatus {
 export interface BrokerageConnectRequest {
   username: string;
   password: string;
-  mfa_secret: string;
+  /** Current 6-digit authenticator-app code. Verified once, never persisted. */
+  mfa_code: string;
 }
 
 /** POST /brokerage/connect response. Never echoes credential values. */

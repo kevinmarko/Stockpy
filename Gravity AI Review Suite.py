@@ -2626,7 +2626,7 @@ class GravityAIAuditor:
             serialised_lower = blob.lower()
             secret_leak = any(
                 kw in serialised_lower
-                for kw in ("password", "mfa_secret", "access_token", "rh_password")
+                for kw in ("password", "mfa_secret", "mfa_code", "access_token", "rh_password")
             )
             audit["checks"]["no_secrets_in_cache_payload"] = {
                 "status": "PASSED" if not secret_leak else "FAILED",

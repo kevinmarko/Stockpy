@@ -169,9 +169,13 @@ gate, or fabricated backtest metric.
   `data/robinhood_orders.py` are **read-only**; the MCP server exposes no
   order-submission code; the gated `execution/queue_builder.py` writes a dry-run
   queue and never contacts a broker.
-- **MFA / credential handling:** `RH_MFA_SECRET` via `pyotp`; interactive fallback
-  only when appropriate; `verify_credentials` never falls back to interactive
-  prompting and never persists on a failed verify; credentials never logged.
+- **MFA / credential handling:** main pipeline's own `_login()` derives its TOTP
+  code from the operator's `RH_MFA_SECRET` via `pyotp`, with interactive fallback
+  only when appropriate; the webapp brokerage-connect flow's `verify_credentials`
+  takes a one-time 6-digit authenticator code straight from the caller (no
+  `pyotp`, no persisted secret), never falls back to interactive prompting, and
+  never persists on a failed verify; credentials never logged;
+  `data/brokerage_credentials.py` never writes or clears `RH_MFA_SECRET`.
 - **Kill switch & risk gate:** `GlobalKillSwitch` checked before any order path;
   `PreTradeRiskGate.run_all` short-circuits at first failure.
 

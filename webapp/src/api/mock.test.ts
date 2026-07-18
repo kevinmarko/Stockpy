@@ -328,7 +328,7 @@ describe("mock API — brokerage-connect contract", () => {
     const result = await mockApi.connectBrokerage({
       username: "user@example.com",
       password: "hunter2",
-      mfa_secret: "JBSWY3DPEHPK3PXP",
+      mfa_code: "123456",
     });
     expect(result).toEqual({ connected: true, verified: true, has_account_snapshot: false });
 
@@ -340,18 +340,18 @@ describe("mock API — brokerage-connect contract", () => {
     const result = await mockApi.connectBrokerage({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
-      mfa_secret: "JBSWY3DPEHPK3PXP",
+      mfa_code: "123456",
     });
     expect(JSON.stringify(result)).not.toContain("sUp3rS3cr3t");
-    expect(JSON.stringify(result)).not.toContain("JBSWY3DPEHPK3PXP");
+    expect(JSON.stringify(result)).not.toContain("123456");
   });
 
   it("connectBrokerage() rejects with ApiError(401) when a field is blank", async () => {
     await expect(
-      mockApi.connectBrokerage({ username: "", password: "pw", mfa_secret: "s" })
+      mockApi.connectBrokerage({ username: "", password: "pw", mfa_code: "123456" })
     ).rejects.toBeInstanceOf(ApiError);
     await expect(
-      mockApi.connectBrokerage({ username: "u", password: "pw", mfa_secret: "" })
+      mockApi.connectBrokerage({ username: "u", password: "pw", mfa_code: "" })
     ).rejects.toMatchObject({ status: 401 });
   });
 
@@ -359,7 +359,7 @@ describe("mock API — brokerage-connect contract", () => {
     await mockApi.connectBrokerage({
       username: "user@example.com",
       password: "hunter2",
-      mfa_secret: "JBSWY3DPEHPK3PXP",
+      mfa_code: "123456",
     });
     expect((await mockApi.getBrokerageStatus()).connected).toBe(true);
 
@@ -372,7 +372,7 @@ describe("mock API — brokerage-connect contract", () => {
     await mockApi.connectBrokerage({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
-      mfa_secret: "JBSWY3DPEHPK3PXP",
+      mfa_code: "123456",
     });
     const dump: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -381,7 +381,7 @@ describe("mock API — brokerage-connect contract", () => {
     }
     const joined = dump.join("\n");
     expect(joined).not.toContain("sUp3rS3cr3t");
-    expect(joined).not.toContain("JBSWY3DPEHPK3PXP");
+    expect(joined).not.toContain("123456");
   });
 });
 

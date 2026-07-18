@@ -154,7 +154,7 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
 
     expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/totp secret/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/authenticator app code/i)).toBeInTheDocument();
   });
 
   it("the Connect button stays disabled until all three fields are filled", async () => {
@@ -175,8 +175,8 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
     });
     expect(connectBtn).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/totp secret/i), {
-      target: { value: "JBSWY3DPEHPK3PXP" },
+    fireEvent.change(screen.getByLabelText(/authenticator app code/i), {
+      target: { value: "123456" },
     });
     expect(connectBtn).toBeEnabled();
   });
@@ -192,8 +192,8 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
     fireEvent.change(screen.getByLabelText(/^password$/i), {
       target: { value: "sUp3rS3cr3tPassw0rd!!" },
     });
-    fireEvent.change(screen.getByLabelText(/totp secret/i), {
-      target: { value: "JBSWY3DPEHPK3PXP" },
+    fireEvent.change(screen.getByLabelText(/authenticator app code/i), {
+      target: { value: "123456" },
     });
 
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
@@ -223,8 +223,8 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
     fireEvent.change(screen.getByLabelText(/^password$/i), {
       target: { value: "wrongpassword" },
     });
-    fireEvent.change(screen.getByLabelText(/totp secret/i), {
-      target: { value: "JBSWY3DPEHPK3PXP" },
+    fireEvent.change(screen.getByLabelText(/authenticator app code/i), {
+      target: { value: "123456" },
     });
     fireEvent.click(screen.getByRole("button", { name: /connect$/i }));
 
