@@ -11,7 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgenticTrading } from "./AgenticTrading";
 import { api, ApiError } from "../api/client";
-import type { AgenticDiscovery, AgenticStatus } from "../api/types";
+import type { AgenticDiscovery, AgenticStatus, DiscoveryCandidate } from "../api/types";
 
 function renderScreen() {
   return render(
@@ -58,6 +58,62 @@ describe("Agentic Trading screen (real mock API)", () => {
 
     const pltr = rows.find((r) => r.textContent?.includes("PLTR"))!;
     expect(within(pltr).getByText("not scored")).toBeInTheDocument();
+  });
+
+  it("renders the Discovery section's 'as of' freshness line from generated_at (backlog finding #5)", async () => {
+    renderScreen();
+    // The mock fixture's generated_at is ~1h old (webapp/src/api/mock.ts) --
+    // assert loosely on the "X ago" shape rather than an exact minute count,
+    // since a few ms of test-run time elapse between the fixture's
+    // Date.now() capture and the assertion.
+    expect(await screen.findByText(/^As of .+ ago$/)).toBeInTheDocument();
+  });
+
+  it("omits the 'as of' line honestly when generated_at is null, never a fabricated time", async () => {
+    vi.spyOn(api, "getAgenticDiscovery").mockResolvedValueOnce({
+      generated_at: null,
+      candidates: [],
+      scan_configs: [],
+      reason: "No scan candidates yet, and no scan configs are enabled.",
+      writable: true,
+      note: "",
+    } satisfies AgenticDiscovery);
+    renderScreen();
+    expect(await screen.findByText("No candidates yet")).toBeInTheDocument();
+    expect(screen.queryByText(/As of/)).not.toBeInTheDocument();
+  });
+
+  it("shows each candidate's own discovered_at timestamp", async () => {
+    renderScreen();
+    const rows = await screen.findAllByTestId("discovery-candidate-row");
+    const nvda = rows.find((r) => r.textContent?.includes("NVDA"))!;
+    // The mock candidate's discovered_at is ~1h old, same shape as above.
+    expect(within(nvda).getByText(/^discovered .+ ago$/)).toBeInTheDocument();
+  });
+
+  it("a candidate with no discovered_at renders no fabricated timestamp", async () => {
+    const noTimestampCandidate: DiscoveryCandidate = {
+      symbol: "ZZZZ",
+      scan_name: "test_scan",
+      scan_reason: "test reason",
+      action: null,
+      conviction: null,
+      discovered_at: null,
+    };
+    vi.spyOn(api, "getAgenticDiscovery").mockResolvedValueOnce({
+      generated_at: new Date(Date.now() - 3_600_000).toISOString(),
+      candidates: [noTimestampCandidate],
+      scan_configs: [],
+      reason: null,
+      writable: true,
+      note: "",
+    } satisfies AgenticDiscovery);
+    renderScreen();
+    const rows = await screen.findAllByTestId("discovery-candidate-row");
+    const zzzz = rows.find((r) => r.textContent?.includes("ZZZZ"))!;
+    // The section-level "as of" line is still honest (generated_at was
+    // provided), but this specific row never fabricates its own timestamp.
+    expect(within(zzzz).queryByText(/discovered/)).not.toBeInTheDocument();
   });
 
   it("renders the shared execution queue section (mode, placeable count, intents)", async () => {

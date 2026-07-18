@@ -195,6 +195,19 @@ function DiscoverySection() {
       )}
       {!discovery.loading && !discovery.error && discovery.data && (
         <>
+          {/* Candidate-list freshness (backlog finding #5): the whole file is
+              a single overwrite snapshot (pilots/discovery.py +
+              .claude/skills/agentic-discovery's "overwrite, don't merge"
+              contract — each run replaces the prior one, it never persists
+              incrementally), so `generated_at` is an honest answer to "how
+              stale is this list." Null means no scan has run yet — the empty
+              state below already covers that, so this renders nothing rather
+              than a fabricated "as of never" line. */}
+          {discovery.data.generated_at && (
+            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: -6, marginBottom: 12 }}>
+              As of {timeAgo(discovery.data.generated_at)}
+            </p>
+          )}
           {discovery.data.candidates.length === 0 ? (
             <EmptyState
               title="No candidates yet"
@@ -258,6 +271,13 @@ function DiscoverySection() {
  * inside it (nested interactive elements are invalid/ a11y-hostile). The button
  * degrades honestly — a 409 (WATCHLIST env precedence) or 422 (bad symbol)
  * surfaces the server's message rather than a fake success.
+ *
+ * `discovered_at` renders per-row rather than relying solely on the section's
+ * "as of" line: today's contract overwrites the whole candidate file on every
+ * scan run, so a row's own timestamp is normally within seconds of the
+ * section-level `generated_at` — but it's still each candidate's own field,
+ * and stays honest (not a copy of `generated_at`) if discovery ever starts
+ * persisting incrementally instead of overwriting.
  */
 function CandidateRow({ c }: { c: DiscoveryCandidate }) {
   const watch = useMutation(() => api.watchCandidate(c.symbol));
@@ -305,6 +325,11 @@ function CandidateRow({ c }: { c: DiscoveryCandidate }) {
             )}
             {c.scan_name && (
               <span style={{ color: theme.textMuted, fontSize: 11 }}>{c.scan_name}</span>
+            )}
+            {c.discovered_at && (
+              <span style={{ color: theme.textMuted, fontSize: 11 }}>
+                discovered {timeAgo(c.discovered_at)}
+              </span>
             )}
           </div>
         </Link>
