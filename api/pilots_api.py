@@ -611,6 +611,17 @@ class ScanConfigRequest(BaseModel):
     enabled: bool = True
 
 
+class WatchRequest(BaseModel):
+    """Body for ``POST /agentic/watch``. Start tracking a discovered candidate by
+    appending its symbol to ``watchlist.txt`` (via ``pilots.watchlist_writer``),
+    the same file ``main._load_watchlist()`` reads when building the evaluation
+    universe. NOT an ``.env`` write and NOT an order — it is not retroactive and
+    places nothing; the symbol enters the universe on the next pipeline run.
+    The symbol shape is validated in the writer (rejected, never sanitized)."""
+
+    symbol: str = Field(..., min_length=1, max_length=16)
+
+
 # ---------------------------------------------------------------------------
 # Serialization helpers
 # ---------------------------------------------------------------------------
@@ -1774,6 +1785,67 @@ def put_agentic_scan_config(body: ScanConfigRequest) -> Dict[str, Any]:
         "note": (
             "Saved to output/scan_configs.json. Takes effect the next time the "
             "agentic-discovery skill runs a scan — it is not applied automatically."
+        ),
+    }
+
+
+@app.post(
+    "/agentic/watch",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_agentic_discovery_enabled),
+    ],
+)
+def post_agentic_watch(body: WatchRequest) -> Dict[str, Any]:
+    """Start tracking a discovered candidate: append its symbol to
+    ``watchlist.txt`` so the advisory pipeline evaluates it on the next run.
+
+    Same auth tier as ``PUT /agentic/scan-config`` — ``require_command_token`` +
+    the DEDICATED ``AGENTIC_DISCOVERY_ENABLED`` master switch: this is the same
+    discovery-feature risk class (deciding which symbols the agent tracks and
+    feeds toward the gated order queue), the programmatic twin of the
+    ``agentic-discovery`` skill's operator-confirmed step-7 "track a candidate"
+    flow, so it rides the same flag rather than a new one. Places NO order and is
+    NOT retroactive — ``applies`` is ``"next_pipeline_run"``.
+
+    Honest-failure contract (CONSTRAINT #4): if the ``WATCHLIST`` env var is set,
+    ``watchlist.txt`` is ignored by the universe builder, so the write would be a
+    silent no-op — that returns 409 with a stable ``watchlist_env_precedence``
+    tag rather than a fake success. A malformed symbol returns 422
+    ``invalid_symbol`` (the writer rejects it, never sanitizes it). Echoes the
+    writer's own result (``added`` vs ``already_present``), never a fabricated
+    ``added`` list."""
+    from pilots.watchlist_writer import (
+        InvalidSymbolError,
+        WatchlistEnvPrecedenceError,
+        append_symbols,
+    )
+
+    try:
+        result = append_symbols([body.symbol])
+    except WatchlistEnvPrecedenceError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": exc.tag, "message": str(exc)},
+        )
+    except InvalidSymbolError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": exc.tag, "message": str(exc)},
+        )
+
+    already = bool(result.already_present) and not result.added
+    return {
+        "symbol": body.symbol.strip().upper(),
+        "added": result.added,
+        "already_present": result.already_present,
+        "watchlist_file": result.watchlist_file,
+        "applies": "next_pipeline_run",
+        "note": (
+            f"{body.symbol.strip().upper()} is already on the watchlist."
+            if already
+            else "Added to watchlist.txt — the pipeline will evaluate it on the "
+            "next run. No order was placed."
         ),
     }
 

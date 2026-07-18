@@ -217,7 +217,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -252,4 +252,10 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"pilots"}
     if module_name == "scan_config_store":
         allowed = allowed | {"datetime"}
+    if module_name == "watchlist_writer":
+        # Stdlib-only append helper for watchlist.txt (no settings, no engines):
+        # os (WATCHLIST env precedence check, mirroring main._load_watchlist),
+        # re (strict ticker-shape validation), dataclasses (result container),
+        # datetime (audit-comment timestamp).
+        allowed = allowed | {"os", "re", "dataclasses", "datetime"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"

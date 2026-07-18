@@ -1544,6 +1544,21 @@ export interface ScanConfigResult {
   note: string;
 }
 
+/** POST /agentic/watch response. Echoes the writer's own result — `added` vs
+ *  `already_present` (never a fabricated success). `applies` is
+ *  "next_pipeline_run": the symbol enters the universe on the next run, and
+ *  NO order is placed. A 409 (`watchlist_env_precedence`) or 422
+ *  (`invalid_symbol`) surfaces as an `ApiError` with the stable tag in its
+ *  message, per the endpoint's honest-failure contract. */
+export interface WatchResult {
+  symbol: string;
+  added: string[];
+  already_present: string[];
+  watchlist_file: string;
+  applies: "next_pipeline_run";
+  note: string;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

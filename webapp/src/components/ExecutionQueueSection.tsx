@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import type { ExecutionQueue, ExecutionQueueIntent } from "../api/types";
@@ -107,7 +108,12 @@ function IntentRow({ intent }: { intent: ExecutionQueueIntent }) {
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ fontWeight: 700, color: theme.textPrimary }}>{intent.symbol}</span>
+        <Link
+          to={`/symbol/${encodeURIComponent(intent.symbol)}`}
+          style={{ fontWeight: 700, color: theme.textPrimary, textDecoration: "none" }}
+        >
+          {intent.symbol}
+        </Link>
         <span style={{ color: intent.action === "BUY" ? theme.growth : theme.decline, fontWeight: 600, fontSize: 12 }}>
           {intent.action}
         </span>

@@ -182,4 +182,72 @@ describe("Agentic Trading screen (real mock API)", () => {
     expect(within(modeLink).getByText(/Change execution mode/)).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: /Manage Pilot follows/ })).toBeInTheDocument();
   });
+
+  it("Watch on a candidate calls watchCandidate and confirms it's now tracked", async () => {
+    const user = userEvent.setup();
+    const watchSpy = vi.spyOn(api, "watchCandidate").mockResolvedValueOnce({
+      symbol: "NVDA",
+      added: ["NVDA"],
+      already_present: [],
+      watchlist_file: "watchlist.txt",
+      applies: "next_pipeline_run",
+      note: "Added to watchlist.txt.",
+    });
+    renderScreen();
+    const rows = await screen.findAllByTestId("discovery-candidate-row");
+    const nvda = rows.find((r) => r.textContent?.includes("NVDA"))!;
+    await user.click(within(nvda).getByRole("button", { name: "Watch" }));
+
+    await waitFor(() => expect(watchSpy).toHaveBeenCalledWith("NVDA"));
+    expect(await within(nvda).findByText(/Watching/)).toBeInTheDocument();
+    // No order is placed — the confirmation says so, never implies a trade.
+    expect(within(nvda).getByText(/No order was placed/)).toBeInTheDocument();
+  });
+
+  it("a Watch failure surfaces the server's honest error, never a fabricated success", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "watchCandidate").mockRejectedValueOnce(
+      new ApiError("watchlist_env_precedence: WATCHLIST env is set.", 409)
+    );
+    renderScreen();
+    const rows = await screen.findAllByTestId("discovery-candidate-row");
+    const nvda = rows.find((r) => r.textContent?.includes("NVDA"))!;
+    await user.click(within(nvda).getByRole("button", { name: "Watch" }));
+
+    expect(await within(nvda).findByText(/watchlist_env_precedence/)).toBeInTheDocument();
+    // The Watch button stays offered — no "Watching" confirmation was faked.
+    expect(within(nvda).getByRole("button", { name: "Watch" })).toBeInTheDocument();
+    expect(within(nvda).queryByText(/✓ Watching/)).not.toBeInTheDocument();
+  });
+
+  it("Log on a candidate opens the decision modal for that exact symbol", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    const rows = await screen.findAllByTestId("discovery-candidate-row");
+    const nvda = rows.find((r) => r.textContent?.includes("NVDA"))!;
+    await user.click(within(nvda).getByRole("button", { name: "Log" }));
+    expect(
+      await screen.findByRole("heading", { name: /Log decision — NVDA/ })
+    ).toBeInTheDocument();
+  });
+
+  it("candidate rows, journal rows, and queue intents deep-link to the symbol page", async () => {
+    renderScreen();
+    // Discovery candidate → /symbol/NVDA
+    const candRows = await screen.findAllByTestId("discovery-candidate-row");
+    const nvda = candRows.find((r) => r.textContent?.includes("NVDA"))!;
+    expect(within(nvda).getByRole("link")).toHaveAttribute("href", "/symbol/NVDA");
+    // Decision-journal row (AAPL in the mock) → /symbol/AAPL, scoped to the
+    // journal section (AAPL also appears as an execution-queue intent link).
+    const journal = (await screen.findByRole("heading", { name: "Decision journal" }))
+      .closest("section")!;
+    expect(within(journal).getByRole("link", { name: /AAPL/ })).toHaveAttribute(
+      "href",
+      "/symbol/AAPL"
+    );
+    // Execution-queue intent symbol → /symbol/{sym}
+    const intentRows = await screen.findAllByTestId("execution-intent-row");
+    const firstIntentLink = within(intentRows[0]).getByRole("link");
+    expect(firstIntentLink.getAttribute("href")).toMatch(/^\/symbol\//);
+  });
 });
