@@ -204,6 +204,13 @@ export function Marketplace() {
                 Multi-horizon price forecast &amp; MC band
               </div>
             </Link>
+            <Link to="/commands" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>⌨️</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Commands</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                CLI autocomplete &amp; validation
+              </div>
+            </Link>
           </div>
 
           <p

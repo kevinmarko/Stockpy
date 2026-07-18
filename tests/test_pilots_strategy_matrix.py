@@ -215,7 +215,7 @@ def _import_roots(source: str) -> set:
     return roots
 
 
-@pytest.mark.parametrize("module_name", ["strategy_matrix", "options", "strategy_health"])
+@pytest.mark.parametrize("module_name", ["strategy_matrix", "options", "strategy_health", "commands"])
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
     pilots.strategy_health. The AST guard on pilots_api.py walks THAT file

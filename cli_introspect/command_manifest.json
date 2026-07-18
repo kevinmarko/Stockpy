@@ -1,0 +1,721 @@
+{
+  "generated_at": "2026-07-18T01:51:17.681714+00:00",
+  "command_count": 11,
+  "dead_letters": [],
+  "commands": [
+    {
+      "name": "main.py",
+      "invocation": "python3 main.py",
+      "aliases": [],
+      "description": "InvestYo Quant Platform \u2014 advisory pipeline launcher",
+      "options": [
+        {
+          "name": "--interval",
+          "aliases": [
+            "--interval"
+          ],
+          "description": "Refresh market data every N seconds (0 = run once and exit).",
+          "default": 0,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": "SECONDS",
+          "takes_value": true
+        },
+        {
+          "name": "--refresh-account",
+          "aliases": [
+            "--refresh-account"
+          ],
+          "description": "Force a fresh Robinhood fetch on this launch (bypasses daily cache).",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--agent",
+          "aliases": [
+            "--agent"
+          ],
+          "description": "Run the autonomous advisory agent loop: adaptive cadence based on market hours / VIX / regime, backlog reminders for high-conviction signals the operator has not yet logged a decision for, persistent state across restarts.  Takes precedence over --interval.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "main_orchestrator.py",
+      "invocation": "python3 main_orchestrator.py",
+      "aliases": [],
+      "description": "InvestYo Master Orchestrator",
+      "options": [
+        {
+          "name": "--dry-run",
+          "aliases": [
+            "--dry-run"
+          ],
+          "description": "Log intended orders but do not submit to broker.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--strict",
+          "aliases": [
+            "--strict"
+          ],
+          "description": "Treat DashboardSchema validation failures as fatal (exit 1). For CI / schema-drift gating.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "universe_engine.py",
+      "invocation": "python3 universe_engine.py",
+      "aliases": [],
+      "description": "InvestYo S&P 500 Universe Loader",
+      "options": [
+        {
+          "name": "--date",
+          "aliases": [
+            "--date"
+          ],
+          "description": "As-of date in YYYY-MM-DD format",
+          "default": null,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--report",
+          "aliases": [
+            "--report"
+          ],
+          "description": "Print survivorship bias report",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "app_shell.py",
+      "invocation": "python3 app_shell.py",
+      "aliases": [],
+      "description": "InvestYo native desktop supervisor (UI server + advisory engine loop).",
+      "options": [
+        {
+          "name": "--interval",
+          "aliases": [
+            "--interval"
+          ],
+          "description": "Advisory engine refresh cadence in seconds (default: 300).",
+          "default": 300,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "execution.kill_switch",
+      "invocation": "python -m execution.kill_switch",
+      "aliases": [],
+      "description": "InvestYo Global Kill Switch CLI",
+      "options": [
+        {
+          "name": "--activate",
+          "aliases": [
+            "--activate"
+          ],
+          "description": "Activate the kill switch.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--deactivate",
+          "aliases": [
+            "--deactivate"
+          ],
+          "description": "Deactivate the kill switch.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--status",
+          "aliases": [
+            "--status"
+          ],
+          "description": "Print current status.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--reason",
+          "aliases": [
+            "--reason"
+          ],
+          "description": "Reason text (--activate only).",
+          "default": "",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "validation.harness",
+      "invocation": "python -m validation.harness",
+      "aliases": [],
+      "description": "InvestYo Strategy Validation Harness",
+      "options": [
+        {
+          "name": "--strategy",
+          "aliases": [
+            "--strategy"
+          ],
+          "description": "Name of the strategy to validate",
+          "default": null,
+          "choices": null,
+          "required": true,
+          "arg_kind": "required",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--start",
+          "aliases": [
+            "--start"
+          ],
+          "description": "Start date (YYYY-MM-DD)",
+          "default": "2020-01-01",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--end",
+          "aliases": [
+            "--end"
+          ],
+          "description": "End date (YYYY-MM-DD)",
+          "default": "2023-12-31",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "prompt_registry",
+      "invocation": "python -m prompt_registry",
+      "aliases": [],
+      "description": "Prompt Registry \u2014 versioned, cryptographically-signed AI prompts.",
+      "options": [],
+      "positionals": [],
+      "subcommands": [
+        {
+          "name": "list",
+          "invocation": "python -m prompt_registry list",
+          "aliases": [],
+          "description": "Table of prompt IDs with pinned / remote-latest / newest-cached versions.",
+          "options": [],
+          "positionals": [],
+          "subcommands": []
+        },
+        {
+          "name": "get",
+          "invocation": "python -m prompt_registry get",
+          "aliases": [],
+          "description": "Print a resolved prompt body.",
+          "options": [
+            {
+              "name": "--version",
+              "aliases": [
+                "--version",
+                "-v"
+              ],
+              "description": "Specific version (e.g. 1.0.0 or 'baseline'). Default: full resolution chain.",
+              "default": null,
+              "choices": null,
+              "required": false,
+              "arg_kind": "optional",
+              "metavar": "VER",
+              "takes_value": true
+            },
+            {
+              "name": "--raw",
+              "aliases": [
+                "--raw"
+              ],
+              "description": "Suppress the header comment line \u2014 print body text only.",
+              "default": false,
+              "choices": null,
+              "required": false,
+              "arg_kind": "optional",
+              "metavar": null,
+              "takes_value": false
+            }
+          ],
+          "positionals": [
+            {
+              "name": "id",
+              "description": "Prompt registry ID (e.g. gravity.system).",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": null
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "sync",
+          "invocation": "python -m prompt_registry sync",
+          "aliases": [],
+          "description": "Fetch the remote manifest and pre-warm the disk cache.",
+          "options": [],
+          "positionals": [],
+          "subcommands": []
+        },
+        {
+          "name": "pin",
+          "invocation": "python -m prompt_registry pin",
+          "aliases": [],
+          "description": "Pin a prompt ID to a specific version.",
+          "options": [],
+          "positionals": [
+            {
+              "name": "id",
+              "description": "Prompt registry ID.",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": null
+            },
+            {
+              "name": "version",
+              "description": "Version to pin (e.g. 1.2.3).",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": null
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "rollback",
+          "invocation": "python -m prompt_registry rollback",
+          "aliases": [],
+          "description": "Roll back to the previous cached version.",
+          "options": [],
+          "positionals": [
+            {
+              "name": "id",
+              "description": "Prompt registry ID.",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": null
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "diff",
+          "invocation": "python -m prompt_registry diff",
+          "aliases": [],
+          "description": "Unified diff between two versions of a prompt.",
+          "options": [],
+          "positionals": [
+            {
+              "name": "id",
+              "description": "Prompt registry ID.",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": null
+            },
+            {
+              "name": "version_a",
+              "description": "From-version (or 'baseline').",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": "vA"
+            },
+            {
+              "name": "version_b",
+              "description": "To-version (or 'baseline').",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": "vB"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "verify",
+          "invocation": "python -m prompt_registry verify",
+          "aliases": [],
+          "description": "Re-check signatures and guardrails for cached versions.",
+          "options": [],
+          "positionals": [
+            {
+              "name": "id",
+              "description": "Specific prompt ID (default: all known IDs).",
+              "default": null,
+              "choices": null,
+              "arg_kind": "optional",
+              "metavar": null
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "publish",
+          "invocation": "python -m prompt_registry publish",
+          "aliases": [],
+          "description": "Sign a file and push it to the remote store (publish credentials required).",
+          "options": [
+            {
+              "name": "--version",
+              "aliases": [
+                "--version",
+                "-v"
+              ],
+              "description": "Version string to publish (e.g. 1.1.0).",
+              "default": null,
+              "choices": null,
+              "required": true,
+              "arg_kind": "required",
+              "metavar": "VER",
+              "takes_value": true
+            },
+            {
+              "name": "--author",
+              "aliases": [
+                "--author"
+              ],
+              "description": "Author identifier.",
+              "default": "",
+              "choices": null,
+              "required": false,
+              "arg_kind": "optional",
+              "metavar": null,
+              "takes_value": true
+            },
+            {
+              "name": "--notes",
+              "aliases": [
+                "--notes"
+              ],
+              "description": "Changelog note.",
+              "default": "",
+              "choices": null,
+              "required": false,
+              "arg_kind": "optional",
+              "metavar": null,
+              "takes_value": true
+            }
+          ],
+          "positionals": [
+            {
+              "name": "id",
+              "description": "Prompt registry ID.",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": null
+            },
+            {
+              "name": "file",
+              "description": "Path to the file containing the prompt body.",
+              "default": null,
+              "choices": null,
+              "arg_kind": "required",
+              "metavar": null
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "name": "preflight_check.py",
+      "invocation": "python scripts/preflight_check.py",
+      "aliases": [],
+      "description": "InvestYo pre-live readiness check",
+      "options": [
+        {
+          "name": "--json",
+          "aliases": [
+            "--json"
+          ],
+          "description": "Output machine-readable JSON array instead of a human-readable table",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        },
+        {
+          "name": "--skip",
+          "aliases": [
+            "--skip"
+          ],
+          "description": "Skip named checks (e.g. --skip heartbeat_fresh paper_trading_duration). Useful in CI where certain checks are contextually inapplicable.",
+          "default": "[]",
+          "choices": null,
+          "required": false,
+          "arg_kind": "variadic",
+          "metavar": "CHECK",
+          "takes_value": true
+        },
+        {
+          "name": "--fire-alerts",
+          "aliases": [
+            "--fire-alerts"
+          ],
+          "description": "Dispatch a CRITICAL alert via observability.alerts.send_alert when validation_reports fails. Off by default so an interactive run never pages anyone; intended for a scheduled/CI invocation of this script.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "refresh_validations.py",
+      "invocation": "python scripts/refresh_validations.py",
+      "aliases": [],
+      "description": "Run walk-forward validation for registered strategies (monthly cadence).",
+      "options": [
+        {
+          "name": "--strategies",
+          "aliases": [
+            "--strategies"
+          ],
+          "description": "Comma-separated strategy names to validate. Default: all (coppock_momentum, cross_sectional_momentum, deep_value_edgar_pit, dividend_yield_edgar_pit, forecast_direction_arima_hw, garch_vol_target, macd_trend, macro_regime_pit, multifactor_lowvol_size, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit).",
+          "default": null,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--start",
+          "aliases": [
+            "--start"
+          ],
+          "description": "Backtest start date (default: 2005-01-01).",
+          "default": "2005-01-01",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": "YYYY-MM-DD",
+          "takes_value": true
+        },
+        {
+          "name": "--end",
+          "aliases": [
+            "--end"
+          ],
+          "description": "Backtest end date (default: today).",
+          "default": null,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": "YYYY-MM-DD",
+          "takes_value": true
+        },
+        {
+          "name": "--output-dir",
+          "aliases": [
+            "--output-dir"
+          ],
+          "description": "Directory for JSON report output (default: reports/).",
+          "default": "reports",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--n-cpcv-splits",
+          "aliases": [
+            "--n-cpcv-splits"
+          ],
+          "description": "Number of CPCV splits (default: 10).",
+          "default": 10,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--n-test-splits",
+          "aliases": [
+            "--n-test-splits"
+          ],
+          "description": "Walk-forward test splits (default: 2).",
+          "default": 2,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--json",
+          "aliases": [
+            "--json"
+          ],
+          "description": "Also print ONE machine-readable JSON line (the LAST line of stdout) mapping strategy_id \u2192 {deployable, pbo, dsr, sharpe, max_drawdown[, error]}. The human pass/fail table is still printed above it.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "daily_briefing.py",
+      "invocation": "python scripts/daily_briefing.py",
+      "aliases": [],
+      "description": "Generate InvestYo daily advisory briefing (Markdown).",
+      "options": [
+        {
+          "name": "--output-dir",
+          "aliases": [
+            "--output-dir"
+          ],
+          "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
+          "default": "/Users/kevinlee/Desktop/Stockpy/.claude/worktrees/command-line-autocomplete-68cea1/output",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--print",
+          "aliases": [
+            "--print"
+          ],
+          "description": "Also print the briefing to stdout after writing the file.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "track_record_status.py",
+      "invocation": "python scripts/track_record_status.py",
+      "aliases": [],
+      "description": "Report InvestYo paper-trading track-record progress (90-day gate, calibration depth/coverage, last-run staleness).",
+      "options": [
+        {
+          "name": "--output-dir",
+          "aliases": [
+            "--output-dir"
+          ],
+          "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
+          "default": "/Users/kevinlee/Desktop/Stockpy/.claude/worktrees/command-line-autocomplete-68cea1/output",
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": true
+        },
+        {
+          "name": "--json",
+          "aliases": [
+            "--json"
+          ],
+          "description": "Emit machine-readable JSON instead of the human-readable report.",
+          "default": false,
+          "choices": null,
+          "required": false,
+          "arg_kind": "optional",
+          "metavar": null,
+          "takes_value": false
+        }
+      ],
+      "positionals": [],
+      "subcommands": []
+    }
+  ]
+}

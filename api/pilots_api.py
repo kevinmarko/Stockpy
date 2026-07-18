@@ -104,6 +104,7 @@ from pilots import (
     brinson,
     calibration,
     catalog,
+    commands as commands_reader,
     forecast_skill,
     models,
     observability,
@@ -161,6 +162,17 @@ import data.brokerage_credentials as brokerage_credentials
 # tests can `mock.patch.object(pilots_api, ...)`.
 import gui.ai_control_center as ai_control_center
 import llm.status_store as llm_status_store
+
+# Robinhood execution-queue READ side (GET /execution-queue). Reuses the
+# existing Streamlit-free, dependency-light reader the GUI Launcher tab already
+# uses (json/logging/dataclasses/datetime/pathlib/typing at module top; settings
+# imported lazily inside one function) — same reasoning as daemon_client/env_io
+# above: don't duplicate a tested parser. This module NEVER contacts the
+# Robinhood MCP and NEVER places an order — see execution/queue_builder.py's
+# module docstring: a live Claude Code agent session is the ONLY actor that
+# ever calls the MCP place_equity_order tool. Imported at module top so tests
+# can `mock.patch.object(pilots_api, "execution_panel", ...)`.
+import gui.robinhood_execution_panel as execution_panel
 
 logger = logging.getLogger(__name__)
 
@@ -1128,6 +1140,85 @@ def get_pairs_radar() -> Dict[str, Any]:
     ``pairs`` + an honest ``reason`` when ``PAIRS_SNAPSHOT_ENABLED`` is off or the
     artifact hasn't been written yet (CONSTRAINT #4). Never 500s."""
     return pairs.pairs_radar(path=_pairs_snapshot_path())
+
+
+@app.get("/commands", dependencies=[Depends(require_read_token)])
+def get_commands() -> Dict[str, Any]:
+    """The CLI command manifest powering the PWA command bar's autocomplete.
+
+    Reads only the committed ``cli_introspect/command_manifest.json`` artifact
+    (produced offline by ``scripts/build_command_manifest.py`` — this endpoint
+    NEVER introspects the live argparse parsers, which would import the heavy
+    engines the AST guard forbids). Returns ``{generated_at, command_count,
+    dead_letters, commands, reason}`` — empty ``commands`` + an honest ``reason``
+    when the manifest hasn't been generated yet (CONSTRAINT #4). Never 500s."""
+    return commands_reader.command_manifest()
+
+
+def _safe_float(value: float) -> Optional[float]:
+    """NaN is a legitimate internal signal (unparsable timestamp) but is not
+    valid JSON — coerce to ``None`` (CONSTRAINT #4: never fabricate a number,
+    but also never emit a token the frontend's JSON parser can't read)."""
+    return None if value != value else value  # NaN != NaN
+
+
+@app.get("/execution-queue", dependencies=[Depends(require_read_token)])
+def get_execution_queue() -> Dict[str, Any]:
+    """The gated, dry-run Robinhood order queue (``output/execution_queue.json``)
+    — READ ONLY. This endpoint never contacts the Robinhood MCP and never
+    places an order: per ``execution/queue_builder.py``'s module contract, a
+    live Claude Code agent session is the ONLY actor that ever calls the MCP
+    ``place_equity_order`` tool, so there is nothing for this API to trigger.
+
+    Returns ``{generated_at, mode, kill_switch_active, max_notional_per_order,
+    n_intents, n_placeable, stale, age_seconds, intents, reason}`` — empty
+    ``intents`` + an honest ``reason`` when no queue has been written yet
+    (CONSTRAINT #4). Never 500s (reuses ``gui.robinhood_execution_panel``'s
+    dead-letter-tolerant reader)."""
+    snapshot = execution_panel.read_execution_queue()
+    if snapshot is None:
+        return {
+            "generated_at": None,
+            "mode": "off",
+            "kill_switch_active": False,
+            "max_notional_per_order": 0.0,
+            "n_intents": 0,
+            "n_placeable": 0,
+            "stale": False,
+            "age_seconds": None,
+            "intents": [],
+            "reason": (
+                "No execution queue yet — ROBINHOOD_EXECUTION_MODE may be 'off', "
+                "or the pipeline hasn't run since it was enabled."
+            ),
+        }
+    return {
+        "generated_at": snapshot.generated_at or None,
+        "mode": snapshot.mode,
+        "kill_switch_active": snapshot.kill_switch_active,
+        "max_notional_per_order": snapshot.max_notional_per_order,
+        "n_intents": snapshot.n_intents,
+        "n_placeable": snapshot.n_placeable,
+        "stale": execution_panel.is_queue_stale(snapshot),
+        "age_seconds": _safe_float(execution_panel.queue_age_seconds(snapshot)),
+        "intents": [
+            {
+                "symbol": i.symbol,
+                "action": i.action,
+                "side": i.side,
+                "qty": i.qty,
+                "target_notional": i.target_notional,
+                "conviction": i.conviction,
+                "gate_allowed": i.gate_allowed,
+                "gate_reasons": i.gate_reasons,
+                "allow_place": i.allow_place,
+                "rationale": i.rationale,
+                "client_order_id": i.client_order_id,
+            }
+            for i in snapshot.intents
+        ],
+        "reason": None,
+    }
 
 
 def _env_drift() -> Dict[str, Any]:
