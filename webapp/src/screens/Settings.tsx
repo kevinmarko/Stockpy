@@ -7,6 +7,7 @@ import type {
   BrokerageStatus,
   Follow,
   LlmStatus,
+  ProgressState,
   StrategyMatrix,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
@@ -516,13 +517,7 @@ function PipelineStatusSection({
           </div>
 
           {status.progress && !status.progress.is_terminal && !status.progress.stale && (
-            <div className="row">
-              <span className="row-title">In progress</span>
-              <span style={{ color: theme.accent, fontSize: 13 }}>
-                {status.progress.stage} ({status.progress.stage_index + 1}/
-                {status.progress.stage_total}) · {status.progress.percent.toFixed(0)}%
-              </span>
-            </div>
+            <ProgressDetail progress={status.progress} />
           )}
 
           {status.kill_switch.active && (
@@ -553,6 +548,71 @@ function PipelineStatusSection({
         </div>
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * Per-stage breakdown of an in-flight run. `stage_total` is a count, not a
+ * named list (the daemon never serializes the other stage names), so the
+ * dots are rendered generically -- done/current/pending -- rather than
+ * labeled, to avoid guessing at stage names the API never sent (CONSTRAINT #4).
+ */
+function ProgressDetail({ progress }: { progress: ProgressState }) {
+  return (
+    <div className="row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span className="row-title">In progress</span>
+        <span style={{ color: theme.accent, fontSize: 13 }}>
+          {progress.stage} ({progress.stage_index + 1}/
+          {progress.stage_total}) · {progress.percent.toFixed(0)}%
+        </span>
+      </div>
+
+      {progress.stage_total > 0 && (
+        <div
+          role="img"
+          aria-label={`Stage ${progress.stage_index + 1} of ${progress.stage_total}`}
+          style={{ display: "flex", gap: 4, marginTop: 8 }}
+        >
+          {Array.from({ length: progress.stage_total }, (_, i) => (
+            <span
+              key={i}
+              data-testid="progress-stage-dot"
+              data-state={
+                i < progress.stage_index
+                  ? "done"
+                  : i === progress.stage_index
+                    ? "current"
+                    : "pending"
+              }
+              style={{
+                flex: 1,
+                height: 4,
+                borderRadius: 2,
+                background:
+                  i < progress.stage_index
+                    ? theme.growth
+                    : i === progress.stage_index
+                      ? theme.accent
+                      : theme.surface3,
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {progress.symbols_total > 0 && (
+        <div className="row-sub" style={{ marginTop: 6 }}>
+          {progress.symbols_done}/{progress.symbols_total} symbols in this stage
+        </div>
+      )}
+
+      {progress.message && (
+        <div className="row-sub" style={{ marginTop: 2, color: theme.textMuted }}>
+          {progress.message}
+        </div>
+      )}
+    </div>
   );
 }
 

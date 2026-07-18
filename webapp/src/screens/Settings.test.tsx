@@ -174,6 +174,33 @@ describe("Settings screen", () => {
     renderSettings();
 
     expect(await screen.findByText(/forecasting \(2\/4\) · 33%/)).toBeInTheDocument();
+
+    // Stage stepper: 4 dots, stage_index 1 -> dot 0 done, dot 1 current, dots 2-3 pending.
+    const dots = screen.getAllByTestId("progress-stage-dot");
+    expect(dots).toHaveLength(4);
+    expect(dots.map((d) => d.dataset.state)).toEqual(["done", "current", "pending", "pending"]);
+
+    // Per-stage symbol counter and server message, both previously unrendered.
+    expect(screen.getByText("3/10 symbols in this stage")).toBeInTheDocument();
+    expect(screen.getByText("Forecasting AAPL")).toBeInTheDocument();
+  });
+
+  it("progress with no per-symbol counter (symbols_total 0) omits that line, not a fabricated 0/0", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValueOnce({
+      ...HEALTHY_STATUS,
+      progress: {
+        run_id: "orch-3", state: "running", stage: "data", stage_index: 0,
+        stage_total: 6, symbols_done: 0, symbols_total: 0, percent: 4,
+        message: "", started_at: "x", updated_at: "x",
+        age_seconds: 5, is_terminal: false, stale: false,
+      },
+    });
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValueOnce(HEALTHY_SCHEDULE);
+    renderSettings();
+
+    expect(await screen.findByText(/data \(1\/6\) · 4%/)).toBeInTheDocument();
+    expect(screen.queryByText(/symbols in this stage/)).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("progress-stage-dot")).toHaveLength(6);
   });
 
   it("interval drift renders the running-vs-configured notice", async () => {
