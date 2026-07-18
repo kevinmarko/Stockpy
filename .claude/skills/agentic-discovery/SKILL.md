@@ -4,11 +4,13 @@ description: >-
   Discover new trading candidates for the Stockpy Agentic Trading tab by running
   the operator's configured Robinhood broker scans, cross-referencing hits
   against this platform's own advisory engine, and writing
-  output/scan_candidates.json. Use when the operator asks to run a scan, find
-  new candidates, refresh the Agentic Trading tab's Discovery section, or acts
-  on output/scan_configs.json. Read-only with respect to orders — never calls
-  any Robinhood order-placement tool; that stays the robinhood-execution skill's
-  job alone.
+  output/scan_candidates.json. Can also add a specific, operator-named
+  candidate to watchlist.txt so the platform's advisory pipeline picks it up
+  going forward. Use when the operator asks to run a scan, find new
+  candidates, refresh the Agentic Trading tab's Discovery section, acts on
+  output/scan_configs.json, or asks to track/watch a discovered symbol.
+  Read-only with respect to orders — never calls any Robinhood
+  order-placement tool; that stays the robinhood-execution skill's job alone.
 ---
 
 # Agentic Discovery (scan-based candidate discovery, read-only on orders)
@@ -117,10 +119,31 @@ and invite questions before writing the file.
    scored a high-conviction BUY/SELL, mention that the platform's *existing*
    gated pipeline (not this skill) is what would eventually surface it on the
    real execution queue once it's part of the tracked universe — this skill
-   only discovers and scores, it doesn't add symbols to `WATCHLIST` or
-   `watchlist.txt` on its own. If the operator wants a candidate tracked going
-   forward, that's a separate, explicit edit to `watchlist.txt` they should
-   confirm — don't do it silently as a side effect of a scan.
+   only discovers and scores; adding a symbol to that universe is the separate,
+   operator-confirmed step below (7), never an automatic side effect of a scan.
+7. **Track a candidate (only when the operator names it).** A high score or
+   `BUY` action is information, not consent — this step only runs when the
+   operator explicitly names which symbol(s) to start tracking (e.g. "track
+   YMM"), never automatically for every high-conviction hit.
+   1. Check whether the `WATCHLIST` env var is set (non-empty) in `.env` /
+      `os.environ`. `main._load_watchlist()` gives `WATCHLIST` precedence over
+      `watchlist.txt` — if it's set, appending to `watchlist.txt` would be
+      silently ineffective. Tell the operator, and ask whether to (a) append
+      to `WATCHLIST` instead (comma-separated) or (b) clear `WATCHLIST` so
+      `watchlist.txt` takes effect. Don't pick for them.
+   2. Otherwise, read `watchlist.txt` (create it if missing). Append the named
+      ticker(s), one per line, uppercase, skipping any already present
+      (case-insensitive match against existing non-comment lines) — never
+      duplicate. Add a `# added via agentic-discovery on <UTC date>` comment
+      above the new line(s) for auditability, matching the file's existing
+      `#`-comment convention.
+   3. Report exactly which lines were added vs. already present. Note this
+      takes effect on the *next* `main.py`/`main_orchestrator.py` universe
+      build — it's not retroactive and places no order on its own.
+   4. Leave `DEFAULT_TICKERS` (`data/portfolio_sync.py`'s separate
+      coverage-tracking universe, distinct from the advisory pipeline's
+      `WATCHLIST`/`watchlist.txt`) untouched unless the operator separately
+      asks for that too — don't conflate the two mechanisms.
 
 ## Invariants (never violate)
 
@@ -131,7 +154,8 @@ and invite questions before writing the file.
   0.0, not a copied score from a similar symbol.
 - **Overwrite, don't merge, `scan_candidates.json`.** Each run is a fresh
   snapshot; stale candidates from a prior run should not linger silently.
-- **Never silently add symbols to the tracked universe.** Discovering a
-  candidate is not the same as watching it — `WATCHLIST`/`watchlist.txt`
-  changes are a separate, operator-confirmed action.
+- **Only add symbols to the tracked universe when the operator names them.**
+  A high score or `BUY` action is never sufficient justification on its own —
+  discovering and scoring a candidate is not the same as watching it. Step 7
+  only acts on symbols the operator explicitly named in this conversation.
 - **Respect `AGENTIC_MAX_CANDIDATES`.** Don't write an unbounded candidate list.
