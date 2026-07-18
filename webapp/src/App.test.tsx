@@ -36,6 +36,7 @@ const LLM_ATTENTION: LlmStatus = {
       label: "Analyst rationale commentary",
       trigger: "on_demand",
       toggle_key: "LLM_COMMENTARY_ENABLED",
+      provider_selector_setting: "LLM_COMMENTARY_RATIONALE_PROVIDER",
       provider_keys: ["ANTHROPIC_API_KEY"],
       active_provider: "claude",
       invalid_provider: "claude",
@@ -64,6 +65,8 @@ const LLM_ATTENTION: LlmStatus = {
   telemetry_note: "note",
   attention: true,
   attention_reason: "invalid_key",
+  writable: false,
+  writable_note: "AI-capability writes are disabled (LLM_WRITES_ENABLED=false).",
 };
 
 let needRefresh = false;

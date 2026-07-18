@@ -302,7 +302,15 @@ export interface LlmCapabilityRow {
   key: string;
   label: string;
   trigger: "on_demand" | "scheduled";
+  /** The .env key a toggle write (PUT /llm/setting) flips; null = read-only row. */
   toggle_key: string | null;
+  /**
+   * The .env key a provider-selector write (PUT /llm/setting) sets, when this
+   * capability supports flexible per-job routing (either Claude or Gemini may
+   * serve rationale/alert commentary, OpenAI or Gemini may serve Opal). null =
+   * this capability has a fixed provider (Gravity runner, chart vision).
+   */
+  provider_selector_setting: string | null;
   provider_keys: string[];
   active_provider: LlmProviderName | null;
   /** Non-null ⇒ this provider's key was rejected on the last REAL call. */
@@ -322,6 +330,24 @@ export interface LlmStatus {
   telemetry_note: string;
   attention: boolean;
   attention_reason: "invalid_key" | "missing_key" | null;
+  /** Tracks LLM_WRITES_ENABLED -- false means PUT /llm/setting is disabled. */
+  writable: boolean;
+  writable_note: string;
+}
+
+/** Body for PUT /llm/setting. `key` is a toggle_key (bool) or a
+ * provider_selector_setting (string provider name). */
+export interface LlmSettingUpdate {
+  key: string;
+  value: boolean | string;
+}
+
+/** PUT /llm/setting result. `value` echoes the request body. */
+export interface LlmSettingUpdateResult {
+  written: string[];
+  value: boolean | string;
+  applies: "next_daemon_restart";
+  note: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -1124,6 +1124,29 @@ class Settings(BaseSettings):
             "signal tuning cannot ride in on AUTOMATION_WRITES_ENABLED."
         ),
     )
+    # Master switch for the Pilots API's AI Control Center WRITE endpoint
+    # (api/pilots_api.py PUT /llm/setting — LLM capability toggles + provider
+    # selection -> .env). A DEDICATED flag, not AUTOMATION_WRITES_ENABLED or
+    # STRATEGY_WRITES_ENABLED: those were scoped to the daemon interval/kill-switch
+    # resume and to signal-weight tuning respectively — flipping an AI capability
+    # (which provider narrates a rationale, whether the Gravity AI runner or Opal
+    # research agent can fire) is its own risk class and must not ride in on
+    # either. Mirrors BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED exactly:
+    # default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug
+    # must never flip it on; hand-set in .env only), and also requires
+    # FOLLOW_API_TOKEN. GET /llm/status is read-only and NOT gated by this flag
+    # (require_read_token alone, matching GET /brokerage/status and
+    # GET /strategy/matrix).
+    LLM_WRITES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables PUT /llm/setting on the Pilots API (LLM capability toggles + "
+            "provider selection -> .env). Off by default; also requires "
+            "FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so "
+            "AI-capability writes cannot ride in on AUTOMATION_WRITES_ENABLED or "
+            "STRATEGY_WRITES_ENABLED."
+        ),
+    )
     # --- Pilots PWA: persisted analytics artifacts (options matrix + pairs radar) ---
     # The options premium matrix (technical_options_engine) and pairs radar
     # (pairs/ + signals.pairs_trading) are computed live in the Streamlit GUI but

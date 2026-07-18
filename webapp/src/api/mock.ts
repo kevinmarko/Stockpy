@@ -30,6 +30,10 @@ import type {
   ExecutionModeUpdateRequest,
   ExecutionModeUpdateResult,
   KillSwitchActionResult,
+  LlmCapabilityRow,
+  LlmProviderName,
+  LlmProviderTelemetry,
+  LlmSettingUpdateResult,
   LlmStatus,
   ModelRow,
   ObservabilitySummary,
@@ -804,6 +808,212 @@ function writeMockInterval(seconds: number) {
   } catch {
     /* ignore quota */
   }
+}
+
+// ---- Local AI Control Center simulation (localStorage) so a toggle flip or
+// provider-selector change in the demo is visible on the next GET /llm/status
+// read within the mock session, same convention as the interval/strategy
+// simulations above. Mirrors gui/ai_control_center.py's CAPABILITIES registry:
+// LLM_COMMENTARY_ENABLED gates THREE capabilities at once (claude_commentary,
+// gemini_alerts, gemini_vision); GRAVITY_AI_RUNNER_ENABLED and
+// OPAL_RESEARCH_ENABLED each gate one. Three capabilities additionally carry a
+// provider_selector_setting ("claude"/"gemini"/"openai"/"none" — "none" counts
+// as disabled, matching the real backend's `_is_enabled`). ----
+const LLM_SETTINGS_KEY = "stockpy.mock.llm_settings";
+
+interface LlmMockOverrides {
+  toggles: Record<string, boolean>;
+  providers: Record<string, string>;
+}
+
+const LLM_TOGGLE_KEYS = new Set([
+  "LLM_COMMENTARY_ENABLED",
+  "GRAVITY_AI_RUNNER_ENABLED",
+  "OPAL_RESEARCH_ENABLED",
+]);
+const LLM_PROVIDER_SELECTOR_KEYS = new Set([
+  "LLM_COMMENTARY_RATIONALE_PROVIDER",
+  "LLM_COMMENTARY_ALERT_PROVIDER",
+  "OPAL_RESEARCH_PROVIDER",
+]);
+
+function readLlmOverrides(): LlmMockOverrides {
+  try {
+    const raw = localStorage.getItem(LLM_SETTINGS_KEY);
+    if (!raw) return { toggles: {}, providers: {} };
+    const parsed = JSON.parse(raw);
+    return { toggles: parsed.toggles ?? {}, providers: parsed.providers ?? {} };
+  } catch {
+    return { toggles: {}, providers: {} };
+  }
+}
+
+function writeLlmOverride(key: string, value: boolean | string) {
+  const ov = readLlmOverrides();
+  if (LLM_TOGGLE_KEYS.has(key)) {
+    ov.toggles[key] = Boolean(value);
+  } else if (LLM_PROVIDER_SELECTOR_KEYS.has(key)) {
+    ov.providers[key] = String(value);
+  }
+  try {
+    localStorage.setItem(LLM_SETTINGS_KEY, JSON.stringify(ov));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+const LLM_PROVIDER_KEY_MAP: Record<LlmProviderName, string> = {
+  claude: "ANTHROPIC_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  openai: "OPENAI_API_KEY",
+};
+
+function llmNoCallTelemetry(provider: LlmProviderName): LlmProviderTelemetry {
+  return {
+    provider,
+    ok: null,
+    error_kind: null,
+    exception_type: null,
+    http_status: null,
+    checked_at: null,
+    age_seconds: null,
+    source: "none",
+  };
+}
+
+/**
+ * Builds one capability row from live mock overrides. `key_present` is always
+ * `false` in the mock (there is no key-entry surface in this PWA) — so
+ * enabling a capability here honestly lands on `missing_key`, exactly the
+ * state a real operator hits after flipping a toggle before setting the
+ * provider's key in `.env`. This is deliberate, not an oversight: it
+ * exercises the real "enabled but unconfigured" UI branch instead of always
+ * rendering a clean, unrealistic `ready` state.
+ */
+function llmRow(
+  key: string,
+  label: string,
+  trigger: "on_demand" | "scheduled",
+  toggleKey: string,
+  providerSelectorSetting: string | null,
+  providerChoice: string | null, // live override or default; null = fixed-provider capability
+  fixedProviderKeys: string[],
+  overrides: LlmMockOverrides
+): LlmCapabilityRow {
+  const masterOn = overrides.toggles[toggleKey] ?? false;
+  const activeProvider: LlmProviderName | null =
+    providerChoice && providerChoice !== "none"
+      ? (providerChoice as LlmProviderName)
+      : null;
+  const enabled = providerSelectorSetting ? masterOn && providerChoice !== "none" : masterOn;
+  const providerKeys = activeProvider ? [LLM_PROVIDER_KEY_MAP[activeProvider]] : fixedProviderKeys;
+  return {
+    key,
+    label,
+    trigger,
+    toggle_key: toggleKey,
+    provider_selector_setting: providerSelectorSetting,
+    provider_keys: providerKeys,
+    active_provider: activeProvider,
+    invalid_provider: null,
+    enabled,
+    key_present: false,
+    built: true,
+    status: enabled ? "missing_key" : "disabled",
+  };
+}
+
+function mockLlmStatus(): LlmStatus {
+  const ov = readLlmOverrides();
+  const providerVal = (k: string, def: string) => ov.providers[k] ?? def;
+
+  const capabilities: LlmCapabilityRow[] = [
+    llmRow(
+      "claude_commentary",
+      "Analyst rationale commentary",
+      "on_demand",
+      "LLM_COMMENTARY_ENABLED",
+      "LLM_COMMENTARY_RATIONALE_PROVIDER",
+      providerVal("LLM_COMMENTARY_RATIONALE_PROVIDER", "claude"),
+      ["ANTHROPIC_API_KEY"],
+      ov
+    ),
+    llmRow(
+      "gemini_alerts",
+      "Alert commentary",
+      "scheduled",
+      "LLM_COMMENTARY_ENABLED",
+      "LLM_COMMENTARY_ALERT_PROVIDER",
+      providerVal("LLM_COMMENTARY_ALERT_PROVIDER", "gemini"),
+      ["GEMINI_API_KEY"],
+      ov
+    ),
+    llmRow(
+      "gemini_vision",
+      "Gemini chart vision",
+      "on_demand",
+      "LLM_COMMENTARY_ENABLED",
+      null,
+      null,
+      ["GEMINI_API_KEY"],
+      ov
+    ),
+    llmRow(
+      "gravity_ai_runner",
+      "Gravity AI runner (Claude + Gemini)",
+      "on_demand",
+      "GRAVITY_AI_RUNNER_ENABLED",
+      null,
+      null,
+      ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"],
+      ov
+    ),
+    llmRow(
+      "opal_research",
+      "Opal research agent",
+      "on_demand",
+      "OPAL_RESEARCH_ENABLED",
+      "OPAL_RESEARCH_PROVIDER",
+      providerVal("OPAL_RESEARCH_PROVIDER", "openai"),
+      ["OPENAI_API_KEY"],
+      ov
+    ),
+  ];
+
+  // Mirrors api/pilots_api.py's GET /llm/status attention logic: at least one
+  // ENABLED capability misconfigured; invalid_key (unreachable in the mock --
+  // there is no key-entry surface) would outrank missing_key.
+  let attentionReason: "invalid_key" | "missing_key" | null = null;
+  for (const row of capabilities) {
+    if (!row.enabled) continue;
+    if (row.status === "invalid_key") {
+      attentionReason = "invalid_key";
+      break;
+    }
+    if (row.status === "missing_key" && attentionReason === null) attentionReason = "missing_key";
+  }
+
+  return {
+    capabilities,
+    capabilities_source: "gui.ai_control_center.control_center_overview",
+    providers: {
+      claude: llmNoCallTelemetry("claude"),
+      gemini: llmNoCallTelemetry("gemini"),
+      openai: llmNoCallTelemetry("openai"),
+    },
+    providers_source: "llm.status_store.read_all",
+    telemetry_note:
+      "Verdicts are recorded from REAL LLM calls only — this platform never " +
+      "probes a provider to test a key. A null last-call record means no LLM " +
+      "call has been made with the current key, which is the EXPECTED state " +
+      "when LLM commentary is off by default — it does NOT mean the key is broken.",
+    attention: attentionReason !== null,
+    attention_reason: attentionReason,
+    // Always writable in the mock (matches mockStrategyMatrix's convention
+    // below) so the demo can exercise the write flow with zero config.
+    writable: true,
+    writable_note: "Toggle and provider writes persist to .env and apply on the next daemon restart.",
+  };
 }
 
 // ---- Local strategy-matrix simulation. A Save persists weights/disabled to
@@ -2225,97 +2435,26 @@ export const mockApi = {
     // / GRAVITY_AI_RUNNER_ENABLED all default False (settings.py), so every
     // capability is `disabled`, no provider has a recorded call (`source:
     // "none"`), and there is nothing to warn about (`attention: false`). This
-    // models the real out-of-box state and keeps App.test.tsx dot-free.
-    const noCall = (provider: "claude" | "gemini" | "openai") => ({
-      provider,
-      ok: null,
-      error_kind: null,
-      exception_type: null,
-      http_status: null,
-      checked_at: null,
-      age_seconds: null,
-      source: "none" as const,
-    });
-    const disabledRow = (
-      key: string,
-      label: string,
-      trigger: "on_demand" | "scheduled",
-      toggle_key: string,
-      provider_keys: string[],
-      active_provider: "claude" | "gemini" | "openai" | null
-    ) => ({
-      key,
-      label,
-      trigger,
-      toggle_key,
-      provider_keys,
-      active_provider,
-      invalid_provider: null,
-      enabled: false,
-      key_present: false,
-      built: true,
-      status: "disabled" as const,
-    });
+    // models the real out-of-box state and keeps App.test.tsx dot-free. A
+    // toggle/provider write (putLlmSetting, below) persists to localStorage so
+    // this reflects the change on the next read within the mock session --
+    // see mockLlmStatus() and the LLM_* helpers above.
+    return delay(mockLlmStatus(), 80);
+  },
+
+  async putLlmSetting(key: string, value: boolean | string): Promise<LlmSettingUpdateResult> {
+    writeLlmOverride(key, value);
     return delay(
       {
-        capabilities: [
-          disabledRow(
-            "claude_commentary",
-            "Analyst rationale commentary",
-            "on_demand",
-            "LLM_COMMENTARY_ENABLED",
-            ["ANTHROPIC_API_KEY"],
-            "claude"
-          ),
-          disabledRow(
-            "gemini_alerts",
-            "Alert commentary",
-            "scheduled",
-            "LLM_COMMENTARY_ENABLED",
-            ["GEMINI_API_KEY"],
-            "gemini"
-          ),
-          disabledRow(
-            "gemini_vision",
-            "Gemini chart vision",
-            "on_demand",
-            "LLM_COMMENTARY_ENABLED",
-            ["GEMINI_API_KEY"],
-            null
-          ),
-          disabledRow(
-            "gravity_ai_runner",
-            "Gravity AI runner (Claude + Gemini)",
-            "on_demand",
-            "GRAVITY_AI_RUNNER_ENABLED",
-            ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"],
-            null
-          ),
-          disabledRow(
-            "opal_research",
-            "Opal research agent",
-            "on_demand",
-            "OPAL_RESEARCH_ENABLED",
-            ["OPENAI_API_KEY"],
-            "openai"
-          ),
-        ],
-        capabilities_source: "gui.ai_control_center.control_center_overview",
-        providers: {
-          claude: noCall("claude"),
-          gemini: noCall("gemini"),
-          openai: noCall("openai"),
-        },
-        providers_source: "llm.status_store.read_all",
-        telemetry_note:
-          "Verdicts are recorded from REAL LLM calls only — this platform never " +
-          "probes a provider to test a key. A null last-call record means no LLM " +
-          "call has been made with the current key, which is the EXPECTED state " +
-          "when LLM commentary is off by default — it does NOT mean the key is broken.",
-        attention: false,
-        attention_reason: null,
+        written: [key],
+        value,
+        applies: "next_daemon_restart",
+        note:
+          "Written to .env. settings is not patched in-process — this API " +
+          "and any already-launched pipeline still use the previous value " +
+          "until restarted.",
       },
-      80
+      150
     );
   },
 

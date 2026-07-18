@@ -357,6 +357,7 @@ def control_center_overview(
             "label": cap.label,
             "trigger": cap.trigger,
             "toggle_key": cap.toggle_key,
+            "provider_selector_setting": cap.provider_selector_setting,
             "provider_keys": [required_key] if required_key else list(cap.provider_key_settings),
             **st,
         })
