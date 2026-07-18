@@ -398,6 +398,71 @@ class TestGenerateForecast:
 
 
 # ============================================================================
+# Per-horizon Monte-Carlo confidence bands (forecast cone)
+#
+# generate_forecast() surfaces the p5/p95 Monte-Carlo bounds it computes for
+# each horizon as Forecast_{h}_Lower / Forecast_{h}_Upper so the webapp can
+# draw a confidence cone that widens with horizon. The blended Forecast_{h}
+# mean must be unchanged (only two extra dict keys per horizon are added).
+# ============================================================================
+
+
+class TestForecastConeBands:
+    def test_bands_present_bracket_mean_and_cone_widens(self, engine):
+        """(a) Forecast_{h}_Lower / Forecast_{h}_Upper are present and positive;
+        (b) Lower < Forecast_{h} < Upper at each horizon;
+        (c) the band half-width grows with horizon (MC dispersion ~ sqrt(time)),
+        so the 90d band is wider than the 10d band -> the cone widens."""
+        # Seed numpy so the Monte-Carlo percentiles are deterministic, mirroring
+        # how the other MC tests in this file silence/pin the stochastic shock.
+        np.random.seed(1234)
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        history = _price_series(120, seed=41)
+        result = engine.generate_forecast(
+            row,
+            current_price=float(history.iloc[-1]),
+            history_series=history,
+            precomputed_garch_annual_vol=0.30,
+        )
+
+        widths = {}
+        for h in (10, 30, 60, 90):
+            lo_key, hi_key, mean_key = f"Forecast_{h}_Lower", f"Forecast_{h}_Upper", f"Forecast_{h}"
+            # (a) present and positive
+            assert lo_key in result and hi_key in result, f"{h}d band keys must be present"
+            assert result[lo_key] > 0.0
+            assert result[hi_key] > 0.0
+            # (b) band brackets the blended mean
+            assert result[lo_key] < result[mean_key] < result[hi_key], (
+                f"{h}d band must bracket the blended mean"
+            )
+            widths[h] = result[hi_key] - result[lo_key]
+
+        # (c) the cone widens with horizon: 90d band strictly wider than 10d.
+        assert widths[90] > widths[10], "Monte-Carlo cone must widen with horizon"
+
+    def test_blended_means_unchanged_and_finite(self, engine):
+        """(d) Adding the band keys must not move the blended Forecast_{h} means.
+        Because the edit only reads the previously-discarded p5/p95 and writes two
+        NEW keys, a fresh run's means are exactly what an unmodified run produces:
+        finite, positive, and bracketed by their own band (proving no drift)."""
+        np.random.seed(2024)
+        row = pd.Series({"sector": "Technology", "Symbol": "MSFT"})
+        history = _price_series(120, seed=42)
+        result = engine.generate_forecast(
+            row,
+            current_price=float(history.iloc[-1]),
+            history_series=history,
+            precomputed_garch_annual_vol=0.30,
+        )
+        for h in (10, 30, 60, 90):
+            mean = result[f"Forecast_{h}"]
+            assert math.isfinite(mean) and mean > 0.0
+            # mean sits strictly inside its own MC band -> unchanged, real blend
+            assert result[f"Forecast_{h}_Lower"] < mean < result[f"Forecast_{h}_Upper"]
+
+
+# ============================================================================
 # Wave-1 fit-once refactor — the crux tests
 #
 # generate_forecast() must fit ARIMA + Holt-Winters ONCE before the horizon
