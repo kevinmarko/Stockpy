@@ -149,3 +149,55 @@ accordingly: "capabilities" stand in for "themes," "status" stands in for "preva
 listed was independently verified against source (file paths cited throughout), not inferred from
 documentation alone. The "net-new" findings were confirmed by an exhaustive repo-wide grep for
 scan-related MCP tool names returning zero hits prior to this PR.
+
+---
+
+## Appendix — UX improvement backlog (`/user-research` pass, post-launch)
+
+**Method:** expert heuristic evaluation of the shipped tab (grounded in source, not inferred) plus a
+jobs-to-be-done interview with the sole operator — adapted from `/user-research`'s standard
+multi-participant methods, since this is a solo-operator platform (`AGENTS.md`: one user, own
+capital, no team) and the operator's own answers are the research data. **Date:** 2026-07-18.
+
+**Interview result (drives the phasing below):** job-to-be-done is an *active operational surface*
+(decide/act on candidates, drive the gated queue, discover opportunities) — not a passive
+at-a-glance monitor. Operated from both desktop and mobile. Rollout order: close the action loop →
+fix the discovery loop → polish.
+
+### Findings
+
+| # | Friction | Where | Theme | Status |
+|---|---|---|---|---|
+| 1 | Discovery candidates were display-only — no way to watch/track from the tab | `AgenticTrading.tsx` `DiscoverySection` | Action loop | **Fixed** — [#360](https://github.com/kevinmarko/Stockpy/pull/360) added a "Watch" button (`POST /agentic/watch`) |
+| 2 | Decision Journal couldn't log a decision from the tab | `AgenticTrading.tsx` `DecisionJournalSection` | Action loop | **Fixed** — #360 added a "Log" button reusing `DecisionModal` |
+| 3 | Blocked queue intents, journal rows, and candidates weren't linked to their symbol page | `ExecutionQueueSection.tsx`, `AgenticTrading.tsx` | Action loop | **Fixed** — #360 |
+| 4 | No "run scan" affordance — a saved scan config can't be triggered from the tab; config→results is a manual Claude Code hop | `AgenticTrading.tsx` `ScanConfigModal` | Discovery loop | Not started |
+| 5 | Candidate list age (`generated_at`/`discovered_at`) is fetched but never rendered — a stale list looks current | `api/types.ts` `AgenticDiscovery`/`DiscoveryCandidate` | Discovery loop | Not started |
+| 6 | Pause control duplicates Settings' kill-switch toggle under a *different* label ("Agent: Running" vs "Signal generation: Running") | `AgenticTrading.tsx` `ControlsSection` vs `Settings.tsx` | Polish | Not started |
+| 7 | Redundant Refresh button (the 30s poll already covers it); "Blocked" chip uses low-emphasis muted grey | `AgenticTrading.tsx`, `ExecutionQueueSection.tsx` | Polish | Not started |
+| 8 | On mobile the tab is 2 taps + a scroll to the bottom of the "More" sheet (last of 15 items) | `App.tsx` `NAV_ITEMS`/`MOBILE_PRIMARY_COUNT` | Cross-cutting | Not started |
+
+Confirmed: **zero usage telemetry** in the webapp — the decision log is the only behavioral trace of
+tab usage, and it only records deliberate "Log decision" actions. Noted as a finding, not treated as
+a gap to fix (instrumenting a solo local app isn't worth the added surface).
+
+### Backlog (not yet built)
+
+**Phase 2 — fix the discovery loop** (findings #4, #5):
+- Render `discovery.data.generated_at` as an "as of {time}" line so a stale candidate list is
+  never mistaken for current.
+- Add a "copy the scan command" affordance (mirroring `Commands.tsx`'s copyable-command pattern)
+  rather than a fake "Run scan" button — the webapp/API architecturally cannot call the Robinhood
+  MCP directly (only a live Claude Code session can, same constraint the `robinhood-execution`
+  skill operates under), so the honest UI is "here's the command to paste," not a button that lies
+  about what the browser can do.
+
+**Phase 3 — polish** (findings #6, #7):
+- Rename/dedupe the pause control so it's visibly the *same* kill switch as Settings' "Signal
+  generation" toggle, not a second control.
+- Drop the redundant Refresh button; change the "Blocked" execution-queue chip to a caution tone
+  so a blocked intent reads as blocked at a glance.
+
+**Cross-cutting — mobile reachability** (finding #8): promote `/agentic` out of the bottom of the
+"More" sheet — reorder `NAV_ITEMS` and/or bump `MOBILE_PRIMARY_COUNT` (currently 3) or evict a
+lower-priority primary tab. Needs an explicit operator decision on which tab to evict, if any.
