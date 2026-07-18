@@ -86,8 +86,9 @@ have a template for:
 1. **A companion Claude Code skill**, not a backend feature — `.claude/skills/agentic-discovery/SKILL.md`.
    The webapp and Pilots API cannot reach the Robinhood MCP under any circumstance (same constraint
    `robinhood-execution` operates under); only a live agent session can. The skill runs the
-   operator's configured scans, cross-references hits against `engine.advisory.evaluate()` via the
-   investyo MCP, and writes `output/scan_candidates.json`. It is explicitly **read-only with respect
+   operator's configured scans, cross-references hits against the platform's advisory engine via the
+   investyo MCP's `get_recommendation(symbol)` tool (which surfaces `engine.advisory.evaluate()`'s
+   output), and writes `output/scan_candidates.json`. It is explicitly **read-only with respect
    to orders** — it never calls `place_equity_order`/`review_equity_order`/any option-order tool, and
    never fabricates a score for a symbol the advisory cross-reference couldn't reach (`action: null`,
    `conviction: null`, not a guess).

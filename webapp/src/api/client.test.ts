@@ -319,6 +319,38 @@ describe("client.ts — live client (mocked fetch)", () => {
     });
   });
 
+  it("the Agentic Trading endpoints hit the pilots base with the right methods/body", async () => {
+    const mod = await importLiveClient({ VITE_API_BASE_URL: "http://example.test:9000" });
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+
+    // GET /agentic/status — routes to the PILOTS base (must NOT be captured by
+    // baseFor's "/status" control-API check, which matches only the bare path).
+    fetchMock.mockResolvedValueOnce(jsonResponse({ mode: "off" }));
+    await mod.api.getAgenticStatus();
+    expect(fetchMock.mock.calls[0][0]).toBe("http://example.test:9000/agentic/status");
+
+    // GET /agentic/discovery
+    fetchMock.mockResolvedValueOnce(jsonResponse({ candidates: [], scan_configs: [] }));
+    await mod.api.getAgenticDiscovery();
+    expect(fetchMock.mock.calls[1][0]).toBe("http://example.test:9000/agentic/discovery");
+
+    // PUT /agentic/scan-config — sends the request body verbatim as JSON.
+    fetchMock.mockResolvedValueOnce(jsonResponse({ applies: "next_discovery_run" }));
+    await mod.api.putScanConfig({
+      name: "high_momentum_breakout",
+      filters: { min_price: 5, rsi_max: 70 },
+      enabled: true,
+    });
+    const [url, init] = fetchMock.mock.calls[2];
+    expect(url).toBe("http://example.test:9000/agentic/scan-config");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({
+      name: "high_momentum_breakout",
+      filters: { min_price: 5, rsi_max: 70 },
+      enabled: true,
+    });
+  });
+
   describe("offline localStorage cache fallback (Web App Resilience gap)", () => {
     it("a successful GET is persisted to localStorage under a namespaced key", async () => {
       const mod = await importLiveClient();
