@@ -7,13 +7,18 @@
  * screens. Rendered by `<TabGuide tabKey=… />` as a dismissible "How this works"
  * panel.
  *
- * Content is authored (not machine-generated) and restates threshold values as
- * prose — they are accurate to `settings` / `validation.thresholds` at authoring
- * time (PBO < 0.5, DSR > 0.95, net Sharpe > 0.5, Max DD < 30% / 50% stress;
- * half-Kelly, 20% Kelly cap). If those config defaults change, update the prose
- * here to match. Definitions are sourced from the matching `GLOSSARY` entries so
- * the two surfaces stay consistent.
+ * Content is authored (not machine-generated). Every glossary entry that
+ * quotes a deployability-gate or sizing threshold (PBO, DSR, net Sharpe, Max
+ * Drawdown, the stress-gate limit, the Kelly cap) is a FUNCTION over the live
+ * `Thresholds` fetched from `GET /thresholds` (`help/thresholds.ts`), never a
+ * hard-coded literal — mirroring `gui/help_content.py`'s own rule ("Never
+ * hard-code numeric thresholds here"). Every other entry is static prose. A
+ * function entry degrades to "—" per number (via `fmtNum`/`fmtPct`'s existing
+ * null-handling) if thresholds haven't loaded yet or the fetch failed — never
+ * a guessed value.
  */
+import { fmtNum, fmtPct } from "../format";
+import type { Thresholds } from "../api/types";
 
 export interface TabHelp {
   /** Short screen title shown in the panel header. */
@@ -24,8 +29,11 @@ export interface TabHelp {
   keyConcepts: string[];
 }
 
+/** A glossary definition: static prose, or a live-threshold template. */
+export type GlossaryValue = string | ((t: Thresholds | null) => string);
+
 /** term key (lower-case) → plain-English definition. */
-export const GLOSSARY: Record<string, string> = {
+export const GLOSSARY: Record<string, GlossaryValue> = {
   "advisory only":
     "The platform recommends; you decide. It is in advisory mode by default — no order is ever sent to a broker automatically. Every action signal, size, and options directive is informational.",
   "action signal":
@@ -36,22 +44,22 @@ export const GLOSSARY: Record<string, string> = {
     "A reliability check: 'when the system says conviction 0.80, does it actually win 80% of the time?' The reliability diagram compares stated conviction to the realized win rate per bin.",
   "reliability diagram":
     "The chart on the Calibration screen. Points on the diagonal are perfectly calibrated; above the line = underconfident, below = overconfident. Bins with too little data read 'insufficient', never a fabricated win rate.",
-  "kelly target":
-    "The suggested fraction of your capital for one position, from the fractional (half-) Kelly formula using your real trade history, capped at 20% and then by a per-name advisory ceiling. 0.14 means 'up to 14% of capital' — still advisory only.",
+  "kelly target": (t) =>
+    `The suggested fraction of your capital for one position, from the fractional (half-) Kelly formula using your real trade history, capped at ${fmtPct(t?.kelly_cap, 0, { fromFraction: true })} and then by a per-name advisory ceiling. 0.14 means 'up to 14% of capital' — still advisory only.`,
   "edge ratio":
     "Post-trade quality: how far a trade ran in your favor (MFE) versus against you (MAE). An edge ratio ≥ 1 means favorable excursion dominated adverse excursion.",
   "mfe / mae":
     "Maximum Favorable Excursion and Maximum Adverse Excursion — the best and worst unrealized moves during a trade's life. Together they measure trade quality independent of the final exit.",
-  deployable:
-    "An honesty badge. A strategy is 'deployable' only if it clears every validation gate — PBO < 0.5, DSR > 0.95, net-of-cost Sharpe > 0.5, Max Drawdown < 30%. A strategy that fails any gate reads 'not deployable', never softened.",
-  pbo:
-    "Probability of Backtest Overfitting — how likely a backtest's edge is luck rather than real, via Combinatorial Purged Cross-Validation. Lower is better; must be < 0.5 (0.5 is coin-flip) to deploy.",
-  dsr:
-    "Deflated Sharpe Ratio — the Sharpe adjusted for how many parameter combinations were tried, since testing many inflates the best in-sample Sharpe by chance. Must be > 0.95 to deploy.",
-  "sharpe ratio":
-    "Average return divided by the standard deviation of returns — risk-adjusted performance. Deployment requires a net-of-costs Sharpe > 0.5.",
-  "max drawdown":
-    "The largest peak-to-trough drop in the equity curve, as a fraction of peak equity. Must be < 30% for standard strategies; options-selling strategies must also stay < 50% in every dated shock window (2008, 2018, 2020, 2024).",
+  deployable: (t) =>
+    `An honesty badge. A strategy is 'deployable' only if it clears every validation gate — PBO < ${fmtNum(t?.pbo_max, 1)}, DSR > ${fmtNum(t?.dsr_min, 2)}, net-of-cost Sharpe > ${fmtNum(t?.net_sharpe_min, 1)}, Max Drawdown < ${fmtPct(t?.max_drawdown_max, 0, { fromFraction: true })}. A strategy that fails any gate reads 'not deployable', never softened.`,
+  pbo: (t) =>
+    `Probability of Backtest Overfitting — how likely a backtest's edge is luck rather than real, via Combinatorial Purged Cross-Validation. Lower is better; must be < ${fmtNum(t?.pbo_max, 1)} (${fmtNum(t?.pbo_max, 1)} is coin-flip) to deploy.`,
+  dsr: (t) =>
+    `Deflated Sharpe Ratio — the Sharpe adjusted for how many parameter combinations were tried, since testing many inflates the best in-sample Sharpe by chance. Must be > ${fmtNum(t?.dsr_min, 2)} to deploy.`,
+  "sharpe ratio": (t) =>
+    `Average return divided by the standard deviation of returns — risk-adjusted performance. Deployment requires a net-of-costs Sharpe > ${fmtNum(t?.net_sharpe_min, 1)}.`,
+  "max drawdown": (t) =>
+    `The largest peak-to-trough drop in the equity curve, as a fraction of peak equity. Must be < ${fmtPct(t?.max_drawdown_max, 0, { fromFraction: true })} for standard strategies; options-selling strategies must also stay < ${fmtPct(t?.stress_max_drawdown, 0, { fromFraction: true })} in every dated shock window (2008, 2018, 2020, 2024).`,
   "signal weight":
     "How much each signal module contributes to the final composite score: total = sum of (module_score × weight) across active modules. Weights are tunable in the Strategy Matrix.",
   multifactor:
@@ -69,6 +77,10 @@ export const GLOSSARY: Record<string, string> = {
   "iron condor":
     "A put credit spread below the market plus a call credit spread above it, profiting if the stock stays in a range until expiry. Requires favorable IV. Advisory only.",
   "iv rank":
+    // IVR/VRP/VIX gate values here are literal constants inside
+    // technical_options_engine.py (not settings-derived) — gui/help_content.py
+    // hard-codes them too for the same reason, so this matches its precedent
+    // rather than being an inconsistency with the live-threshold entries above.
     "Implied Volatility Rank — where current IV sits in its past-year range. IVR 80 = top 20% of the year, historically a good time to sell premium. Credit spreads require IVR > 50.",
   vrp:
     "Volatility Risk Premium — implied volatility in excess of realized. When options charge more than the stock actually moves, there's premium to collect. A VRP > 0.02 is required before recommending a premium-selling strategy.",
@@ -111,7 +123,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "strategy-health": {
     title: "Strategy Health",
     description:
-      "The statistical-soundness view: each strategy's Deployable verdict against the four gates — PBO < 0.5, DSR > 0.95, net Sharpe > 0.5, Max DD < 30%. Options-selling strategies add a tail-scenario stress gate. A failing gate honestly reads 'not deployable'.",
+      "The statistical-soundness view: each strategy's Deployable verdict against the four validation gates. Options-selling strategies add a tail-scenario stress gate. A failing gate honestly reads 'not deployable' — tap a term below for the exact live threshold.",
     keyConcepts: ["deployable", "pbo", "dsr", "sharpe ratio", "max drawdown"],
   },
   signals: {
@@ -139,7 +151,14 @@ export const TAB_HELP: Record<string, TabHelp> = {
   },
 };
 
-/** Look up a glossary definition by key; `undefined` when absent (never throws). */
-export function glossaryDef(key: string): string | undefined {
-  return GLOSSARY[key];
+/**
+ * Look up a glossary definition by key; `undefined` when absent (never
+ * throws). `thresholds` is only consulted by the small set of entries that
+ * are functions — `null` (not yet loaded / fetch failed) renders "—" for each
+ * live number rather than a stale or guessed value.
+ */
+export function glossaryDef(key: string, thresholds: Thresholds | null = null): string | undefined {
+  const entry = GLOSSARY[key];
+  if (entry === undefined) return undefined;
+  return typeof entry === "function" ? entry(thresholds) : entry;
 }

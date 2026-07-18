@@ -5,12 +5,19 @@
  */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabGuide } from "./TabGuide";
 import { resetHelpSeen } from "../help/helpState";
+import { __resetThresholdsCache } from "../help/thresholds";
+import { api } from "../api/client";
 
 beforeEach(() => {
   resetHelpSeen();
+  __resetThresholdsCache();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("TabGuide", () => {
@@ -58,5 +65,33 @@ describe("TabGuide", () => {
   it("renders nothing for an unknown tab key", () => {
     const { container } = render(<TabGuide tabKey="does-not-exist" />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders live threshold values once GET /thresholds resolves", async () => {
+    vi.spyOn(api, "getThresholds").mockResolvedValue({
+      pbo_max: 0.5,
+      dsr_min: 0.95,
+      net_sharpe_min: 0.5,
+      max_drawdown_max: 0.3,
+      stress_max_drawdown: 0.5,
+      kelly_fraction: 0.5,
+      kelly_cap: 0.2,
+    });
+    const user = userEvent.setup();
+    render(<TabGuide tabKey="strategy-health" />);
+
+    await user.click(screen.getByRole("button", { name: "pbo" }));
+    const def = await screen.findByTestId("tab-guide-def");
+    expect(def).toHaveTextContent("< 0.5");
+  });
+
+  it("shows '—' instead of a guessed number while thresholds are unavailable", async () => {
+    vi.spyOn(api, "getThresholds").mockRejectedValue(new Error("offline"));
+    const user = userEvent.setup();
+    render(<TabGuide tabKey="strategy-health" />);
+
+    await user.click(screen.getByRole("button", { name: "pbo" }));
+    const def = screen.getByTestId("tab-guide-def");
+    expect(def).toHaveTextContent("< —");
   });
 });

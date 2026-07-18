@@ -253,6 +253,48 @@ def test_universe_cold_start_empty_not_404(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# GET /thresholds — live deployability-gate / sizing thresholds for the PWA's
+# education panels. Asserted against the SAME imported constants the route
+# itself reads, so this test can never silently drift from the live source.
+# ---------------------------------------------------------------------------
+
+
+def test_thresholds_shape_and_live_values():
+    from validation.thresholds import (
+        DSR_MIN,
+        MAX_DRAWDOWN_MAX,
+        NET_SHARPE_MIN,
+        PBO_MAX,
+        STRESS_MAX_DRAWDOWN,
+    )
+
+    resp = client.get("/thresholds")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {
+        "pbo_max", "dsr_min", "net_sharpe_min", "max_drawdown_max",
+        "stress_max_drawdown", "kelly_fraction", "kelly_cap",
+    }
+    assert body["pbo_max"] == PBO_MAX
+    assert body["dsr_min"] == DSR_MIN
+    assert body["net_sharpe_min"] == NET_SHARPE_MIN
+    assert body["max_drawdown_max"] == MAX_DRAWDOWN_MAX
+    assert body["stress_max_drawdown"] == STRESS_MAX_DRAWDOWN
+    assert body["kelly_fraction"] == settings.KELLY_FRACTION
+    assert body["kelly_cap"] == settings.KELLY_CAP
+
+
+def test_thresholds_never_depends_on_snapshot(tmp_path):
+    # Config constants, not persisted state — a cold-start OUTPUT_DIR (no
+    # state_snapshot.json) must not change anything, unlike /universe or
+    # /symbols/{ticker}.
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        resp = client.get("/thresholds")
+    assert resp.status_code == 200
+    assert resp.json()["pbo_max"] == 0.5
+
+
+# ---------------------------------------------------------------------------
 # GET /pilots/{id}/performance
 # ---------------------------------------------------------------------------
 

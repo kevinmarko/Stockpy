@@ -98,6 +98,18 @@ from settings import settings
 from settings import INTERVAL_MAX_SECONDS as _INTERVAL_MAX_SECONDS
 from settings import validate_interval_seconds as _validate_interval_seconds
 
+# Deployability-gate thresholds — a pure, import-free leaf module (see its own
+# docstring: "Never hard-code these numbers elsewhere"). Backs GET /thresholds
+# so the PWA's education panels render the SAME numbers the validation harness
+# actually enforces, mirroring gui/help_content.py's live-import discipline.
+from validation.thresholds import (
+    DSR_MIN,
+    MAX_DRAWDOWN_MAX,
+    NET_SHARPE_MIN,
+    PBO_MAX,
+    STRESS_MAX_DRAWDOWN,
+)
+
 # Pilot layer (pure, persisted-state readers) + the gated follow write-path.
 from pilots import (
     alerts_feed,
@@ -1168,6 +1180,29 @@ def get_commands() -> Dict[str, Any]:
     dead_letters, commands, reason}`` — empty ``commands`` + an honest ``reason``
     when the manifest hasn't been generated yet (CONSTRAINT #4). Never 500s."""
     return commands_reader.command_manifest()
+
+
+@app.get("/thresholds", dependencies=[Depends(require_read_token)])
+def get_thresholds() -> Dict[str, float]:
+    """Live deployability-gate and position-sizing thresholds, imported
+    directly from ``validation.thresholds`` and ``settings`` — never re-typed
+    as literals — so the PWA's "How this works" education panels can quote the
+    SAME numbers the strategy validation harness actually enforces, mirroring
+    the live-import discipline ``gui/help_content.py`` already applies for the
+    Streamlit Command Center (see that module's docstring: "Never hard-code
+    numeric thresholds here").
+
+    These are config constants, not persisted pipeline state — always
+    available, no cold-start empty case, never 404s/500s."""
+    return {
+        "pbo_max": PBO_MAX,
+        "dsr_min": DSR_MIN,
+        "net_sharpe_min": NET_SHARPE_MIN,
+        "max_drawdown_max": MAX_DRAWDOWN_MAX,
+        "stress_max_drawdown": STRESS_MAX_DRAWDOWN,
+        "kelly_fraction": settings.KELLY_FRACTION,
+        "kelly_cap": settings.KELLY_CAP,
+    }
 
 
 def _safe_float(value: float) -> Optional[float]:
