@@ -323,6 +323,57 @@ class TestFetchAccountSnapshot:
         assert live_called, "Live fetch was NOT called despite force=True"
         assert result.buying_power == pytest.approx(88888.0)
 
+    def test_auto_refresh_disabled_stale_cache_returns_stale_no_live_call(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """ROBINHOOD_AUTO_REFRESH_ENABLED=False must skip Tier 3 entirely, even
+        when the cache is stale — the whole point is no unattended login."""
+        monkeypatch.setattr("settings.settings.ROBINHOOD_AUTO_REFRESH_ENABLED", False)
+        cache_file, live_called = self._setup(monkeypatch, tmp_path)
+
+        stale = _make_snapshot(age_hours=101.0)
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(stale.to_dict()))
+
+        result = fetch_account_snapshot(max_age_hours=20.0, force=False)
+
+        assert not live_called, "Live fetch was called despite ROBINHOOD_AUTO_REFRESH_ENABLED=False"
+        assert result.buying_power == pytest.approx(stale.buying_power)
+        assert result.is_stale(max_age_hours=20.0)
+
+    def test_auto_refresh_disabled_force_still_calls_live(self, tmp_path, monkeypatch) -> None:
+        """force=True is the explicit 'I want it now' override and must bypass
+        ROBINHOOD_AUTO_REFRESH_ENABLED=False just like it bypasses a fresh cache."""
+        monkeypatch.setattr("settings.settings.ROBINHOOD_AUTO_REFRESH_ENABLED", False)
+        live_fresh_marked = AccountSnapshot(
+            positions={},
+            buying_power=99999.0,
+            total_equity=0.0,
+            total_dividends=0.0,
+            fetched_at=datetime.now(timezone.utc),
+        )
+        cache_file, live_called = self._setup(monkeypatch, tmp_path, live_snap=live_fresh_marked)
+
+        stale = _make_snapshot(age_hours=101.0)
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(stale.to_dict()))
+
+        result = fetch_account_snapshot(max_age_hours=20.0, force=True)
+
+        assert live_called, "Live fetch was NOT called despite force=True"
+        assert result.buying_power == pytest.approx(99999.0)
+
+    def test_auto_refresh_disabled_no_cache_raises(self, tmp_path, monkeypatch) -> None:
+        """With auto-refresh off and nothing cached anywhere, there is nothing to
+        return — must raise rather than silently attempt a live login."""
+        monkeypatch.setattr("settings.settings.ROBINHOOD_AUTO_REFRESH_ENABLED", False)
+        cache_file, live_called = self._setup(monkeypatch, tmp_path)
+
+        with pytest.raises(RuntimeError, match="ROBINHOOD_AUTO_REFRESH_ENABLED"):
+            fetch_account_snapshot(max_age_hours=20.0, force=False)
+
+        assert not live_called, "Live fetch was called despite ROBINHOOD_AUTO_REFRESH_ENABLED=False"
+
     def test_live_fail_returns_stale_cache(self, tmp_path, monkeypatch) -> None:
         """Live-fetch failure with an existing cache must return the stale cache."""
         cache_file = tmp_path / "account_snapshot.json"

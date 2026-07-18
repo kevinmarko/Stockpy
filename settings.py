@@ -313,6 +313,24 @@ class Settings(BaseSettings):
             "the 6-digit code via pyotp.TOTP(RH_MFA_SECRET).now() — never logged or cached."
         ),
     )
+    # data.robinhood_portfolio.fetch_account_snapshot()'s Tier 3 (live fetch) runs
+    # automatically whenever the cached snapshot is older than max_age_hours (default
+    # 20h) — every one of its ~8 call sites (GUI panels, the MCP server, the Pilots/
+    # data APIs, portfolio_sync, llm_commentary) inherits this, so once credentials
+    # start failing, every poll from every surface re-attempts a Robinhood login with
+    # no shared cooldown. Default True preserves that exact behavior. Set False to
+    # make the live fetch strictly opt-in: only `force=True` (i.e. `python3 main.py
+    # --refresh-account`) ever logs in; every other caller gets the best available
+    # cached snapshot regardless of staleness.
+    ROBINHOOD_AUTO_REFRESH_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True (default), fetch_account_snapshot() automatically re-logs-in "
+            "to Robinhood whenever the cached snapshot exceeds max_age_hours. When "
+            "False, live login only happens when explicitly forced (--refresh-account) "
+            "— all other callers get the cached snapshot regardless of staleness."
+        ),
+    )
     # --- Order management (execution/order_manager.py) ---
     # When True the orchestrator logs intended orders but never submits them.
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.
