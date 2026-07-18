@@ -536,9 +536,16 @@ def fetch_account_snapshot(
     Cache behaviour:
         First call of the day → authenticates, fetches, writes cache, returns.
         Subsequent same-day calls → returns instantly from cache, NO network.
-        force=True → always re-authenticates and refreshes cache.
+        force=True → always re-authenticates and refreshes cache, regardless
+            of settings.ROBINHOOD_AUTO_REFRESH_ENABLED (this is the explicit
+            "I want it now" override — see main.py --refresh-account).
         Live-fetch failure + cache present → returns stale cache, logs warning.
         Live-fetch failure + no cache     → raises the original exception.
+
+    settings.ROBINHOOD_AUTO_REFRESH_ENABLED=False:
+        Tier 3 (live fetch) is skipped entirely whenever force=False — the
+        best available cached snapshot is returned regardless of staleness,
+        and no Robinhood login is attempted. Only force=True ever logs in.
     """
     # ---- Tier 1: DB-first read (fastest — no JSON I/O, no network) ----
     if not force:
@@ -566,7 +573,33 @@ def fetch_account_snapshot(
             )
             return cached
 
-    # ---- Tier 3: live fetch ----
+    # ---- Tier 3: live fetch (skipped when auto-refresh is disabled) ----
+    if not force:
+        from settings import settings as _settings
+
+        if not _settings.ROBINHOOD_AUTO_REFRESH_ENABLED:
+            logger.info(
+                "ROBINHOOD_AUTO_REFRESH_ENABLED=False — skipping live Robinhood "
+                "login, returning best available cached snapshot regardless of "
+                "staleness. Run `python3 main.py --refresh-account` to fetch "
+                "fresh data on demand."
+            )
+            try:
+                from data.historical_store import HistoricalStore
+                _db_snap = HistoricalStore().latest_account_snapshot()
+                if _db_snap is not None:
+                    return _db_snap
+            except Exception as _exc:
+                logger.debug("DB snapshot read failed, falling through: %s", _exc)
+            cached = _read_cache()
+            if cached is not None:
+                return cached
+            raise RuntimeError(
+                "No cached Robinhood account snapshot available and "
+                "ROBINHOOD_AUTO_REFRESH_ENABLED=False prevents a live fetch. "
+                "Run `python3 main.py --refresh-account` to fetch one manually."
+            )
+
     try:
         snapshot = _fetch_live_snapshot()
         _write_cache(snapshot)
