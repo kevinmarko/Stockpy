@@ -39,38 +39,59 @@ import { Modal } from "./components/Modal";
 import { theme } from "./theme";
 
 /**
- * How many NAV_ITEMS the mobile bottom bar shows directly before the rest fold
- * into the "More" sheet. Kept at 3 (Dashboard/Pilots/Activity) so the primary
- * three never get evicted — see the NAV_ITEMS comment below.
+ * Which nav group a screen belongs to. Replaces the old MOBILE_PRIMARY_COUNT
+ * array-slice split (whichever 3 items happened to be listed first) with an
+ * explicit, per-item classification that can't silently drift when items are
+ * added or reordered.
+ *
+ * "primary" -> the 3 always-visible mobile bottom-nav tabs. Chosen by actual
+ * usage frequency (a 2026-07 UX audit), not by original insertion order:
+ * Dashboard/Portfolio/Activity are checked constantly; everything else is an
+ * occasional deep-dive. "settings" is its own single-item group so Settings
+ * is reachable the same way as every other screen (mobile More sheet /
+ * desktop sidebar) -- the persistent gear button (SettingsButton) remains an
+ * ADDITIONAL fast-access shortcut (it also carries the update/LLM-attention
+ * dots), not the only path.
  */
-const MOBILE_PRIMARY_COUNT = 3;
+type NavSection = "primary" | "research" | "trading" | "operations" | "settings";
+
+/** Group header shown above each non-primary cluster in the mobile "More" sheet and the desktop sidebar. */
+const SECTION_LABEL: Record<Exclude<NavSection, "primary">, string> = {
+  research: "Research",
+  trading: "Trading Tools",
+  operations: "Operations",
+  settings: "Settings",
+};
+
+/** Render order for the non-primary groups (most to least frequently visited). */
+const SECTION_ORDER: Exclude<NavSection, "primary">[] = ["research", "trading", "operations", "settings"];
 
 /** Shared between the mobile bottom tab bar and the desktop sidebar. */
-const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) => boolean }[] = [
-  { to: "/", label: "Dashboard", ico: "⚡", match: (p) => p === "/" },
-  { to: "/marketplace", label: "Pilots", ico: "🧭", match: (p) => p.startsWith("/marketplace") || p.startsWith("/pilots") },
-  { to: "/activity", label: "Activity", ico: "🔔", match: (p) => p.startsWith("/activity") },
-  { to: "/portfolio", label: "Portfolio", ico: "📊", match: (p) => p.startsWith("/portfolio") },
-  { to: "/compare", label: "Compare", ico: "⚖️", match: (p) => p.startsWith("/compare") },
-  { to: "/models", label: "Models", ico: "🧠", match: (p) => p.startsWith("/models") },
-  { to: "/pairs", label: "Pairs radar", ico: "🔗", match: (p) => p.startsWith("/pairs") },
-  { to: "/options", label: "Options", ico: "🎯", match: (p) => p.startsWith("/options") },
-  { to: "/attribution", label: "Attribution", ico: "🧮", match: (p) => p.startsWith("/attribution") },
-  { to: "/observability", label: "Mission Control", ico: "🛰️", match: (p) => p.startsWith("/observability") },
-  { to: "/strategy-health", label: "Strategy Health", ico: "🛡️", match: (p) => p.startsWith("/strategy-health") },
-  { to: "/calibration", label: "Calibration", ico: "🎚️", match: (p) => p.startsWith("/calibration") },
-  { to: "/pipeline", label: "Pipeline", ico: "🚀", match: (p) => p.startsWith("/pipeline") },
-  { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", match: (p) => p.startsWith("/data-explorer") },
-  { to: "/signals", label: "Signal Breakdown", ico: "🧬", match: (p) => p.startsWith("/signals") },
-  { to: "/forecast", label: "Forecast Viewer", ico: "📈", match: (p) => p.startsWith("/forecast") },
-  { to: "/commands", label: "Commands", ico: "⌨️", match: (p) => p.startsWith("/commands") },
-  { to: "/agentic", label: "Agent", ico: "🤖", match: (p) => p.startsWith("/agentic") },
-  // Last item: Sidebar (desktop) renders all of NAV_ITEMS, so this shows up
-  // there automatically. BottomNav (mobile) shows only the first
-  // MOBILE_PRIMARY_COUNT directly; everything after folds into the "More"
-  // sheet -- EXCEPT /settings, which the fixed gear button (SettingsButton)
-  // already covers, so the sheet omits it to avoid two paths to one screen.
-  { to: "/settings", label: "Settings", ico: "⚙", match: (p) => p.startsWith("/settings") },
+const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) => boolean; section: NavSection }[] = [
+  // Primary — checked constantly, always one tap away on mobile.
+  { to: "/", label: "Dashboard", ico: "⚡", match: (p) => p === "/", section: "primary" },
+  { to: "/portfolio", label: "Portfolio", ico: "📊", match: (p) => p.startsWith("/portfolio"), section: "primary" },
+  { to: "/activity", label: "Activity", ico: "🔔", match: (p) => p.startsWith("/activity"), section: "primary" },
+  // Research — vetting Pilots, symbols, and strategies before you act.
+  { to: "/marketplace", label: "Pilots", ico: "🧭", match: (p) => p.startsWith("/marketplace") || p.startsWith("/pilots"), section: "research" },
+  { to: "/compare", label: "Compare", ico: "⚖️", match: (p) => p.startsWith("/compare"), section: "research" },
+  { to: "/models", label: "Models", ico: "🧠", match: (p) => p.startsWith("/models"), section: "research" },
+  { to: "/strategy-health", label: "Strategy Health", ico: "🛡️", match: (p) => p.startsWith("/strategy-health"), section: "research" },
+  { to: "/pairs", label: "Pairs radar", ico: "🔗", match: (p) => p.startsWith("/pairs"), section: "research" },
+  { to: "/options", label: "Options", ico: "🎯", match: (p) => p.startsWith("/options"), section: "research" },
+  { to: "/signals", label: "Signal Breakdown", ico: "🧬", match: (p) => p.startsWith("/signals"), section: "research" },
+  { to: "/forecast", label: "Forecast Viewer", ico: "📈", match: (p) => p.startsWith("/forecast"), section: "research" },
+  { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", match: (p) => p.startsWith("/data-explorer"), section: "research" },
+  // Trading Tools — grading and acting on your own portfolio.
+  { to: "/attribution", label: "Attribution", ico: "🧮", match: (p) => p.startsWith("/attribution"), section: "trading" },
+  { to: "/calibration", label: "Calibration", ico: "🎚️", match: (p) => p.startsWith("/calibration"), section: "trading" },
+  { to: "/agentic", label: "Agent", ico: "🤖", match: (p) => p.startsWith("/agentic"), section: "trading" },
+  { to: "/commands", label: "Commands", ico: "⌨️", match: (p) => p.startsWith("/commands"), section: "trading" },
+  // Operations — the platform/pipeline itself, not a symbol or your money.
+  { to: "/observability", label: "Mission Control", ico: "🛰️", match: (p) => p.startsWith("/observability"), section: "operations" },
+  { to: "/pipeline", label: "Pipeline", ico: "🚀", match: (p) => p.startsWith("/pipeline"), section: "operations" },
+  // Settings — also has the always-on gear shortcut (SettingsButton) below.
+  { to: "/settings", label: "Settings", ico: "⚙", match: (p) => p.startsWith("/settings"), section: "settings" },
 ];
 
 /**
@@ -80,7 +101,9 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
  * thing instead of two competing "settings" affordances. Keeps the
  * needRefresh amber dot, the one thing the drawer did that a plain route
  * link can't -- surfacing "update available" from any screen without the
- * operator having to visit Settings first.
+ * operator having to visit Settings first. Settings is ALSO listed like any
+ * other screen (mobile More sheet's "Settings" group / desktop sidebar) --
+ * this button is a fast-access shortcut on top of that, not the only path.
  */
 function SettingsButton() {
   const nav = useNavigate();
@@ -162,14 +185,10 @@ function BottomNav() {
   const path = loc.pathname;
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const primary = NAV_ITEMS.slice(0, MOBILE_PRIMARY_COUNT);
-  // Everything after the primary three, minus /settings (the gear covers it).
-  // Driven off NAV_ITEMS so the sheet can never drift from the desktop sidebar
-  // (kept non-enumerating on purpose -- an explicit list here goes stale every
-  // time a nav item is added).
-  const secondary = NAV_ITEMS.slice(MOBILE_PRIMARY_COUNT).filter(
-    (it) => it.to !== "/settings"
-  );
+  const primary = NAV_ITEMS.filter((it) => it.section === "primary");
+  // Everything non-primary, grouped by section for the sheet. Driven off
+  // NAV_ITEMS so it can never drift from the desktop sidebar.
+  const secondary = NAV_ITEMS.filter((it) => it.section !== "primary");
   const moreActive = secondary.some((it) => it.match(path));
 
   const go = (to: string) => {
@@ -208,35 +227,57 @@ function BottomNav() {
       {moreOpen && (
         <Modal ariaLabel="More sections" onClose={() => setMoreOpen(false)}>
           <h2 style={{ margin: "0 0 12px", fontSize: "var(--t-title)" }}>More</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {secondary.map((it) => {
-              const active = it.match(path);
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            {SECTION_ORDER.map((section) => {
+              const items = secondary.filter((it) => it.section === section);
+              if (items.length === 0) return null;
               return (
-                <button
-                  key={it.to}
-                  onClick={() => go(it.to)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    width: "100%",
-                    justifyContent: "flex-start",
-                    padding: "12px 14px",
-                    minHeight: 48,
-                    background: active ? theme.surface2 : "transparent",
-                    border: `1px solid ${active ? theme.borderStrong : theme.border}`,
-                    borderRadius: 10,
-                    color: active ? theme.textPrimary : theme.textSecondary,
-                    fontSize: 15,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  <span aria-hidden style={{ fontSize: 20 }}>
-                    {it.ico}
-                  </span>
-                  <span>{it.label}</span>
-                </button>
+                <div key={section}>
+                  <h3
+                    style={{
+                      margin: "0 0 8px",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      letterSpacing: "0.04em",
+                      textTransform: "uppercase",
+                      color: theme.textMuted,
+                    }}
+                  >
+                    {SECTION_LABEL[section]}
+                  </h3>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {items.map((it) => {
+                      const active = it.match(path);
+                      return (
+                        <button
+                          key={it.to}
+                          onClick={() => go(it.to)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 12,
+                            width: "100%",
+                            justifyContent: "flex-start",
+                            padding: "12px 14px",
+                            minHeight: 48,
+                            background: active ? theme.surface2 : "transparent",
+                            border: `1px solid ${active ? theme.borderStrong : theme.border}`,
+                            borderRadius: 10,
+                            color: active ? theme.textPrimary : theme.textSecondary,
+                            fontSize: 15,
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span aria-hidden style={{ fontSize: 20 }}>
+                            {it.ico}
+                          </span>
+                          <span>{it.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -251,23 +292,49 @@ function Sidebar() {
   const loc = useLocation();
   const nav = useNavigate();
   const path = loc.pathname;
+  const primary = NAV_ITEMS.filter((it) => it.section === "primary");
+  const secondary = NAV_ITEMS.filter((it) => it.section !== "primary");
+
+  const renderItem = (it: (typeof NAV_ITEMS)[number]) => (
+    <button
+      key={it.to}
+      className={`nav-item ${it.match(path) ? "active" : ""}`}
+      onClick={() => nav(it.to)}
+    >
+      <span className="nav-ico" aria-hidden>
+        {it.ico}
+      </span>
+      {it.label}
+    </button>
+  );
+
   return (
     <nav className="sidebar">
       <div className="sidebar-brand">
         <span aria-hidden>🧭</span> Stockpy Pilots
       </div>
-      {NAV_ITEMS.map((it) => (
-        <button
-          key={it.to}
-          className={`nav-item ${it.match(path) ? "active" : ""}`}
-          onClick={() => nav(it.to)}
-        >
-          <span className="nav-ico" aria-hidden>
-            {it.ico}
-          </span>
-          {it.label}
-        </button>
-      ))}
+      {primary.map(renderItem)}
+      {SECTION_ORDER.map((section) => {
+        const items = secondary.filter((it) => it.section === section);
+        if (items.length === 0) return null;
+        return (
+          <div key={section} style={{ marginTop: 14 }}>
+            <div
+              style={{
+                margin: "0 10px 4px",
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+                color: theme.textMuted,
+              }}
+            >
+              {SECTION_LABEL[section]}
+            </div>
+            {items.map(renderItem)}
+          </div>
+        );
+      })}
     </nav>
   );
 }
