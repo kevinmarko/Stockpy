@@ -518,6 +518,46 @@ Covered by `tests/test_transactions_store.py` and Gravity
 
 ---
 
+### 3.12 MCP Client Shows "Server Disconnected" (investyo)
+
+**Symptom**: Claude Desktop's `investyo` MCP connector (or another local `gcloud`/venv-launched
+MCP entry, e.g. the CLI's `investyo-platform`) shows **"Server disconnected"** immediately after
+launch, with no obvious local error.
+
+**Root causes** (check both — they present identically and can occur independently):
+
+1. **Client-side PATH resolution.** GUI-launched apps (Claude Desktop) spawn subprocesses with a
+   minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes Homebrew's `/opt/homebrew/bin`.
+   A bare `"gcloud"` (or `"python3"`, `"npx"`, …) command in an MCP server config silently
+   resolves to nothing — or, worse, to a *different* interpreter that lacks the required
+   packages (e.g. Apple's stub `/usr/bin/python3` instead of the project's `.venv`) — and the
+   process exits before completing the MCP handshake.
+2. **Remote `.env` permission trap** (`investyo` only, the `gcloud compute ssh`-tunneled server).
+   The adapter's remote command must `cd /opt/investyo` before `sudo -u investyo ...` — `sudo`
+   does not change the working directory, and the SSH login user's home directory (the default
+   remote cwd) is typically mode `750` and unreadable by the `investyo` service user. Without the
+   `cd`, FastMCP's pydantic-settings crashes reading `.env` with `PermissionError: [Errno 13]
+   Permission denied: '.env'`.
+
+**Operator action**:
+
+1. Check `~/Library/Logs/Claude/mcp-server-<name>.log` (Claude Desktop) for the actual traceback
+   — do not guess; the two root causes above look identical from the UI alone.
+2. Confirm every `command` field in `claude_desktop_config.json` / `~/.claude.json`'s
+   `mcpServers` entries is an **absolute path** (`which <tool>` in an interactive shell, then
+   hardcode that path — never rely on inherited `PATH`).
+3. For `investyo` specifically, point `command` at `mcp_remote_adapter.py` (run via the project's
+   `.venv/bin/python3`) rather than inlining a raw `gcloud compute ssh` command — the adapter is
+   the single tested source of truth for both the absolute-`gcloud` resolution (`_resolve_gcloud()`)
+   and the load-bearing `cd /opt/investyo` fix, so it can't drift out of sync again.
+4. Fully quit and relaunch Claude Desktop (a reload is not enough — MCP server configs are read
+   at app launch).
+
+Covered by `tests/test_mcp_remote_adapter.py`; see `docs/architecture/observability-and-apis.md`
+for the full technical writeup.
+
+---
+
 ## 4. Contacts
 
 | Role | Contact | Notes |
