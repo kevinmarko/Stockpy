@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.investyo.stack.plist
+  ========================
+  macOS launchd job: the ALWAYS-ON backend stack for the Pilots PWA. Runs
+  scripts/investyo_stack_service.sh at login (RunAtLoad) and restarts it on
+  crash (KeepAlive). That wrapper starts the orchestrator daemon (5-min warm
+  refresh cycles + Control API :8601 + Pilots API :8602) plus data_api :8603
+  and metrics_api :8604 — so data keeps being collected and the webapp can
+  reconnect to live data any time, no app window required.
+
+  INSTALL (recommended): double-click scripts/install_stack_service.command.
+
+  UNINSTALL:
+      launchctl unload ~/Library/LaunchAgents/com.investyo.stack.plist
+      rm ~/Library/LaunchAgents/com.investyo.stack.plist
+
+  STATUS / LOGS:
+      launchctl list | grep com.investyo.stack
+      tail -f /Users/kevinlee/Desktop/Stockpy/output/stack_service.err
+      tail -f /Users/kevinlee/Desktop/Stockpy/output/stack_daemon.log
+
+  FULL DISK ACCESS (required if the repo is under ~/Desktop / ~/Documents /
+  ~/Downloads): grant Full Disk Access to /bin/bash in System Settings →
+  Privacy & Security, or launchd fails with
+  "Operation not permitted: .venv/pyvenv.cfg".
+
+  Paths below are absolute (launchd does not expand ~ or $HOME). The installer
+  rewrites /Users/kevinlee/Desktop/Stockpy to this repo's real location.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.investyo.stack</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kevinlee/Desktop/Stockpy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/kevinlee/Desktop/Stockpy/scripts/investyo_stack_service.sh</string>
+    </array>
+
+    <!-- Start at login and keep it running: restart the whole stack whenever
+         the wrapper (i.e. the daemon) exits. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Don't hammer restarts if it's crash-looping (e.g. missing FDA). -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/stack_service.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/stack_service.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

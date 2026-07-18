@@ -763,8 +763,9 @@ class TestPipelineModeThreading(unittest.TestCase):
         recorded = {}
 
         async def _fake_main_body(dry_run, strict=False, *, engines=None,
-                                  data_engine=None, mode="full"):
+                                  data_engine=None, mode="full", force=True):
             recorded["mode"] = mode
+            recorded["force"] = force
 
         daemon = OrchestratorDaemon(interval_seconds=0)
         patcher = patch.object(main_orchestrator, "_main_body", _fake_main_body)
@@ -789,6 +790,29 @@ class TestPipelineModeThreading(unittest.TestCase):
         run_id, rec = self._run_and_wait(daemon, mode_kwarg=_SENTINEL, recorder_holder=recorded)
         self.assertEqual(recorded["mode"], "full")
         self.assertEqual(rec.mode, "full")
+
+    def test_manual_trigger_forces_refresh(self):
+        # Default reason ("manual") must bypass the data-freshness gate so an
+        # operator's explicit "Run Pipeline" is never skipped as "still fresh".
+        daemon, recorded = self._make_daemon_with_recorder()
+        self._run_and_wait(daemon, mode_kwarg=_SENTINEL, recorder_holder=recorded)
+        self.assertIs(recorded["force"], True)
+
+    def test_interval_trigger_honors_freshness_gate(self):
+        # The automatic interval timer passes force=False so _main_body can
+        # skip the pull when DATA_FRESHNESS_TTL_SECONDS says the DB is fresh.
+        daemon, recorded = self._make_daemon_with_recorder()
+        import time
+        from desktop.daemon_runtime import RunState
+
+        result = daemon.trigger_run(reason="interval")
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            rec = daemon.get_run(result.run_id)
+            if rec is not None and rec.state != RunState.RUNNING:
+                break
+            time.sleep(0.02)
+        self.assertIs(recorded["force"], False)
 
     def test_status_run_history_most_recent_first_with_mode(self):
         daemon, recorded = self._make_daemon_with_recorder()

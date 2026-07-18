@@ -223,12 +223,32 @@ class Settings(BaseSettings):
         description="In-process quote cache TTL in seconds (never persisted to disk).",
     )
     MARKET_DATA_BARS_TTL_SECONDS: int = Field(
-        default=300,
+        default=900,
         description=(
             "In-process OHLCV intraday-bars cache TTL in seconds (never persisted "
             "to disk). Bars are daily-resolution, so a few-minutes TTL collapses "
             "the repeated per-symbol history fetches (universe pre-fetch + advisory "
-            "refetch + GUI panels) into a single network pull within the window."
+            "refetch + GUI panels) into a single network pull within the window. "
+            "Defaults to 15 min to align with DATA_FRESHNESS_TTL_SECONDS (the "
+            "cross-cycle persisted-freshness gate); this is the in-process, "
+            "single-cycle companion to that gate."
+        ),
+    )
+    # Cross-cycle data-freshness gate (persisted marker, see main_orchestrator.
+    # _data_is_fresh / _mark_data_refreshed). When an INTERVAL-triggered daemon
+    # cycle finds the last successful data pull was younger than this TTL, it
+    # SKIPS the network refresh entirely rather than re-pulling every 5 min.
+    # Manual "Run Pipeline" / --refresh / any non-interval trigger always
+    # bypasses the gate (force=True). 0 disables the gate (every cycle pulls,
+    # the pre-gate behavior). Unlike MARKET_DATA_BARS_TTL_SECONDS (in-process,
+    # dies with the process), this survives daemon restarts via a small marker
+    # file in OUTPUT_DIR, so a fresh daemon does not immediately re-pull.
+    DATA_FRESHNESS_TTL_SECONDS: int = Field(
+        default=900,
+        description=(
+            "Skip an interval-triggered daemon refresh when the last successful "
+            "data pull was younger than this many seconds (default 15 min). "
+            "Manual/forced runs always bypass. 0 disables the gate."
         ),
     )
     # TTL (seconds) for the in-process fundamentals cache in FinnhubProvider
