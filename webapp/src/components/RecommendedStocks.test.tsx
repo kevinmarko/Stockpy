@@ -66,6 +66,55 @@ describe("RecommendedStocks (real mock API)", () => {
     );
   });
 
+  it("a symbol already in the execution queue shows an 'In queue' badge; others don't", async () => {
+    // The mock execution queue seeds an AAPL intent (see MOCK_EXECUTION_QUEUE) --
+    // the same recommendation, cross-referenced, so the operator can see the
+    // recommendation <-> queue link the backend already draws internally.
+    render(
+      <MemoryRouter>
+        <RecommendedStocks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByTestId("rec-queued-AAPL")).toBeInTheDocument();
+    await screen.findByTestId("rec-row-NVDA");
+    expect(screen.queryByTestId("rec-queued-NVDA")).not.toBeInTheDocument();
+  });
+
+  it("the 'In queue' badge links to Agentic Trading", async () => {
+    render(
+      <MemoryRouter initialEntries={["/compare"]}>
+        <Routes>
+          <Route path="/compare" element={<RecommendedStocks />} />
+          <Route path="/agentic" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByTestId("rec-queued-AAPL"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loc")).toHaveTextContent("/agentic")
+    );
+  });
+
+  it("the Detail link always navigates to the symbol page, even when onSelect diverts the row click", async () => {
+    // Data Explorer passes onSelect to load a pick inline instead of navigating
+    // -- the Detail link must still provide a guaranteed path to the actionable
+    // SymbolDetail page (Held-by-Pilots -> Follow, Decision journal) regardless.
+    const onSelect = vi.fn();
+    render(
+      <MemoryRouter initialEntries={["/data-explorer"]}>
+        <Routes>
+          <Route path="/data-explorer" element={<RecommendedStocks onSelect={onSelect} />} />
+          <Route path="/symbol/:ticker" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByTestId("rec-detail-AAPL"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loc")).toHaveTextContent("/symbol/AAPL")
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("renders the honest empty state (with reason) when there are no picks", async () => {
     vi.spyOn(api, "getRecommendations").mockResolvedValueOnce({
       recommendations: [],

@@ -24,6 +24,7 @@ import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { PwaStatusSection } from "../components/PwaStatusSection";
 import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
+import { UniverseManager } from "../components/UniverseManager";
 import { fmtAge, fmtDate, fmtUsd } from "../format";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
@@ -120,6 +121,13 @@ export function Settings() {
           onChanged={reloadStatus}
         />
       )}
+
+      <SectionCard
+        title="Tracked universe"
+        sub="Add or remove any stock. Changes take effect on the next pipeline run — raw data for any symbol is explorable immediately in Data Explorer."
+      >
+        <UniverseManager />
+      </SectionCard>
 
       <SignalModulesLink />
 
