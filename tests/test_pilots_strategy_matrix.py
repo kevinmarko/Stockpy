@@ -215,7 +215,10 @@ def _import_roots(source: str) -> set:
     return roots
 
 
-@pytest.mark.parametrize("module_name", ["strategy_matrix", "options", "strategy_health", "commands"])
+@pytest.mark.parametrize(
+    "module_name",
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store"],
+)
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
     pilots.strategy_health. The AST guard on pilots_api.py walks THAT file
@@ -242,4 +245,11 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     allowed = {"__future__", "json", "logging", "math", "pathlib", "typing", "settings"}
     if module_name == "strategy_health":
         allowed = allowed | {"pilots", "validation"}
+    if module_name == "discovery":
+        # pilots.discovery composes pilots.scan_config_store.ScanConfigStore
+        # (itself independently confirmed dependency-light below) for the
+        # scan_configs section of its payload.
+        allowed = allowed | {"pilots"}
+    if module_name == "scan_config_store":
+        allowed = allowed | {"datetime"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"

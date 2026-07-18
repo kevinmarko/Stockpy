@@ -9,6 +9,9 @@
 
 import { ApiError } from "./types";
 import type {
+  AgenticDiscovery,
+  AgenticStatus,
+  AgentLoopStatus,
   AlertsFeed,
   AutomationSchedule,
   AutomationStatus,
@@ -16,7 +19,11 @@ import type {
   BrinsonFachlerRow,
   BrinsonFachlerSectorDetail,
   CommandManifest,
+  DiscoveryCandidate,
   ExecutionQueue,
+  ScanConfig,
+  ScanConfigRequest,
+  ScanConfigResult,
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
@@ -2319,6 +2326,76 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
   ],
 };
 
+// ---- Local scan-config store (localStorage) — mirrors the follows-store
+// pattern above; backs the Agentic Trading tab's Discovery section. Seeded
+// with one enabled config so the demo shows a populated Discovery section by
+// default; a fresh browser with a cleared localStorage still degrades
+// honestly (readScanConfigs falls back to this same seed, not an empty
+// list — there's no server round-trip to distinguish "never configured" from
+// "cleared" in the mock, so the seed doubles as both). ----
+const SCAN_CONFIG_KEY = "stockpy.mock.scan_configs";
+
+const DEFAULT_SCAN_CONFIGS: ScanConfig[] = [
+  {
+    name: "high_momentum_breakout",
+    filters: { min_price: 5, min_volume: 1_000_000, rsi_min: 50, rsi_max: 70 },
+    enabled: true,
+    created_at: new Date(Date.now() - 86_400_000).toISOString(),
+    updated_at: new Date(Date.now() - 86_400_000).toISOString(),
+  },
+];
+
+function readScanConfigs(): ScanConfig[] {
+  try {
+    const raw = localStorage.getItem(SCAN_CONFIG_KEY);
+    return raw ? (JSON.parse(raw) as ScanConfig[]) : DEFAULT_SCAN_CONFIGS;
+  } catch {
+    return DEFAULT_SCAN_CONFIGS;
+  }
+}
+function writeScanConfigs(cs: ScanConfig[]) {
+  try {
+    localStorage.setItem(SCAN_CONFIG_KEY, JSON.stringify(cs));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+/**
+ * Honest fixture for GET /agentic/discovery. Exercises a scored candidate
+ * (action/conviction populated from an advisory cross-reference) alongside
+ * one the agentic-discovery skill couldn't cross-reference — action/conviction
+ * null, never a fabricated score (CONSTRAINT #4) — mirroring
+ * pilots/discovery.py's `_sanitize_candidate`.
+ */
+const MOCK_DISCOVERY_CANDIDATES: DiscoveryCandidate[] = [
+  {
+    symbol: "NVDA",
+    scan_name: "high_momentum_breakout",
+    scan_reason: "Price > 20SMA, volume > 2x avg, RSI(14) 58",
+    action: "BUY",
+    conviction: 0.71,
+    discovered_at: new Date(Date.now() - 3_600_000).toISOString(),
+  },
+  {
+    symbol: "PLTR",
+    scan_name: "high_momentum_breakout",
+    scan_reason: "Price > 20SMA, volume > 2x avg, RSI(14) 63",
+    action: null,
+    conviction: null,
+    discovered_at: new Date(Date.now() - 3_600_000).toISOString(),
+  },
+];
+
+/** Honest fixture for GET /agentic/status -> agent_loop. A populated,
+ *  mid-cycle advisory-loop agent state (engine/advisory_agent.py). */
+const MOCK_AGENT_LOOP: AgentLoopStatus = {
+  cycle_count: 42,
+  last_cycle_iso: new Date(Date.now() - 8 * 60_000).toISOString(),
+  backlog_count: 1,
+  reason: null,
+};
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
   async health() {
@@ -3140,6 +3217,80 @@ export const mockApi = {
       MC_Lower: round2(base * 0.94),
       MC_Upper: round2(base * 1.12),
     });
+  },
+
+  // ---- Agentic Trading tab ----
+  async getAgenticStatus(): Promise<AgenticStatus> {
+    const activeFollows = readFollows().filter((f) => f.status === "active");
+    return delay({
+      mode: MOCK_EXECUTION_QUEUE.mode,
+      advisory_only: false,
+      kill_switch: readKillSwitch(),
+      queue: {
+        mode: MOCK_EXECUTION_QUEUE.mode,
+        generated_at: MOCK_EXECUTION_QUEUE.generated_at,
+        n_intents: MOCK_EXECUTION_QUEUE.n_intents,
+        n_placeable: MOCK_EXECUTION_QUEUE.n_placeable,
+        stale: MOCK_EXECUTION_QUEUE.stale,
+        age_seconds: MOCK_EXECUTION_QUEUE.age_seconds,
+      },
+      follows: {
+        n_active: activeFollows.length,
+        total_amount: activeFollows.reduce((sum, f) => sum + f.amount, 0),
+      },
+      agent_loop: MOCK_AGENT_LOOP,
+    });
+  },
+
+  async getAgenticDiscovery(): Promise<AgenticDiscovery> {
+    const configs = readScanConfigs();
+    // Always writable in the mock (matches mockStrategyMatrix's convention
+    // above) so the demo can exercise the write flow with zero config.
+    const writable = true;
+    const note = "Scan configs are saved immediately and take effect on the agentic-discovery skill's next run.";
+    if (!configs.some((c) => c.enabled)) {
+      return delay({
+        generated_at: null,
+        candidates: [],
+        scan_configs: configs,
+        reason:
+          "No scan candidates yet, and no scan configs are enabled. Add a scan config, then run the agentic-discovery skill.",
+        writable,
+        note,
+      });
+    }
+    return delay({
+      generated_at: new Date(Date.now() - 3_600_000).toISOString(),
+      candidates: MOCK_DISCOVERY_CANDIDATES,
+      scan_configs: configs,
+      reason: null,
+      writable,
+      note,
+    });
+  },
+
+  async putScanConfig(req: ScanConfigRequest): Promise<ScanConfigResult> {
+    const now = new Date().toISOString();
+    const configs = readScanConfigs();
+    const idx = configs.findIndex((c) => c.name === req.name);
+    const row: ScanConfig = {
+      name: req.name,
+      filters: req.filters,
+      enabled: req.enabled,
+      created_at: idx >= 0 ? configs[idx].created_at : now,
+      updated_at: now,
+    };
+    const next = idx >= 0 ? configs.map((c, i) => (i === idx ? row : c)) : [...configs, row];
+    writeScanConfigs(next);
+    return delay(
+      {
+        scan_config: row,
+        applies: "next_discovery_run",
+        note:
+          "Saved to output/scan_configs.json. Takes effect the next time the agentic-discovery skill runs a scan — it is not applied automatically.",
+      },
+      150
+    );
   },
 };
 

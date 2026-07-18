@@ -1185,6 +1185,40 @@ class Settings(BaseSettings):
             "STRATEGY_WRITES_ENABLED."
         ),
     )
+    # Master switch for the Pilots API's Agentic Trading Discovery WRITE endpoint
+    # (api/pilots_api.py PUT /agentic/scan-config -> output/scan_configs.json, read
+    # by the .claude/skills/agentic-discovery/ Claude Code skill). A DEDICATED flag,
+    # not AUTOMATION_WRITES_ENABLED/STRATEGY_WRITES_ENABLED/LLM_WRITES_ENABLED: this
+    # changes WHAT THE AGENT DISCOVERS (which symbols get scanned and fed toward the
+    # gated order queue), its own risk class, and must not ride in on any of those.
+    # Mirrors BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED
+    # exactly: default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI
+    # bug must never flip it on; hand-set in .env only), and also requires
+    # FOLLOW_API_TOKEN. GET /agentic/status and GET /agentic/discovery are read-only
+    # and NOT gated by this flag (require_read_token alone, matching GET
+    # /brokerage/status, GET /strategy/matrix, and GET /llm/status).
+    AGENTIC_DISCOVERY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables PUT /agentic/scan-config on the Pilots API (Robinhood broker-scan "
+            "config -> output/scan_configs.json, consumed by the agentic-discovery "
+            "skill). Off by default; also requires FOLLOW_API_TOKEN. Never "
+            "GUI-writable — hand-set in .env only, so discovery-scan configuration "
+            "cannot ride in on any other writes-enabled flag."
+        ),
+    )
+    # Cap on candidates GET /agentic/discovery returns (and on what the
+    # agentic-discovery skill is expected to write per scan) — keeps the Discovery
+    # section of the Agentic Trading tab bounded regardless of how many symbols a
+    # broker scan matches. Read live here (never re-typed as a literal in the reader
+    # or the webapp) per this repo's "thresholds come from settings" convention.
+    AGENTIC_MAX_CANDIDATES: int = Field(
+        default=25,
+        description=(
+            "Max candidates GET /agentic/discovery returns from "
+            "output/scan_candidates.json."
+        ),
+    )
     # --- Pilots PWA: persisted analytics artifacts (options matrix + pairs radar) ---
     # The options premium matrix (technical_options_engine) and pairs radar
     # (pairs/ + signals.pairs_trading) are computed live in the Streamlit GUI but

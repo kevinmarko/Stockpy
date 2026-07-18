@@ -28,6 +28,7 @@ import { DataExplorer } from "./screens/DataExplorer";
 import { SignalBreakdown } from "./screens/SignalBreakdown";
 import { ForecastViewer } from "./screens/ForecastViewer";
 import { Commands } from "./screens/Commands";
+import { AgenticTrading } from "./screens/AgenticTrading";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { usePwaStatus } from "./hooks/usePwaStatus";
@@ -63,6 +64,7 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   { to: "/signals", label: "Signal Breakdown", ico: "🧬", match: (p) => p.startsWith("/signals") },
   { to: "/forecast", label: "Forecast Viewer", ico: "📈", match: (p) => p.startsWith("/forecast") },
   { to: "/commands", label: "Commands", ico: "⌨️", match: (p) => p.startsWith("/commands") },
+  { to: "/agentic", label: "Agent", ico: "🤖", match: (p) => p.startsWith("/agentic") },
   // Last item: Sidebar (desktop) renders all of NAV_ITEMS, so this shows up
   // there automatically. BottomNav (mobile) shows only the first
   // MOBILE_PRIMARY_COUNT directly; everything after folds into the "More"
@@ -305,6 +307,7 @@ export default function App() {
           <Route path="/signals" element={<SignalBreakdown />} />
           <Route path="/forecast" element={<ForecastViewer />} />
           <Route path="/commands" element={<Commands />} />
+          <Route path="/agentic" element={<AgenticTrading />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/strategy" element={<StrategyMatrix />} />
