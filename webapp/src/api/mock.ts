@@ -76,6 +76,7 @@ import type {
   SymbolDetail,
   UniverseResponse,
   UniverseSymbol,
+  Thresholds,
   SymbolHeldBy,
   SymbolOptions,
   TriggerRunResult,
@@ -2388,6 +2389,21 @@ export const mockApi = {
       .sort()
       .map((symbol) => ({ symbol, action: ACTIONS[symbol] ?? null }));
     return delay({ symbols });
+  },
+
+  async getThresholds(): Promise<Thresholds> {
+    // Mirrors validation/thresholds.py + settings.py's real current defaults —
+    // the mock has no live Python process to import from, so these are the
+    // fixture layer's honest snapshot of those values, not an invented number.
+    return delay({
+      pbo_max: 0.5,
+      dsr_min: 0.95,
+      net_sharpe_min: 0.5,
+      max_drawdown_max: 0.3,
+      stress_max_drawdown: 0.5,
+      kelly_fraction: 0.5,
+      kelly_cap: 0.2,
+    });
   },
 
   async getSymbol(ticker: string): Promise<SymbolDetail> {

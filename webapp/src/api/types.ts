@@ -187,6 +187,24 @@ export interface UniverseResponse {
 }
 
 /**
+ * GET /thresholds — deployability-gate and position-sizing thresholds,
+ * live-imported on the backend from `validation.thresholds` / `settings`
+ * (never re-typed as literals there). Powers the education panels'
+ * (`TabGuide`/`helpContent.ts`) live-value glossary entries so the PWA quotes
+ * the SAME numbers the validation harness actually enforces. Config constants,
+ * not persisted state — always available, no honest-empty case.
+ */
+export interface Thresholds {
+  pbo_max: number;
+  dsr_min: number;
+  net_sharpe_min: number;
+  max_drawdown_max: number;
+  stress_max_drawdown: number;
+  kelly_fraction: number;
+  kelly_cap: number;
+}
+
+/**
  * GET /symbols/{ticker} — grouped per-symbol data from the persisted state
  * snapshot, plus the reverse cross-link. Every factor/risk leaf the active
  * snapshot writer could not compute is `null` (NEVER a fabricated 0) so the UI

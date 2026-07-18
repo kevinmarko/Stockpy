@@ -1,6 +1,8 @@
 import { useEffect, useId, useState } from "react";
 import { TAB_HELP, glossaryDef } from "../help/helpContent";
 import { helpSeen, markHelpSeen } from "../help/helpState";
+import { loadThresholds } from "../help/thresholds";
+import type { Thresholds } from "../api/types";
 
 /**
  * "How this works" education panel for a screen. Dismissible and self-teaching:
@@ -17,12 +19,28 @@ export function TabGuide({ tabKey }: { tabKey: string }) {
   // the localStorage read happens once, not every render.
   const [expanded, setExpanded] = useState(() => (help ? !helpSeen(tabKey) : false));
   const [activeTerm, setActiveTerm] = useState<string | null>(null);
+  const [thresholds, setThresholds] = useState<Thresholds | null>(null);
   const bodyId = useId();
 
   // Showing the guide counts as "seen" → it collapses on the next visit.
   useEffect(() => {
     if (help) markHelpSeen(tabKey);
   }, [help, tabKey]);
+
+  // Lazy, session-cached fetch (see help/thresholds.ts) — every mounted
+  // TabGuide asks, but the module-level cache dedups to one request. `null`
+  // (not yet loaded, or the fetch failed) renders "—" per number rather than
+  // a stale guess.
+  useEffect(() => {
+    if (!help) return;
+    let alive = true;
+    void loadThresholds().then((t) => {
+      if (alive) setThresholds(t);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [help]);
 
   if (!help) return null;
 
@@ -68,7 +86,7 @@ export function TabGuide({ tabKey }: { tabKey: string }) {
               </div>
               {activeTerm && (
                 <p className="tab-guide-def" data-testid="tab-guide-def">
-                  <strong>{activeTerm}</strong> — {glossaryDef(activeTerm) ?? "—"}
+                  <strong>{activeTerm}</strong> — {glossaryDef(activeTerm, thresholds) ?? "—"}
                 </p>
               )}
             </>
