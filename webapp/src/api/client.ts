@@ -14,6 +14,8 @@ import type {
   AlertsFeed,
   AutomationSchedule,
   AutomationStatus,
+  BrinsonFachlerResult,
+  BrinsonFachlerRow,
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
@@ -165,6 +167,14 @@ const liveApi = {
     http<PortfolioTradeQuality>(
       `/portfolio/trade-quality?lookback_days=${lookbackDays}`
     ),
+  // Manual-input calculator (POST-with-a-body, but a stateless read-tier
+  // endpoint -- nothing is persisted). Distinct from getPortfolioAttribution
+  // above, which is auto-derived from real holdings.
+  getBrinsonFachlerAttribution: (rows: BrinsonFachlerRow[]) =>
+    http<BrinsonFachlerResult>("/portfolio/attribution/brinson-fachler", {
+      method: "POST",
+      body: JSON.stringify({ rows }),
+    }),
   getAlerts: (limit = 50) => http<AlertsFeed>(`/alerts?limit=${limit}`),
   getForecast: (ticker: string, horizon = 30) =>
     http<ForecastSkill>(

@@ -12,6 +12,9 @@ import type {
   AlertsFeed,
   AutomationSchedule,
   AutomationStatus,
+  BrinsonFachlerResult,
+  BrinsonFachlerRow,
+  BrinsonFachlerSectorDetail,
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
@@ -1675,6 +1678,101 @@ function mockPortfolioTradeQuality(): PortfolioTradeQuality {
   };
 }
 
+// ---- Manual-input Brinson-Fachler calculator (mock mirrors the real math,
+// not a canned fixture -- this is a genuine client-editable calculator, so
+// mock/live parity means the ARITHMETIC matches, not just the shape).
+// Reimplements evaluation_engine.py::_calculate_brinson_fachler_compat and
+// pilots/brinson.py::validate_brinson_fachler_rows in TS. Keep in sync with
+// those two if either changes.
+
+function round6(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
+}
+
+function mockValidateBrinsonFachlerRows(rows: BrinsonFachlerRow[]): string[] {
+  const warnings: string[] = [];
+  const validRows = rows.filter((r) => r.sector.trim() !== "");
+  if (validRows.length === 0) return ["No rows with a non-blank sector name."];
+
+  const pSum = validRows.reduce((a, r) => a + (r.portfolio_weight_pct || 0), 0);
+  const bSum = validRows.reduce((a, r) => a + (r.benchmark_weight_pct || 0), 0);
+
+  if (Math.abs(pSum - 100) > 1) {
+    warnings.push(`Portfolio weights sum to ${pSum.toFixed(2)}% (expected ~100%).`);
+  }
+  if (Math.abs(bSum - 100) > 1) {
+    warnings.push(`Benchmark weights sum to ${bSum.toFixed(2)}% (expected ~100%).`);
+  }
+  if (validRows.some((r) => (r.portfolio_weight_pct || 0) < 0)) {
+    warnings.push(
+      "Negative values found in Portfolio Weight — long-only attribution typically requires non-negative weights."
+    );
+  }
+  if (validRows.some((r) => (r.benchmark_weight_pct || 0) < 0)) {
+    warnings.push(
+      "Negative values found in Benchmark Weight — long-only attribution typically requires non-negative weights."
+    );
+  }
+  if (pSum === 0 && bSum === 0) {
+    warnings.push("All weights are zero — nothing to attribute.");
+  }
+  return warnings;
+}
+
+function mockComputeBrinsonFachler(rows: BrinsonFachlerRow[]): BrinsonFachlerResult {
+  const validRows = rows.filter((r) => r.sector.trim() !== "");
+  if (validRows.length === 0) {
+    throw new ApiError("No rows with a non-blank sector name.", 422);
+  }
+
+  let rP = 0;
+  let rB = 0;
+  const sectorDetails: Record<string, BrinsonFachlerSectorDetail> = {};
+  const perSector = validRows.map((row) => {
+    const wP = (row.portfolio_weight_pct || 0) / 100;
+    const retP = (row.portfolio_return_pct || 0) / 100;
+    const wB = (row.benchmark_weight_pct || 0) / 100;
+    const retB = (row.benchmark_return_pct || 0) / 100;
+    rP += wP * retP;
+    rB += wB * retB;
+    return { sector: row.sector, wP, retP, wB, retB };
+  });
+
+  let totalAlloc = 0;
+  let totalSelect = 0;
+  let totalInter = 0;
+  for (const s of perSector) {
+    const allocationEffect = (s.wP - s.wB) * (s.retB - rB);
+    const selectionEffect = s.wB * (s.retP - s.retB);
+    const interactionEffect = (s.wP - s.wB) * (s.retP - s.retB);
+    totalAlloc += allocationEffect;
+    totalSelect += selectionEffect;
+    totalInter += interactionEffect;
+    sectorDetails[s.sector] = {
+      weight_p: round6(s.wP),
+      weight_b: round6(s.wB),
+      return_p: round6(s.retP),
+      return_b: round6(s.retB),
+      allocation_effect: round6(allocationEffect),
+      selection_effect: round6(selectionEffect),
+      interaction_effect: round6(interactionEffect),
+      total_attribution: round6(allocationEffect + selectionEffect + interactionEffect),
+    };
+  }
+
+  return {
+    "Portfolio Return": rP,
+    "Benchmark Return": rB,
+    "Active Return": rP - rB,
+    "Allocation Effect": totalAlloc,
+    "Selection Effect": totalSelect,
+    "Interaction Effect": totalInter,
+    "Attribution Sum": totalAlloc + totalSelect + totalInter,
+    "Sector Details": sectorDetails,
+    validation_warnings: mockValidateBrinsonFachlerRows(rows),
+  };
+}
+
 // ---- Observability / Mission Control fixture ----
 // Portfolio-level risk stats: a healthy, plausible track record (not
 // deployable-badge territory — this is account risk, not a strategy gate).
@@ -2391,6 +2489,15 @@ export const mockApi = {
 
   async getPortfolioTradeQuality(_lookbackDays = 756): Promise<PortfolioTradeQuality> {
     return delay(mockPortfolioTradeQuality());
+  },
+
+  async getBrinsonFachlerAttribution(
+    rows: BrinsonFachlerRow[]
+  ): Promise<BrinsonFachlerResult> {
+    // Throws ApiError(..., 422) synchronously on structurally bad input --
+    // matches the live endpoint's honesty contract (a 422 shows the server's
+    // error message inline, not a generic failure).
+    return delay(mockComputeBrinsonFachler(rows));
   },
 
   async getAlerts(limit = 50): Promise<AlertsFeed> {

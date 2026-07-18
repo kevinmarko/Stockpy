@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type {
+  BrinsonFachlerResult,
+  BrinsonFachlerRow,
   CorrelationCluster,
   EdgeRatioByStrategyRow,
   FactorExposure,
@@ -10,7 +12,8 @@ import type {
   TradeQualityPoint,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { EmptyState, ErrorState, Loading, StaleDataNotice } from "../components/ui";
+import { useMutation } from "../hooks/useMutation";
+import { Button, EmptyState, ErrorState, Loading, StaleDataNotice, Tile } from "../components/ui";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -297,6 +300,272 @@ function TradeQualitySection({ data }: { data: PortfolioTradeQualityT }) {
   );
 }
 
+// ===========================================================================
+// Brinson-Fachler attribution — manual-input operator calculator
+// ===========================================================================
+// Distinct from the two auto-derived sections above (both driven by real
+// holdings + the pipeline snapshot): this section's sector-level portfolio-
+// vs-benchmark matrix is entirely OPERATOR-TYPED. Point-in-time sector-level
+// BENCHMARK returns aren't available anywhere in this platform, so there is
+// no honest way to auto-derive this -- mirrors the legacy Streamlit Command
+// Center's interactive `_render_brinson_fachler_section` calculator.
+
+const GICS_SECTORS = [
+  "Energy",
+  "Materials",
+  "Industrials",
+  "Consumer Discretionary",
+  "Consumer Staples",
+  "Health Care",
+  "Financials",
+  "Information Technology",
+  "Communication Services",
+  "Utilities",
+  "Real Estate",
+] as const;
+
+function emptyBrinsonRows(): BrinsonFachlerRow[] {
+  return GICS_SECTORS.map((sector) => ({
+    sector,
+    portfolio_weight_pct: 0,
+    portfolio_return_pct: 0,
+    benchmark_weight_pct: 0,
+    benchmark_return_pct: 0,
+  }));
+}
+
+/** Client-side mirror of `pilots/brinson.py::validate_brinson_fachler_rows` --
+ * purely informational (never blocks Compute), so the operator sees weight-sum
+ * / negative-weight issues instantly without a round-trip. The server
+ * re-validates independently and returns its own authoritative
+ * `validation_warnings` alongside the computed result. */
+function clientSideBrinsonWarnings(rows: BrinsonFachlerRow[]): string[] {
+  const warnings: string[] = [];
+  const pSum = rows.reduce((a, r) => a + (r.portfolio_weight_pct || 0), 0);
+  const bSum = rows.reduce((a, r) => a + (r.benchmark_weight_pct || 0), 0);
+  if (Math.abs(pSum - 100) > 1) {
+    warnings.push(`Portfolio weights sum to ${pSum.toFixed(2)}% (expected ~100%).`);
+  }
+  if (Math.abs(bSum - 100) > 1) {
+    warnings.push(`Benchmark weights sum to ${bSum.toFixed(2)}% (expected ~100%).`);
+  }
+  if (rows.some((r) => (r.portfolio_weight_pct || 0) < 0)) {
+    warnings.push("Negative values found in Portfolio Weight.");
+  }
+  if (rows.some((r) => (r.benchmark_weight_pct || 0) < 0)) {
+    warnings.push("Negative values found in Benchmark Weight.");
+  }
+  return warnings;
+}
+
+function EffectTile({ label, fraction }: { label: string; fraction: number }) {
+  return (
+    <Tile
+      label={label}
+      value={fmtPct(fraction, 2, { fromFraction: true, signed: true })}
+      tone={fraction >= 0 ? "pos" : "neg"}
+    />
+  );
+}
+
+function NumCell({
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      className="input"
+      aria-label={ariaLabel}
+      value={value}
+      step={0.1}
+      style={{ width: 84, padding: "6px 8px", fontSize: 13, textAlign: "right" }}
+      onChange={(e) => {
+        const n = Number(e.target.value);
+        onChange(Number.isFinite(n) ? n : 0);
+      }}
+    />
+  );
+}
+
+const _BF_COLUMNS: {
+  field: keyof Omit<BrinsonFachlerRow, "sector">;
+  header: string;
+  labelSuffix: string;
+}[] = [
+  { field: "portfolio_weight_pct", header: "Port. weight %", labelSuffix: "portfolio weight percent" },
+  { field: "portfolio_return_pct", header: "Port. return %", labelSuffix: "portfolio return percent" },
+  { field: "benchmark_weight_pct", header: "Bench. weight %", labelSuffix: "benchmark weight percent" },
+  { field: "benchmark_return_pct", header: "Bench. return %", labelSuffix: "benchmark return percent" },
+];
+
+function BrinsonFachlerSection() {
+  const [rows, setRows] = useState<BrinsonFachlerRow[]>(emptyBrinsonRows);
+  const mutation = useMutation((r: BrinsonFachlerRow[]) => api.getBrinsonFachlerAttribution(r));
+  const clientWarnings = useMemo(() => clientSideBrinsonWarnings(rows), [rows]);
+  const result: BrinsonFachlerResult | null = mutation.result ?? null;
+
+  function updateCell(index: number, field: keyof Omit<BrinsonFachlerRow, "sector">, value: number) {
+    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
+  }
+
+  return (
+    <>
+      <h2 style={{ fontSize: 15, marginTop: 24, marginBottom: 4 }}>Brinson-Fachler attribution</h2>
+      <p className="screen-sub" style={{ marginTop: 0 }}>
+        Type a sector-level portfolio-vs-benchmark matrix to see how much of the active return
+        came from allocation, selection, or their interaction. Manual input -- point-in-time
+        sector benchmark returns aren't available to derive this automatically.
+      </p>
+
+      <section className="card card-pad" style={{ marginBottom: 16, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
+              <th style={{ padding: "6px 8px", textAlign: "left" }}>Sector</th>
+              {_BF_COLUMNS.map((c) => (
+                <th key={c.field} style={{ padding: "6px 4px", textAlign: "right", fontWeight: 600 }}>
+                  {c.header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={row.sector} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{row.sector}</td>
+                {_BF_COLUMNS.map((c) => (
+                  <td key={c.field} style={{ padding: "4px" }}>
+                    <NumCell
+                      ariaLabel={`${row.sector} ${c.labelSuffix}`}
+                      value={row[c.field]}
+                      onChange={(v) => updateCell(i, c.field, v)}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {clientWarnings.length > 0 && (
+          <div className="notice notice-warn" style={{ marginTop: 12 }}>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {clientWarnings.map((w) => (
+                <li key={w}>{w}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div style={{ marginTop: 14 }}>
+          <Button variant="primary" pending={mutation.pending} onClick={() => mutation.run(rows)}>
+            Compute
+          </Button>
+        </div>
+
+        {mutation.error && (
+          <div className="notice notice-warn" style={{ marginTop: 12 }} data-testid="brinson-error">
+            <span>{mutation.error}</span>
+          </div>
+        )}
+      </section>
+
+      {result && (
+        <>
+          <div className="tiles" style={{ marginBottom: 16 }}>
+            <EffectTile label="Portfolio return" fraction={result["Portfolio Return"]} />
+            <EffectTile label="Benchmark return" fraction={result["Benchmark Return"]} />
+            <EffectTile label="Active return" fraction={result["Active Return"]} />
+            <EffectTile label="Allocation effect" fraction={result["Allocation Effect"]} />
+            <EffectTile label="Selection effect" fraction={result["Selection Effect"]} />
+            <EffectTile label="Interaction effect" fraction={result["Interaction Effect"]} />
+          </div>
+
+          {result.validation_warnings.length > 0 && (
+            <div className="notice notice-info" style={{ marginBottom: 12 }}>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {result.validation_warnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <section className="card card-pad" style={{ marginBottom: 16, overflowX: "auto" }}>
+            <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>Per-sector effects</h3>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
+                  <th style={{ padding: "6px 8px", textAlign: "left" }}>Sector</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Allocation</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Selection</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Interaction</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(result["Sector Details"]).map(([sector, d]) => (
+                  <tr key={sector} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                    <td style={{ padding: "6px 8px" }}>{sector}</td>
+                    <td
+                      className="num"
+                      style={{
+                        padding: "6px 8px",
+                        textAlign: "right",
+                        color: d.allocation_effect >= 0 ? theme.growth : theme.decline,
+                      }}
+                    >
+                      {fmtPct(d.allocation_effect, 2, { fromFraction: true, signed: true })}
+                    </td>
+                    <td
+                      className="num"
+                      style={{
+                        padding: "6px 8px",
+                        textAlign: "right",
+                        color: d.selection_effect >= 0 ? theme.growth : theme.decline,
+                      }}
+                    >
+                      {fmtPct(d.selection_effect, 2, { fromFraction: true, signed: true })}
+                    </td>
+                    <td
+                      className="num"
+                      style={{
+                        padding: "6px 8px",
+                        textAlign: "right",
+                        color: d.interaction_effect >= 0 ? theme.growth : theme.decline,
+                      }}
+                    >
+                      {fmtPct(d.interaction_effect, 2, { fromFraction: true, signed: true })}
+                    </td>
+                    <td
+                      className="num"
+                      style={{
+                        padding: "6px 8px",
+                        textAlign: "right",
+                        fontWeight: 700,
+                        color: d.total_attribution >= 0 ? theme.growth : theme.decline,
+                      }}
+                    >
+                      {fmtPct(d.total_attribution, 2, { fromFraction: true, signed: true })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </>
+      )}
+    </>
+  );
+}
+
 function AttributionBody({ data }: { data: PortfolioAttributionT }) {
   const fe = data.factor_exposure;
   const cc = data.correlation_clusters;
@@ -415,6 +684,10 @@ export function Attribution() {
           hint={tq.error ?? "Run the pipeline and record a closed trade to see this section."}
         />
       )}
+
+      {/* Manual-input calculator -- independent of the holdings-derived
+          sections above; renders regardless of their load/error state. */}
+      <BrinsonFachlerSection />
     </div>
   );
 }

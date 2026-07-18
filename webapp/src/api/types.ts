@@ -468,6 +468,57 @@ export interface PortfolioTradeQuality {
   edge_ratio_by_strategy: EdgeRatioByStrategy;
 }
 
+/**
+ * POST /portfolio/attribution/brinson-fachler — one row of the operator-typed
+ * sector matrix. All four numeric fields are PERCENT (e.g. `28.0` for 28%),
+ * matching what an operator naturally types into a form -- the backend
+ * (`pilots/brinson.py::build_brinson_fachler_frames`) does the `/100`
+ * conversion to the fractions the engine's math needs. This is a MANUAL,
+ * operator-entered matrix, not auto-derived from real holdings -- there is no
+ * point-in-time sector-level benchmark return data anywhere in this platform.
+ */
+export interface BrinsonFachlerRow {
+  sector: string;
+  portfolio_weight_pct: number;
+  portfolio_return_pct: number;
+  benchmark_weight_pct: number;
+  benchmark_return_pct: number;
+}
+
+/** One sector's Allocation/Selection/Interaction decomposition. Weights and
+ * returns here are FRACTIONS (engine-native units), not percent -- distinct
+ * from the request row's percent fields above. */
+export interface BrinsonFachlerSectorDetail {
+  weight_p: number;
+  weight_b: number;
+  return_p: number;
+  return_b: number;
+  allocation_effect: number;
+  selection_effect: number;
+  interaction_effect: number;
+  total_attribution: number;
+}
+
+/**
+ * Result of POST /portfolio/attribution/brinson-fachler. Field names mirror
+ * `evaluation_engine.py::_calculate_brinson_fachler_compat`'s dict verbatim
+ * (including the spaced keys) so the wire shape needs no renaming layer.
+ * `validation_warnings` is server-computed but purely informational (weights
+ * not summing to ~100%, negative weights, all-zero matrix) -- it never blocks
+ * computation, only a structurally empty/blank-sector matrix does (422).
+ */
+export interface BrinsonFachlerResult {
+  "Portfolio Return": number;
+  "Benchmark Return": number;
+  "Active Return": number;
+  "Allocation Effect": number;
+  "Selection Effect": number;
+  "Interaction Effect": number;
+  "Attribution Sum": number;
+  "Sector Details": Record<string, BrinsonFachlerSectorDetail>;
+  validation_warnings: string[];
+}
+
 /** GET /alerts — tail of the structured alert JSONL. */
 export interface AlertEntry {
   timestamp: string | null;
