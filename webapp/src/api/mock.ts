@@ -2685,7 +2685,10 @@ export const mockApi = {
   async setExecutionMode(req: ExecutionModeUpdateRequest): Promise<ExecutionModeUpdateResult> {
     return delay(
       {
-        written: ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"],
+        written:
+          req.mode === "advisory"
+            ? ["ADVISORY_ONLY"]
+            : ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"],
         advisory_only: req.advisory_only,
         mode: req.mode,
         applies: "next_daemon_restart",

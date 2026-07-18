@@ -61,7 +61,8 @@ token for the writes with real persistence/rollback cost, each a dedicated
 ``settings`` flag deliberately kept out of ``gui/env_io.py``'s ALLOWED_KEYS
 (hand-set in ``.env`` only): ``require_brokerage_connect_enabled``
 (``/brokerage/connect``), ``require_automation_writes_enabled``
-(``PUT /automation/schedule/interval``, ``POST /automation/resume``),
+(``PUT /automation/schedule/interval``, ``POST /automation/resume``,
+``PUT /automation/execution-mode``),
 ``require_strategy_writes_enabled`` (``PUT /strategy/modules`` — signal weights +
 disabled-module set to ``.env``; its own flag so signal tuning cannot ride in on
 the automation flag), and ``require_llm_writes_enabled`` (``PUT /llm/setting`` —
@@ -85,7 +86,7 @@ import logging
 import math
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -1959,6 +1960,9 @@ def get_automation_schedule() -> Dict[str, Any]:
 #                                (re-enabling LIVE order submission remotely)
 #   PUT  /automation/schedule/interval -> + require_automation_writes_enabled
 #                                (persists to .env)
+#   PUT  /automation/execution-mode    -> + require_automation_writes_enabled
+#                                (same risk tier as resume -- can flip
+#                                ADVISORY_ONLY/ALPACA_PAPER toward live)
 # ---------------------------------------------------------------------------
 
 
@@ -2190,25 +2194,32 @@ def set_strategy_modules(body: StrategyModulesUpdateRequest) -> Dict[str, Any]:
 
 @app.put(
     "/automation/execution-mode",
-    dependencies=[Depends(require_command_token)],
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_automation_writes_enabled),
+    ],
 )
 def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
-    """1-Click Go Live / Execution Mode Toggle. Sets ADVISORY_ONLY and the active execution mode."""
-    require_automation_writes_enabled()
-    
+    """1-Click Go Live / Execution Mode Toggle. Sets ``ADVISORY_ONLY`` and,
+    unless ``mode == "advisory"`` (which carries no ``DRY_RUN``/``ALPACA_PAPER``
+    pairing of its own), the ``DRY_RUN``/``ALPACA_PAPER`` pair via
+    ``gui.strategy_registry.set_active_mode`` (see its docstring for the
+    mode -> env-var mapping). ``written`` always reflects exactly which keys
+    this call touched -- never a fixed list -- so the response can't claim a
+    write that didn't happen (CONSTRAINT #4)."""
     from gui import strategy_registry
-    
-    # 1. First, set ADVISORY_ONLY
+
     env_io.write_setting("ADVISORY_ONLY", body.advisory_only)
-    
-    # 2. Then set the execution mode
+    written = ["ADVISORY_ONLY"]
+
     if body.mode != "advisory":
         strategy_registry.set_active_mode(body.mode)
-        
+        written += ["DRY_RUN", "ALPACA_PAPER"]
+
     return {
-        "written": ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"],
+        "written": written,
         "advisory_only": body.advisory_only,
         "mode": body.mode,
         "applies": "next_daemon_restart",
-        "note": "Execution mode updated."
+        "note": "Execution mode updated.",
     }
