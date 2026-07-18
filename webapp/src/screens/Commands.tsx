@@ -4,13 +4,13 @@ import { useApi } from "../hooks/useApi";
 import type { CommandManifest } from "../api/types";
 import { parseCommandLine, type Suggestion } from "../commandParse";
 import {
-  Button,
   EmptyState,
   ErrorState,
   Loading,
   StaleDataNotice,
 } from "../components/ui";
 import { ExecutionQueueSection } from "../components/ExecutionQueueSection";
+import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { theme } from "../theme";
 
 /**
@@ -61,7 +61,6 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
   const [input, setInput] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [open, setOpen] = useState(true);
-  const [copied, setCopied] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const parsed = useMemo(() => parseCommandLine(input, commands), [input, commands]);
@@ -76,7 +75,6 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
     setInput([...prefix, s.value].join(" ") + " ");
     setActiveIndex(0);
     setOpen(true);
-    setCopied(false);
     inputRef.current?.focus();
   };
 
@@ -97,12 +95,6 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
     } else if (e.key === "Escape") {
       setOpen(false);
     }
-  };
-
-  const copy = () => {
-    if (!parsed.composed) return;
-    void navigator.clipboard?.writeText(parsed.composed);
-    setCopied(true);
   };
 
   // The dropdown is for refining a command being typed; when the field is empty
@@ -132,7 +124,6 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
             setInput(e.target.value);
             setActiveIndex(0);
             setOpen(true);
-            setCopied(false);
           }}
           onKeyDown={onKeyDown}
           onFocus={() => setOpen(true)}
@@ -218,30 +209,11 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
       {/* Composed command + copy */}
       {parsed.composed && (
         <div style={{ marginTop: 16 }}>
-          <div className="tile-label" style={{ marginBottom: 6 }}>
-            Command to run{errors.length ? " (incomplete — see above)" : ""}
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-            <code
-              data-testid="command-composed"
-              style={{
-                flex: 1,
-                padding: "10px 12px",
-                background: theme.surface,
-                border: `1px solid ${theme.border}`,
-                borderRadius: 8,
-                fontFamily: "var(--font-mono, ui-monospace, monospace)",
-                color: theme.textPrimary,
-                overflowX: "auto",
-                whiteSpace: "pre",
-              }}
-            >
-              {parsed.composed}
-            </code>
-            <Button onClick={copy} data-testid="command-copy">
-              {copied ? "Copied" : "Copy"}
-            </Button>
-          </div>
+          <CopyCommandBlock
+            command={parsed.composed}
+            label={`Command to run${errors.length ? " (incomplete — see above)" : ""}`}
+            resetKey={input}
+          />
         </div>
       )}
 
