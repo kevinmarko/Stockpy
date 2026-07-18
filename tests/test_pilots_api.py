@@ -274,6 +274,8 @@ def test_thresholds_shape_and_live_values():
     assert set(body) == {
         "pbo_max", "dsr_min", "net_sharpe_min", "max_drawdown_max",
         "stress_max_drawdown", "kelly_fraction", "kelly_cap",
+        "robinhood_max_notional_per_order", "follow_min_amount",
+        "agentic_max_candidates",
     }
     assert body["pbo_max"] == PBO_MAX
     assert body["dsr_min"] == DSR_MIN
@@ -282,6 +284,9 @@ def test_thresholds_shape_and_live_values():
     assert body["stress_max_drawdown"] == STRESS_MAX_DRAWDOWN
     assert body["kelly_fraction"] == settings.KELLY_FRACTION
     assert body["kelly_cap"] == settings.KELLY_CAP
+    assert body["robinhood_max_notional_per_order"] == settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
+    assert body["follow_min_amount"] == settings.FOLLOW_MIN_AMOUNT
+    assert body["agentic_max_candidates"] == float(settings.AGENTIC_MAX_CANDIDATES)
 
 
 def test_thresholds_never_depends_on_snapshot(tmp_path):

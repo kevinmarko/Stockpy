@@ -1223,13 +1223,20 @@ def get_commands() -> Dict[str, Any]:
 
 @app.get("/thresholds", dependencies=[Depends(require_read_token)])
 def get_thresholds() -> Dict[str, float]:
-    """Live deployability-gate and position-sizing thresholds, imported
-    directly from ``validation.thresholds`` and ``settings`` — never re-typed
-    as literals — so the PWA's "How this works" education panels can quote the
-    SAME numbers the strategy validation harness actually enforces, mirroring
-    the live-import discipline ``gui/help_content.py`` already applies for the
+    """Live deployability-gate, position-sizing, and Agentic Trading
+    thresholds, imported directly from ``validation.thresholds`` and
+    ``settings`` — never re-typed as literals — so the PWA's "How this works"
+    education panels can quote the SAME numbers the strategy validation
+    harness and the Agentic Trading tab actually enforce, mirroring the
+    live-import discipline ``gui/help_content.py`` already applies for the
     Streamlit Command Center (see that module's docstring: "Never hard-code
     numeric thresholds here").
+
+    ``robinhood_max_notional_per_order``, ``follow_min_amount``, and
+    ``agentic_max_candidates`` back the Agentic Trading tab's glossary
+    entries the same way the other five keys back Strategy Health / Pilots —
+    see ``settings.AGENTIC_MAX_CANDIDATES``'s docstring ("never re-typed as a
+    literal in the reader or the webapp").
 
     These are config constants, not persisted pipeline state — always
     available, no cold-start empty case, never 404s/500s."""
@@ -1241,6 +1248,9 @@ def get_thresholds() -> Dict[str, float]:
         "stress_max_drawdown": STRESS_MAX_DRAWDOWN,
         "kelly_fraction": settings.KELLY_FRACTION,
         "kelly_cap": settings.KELLY_CAP,
+        "robinhood_max_notional_per_order": settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER,
+        "follow_min_amount": settings.FOLLOW_MIN_AMOUNT,
+        "agentic_max_candidates": float(settings.AGENTIC_MAX_CANDIDATES),
     }
 
 
