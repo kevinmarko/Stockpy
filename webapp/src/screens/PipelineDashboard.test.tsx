@@ -11,7 +11,7 @@
  *  - a trigger-button click calls the POST endpoint (mutation) and surfaces
  *    whatever the server returned
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -135,5 +135,59 @@ describe("PipelineDashboard (real mock API)", () => {
 
     await user.click(await screen.findByTestId("trigger-data"));
     expect(await screen.findByText(/pipeline is paused/)).toBeInTheDocument();
+  });
+});
+
+describe("PipelineDashboard — durable run history (GET /runs/history)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders the durable history table, distinct from the live one above it", async () => {
+    vi.spyOn(api, "getRunHistory").mockResolvedValue([
+      {
+        run_id: "orch-durable-1",
+        state: "succeeded",
+        mode: "full",
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+        duration_seconds: 12.3,
+        error: null,
+        reason: "interval",
+        progress: null,
+      },
+    ]);
+    renderScreen();
+    expect(await screen.findByText("Full run history")).toBeInTheDocument();
+    expect(await screen.findByText("orch-durable-1")).toBeInTheDocument();
+  });
+
+  it("an empty durable history renders its own honest empty state", async () => {
+    vi.spyOn(api, "getRunHistory").mockResolvedValue([]);
+    renderScreen();
+    expect(
+      await screen.findByText("No persisted run history yet")
+    ).toBeInTheDocument();
+  });
+
+  it("a durable-history read failure renders ErrorState, not a fabricated table", async () => {
+    vi.spyOn(api, "getRunHistory").mockRejectedValue(
+      new ApiError("db unreachable", 500)
+    );
+    renderScreen();
+    // Non-404 -> the honest "Couldn't load" branch, never the cold-start copy.
+    expect(await screen.findByText("Couldn't load")).toBeInTheDocument();
+  });
+
+  it("clicking Refresh re-fetches the durable history", async () => {
+    const spy = vi.spyOn(api, "getRunHistory").mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderScreen();
+
+    const btn = await screen.findByTestId("refresh-run-history");
+    const callsBeforeClick = spy.mock.calls.length;
+    await user.click(btn);
+
+    await waitFor(() =>
+      expect(spy.mock.calls.length).toBeGreaterThan(callsBeforeClick)
+    );
   });
 });

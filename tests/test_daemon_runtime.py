@@ -23,6 +23,8 @@ from desktop.daemon_runtime import (
     RunState,
     TriggerOutcome,
 )
+from desktop.run_history_store import RunHistoryStore
+from tests._db_isolation import redirect_class_to_memory_db
 
 
 def _poll_until(predicate, *, timeout: float = 3.0, interval: float = 0.02) -> bool:
@@ -56,6 +58,17 @@ def _patch_engine_context_build(monkeypatch):
         main_orchestrator.EngineContext, "build",
         classmethod(lambda cls, *, data_engine=None: cls()),
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_run_history_db():
+    """_run_one_cycle persists every completed run to RunHistoryStore (see
+    desktop/run_history_store.py), which defaults to the real, git-untracked
+    quant_platform.db when constructed with no db_url. Every test in this
+    file drives a real _run_one_cycle to completion, so without this
+    redirect they'd all write test run records into that on-disk file."""
+    with redirect_class_to_memory_db(RunHistoryStore):
+        yield
 
 
 def _fast_ok_main_body(monkeypatch):
@@ -374,6 +387,55 @@ class TestBoundedRunHistory:
                 record = d.get_run(kept_id)
                 assert record is not None
                 assert record.state == RunState.SUCCEEDED
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestRunHistoryPersistence:
+    """_run_one_cycle persists every completed run to the durable
+    pipeline_runs DB table (desktop/run_history_store.py) on top of the
+    in-memory ring -- see the docstring on that call site."""
+
+    def test_completed_run_is_persisted(self, monkeypatch):
+        _fast_ok_main_body(monkeypatch)
+        recorded = []
+        monkeypatch.setattr(
+            RunHistoryStore, "record_run",
+            lambda self, record: recorded.append(record),
+        )
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            result = d.trigger_run(reason="manual")
+            completed = _poll_until(lambda: not d.is_running, timeout=3.0)
+            assert completed, "run never completed within timeout"
+
+            assert len(recorded) == 1
+            assert recorded[0].run_id == result.run_id
+            assert recorded[0].state == RunState.SUCCEEDED
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_persistence_failure_does_not_crash_daemon(self, monkeypatch, caplog):
+        """A DB hiccup in RunHistoryStore must never affect the run's own
+        SUCCEEDED/FAILED verdict -- only the durable table lags."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(
+            RunHistoryStore, "record_run",
+            lambda self, record: (_ for _ in ()).throw(RuntimeError("db is down")),
+        )
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            with caplog.at_level("WARNING"):
+                result = d.trigger_run(reason="manual")
+                completed = _poll_until(lambda: not d.is_running, timeout=3.0)
+                assert completed, "run never completed within timeout"
+
+            record = d.get_run(result.run_id)
+            assert record is not None
+            assert record.state == RunState.SUCCEEDED
+            assert "failed to persist run history" in caplog.text
         finally:
             d.shutdown(timeout=2.0)
 

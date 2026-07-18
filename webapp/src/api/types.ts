@@ -808,6 +808,15 @@ export interface ControlStatus {
   dry_run: boolean;
 }
 
+/**
+ * GET /runs/history (api/control_api.py) — durable run history read from
+ * the daemon's `pipeline_runs` DB table (desktop/run_history_store.py),
+ * independent of `ControlStatus.run_history`'s in-memory 10-run ring.
+ * Survives a daemon restart; only terminal (succeeded/failed) runs are
+ * ever written here — a run still `running` never appears, by design.
+ */
+export type RunHistoryEntry = RunRecord;
+
 /** GET /automation/schedule — interval drift display + read-only cron. */
 export interface CronEntry {
   schedule: string; // "0 21 * * 1-5"

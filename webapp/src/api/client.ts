@@ -285,6 +285,14 @@ const liveApi = {
       method: "POST",
     }),
   /**
+   * GET /runs/history — durable run history read from the daemon's
+   * pipeline_runs DB table (desktop/run_history_store.py), independent of
+   * GET /status's in-memory run_history ring. Survives a daemon restart.
+   * Routes to CONTROL_BASE_URL via baseFor's `/run` prefix match.
+   */
+  getRunHistory: (limit = 50) =>
+    http<RunRecord[]>(`/runs/history?limit=${limit}`),
+  /**
    * POST /automation/run. Mirrors gui/daemon_client.py's own non-raising
    * TriggerResponse contract: a documented RUNTIME outcome (queued, already
    * running, kill-switch-paused, daemon unreachable) resolves as data here,

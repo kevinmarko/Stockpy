@@ -739,6 +739,19 @@ class TestPipelineModeThreading(unittest.TestCase):
     so no real data fetch / engines run.
     """
 
+    def setUp(self):
+        # Every test here drives a real _run_one_cycle to completion, which
+        # persists to RunHistoryStore (desktop/run_history_store.py) -- that
+        # defaults to the real, git-untracked quant_platform.db when
+        # constructed with no db_url. Redirect it onto :memory: for the
+        # duration of each test.
+        from desktop.run_history_store import RunHistoryStore
+        from tests._db_isolation import redirect_class_to_memory_db
+
+        cm = redirect_class_to_memory_db(RunHistoryStore)
+        cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+
     def _run_and_wait(self, daemon, *, mode_kwarg, recorder_holder):
         import time
         from desktop.daemon_runtime import RunState

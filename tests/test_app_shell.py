@@ -62,24 +62,52 @@ def _install_fake_webview_module() -> types.ModuleType:
     return webview
 
 
-def _purge_app_shell_related_modules() -> None:
-    """Remove app_shell + fake desktop/webview modules from sys.modules so
-    each test gets a clean import (patched mocks don't bleed across tests).
+def _purge_app_shell_related_modules() -> dict:
+    """Remove app_shell + desktop.*/webview modules from sys.modules so each
+    test gets a clean import (patched mocks don't bleed across tests), and
+    return a snapshot of whatever was actually there beforehand.
+
+    The "desktop" prefix match doesn't distinguish this file's fakes (
+    desktop.net_util/ui_server/engine_supervisor) from the REAL desktop/
+    package, which by now also holds daemon_runtime.py, run_history_store.py,
+    orchestrator_daemon.py, etc. A plain delete-with-no-restore would evict
+    those real modules from sys.modules for the rest of the pytest session:
+    fine for code that only ever imports desktop.* once at module top level
+    (existing objects keep working even if unreachable via sys.modules), but
+    NOT fine for anything doing a runtime `import desktop.xxx` inside a
+    function body (e.g. OrchestratorDaemon._run_one_cycle's lazy
+    RunHistoryStore import) -- a later test importing that fresh would get a
+    BRAND NEW module/class object, silently distinct from (and un-
+    monkeypatchable via) whatever a test imported at collection time. The
+    caller is expected to restore the returned snapshot afterward via
+    _restore_app_shell_related_modules.
     """
+    snapshot: dict = {}
+    for name in list(sys.modules):
+        if name == "app_shell" or name.startswith("desktop") or name == "webview":
+            snapshot[name] = sys.modules.pop(name)
+    return snapshot
+
+
+def _restore_app_shell_related_modules(snapshot: dict) -> None:
+    """Undo _purge_app_shell_related_modules: drop this file's fakes (and
+    app_shell itself, so the next test re-imports it fresh) and put back
+    whatever real modules were there before."""
     for name in list(sys.modules):
         if name == "app_shell" or name.startswith("desktop") or name == "webview":
             del sys.modules[name]
+    sys.modules.update(snapshot)
 
 
 class BaseAppShellTest(unittest.TestCase):
     """Common setup: install fake desktop.* + webview modules, import
-    app_shell fresh, and clean up sys.modules afterward so tests don't
-    interfere with each other or with any real desktop/ package that might
-    later exist on disk.
+    app_shell fresh, and restore the real sys.modules state afterward so
+    tests don't interfere with each other or with any other test that
+    imports the real desktop/ package later in the session.
     """
 
     def setUp(self):
-        _purge_app_shell_related_modules()
+        self._real_modules_snapshot = _purge_app_shell_related_modules()
         _install_fake_desktop_modules()
         self.fake_webview = _install_fake_webview_module()
 
@@ -96,7 +124,7 @@ class BaseAppShellTest(unittest.TestCase):
 
     def tearDown(self):
         self._load_dotenv_patcher.stop()
-        _purge_app_shell_related_modules()
+        _restore_app_shell_related_modules(self._real_modules_snapshot)
 
 
 class TestHappyPath(BaseAppShellTest):

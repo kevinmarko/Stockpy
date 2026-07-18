@@ -10,7 +10,7 @@
  * run's real `error` is shown, never softened. Polling engages ONLY while a run
  * is actually in flight (battery), mirroring the Settings screen.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { ControlStatus, RunRecord } from "../api/types";
@@ -205,6 +205,62 @@ function Controls({
   );
 }
 
+function RunsTable({ runs }: { runs: RunRecord[] }) {
+  return (
+    <table
+      style={{
+        width: "100%",
+        borderCollapse: "collapse",
+        textAlign: "left",
+        fontSize: 13,
+      }}
+    >
+      <thead>
+        <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
+          <th style={{ padding: 8 }}>Run</th>
+          <th style={{ padding: 8 }}>Mode</th>
+          <th style={{ padding: 8 }}>State</th>
+          <th style={{ padding: 8 }}>Started</th>
+          <th style={{ padding: 8 }}>Duration</th>
+        </tr>
+      </thead>
+      <tbody>
+        {runs.map((r) => (
+          <tr key={r.run_id} style={{ borderBottom: `1px solid ${theme.surface3}` }}>
+            <td style={{ padding: 8, fontFamily: "monospace", fontSize: 12 }}>
+              {r.run_id}
+            </td>
+            <td style={{ padding: 8 }}>
+              {r.mode ? (
+                <span className="chip">{r.mode.toUpperCase()}</span>
+              ) : (
+                <span style={{ color: theme.textMuted }}>—</span>
+              )}
+            </td>
+            <td style={{ padding: 8 }}>
+              <StateBadge state={r.state} />
+              {r.error && (
+                <div
+                  style={{ color: theme.textMuted, fontSize: 11, marginTop: 4 }}
+                  data-testid="run-error"
+                >
+                  {r.error}
+                </div>
+              )}
+            </td>
+            <td style={{ padding: 8, color: theme.textSecondary }}>
+              {timeAgo(r.started_at)}
+            </td>
+            <td className="num" style={{ padding: 8 }}>
+              {r.duration_seconds == null ? "—" : `${r.duration_seconds.toFixed(1)}s`}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function RunHistory({ runs }: { runs: RunRecord[] }) {
   return (
     <section className="card card-pad" style={{ marginTop: 16, overflowX: "auto" }}>
@@ -215,57 +271,81 @@ function RunHistory({ runs }: { runs: RunRecord[] }) {
           hint="Trigger a run above, or wait for the daemon's next scheduled cycle."
         />
       ) : (
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            textAlign: "left",
-            fontSize: 13,
-          }}
+        <RunsTable runs={runs} />
+      )}
+    </section>
+  );
+}
+
+/**
+ * GET /runs/history — the daemon's durable pipeline_runs DB table (desktop/
+ * run_history_store.py). Distinct from RunHistory above (which reflects
+ * ControlStatus.run_history, an in-memory ring capped at 10 and lost on a
+ * daemon restart): this table survives a restart, at the cost of only ever
+ * showing terminal (succeeded/failed) runs — a run still in flight is never
+ * written here, so it won't appear until it finishes. No auto-polling (this
+ * isn't a "live" view); a manual refresh mirrors the honest, battery-minded
+ * posture the rest of this screen already takes toward polling.
+ */
+function DurableRunHistory({
+  runs,
+  loading,
+  error,
+  httpStatus,
+  onReload,
+}: {
+  runs: RunRecord[] | null;
+  loading: boolean;
+  error: string | null;
+  httpStatus: number | null;
+  onReload: () => void;
+}) {
+  return (
+    <section className="card card-pad" style={{ marginTop: 16, overflowX: "auto" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <div>
+          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
+            Full run history
+          </h2>
+          <p style={{ color: theme.textSecondary, fontSize: 13, margin: 0 }}>
+            Persisted to the database — survives a daemon restart.
+          </p>
+        </div>
+        <Button
+          onClick={onReload}
+          disabled={loading}
+          data-testid="refresh-run-history"
         >
-          <thead>
-            <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
-              <th style={{ padding: 8 }}>Run</th>
-              <th style={{ padding: 8 }}>Mode</th>
-              <th style={{ padding: 8 }}>State</th>
-              <th style={{ padding: 8 }}>Started</th>
-              <th style={{ padding: 8 }}>Duration</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((r) => (
-              <tr key={r.run_id} style={{ borderBottom: `1px solid ${theme.surface3}` }}>
-                <td style={{ padding: 8, fontFamily: "monospace", fontSize: 12 }}>
-                  {r.run_id}
-                </td>
-                <td style={{ padding: 8 }}>
-                  {r.mode ? (
-                    <span className="chip">{r.mode.toUpperCase()}</span>
-                  ) : (
-                    <span style={{ color: theme.textMuted }}>—</span>
-                  )}
-                </td>
-                <td style={{ padding: 8 }}>
-                  <StateBadge state={r.state} />
-                  {r.error && (
-                    <div
-                      style={{ color: theme.textMuted, fontSize: 11, marginTop: 4 }}
-                      data-testid="run-error"
-                    >
-                      {r.error}
-                    </div>
-                  )}
-                </td>
-                <td style={{ padding: 8, color: theme.textSecondary }}>
-                  {timeAgo(r.started_at)}
-                </td>
-                <td className="num" style={{ padding: 8 }}>
-                  {r.duration_seconds == null ? "—" : `${r.duration_seconds.toFixed(1)}s`}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          Refresh
+        </Button>
+      </div>
+
+      {loading && !runs ? (
+        <div style={{ marginTop: 12 }}>
+          <Loading />
+        </div>
+      ) : error && !runs ? (
+        <div style={{ marginTop: 12 }}>
+          <ErrorState message={error} status={httpStatus} onRetry={onReload} />
+        </div>
+      ) : !runs || runs.length === 0 ? (
+        <div style={{ marginTop: 12 }}>
+          <EmptyState
+            title="No persisted run history yet"
+            hint="History is written once a triggered run finishes."
+          />
+        </div>
+      ) : (
+        <div style={{ marginTop: 12 }}>
+          <RunsTable runs={runs} />
+        </div>
       )}
     </section>
   );
@@ -289,6 +369,24 @@ export function PipelineDashboard() {
   // budget spent polling a status that changes once every few minutes.
   const inFlight = Boolean(data?.is_running || data?.current_run_id);
   usePoll(reload, 3000, inFlight);
+
+  const {
+    data: history,
+    loading: historyLoading,
+    error: historyError,
+    status: historyStatus,
+    reload: reloadHistory,
+  } = useApi<RunRecord[]>(() => api.getRunHistory(50), []);
+
+  // The durable table only ever gains a row once a run finishes (see
+  // DurableRunHistory's docstring), so refetch it the moment `inFlight` flips
+  // false->true->false — i.e. whenever a run this screen was watching just
+  // completed — rather than making the caller hit "Refresh" manually.
+  const wasInFlight = useRef(inFlight);
+  useEffect(() => {
+    if (wasInFlight.current && !inFlight) reloadHistory();
+    wasInFlight.current = inFlight;
+  }, [inFlight, reloadHistory]);
 
   return (
     <div className="screen" data-testid="pipeline-screen">
@@ -321,6 +419,13 @@ export function PipelineDashboard() {
           <StatusBanner status={data} />
           <Controls disabled={data.is_running} onTriggered={reload} />
           <RunHistory runs={data.run_history} />
+          <DurableRunHistory
+            runs={history}
+            loading={historyLoading}
+            error={historyError}
+            httpStatus={historyStatus}
+            onReload={reloadHistory}
+          />
         </>
       ) : null}
     </div>

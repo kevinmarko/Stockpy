@@ -2128,6 +2128,30 @@ const CONTROL_RUN_HISTORY: RunRecord[] = [
   controlRun("orch-mock-5c88", "succeeded", undefined, 305, 44.2, "interval", null),
 ];
 
+// GET /runs/history's durable fixture -- deliberately LONGER than
+// CONTROL_RUN_HISTORY (the in-memory 10-run ring GET /status returns) to
+// demonstrate the whole point of the durable table: history that outlives a
+// daemon restart, not just "the same 4 runs again." Only terminal runs ever
+// land here (see RunHistoryEntry's doc comment in types.ts) -- no "running"
+// entries, unlike CONTROL_RUN_HISTORY which a test injects one into directly.
+const RUN_HISTORY_DURABLE: RunRecord[] = [
+  ...CONTROL_RUN_HISTORY,
+  controlRun("orch-mock-5b41", "succeeded", "full", 365, 39.7, "interval", null),
+  controlRun("orch-mock-5a02", "succeeded", "data", 425, 11.9, "interval", null),
+  controlRun(
+    "orch-mock-4f93",
+    "failed",
+    "full",
+    488,
+    22.3,
+    "manual",
+    "DataEngine: Robinhood login failed after 3 retries (session expired)"
+  ),
+  controlRun("orch-mock-4e6c", "succeeded", "metrics", 550, 9.4, "interval", null),
+  controlRun("orch-mock-4d21", "succeeded", "full", 612, 43.1, "interval", null),
+  controlRun("orch-mock-4c05", "succeeded", "data", 675, 13.2, "interval", null),
+];
+
 function mockControlStatus(): ControlStatus {
   return {
     daemon_alive: true,
@@ -2652,6 +2676,10 @@ export const mockApi = {
       },
       80
     );
+  },
+
+  async getRunHistory(limit = 50): Promise<RunRecord[]> {
+    return delay(RUN_HISTORY_DURABLE.slice(0, limit), 140);
   },
 
   async postControlRun(): Promise<{ run_id: string; state: string }> {
