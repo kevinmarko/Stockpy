@@ -69,7 +69,11 @@ class TestHappyPath:
 # ---------------------------------------------------------------------------
 class TestNoValidatedBacktest:
     def test_none_validation_id_honest_empty_entry(self):
-        pilot = get_pilot("balanced-blend")  # validation_strategy_id is None
+        # news-catalyst is the catalog's genuinely backtest-less pilot
+        # (validation_strategy_id=None). balanced-blend used to be, but gained
+        # a real signal-replay backtest (signal_replay_balanced_blend) in #321
+        # — see the identical fix in tests/test_pilots_api.py (PR #325).
+        pilot = get_pilot("news-catalyst")
         assert pilot is not None
         result = pilot_strategy_health(pilot, reports_dir=FIXTURES_DIR)
         assert result["strategy_id"] is None
