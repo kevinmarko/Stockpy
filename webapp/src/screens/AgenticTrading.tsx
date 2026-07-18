@@ -19,6 +19,7 @@ import {
   StaleDataNotice,
 } from "../components/ui";
 import { Chip, ExecutionQueueSection, ModeBadge } from "../components/ExecutionQueueSection";
+import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { DecisionModal } from "../components/DecisionModal";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
@@ -179,6 +180,18 @@ function StatRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * The exact phrasing for a per-scan-config Claude Code invocation. The
+ * agentic-discovery skill's documented procedure (.claude/skills/
+ * agentic-discovery/SKILL.md) runs EVERY `enabled: true` scan config by
+ * default — there is no native "just this one" mode — so this command must
+ * explicitly scope to a single named config, or copying it would silently
+ * kick off every other enabled scan too.
+ */
+function scanConfigCommand(scanName: string): string {
+  return `Run the agentic-discovery skill for just the '${scanName}' scan config in output/scan_configs.json — don't run the other enabled scans.`;
+}
+
 function DiscoverySection() {
   const discovery = useApi<AgenticDiscovery>(() => api.getAgenticDiscovery(), []);
   const [adding, setAdding] = useState(false);
@@ -228,16 +241,28 @@ function DiscoverySection() {
             {discovery.data.scan_configs.length === 0 ? (
               <p style={{ color: theme.textMuted, fontSize: 13 }}>None configured yet.</p>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {discovery.data.scan_configs.map((cfg) => (
-                  <div key={cfg.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Chip label={cfg.enabled ? "enabled" : "disabled"} tone={cfg.enabled ? "growth" : "muted"} />
-                    <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 13 }}>
-                      {cfg.name}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <>
+                <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 0, marginBottom: 10 }}>
+                  Copy a command below into a separate Claude Code session to run just that scan —
+                  nothing on this screen runs it for you.
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {discovery.data.scan_configs.map((cfg) => (
+                    <div key={cfg.name} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <Chip label={cfg.enabled ? "enabled" : "disabled"} tone={cfg.enabled ? "growth" : "muted"} />
+                        <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 13 }}>
+                          {cfg.name}
+                        </span>
+                      </div>
+                      <CopyCommandBlock
+                        command={scanConfigCommand(cfg.name)}
+                        testIdPrefix={`scan-cmd-${cfg.name}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
 
