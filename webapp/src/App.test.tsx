@@ -1,11 +1,13 @@
 /**
- * App.test.tsx — nav/gear wiring for the Data & Automation fold-in: the
- * gear button navigates to /settings (instead of opening a local sheet), it
- * still carries the needRefresh "update available" dot from any screen, the
- * /settings route resolves to the real Settings screen, and BottomNav shows
- * the 3 primary tabs plus a "More" button whose sheet backfills mobile
- * reachability for the secondary sections (Portfolio/Compare/Models/Pairs/
- * Options) -- Settings stays gear-only.
+ * App.test.tsx — nav/gear wiring for the Data & Automation fold-in, plus the
+ * 2026-07 navigation rework: the gear button navigates to /settings (instead
+ * of opening a local sheet), it still carries the needRefresh "update
+ * available" dot from any screen, the /settings route resolves to the real
+ * Settings screen, and BottomNav shows a usage-frequency-driven primary 3
+ * (Dashboard/Portfolio/Activity) plus a "More" button whose sheet groups
+ * every other screen into labeled sections (Research / Trading Tools /
+ * Operations / Settings) -- Settings now has two entry points, the same as
+ * every other screen (the sheet) plus the always-on gear shortcut.
  */
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -169,45 +171,91 @@ describe("App — Settings gear + nav", () => {
     expect(await screen.findByText("App status")).toBeInTheDocument();
   });
 
-  it("BottomNav shows the 3 primary tabs plus a More button (Settings not evicted)", () => {
+  it("BottomNav shows the usage-frequency-driven primary 3 plus a More button", () => {
     const { container } = renderApp("/");
     const bottomNav = container.querySelector(".bottom-nav");
     expect(bottomNav).not.toBeNull();
     const items = bottomNav!.querySelectorAll(".nav-item");
-    // Dashboard, Pilots, Activity + More.
+    // Dashboard, Portfolio, Activity + More -- the screens checked constantly,
+    // per the 2026-07 usage-frequency audit (not the old insertion-order slice).
     expect(items).toHaveLength(4);
-    const labels = Array.from(items).map((el) => el.textContent);
-    expect(labels.some((l) => l?.includes("More"))).toBe(true);
-    // Settings stays gear-only, never a direct bottom-nav tab.
-    expect(labels.some((l) => l?.includes("Settings"))).toBe(false);
+    const nav = within(bottomNav as HTMLElement);
+    expect(nav.getByText("Dashboard")).toBeInTheDocument();
+    expect(nav.getByText("Portfolio")).toBeInTheDocument();
+    expect(nav.getByText("Activity")).toBeInTheDocument();
+    expect(nav.getByText("More")).toBeInTheDocument();
+    // Pilots was checked less often than Portfolio in the audit -- it moved
+    // out of the primary 3 into the More sheet's Research section.
+    expect(nav.queryByText("Pilots")).not.toBeInTheDocument();
   });
 
-  it("the More sheet reaches every secondary section and omits Settings (gear covers it)", async () => {
+  it("the More sheet groups every secondary screen into labeled sections, including Settings", async () => {
     const user = userEvent.setup();
     renderApp("/");
 
     await user.click(screen.getByTestId("more-nav-button"));
 
     const dialog = await screen.findByRole("dialog", { name: "More sections" });
-    for (const label of ["Portfolio", "Compare", "Models", "Pairs radar", "Options"]) {
+    // Section headers (h3s -- distinct from the "Settings" nav-item button
+    // text below, which shares the same string).
+    for (const section of ["Research", "Trading Tools", "Operations", "Settings"]) {
+      expect(
+        within(dialog).getByRole("heading", { name: section, level: 3 })
+      ).toBeInTheDocument();
+    }
+    // Pilots moved out of the primary 3 into Research, alongside the rest of
+    // the research/vetting screens.
+    for (const label of [
+      "Pilots",
+      "Compare",
+      "Models",
+      "Strategy Health",
+      "Pairs radar",
+      "Options",
+      "Signal Breakdown",
+      "Forecast Viewer",
+      "Data Explorer",
+    ]) {
       expect(within(dialog).getByText(label)).toBeInTheDocument();
     }
-    // Settings has one entry point (the gear) -- not duplicated into the sheet.
-    expect(within(dialog).queryByText("Settings")).not.toBeInTheDocument();
+    for (const label of ["Attribution", "Calibration", "Agent", "Commands"]) {
+      expect(within(dialog).getByText(label)).toBeInTheDocument();
+    }
+    for (const label of ["Mission Control", "Pipeline"]) {
+      expect(within(dialog).getByText(label)).toBeInTheDocument();
+    }
+    // Settings is now listed like any other screen, not gear-only.
+    expect(within(dialog).getByRole("button", { name: "Settings" })).toBeInTheDocument();
+    // Portfolio is primary now -- it should not also appear inside the sheet.
+    expect(within(dialog).queryByText("Portfolio")).not.toBeInTheDocument();
   });
 
-  it("Portfolio is reachable on mobile via More -> navigates and closes the sheet", async () => {
+  it("Pilots (moved out of primary) is reachable on mobile via More -> Research", async () => {
     const user = userEvent.setup();
     renderApp("/");
 
     await user.click(screen.getByTestId("more-nav-button"));
     const dialog = await screen.findByRole("dialog", { name: "More sections" });
-    await user.click(within(dialog).getByText("Portfolio"));
+    await user.click(within(dialog).getByText("Pilots"));
 
-    // Landed on the Portfolio screen and the sheet is gone.
+    // Landed on the Marketplace/Pilots screen and the sheet is gone.
     expect(
-      await screen.findByRole("heading", { name: "Portfolio" })
+      await screen.findByRole("heading", { name: "Pilots" })
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "More sections" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("Settings is reachable from the More sheet, in addition to the gear shortcut", async () => {
+    const user = userEvent.setup();
+    renderApp("/");
+
+    await user.click(screen.getByTestId("more-nav-button"));
+    const dialog = await screen.findByRole("dialog", { name: "More sections" });
+    await user.click(within(dialog).getByRole("button", { name: "Settings" }));
+
+    expect(await screen.findByText("Data & Automation")).toBeInTheDocument();
     expect(
       screen.queryByRole("dialog", { name: "More sections" })
     ).not.toBeInTheDocument();
