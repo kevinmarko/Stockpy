@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { FollowResult, PilotSummary } from "../api/types";
+import type { FollowResult, PilotSummary, Thresholds } from "../api/types";
 import { fmtPct, fmtUsd } from "../format";
+import { loadThresholds } from "../help/thresholds";
 import { theme } from "../theme";
 
 const MODE_LABEL: Record<string, { label: string; cls: string }> = {
@@ -10,6 +11,23 @@ const MODE_LABEL: Record<string, { label: string; cls: string }> = {
   paper: { label: "PAPER — simulated fills", cls: "badge-warn" },
   live: { label: "LIVE — real orders (per-trade confirm)", cls: "badge-bad" },
 };
+
+/**
+ * Resolves the minimum follow amount to display/gate on. `result.min_amount`
+ * (once a real follow response exists) is the most authoritative source — it
+ * may reflect server-side overrides that a cached `GET /thresholds` fetch
+ * wouldn't know about — so it always wins when present. Before that, the
+ * live `GET /thresholds` value (`follow_min_amount`, read live from
+ * `settings.FOLLOW_MIN_AMOUNT`) is used. Never a hardcoded literal: if
+ * neither has resolved yet, the minimum is honestly `null` (unknown), not a
+ * guessed number — callers render that via `fmtUsd(null)` ("—").
+ */
+export function resolveMinAmount(
+  result: FollowResult | null,
+  thresholds: Thresholds | null
+): number | null {
+  return result?.min_amount ?? thresholds?.follow_min_amount ?? null;
+}
 
 /**
  * Follow flow modal. Amount input (min + notional cap), planned_intents preview,
@@ -29,9 +47,24 @@ export function FollowModal({
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<FollowResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [thresholds, setThresholds] = useState<Thresholds | null>(null);
 
-  const minAmount = result?.min_amount ?? 100;
-  const belowMin = amount < minAmount;
+  // Lazy, session-cached fetch (see help/thresholds.ts) so the pre-submit
+  // minimum-allocation copy quotes the live settings.FOLLOW_MIN_AMOUNT
+  // instead of a re-typed literal. `null` (not yet loaded, or the fetch
+  // failed) renders "—" via fmtUsd rather than a fabricated guess.
+  useEffect(() => {
+    let alive = true;
+    void loadThresholds().then((t) => {
+      if (alive) setThresholds(t);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const minAmount = resolveMinAmount(result, thresholds);
+  const belowMin = minAmount != null && amount < minAmount;
 
   const submit = async () => {
     setSubmitting(true);
@@ -80,7 +113,7 @@ export function FollowModal({
                 className="field"
                 type="number"
                 inputMode="decimal"
-                min={minAmount}
+                min={minAmount ?? undefined}
                 step={0.01}
                 value={amount}
                 onChange={(e) => setAmount(Math.max(0, Number(e.target.value)))}
@@ -100,11 +133,21 @@ export function FollowModal({
               ))}
             </div>
 
-            {belowMin && (
-              <p style={{ color: theme.caution, fontSize: 12, marginTop: 8 }}>
-                Minimum allocation is {fmtUsd(minAmount)}.
-              </p>
-            )}
+            {/* Always visible (not just when violated) so the minimum is never
+                silently absent — "—" (fmtUsd's null rendering) while the live
+                GET /thresholds fetch hasn't resolved yet, never a hardcoded
+                literal. */}
+            <p
+              style={{
+                color: belowMin ? theme.caution : theme.textMuted,
+                fontSize: 12,
+                marginTop: 8,
+              }}
+            >
+              {belowMin
+                ? `Minimum allocation is ${fmtUsd(minAmount)}.`
+                : `Minimum allocation: ${fmtUsd(minAmount)}`}
+            </p>
 
             <div className="notice notice-warn" style={{ marginTop: 16 }}>
               <span>⚠️</span>
