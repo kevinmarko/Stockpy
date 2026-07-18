@@ -5,11 +5,13 @@
  * unmatched symbols, empty clusters, heavy-concentration warning) degrades to
  * an explicit honest message rather than a fabricated 0 or blank chart.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Attribution } from "./Attribution";
 import { api } from "../api/client";
+import { ApiError } from "../api/types";
 import type { PortfolioAttribution } from "../api/types";
 
 function renderScreen() {
@@ -191,5 +193,75 @@ describe("Attribution screen (real mock API)", () => {
     renderScreen();
     await screen.findByText("Correlation clusters");
     expect(screen.queryByText(/High concentration/)).not.toBeInTheDocument();
+  });
+});
+
+describe("Brinson-Fachler manual-input calculator", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders the 11-sector editable table (real mock GET, no server round-trip needed to seed it)", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    expect(
+      await screen.findByText("Brinson-Fachler attribution")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Energy")).toBeInTheDocument();
+    expect(screen.getByText("Real Estate")).toBeInTheDocument();
+    expect(screen.getByText("Information Technology")).toBeInTheDocument();
+    // All 11 GICS sectors * 4 editable numeric cells each.
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(11 * 4);
+  });
+
+  it("all-zero default rows show the client-side weight-sum warning before any edit", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+    expect(
+      screen.getByText("Portfolio weights sum to 0.00% (expected ~100%).")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Benchmark weights sum to 0.00% (expected ~100%).")
+    ).toBeInTheDocument();
+  });
+
+  it("computing a single fully-weighted sector matches hand-computed effects", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    const row = screen.getByText("Energy").closest("tr") as HTMLElement;
+    await user.clear(within(row).getByLabelText("Energy portfolio weight percent"));
+    await user.type(within(row).getByLabelText("Energy portfolio weight percent"), "100");
+    await user.clear(within(row).getByLabelText("Energy portfolio return percent"));
+    await user.type(within(row).getByLabelText("Energy portfolio return percent"), "10");
+    await user.clear(within(row).getByLabelText("Energy benchmark weight percent"));
+    await user.type(within(row).getByLabelText("Energy benchmark weight percent"), "100");
+    await user.clear(within(row).getByLabelText("Energy benchmark return percent"));
+    await user.type(within(row).getByLabelText("Energy benchmark return percent"), "8");
+
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+
+    // Single fully-weighted sector: Portfolio Return = 10%, Benchmark Return =
+    // 8%, Active Return = 2% = Selection Effect (Allocation/Interaction = 0
+    // since portfolio and benchmark weights are identical in every sector).
+    expect(await screen.findByText("+10.00%")).toBeInTheDocument(); // Portfolio return
+    expect(screen.getByText("+8.00%")).toBeInTheDocument(); // Benchmark return
+    expect(screen.getAllByText("+2.00%").length).toBeGreaterThan(0); // Active + Selection effect
+  });
+
+  it("a 422 from the server renders the honest error message inline, not a generic failure", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    vi.spyOn(api, "getBrinsonFachlerAttribution").mockRejectedValueOnce(
+      new ApiError("No rows with a non-blank sector name.", 422)
+    );
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Compute" }));
+
+    const errorBox = await screen.findByTestId("brinson-error");
+    expect(errorBox).toHaveTextContent("No rows with a non-blank sector name.");
   });
 });

@@ -98,6 +98,7 @@ from settings import validate_interval_seconds as _validate_interval_seconds
 from pilots import (
     alerts_feed,
     attribution,
+    brinson,
     catalog,
     forecast_skill,
     models,
@@ -437,6 +438,26 @@ class BrokerageConnectRequest(BaseModel):
             "treated as a verification failure."
         ),
     )
+
+
+class BrinsonFachlerRow(BaseModel):
+    """One sector row of the wire-format matrix for
+    ``POST /portfolio/attribution/brinson-fachler``. All weight/return fields
+    are PERCENT (e.g. ``28.0`` for 28%, not the fraction ``0.28`` the engine
+    itself consumes) — ``pilots.brinson.build_brinson_fachler_frames`` does
+    the ``/100`` conversion server-side."""
+
+    sector: str = Field(..., min_length=1)
+    portfolio_weight_pct: float = 0.0
+    portfolio_return_pct: float = 0.0
+    benchmark_weight_pct: float = 0.0
+    benchmark_return_pct: float = 0.0
+
+
+class BrinsonFachlerRequest(BaseModel):
+    """Body for ``POST /portfolio/attribution/brinson-fachler``."""
+
+    rows: List[BrinsonFachlerRow] = Field(..., min_length=1)
 
 
 # Stable 422 tags for PUT /strategy/modules validation failures — the frontend
@@ -929,6 +950,46 @@ def get_portfolio_attribution(
         "factor_exposure": factor_exposure,
         "correlation_clusters": correlation_clusters,
     }
+
+
+@app.post(
+    "/portfolio/attribution/brinson-fachler",
+    dependencies=[Depends(require_read_token)],
+)
+def post_brinson_fachler_attribution(body: BrinsonFachlerRequest) -> Dict[str, Any]:
+    """Manual-input Brinson-Fachler sector attribution calculator.
+
+    STATELESS — nothing is persisted; this is the POST-with-a-body analogue
+    of the read-only ``GET /portfolio/attribution`` above, not a write, hence
+    the fail-open ``require_read_token`` guard rather than the command token.
+
+    Distinct from ``GET /portfolio/attribution``'s ``factor_exposure`` /
+    ``correlation_clusters`` sections (which are auto-derived from real
+    holdings + the pipeline snapshot): this endpoint's sector-level
+    portfolio/benchmark weight+return matrix is entirely OPERATOR-SUPPLIED —
+    point-in-time sector-level benchmark returns aren't available anywhere in
+    this platform, so there is no honest way to auto-derive this. Mirrors the
+    legacy Streamlit Command Center's interactive
+    ``gui/panels/report_viewer.py::_render_brinson_fachler_section`` calculator.
+
+    Delegates to ``pilots.brinson.compute_brinson_fachler`` (see that module's
+    docstring for the wire-format-percent -> engine-format-fraction conversion
+    and the one documented residual-risk case: a request whose rows pass this
+    endpoint's own pre-validation but still trip an internal exception in
+    ``EvaluationEngine._calculate_brinson_fachler_compat`` gets that engine's
+    pre-existing all-zero fallback shape back, not a 500 — this endpoint does
+    not attempt to distinguish that case from a genuine all-zero result).
+
+    422 (not 500) on a structurally unusable matrix (e.g. every row has a
+    blank sector name) — the request body schema itself already rejects an
+    empty ``rows`` list."""
+    rows = [r.model_dump() for r in body.rows]
+    try:
+        result = brinson.compute_brinson_fachler(rows)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result["validation_warnings"] = brinson.validate_brinson_fachler_rows(rows)
+    return result
 
 
 @app.get("/observability/summary", dependencies=[Depends(require_read_token)])
