@@ -99,6 +99,7 @@ from pilots import (
     alerts_feed,
     attribution,
     brinson,
+    calibration,
     catalog,
     forecast_skill,
     models,
@@ -362,6 +363,16 @@ def _validation_history_dir() -> str:
     return "reports/history"
 
 
+def _decision_log_path():
+    """Resolve ``output/decision_log.jsonl`` from live settings per call.
+
+    The WRITE side (``POST /decisions``) and the READ side
+    (``pilots.calibration`` recommendation-tracking / recent-decisions) both
+    resolve from ``settings.OUTPUT_DIR`` so they agree and stay isolatable under
+    a tests-patched OUTPUT_DIR (matching ``_snapshot_path`` et al.)."""
+    return settings.OUTPUT_DIR / "decision_log.jsonl"
+
+
 def _load_snapshot() -> Optional[dict]:
     """Load the current state snapshot, or ``None`` (never raises)."""
     return scoring.load_snapshot(_snapshot_path())
@@ -422,6 +433,20 @@ class ExecutionModeUpdateRequest(BaseModel):
     """Body for ``PUT /automation/execution-mode``."""
     mode: Literal["live", "paper", "simulation", "advisory"]
     advisory_only: bool
+
+
+class DecisionCreateRequest(BaseModel):
+    """Body for ``POST /decisions`` — append one operator decision to the
+    journal (``gui/decision_log.py``). ``action_taken`` is validated against the
+    ``{acted, passed, modified}`` set (422 with a stable ``invalid_action`` tag
+    otherwise — the frontend branches on the tag, not the message)."""
+
+    symbol: str = Field(..., min_length=1)
+    action_taken: str = Field(..., min_length=1)
+    signal_action: str = Field(default="")
+    conviction: Optional[float] = Field(default=None)
+    notes: str = Field(default="")
+    signal_ts: str = Field(default="")
 
 
 class BrokerageConnectRequest(BaseModel):
@@ -1143,6 +1168,110 @@ def get_strategy_health() -> List[Dict[str, Any]]:
         reports_dir=_reports_dir(),
         history_dir=_validation_history_dir(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Calibration & Recommendation Tracking (read: fail-open; write: fail-closed cmd)
+# ---------------------------------------------------------------------------
+
+_VALID_DECISION_ACTIONS = frozenset({"acted", "passed", "modified"})
+
+
+@app.get("/calibration/summary", dependencies=[Depends(require_read_token)])
+def get_calibration_summary(
+    horizon: int = Query(30, ge=1, le=365),
+) -> Dict[str, Any]:
+    """Composite "did our actual calls work?" summary — the PWA's port of the
+    retired Streamlit Report Viewer's evaluation-analytics sections (bounded to
+    four): the conviction-calibration reliability diagram, the model-vs-operator
+    recommendation-tracking report, the per-signal MFE/MAE points, and the
+    recent operator-decision journal tail.
+
+    Composes FOUR independently-degrading sections (``pilots.calibration
+    .calibration_summary`` — see that module's docstring for the full per-section
+    contract); one section's cold-start/failure never blocks the others, and
+    each carries its own honest ``reason`` when empty. Deliberately EXCLUDES the
+    heavier edge-by-strategy recompute (``GET /calibration/edge-by-strategy``) so
+    this summary never blocks on per-trade bar fetches. ``horizon`` selects the
+    recommendation-tracking look-forward window. Never raises (CONSTRAINT #6);
+    never fabricates a metric (CONSTRAINT #4)."""
+    return calibration.calibration_summary(horizon_days=horizon, snapshot=_load_snapshot())
+
+
+@app.get("/calibration/edge-by-strategy", dependencies=[Depends(require_read_token)])
+def get_edge_by_strategy() -> Dict[str, Any]:
+    """MFE/MAE/Edge-Ratio recomputed per CLOSED trade and grouped by the
+    ``strategy`` tag recorded at entry (``pilots.calibration.edge_by_strategy_view``).
+
+    The heavier recompute — it fetches OHLC bars per traded symbol via
+    ``HistoricalStore.get_bars`` — so it lives behind its OWN endpoint (the PWA
+    lazy-loads it) rather than blocking ``GET /calibration/summary``. Honest
+    empty ``rows`` + ``reason`` on cold start (no closed trades / none with
+    recoverable history). Never 500s (CONSTRAINT #6); NaN aggregates → ``null``
+    (CONSTRAINT #4)."""
+    return calibration.edge_by_strategy_view()
+
+
+@app.post("/decisions", dependencies=[Depends(require_command_token)])
+def create_decision(body: DecisionCreateRequest) -> Dict[str, Any]:
+    """Append one operator decision to the journal (``output/decision_log.jsonl``).
+
+    Fail-closed ``require_command_token`` ALONE — deliberately NO dedicated
+    master-switch flag: appending a local operator note carries no order/money/
+    config risk, so it matches ``POST /automation/pause``'s risk tier, not the
+    ``require_*_writes_enabled`` tier reserved for materially riskier writes
+    (see the pilots-endpoint auth taxonomy).
+
+    ``action_taken`` MUST be one of ``{acted, passed, modified}`` (422 with a
+    stable ``invalid_action`` tag otherwise). For an ``"acted"`` decision, the
+    entry is best-effort linked to the nearest ``TransactionsStore`` trade within
+    24h (READ-ONLY store) — ``trade_id`` is ``null`` when no match exists (never
+    fabricated — CONSTRAINT #4). Returns the created entry incl. the resolved
+    ``trade_id`` + a ``trade_linked`` convenience flag."""
+    action = body.action_taken.strip().lower()
+    if action not in _VALID_DECISION_ACTIONS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_action",
+                "allowed": sorted(_VALID_DECISION_ACTIONS),
+            },
+        )
+
+    from gui.decision_log import log_decision
+    from transactions_store import TransactionsStore
+
+    # READ-ONLY store — used only to link an "acted" decision to an existing
+    # trade via join_to_store; never written to here (CONSTRAINT #4).
+    store: Any = None
+    try:
+        store = TransactionsStore(readonly=True)
+    except Exception as exc:  # noqa: BLE001 — dead-letter: no store -> no trade link
+        logger.warning("create_decision: TransactionsStore unavailable: %s", exc)
+        store = None
+
+    entry = log_decision(
+        symbol=body.symbol,
+        action_taken=action,  # type: ignore[arg-type]  — validated above
+        signal_action=body.signal_action,
+        conviction=body.conviction,
+        notes=body.notes.strip(),
+        signal_ts=body.signal_ts,
+        transactions_store=store,
+        log_path=_decision_log_path(),
+    )
+
+    return {
+        "symbol": entry.symbol,
+        "action_taken": entry.action_taken,
+        "signal_action": entry.signal_action,
+        "conviction": entry.conviction,
+        "notes": entry.notes,
+        "timestamp": entry.timestamp,
+        "signal_ts": entry.signal_ts,
+        "trade_id": entry.trade_id,
+        "trade_linked": entry.trade_id is not None,
+    }
 
 
 # ---------------------------------------------------------------------------

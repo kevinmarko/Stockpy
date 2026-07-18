@@ -1099,6 +1099,148 @@ export interface ForecastResult {
   [key: string]: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// Recommendation Tracking & Calibration (pilots/calibration.py) — GET
+// /calibration/summary, GET /calibration/edge-by-strategy, POST /decisions.
+// ---------------------------------------------------------------------------
+
+/**
+ * One conviction bin of the reliability diagram. `win_rate` is `null` when the
+ * bin has fewer than `min_trades_per_bin` trades (insufficient sample — never a
+ * fabricated rate, CONSTRAINT #4). `perfect_calibration` == `bin_center` (the
+ * y=x reference for that bin).
+ */
+export interface CalibrationBin {
+  bin_low: number | null;
+  bin_high: number | null;
+  bin_center: number | null;
+  conviction_mean: number | null;
+  win_rate: number | null;
+  count: number;
+  perfect_calibration: number | null;
+}
+
+/** GET /calibration/summary -> calibration section. */
+export interface Calibration {
+  bins: CalibrationBin[];
+  total: number;
+  overall_win_rate: number | null;
+  calibration_error: number | null;
+  n_scored_bins: number;
+  n_bins: number;
+  min_trades_per_bin: number;
+  reason: string | null;
+}
+
+/** One logged BUY signal's model-vs-operator comparison. Returns are fractions. */
+export interface RecTrackingRow {
+  symbol: string;
+  signal_ts: string | null;
+  signal_action: string | null;
+  conviction: number | null;
+  action_taken: string | null;
+  model_return: number | null;
+  actual_return: number | null;
+  days_held: number | null;
+  trade_id: number | null;
+  completed: boolean;
+}
+
+/** GET /calibration/summary -> recommendation_tracking section. */
+export interface RecommendationTracking {
+  horizon_days: number;
+  model_return: number | null;
+  operator_return: number | null;
+  delta: number | null;
+  n_signals: number;
+  n_acted: number;
+  n_completed: number;
+  n_with_exit: number;
+  rows: RecTrackingRow[];
+  reason: string | null;
+}
+
+/** One current-signal MFE/MAE point (fractions of entry price). */
+export interface MfeMaePoint {
+  symbol: string;
+  mfe: number;
+  mae: number;
+  edge_ratio: number | null;
+  conviction: number | null;
+  action: string;
+}
+
+/** GET /calibration/summary -> mfe_mae section. */
+export interface MfeMaeView {
+  points: MfeMaePoint[];
+  reason: string | null;
+}
+
+/** One row of the operator decision journal. `trade_id` null == unlinked. */
+export interface DecisionEntry {
+  symbol: string | null;
+  action_taken: string | null;
+  signal_action: string | null;
+  conviction: number | null;
+  notes: string;
+  timestamp: string | null;
+  signal_ts: string;
+  trade_id: number | null;
+}
+
+/** GET /calibration/summary -> recent_decisions section. */
+export interface RecentDecisions {
+  decisions: DecisionEntry[];
+  reason: string | null;
+}
+
+/** GET /calibration/summary — composite for the Calibration screen. */
+export interface CalibrationSummary {
+  calibration: Calibration;
+  recommendation_tracking: RecommendationTracking;
+  mfe_mae: MfeMaeView;
+  recent_decisions: RecentDecisions;
+}
+
+/** One strategy's aggregated edge-ratio row. NaN aggregates -> null. */
+export interface EdgeByStrategyRow {
+  strategy: string;
+  n_trades: number;
+  mean_edge_ratio: number | null;
+  median_edge_ratio: number | null;
+  mean_mfe: number | null;
+  mean_mae: number | null;
+}
+
+/** GET /calibration/edge-by-strategy — the heavier, lazy-loaded recompute. */
+export interface EdgeByStrategy {
+  rows: EdgeByStrategyRow[];
+  reason: string | null;
+}
+
+/** POST /decisions request body. */
+export interface DecisionCreateRequest {
+  symbol: string;
+  action_taken: "acted" | "passed" | "modified";
+  signal_action: string;
+  conviction: number | null;
+  notes: string;
+  signal_ts?: string;
+}
+
+/** POST /decisions response — the created entry, with the resolved trade link. */
+export interface DecisionCreateResult {
+  symbol: string;
+  action_taken: string;
+  signal_action: string;
+  conviction: number | null;
+  notes: string;
+  timestamp: string;
+  signal_ts: string;
+  trade_id: number | null;
+  trade_linked: boolean;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;
