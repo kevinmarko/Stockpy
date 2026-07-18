@@ -21,8 +21,8 @@ import {
   Loading,
   MetricBadge,
 } from "../components/ui";
+import { KillSwitchToggle } from "../components/KillSwitchToggle";
 import { Modal } from "../components/Modal";
-import { Toggle } from "../components/Toggle";
 import { PwaStatusSection } from "../components/PwaStatusSection";
 import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { UniverseManager } from "../components/UniverseManager";
@@ -825,102 +825,20 @@ function SignalGenerationSection({
   advisoryOnly: boolean;
   onChanged: () => void;
 }) {
-  const [confirmKind, setConfirmKind] = useState<"pause" | "resume" | null>(null);
-  const [inputReason, setInputReason] = useState("");
-  const pauseMutation = useMutation((r: string) => api.pauseAutomation(r));
-  const resumeMutation = useMutation((r: string) => api.resumeAutomation(r));
-
-  const running = !active;
-  const busy = pauseMutation.pending || resumeMutation.pending;
-  const resumeBlocked = !running && !advisoryOnly;
-
-  const openConfirm = (next: boolean) => {
-    setInputReason("");
-    setConfirmKind(next ? "resume" : "pause");
-  };
-
-  const confirmAction = async () => {
-    if (confirmKind === "pause") {
-      await pauseMutation.run(inputReason);
-    } else if (confirmKind === "resume") {
-      await resumeMutation.run(inputReason);
-    }
-    setConfirmKind(null);
-    onChanged();
-  };
-
+  // The pause/resume UI is the shared KillSwitchToggle — the SAME control the
+  // Agentic Trading tab's Controls section renders (UX backlog finding #6:
+  // one kill switch, one component, no drift). `showReason` renders the inline
+  // "Reason: ..." line here, which this screen has always shown.
   return (
     <SectionCard title="Signal generation">
-      <Toggle
-        checked={running}
-        onChange={openConfirm}
-        label={running ? "Signal generation: Running" : "Signal generation: Paused"}
-        disabled={resumeBlocked}
-        pending={busy}
+      <KillSwitchToggle
+        noun="Signal generation"
+        active={active}
+        reason={reason}
+        advisoryOnly={advisoryOnly}
+        onChanged={onChanged}
+        showReason
       />
-      {active && reason && (
-        <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>Reason: {reason}</p>
-      )}
-      {resumeBlocked && (
-        <p style={{ color: theme.caution, fontSize: 12, marginTop: 8 }}>
-          Resume must be done at the console while live trading is enabled.
-        </p>
-      )}
-      <p
-        style={{
-          color: theme.textMuted,
-          fontSize: "var(--t-caption)",
-          marginTop: 8,
-          lineHeight: 1.45,
-        }}
-      >
-        Pausing does not stop the schedule — cycles still run, they just
-        produce no recommendations (or submit no orders in live mode).
-      </p>
-      {(pauseMutation.error || resumeMutation.error) && (
-        <div className="notice notice-warn" style={{ marginTop: 10 }}>
-          <span>⚠️</span>
-          <span>{pauseMutation.error ?? resumeMutation.error}</span>
-        </div>
-      )}
-
-      {confirmKind && (
-        <Modal
-          ariaLabel={
-            confirmKind === "pause" ? "Pause signal generation" : "Resume signal generation"
-          }
-          onClose={() => setConfirmKind(null)}
-        >
-          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
-            {confirmKind === "pause" ? "Pause signal generation?" : "Resume signal generation?"}
-          </h2>
-          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
-            {confirmKind === "pause"
-              ? "New recommendations stop until resumed. The schedule keeps running."
-              : "Recommendations resume on the next scheduled or manual run."}
-          </p>
-          <Input
-            label="Reason"
-            value={inputReason}
-            onChange={(e) => setInputReason(e.target.value)}
-            hint="Required."
-          />
-          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-            <Button variant="neutral" onClick={() => setConfirmKind(null)} style={{ flex: 1 }}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={confirmAction}
-              disabled={!inputReason.trim()}
-              pending={busy}
-              style={{ flex: 2 }}
-            >
-              {confirmKind === "pause" ? "Pause" : "Resume"}
-            </Button>
-          </div>
-        </Modal>
-      )}
     </SectionCard>
   );
 }

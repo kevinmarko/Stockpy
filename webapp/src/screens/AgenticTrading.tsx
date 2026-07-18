@@ -21,9 +21,9 @@ import {
 import { Chip, ExecutionQueueSection, ModeBadge } from "../components/ExecutionQueueSection";
 import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { DecisionModal } from "../components/DecisionModal";
+import { KillSwitchToggle } from "../components/KillSwitchToggle";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
-import { Toggle } from "../components/Toggle";
 import { theme } from "../theme";
 import { timeAgo } from "../format";
 
@@ -46,6 +46,17 @@ export function AgenticTrading() {
   // pipeline-status convention.
   usePoll(status.reload, 30_000, !status.loading);
 
+  // "Refresh all" (UX backlog finding #7a): status already auto-refreshes on
+  // the 30s poll above, but Discovery and the Decision journal own their own
+  // un-polled useApi calls. Bumping this token is threaded into both of their
+  // dependency arrays, so one button reloads all three sections at once
+  // instead of a "Refresh" that only ever re-fetched status.
+  const [refreshToken, setRefreshToken] = useState(0);
+  const refreshAll = () => {
+    setRefreshToken((t) => t + 1);
+    status.reload();
+  };
+
   return (
     <div className="screen">
       <div className="rail-head">
@@ -65,14 +76,14 @@ export function AgenticTrading() {
         <ErrorState message={status.error} status={status.status} onRetry={status.reload} />
       )}
       {!status.loading && !status.error && status.data && (
-        <AgentStatusHeader data={status.data} onChanged={status.reload} />
+        <AgentStatusHeader data={status.data} onRefreshAll={refreshAll} />
       )}
 
-      <DiscoverySection />
+      <DiscoverySection refreshToken={refreshToken} />
 
       <ExecutionQueueSection />
 
-      <DecisionJournalSection />
+      <DecisionJournalSection refreshToken={refreshToken} />
 
       <ControlsSection status={status.data} onChanged={status.reload} />
     </div>
@@ -103,10 +114,10 @@ function SectionCard({
 
 function AgentStatusHeader({
   data,
-  onChanged,
+  onRefreshAll,
 }: {
   data: AgenticStatus;
-  onChanged: () => void;
+  onRefreshAll: () => void;
 }) {
   return (
     <SectionCard title="Agent status">
@@ -158,8 +169,8 @@ function AgentStatusHeader({
         />
       </div>
       <div style={{ marginTop: 12 }}>
-        <Button variant="neutral" onClick={onChanged}>
-          Refresh
+        <Button variant="neutral" onClick={onRefreshAll}>
+          Refresh all
         </Button>
       </div>
     </SectionCard>
@@ -192,8 +203,11 @@ function scanConfigCommand(scanName: string): string {
   return `Run the agentic-discovery skill for just the '${scanName}' scan config in output/scan_configs.json — don't run the other enabled scans.`;
 }
 
-function DiscoverySection() {
-  const discovery = useApi<AgenticDiscovery>(() => api.getAgenticDiscovery(), []);
+function DiscoverySection({ refreshToken }: { refreshToken: number }) {
+  // `refreshToken` (from the parent's "Refresh all") is a useApi dependency so
+  // this section refetches when the header's Refresh all is clicked -- it has
+  // no 30s poll of its own, unlike status.
+  const discovery = useApi<AgenticDiscovery>(() => api.getAgenticDiscovery(), [refreshToken]);
   const [adding, setAdding] = useState(false);
 
   return (
@@ -472,8 +486,10 @@ function ScanConfigModal({
   );
 }
 
-function DecisionJournalSection() {
-  const decisions = useApi<DecisionEntry[]>(() => api.getDecisions({ limit: 10 }), []);
+function DecisionJournalSection({ refreshToken }: { refreshToken: number }) {
+  // Same as DiscoverySection: no poll of its own, so the parent's "Refresh
+  // all" token is a useApi dependency to force a refetch on demand.
+  const decisions = useApi<DecisionEntry[]>(() => api.getDecisions({ limit: 10 }), [refreshToken]);
 
   return (
     <SectionCard title="Decision journal" sub="What you've actually done about recent recommendations, most recent first.">
@@ -543,53 +559,28 @@ function ControlsSection({
   status: AgenticStatus | null;
   onChanged: () => void;
 }) {
-  const [confirmKind, setConfirmKind] = useState<"pause" | "resume" | null>(null);
-  const [inputReason, setInputReason] = useState("");
-  const pauseMutation = useMutation((r: string) => api.pauseAutomation(r));
-  const resumeMutation = useMutation((r: string) => api.resumeAutomation(r));
-
-  const active = status?.kill_switch.active ?? false;
-  const running = !active;
-  const busy = pauseMutation.pending || resumeMutation.pending;
-  const resumeBlocked = !running && status !== null && !status.advisory_only;
-
-  const openConfirm = (next: boolean) => {
-    setInputReason("");
-    setConfirmKind(next ? "resume" : "pause");
-  };
-
-  const confirmAction = async () => {
-    if (confirmKind === "pause") await pauseMutation.run(inputReason);
-    else if (confirmKind === "resume") await resumeMutation.run(inputReason);
-    setConfirmKind(null);
-    onChanged();
-  };
-
   return (
     <SectionCard title="Controls">
       <div style={{ marginBottom: 16 }}>
-        <Toggle
-          checked={running}
-          onChange={openConfirm}
-          label={running ? "Agent: Running" : "Agent: Paused"}
-          disabled={status === null || resumeBlocked}
-          pending={busy}
+        {/* The SAME global kill switch as Settings → Signal generation
+            (execution/kill_switch.py), shared via KillSwitchToggle so the two
+            surfaces can't drift again (UX backlog finding #6). `showReason` is
+            left off here because the Agent status header above already renders
+            the live pause reason — turning it on would duplicate it. The
+            control is disabled until status has loaded; `advisoryOnly` defaults
+            to true (the safe state) since resume is only ever blocked once the
+            switch is already paused. */}
+        <KillSwitchToggle
+          noun="Signal generation"
+          active={status?.kill_switch.active ?? false}
+          reason={status?.kill_switch.reason ?? null}
+          advisoryOnly={status?.advisory_only ?? true}
+          onChanged={onChanged}
+          disabled={status === null}
         />
-        {resumeBlocked && (
-          <p style={{ color: theme.caution, fontSize: 12, marginTop: 8 }}>
-            Resume must be done at the console while live trading is enabled.
-          </p>
-        )}
-        <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: 8, lineHeight: 1.45 }}>
-          Pausing does not stop the schedule — cycles still run, they just
-          produce no recommendations (or submit no orders in live mode).
+        <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>
+          Same global kill switch as Settings → Signal generation.
         </p>
-        {(pauseMutation.error || resumeMutation.error) && (
-          <div className="notice notice-warn" style={{ marginTop: 10 }}>
-            <span>⚠️</span>
-            <span>{pauseMutation.error ?? resumeMutation.error}</span>
-          </div>
-        )}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -606,37 +597,6 @@ function ControlsSection({
           </div>
         </Link>
       </div>
-
-      {confirmKind && (
-        <Modal
-          ariaLabel={confirmKind === "pause" ? "Pause agent" : "Resume agent"}
-          onClose={() => setConfirmKind(null)}
-        >
-          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
-            {confirmKind === "pause" ? "Pause the agent?" : "Resume the agent?"}
-          </h2>
-          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
-            {confirmKind === "pause"
-              ? "New recommendations stop until resumed. The schedule keeps running."
-              : "Recommendations resume on the next scheduled or manual run."}
-          </p>
-          <Input label="Reason" value={inputReason} onChange={(e) => setInputReason(e.target.value)} hint="Required." />
-          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-            <Button variant="neutral" onClick={() => setConfirmKind(null)} style={{ flex: 1 }}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={confirmAction}
-              disabled={!inputReason.trim()}
-              pending={busy}
-              style={{ flex: 2 }}
-            >
-              {confirmKind === "pause" ? "Pause" : "Resume"}
-            </Button>
-          </div>
-        </Modal>
-      )}
     </SectionCard>
   );
 }
