@@ -37,7 +37,13 @@ from pilots import catalog, scoring
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["find_signal", "held_by_pilots", "list_universe", "symbol_detail"]
+__all__ = [
+    "find_signal",
+    "held_by_pilots",
+    "list_recommendations",
+    "list_universe",
+    "symbol_detail",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +140,82 @@ def list_universe(snapshot: Any) -> List[dict]:
         return [{"symbol": s, "action": seen[s]} for s in sorted(seen)]
     except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
         logger.debug("list_universe failed: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Ranked recommendations (the platform's current BUY picks)
+# ---------------------------------------------------------------------------
+
+def list_recommendations(snapshot: Any, limit: int = 25) -> List[dict]:
+    """Return the latest snapshot's BUY-rated picks, ranked by conviction.
+
+    The sibling to :func:`list_universe`: where that returns *every* tracked
+    symbol decorated with its action, this returns only the actionable BUY
+    picks — what the advisory engine would buy right now — as a ranked feed for
+    the PWA's "Recommended stocks" surface.
+
+    * **Selection** — an entry is kept when its holding-aware ``advisory_action``
+      (else the raw signal ``action``) is a BUY-family action (contains
+      ``"BUY"`` — covers ``"BUY"`` / ``"STRONG BUY"``). ``HOLD``/``SELL`` and
+      un-actioned rows are dropped.
+    * **Ranking** — conviction descending, then ``score`` descending, then
+      symbol ascending (a stable, deterministic order even when conviction is
+      absent for some rows). ``None`` conviction/score sort last within their
+      tier.
+    * **Honesty (CONSTRAINT #4)** — every numeric leaf (``conviction`` from
+      ``advisory_conviction``, ``score``) is nulled via ``scoring._coerce_float``
+      when absent, ``price`` via :func:`_clean_price` (non-positive → ``None``),
+      and ``buy_range``/``sector``/``action`` via :func:`_clean_str`. Nothing is
+      fabricated.
+    * ``limit`` is clamped to ``[1, 200]``. ``[]`` on a cold start (no snapshot),
+      a malformed snapshot, or when nothing is BUY-rated. **Never raises**
+      (CONSTRAINT #6).
+    """
+    try:
+        if not isinstance(snapshot, dict):
+            return []
+        signals = snapshot.get("signals") or []
+        if not isinstance(signals, list):
+            return []
+        try:
+            cap = max(1, min(int(limit), 200))
+        except (TypeError, ValueError):
+            cap = 25
+        cf = scoring._coerce_float
+
+        picks: List[dict] = []
+        for sig in signals:
+            if not isinstance(sig, dict):
+                continue
+            symbol = str(sig.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            action = _clean_str(sig.get("advisory_action")) or _clean_str(sig.get("action"))
+            if not action or "BUY" not in action.upper():
+                continue
+            picks.append({
+                "symbol": symbol,
+                "action": action,
+                "conviction": cf(sig.get("advisory_conviction")),
+                "score": cf(sig.get("score")),
+                "buy_range": _clean_str(sig.get("buy_range")),
+                "sector": _clean_str(sig.get("sector")),
+                "price": _clean_price(sig.get("price")),  # non-positive → None
+            })
+
+        # Conviction desc, score desc, symbol asc. None sorts last within a tier
+        # (a missing conviction must never outrank a real one) via the -inf key.
+        picks.sort(
+            key=lambda p: (
+                -(p["conviction"] if p["conviction"] is not None else float("-inf")),
+                -(p["score"] if p["score"] is not None else float("-inf")),
+                p["symbol"],
+            )
+        )
+        return picks[:cap]
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("list_recommendations failed: %s", exc)
         return []
 
 

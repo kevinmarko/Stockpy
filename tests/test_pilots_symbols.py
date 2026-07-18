@@ -16,7 +16,13 @@ import pytest
 
 from pilots.catalog import get_pilot
 from pilots.scoring import load_snapshot
-from pilots.symbols import find_signal, held_by_pilots, list_universe, symbol_detail
+from pilots.symbols import (
+    find_signal,
+    held_by_pilots,
+    list_recommendations,
+    list_universe,
+    symbol_detail,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "state_snapshot.json"
 
@@ -330,3 +336,106 @@ class TestListUniverse:
         assert list_universe({"signals": "nope"}) == []
         assert list_universe({"signals": None}) == []
         assert list_universe(123) == []
+
+
+# ---------------------------------------------------------------------------
+# list_recommendations — the ranked BUY-picks feed (GET /recommendations)
+# ---------------------------------------------------------------------------
+
+class TestListRecommendations:
+    def test_only_buys_from_fixture_ranked_by_conviction(self, snapshot):
+        # Fixture BUYs: NVDA(0.88) AAPL(0.72) JPM(0.64) XOM(0.58); HOLDs/SELL dropped.
+        rows = list_recommendations(snapshot)
+        assert [r["symbol"] for r in rows] == ["NVDA", "AAPL", "JPM", "XOM"]
+
+    def test_row_shape(self, snapshot):
+        rows = list_recommendations(snapshot)
+        assert rows, "fixture has BUYs"
+        for r in rows:
+            assert set(r) == {"symbol", "action", "conviction", "score", "buy_range", "sector", "price"}
+
+    def test_values_are_carried_through(self, snapshot):
+        nvda = list_recommendations(snapshot)[0]
+        assert nvda == {
+            "symbol": "NVDA",
+            "action": "BUY",
+            "conviction": 0.88,
+            "score": 118.4,
+            "buy_range": "Buy Zone: $118.00 - $126.00",
+            "sector": "Information Technology",
+            "price": 128.72,
+        }
+
+    def test_strong_buy_is_included(self):
+        snap = {"signals": [{"symbol": "ZZ", "advisory_action": "STRONG BUY", "advisory_conviction": 0.9}]}
+        assert [r["symbol"] for r in list_recommendations(snap)] == ["ZZ"]
+
+    def test_hold_and_sell_excluded(self):
+        snap = {"signals": [
+            {"symbol": "H", "advisory_action": "HOLD"},
+            {"symbol": "S", "advisory_action": "SELL"},
+            {"symbol": "B", "advisory_action": "BUY"},
+        ]}
+        assert [r["symbol"] for r in list_recommendations(snap)] == ["B"]
+
+    def test_action_prefers_advisory_over_raw(self):
+        # advisory_action HOLD overrides a raw BUY → not a recommendation.
+        snap = {"signals": [{"symbol": "AAPL", "advisory_action": "HOLD", "action": "BUY"}]}
+        assert list_recommendations(snap) == []
+
+    def test_action_falls_back_to_raw_action(self):
+        snap = {"signals": [{"symbol": "AAPL", "action": "BUY"}]}
+        assert [r["symbol"] for r in list_recommendations(snap)] == ["AAPL"]
+
+    def test_missing_numeric_fields_are_null_not_zero(self):
+        # Honesty (CONSTRAINT #4): absent conviction/score/price → None, never 0.0.
+        snap = {"signals": [{"symbol": "ZZ", "action": "BUY"}]}
+        row = list_recommendations(snap)[0]
+        assert row["conviction"] is None
+        assert row["score"] is None
+        assert row["price"] is None
+        assert row["buy_range"] is None
+        assert row["sector"] is None
+
+    def test_nonpositive_price_nulled(self):
+        snap = {"signals": [{"symbol": "ZZ", "action": "BUY", "price": 0.0}]}
+        assert list_recommendations(snap)[0]["price"] is None
+
+    def test_null_conviction_sorts_after_real_conviction(self):
+        snap = {"signals": [
+            {"symbol": "NOCONV", "action": "BUY"},
+            {"symbol": "REAL", "action": "BUY", "advisory_conviction": 0.10},
+        ]}
+        assert [r["symbol"] for r in list_recommendations(snap)] == ["REAL", "NOCONV"]
+
+    def test_score_tiebreaks_equal_conviction(self):
+        snap = {"signals": [
+            {"symbol": "LO", "action": "BUY", "advisory_conviction": 0.5, "score": 10},
+            {"symbol": "HI", "action": "BUY", "advisory_conviction": 0.5, "score": 90},
+        ]}
+        assert [r["symbol"] for r in list_recommendations(snap)] == ["HI", "LO"]
+
+    def test_symbol_tiebreaks_equal_conviction_and_score(self):
+        snap = {"signals": [
+            {"symbol": "BBB", "action": "BUY", "advisory_conviction": 0.5, "score": 10},
+            {"symbol": "AAA", "action": "BUY", "advisory_conviction": 0.5, "score": 10},
+        ]}
+        assert [r["symbol"] for r in list_recommendations(snap)] == ["AAA", "BBB"]
+
+    def test_limit_clamped_and_applied(self, snapshot):
+        assert [r["symbol"] for r in list_recommendations(snapshot, limit=2)] == ["NVDA", "AAPL"]
+        # Clamp: <1 → 1, non-int → default; never raises, never empties everything.
+        assert len(list_recommendations(snapshot, limit=0)) == 1
+        assert len(list_recommendations(snapshot, limit="bad")) == 4  # type: ignore[arg-type]
+
+    def test_uppercases_and_strips_symbol(self):
+        snap = {"signals": [{"symbol": "  nvda  ", "action": "BUY"}]}
+        assert list_recommendations(snap)[0]["symbol"] == "NVDA"
+
+    def test_cold_start_and_malformed_never_raise(self):
+        assert list_recommendations(None) == []
+        assert list_recommendations({}) == []
+        assert list_recommendations("not a dict") == []
+        assert list_recommendations({"signals": "nope"}) == []
+        assert list_recommendations({"signals": None}) == []
+        assert list_recommendations({"signals": [123, "x", {"no_symbol": 1}]}) == []

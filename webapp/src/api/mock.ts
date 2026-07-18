@@ -82,6 +82,9 @@ import type {
   StrategyModulesUpdateResult,
   SymbolDetail,
   UniverseResponse,
+  RecommendationsResponse,
+  Recommendation,
+  UniverseListResponse,
   UniverseSymbol,
   Thresholds,
   SymbolHeldBy,
@@ -735,6 +738,17 @@ const SYMBOL_UNIVERSE: Set<string> = new Set<string>([
   ...CATALOG.flatMap((p) => p.holdings.map((x) => x.symbol)),
   ...PORTFOLIO.positions.map((p) => p.symbol),
 ]);
+
+// ---- Mock configured universe (settings.DEFAULT_TICKERS) --------------------
+// A module-level mutable list so getDataUniverse/updateDataUniverse behave like
+// a real read-modify-write within a session (and across a test's add→remove
+// steps). Seeded with the same defaults settings.py ships.
+let MOCK_DATA_UNIVERSE: string[] = ["AAPL", "MSFT", "JNJ", "AGNC"];
+
+/** Exposed for tests: reset the mock universe between cases. */
+export function __resetMockDataUniverse() {
+  MOCK_DATA_UNIVERSE = ["AAPL", "MSFT", "JNJ", "AGNC"];
+}
 
 // ---- Local follows store (persisted to localStorage so the mock feels live) ----
 const FOLLOWS_KEY = "stockpy.mock.follows";
@@ -3204,6 +3218,42 @@ export const mockApi = {
       // honest null: FRED hadn't published today's real yield yet
       real_yield_10y: null,
     });
+  },
+
+  async getRecommendations(limit = 25): Promise<RecommendationsResponse> {
+    // Ranked BUY picks, conviction-descending. The last row is the honest-null
+    // fixture (no conviction/score/price/buy_range/sector) so the UI's "—" path
+    // is exercised, never a fabricated 0 (CONSTRAINT #4).
+    const all: Recommendation[] = [
+      { symbol: "NVDA", action: "STRONG BUY", conviction: 0.88, score: 118.4, buy_range: "Buy Zone: $118.00 - $126.00", sector: "Information Technology", price: 128.72 },
+      { symbol: "AAPL", action: "BUY", conviction: 0.72, score: 96.8, buy_range: "Buy Zone: $210.00 - $222.00", sector: "Information Technology", price: 224.15 },
+      { symbol: "JPM", action: "BUY", conviction: 0.64, score: 78.9, buy_range: "Buy Zone: $196.00 - $203.00", sector: "Financials", price: 205.6 },
+      { symbol: "XOM", action: "BUY", conviction: 0.58, score: 71.2, buy_range: "Buy Zone: $106.00 - $111.00", sector: "Energy", price: 112.4 },
+      { symbol: "ZZ", action: "BUY", conviction: null, score: null, buy_range: null, sector: null, price: null },
+    ];
+    const recommendations = all.slice(0, Math.max(1, Math.min(limit, 200)));
+    return delay<RecommendationsResponse>({
+      recommendations,
+      count: recommendations.length,
+      as_of: "2026-07-11T21:05:00+00:00",
+      reason: recommendations.length ? null : "No BUY-rated recommendations in the latest snapshot yet.",
+    });
+  },
+
+  async getDataUniverse(): Promise<UniverseListResponse> {
+    return delay<UniverseListResponse>({
+      symbols: [...MOCK_DATA_UNIVERSE],
+      count: MOCK_DATA_UNIVERSE.length,
+    });
+  },
+
+  async updateDataUniverse(symbols: string[]): Promise<{ status: string; symbols: string[] }> {
+    // Mirror the backend PUT: strip/upper/dedupe, then replace the whole list.
+    const cleaned = Array.from(
+      new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))
+    );
+    MOCK_DATA_UNIVERSE = cleaned;
+    return delay({ status: "updated", symbols: [...cleaned] });
   },
 
   async getSignalBreakdown(symbol: string): Promise<SignalBreakdown> {

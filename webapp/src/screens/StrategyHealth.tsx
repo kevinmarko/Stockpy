@@ -1,11 +1,12 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { CurvePoint, StrategyHealthGate, StrategyHealthRow } from "../api/types";
+import type { CurvePoint, StrategyHealthGate, StrategyHealthRow, Thresholds } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { DeployableBadge, ErrorState, Loading } from "../components/ui";
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
+import { loadThresholds } from "../help/thresholds";
 import { fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
 
@@ -51,12 +52,25 @@ function GateChip({ gate }: { gate: StrategyHealthGate }) {
   );
 }
 
-function StressGateChip({ passed }: { passed: boolean | null }) {
+/**
+ * `stressMaxDrawdown` is `validation.thresholds.STRESS_MAX_DRAWDOWN`, live-read
+ * from `GET /thresholds` (never re-typed as a literal here) — `null` while the
+ * fetch is in flight or failed renders "—" rather than a guessed limit.
+ */
+function StressGateChip({
+  passed,
+  stressMaxDrawdown,
+}: {
+  passed: boolean | null;
+  stressMaxDrawdown: number | null;
+}) {
   if (passed == null) return null;
+  const ddText =
+    stressMaxDrawdown == null ? "—" : fmtPct(stressMaxDrawdown, 0, { fromFraction: true });
   return (
     <span
       className={passed ? "badge badge-good" : "badge badge-bad"}
-      title="Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < 50% drawdown"
+      title={`Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < ${ddText} drawdown`}
     >
       Stress {passed ? "✓ passed" : "✗ failed"}
     </span>
@@ -70,7 +84,7 @@ function trendToCurve(row: StrategyHealthRow): CurvePoint[] {
     .map((t) => ({ date: t.report_date, value: t.dsr }));
 }
 
-function HealthCard({ row }: { row: StrategyHealthRow }) {
+function HealthCard({ row, thresholds }: { row: StrategyHealthRow; thresholds: Thresholds | null }) {
   const hasGates = row.gates.length > 0;
   const curve = useMemo(() => trendToCurve(row), [row]);
 
@@ -94,7 +108,12 @@ function HealthCard({ row }: { row: StrategyHealthRow }) {
             {row.gates.map((g) => (
               <GateChip key={g.key} gate={g} />
             ))}
-            {row.is_options_selling === true && <StressGateChip passed={row.stress_gate_passed} />}
+            {row.is_options_selling === true && (
+              <StressGateChip
+                passed={row.stress_gate_passed}
+                stressMaxDrawdown={thresholds?.stress_max_drawdown ?? null}
+              />
+            )}
           </div>
           {row.report_date && (
             <div style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>
@@ -126,6 +145,22 @@ export function StrategyHealth() {
     []
   );
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/marketplace"));
+
+  // Live deployability-gate thresholds (GET /thresholds, session-cached) so the
+  // footer summary and the stress-gate tooltip quote the SAME numbers the
+  // per-row GateChip values are already compared against — never a hard-coded
+  // literal that could drift from an operator-tuned validation/thresholds.py
+  // gate. Mirrors TabGuide.tsx's own loadThresholds() usage pattern.
+  const [thresholds, setThresholds] = useState<Thresholds | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadThresholds().then((t) => {
+      if (alive) setThresholds(t);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const summary = useMemo(() => {
     if (!data) return null;
@@ -181,7 +216,7 @@ export function StrategyHealth() {
               </div>
             )}
             {data.map((row) => (
-              <HealthCard key={row.pilot_id} row={row} />
+              <HealthCard key={row.pilot_id} row={row} thresholds={thresholds} />
             ))}
           </>
         )
@@ -196,9 +231,12 @@ export function StrategyHealth() {
           lineHeight: 1.5,
         }}
       >
-        Deployable requires PBO &lt; 0.50, DSR &gt; 0.95, net Sharpe &gt; 0.50, Max
-        Drawdown &lt; 30% — plus a tail-scenario stress gate for options-selling
-        strategies. Thresholds are never loosened to force a green badge.
+        Deployable requires PBO &lt; {fmtNum(thresholds?.pbo_max, 2)}, DSR &gt;{" "}
+        {fmtNum(thresholds?.dsr_min, 2)}, net Sharpe &gt;{" "}
+        {fmtNum(thresholds?.net_sharpe_min, 2)}, Max Drawdown &lt;{" "}
+        {fmtPct(thresholds?.max_drawdown_max, 0, { fromFraction: true })} — plus a
+        tail-scenario stress gate for options-selling strategies. Thresholds are
+        never loosened to force a green badge.
       </p>
     </div>
   );

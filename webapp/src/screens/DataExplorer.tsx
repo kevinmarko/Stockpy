@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Bar, Fundamentals, MacroSnapshot, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
 import { PerfLine } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
+import { RecommendedStocks } from "../components/RecommendedStocks";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -121,10 +122,12 @@ export function DataExplorer() {
       </button>
       <h1 className="screen-title">Data explorer</h1>
       <p className="screen-sub">
-        Browse the raw data layer for a symbol — daily bars and current
-        fundamentals — plus the current macro snapshot. Straight from the data
-        API, no advisory overlay.
+        See the platform's recommended stocks and browse the raw data layer for
+        a symbol — daily bars, current fundamentals, and the macro snapshot.{" "}
+        Manage which stocks are tracked in <Link to="/settings">Settings</Link>.
       </p>
+
+      <RecommendedStocks onSelect={setSymbol} />
 
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={bars.loading} />
 

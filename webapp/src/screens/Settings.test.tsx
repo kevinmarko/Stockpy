@@ -16,6 +16,7 @@ import { Settings } from "./Settings";
 import { api } from "../api/client";
 import type { AutomationSchedule, AutomationStatus, Follow, FollowResult, LlmProviderName, LlmStatus, TriggerRunResult } from "../api/types";
 import { writeOnboarding, readOnboarding } from "../onboarding";
+import { __resetMockDataUniverse } from "../api/mock";
 
 vi.mock("virtual:pwa-register/react", () => ({
   useRegisterSW: (opts?: { onRegisteredSW?: () => void }) => {
@@ -715,5 +716,18 @@ describe("Settings — AI providers link card", () => {
     renderSettings();
     await screen.findByText("AI providers");
     expect(screen.queryByLabelText("needs attention")).not.toBeInTheDocument();
+  });
+});
+
+describe("Settings screen — Tracked universe", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetMockDataUniverse();
+  });
+
+  it("renders the Tracked universe card with the seeded chips", async () => {
+    renderSettings();
+    expect(await screen.findByText("Tracked universe")).toBeInTheDocument();
+    expect(await screen.findByTestId("universe-chip-AAPL")).toBeInTheDocument();
   });
 });

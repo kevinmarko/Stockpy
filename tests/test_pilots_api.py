@@ -253,6 +253,61 @@ def test_universe_cold_start_empty_not_404(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# GET /recommendations — the ranked BUY-picks feed
+# ---------------------------------------------------------------------------
+
+
+def test_recommendations_shape_and_ranking():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/recommendations")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"recommendations", "count", "as_of", "reason"}
+    # Fixture BUYs ranked by conviction: NVDA(0.88) AAPL(0.72) JPM(0.64) XOM(0.58).
+    symbols = [r["symbol"] for r in body["recommendations"]]
+    assert symbols == ["NVDA", "AAPL", "JPM", "XOM"]
+    assert body["count"] == 4
+    assert body["as_of"] == "2026-07-11T21:05:00+00:00"
+    assert body["reason"] is None
+    for r in body["recommendations"]:
+        assert set(r) == {"symbol", "action", "conviction", "score", "buy_range", "sector", "price"}
+
+
+def test_recommendations_limit_clamped():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/recommendations?limit=2")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [r["symbol"] for r in body["recommendations"]] == ["NVDA", "AAPL"]
+    assert body["count"] == 2
+    # FastAPI validates ge=1/le=200 → 422 out of range.
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        assert client.get("/recommendations?limit=0").status_code == 422
+        assert client.get("/recommendations?limit=999").status_code == 422
+
+
+def test_recommendations_cold_start_empty_with_reason(tmp_path):
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        resp = client.get("/recommendations")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["recommendations"] == []
+    assert body["count"] == 0
+    assert body["as_of"] is None
+    assert body["reason"]  # honest "nothing yet" note, never 404
+
+
+def test_recommendations_read_token_gates_the_endpoint():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            assert client.get("/recommendations").status_code == 401
+            resp = client.get("/recommendations", headers={"Authorization": "Bearer read-tok"})
+        assert resp.status_code == 200
+        with mock.patch.object(settings, "STATE_API_TOKEN", ""):
+            assert client.get("/recommendations").status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # GET /thresholds — live deployability-gate / sizing thresholds for the PWA's
 # education panels. Asserted against the SAME imported constants the route
 # itself reads, so this test can never silently drift from the live source.

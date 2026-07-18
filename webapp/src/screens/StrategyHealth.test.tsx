@@ -7,10 +7,11 @@
  */
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrategyHealth } from "./StrategyHealth";
 import { api } from "../api/client";
 import type { StrategyHealthRow } from "../api/types";
+import { __resetThresholdsCache } from "../help/thresholds";
 
 function renderScreen() {
   return render(
@@ -21,6 +22,7 @@ function renderScreen() {
 }
 
 describe("StrategyHealth screen (real mock API)", () => {
+  beforeEach(() => __resetThresholdsCache());
   afterEach(() => vi.restoreAllMocks());
 
   it("renders a deployable pilot with its per-gate value vs threshold", async () => {
@@ -122,5 +124,67 @@ describe("StrategyHealth screen (real mock API)", () => {
     renderScreen();
     expect(await screen.findByText("Solo Pilot")).toBeInTheDocument();
     expect(screen.getAllByText("● Deployable").length).toBe(1);
+  });
+
+  it("renders live PBO/DSR/Sharpe/MaxDD thresholds in the footer summary, never a hard-coded literal", async () => {
+    vi.spyOn(api, "getThresholds").mockResolvedValue({
+      pbo_max: 0.42,
+      dsr_min: 0.88,
+      net_sharpe_min: 0.61,
+      max_drawdown_max: 0.25,
+      stress_max_drawdown: 0.44,
+      kelly_fraction: 0.5,
+      kelly_cap: 0.2,
+      robinhood_max_notional_per_order: 0.0,
+      follow_min_amount: 100.0,
+      agentic_max_candidates: 25,
+    });
+    renderScreen();
+    await screen.findByText("Trend Follower");
+    expect(
+      await screen.findByText(
+        /Deployable requires PBO < 0\.42, DSR > 0\.88, net Sharpe > 0\.61, Max Drawdown < 25%/
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("footer degrades to '—' for every gate when the threshold fetch fails (no guessed gate)", async () => {
+    vi.spyOn(api, "getThresholds").mockRejectedValue(new Error("offline"));
+    renderScreen();
+    await screen.findByText("Trend Follower");
+    expect(
+      await screen.findByText(/Deployable requires PBO < —, DSR > —, net Sharpe > —, Max Drawdown < —/)
+    ).toBeInTheDocument();
+  });
+
+  it("the stress-gate tooltip quotes the live stress_max_drawdown limit", async () => {
+    vi.spyOn(api, "getThresholds").mockResolvedValue({
+      pbo_max: 0.5,
+      dsr_min: 0.95,
+      net_sharpe_min: 0.5,
+      max_drawdown_max: 0.3,
+      stress_max_drawdown: 0.44,
+      kelly_fraction: 0.5,
+      kelly_cap: 0.2,
+      robinhood_max_notional_per_order: 0.0,
+      follow_min_amount: 100.0,
+      agentic_max_candidates: 25,
+    });
+    renderScreen();
+    const chip = await screen.findByText("Stress ✗ failed");
+    expect(chip).toHaveAttribute(
+      "title",
+      "Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < 44% drawdown"
+    );
+  });
+
+  it("the stress-gate tooltip degrades to '—' when thresholds are unavailable", async () => {
+    vi.spyOn(api, "getThresholds").mockRejectedValue(new Error("offline"));
+    renderScreen();
+    const chip = await screen.findByText("Stress ✗ failed");
+    expect(chip).toHaveAttribute(
+      "title",
+      "Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < — drawdown"
+    );
   });
 });

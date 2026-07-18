@@ -57,6 +57,8 @@ import type {
   StrategyModulesUpdateResult,
   SymbolDetail,
   UniverseResponse,
+  RecommendationsResponse,
+  UniverseListResponse,
   Thresholds,
   SymbolOptions,
   TriggerRunResult,
@@ -182,6 +184,9 @@ const liveApi = {
       `/pilots/${encodeURIComponent(id)}/performance?range=${range}`
     ),
   getUniverse: () => http<UniverseResponse>("/universe"),
+  // Ranked BUY picks from the latest snapshot (pilots base, :8602).
+  getRecommendations: (limit = 25) =>
+    http<RecommendationsResponse>(`/recommendations?limit=${limit}`),
   getThresholds: () => http<Thresholds>("/thresholds"),
   getSymbol: (ticker: string) =>
     http<SymbolDetail>(`/symbols/${encodeURIComponent(ticker)}`),
@@ -254,6 +259,15 @@ const liveApi = {
   getDataFundamentals: (symbol: string) =>
     http<Fundamentals>(`/data/fundamentals/${encodeURIComponent(symbol)}`),
   getMacro: () => http<MacroSnapshot>("/data/macro"),
+  // The operator's configured universe (settings.DEFAULT_TICKERS) — read + PUT
+  // (full-list replace). The Data Explorer's add/remove control does a
+  // read-modify-write against these two (data base, :8603).
+  getDataUniverse: () => http<UniverseListResponse>("/data/universe"),
+  updateDataUniverse: (symbols: string[]) =>
+    http<{ status: string; symbols: string[] }>("/data/universe", {
+      method: "PUT",
+      body: JSON.stringify(symbols),
+    }),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
   getForecastResult: (symbol: string) =>
