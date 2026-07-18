@@ -1214,6 +1214,48 @@ def get_edge_by_strategy() -> Dict[str, Any]:
     return calibration.edge_by_strategy_view()
 
 
+@app.get("/decisions", dependencies=[Depends(require_read_token)])
+def get_decisions(
+    limit: int = Query(50, ge=1, le=500),
+    symbol: Optional[str] = Query(None),
+) -> List[Dict[str, Any]]:
+    """Decision Journal history, most-recent-first, optionally filtered to one
+    symbol. A COLLECTION view — an empty or not-yet-created log degrades to
+    ``[]``, never a 404 (CONSTRAINT #6). Distinct from ``GET /calibration/summary``'s
+    bundled ``recent_decisions`` (a fixed-size portfolio-wide preview): this is
+    the standalone, paginated, symbol-filterable read a symbol detail page
+    needs. ``gui.decision_log.read_decisions`` already tolerates a missing
+    file / corrupt lines internally; the ``try/except`` here is a second
+    dead-letter layer for an unexpected read failure (e.g. a permissions
+    error)."""
+    from gui.decision_log import read_decisions
+
+    try:
+        entries = read_decisions(_decision_log_path())
+    except Exception as exc:  # noqa: BLE001 - dead-letter: unreadable log -> empty
+        logger.warning("pilots_api: read_decisions failed: %s", exc)
+        return []
+
+    if symbol:
+        sym_upper = symbol.strip().upper()
+        entries = [e for e in entries if e.symbol.upper() == sym_upper]
+
+    entries.sort(key=lambda e: e.timestamp, reverse=True)
+    return [
+        {
+            "symbol": e.symbol,
+            "action_taken": e.action_taken,
+            "signal_action": e.signal_action,
+            "conviction": e.conviction,
+            "notes": e.notes,
+            "timestamp": e.timestamp,
+            "signal_ts": e.signal_ts,
+            "trade_id": e.trade_id,
+        }
+        for e in entries[:limit]
+    ]
+
+
 @app.post("/decisions", dependencies=[Depends(require_command_token)])
 def create_decision(body: DecisionCreateRequest) -> Dict[str, Any]:
     """Append one operator decision to the journal (``output/decision_log.jsonl``).

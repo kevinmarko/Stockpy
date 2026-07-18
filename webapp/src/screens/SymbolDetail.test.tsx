@@ -5,6 +5,7 @@
  * value), and the honest 404 for an unknown ticker.
  */
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SymbolDetail } from "./SymbolDetail";
@@ -96,6 +97,44 @@ describe("SymbolDetail screen (real mock API)", () => {
       ).toBeInTheDocument();
       // The "latest" caption belongs to the real-series branch only.
       expect(screen.queryByText(/60-day rolling beta — latest:/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Decision journal section", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("renders the seeded decision for AAPL (the mock's pre-populated symbol)", async () => {
+      renderSymbol("AAPL");
+      await screen.findByRole("heading", { name: "AAPL" });
+      expect(await screen.findByRole("heading", { name: "Decision journal" })).toBeInTheDocument();
+      expect(await screen.findByText("✅ Acted")).toBeInTheDocument();
+    });
+
+    it("a symbol with no logged decisions renders the honest empty state", async () => {
+      renderSymbol("NVDA");
+      await screen.findByRole("heading", { name: "NVDA" });
+      expect(
+        await screen.findByText("No decisions logged yet for NVDA.")
+      ).toBeInTheDocument();
+    });
+
+    it("clicking 'Log decision' opens the modal, and a successful submit refreshes the list", async () => {
+      const user = userEvent.setup();
+      renderSymbol("NVDA");
+      await screen.findByRole("heading", { name: "NVDA" });
+      await screen.findByText("No decisions logged yet for NVDA.");
+
+      await user.click(screen.getByRole("button", { name: "Log decision" }));
+      expect(await screen.findByText("Log decision — NVDA")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "⏭ Passed" }));
+      expect(await screen.findByTestId("decision-result")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Done" }));
+      // The list refetches on close -- the empty-state message is gone and
+      // the newly-logged entry renders.
+      await screen.findByText("⏭ Passed");
+      expect(screen.queryByText("No decisions logged yet for NVDA.")).not.toBeInTheDocument();
     });
   });
 });

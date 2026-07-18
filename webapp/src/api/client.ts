@@ -24,6 +24,7 @@ import type {
   ControlStatus,
   DecisionCreateRequest,
   DecisionCreateResult,
+  DecisionEntry,
   EdgeByStrategy,
   Follow,
   FollowResult,
@@ -204,6 +205,15 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  // Standalone, paginated, symbol-filterable read -- distinct from
+  // getCalibrationSummary's bundled, fixed-size recent-decisions preview.
+  // Used by SymbolDetail's per-symbol decision journal section.
+  getDecisions: (opts?: { symbol?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.symbol) params.set("symbol", opts.symbol);
+    params.set("limit", String(opts?.limit ?? 20));
+    return http<DecisionEntry[]>(`/decisions?${params.toString()}`);
+  },
   // ---- Data API (data_api.py, :8603) + Metrics API (metrics_api.py, :8604) ----
   // Routed by path prefix (see baseFor); these are the Phase-4 Data Explorer,
   // Signal Breakdown, and Forecast Viewer screens' data sources.

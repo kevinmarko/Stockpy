@@ -9,11 +9,14 @@ import type {
   SymbolOptions,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, MetricBadge } from "../components/ui";
+import { Button, ErrorState, Loading, MetricBadge } from "../components/ui";
 import { PerfLine } from "../components/charts";
+import { DecisionModal } from "../components/DecisionModal";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { realizableTheta } from "../optionsHonesty";
+import { useState } from "react";
+import type { DecisionEntry } from "../api/types";
 
 /** News sentiment (FinBERT, ~[-1,1]) → colored bullish/neutral/bearish badge. */
 function NewsBadge({ value }: { value: number | null }) {
@@ -74,6 +77,11 @@ export function SymbolDetail() {
   const forecast = useApi<ForecastSkill>(() => api.getForecast(ticker, 30), [ticker]);
   const options = useApi<SymbolOptions>(() => api.getSymbolOptions(ticker), [ticker]);
   const rollingBeta = useApi<RollingBeta>(() => api.getRollingBeta(ticker, 60), [ticker]);
+  const decisions = useApi<DecisionEntry[]>(
+    () => api.getDecisions({ symbol: ticker, limit: 10 }),
+    [ticker]
+  );
+  const [journaling, setJournaling] = useState(false);
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
@@ -154,6 +162,55 @@ export function SymbolDetail() {
           </p>
         )}
       </section>
+
+      {/* Decision journal — per-symbol log of what the operator actually did
+          with this signal. Shared DecisionModal with the Calibration screen's
+          portfolio-wide journal (../components/DecisionModal); this section
+          is the standalone, symbol-scoped read (GET /decisions?symbol=...)
+          Calibration's bundled recent-decisions preview doesn't offer. */}
+      <section className="card card-pad" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ fontSize: 16, margin: 0 }}>Decision journal</h2>
+          <Button variant="neutral" onClick={() => setJournaling(true)}>
+            Log decision
+          </Button>
+        </div>
+        {decisions.loading && <Loading lines={2} />}
+        {!decisions.loading && (!decisions.data || decisions.data.length === 0) && (
+          <p style={{ color: theme.textMuted, fontSize: 13, marginTop: 10 }}>
+            No decisions logged yet for {data.symbol}.
+          </p>
+        )}
+        {!decisions.loading && decisions.data && decisions.data.length > 0 && (
+          <div className="list" style={{ marginTop: 8 }}>
+            {decisions.data.map((d, i) => (
+              <div key={`${d.timestamp}-${i}`} className="row">
+                <div className="row-main">
+                  <span className="row-title" style={{ fontWeight: 500 }}>
+                    {d.action_taken === "acted" ? "✅ Acted" : d.action_taken === "passed" ? "⏭ Passed" : "🔁 Modified"}
+                  </span>
+                  {d.notes && (
+                    <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>{d.notes}</div>
+                  )}
+                </div>
+                <div className="row-end">
+                  <span style={{ color: theme.textMuted, fontSize: 12 }}>
+                    {d.timestamp ? timeAgo(d.timestamp) : "—"}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {journaling && (
+        <DecisionModal
+          signal={{ symbol: data.symbol, action: advisory.action, conviction: advisory.conviction }}
+          onClose={() => setJournaling(false)}
+          onLogged={decisions.reload}
+        />
+      )}
 
       {/* Identity */}
       <section className="card card-pad" style={{ marginBottom: 16 }}>

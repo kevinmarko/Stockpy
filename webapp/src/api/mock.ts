@@ -24,6 +24,7 @@ import type {
   CorrelationCluster,
   DecisionCreateRequest,
   DecisionCreateResult,
+  DecisionEntry,
   EdgeByStrategy,
   EquityDrawdownCurve,
   EquityDrawdownPoint,
@@ -1933,6 +1934,23 @@ async function delay<T>(v: T, ms = 260): Promise<T> {
   return new Promise((res) => setTimeout(() => res(v), ms));
 }
 
+// In-memory decision journal -- logDecision pushes into it, getDecisions
+// reads from it, so a logged decision is genuinely visible on re-fetch within
+// the mock session (not persisted across a page reload -- matches this
+// module's other ephemeral, non-localStorage mock state).
+const MOCK_DECISION_LOG: DecisionEntry[] = [
+  {
+    symbol: "AAPL",
+    action_taken: "acted",
+    signal_action: "BUY",
+    conviction: 0.72,
+    notes: "Sized to half -- position already large.",
+    timestamp: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    signal_ts: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+    trade_id: 42,
+  },
+];
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
   async health() {
@@ -2634,20 +2652,27 @@ export const mockApi = {
     // case is honestly unlinked (trade_id null) — exercising BOTH render paths
     // ("linked to trade #N" vs "no trade match within 24h").
     const linked = body.action_taken === "acted" && body.symbol.toUpperCase() === "AAPL";
-    return delay<DecisionCreateResult>(
-      {
-        symbol: body.symbol.toUpperCase(),
-        action_taken: body.action_taken,
-        signal_action: body.signal_action,
-        conviction: body.conviction,
-        notes: body.notes,
-        timestamp: new Date().toISOString(),
-        signal_ts: body.signal_ts ?? "",
-        trade_id: linked ? 42 : null,
-        trade_linked: linked,
-      },
-      150
-    );
+    const entry = {
+      symbol: body.symbol.toUpperCase(),
+      action_taken: body.action_taken,
+      signal_action: body.signal_action,
+      conviction: body.conviction,
+      notes: body.notes,
+      timestamp: new Date().toISOString(),
+      signal_ts: body.signal_ts ?? "",
+      trade_id: linked ? 42 : null,
+    };
+    MOCK_DECISION_LOG.unshift(entry);
+    return delay<DecisionCreateResult>({ ...entry, trade_linked: linked }, 150);
+  },
+
+  async getDecisions(opts?: { symbol?: string; limit?: number }): Promise<DecisionEntry[]> {
+    let rows = MOCK_DECISION_LOG;
+    if (opts?.symbol) {
+      const sym = opts.symbol.toUpperCase();
+      rows = rows.filter((r) => r.symbol === sym);
+    }
+    return delay(rows.slice(0, opts?.limit ?? 20));
   },
 
   async setStrategyModules(
