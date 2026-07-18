@@ -163,9 +163,10 @@ function BottomNav() {
   const [moreOpen, setMoreOpen] = useState(false);
 
   const primary = NAV_ITEMS.slice(0, MOBILE_PRIMARY_COUNT);
-  // Everything after the primary three, minus /settings (the gear covers it) --
-  // Portfolio, Compare, Models, Pairs, Options. Driven off NAV_ITEMS so the
-  // sheet can never drift from the desktop sidebar.
+  // Everything after the primary three, minus /settings (the gear covers it).
+  // Driven off NAV_ITEMS so the sheet can never drift from the desktop sidebar
+  // (kept non-enumerating on purpose -- an explicit list here goes stale every
+  // time a nav item is added).
   const secondary = NAV_ITEMS.slice(MOBILE_PRIMARY_COUNT).filter(
     (it) => it.to !== "/settings"
   );

@@ -202,6 +202,12 @@ export interface Thresholds {
   stress_max_drawdown: number;
   kelly_fraction: number;
   kelly_cap: number;
+  /** Live settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER — USD cap per gated queue order (0 = unset). */
+  robinhood_max_notional_per_order: number;
+  /** Live settings.FOLLOW_MIN_AMOUNT — USD floor the Follow modal enforces. */
+  follow_min_amount: number;
+  /** Live settings.AGENTIC_MAX_CANDIDATES — cap on GET /agentic/discovery's candidate list. */
+  agentic_max_candidates: number;
 }
 
 /**

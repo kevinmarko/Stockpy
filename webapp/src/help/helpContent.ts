@@ -17,7 +17,7 @@
  * null-handling) if thresholds haven't loaded yet or the fetch failed — never
  * a guessed value.
  */
-import { fmtNum, fmtPct } from "../format";
+import { fmtNum, fmtPct, fmtUsd } from "../format";
 import type { Thresholds } from "../api/types";
 
 export interface TabHelp {
@@ -86,6 +86,19 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Volatility Risk Premium — implied volatility in excess of realized. When options charge more than the stock actually moves, there's premium to collect. A VRP > 0.02 is required before recommending a premium-selling strategy.",
   "brinson-fachler":
     "Attribution that splits benchmark out-/under-performance into Allocation (right sectors?), Selection (right stocks within a sector?), and Interaction (the combined effect).",
+  "execution mode":
+    "The Robinhood order queue's posture: 'off' builds nothing, 'review' builds a dry-run queue for you to confirm, 'live' still requires the same per-trade human confirmation before any order reaches the broker — no mode ever places an order automatically.",
+  "kill switch":
+    "A global, file-based safety switch. While active, the execution queue adds no new orders and Pilot follows are paused. Pausing does not stop the pipeline schedule — cycles keep running, they just produce no actionable output.",
+  "notional cap": (t) => {
+    const cap = t?.robinhood_max_notional_per_order;
+    const rendered = cap != null && cap > 0 ? fmtUsd(cap) : "not configured";
+    return `The hard per-order USD ceiling the execution queue enforces before an intent is marked placeable: ${rendered}. An intent above the cap is blocked, never silently resized.`;
+  },
+  "follow minimum": (t) =>
+    `The smallest dollar amount the Follow modal accepts for a Pilot allocation: ${fmtUsd(t?.follow_min_amount)}. A UX floor, not a broker constraint — the gated queue itself is bounded by the per-order notional cap.`,
+  "opportunity scan": (t) =>
+    `A Robinhood broker scan run by the agentic-discovery skill, cross-referenced against this platform's own advisory engine — never run automatically. Results are capped at ${fmtNum(t?.agentic_max_candidates, 0)} candidates regardless of how many the scan matches; a candidate with no computed action shows '—', never a guessed one.`,
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -100,7 +113,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
     title: "Pilots",
     description:
       "Browse strategy 'Pilots' you can follow. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
-    keyConcepts: ["deployable", "pbo", "dsr", "sharpe ratio", "max drawdown"],
+    keyConcepts: ["deployable", "pbo", "dsr", "sharpe ratio", "max drawdown", "follow minimum"],
   },
   portfolio: {
     title: "Portfolio",
@@ -148,6 +161,19 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "Premium-selling strategy directives per active symbol: recommended structure (Put Credit Spread, Iron Condor, or Cash/Wait), strikes, net premium, and Greeks. Gated by IVR > 50, VRP > 0.02, VIX < 30, and no CREDIT EVENT — Cash/Wait is returned when any gate fails. All informational.",
     keyConcepts: ["put credit spread", "iron condor", "iv rank", "vrp", "garch vol"],
+  },
+  agentic: {
+    title: "Agentic Trading",
+    description:
+      "The consolidated command center for the platform's Robinhood-backed loop: Pilot follows, the gated dry-run order queue, scan-based candidate discovery, and the decision journal. Every control here is advisory-only or paper-first — placing a real order always requires a separate, human-confirmed step outside this screen.",
+    keyConcepts: [
+      "advisory only",
+      "execution mode",
+      "kill switch",
+      "notional cap",
+      "opportunity scan",
+      "follow minimum",
+    ],
   },
 };
 

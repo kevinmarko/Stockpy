@@ -16,6 +16,9 @@ const LIVE: Thresholds = {
   stress_max_drawdown: 0.5,
   kelly_fraction: 0.5,
   kelly_cap: 0.2,
+  robinhood_max_notional_per_order: 2500,
+  follow_min_amount: 100,
+  agentic_max_candidates: 25,
 };
 
 describe("glossaryDef", () => {
@@ -55,6 +58,33 @@ describe("glossaryDef", () => {
     expect(glossaryDef("max drawdown", LIVE)).toContain("30%");
     expect(glossaryDef("max drawdown", LIVE)).toContain("50%"); // stress gate
     expect(glossaryDef("kelly target", LIVE)).toContain("20%");
+  });
+
+  it("renders the live per-order notional cap when configured", () => {
+    expect(glossaryDef("notional cap", LIVE)).toContain("$2,500.00");
+  });
+
+  it("renders 'not configured' rather than a fabricated $0.00 when the notional cap is unset", () => {
+    const unset: Thresholds = { ...LIVE, robinhood_max_notional_per_order: 0 };
+    const def = glossaryDef("notional cap", unset)!;
+    expect(def).toContain("not configured");
+    expect(def).not.toContain("$0.00");
+  });
+
+  it("degrades the notional cap to 'not configured' when thresholds are null (not a guessed $0.00)", () => {
+    const def = glossaryDef("notional cap", null)!;
+    expect(def).toContain("not configured");
+    expect(def).not.toContain("$0.00");
+  });
+
+  it("renders live values for follow minimum and opportunity scan", () => {
+    expect(glossaryDef("follow minimum", LIVE)).toContain("$100.00");
+    expect(glossaryDef("opportunity scan", LIVE)).toContain("25 candidates");
+  });
+
+  it("degrades follow minimum and opportunity scan to '—' when thresholds are null", () => {
+    expect(glossaryDef("follow minimum", null)).toContain("—");
+    expect(glossaryDef("opportunity scan", null)).toContain("— candidates");
   });
 });
 

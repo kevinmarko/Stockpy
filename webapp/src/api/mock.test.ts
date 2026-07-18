@@ -421,3 +421,81 @@ describe("mock API — /llm/status contract", () => {
     }
   });
 });
+
+describe("mock API — Agentic Trading contract", () => {
+  // putScanConfig / status read from localStorage-backed stores; isolate them.
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it("getAgenticStatus() returns the full composite AgenticStatus shape", async () => {
+    const s = await mockApi.getAgenticStatus();
+    expect(typeof s.mode).toBe("string");
+    expect(typeof s.advisory_only).toBe("boolean");
+    expect(typeof s.kill_switch.active).toBe("boolean");
+    expect(
+      s.kill_switch.reason === null || typeof s.kill_switch.reason === "string"
+    ).toBe(true);
+    // queue = summary sub-shape only (never the full intents list).
+    expect(typeof s.queue.mode).toBe("string");
+    expect(typeof s.queue.n_intents).toBe("number");
+    expect(typeof s.queue.n_placeable).toBe("number");
+    expect(typeof s.queue.stale).toBe("boolean");
+    // follows summary.
+    expect(typeof s.follows.n_active).toBe("number");
+    expect(typeof s.follows.total_amount).toBe("number");
+    // agent_loop mirrors engine/advisory_agent.py's persisted AgentState.
+    expect(typeof s.agent_loop.cycle_count).toBe("number");
+    expect(typeof s.agent_loop.backlog_count).toBe("number");
+    expect(
+      s.agent_loop.last_cycle_iso === null ||
+        typeof s.agent_loop.last_cycle_iso === "string"
+    ).toBe(true);
+  });
+
+  it("getAgenticDiscovery() surfaces a scored AND an honestly-unscored candidate (CONSTRAINT #4)", async () => {
+    const d = await mockApi.getAgenticDiscovery();
+    expect(Array.isArray(d.candidates)).toBe(true);
+    expect(Array.isArray(d.scan_configs)).toBe(true);
+    expect(typeof d.writable).toBe("boolean");
+    expect(typeof d.note).toBe("string");
+    // action/conviction are provider-null or populated together — never a
+    // fabricated score for a symbol the advisory couldn't cross-reference.
+    for (const c of d.candidates) {
+      expect(typeof c.symbol).toBe("string");
+      expect(c.action === null || typeof c.action === "string").toBe(true);
+      expect(c.conviction === null || typeof c.conviction === "number").toBe(true);
+    }
+    const scored = d.candidates.find((c) => c.action !== null);
+    const unscored = d.candidates.find((c) => c.action === null);
+    expect(scored?.conviction).not.toBeNull();
+    expect(unscored).toBeDefined();
+    expect(unscored!.conviction).toBeNull();
+  });
+
+  it("putScanConfig() persists + echoes the stored row, preserving created_at on update", async () => {
+    const first = await mockApi.putScanConfig({
+      name: "my_scan",
+      filters: { min_price: 5 },
+      enabled: true,
+    });
+    expect(first.scan_config.name).toBe("my_scan");
+    expect(first.scan_config.filters).toEqual({ min_price: 5 });
+    expect(first.scan_config.enabled).toBe(true);
+    expect(first.applies).toBe("next_discovery_run");
+    expect(typeof first.note).toBe("string");
+
+    // now readable back through the discovery read.
+    const disc = await mockApi.getAgenticDiscovery();
+    expect(disc.scan_configs.some((c) => c.name === "my_scan")).toBe(true);
+
+    // an upsert to the same name preserves created_at (not a fresh row).
+    const second = await mockApi.putScanConfig({
+      name: "my_scan",
+      filters: { min_price: 10 },
+      enabled: false,
+    });
+    expect(second.scan_config.created_at).toBe(first.scan_config.created_at);
+    expect(second.scan_config.enabled).toBe(false);
+    expect(second.scan_config.filters).toEqual({ min_price: 10 });
+  });
+});
