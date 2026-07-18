@@ -1,12 +1,20 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { ModelRow } from "../api/types";
+import type { ModelRow, Thresholds } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { DeployableBadge, ErrorState, Loading, MetricBadge } from "../components/ui";
+import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum } from "../format";
 import { theme } from "../theme";
 
-function ModelCard({ m }: { m: ModelRow }) {
+/**
+ * `thresholds` is live from `GET /thresholds` (`dsr_min`/`pbo_max`, mirroring
+ * `validation/thresholds.py`'s `DSR_MIN`/`PBO_MAX` -- never re-typed as a
+ * literal here). `null` while the fetch is in flight or failed degrades the
+ * `good` color to "neutral" rather than guessing a gate.
+ */
+function ModelCard({ m, thresholds }: { m: ModelRow; thresholds: Thresholds | null }) {
   return (
     <section className="card card-pad" style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -22,12 +30,14 @@ function ModelCard({ m }: { m: ModelRow }) {
         <MetricBadge
           label="DSR"
           value={m.cpcv_dsr == null ? "—" : fmtNum(m.cpcv_dsr, 3)}
-          good={m.cpcv_dsr == null ? null : m.cpcv_dsr > 0.95}
+          good={
+            m.cpcv_dsr == null || thresholds == null ? null : m.cpcv_dsr > thresholds.dsr_min
+          }
         />
         <MetricBadge
           label="PBO"
           value={m.pbo == null ? "—" : fmtNum(m.pbo, 2)}
-          good={m.pbo == null ? null : m.pbo < 0.5}
+          good={m.pbo == null || thresholds == null ? null : m.pbo < thresholds.pbo_max}
         />
         <MetricBadge label="Trained" value={fmtDate(m.trained_date)} />
         <MetricBadge label="N" value={m.n_train == null ? "—" : String(m.n_train)} />
@@ -48,6 +58,22 @@ export function Models() {
     []
   );
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
+
+  // Live deployability-gate thresholds (GET /thresholds, session-cached) so
+  // the footer's "Deployable = ..." summary and each card's DSR/PBO badge
+  // color quote the SAME numbers validation/thresholds.py actually enforces
+  // -- never a hard-coded literal. Mirrors TabGuide.tsx's loadThresholds()
+  // usage and StrategyHealth.tsx's identical pattern.
+  const [thresholds, setThresholds] = useState<Thresholds | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadThresholds().then((t) => {
+      if (alive) setThresholds(t);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   return (
     <div className="screen">
@@ -81,7 +107,7 @@ export function Models() {
         ) : (
           <div style={{ marginTop: 12 }}>
             {data.map((m) => (
-              <ModelCard key={m.name} m={m} />
+              <ModelCard key={m.name} m={m} thresholds={thresholds} />
             ))}
           </div>
         )
@@ -95,8 +121,9 @@ export function Models() {
           lineHeight: 1.5,
         }}
       >
-        Deployable = CPCV-DSR &gt; 0.95 AND PBO &lt; 0.50. Metrics are never loosened
-        to force a green badge.
+        Deployable = CPCV-DSR &gt; {fmtNum(thresholds?.dsr_min, 2)} AND PBO &lt;{" "}
+        {fmtNum(thresholds?.pbo_max, 2)}. Metrics are never loosened to force a
+        green badge.
       </p>
     </div>
   );
