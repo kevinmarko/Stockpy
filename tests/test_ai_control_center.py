@@ -255,6 +255,24 @@ class TestOverview:
         assert vision_row["active_provider"] is None
         assert vision_row["provider_keys"] == ["GEMINI_API_KEY"]
 
+    def test_provider_selector_setting_is_additive_and_matches_capability(self) -> None:
+        """PUT /llm/setting (api/pilots_api.py) needs to know WHICH .env key
+        holds a capability's provider choice, per-row, not just a static
+        lookup — this is a purely additive field alongside the pre-existing
+        ``toggle_key``."""
+        rows = control_center_overview(SimpleNamespace())
+        by_key = {r["key"]: r for r in rows}
+        assert by_key["claude_commentary"]["provider_selector_setting"] == (
+            "LLM_COMMENTARY_RATIONALE_PROVIDER"
+        )
+        assert by_key["gemini_alerts"]["provider_selector_setting"] == (
+            "LLM_COMMENTARY_ALERT_PROVIDER"
+        )
+        assert by_key["opal_research"]["provider_selector_setting"] == "OPAL_RESEARCH_PROVIDER"
+        # Non-flexible capabilities carry no provider selector.
+        assert by_key["gemini_vision"]["provider_selector_setting"] is None
+        assert by_key["gravity_ai_runner"]["provider_selector_setting"] is None
+
 
 # ---------------------------------------------------------------------------
 # validate_toggle_write (CONSTRAINT #3)
