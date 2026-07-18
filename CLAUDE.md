@@ -19,6 +19,10 @@ is Claude Code's to edit).
    `git checkout -b <short-description>` (lowercase-kebab, e.g. `fix-hmm-lookahead`) and a PR.
    Never commit these directly to `main`.
 4. Open a PR when a feature-branch change is complete; do not squash or amend published commits.
+5. **After merging any PR**, sync the local main checkout so the next session (in this or any
+   other worktree) starts from the merged state instead of a stale `main`:
+   `git -C <main-checkout-path> fetch origin && git -C <main-checkout-path> merge --ff-only origin/main`.
+   Do this immediately after the merge, not at the start of some future session.
 
 ## Project
 
