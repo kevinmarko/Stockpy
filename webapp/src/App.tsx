@@ -29,6 +29,9 @@ import { SignalBreakdown } from "./screens/SignalBreakdown";
 import { ForecastViewer } from "./screens/ForecastViewer";
 import { Commands } from "./screens/Commands";
 import { AgenticTrading } from "./screens/AgenticTrading";
+import { ResearchHub } from "./screens/ResearchHub";
+import { TradingHub } from "./screens/TradingHub";
+import { OperationsHub } from "./screens/OperationsHub";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { usePwaStatus } from "./hooks/usePwaStatus";
@@ -65,6 +68,17 @@ const SECTION_LABEL: Record<Exclude<NavSection, "primary">, string> = {
 
 /** Render order for the non-primary groups (most to least frequently visited). */
 const SECTION_ORDER: Exclude<NavSection, "primary">[] = ["research", "trading", "operations", "settings"];
+
+/**
+ * Hub screen route for each section, tapped from the section header itself
+ * (mobile More sheet + desktop sidebar). "settings" has no hub screen -- it's
+ * a single item (Settings) so its header stays plain, non-interactive text.
+ */
+const SECTION_ROUTE: Partial<Record<Exclude<NavSection, "primary">, string>> = {
+  research: "/research",
+  trading: "/trading",
+  operations: "/operations",
+};
 
 /** Shared between the mobile bottom tab bar and the desktop sidebar. */
 const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) => boolean; section: NavSection }[] = [
@@ -231,9 +245,22 @@ function BottomNav() {
             {SECTION_ORDER.map((section) => {
               const items = secondary.filter((it) => it.section === section);
               if (items.length === 0) return null;
+              const hubRoute = SECTION_ROUTE[section];
               return (
                 <div key={section}>
                   <h3
+                    onClick={hubRoute ? () => go(hubRoute) : undefined}
+                    tabIndex={hubRoute ? 0 : undefined}
+                    onKeyDown={
+                      hubRoute
+                        ? (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              go(hubRoute);
+                            }
+                          }
+                        : undefined
+                    }
                     style={{
                       margin: "0 0 8px",
                       fontSize: 12,
@@ -241,9 +268,18 @@ function BottomNav() {
                       letterSpacing: "0.04em",
                       textTransform: "uppercase",
                       color: theme.textMuted,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                      cursor: hubRoute ? "pointer" : "default",
                     }}
                   >
                     {SECTION_LABEL[section]}
+                    {hubRoute && (
+                      <span aria-hidden style={{ fontSize: 11 }}>
+                        →
+                      </span>
+                    )}
                   </h3>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {items.map((it) => {
@@ -317,9 +353,22 @@ function Sidebar() {
       {SECTION_ORDER.map((section) => {
         const items = secondary.filter((it) => it.section === section);
         if (items.length === 0) return null;
+        const hubRoute = SECTION_ROUTE[section];
         return (
           <div key={section} style={{ marginTop: 14 }}>
             <div
+              onClick={hubRoute ? () => nav(hubRoute) : undefined}
+              tabIndex={hubRoute ? 0 : undefined}
+              onKeyDown={
+                hubRoute
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        nav(hubRoute);
+                      }
+                    }
+                  : undefined
+              }
               style={{
                 margin: "0 10px 4px",
                 fontSize: 11,
@@ -327,9 +376,18 @@ function Sidebar() {
                 letterSpacing: "0.04em",
                 textTransform: "uppercase",
                 color: theme.textMuted,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                cursor: hubRoute ? "pointer" : "default",
               }}
             >
               {SECTION_LABEL[section]}
+              {hubRoute && (
+                <span aria-hidden style={{ fontSize: 10 }}>
+                  →
+                </span>
+              )}
             </div>
             {items.map(renderItem)}
           </div>
@@ -376,6 +434,9 @@ export default function App() {
           <Route path="/forecast" element={<ForecastViewer />} />
           <Route path="/commands" element={<Commands />} />
           <Route path="/agentic" element={<AgenticTrading />} />
+          <Route path="/research" element={<ResearchHub />} />
+          <Route path="/trading" element={<TradingHub />} />
+          <Route path="/operations" element={<OperationsHub />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/strategy" element={<StrategyMatrix />} />
