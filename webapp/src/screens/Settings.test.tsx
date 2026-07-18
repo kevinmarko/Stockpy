@@ -632,10 +632,11 @@ describe("Settings screen — Brokerage", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The AI providers section — LLM config + last-real-call telemetry. All copy
-// is past-tense; a rejected key is a rendered WARNING, a transient failure is
-// telemetry that must NOT render as a key problem, and a deliberately-off
-// feature is neutral (never a false alarm).
+// The "AI providers" link card. Full toggle/provider-write coverage and the
+// last-real-call telemetry section now live in AIControlCenter.test.tsx --
+// this screen only needs to prove the card renders, links to /settings/ai,
+// and surfaces the attention indicator (moved out once GET /llm/status grew
+// a write path and the section became its own screen).
 // ---------------------------------------------------------------------------
 
 const _noCall = (provider: LlmProviderName) => ({
@@ -652,14 +653,16 @@ function llmStatus(overrides: Partial<LlmStatus> = {}): LlmStatus {
     telemetry_note: "Verdicts are recorded from REAL LLM calls only.",
     attention: false,
     attention_reason: null,
+    writable: false,
+    writable_note: "AI-capability writes are disabled (LLM_WRITES_ENABLED=false).",
     ...overrides,
   };
 }
 
-describe("Settings — AI providers section", () => {
+describe("Settings — AI providers link card", () => {
   beforeEach(() => {
     Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
-    // The section's siblings need SOME status/schedule to render the screen.
+    // The card's siblings need SOME status/schedule to render the screen.
     vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
     vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
   });
@@ -670,61 +673,22 @@ describe("Settings — AI providers section", () => {
     delete (navigator as { serviceWorker?: unknown }).serviceWorker;
   });
 
-  it("renders an invalid_key capability with an amber notice naming the key setting", async () => {
+  it("links to /settings/ai and shows a ready-count summary", async () => {
     vi.spyOn(api, "getLlmStatus").mockResolvedValue(
       llmStatus({
         capabilities: [
           {
             key: "claude_commentary", label: "Analyst rationale commentary",
             trigger: "on_demand", toggle_key: "LLM_COMMENTARY_ENABLED",
-            provider_keys: ["ANTHROPIC_API_KEY"], active_provider: "claude",
-            invalid_provider: "claude", enabled: true, key_present: true,
-            built: true, status: "invalid_key",
-          },
-        ],
-        providers: {
-          claude: { provider: "claude", ok: false, error_kind: "auth", exception_type: "AuthenticationError", http_status: 401, checked_at: new Date().toISOString(), age_seconds: 30, source: "last_call" },
-          gemini: _noCall("gemini"), openai: _noCall("openai"),
-        },
-        attention: true, attention_reason: "invalid_key",
-      })
-    );
-    renderSettings();
-    expect(await screen.findByText(/was rejected as unauthenticated/i)).toBeInTheDocument();
-    expect(screen.getByText("ANTHROPIC_API_KEY")).toBeInTheDocument();
-  });
-
-  it("a rate_limit failure is telemetry, NOT an invalid-key warning", async () => {
-    vi.spyOn(api, "getLlmStatus").mockResolvedValue(
-      llmStatus({
-        capabilities: [
-          {
-            key: "claude_commentary", label: "Analyst rationale commentary",
-            trigger: "on_demand", toggle_key: "LLM_COMMENTARY_ENABLED",
+            provider_selector_setting: "LLM_COMMENTARY_RATIONALE_PROVIDER",
             provider_keys: ["ANTHROPIC_API_KEY"], active_provider: "claude",
             invalid_provider: null, enabled: true, key_present: true,
             built: true, status: "ready",
           },
-        ],
-        providers: {
-          claude: { provider: "claude", ok: false, error_kind: "rate_limit", exception_type: "RateLimitError", http_status: 429, checked_at: new Date().toISOString(), age_seconds: 5, source: "last_call" },
-          gemini: _noCall("gemini"), openai: _noCall("openai"),
-        },
-      })
-    );
-    renderSettings();
-    // The telemetry line renders, but never the invalid-key warning.
-    expect(await screen.findByText(/Last call failed: rate_limit/i)).toBeInTheDocument();
-    expect(screen.queryByText(/was rejected as unauthenticated/i)).not.toBeInTheDocument();
-  });
-
-  it("renders the telemetry note and a neutral 'Off' for a disabled capability", async () => {
-    vi.spyOn(api, "getLlmStatus").mockResolvedValue(
-      llmStatus({
-        capabilities: [
           {
             key: "gemini_vision", label: "Gemini chart vision",
             trigger: "on_demand", toggle_key: "LLM_COMMENTARY_ENABLED",
+            provider_selector_setting: null,
             provider_keys: ["GEMINI_API_KEY"], active_provider: null,
             invalid_provider: null, enabled: false, key_present: false,
             built: true, status: "disabled",
@@ -733,14 +697,23 @@ describe("Settings — AI providers section", () => {
       })
     );
     renderSettings();
-    expect(await screen.findByText(/Verdicts are recorded from REAL LLM calls only/i)).toBeInTheDocument();
-    expect(screen.queryByText(/was rejected as unauthenticated/i)).not.toBeInTheDocument();
+    expect(await screen.findByText("1/2 ready")).toBeInTheDocument();
+    const link = screen.getByText("AI providers").closest("a");
+    expect(link).toHaveAttribute("href", "/settings/ai");
   });
 
-  it("renders an ErrorState when the fetch fails", async () => {
-    vi.spyOn(api, "getLlmStatus").mockRejectedValue(new Error("boom"));
+  it("shows the attention indicator when a capability needs it", async () => {
+    vi.spyOn(api, "getLlmStatus").mockResolvedValue(
+      llmStatus({ attention: true, attention_reason: "invalid_key" })
+    );
     renderSettings();
-    // AI providers heading is always present; the section shows an error under it.
-    expect(await screen.findByText("AI providers")).toBeInTheDocument();
+    expect(await screen.findByLabelText("needs attention")).toBeInTheDocument();
+  });
+
+  it("no attention indicator when nothing needs it", async () => {
+    vi.spyOn(api, "getLlmStatus").mockResolvedValue(llmStatus());
+    renderSettings();
+    await screen.findByText("AI providers");
+    expect(screen.queryByLabelText("needs attention")).not.toBeInTheDocument();
   });
 });

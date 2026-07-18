@@ -23,6 +23,7 @@ import { Calibration } from "./screens/Calibration";
 import { PipelineDashboard } from "./screens/PipelineDashboard";
 import { Settings } from "./screens/Settings";
 import { StrategyMatrix } from "./screens/StrategyMatrix";
+import { AIControlCenter } from "./screens/AIControlCenter";
 import { DataExplorer } from "./screens/DataExplorer";
 import { SignalBreakdown } from "./screens/SignalBreakdown";
 import { ForecastViewer } from "./screens/ForecastViewer";
@@ -304,6 +305,7 @@ export default function App() {
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/strategy" element={<StrategyMatrix />} />
+          <Route path="/settings/ai" element={<AIControlCenter />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

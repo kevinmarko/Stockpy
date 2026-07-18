@@ -56,15 +56,18 @@ Two independent bearer-token guards (both ``HTTPBearer(auto_error=False)`` +
     different risk than reading persisted state (mirrors
     ``api/control_api.py``'s ``ORCHESTRATOR_DAEMON_TOKEN`` posture).
 
-Three additional FAIL-CLOSED master-switch guards stack ON TOP of the command
+Four additional FAIL-CLOSED master-switch guards stack ON TOP of the command
 token for the writes with real persistence/rollback cost, each a dedicated
 ``settings`` flag deliberately kept out of ``gui/env_io.py``'s ALLOWED_KEYS
 (hand-set in ``.env`` only): ``require_brokerage_connect_enabled``
 (``/brokerage/connect``), ``require_automation_writes_enabled``
-(``PUT /automation/schedule/interval``, ``POST /automation/resume``), and
+(``PUT /automation/schedule/interval``, ``POST /automation/resume``),
 ``require_strategy_writes_enabled`` (``PUT /strategy/modules`` — signal weights +
 disabled-module set to ``.env``; its own flag so signal tuning cannot ride in on
-the automation flag). ``GET /strategy/matrix`` is read-only (``require_read_token``).
+the automation flag), and ``require_llm_writes_enabled`` (``PUT /llm/setting`` —
+AI-capability toggle + provider-selection writes to ``.env``; its own flag so
+AI-capability writes cannot ride in on either of the other two). ``GET
+/strategy/matrix`` and ``GET /llm/status`` are read-only (``require_read_token``).
 
 CORS mirrors ``state_api.py`` (``settings.CORS_ALLOWED_ORIGINS``) but allows
 GET, POST and PUT (state_api is GET-only).
@@ -82,7 +85,7 @@ import logging
 import math
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -304,6 +307,25 @@ def require_strategy_writes_enabled() -> None:
         )
 
 
+def require_llm_writes_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``PUT /llm/setting`` (AI-capability
+    toggle + provider-selection writes -> ``.env``). A DEDICATED flag
+    (``settings.LLM_WRITES_ENABLED``), NOT ``AUTOMATION_WRITES_ENABLED`` or
+    ``STRATEGY_WRITES_ENABLED``: those were scoped to the daemon interval/
+    kill-switch resume and to signal-weight tuning respectively — flipping
+    which LLM provider narrates a rationale, or whether the Gravity AI runner
+    / Opal research agent can fire, is its own risk class and must not ride
+    in on either. Mirrors ``require_strategy_writes_enabled`` exactly —
+    deliberately NOT GUI-writable, hand-set in ``.env`` only. ``GET /llm/status``
+    is read-only and NOT gated by this flag (``require_read_token`` alone,
+    matching ``/brokerage/status`` and ``GET /strategy/matrix``)."""
+    if not settings.LLM_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="LLM writes are disabled (LLM_WRITES_ENABLED=false).",
+        )
+
+
 if not settings.STATE_API_TOKEN:
     logger.warning(
         "STATE_API_TOKEN not set — Pilots read endpoints are UNAUTHENTICATED. "
@@ -506,6 +528,23 @@ class StrategyModulesUpdateRequest(BaseModel):
 
     weights: Dict[str, float] = Field(..., max_length=128)
     disabled: List[str] = Field(default_factory=list, max_length=128)
+
+
+class LlmSettingUpdateRequest(BaseModel):
+    """Body for ``PUT /llm/setting``. A single-key ``.env`` write: ``key`` is
+    either a capability's ``toggle_key`` (bool, e.g. ``LLM_COMMENTARY_ENABLED``)
+    or a ``provider_selector_setting`` (str, e.g.
+    ``LLM_COMMENTARY_RATIONALE_PROVIDER`` -> ``"claude"``/``"gemini"``/``"none"``).
+    Unlike ``PUT /strategy/modules`` this is NOT a multi-key atomic write — each
+    AI-capability toggle/selector is an independent scalar, so
+    ``gui.env_io.write_setting`` (single-key) is the right primitive, not
+    ``write_many_atomic``. ``key`` is validated against
+    ``gui.ai_control_center.validate_toggle_write`` (CONSTRAINT #3: secret keys
+    are rejected, as is any key outside ``gui.env_io.ALLOWED_KEYS``) before the
+    write is attempted."""
+
+    key: str = Field(..., min_length=1)
+    value: Union[bool, str]
 
 
 # ---------------------------------------------------------------------------
@@ -1413,7 +1452,7 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# LLM configuration status (read-only diagnostics — see module docstring)
+# LLM configuration status + writes (AI Control Center — see module docstring)
 # ---------------------------------------------------------------------------
 
 
@@ -1445,6 +1484,13 @@ def get_llm_status() -> Dict[str, Any]:
     failure — see ``telemetry_note``. No ``try/except``: both sub-reads are
     non-raising by their own contracts (CONSTRAINT #6), a property pinned by
     test rather than papered over here.
+
+    ``writable``/``writable_note`` track whether ``PUT /llm/setting`` would
+    actually succeed right now (``settings.LLM_WRITES_ENABLED`` — the same
+    fail-closed master switch that endpoint requires), mirroring
+    ``GET /automation/schedule``'s ``interval.writable`` and
+    ``GET /strategy/matrix``'s ``writable`` — so the PWA can show a read-only
+    notice up front instead of letting the operator hit a 403.
     """
     last_calls = llm_status_store.read_all()
     rows = ai_control_center.control_center_overview(settings, last_calls=last_calls)
@@ -1459,6 +1505,7 @@ def get_llm_status() -> Dict[str, Any]:
             break
         if row.get("status") == "missing_key" and attention_reason is None:
             attention_reason = "missing_key"
+    writable = bool(settings.LLM_WRITES_ENABLED)
     return {
         "capabilities": rows,
         "capabilities_source": "gui.ai_control_center.control_center_overview",
@@ -1467,6 +1514,54 @@ def get_llm_status() -> Dict[str, Any]:
         "telemetry_note": llm_status_store.LLM_STATUS_ADVISORY_NOTE,
         "attention": attention_reason is not None,
         "attention_reason": attention_reason,
+        "writable": writable,
+        "writable_note": (
+            "Toggle and provider writes persist to .env and apply on the next "
+            "daemon restart."
+            if writable
+            else "AI-capability writes are disabled (LLM_WRITES_ENABLED=false)."
+        ),
+    }
+
+
+@app.put(
+    "/llm/setting",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_llm_writes_enabled),
+    ],
+)
+def set_llm_setting(body: LlmSettingUpdateRequest) -> Dict[str, Any]:
+    """Write ONE AI-capability toggle or provider-selector key to ``.env``.
+
+    ``key`` must be a capability's ``toggle_key`` (bool value) or
+    ``provider_selector_setting`` (str value) from ``GET /llm/status``'s
+    ``capabilities`` rows — validated via
+    ``ai_control_center.validate_toggle_write`` (CONSTRAINT #3: a secret key
+    is refused with 403, as is any key outside ``gui.env_io.ALLOWED_KEYS``)
+    before ``env_io.write_setting`` performs the actual (re-validated) write.
+
+    Like ``PUT /strategy/modules`` this is an ``.env``-ONLY write: it does NOT
+    patch the running ``settings`` singleton (a process-lifetime object), so
+    this API and any already-launched pipeline keep using the previous value
+    until restart. ``applies`` is therefore always ``"next_daemon_restart"``,
+    and the echoed ``value`` reflects the REQUEST BODY, not ``settings``
+    (which would return the stale value and read as a failed write).
+    """
+    try:
+        ai_control_center.validate_toggle_write(body.key)
+    except (env_io.SecretWriteError, env_io.DisallowedKeyError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    env_io.write_setting(body.key, body.value)
+    return {
+        "written": [body.key],
+        "value": body.value,
+        "applies": "next_daemon_restart",
+        "note": (
+            "Written to .env. settings is not patched in-process — this API "
+            "and any already-launched pipeline still use the previous value "
+            "until restarted."
+        ),
     }
 
 

@@ -33,6 +33,7 @@ import type {
   ExecutionModeUpdateRequest,
   ExecutionModeUpdateResult,
   KillSwitchActionResult,
+  LlmSettingUpdateResult,
   LlmStatus,
   ModelRow,
   ObservabilitySummary,
@@ -345,6 +346,11 @@ const liveApi = {
     }),
   getBrokerageStatus: () => http<BrokerageStatus>("/brokerage/status"),
   getLlmStatus: () => http<LlmStatus>("/llm/status"),
+  putLlmSetting: (key: string, value: boolean | string) =>
+    http<LlmSettingUpdateResult>("/llm/setting", {
+      method: "PUT",
+      body: JSON.stringify({ key, value }),
+    }),
   connectBrokerage: (creds: BrokerageConnectRequest) =>
     http<BrokerageConnectResult>("/brokerage/connect", {
       method: "POST",
