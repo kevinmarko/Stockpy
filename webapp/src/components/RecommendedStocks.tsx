@@ -3,7 +3,7 @@ import { api } from "../api/client";
 import type { ExecutionQueue, Recommendation, RecommendationsResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { EmptyState, ErrorState, Loading } from "./ui";
-import { fmtNum, fmtPct } from "../format";
+import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
 
 /**
@@ -52,7 +52,8 @@ export function RecommendedStocks({
     <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="recommended-stocks">
       <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Recommended stocks</h2>
       <p style={{ margin: "0 0 10px", fontSize: 13, color: theme.textMuted }}>
-        The platform's current BUY picks, ranked by conviction. From the latest pipeline run.
+        The platform's current BUY picks, ranked by conviction. From the latest pipeline run
+        {data && ` (${timeAgo(data.as_of)})`}.
       </p>
 
       {loading && <Loading lines={3} />}

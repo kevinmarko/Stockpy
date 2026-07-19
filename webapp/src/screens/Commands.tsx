@@ -12,6 +12,7 @@ import {
 import { TabGuide } from "../components/TabGuide";
 import { ExecutionQueueSection } from "../components/ExecutionQueueSection";
 import { CopyCommandBlock } from "../components/CopyCommandBlock";
+import { timeAgo } from "../format";
 import { theme } from "../theme";
 
 /**
@@ -36,6 +37,7 @@ export function Commands() {
       <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: 16 }}>
         Autocomplete for the platform's command-line tools. Compose a command,
         then copy it to run in your terminal — this screen never executes anything.
+        {data && ` Manifest generated ${timeAgo(data.generated_at)}.`}
       </p>
 
       <TabGuide tabKey="commands" />

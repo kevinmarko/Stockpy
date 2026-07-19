@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import type { ExecutionQueue, ExecutionQueueIntent } from "../api/types";
 import { EmptyState, ErrorState, Loading, StaleDataNotice } from "./ui";
+import { timeAgo } from "../format";
 import { theme } from "../theme";
 
 /**
@@ -48,6 +49,7 @@ export function ExecutionQueueSection() {
               {data.kill_switch_active && <Chip label="Kill switch ACTIVE" tone="decline" />}
               {data.stale && <Chip label="Queue is stale" tone="caution" />}
               <Chip label={`${data.n_placeable}/${data.n_intents} placeable`} tone="muted" />
+              <Chip label={`as of ${timeAgo(data.generated_at)}`} tone="muted" />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {data.intents.map((intent) => (

@@ -710,6 +710,8 @@ const PORTFOLIO: Portfolio = {
   position_count: 6,
   source: "cache",
   fetched_at: new Date(Date.now() - 3600_000).toISOString(),
+  is_stale: false,
+  age_hours: 1,
   positions: [
     pos("AAPL", 40, 168.2, 214.9),
     pos("MSFT", 18, 372.5, 431.2),
