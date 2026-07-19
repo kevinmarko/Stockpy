@@ -2308,15 +2308,22 @@ class TestExecutionModeWrite:
         assert resp.status_code == 403
 
     def test_command_token_required(self):
-        # FOLLOW_API_TOKEN is configured (ambient test settings), so a request
-        # with no Authorization header hits require_command_token's "missing
-        # credentials" branch (401) -- 403 is reserved for FOLLOW_API_TOKEN
-        # being unconfigured at all, covered separately above.
-        with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
-            resp = client.put(
-                "/automation/execution-mode",
-                json={"mode": "paper", "advisory_only": False},
-            )
+        # FOLLOW_API_TOKEN must be EXPLICITLY configured here, not assumed
+        # ambient -- there is no conftest fixture or test .env pinning it, so
+        # its value otherwise depends on whatever real .env (if any) happens
+        # to be on the machine running pytest. With no token configured (the
+        # honest default in a hermetic/CI checkout), a missing Authorization
+        # header correctly hits require_command_token's "token wholly
+        # unconfigured" branch (403), not "missing credentials" (401) --
+        # those are two different failure modes, both real, so the test must
+        # pin which one it's exercising rather than leave it up to whatever
+        # `.env` happens to be lying around.
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/automation/execution-mode",
+                    json={"mode": "paper", "advisory_only": False},
+                )
         assert resp.status_code == 401
 
     def test_401_on_wrong_command_token(self):
