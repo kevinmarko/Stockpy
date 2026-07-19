@@ -238,9 +238,9 @@ describe("Agentic Trading screen (real mock API)", () => {
     const pauseSpy = vi.spyOn(api, "pauseAutomation").mockResolvedValueOnce({ active: true, reason: "lunch break" });
     renderScreen();
 
-    const toggle = await screen.findByRole("switch", { name: /Agent: Running/ });
+    const toggle = await screen.findByRole("switch", { name: /Signal generation: Running/ });
     await user.click(toggle);
-    expect(screen.getByText("Pause the agent?")).toBeInTheDocument();
+    expect(screen.getByText("Pause signal generation?")).toBeInTheDocument();
 
     const pauseBtn = screen.getByRole("button", { name: "Pause" });
     expect(pauseBtn).toBeDisabled();
@@ -259,10 +259,57 @@ describe("Agentic Trading screen (real mock API)", () => {
     });
     renderScreen();
 
-    const toggle = await screen.findByRole("switch", { name: /Agent: Paused/ });
+    const toggle = await screen.findByRole("switch", { name: /Signal generation: Paused/ });
     expect(toggle).toBeDisabled();
     expect(screen.getByText(/Resume must be done at the console/)).toBeInTheDocument();
+    // The live pause reason still renders once, in the Agent status header
+    // (the shared toggle leaves showReason off on this tab to avoid a dup).
     expect(screen.getByText(/Reason: live halt/)).toBeInTheDocument();
+  });
+
+  it("unifies the pause label with Settings and cross-references it as one switch (finding #6)", async () => {
+    renderScreen();
+    // The shared KillSwitchToggle renders the SAME label Settings uses --
+    // "Signal generation", not the old, divergent "Agent: ...".
+    expect(
+      await screen.findByRole("switch", { name: /Signal generation: Running/ })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Agent: Running/ })).not.toBeInTheDocument();
+    // Plus an explicit cross-reference so it reads as ONE switch, two surfaces.
+    expect(screen.getByText(/Same global kill switch as Settings/)).toBeInTheDocument();
+  });
+
+  it("'Refresh all' re-fetches status, discovery, and decisions together (finding #7a)", async () => {
+    const user = userEvent.setup();
+    // Spies call through to the real mock API (no mockResolvedValue), so this
+    // asserts the wiring: one button reloads all three independent fetches.
+    const statusSpy = vi.spyOn(api, "getAgenticStatus");
+    const discoverySpy = vi.spyOn(api, "getAgenticDiscovery");
+    const decisionsSpy = vi.spyOn(api, "getDecisions");
+    renderScreen();
+
+    // Initial mount loads each section once.
+    await screen.findByRole("button", { name: "Refresh all" });
+    await waitFor(() => {
+      expect(statusSpy).toHaveBeenCalled();
+      expect(discoverySpy).toHaveBeenCalled();
+      expect(decisionsSpy).toHaveBeenCalled();
+    });
+    const before = {
+      status: statusSpy.mock.calls.length,
+      discovery: discoverySpy.mock.calls.length,
+      decisions: decisionsSpy.mock.calls.length,
+    };
+
+    await user.click(screen.getByRole("button", { name: "Refresh all" }));
+
+    // Status already auto-polls, but Discovery and the Decision journal do
+    // not -- the button must re-fetch all three, not just status.
+    await waitFor(() => {
+      expect(statusSpy.mock.calls.length).toBeGreaterThan(before.status);
+      expect(discoverySpy.mock.calls.length).toBeGreaterThan(before.discovery);
+      expect(decisionsSpy.mock.calls.length).toBeGreaterThan(before.decisions);
+    });
   });
 
   it("a hard status failure renders the error state, never a blank/fabricated status", async () => {
