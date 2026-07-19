@@ -4,9 +4,12 @@ import { theme } from "../theme";
 
 /**
  * TradingHub.tsx — landing screen for the "Trading Tools" nav section
- * (Attribution / Calibration / Agent / Commands). Purely static content: a
- * card per screen with an icon, label, and one-line description, tapped to
- * navigate. Every description is sourced live from `TAB_HELP`
+ * (Attribution / Calibration / Commands — Agent moved to the primary mobile
+ * tab bar per a `/user-research` pass; kept off this list so it stays in
+ * sync with App.tsx's NAV_ITEMS `section: "trading"` membership rather than
+ * duplicating a screen that's now one tap away already). Purely static
+ * content: a card per screen with an icon, label, and one-line description,
+ * tapped to navigate. Every description is sourced live from `TAB_HELP`
  * (`help/helpContent.ts`) rather than hand-copied, so it can never drift
  * from the real in-app help content.
  */
@@ -20,7 +23,6 @@ interface HubCard {
 const CARDS: HubCard[] = [
   { to: "/attribution", label: "Attribution", icon: "🧮", description: TAB_HELP.attribution.description },
   { to: "/calibration", label: "Calibration", icon: "🎚️", description: TAB_HELP.calibration.description },
-  { to: "/agentic", label: "Agent", icon: "🤖", description: TAB_HELP.agentic.description },
   { to: "/commands", label: "Commands", icon: "⌨️", description: TAB_HELP.commands.description },
 ];
 
