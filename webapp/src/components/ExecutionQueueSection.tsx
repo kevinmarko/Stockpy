@@ -127,7 +127,7 @@ function IntentRow({ intent }: { intent: ExecutionQueueIntent }) {
           {intent.allow_place ? (
             <Chip label="Ready to place" tone="growth" />
           ) : (
-            <Chip label="Blocked" tone="muted" />
+            <Chip label="Blocked" tone="caution" />
           )}
         </span>
       </div>
