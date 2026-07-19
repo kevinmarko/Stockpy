@@ -3,8 +3,9 @@
  * 2026-07 navigation rework: the gear button navigates to /settings (instead
  * of opening a local sheet), it still carries the needRefresh "update
  * available" dot from any screen, the /settings route resolves to the real
- * Settings screen, and BottomNav shows a usage-frequency-driven primary 3
- * (Dashboard/Portfolio/Activity) plus a "More" button whose sheet groups
+ * Settings screen, and BottomNav shows a primary 4 (Dashboard/Portfolio/
+ * Activity per the usage-frequency audit, plus Agent per a later
+ * `/user-research` pass) plus a "More" button whose sheet groups
  * every other screen into labeled sections (Research / Trading Tools /
  * Operations / Settings) -- Settings now has two entry points, the same as
  * every other screen (the sheet) plus the always-on gear shortcut.
@@ -171,21 +172,23 @@ describe("App — Settings gear + nav", () => {
     expect(await screen.findByText("App status")).toBeInTheDocument();
   });
 
-  it("BottomNav shows the usage-frequency-driven primary 3 plus a More button", () => {
+  it("BottomNav shows the primary 4 plus a More button", () => {
     const { container } = renderApp("/");
     const bottomNav = container.querySelector(".bottom-nav");
     expect(bottomNav).not.toBeNull();
     const items = bottomNav!.querySelectorAll(".nav-item");
-    // Dashboard, Portfolio, Activity + More -- the screens checked constantly,
-    // per the 2026-07 usage-frequency audit (not the old insertion-order slice).
-    expect(items).toHaveLength(4);
+    // Dashboard, Portfolio, Activity (2026-07 usage-frequency audit), Agent
+    // (a later `/user-research` pass -- an "active operational surface" the
+    // operator drives from mobile, not an occasional deep-dive) + More.
+    expect(items).toHaveLength(5);
     const nav = within(bottomNav as HTMLElement);
     expect(nav.getByText("Dashboard")).toBeInTheDocument();
     expect(nav.getByText("Portfolio")).toBeInTheDocument();
     expect(nav.getByText("Activity")).toBeInTheDocument();
+    expect(nav.getByText("Agent")).toBeInTheDocument();
     expect(nav.getByText("More")).toBeInTheDocument();
     // Pilots was checked less often than Portfolio in the audit -- it moved
-    // out of the primary 3 into the More sheet's Research section.
+    // out of the primary group into the More sheet's Research section.
     expect(nav.queryByText("Pilots")).not.toBeInTheDocument();
   });
 
@@ -218,7 +221,7 @@ describe("App — Settings gear + nav", () => {
     ]) {
       expect(within(dialog).getByText(label)).toBeInTheDocument();
     }
-    for (const label of ["Attribution", "Calibration", "Agent", "Commands"]) {
+    for (const label of ["Attribution", "Calibration", "Commands"]) {
       expect(within(dialog).getByText(label)).toBeInTheDocument();
     }
     for (const label of ["Mission Control", "Pipeline"]) {
@@ -226,8 +229,10 @@ describe("App — Settings gear + nav", () => {
     }
     // Settings is now listed like any other screen, not gear-only.
     expect(within(dialog).getByRole("button", { name: "Settings" })).toBeInTheDocument();
-    // Portfolio is primary now -- it should not also appear inside the sheet.
+    // Portfolio and Agent are primary now -- neither should also appear
+    // inside the sheet (Agent moved out of Trading Tools into the bottom bar).
     expect(within(dialog).queryByText("Portfolio")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Agent")).not.toBeInTheDocument();
   });
 
   it("Pilots (moved out of primary) is reachable on mobile via More -> Research", async () => {

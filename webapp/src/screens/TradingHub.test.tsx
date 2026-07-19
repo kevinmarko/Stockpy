@@ -18,7 +18,6 @@ function renderHub(initialPath = "/trading") {
         <Route path="/trading" element={<TradingHub />} />
         <Route path="/attribution" element={<div>Attribution landing</div>} />
         <Route path="/calibration" element={<div>Calibration landing</div>} />
-        <Route path="/agentic" element={<div>Agent landing</div>} />
         <Route path="/commands" element={<div>Commands landing</div>} />
       </Routes>
     </MemoryRouter>
@@ -34,18 +33,18 @@ describe("TradingHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 4 card labels", () => {
+  it("renders all 3 card labels (Agent moved to the primary mobile tab bar, not listed here)", () => {
     renderHub();
-    for (const label of ["Attribution", "Calibration", "Agent", "Commands"]) {
+    for (const label of ["Attribution", "Calibration", "Commands"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
   });
 
-  it("renders the live TAB_HELP descriptions for all 4 cards, never a hard-coded duplicate", () => {
+  it("renders the live TAB_HELP descriptions for all 3 cards, never a hard-coded duplicate", () => {
     renderHub();
     expect(screen.getByText(TAB_HELP.attribution.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.calibration.description)).toBeInTheDocument();
-    expect(screen.getByText(TAB_HELP.agentic.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.commands.description)).toBeInTheDocument();
   });
 
@@ -61,13 +60,6 @@ describe("TradingHub screen", () => {
     renderHub();
     await user.click(screen.getByText("Calibration"));
     expect(await screen.findByText("Calibration landing")).toBeInTheDocument();
-  });
-
-  it("clicking the Agent card navigates to /agentic", async () => {
-    const user = userEvent.setup();
-    renderHub();
-    await user.click(screen.getByText("Agent"));
-    expect(await screen.findByText("Agent landing")).toBeInTheDocument();
   });
 
   it("clicking the Commands card navigates to /commands", async () => {

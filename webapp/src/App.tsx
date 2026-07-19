@@ -48,14 +48,19 @@ import { theme } from "./theme";
  * explicit, per-item classification that can't silently drift when items are
  * added or reordered.
  *
- * "primary" -> the 3 always-visible mobile bottom-nav tabs. Chosen by actual
- * usage frequency (a 2026-07 UX audit), not by original insertion order:
- * Dashboard/Portfolio/Activity are checked constantly; everything else is an
- * occasional deep-dive. "settings" is its own single-item group so Settings
- * is reachable the same way as every other screen (mobile More sheet /
- * desktop sidebar) -- the persistent gear button (SettingsButton) remains an
- * ADDITIONAL fast-access shortcut (it also carries the update/LLM-attention
- * dots), not the only path.
+ * "primary" -> the always-visible mobile bottom-nav tabs. Dashboard/Portfolio/
+ * Activity were chosen by actual usage frequency (a 2026-07 UX audit); Agent
+ * joined as a 4th primary tab per a later `/user-research` pass whose
+ * jobs-to-be-done interview named the Agentic tab an "active operational
+ * surface" the operator drives from mobile, not an occasional deep-dive --
+ * the same bar the original three were held to, not a demotion of that
+ * audit's conclusion (nothing was evicted; the primary group just grew by
+ * one). ".bottom-nav"/".nav-item" (index.css) use flex + `flex: 1`, not a
+ * hardcoded column count, so a 4th tab needs no CSS change. "settings" is
+ * its own single-item group so Settings is reachable the same way as every
+ * other screen (mobile More sheet / desktop sidebar) -- the persistent gear
+ * button (SettingsButton) remains an ADDITIONAL fast-access shortcut (it
+ * also carries the update/LLM-attention dots), not the only path.
  */
 type NavSection = "primary" | "research" | "trading" | "operations" | "settings";
 
@@ -67,8 +72,15 @@ const SECTION_LABEL: Record<Exclude<NavSection, "primary">, string> = {
   settings: "Settings",
 };
 
-/** Render order for the non-primary groups (most to least frequently visited). */
-const SECTION_ORDER: Exclude<NavSection, "primary">[] = ["research", "trading", "operations", "settings"];
+/**
+ * Render order for the non-primary groups. "trading" first: its remaining
+ * items (Attribution, Calibration, Commands, now that Agent moved to
+ * primary) are still nearer the top of the mobile "More" sheet than a
+ * frequency-only ordering would put them, ahead of Research's longer
+ * (9-item) list -- a `/user-research` finding, not a re-run of the original
+ * frequency audit above.
+ */
+const SECTION_ORDER: Exclude<NavSection, "primary">[] = ["trading", "research", "operations", "settings"];
 
 /**
  * Hub screen route for each section, tapped from the section header itself
@@ -87,6 +99,7 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   { to: "/", label: "Dashboard", ico: "⚡", match: (p) => p === "/", section: "primary" },
   { to: "/portfolio", label: "Portfolio", ico: "📊", match: (p) => p.startsWith("/portfolio"), section: "primary" },
   { to: "/activity", label: "Activity", ico: "🔔", match: (p) => p.startsWith("/activity"), section: "primary" },
+  { to: "/agentic", label: "Agent", ico: "🤖", match: (p) => p.startsWith("/agentic"), section: "primary" },
   // Research — vetting Pilots, symbols, and strategies before you act.
   { to: "/marketplace", label: "Pilots", ico: "🧭", match: (p) => p.startsWith("/marketplace") || p.startsWith("/pilots"), section: "research" },
   { to: "/compare", label: "Compare", ico: "⚖️", match: (p) => p.startsWith("/compare"), section: "research" },
@@ -100,7 +113,6 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   // Trading Tools — grading and acting on your own portfolio.
   { to: "/attribution", label: "Attribution", ico: "🧮", match: (p) => p.startsWith("/attribution"), section: "trading" },
   { to: "/calibration", label: "Calibration", ico: "🎚️", match: (p) => p.startsWith("/calibration"), section: "trading" },
-  { to: "/agentic", label: "Agent", ico: "🤖", match: (p) => p.startsWith("/agentic"), section: "trading" },
   { to: "/commands", label: "Commands", ico: "⌨️", match: (p) => p.startsWith("/commands"), section: "trading" },
   // Operations — the platform/pipeline itself, not a symbol or your money.
   { to: "/observability", label: "Mission Control", ico: "🛰️", match: (p) => p.startsWith("/observability"), section: "operations" },
