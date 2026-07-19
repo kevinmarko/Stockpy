@@ -2308,12 +2308,16 @@ class TestExecutionModeWrite:
         assert resp.status_code == 403
 
     def test_command_token_required(self):
+        # FOLLOW_API_TOKEN is configured (ambient test settings), so a request
+        # with no Authorization header hits require_command_token's "missing
+        # credentials" branch (401) -- 403 is reserved for FOLLOW_API_TOKEN
+        # being unconfigured at all, covered separately above.
         with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
             resp = client.put(
                 "/automation/execution-mode",
                 json={"mode": "paper", "advisory_only": False},
             )
-        assert resp.status_code == 403
+        assert resp.status_code == 401
 
     def test_401_on_wrong_command_token(self):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
