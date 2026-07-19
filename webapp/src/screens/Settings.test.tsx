@@ -158,6 +158,13 @@ describe("Settings screen", () => {
 
     expect(await screen.findByText(/60 symbols failed/)).toBeInTheDocument();
     expect(screen.getByText(/showing 50/)).toBeInTheDocument();
+    // Errors report's own generated_at freshness, not just the run status's.
+    expect(await screen.findByText(/Errors \(60\) · as of \d+d ago/)).toBeInTheDocument();
+  });
+
+  it("a clean run (no errors) still surfaces the errors report's generated_at", async () => {
+    renderSettings();
+    expect(await screen.findByText(/Errors · as of \d+m ago/)).toBeInTheDocument();
   });
 
   it("an in-flight, fresh progress renders the stage/percent -- a stale one does not", async () => {

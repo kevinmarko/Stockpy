@@ -34,6 +34,22 @@ describe("Commands screen (real mock API)", () => {
     expect(screen.getByText("main.py")).toBeInTheDocument();
   });
 
+  it("renders the manifest's generated_at freshness, never fabricated when null", async () => {
+    renderCommands();
+    // The mock's generated_at is a fixed past date -> a real "Nd ago" age.
+    expect(await screen.findByText(/Manifest generated \d+d ago\./)).toBeInTheDocument();
+
+    vi.spyOn(api, "getCommands").mockResolvedValueOnce({
+      generated_at: null,
+      command_count: 0,
+      dead_letters: [],
+      reason: "Run scripts/build_command_manifest.py.",
+      commands: [],
+    });
+    renderCommands();
+    expect(await screen.findByText(/Manifest generated unknown\./)).toBeInTheDocument();
+  });
+
   it("suggests a resolved command's options after a space", async () => {
     renderCommands();
     await screen.findByText("main.py");
@@ -112,6 +128,9 @@ describe("Robinhood execution queue section (real mock API)", () => {
     // Compose-only invariant: this section never renders a place/execute button.
     expect(screen.queryByRole("button", { name: /place/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
+
+    // generated_at freshness is surfaced, not just the boolean `stale` chip.
+    expect(screen.getByText("as of 5m ago")).toBeInTheDocument();
   });
 
   it("renders the Blocked chip in a caution tone, visually distinct from a muted chip", async () => {

@@ -66,6 +66,7 @@ function RegimeBadgeRow({ regime }: { regime: ObservabilitySummary["regime"] }) 
     return <div className="empty" style={{ padding: 16 }}>{regime.reason}</div>;
   }
   const badges: { label: string; value: string }[] = [
+    { label: "As of", value: timeAgo(regime.as_of) },
     { label: "Regime", value: regime.market_regime ?? "—" },
     { label: "VIX", value: fmtNum(regime.vix, 1) },
     { label: "Sahm Rule", value: fmtNum(regime.sahm_rule, 3) },
@@ -77,7 +78,10 @@ function RegimeBadgeRow({ regime }: { regime: ObservabilitySummary["regime"] }) 
     },
   ];
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+    <div
+      data-testid="regime-badges"
+      style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}
+    >
       {badges.map((b) => (
         <span
           key={b.label}

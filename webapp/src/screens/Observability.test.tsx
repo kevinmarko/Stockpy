@@ -72,8 +72,20 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
 
   it("renders the regime badges from the mock", async () => {
     renderScreen();
-    expect(await screen.findByText(/Regime: RISK ON/)).toBeInTheDocument();
-    expect(await screen.findByText(/Sahm Rule/)).toBeInTheDocument();
+    const badges = await screen.findByTestId("regime-badges");
+    expect(within(badges).getByText(/Regime: RISK ON/)).toBeInTheDocument();
+    expect(within(badges).getByText(/Sahm Rule/)).toBeInTheDocument();
+    // as_of freshness is surfaced, not just the point-in-time metrics.
+    expect(within(badges).getByText(/As of: \d+m ago/)).toBeInTheDocument();
+  });
+
+  it("a cold-start regime (reason set) never fabricates an as_of badge", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(
+      await screen.findByText("No state snapshot yet — run the pipeline first.")
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("regime-badges")).not.toBeInTheDocument();
   });
 
   it("renders portfolio-wide forecast skill weights", async () => {

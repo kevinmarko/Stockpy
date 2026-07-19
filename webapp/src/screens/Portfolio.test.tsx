@@ -34,6 +34,27 @@ describe("Portfolio screen (real mock API)", () => {
     expect(screen.getAllByText("Positions").length).toBeGreaterThan(0);
   });
 
+  it("renders a stale badge when the account snapshot's is_stale is true, and omits it otherwise", async () => {
+    vi.spyOn(api, "getPortfolio").mockResolvedValueOnce({
+      total_equity: 1000,
+      buying_power: 100,
+      total_unrealized_pl: 0,
+      total_dividends: 0,
+      position_count: 0,
+      positions: [],
+      source: "cache",
+      fetched_at: new Date().toISOString(),
+      is_stale: true,
+      age_hours: 30,
+    });
+
+    renderPortfolio();
+
+    const badge = await screen.findByText("stale");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("title", "30.0h old");
+  });
+
   it("an unavailable account snapshot renders the honest error state, never a fabricated $0 portfolio", async () => {
     vi.spyOn(api, "getPortfolio").mockRejectedValueOnce(
       new ApiError("no account snapshot cached yet", 404)

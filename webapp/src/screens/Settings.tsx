@@ -28,7 +28,7 @@ import { PwaStatusSection } from "../components/PwaStatusSection";
 import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { UniverseManager } from "../components/UniverseManager";
 import { TabGuide } from "../components/TabGuide";
-import { fmtAge, fmtDate, fmtUsd } from "../format";
+import { fmtAge, fmtDate, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
 
@@ -659,7 +659,7 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
     return (
       <div style={{ marginTop: 12 }}>
         <div className="row-sub" style={{ marginBottom: 4 }}>
-          Errors
+          Errors · as of {timeAgo(errors.generated_at)}
         </div>
         <EmptyState title="No errors" hint="The last run completed cleanly." />
       </div>
@@ -668,7 +668,7 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
   return (
     <div style={{ marginTop: 12 }}>
       <div className="row-sub" style={{ marginBottom: 4 }}>
-        Errors ({errors.entry_count})
+        Errors ({errors.entry_count}) · as of {timeAgo(errors.generated_at)}
       </div>
       <div className="notice notice-warn">
         <span>⚠️</span>

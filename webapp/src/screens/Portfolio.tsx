@@ -58,8 +58,16 @@ export function Portfolio() {
     <div className="screen">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h1 className="screen-title">Portfolio</h1>
-        <span style={{ fontSize: 12, color: theme.textMuted }}>
+        <span style={{ fontSize: 12, color: theme.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
           {p.source} · {timeAgo(p.fetched_at)}
+          {p.is_stale === true && (
+            <span
+              className="badge badge-warn"
+              title={p.age_hours != null ? `${fmtNum(p.age_hours, 1)}h old` : undefined}
+            >
+              stale
+            </span>
+          )}
         </span>
       </div>
 

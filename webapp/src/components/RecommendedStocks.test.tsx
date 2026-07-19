@@ -115,6 +115,32 @@ describe("RecommendedStocks (real mock API)", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("renders the recommendations' as_of freshness in the header, never fabricated when null", async () => {
+    render(
+      <MemoryRouter>
+        <RecommendedStocks />
+      </MemoryRouter>
+    );
+    // The mock's as_of is a fixed past date -> renders a real "Nd ago" age.
+    expect(await screen.findByText(/\(\d+d ago\)/)).toBeInTheDocument();
+
+    vi.restoreAllMocks();
+    vi.spyOn(api, "getRecommendations").mockResolvedValueOnce({
+      recommendations: [
+        { symbol: "AAPL", action: "BUY", conviction: 0.5, score: 50, buy_range: null, sector: null, price: null },
+      ],
+      count: 1,
+      as_of: null,
+      reason: null,
+    });
+    render(
+      <MemoryRouter>
+        <RecommendedStocks />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText(/\(unknown\)/)).toBeInTheDocument();
+  });
+
   it("renders the honest empty state (with reason) when there are no picks", async () => {
     vi.spyOn(api, "getRecommendations").mockResolvedValueOnce({
       recommendations: [],
