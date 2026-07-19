@@ -175,7 +175,7 @@ fix the discovery loop → polish.
 | 5 | Candidate list age (`generated_at`/`discovered_at`) is fetched but never rendered — a stale list looks current | `api/types.ts` `AgenticDiscovery`/`DiscoveryCandidate` | Discovery loop | **Fixed** — [#365](https://github.com/kevinmarko/Stockpy/pull/365) added an "As of {time}" line + per-candidate "discovered {time}"; confirmed `generated_at` is sourced from the scan-candidates file's own write time, never fabricated at read time |
 | 6 | Pause control duplicates Settings' kill-switch toggle under a *different* label ("Agent: Running" vs "Signal generation: Running") | `AgenticTrading.tsx` `ControlsSection` vs `Settings.tsx` | Polish | **Fixed** — [#371](https://github.com/kevinmarko/Stockpy/pull/371) extracted a shared `KillSwitchToggle` used by both screens, unified label ("Signal generation") + cross-reference note on the Agentic side |
 | 7 | Redundant Refresh button (the 30s poll already covers it); "Blocked" chip uses low-emphasis muted grey | `AgenticTrading.tsx`, `ExecutionQueueSection.tsx` | Polish | **Fixed** — #371 turned Refresh into a real "Refresh all" (status + Discovery + Journal); [#369](https://github.com/kevinmarko/Stockpy/pull/369) changed the Blocked chip to `tone="caution"` |
-| 8 | On mobile the tab is 2 taps + a scroll to the bottom of the "More" sheet (last of 15 items) | `App.tsx` `NAV_ITEMS`/`MOBILE_PRIMARY_COUNT` | Cross-cutting | Not started |
+| 8 | On mobile the tab is 2 taps + a scroll to the bottom of the "More" sheet (last of 15 items) | `App.tsx` `NAV_ITEMS`/`MOBILE_PRIMARY_COUNT` | Cross-cutting | **Fixed** — [#373](https://github.com/kevinmarko/Stockpy/pull/373). A live-browser check found the situation had already improved via an unrelated `#363` nav rework (labeled sections replaced the old flat 15-item list), but Agent still required a scroll past Research's 9 items; #373 promoted `/agentic` to a 4th primary bottom-nav tab (zero taps) and reordered "Trading Tools" before "Research" in the More sheet/sidebar |
 
 Confirmed: **zero usage telemetry** in the webapp — the decision log is the only behavioral trace of
 tab usage, and it only records deliberate "Log decision" actions. Noted as a finding, not treated as
@@ -183,13 +183,8 @@ a gap to fix (instrumenting a solo local app isn't worth the added surface).
 
 ### Backlog
 
-**Phases 1-3 are all shipped** (findings #1-#7 — see the table above for the landing PR of each).
-Everything below is genuinely still open.
-
-**Cross-cutting — mobile reachability** (finding #8, not started): promote `/agentic` out of the
-bottom of the "More" sheet — reorder `NAV_ITEMS` and/or bump `MOBILE_PRIMARY_COUNT` (currently 3)
-or evict a lower-priority primary tab. Needs an explicit operator decision on which tab to evict,
-if any.
+**All eight findings (#1-#8) are shipped** — see the table above for the landing PR of each. Nothing
+from the original heuristic evaluation remains open.
 
 ### Candidate Phase 4 — same bug class, found elsewhere (fixed — [#372](https://github.com/kevinmarko/Stockpy/pull/372))
 
