@@ -374,6 +374,25 @@ def require_agentic_discovery_enabled() -> None:
         )
 
 
+def require_general_settings_writes_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``PUT /settings/tunables`` (general
+    runtime tunables — Kelly sizing, risk gate, forecasting, market data,
+    runtime/ops -> ``.env``). A DEDICATED flag (``settings.GENERAL_SETTINGS_WRITES_ENABLED``),
+    NOT ``AUTOMATION_WRITES_ENABLED``, ``STRATEGY_WRITES_ENABLED``,
+    ``LLM_WRITES_ENABLED``, or ``AGENTIC_DISCOVERY_ENABLED``: this changes sizing
+    and risk-gate behavior (how large a position gets, when the risk gate blocks
+    an order), its own risk class, and must not ride in on any of those. Mirrors
+    ``require_strategy_writes_enabled`` exactly — deliberately NOT GUI-writable,
+    hand-set in ``.env`` only. ``GET /settings/tunables`` is read-only and NOT
+    gated by this flag (``require_read_token`` alone, matching ``GET
+    /strategy/matrix``, ``GET /llm/status``, and ``GET /agentic/status``)."""
+    if not settings.GENERAL_SETTINGS_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Settings writes are disabled (GENERAL_SETTINGS_WRITES_ENABLED=false).",
+        )
+
+
 if not settings.STATE_API_TOKEN:
     logger.warning(
         "STATE_API_TOKEN not set — Pilots read endpoints are UNAUTHENTICATED. "
@@ -2529,4 +2548,446 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
         "mode": body.mode,
         "applies": "next_daemon_restart",
         "note": "Execution mode updated.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Settings tunables (GET: fail-open read; PUT: fail-closed command token)
+# ---------------------------------------------------------------------------
+#
+# The PWA's Settings Tunables editor — the mobile port of the Command Center's
+# "Dynamic Settings Manager" tab (gui/panels/settings_manager.py). Serves ~37
+# NON-secret runtime tunables this screen OWNS (matching the real Streamlit
+# tab's _SETTINGS_LAYOUT, gui/panels/settings_manager.py:36-77, exactly),
+# deliberately EXCLUDING keys owned by other screens (SIGNAL_WEIGHTS /
+# DISABLED_SIGNAL_MODULES -> Strategy Matrix; DEFAULT_TICKERS -> Live Inventory
+# / Universe Manager per PR #357; all LLM_*/OPAL_* -> AI Control Center;
+# MACRO_REGIME_GATE_ENABLED -> Mission Control; ALPACA_PAPER + brokerage ->
+# execution-mode toggle). PROMPT_REGISTRY_ENABLED/PROMPT_REGISTRY_BACKEND are
+# NOT AI Control Center keys despite the "PROMPT_REGISTRY" naming overlap with
+# PROMPT_REGISTRY_PINS/credentials elsewhere — the real Streamlit tab places
+# them in ITS OWN _SETTINGS_LAYOUT (general Settings Manager), so they belong
+# here too.
+#
+# Backed ENTIRELY by the existing allowlist-bounded gui.env_io write layer — no
+# bespoke .env logic here — so writes inherit its ALLOWED_KEYS/SECRET_KEYS
+# enforcement (CONSTRAINT #3) for free, exactly like PUT /strategy/modules and
+# PUT /automation/schedule/interval. `_TUNABLE_GROUPS` carries ONLY UI metadata
+# (grouping + min/max/step/enum-options); value/default/description are derived
+# LIVE from the settings pydantic model (settings.model_fields) so help text and
+# defaults never drift from settings.py (repo convention — never re-type them as
+# literals). Descriptions are ``null`` for plain-assigned fields that carry no
+# pydantic Field(description=...), never fabricated (CONSTRAINT #4).
+#
+# Auth: PUT sits behind require_command_token ALONE (same fail-closed tier as
+# POST /decisions and POST /pilots/{id}/follow) — NOT a dedicated *_WRITES_ENABLED
+# master flag. Every accepted value is still re-checked against
+# env_io.ALLOWED_KEYS / SECRET_KEYS at write time (defensive `forbidden_key`
+# rejection), and the write goes through env_io.write_many_atomic — all-or-nothing
+# so a filesystem failure can't leave a half-applied risk config.
+
+# kind -> wire `type`. float/int both surface as "number" (the contract's numeric
+# type); the float/int split is internal, driving coercion + the UI step. "json"
+# (a JSON-object-in-a-textarea widget, matching gui/panels/settings_manager.py's
+# own st.text_area + json.loads-validate-on-submit convention) surfaces as
+# "string" on the wire — a JSON blob is still a string as far as the frontend's
+# TunableFieldType contract is concerned; the frontend renders it as a
+# multi-line textarea rather than inventing a 5th wire type.
+_KIND_TO_TYPE: Dict[str, str] = {
+    "float": "number",
+    "int": "number",
+    "bool": "boolean",
+    "enum": "enum",
+    "str": "string",
+    "json": "string",
+}
+
+# NOTE on min/max/step below: these bounds are NEW operator guardrails
+# introduced by THIS editor — they are not ported from settings.py (which has
+# zero ge=/le= constraints on any of these fields) or from the Streamlit
+# Settings Manager tab (gui/panels/settings_manager.py, which has zero
+# min_value/max_value anywhere). They exist purely to catch an obvious
+# fat-finger entry (e.g. "50" typed into a fraction field that expects "0.5")
+# and are deliberately chosen wide enough that no legitimate operator value —
+# including the field's own settings.py default — should ever be rejected.
+# Widen (never narrow) if a real value gets blocked; these are typo guardrails,
+# not policy enforcement.
+#
+# Ordered (group -> fields) layout. Each field: (key, kind, extras) where extras
+# may hold min/max/step (number kinds) or options (enum). Self-contained: NOT an
+# import of gui.panels.settings_manager's _SETTINGS_LAYOUT (mirrors its intent).
+_TUNABLE_GROUPS: List[tuple] = [
+    (
+        "Financial Constants",
+        [
+            ("RISK_FREE_RATE", "float", {"min": 0.0, "max": 1.0, "step": 0.005}),
+            ("MARKET_RISK_PREMIUM", "float", {"min": 0.0, "max": 1.0, "step": 0.005}),
+            ("REQUIRED_RETURN_RATE", "float", {"min": 0.0, "max": 1.0, "step": 0.005}),
+            ("MAX_PORTFOLIO_HEAT", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
+        ],
+    ),
+    (
+        "Position Sizing",
+        [
+            ("KELLY_FRACTION", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("KELLY_CAP", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
+            ("VOL_TARGET", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
+            ("MAX_LEVERAGE", "float", {"min": 0.0, "max": 10.0, "step": 0.1}),
+            # Widened to 5.0 (from an originally-invented 1.0): the field's own
+            # default is 1.0, which sat exactly AT the old max — a 2x fat-finger
+            # check (2.0) would have been rejected even though a leveraged
+            # single-position weight above 100% of unlevered equity is a real,
+            # legitimate config (bounded in practice by MAX_LEVERAGE's own 10.0
+            # ceiling above), not a typo.
+            ("MAX_POSITION_WEIGHT", "float", {"min": 0.0, "max": 5.0, "step": 0.05}),
+        ],
+    ),
+    (
+        "Risk Gate",
+        [
+            ("MAX_CORRELATION", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("DAILY_LOSS_LIMIT_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.005}),
+            ("MAX_ORDER_RATE_PER_MIN", "int", {"min": 1, "max": 1000, "step": 1}),
+            ("HMM_RISK_OFF_BLOCK_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("RISK_GATE_ENFORCE_MARKET_HOURS", "bool", {}),
+            ("META_LABEL_MIN_CONFIDENCE", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("DRY_RUN", "bool", {}),
+        ],
+    ),
+    (
+        "Forecasting",
+        [
+            ("FORECAST_USE_GARCH_SIGMA", "bool", {}),
+            ("FORECAST_PROPHET_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("FORECAST_SKILL_WEIGHTING_ENABLED", "bool", {}),
+            ("FORECAST_SKILL_WINDOW_DAYS", "int", {"min": 1, "max": 3650, "step": 1}),
+            ("FORECAST_MODEL_PERSISTENCE_ENABLED", "bool", {}),
+            ("FORECAST_MODEL_RETRAIN_DAYS", "int", {"min": 1, "max": 3650, "step": 1}),
+            ("BETA_LOOKBACK_DAYS", "int", {"min": 1, "max": 3650, "step": 1}),
+        ],
+    ),
+    (
+        "Market Data",
+        [
+            ("MARKET_DATA_PROVIDER", "enum", {"options": ["alpaca", "yfinance"]}),
+            ("MARKET_DATA_QUOTE_TTL_SECONDS", "int", {"min": 0, "max": 86400, "step": 1}),
+            ("MARKET_DATA_BARS_TTL_SECONDS", "int", {"min": 0, "max": 86400, "step": 1}),
+            ("FUNDAMENTALS_SOURCE", "enum", {"options": ["yahoo", "yfinance_info"]}),
+        ],
+    ),
+    (
+        "Runtime & Ops",
+        [
+            ("DASHBOARD_REFRESH_SECONDS", "int", {"min": 1, "max": 86400, "step": 1}),
+            ("PROGRESS_POLL_SECONDS", "int", {"min": 1, "max": 3600, "step": 1}),
+            ("LOG_LEVEL", "enum", {"options": ["DEBUG", "INFO", "WARNING", "ERROR"]}),
+            ("ADVISORY_REUSE_PIPELINE_COMPUTE", "bool", {}),
+            ("ADVISORY_ONLY", "bool", {}),
+        ],
+    ),
+    (
+        # Widgetless / JSON-structured tunables ported from the Streamlit tab's
+        # own _SETTINGS_LAYOUT (gui/panels/settings_manager.py:36-77) — all 7
+        # were previously missing from this editor entirely.
+        "Advanced / Config",
+        [
+            ("SECTOR_FORECAST_CONFIG_PATH", "str", {}),
+            ("SECTOR_FORECAST_CONFIGS", "json", {}),
+            ("PROMPT_REGISTRY_ENABLED", "bool", {}),
+            ("PROMPT_REGISTRY_BACKEND", "str", {}),
+            ("ORCHESTRATOR_DAEMON_ENABLED", "bool", {}),
+            ("PILOTS_API_ENABLED", "bool", {}),
+            ("CORS_ALLOWED_ORIGINS", "json", {}),
+        ],
+    ),
+]
+
+# Flat {key: (kind, extras)} index built once — its keyset IS the editor scope.
+_TUNABLE_INDEX: Dict[str, tuple] = {
+    key: (kind, extras)
+    for _group, _specs in _TUNABLE_GROUPS
+    for key, kind, extras in _specs
+}
+
+# Soft drift guard (the HARD one is tests/test_pilots_api_tunables.py): every
+# served key must be a writable non-secret. A drift can never actually leak a
+# secret — the PUT re-checks each key against ALLOWED_KEYS/SECRET_KEYS at write
+# time — so this only logs rather than taking the whole API down at import.
+_tunable_drift = [
+    k for k in _TUNABLE_INDEX
+    if k not in env_io.ALLOWED_KEYS or k in env_io.SECRET_KEYS
+]
+if _tunable_drift:  # pragma: no cover - config invariant, pinned by test
+    logger.error(
+        "settings-tunables layout drift: %s not writable non-secrets in env_io.",
+        _tunable_drift,
+    )
+
+
+class TunablesUpdateRequest(BaseModel):
+    """Body for ``PUT /settings/tunables``. ``values`` is a partial map of
+    ``{key: value}`` to write. Typed as ``Any`` values (not a pydantic Union) so
+    THIS module does the type/range validation and can return a precise per-key
+    ``rejected`` reason rather than a generic 422 — the frontend branches on the
+    reason tag."""
+
+    values: Dict[str, Any] = Field(..., max_length=64)
+
+
+def _coerce_and_validate_tunable(key: str, value: Any) -> tuple[bool, Any]:
+    """Return ``(True, coerced_value)`` if ``key``/``value`` is an acceptable
+    write, else ``(False, reason_tag)``. Reason tags (frontend branches on these,
+    never on a message): ``unknown_key`` (outside this editor's scope),
+    ``forbidden_key`` (defensive: not an env_io writable non-secret),
+    ``expected_boolean`` / ``expected_number`` / ``expected_integer`` /
+    ``expected_string`` / ``invalid_option`` / ``out_of_range`` / ``invalid_json``
+    (``kind == "json"`` only).
+
+    For ``kind == "json"`` the coerced value returned here is the ORIGINAL
+    STRING the caller submitted (only validated as parseable, never
+    re-serialized) — it is what ``written`` echoes back. ``put_settings_tunables``
+    parses it back to a native object immediately before handing it to
+    ``env_io.write_many_atomic``, which — matching ``env_io._JSON_KEYS``'s own
+    ``json.dumps(value)`` convention for ``SIGNAL_WEIGHTS``/``CORS_ALLOWED_ORIGINS``
+    etc. — expects a native dict/list, not an already-encoded string (handing it
+    a string would double-encode)."""
+    spec = _TUNABLE_INDEX.get(key)
+    if spec is None:
+        return False, "unknown_key"
+    kind, extras = spec
+    # Defensive: never write anything outside the env_io allowlist / any secret,
+    # even if the layout ever drifts (CONSTRAINT #3).
+    if key in env_io.SECRET_KEYS or key not in env_io.ALLOWED_KEYS:
+        return False, "forbidden_key"
+
+    if kind == "bool":
+        if not isinstance(value, bool):
+            return False, "expected_boolean"
+        return True, value
+
+    if kind in ("float", "int"):
+        # bool is an int subclass — reject it explicitly for numeric fields.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, "expected_number"
+        if isinstance(value, float) and not math.isfinite(value):
+            return False, "expected_number"
+        if kind == "int":
+            if isinstance(value, float) and not value.is_integer():
+                return False, "expected_integer"
+            coerced: Any = int(value)
+        else:
+            coerced = float(value)
+        lo, hi = extras.get("min"), extras.get("max")
+        if (lo is not None and coerced < lo) or (hi is not None and coerced > hi):
+            return False, "out_of_range"
+        return True, coerced
+
+    if kind == "enum":
+        if not isinstance(value, str):
+            return False, "expected_string"
+        if value not in extras.get("options", []):
+            return False, "invalid_option"
+        return True, value
+
+    if kind == "json":
+        if not isinstance(value, str):
+            return False, "expected_string"
+        try:
+            json.loads(value)
+        except (TypeError, ValueError):
+            return False, "invalid_json"
+        return True, value  # original string — see docstring above
+
+    # kind == "str"
+    if not isinstance(value, str):
+        return False, "expected_string"
+    return True, value
+
+
+def _tunable_default(fi: Any) -> Any:
+    """A settings field's real default — including fields declared with
+    ``default_factory=`` (e.g. ``SECTOR_FORECAST_CONFIGS``/``CORS_ALLOWED_ORIGINS``,
+    both dict/list defaults), whose ``fi.default`` is pydantic's
+    ``PydanticUndefined`` sentinel rather than the actual default value.
+    Dead-letter: a factory that raises degrades to ``None`` (CONSTRAINT #6),
+    never a crash."""
+    if fi is None:
+        return None
+    if fi.default_factory is not None:
+        try:
+            return fi.default_factory()
+        except Exception:  # noqa: BLE001 - dead-letter, never fabricate/crash
+            return None
+    return fi.default
+
+
+def _build_tunables_groups() -> List[Dict[str, Any]]:
+    """Assemble the grouped tunables payload. ``value``/``default``/``description``
+    are read LIVE from the settings pydantic model — never re-typed as literals
+    (repo convention). ``description`` is ``null`` when the field has no pydantic
+    ``Field(description=...)`` (CONSTRAINT #4 — never fabricated). ``kind == "json"``
+    fields carry a native dict/list ``value``/``default`` in ``settings`` — both are
+    JSON-stringified here so the wire contract's ``string`` type holds (a failed
+    ``json.dumps`` dead-letters to ``None`` rather than 500ing — CONSTRAINT #6)."""
+    model_fields = type(settings).model_fields
+    groups: List[Dict[str, Any]] = []
+    for group_name, specs in _TUNABLE_GROUPS:
+        fields: List[Dict[str, Any]] = []
+        for key, kind, extras in specs:
+            fi = model_fields.get(key)
+            default = _tunable_default(fi)
+            description = (getattr(fi, "description", None) if fi is not None else None) or None
+            value = getattr(settings, key, None)
+            if kind == "json":
+                try:
+                    value = json.dumps(value) if value is not None else None
+                except (TypeError, ValueError):
+                    value = None
+                try:
+                    default = json.dumps(default) if default is not None else None
+                except (TypeError, ValueError):
+                    default = None
+            field: Dict[str, Any] = {
+                "key": key,
+                "value": value,
+                "type": _KIND_TO_TYPE[kind],
+                "default": default,
+                "description": description,
+            }
+            for meta in ("min", "max", "step"):
+                if meta in extras:
+                    field[meta] = extras[meta]
+            if kind == "enum":
+                field["options"] = list(extras.get("options", []))
+            fields.append(field)
+        groups.append({"name": group_name, "fields": fields})
+    return groups
+
+
+def _tunables_env_drift() -> Dict[str, Any]:
+    """Compare the on-disk ``.env`` value of every tunable this editor serves
+    against the running process's ``settings`` singleton. Mirrors
+    ``_env_drift()`` (Strategy Matrix) but scoped to ``_TUNABLE_INDEX`` instead of
+    the two Strategy Matrix keys. A ``.env`` write does NOT reach the live
+    singleton, so after a successful PUT this stays serving the OLD values until
+    restart — this surfaces that pending change. Dead-letter per key: a parse
+    failure for one key is skipped rather than failing the whole check
+    (CONSTRAINT #6 — a hand-mangled ``.env`` must never 500 this endpoint)."""
+    keys: List[str] = []
+    for key, (kind, _extras) in _TUNABLE_INDEX.items():
+        try:
+            raw = env_io.get_value(key, "")
+            if raw == "":
+                continue
+            live = getattr(settings, key, None)
+            if kind == "json":
+                if json.loads(raw) != live:
+                    keys.append(key)
+            elif kind == "bool":
+                on_disk = raw.strip().lower() in {"1", "true", "yes", "on"}
+                if on_disk != bool(live):
+                    keys.append(key)
+            elif kind == "int":
+                if int(float(raw)) != live:
+                    keys.append(key)
+            elif kind == "float":
+                if float(raw) != live:
+                    keys.append(key)
+            else:  # "str" / "enum"
+                if raw != live:
+                    keys.append(key)
+        except Exception as exc:  # noqa: BLE001 - dead-letter, per key
+            logger.debug("settings-tunables env_drift check failed for %s: %s", key, exc)
+            continue
+    return {
+        "detected": bool(keys),
+        "keys": keys,
+        "note": (
+            "An .env write is pending — the API and daemon are still running the "
+            "previous values. Restart to apply."
+            if keys
+            else ""
+        ),
+    }
+
+
+@app.get("/settings/tunables", dependencies=[Depends(require_read_token)])
+def get_settings_tunables() -> Dict[str, Any]:
+    """The ~30+ non-secret runtime tunables this editor owns, grouped, with live
+    value/default/description (from the settings pydantic model) plus UI
+    metadata (type + min/max/step/options).
+
+    Fail-open read (``require_read_token``), mirroring every other GET here. The
+    ``value`` reflects the RUNNING process config (the live ``settings``
+    singleton) — a pending ``.env`` write only takes effect on the next daemon
+    restart, which ``applies`` states explicitly (matching ``GET /strategy/matrix``
+    / ``GET /llm/status`` which likewise read live settings). ``env_drift``
+    reports whether the on-disk ``.env`` currently differs from these live values
+    (mirrors ``GET /strategy/matrix``'s ``env_drift``). Never 500s
+    (CONSTRAINT #6)."""
+    return {
+        "applies": "next_daemon_restart",
+        "groups": _build_tunables_groups(),
+        "env_drift": _tunables_env_drift(),
+    }
+
+
+@app.put(
+    "/settings/tunables",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Write a partial map of non-secret tunables to ``.env``.
+
+    Fail-closed command token (``require_command_token``) STACKED with the
+    dedicated ``GENERAL_SETTINGS_WRITES_ENABLED`` master flag
+    (``require_general_settings_writes_enabled``) — same "auth tier AND feature
+    flag" pattern as ``PUT /strategy/modules``/``PUT /llm/setting``/
+    ``PUT /agentic/scan-config``. Every submitted key is validated against this
+    editor's scope ∩ ``env_io.ALLOWED_KEYS`` (secrets and
+    unknown/out-of-range/wrong-type/invalid-JSON values are REJECTED with an
+    explicit per-key reason tag in ``rejected`` — never silently dropped).
+    Accepted values are written ATOMICALLY via ``env_io.write_many_atomic``
+    (all-or-nothing, so a filesystem failure can't leave a half-applied risk
+    config).
+
+    ``kind == "json"`` accepted values are parsed back to a native dict/list
+    immediately before the ``env_io`` call (already validated parseable by
+    ``_coerce_and_validate_tunable``) — ``env_io``'s ``_JSON_KEYS`` handling
+    ``json.dumps()``s whatever it's given, so handing it the already-encoded
+    string would double-encode it; the ``written`` response below still echoes
+    the original string.
+
+    Like the other ``.env`` writes here this does NOT patch the running
+    ``settings`` singleton, so ``applies`` is always ``"next_daemon_restart"`` and
+    ``written`` echoes the REQUEST/coerced values — NOT ``settings`` (which would
+    return the stale pre-write values and read as a failed write)."""
+    accepted: Dict[str, Any] = {}
+    rejected: Dict[str, str] = {}
+    for key, value in body.values.items():
+        ok, result = _coerce_and_validate_tunable(key, value)
+        if ok:
+            accepted[key] = result
+        else:
+            rejected[key] = result
+
+    if accepted:
+        to_write: Dict[str, Any] = {}
+        for key, value in accepted.items():
+            kind, _extras = _TUNABLE_INDEX[key]
+            to_write[key] = json.loads(value) if kind == "json" else value
+        env_io.write_many_atomic(to_write)
+
+    return {
+        "written": accepted,
+        "rejected": rejected,
+        "applies": "next_daemon_restart",
+        "note": (
+            "Accepted values written to .env. settings is not patched "
+            "in-process — this API and any already-launched pipeline still use "
+            "the previous values until restarted."
+        ),
     }

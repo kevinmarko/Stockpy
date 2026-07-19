@@ -996,6 +996,70 @@ export interface StrategyModulesUpdateResult {
 }
 
 // ---------------------------------------------------------------------------
+// GET/PUT /settings/tunables — the general runtime-settings editor. Reads the
+// platform's allowlisted, non-secret tunables grouped for display, and writes
+// only the changed keys back. Like every other .env-write surface in this PWA
+// the write does NOT reach the running process (settings is a process-lifetime
+// singleton) — hence `applies: "next_daemon_restart"`.
+// ---------------------------------------------------------------------------
+
+/** Widget kind for one tunable field. Enum fields additionally carry `options`. */
+export type TunableFieldType = "number" | "boolean" | "enum" | "string";
+
+/** One editable runtime setting (GET /settings/tunables). */
+export interface TunableField {
+  key: string;
+  /**
+   * Current live value. `null` when the setting is absent/unreadable — NEVER a
+   * fabricated default (CONSTRAINT #4). A number field's input renders empty,
+   * not 0, in that case.
+   */
+  value: number | boolean | string | null;
+  type: TunableFieldType;
+  /** The platform's fallback value; `null` when not applicable. */
+  default: number | boolean | string | null;
+  /** `null` when the settings field has no pydantic `Field(description=...)`. */
+  description: string | null;
+  /** number fields only. */
+  min?: number;
+  max?: number;
+  step?: number;
+  /** enum fields only — the allowed values. */
+  options?: string[];
+}
+
+/** A named cluster of related tunables (GET /settings/tunables). */
+export interface TunableGroup {
+  name: string;
+  fields: TunableField[];
+}
+
+/** GET /settings/tunables — every editable runtime setting, grouped. */
+export interface TunablesResponse {
+  applies: "next_daemon_restart";
+  groups: TunableGroup[];
+  /**
+   * Whether an `.env` write is pending against the running (in-process)
+   * values — mirrors `StrategyMatrix.env_drift`'s shape exactly (GET
+   * /strategy/matrix). A `.env` write does NOT reach the live `settings`
+   * singleton, so after a successful PUT this stays `detected: true` until the
+   * daemon/pipeline restarts.
+   */
+  env_drift: { detected: boolean; keys: string[]; note: string };
+}
+
+/**
+ * PUT /settings/tunables result. `written` echoes accepted key→value; `rejected`
+ * maps a key to the reason it was refused (out of range, unknown, type
+ * mismatch). Rejections are surfaced, never swallowed.
+ */
+export interface TunablesUpdateResult {
+  written: Record<string, number | boolean | string>;
+  rejected: Record<string, string>;
+  applies: "next_daemon_restart";
+}
+
+// ---------------------------------------------------------------------------
 // GET /strategy/health — catalog-wide deployability-gate breakdown. A bird's-
 // eye view across EVERY Pilot of WHY its underlying validated strategy is or
 // isn't deployable (the actual per-gate value vs. required threshold), not
