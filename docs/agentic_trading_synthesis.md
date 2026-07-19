@@ -191,12 +191,12 @@ bottom of the "More" sheet — reorder `NAV_ITEMS` and/or bump `MOBILE_PRIMARY_C
 or evict a lower-priority primary tab. Needs an explicit operator decision on which tab to evict,
 if any.
 
-### Candidate Phase 4 — same bug class, found elsewhere (not yet scoped as a phase)
+### Candidate Phase 4 — same bug class, found elsewhere (fixed — [#372](https://github.com/kevinmarko/Stockpy/pull/372))
 
 A backstop audit run alongside the Phase 2 build (verifying #365/#367 before they landed) swept the
 rest of the webapp for the SAME two bug classes finding #5 fixes here — a fetched field that's never
 rendered — and found five more instances, all outside the Agentic Trading tab and out of scope for
-this doc's phasing:
+this doc's phasing. All five fixed in #372 (2026-07-19):
 
 - `Portfolio.tsx:62` — renders `fetched_at` but never `is_stale`/`age_hours` (the type's own comment
   calls these out as the dedicated freshness fields).
