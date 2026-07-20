@@ -627,12 +627,19 @@ class ForecastingEngine:
             max_h = max(horizons)
             n_reserve = lookback + max_h
 
-            # Need the reserved inference tail PLUS enough train rows to build
-            # at least a handful of supervised windows.
-            if len(df_features) < n_reserve + lookback + 10:
+            # Need the reserved inference tail (n_reserve rows) PLUS a train
+            # slice big enough to build at least a handful of supervised
+            # windows. make_direct_multistep_windows() needs the train slice
+            # itself to be >= n_reserve (= lookback + max_h) just to build a
+            # SINGLE window (see its range(lookback, len(scaled_X) - max_h + 1)
+            # loop), so the true minimum is 2 * n_reserve, plus a +10 buffer
+            # for "a handful" rather than exactly one.
+            min_required = 2 * n_reserve + 10
+            if len(df_features) < min_required:
                 logger.debug(
-                    "CNN-LSTM: insufficient history (%d rows) for lookback=%d, "
-                    "max_horizon=%d. Skipping.", len(df_features), lookback, max_h
+                    "CNN-LSTM: insufficient history (%d rows, need >= %d) for "
+                    "lookback=%d, max_horizon=%d. Skipping.",
+                    len(df_features), min_required, lookback, max_h
                 )
                 return zero_result
 
@@ -652,6 +659,12 @@ class ForecastingEngine:
                 scaled_X_train, scaled_close_train, lookback, list(horizons)
             )
             if len(X_seq) == 0:
+                logger.warning(
+                    "CNN-LSTM: pre-gate history check passed (%d rows) but "
+                    "make_direct_multistep_windows() built zero supervised "
+                    "windows for lookback=%d, max_horizon=%d. Returning zeros.",
+                    len(df_features), lookback, max_h
+                )
                 return zero_result
 
             _, time_steps, num_features = X_seq.shape

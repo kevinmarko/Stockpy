@@ -38,8 +38,23 @@ sys.modules['tensorflow.keras.layers'] = mock_layers
 sys.modules['tensorflow.keras.callbacks'] = mock_callbacks
 
 import forecasting_engine
-# Force TENSORFLOW_AVAILABLE to be True for testing
+# Force TENSORFLOW_AVAILABLE to be True for testing.
 forecasting_engine.TENSORFLOW_AVAILABLE = True
+# Sequential/Conv1D/LSTM/Dense/MaxPooling1D are bound at forecasting_engine's
+# MODULE level only if `import tensorflow` succeeded at the time the module
+# was FIRST imported process-wide -- which, once another test module (e.g.
+# test_forecasting_engine.py, collected earlier alphabetically) has already
+# imported the real forecasting_engine, is whatever the real environment
+# provided (names simply absent if real TensorFlow isn't installed), no
+# matter what sys.modules['tensorflow'] is reassigned to afterwards or what
+# TENSORFLOW_AVAILABLE is overridden to above. Bind these five names directly
+# onto the already-imported module so the mocks apply regardless of pytest's
+# module collection/import order.
+forecasting_engine.Sequential = mock_models.Sequential
+forecasting_engine.Conv1D = mock_layers.Conv1D
+forecasting_engine.LSTM = mock_layers.LSTM
+forecasting_engine.Dense = mock_layers.Dense
+forecasting_engine.MaxPooling1D = mock_layers.MaxPooling1D
 
 import pytest
 from sklearn.preprocessing import MinMaxScaler
@@ -47,18 +62,28 @@ from forecasting_engine import ForecastingEngine
 
 @pytest.fixture
 def sine_wave_data():
-    """Generates a deterministic sine-wave series (300 days)."""
-    dates = pd.date_range(end="2026-06-24", periods=300)
+    """Generates a deterministic sine-wave series (340 days).
+
+    340 raw rows survives build_lstm_features' warm-up dropna at ~319 feature
+    rows -- comfortably above the 2*(lookback+max_horizon)+10 = 310-row floor
+    run_cnn_lstm_forecast actually needs to build a real supervised window
+    (see the min_required gate there). A smaller fixture used to sit between
+    the (buggy, too-low) old gate and this true floor, so the model silently
+    never trained and every consuming test still passed on the zero-fallback
+    sentinel without anyone noticing.
+    """
+    PERIODS = 340
+    dates = pd.date_range(end="2026-06-24", periods=PERIODS)
     # Sine wave for Close
-    t = np.linspace(0, 6 * np.pi, 300)
+    t = np.linspace(0, 6 * np.pi, PERIODS)
     close = 100.0 + 10.0 * np.sin(t)
-    
+
     df = pd.DataFrame({
         "Open": close - 0.5,
         "High": close + 0.5,
         "Low": close - 0.5,
         "Close": close,
-        "Volume": [1000.0] * 300
+        "Volume": [1000.0] * PERIODS
     }, index=dates)
     return df
 
@@ -96,7 +121,20 @@ def test_forecasting_scaler_fit_on_train_only(sine_wave_data):
         assert len(forecasts) == len(horizons)
         for h in horizons:
             assert h in forecasts
-            
+
+        # Guard against the silent-zero fallback: a dict with the right keys
+        # is also what run_cnn_lstm_forecast returns when it gives up early
+        # (insufficient history, or zero supervised windows built) -- neither
+        # of those should be able to happen with this fixture's row count, so
+        # a real (mocked) predict() must have run and produced non-zero,
+        # inverse-transformed prices.
+        for h in horizons:
+            assert forecasts[h] != 0.0, (
+                f"forecast for horizon {h} was exactly 0.0 -- the model "
+                "likely never trained (insufficient-history gate or empty "
+                "window-building silently degraded to the zero sentinel)."
+            )
+
         # Verify the MinMaxScaler fit arguments
         # MinMaxScaler is fit on feature matrix X (columns: feature_cols) and Close price y.
         # We expect fit to be called at least twice (once for X, once for y)
