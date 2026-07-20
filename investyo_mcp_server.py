@@ -284,6 +284,351 @@ def list_registry_prompts() -> str:
     ids = list_baseline_ids()
     return "Available Prompt IDs in the registry:\n" + "\n".join(f"- {pid}" for pid in ids)
 
+
+# ---------------------------------------------------------------------------
+# Prompt Registry — version control tools (sync/status/get/diff/pin/rollback).
+#
+# These wrap the SAME PromptRegistry resolution chain and CacheManager the
+# Streamlit "Prompt Registry" tab (gui/panels/prompt_registry.py) already
+# exposes interactively, so an AI client gets tool-level coverage without
+# only a CLI (`python -m prompt_registry <cmd>`) or the GUI. The small
+# resolve/list helpers below are PORTED from that panel's
+# _pr_resolve_source / _pr_all_known_ids / _pr_cached_versions (not imported)
+# so this server never pulls in gui/panels/prompt_registry.py's heavy
+# Streamlit import chain just to render a status table.
+# ---------------------------------------------------------------------------
+
+def _pr_resolve_source(reg, prompt_id: str):
+    """Return (resolved_version, source_label) for prompt_id without calling
+    reg.get() (which would echo the full body). Mirrors the resolution order
+    PromptRegistry.get() actually uses: pin -> remote manifest -> newest disk
+    cache -> baseline -- so the reported version matches what get() would
+    return, unlike the panel's version which read the OLDEST cached entry.
+    """
+    pinned_ver = getattr(reg, "_pins", {}).get(prompt_id)
+    if pinned_ver is not None:
+        return pinned_ver, "pin"
+    manifest = getattr(reg, "_manifest", None)
+    if manifest is not None:
+        ver_obj = manifest.prompts.get(prompt_id)
+        if ver_obj is not None:
+            return ver_obj.latest, "remote"
+    cache = getattr(reg, "_cache", None)
+    if cache is not None:
+        try:
+            versions = cache.list_versions(prompt_id)  # newest-first
+            if versions:
+                return versions[0], "cache"
+        except Exception:
+            pass
+    try:
+        from prompt_registry.cache import read_baseline
+        if read_baseline(prompt_id) is not None:
+            return "baseline", "baseline"
+    except Exception:
+        pass
+    return "—", "unknown"
+
+
+def _pr_cached_versions(reg, prompt_id: str) -> List[str]:
+    """Return all version strings cached on disk for prompt_id (newest-first),
+    or [] on any error / when no cache is configured."""
+    cache = getattr(reg, "_cache", None)
+    if cache is None:
+        return []
+    try:
+        return list(cache.list_versions(prompt_id))
+    except Exception:
+        return []
+
+
+def _pr_all_known_ids(reg) -> List[str]:
+    """Sorted union of baseline IDs + manifest IDs + pinned IDs."""
+    try:
+        from prompt_registry.cache import list_baseline_ids
+        ids: set = set(list_baseline_ids())
+        manifest = getattr(reg, "_manifest", None)
+        if manifest is not None:
+            ids.update(manifest.prompts.keys())
+        ids.update(getattr(reg, "_pins", {}).keys())
+        return sorted(ids)
+    except Exception:
+        return []
+
+
+@mcp.tool()
+def get_registry_prompt_status() -> str:
+    """
+    Returns a markdown status table for every known Prompt Registry ID:
+    resolved version, source (pin/remote/cache/baseline), pinned version
+    (if any), and how many versions are cached on disk.
+
+    Degrades honestly: an unimportable registry returns a clear error
+    string, and a single ID's resolution failure only breaks that one row,
+    not the whole table.
+    """
+    try:
+        from prompt_registry import get_registry
+    except ImportError as exc:
+        return f"prompt_registry package not importable: {exc}"
+
+    reg = get_registry()
+    all_ids = _pr_all_known_ids(reg)
+    if not all_ids:
+        return (
+            "No prompt IDs found. Call sync_prompt_registry() or check that "
+            "prompt_registry/baseline/ is intact."
+        )
+
+    lines = [
+        "| Prompt ID | Resolved Version | Source | Pinned | Cached Versions |",
+        "|---|---|---|---|---|",
+    ]
+    for pid in all_ids:
+        try:
+            ver, src = _pr_resolve_source(reg, pid)
+            pinned = getattr(reg, "_pins", {}).get(pid, "—")
+            cached_count = len(_pr_cached_versions(reg, pid))
+            lines.append(f"| {pid} | {ver} | {src} | {pinned} | {cached_count} |")
+        except Exception as exc:
+            lines.append(f"| {pid} | ? | error | ? | ? ({exc}) |")
+
+    is_enabled = getattr(reg, "_enabled", False)
+    header = (
+        "Registry is **disabled** (PROMPT_REGISTRY_ENABLED=false) -- every row "
+        "below resolves from the committed baseline only.\n\n"
+        if not is_enabled else ""
+    )
+    return header + "\n".join(lines)
+
+
+@mcp.tool()
+def get_registry_prompt(prompt_id: str, version: Optional[str] = None) -> str:
+    """
+    Returns the body of a Prompt Registry entry.
+
+    Args:
+        prompt_id: Registry ID, e.g. "gravity.system" or "master_preprompt".
+        version: Optional specific version string (or "baseline" for the
+            committed baseline file). When omitted, resolves via the full
+            chain (pin -> remote -> cache -> baseline), same as what the
+            platform itself uses at runtime.
+    """
+    try:
+        from prompt_registry import get_registry
+    except ImportError as exc:
+        return f"prompt_registry package not importable: {exc}"
+
+    reg = get_registry()
+
+    if version is not None:
+        try:
+            from prompt_registry.__main__ import _resolve_body_for_version
+            body = _resolve_body_for_version(reg, prompt_id, version)
+        except Exception as exc:
+            return f"Failed to resolve {prompt_id!r}@{version!r}: {exc}"
+        if body is None:
+            return (
+                f"Version {version!r} of {prompt_id!r} not found in the manifest, "
+                "disk cache, or baseline."
+            )
+        return f"# {prompt_id} @ {version}\n\n{body}"
+
+    try:
+        body = reg.get(prompt_id)
+    except Exception as exc:
+        return f"Failed to resolve {prompt_id!r}: {exc}"
+
+    if body.startswith("[PROMPT UNAVAILABLE"):
+        return (
+            f"{prompt_id!r} has no body in the registry, cache, or committed "
+            f"baseline. Sentinel returned: {body}"
+        )
+    return f"# {prompt_id} (resolved)\n\n{body}"
+
+
+@mcp.tool()
+def diff_registry_prompt(prompt_id: str, version_a: str, version_b: str) -> str:
+    """
+    Returns a unified diff between two versions of a Prompt Registry entry.
+    Use "baseline" as either version to diff against the committed baseline.
+
+    Args:
+        prompt_id: Registry ID.
+        version_a: From-version (or "baseline").
+        version_b: To-version (or "baseline").
+    """
+    try:
+        from prompt_registry import get_registry
+        from prompt_registry.__main__ import _resolve_body_for_version
+    except ImportError as exc:
+        return f"prompt_registry package not importable: {exc}"
+
+    reg = get_registry()
+
+    try:
+        body_a = _resolve_body_for_version(reg, prompt_id, version_a)
+        body_b = _resolve_body_for_version(reg, prompt_id, version_b)
+    except Exception as exc:
+        return f"Failed to resolve versions for {prompt_id!r}: {exc}"
+
+    if body_a is None:
+        return f"Version {version_a!r} of {prompt_id!r} not found."
+    if body_b is None:
+        return f"Version {version_b!r} of {prompt_id!r} not found."
+
+    import difflib
+    diff_lines = list(difflib.unified_diff(
+        body_a.splitlines(keepends=True),
+        body_b.splitlines(keepends=True),
+        fromfile=f"{prompt_id}@{version_a}",
+        tofile=f"{prompt_id}@{version_b}",
+    ))
+
+    if not diff_lines:
+        return f"No differences between {version_a!r} and {version_b!r} of {prompt_id!r}."
+    return "".join(diff_lines)
+
+
+@mcp.tool()
+def pin_registry_prompt(prompt_id: str, version: str) -> str:
+    """
+    Pins a Prompt Registry ID to a specific version. The version is verified
+    against the manifest/cache/baseline BEFORE the pin is committed, then
+    persisted to .env via gui.env_io.write_setting("PROMPT_REGISTRY_PINS", ...)
+    (PROMPT_REGISTRY_PINS is an allowlisted, non-secret key). Effective on the
+    NEXT orchestrator/GUI/MCP-server launch -- the running process's
+    in-memory pin updates immediately for this session, but nothing already
+    running is hot-swapped.
+
+    Args:
+        prompt_id: Registry ID.
+        version: Version string to pin (e.g. "1.2.3", or "baseline").
+    """
+    try:
+        from prompt_registry import get_registry
+        from prompt_registry.__main__ import _resolve_body_for_version
+    except ImportError as exc:
+        return f"prompt_registry package not importable: {exc}"
+
+    reg = get_registry()
+
+    try:
+        body = _resolve_body_for_version(reg, prompt_id, version)
+    except Exception as exc:
+        return f"Failed to resolve {prompt_id!r}@{version!r}: {exc}"
+
+    if body is None:
+        return (
+            f"Version {version!r} of {prompt_id!r} not found in the manifest or "
+            "disk cache; pin NOT set. Call sync_prompt_registry() first to "
+            "populate the cache, or check the version string."
+        )
+
+    reg._pins[prompt_id] = version
+
+    try:
+        from gui import env_io
+        # Pass the dict directly (NOT a pre-json.dumps'd string) -- env_io's
+        # write_setting() JSON-encodes JSON-classified keys itself; passing an
+        # already-encoded string here would double-encode it.
+        pins = dict(sorted(reg._pins.items()))
+        env_io.write_setting("PROMPT_REGISTRY_PINS", pins)
+        return f"Pinned {prompt_id!r} -> {version!r}. Saved to .env; effective on next launch."
+    except Exception as exc:
+        return (
+            f"Pinned {prompt_id!r} -> {version!r} in-memory (this MCP server "
+            f"session only); .env write failed: {exc}"
+        )
+
+
+@mcp.tool()
+def rollback_registry_prompt(prompt_id: str) -> str:
+    """
+    Rolls back a Prompt Registry ID to the previous cached version
+    (PromptRegistry.rollback()) and persists the new pin to .env, same as
+    pin_registry_prompt. Honestly reports when there is nothing to roll back
+    to -- e.g. fewer than 2 cached versions exist, or the pin is already at
+    the oldest cached version -- rather than fabricating a rollback.
+
+    Args:
+        prompt_id: Registry ID to roll back.
+    """
+    try:
+        from prompt_registry import get_registry
+    except ImportError as exc:
+        return f"prompt_registry package not importable: {exc}"
+
+    reg = get_registry()
+
+    try:
+        previous = reg.rollback(prompt_id)
+    except Exception as exc:
+        return f"Rollback failed for {prompt_id!r}: {exc}"
+
+    if previous is None:
+        return (
+            f"Cannot roll back {prompt_id!r}: no older cached version available. "
+            "Call sync_prompt_registry() to populate the cache with more versions."
+        )
+
+    try:
+        from gui import env_io
+        pins = dict(sorted(reg._pins.items()))
+        env_io.write_setting("PROMPT_REGISTRY_PINS", pins)
+        return f"Rolled back {prompt_id!r} -> {previous!r}. Saved to .env; effective on next launch."
+    except Exception as exc:
+        return (
+            f"Rolled back {prompt_id!r} -> {previous!r} in-memory (this MCP "
+            f"server session only); .env write failed: {exc}"
+        )
+
+
+@mcp.tool()
+def sync_prompt_registry() -> str:
+    """
+    Fetches the remote Prompt Registry manifest, verifies every version's
+    HMAC signature + guardrails, and pre-warms the disk cache
+    (PromptRegistry.sync()). On-demand only -- never called on a timer.
+    Degrades to an honest message (not an error) when the registry is
+    disabled (PROMPT_REGISTRY_ENABLED=false) or no remote store is
+    configured (PROMPT_REGISTRY_URL / PROMPT_REGISTRY_BACKEND).
+    """
+    try:
+        from prompt_registry import get_registry
+    except ImportError as exc:
+        return f"prompt_registry package not importable: {exc}"
+
+    reg = get_registry()
+
+    if not getattr(reg, "_enabled", False):
+        return (
+            "Registry is disabled (PROMPT_REGISTRY_ENABLED=false). All prompts "
+            "resolve from the committed baseline -- nothing to sync."
+        )
+    if getattr(reg, "_store", None) is None:
+        return (
+            "No remote store configured (PROMPT_REGISTRY_URL / "
+            "PROMPT_REGISTRY_BACKEND). Nothing to sync."
+        )
+
+    try:
+        ok = reg.sync()
+    except Exception as exc:
+        return f"Sync failed: {exc}"
+
+    if not ok:
+        return "Sync failed (registry fell back to cache/baseline). Check logs for details."
+
+    manifest = getattr(reg, "_manifest", None)
+    if manifest is not None:
+        return (
+            f"Sync complete. Manifest version: {manifest.registry_version}. "
+            f"Prompts in manifest: {len(manifest.prompts)}."
+        )
+    return "Sync complete."
+
+
 # ==========================================
 # [3] TOOLS (Actionable Functions)
 # ==========================================
@@ -493,8 +838,21 @@ def read_platform_logs(lines: int = 50) -> str:
     except Exception as e:
         logs_summary.append(f"Could not read ExecutionLogs from DB: {str(e)}")
             
-    # 2. Check local directory for log files
-    log_files = [f for f in os.listdir(".") if f.endswith(".log")]
+    # 2. Check for log files. The real rotating log file this platform writes
+    # is logs/investyo.log (see alerting.py::setup_logging's RotatingFileHandler,
+    # cwd-relative like every other file-based tool in this module) -- a plain
+    # os.listdir(".") never finds it because it lives one directory down. Look
+    # in logs/ first, then also check the cwd directly (kept for backward
+    # compatibility with any other *.log file an operator might drop there).
+    log_files = []
+    logs_subdir = "logs"
+    if os.path.isdir(logs_subdir):
+        log_files += [
+            os.path.join(logs_subdir, f)
+            for f in sorted(os.listdir(logs_subdir))
+            if f.endswith(".log")
+        ]
+    log_files += [f for f in sorted(os.listdir(".")) if f.endswith(".log")]
     if log_files:
         for log_file in log_files:
             try:
