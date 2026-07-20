@@ -17,6 +17,7 @@ TestRegistration        — 'news_catalyst' in global_registry
 TestGracefulDegradation — API error → 0.0; all-error batch → no crash
 TestEarningsProximityEdge — boundary conditions for the proximity multiplier
 TestContextPopulation   — pre_compute writes news_sentiment_scores + earnings_dates
+TestRegimeGate          — is_active_in_regime suppression + SignalAggregator wiring
 """
 
 import os
@@ -29,6 +30,9 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
+from signals.aggregator import SignalAggregator
+from signals.base import SignalContext
 from signals.news_catalyst import (
     NewsCatalystSignal,
     _earnings_proximity_multiplier,
@@ -37,6 +41,7 @@ from signals.news_catalyst import (
     fetch_company_news,
     fetch_next_earnings,
 )
+from signals.registry import SignalRegistry
 
 
 # ===========================================================================
@@ -470,6 +475,86 @@ class TestFetchHelpers:
 # ===========================================================================
 # TestSettings
 # ===========================================================================
+
+class TestRegimeGate:
+    """is_active_in_regime suppression (mirrors tests/test_rsi2_regime_gate.py)."""
+
+    def test_recession_regime_forces_score_zero(self):
+        sig = _make_signal()
+        macro = MacroEconomicDTO(
+            yield_curve_10y_2y=-0.5, high_yield_oas=8.0, inflation_rate=2.0,
+            nominal_10y=4.0, vix_value=15.0,
+        )
+        assert macro.market_regime == "RECESSION"
+        assert sig.is_active_in_regime(macro) is False
+
+    def test_credit_event_regime_forces_score_zero(self):
+        sig = _make_signal()
+        macro = MacroEconomicDTO(
+            yield_curve_10y_2y=0.5, high_yield_oas=7.0, inflation_rate=2.0,
+            nominal_10y=4.0, vix_value=15.0,
+        )
+        assert macro.market_regime == "CREDIT EVENT"
+        assert sig.is_active_in_regime(macro) is False
+
+    def test_high_vix_forces_score_zero_even_in_neutral_regime(self):
+        sig = _make_signal()
+        macro = MacroEconomicDTO(
+            yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0,
+            nominal_10y=4.0, vix_value=35.0,
+        )
+        assert macro.market_regime in ("NEUTRAL", "RISK ON")
+        assert sig.is_active_in_regime(macro) is False
+
+    def test_risk_on_regime_remains_active(self):
+        sig = _make_signal()
+        macro = MacroEconomicDTO(
+            yield_curve_10y_2y=2.0, high_yield_oas=1.5, inflation_rate=2.0,
+            nominal_10y=4.0, vix_value=12.0,
+        )
+        assert sig.is_active_in_regime(macro) is True
+
+    def test_aggregator_suppresses_contribution_during_recession(self):
+        """End-to-end: SignalAggregator must zero out this module's contribution
+        when macro is RECESSION, even though the raw compute() score is strongly
+        positive."""
+        registry = SignalRegistry()
+        sig = _make_signal()
+        sig._news_scores = {"TEST": 0.9}
+        sig._earnings_dt = {}
+        registry.register(sig)
+
+        bar = MarketBarDTO(datetime.now(), "TEST", 100.0, 100.0, 100.0, 100.0, 1000)
+        fundamentals = FundamentalDataDTO(
+            ticker="TEST", company_name="Test Corp", sector="Technology",
+            pe_ratio=15.0, pb_ratio=1.5, book_value=50.0, eps_trailing=5.0,
+            dividend_yield=0.02, dividend_growth_rate=0.05, payout_ratio=0.30,
+        )
+        row = pd.Series({"Symbol": "TEST", "Ticker": "TEST"})
+
+        # Sanity check: in isolation (no regime gate), this row scores high.
+        benign_macro = MacroEconomicDTO(0.5, 2.0, 2.0, 4.0, vix_value=15.0)
+        benign_context = SignalContext(bar=bar, fundamentals=fundamentals, macro=benign_macro)
+        raw_output = sig.compute(row, benign_context)
+        assert raw_output.score > 0.5
+
+        # Now run through the aggregator under a RECESSION macro.
+        recession_macro = MacroEconomicDTO(-0.5, 8.0, 2.0, 4.0, vix_value=15.0)
+        recession_context = SignalContext(bar=bar, fundamentals=fundamentals, macro=recession_macro)
+        aggregator = SignalAggregator(registry, weights={"news_catalyst": 10.0})
+
+        final_score, score_log, warnings, details, outputs, _meta = aggregator.aggregate(
+            row, recession_context
+        )
+
+        # Base neutral score is 50.0; the gated module must contribute nothing
+        # to the aggregate score or explainer log, even though compute() itself
+        # still ran (outputs retains the raw, ungated score for introspection).
+        assert final_score == 50.0
+        assert not any("News sentiment" in line for line in score_log)
+        assert "news_catalyst" in outputs  # raw compute() output is preserved
+        assert outputs["news_catalyst"].score > 0.5  # but never reaches the score/log
+
 
 class TestSettings:
     def test_news_lookback_days_positive(self):
