@@ -26,6 +26,7 @@ Coverage
 from __future__ import annotations
 
 import json
+import re
 import sys
 import types
 import unittest.mock
@@ -215,6 +216,22 @@ class TestResolveSource:
         ver, src = _pr_resolve_source(reg, _KNOWN_ID)
         # Should fall through to baseline
         assert src in ("baseline", "unknown")
+
+    def test_cache_returns_newest_not_oldest(self, tmp_path):
+        """Regression: CacheManager.list_versions() is newest-first by mtime,
+        and PromptRegistry.get()'s own Rung 3 resolves to cached_versions[0]
+        (newest). The cache rung here previously read versions[-1] (oldest),
+        so the status table could show a stale version while the platform
+        actually resolves to a newer one."""
+        import time as _time
+        cache = CacheManager(tmp_path)
+        cache.write(_KNOWN_ID, "1.0.0", _make_record("v1 — Output in JSON."))
+        _time.sleep(0.02)  # distinct mtime so newest-first ordering is stable
+        cache.write(_KNOWN_ID, "2.0.0", _make_record("v2 — Output in JSON."))
+        reg = PromptRegistry(store=None, cache=cache, enabled=True)
+        ver, src = _pr_resolve_source(reg, _KNOWN_ID)
+        assert src == "cache"
+        assert ver == "2.0.0", f"expected newest cached version 2.0.0, got {ver!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +509,13 @@ class TestRollbackPath:
         assert ok is None
 
     def test_pin_write_uses_env_io(self, tmp_path):
-        """Confirm env_io.write_setting is called with PROMPT_REGISTRY_PINS after rollback."""
+        """Confirm env_io.write_setting is called with PROMPT_REGISTRY_PINS after
+        rollback, and — regression for the double-JSON-encoding bug — that it is
+        passed a plain dict, not a pre-``json.dumps``'d string. ``env_io._encode_value``
+        already JSON-encodes any ``_JSON_KEYS`` value, so pre-dumping here would
+        double-encode and ``PromptRegistry._build_registry_from_settings()``'s
+        ``json.loads()`` would parse back a string, not a dict, silently discarding
+        the pin."""
         import time as _time
         cache = CacheManager(tmp_path)
         cache.write(_KNOWN_ID, "1.0.0", _make_record("v1 — Output in JSON."))
@@ -503,11 +526,61 @@ class TestRollbackPath:
         assert rolled is not None, "rollback must succeed with 2 versions"
 
         with unittest.mock.patch("gui.env_io.write_setting") as mock_write:
-            pins_json = json.dumps(dict(sorted(reg._pins.items())))
+            pins_dict = dict(sorted(reg._pins.items()))
             from gui.env_io import write_setting
-            write_setting("PROMPT_REGISTRY_PINS", pins_json)
-            mock_write.assert_called_once_with("PROMPT_REGISTRY_PINS", pins_json)
+            write_setting("PROMPT_REGISTRY_PINS", pins_dict)
+            mock_write.assert_called_once_with("PROMPT_REGISTRY_PINS", pins_dict)
             key, val = mock_write.call_args[0]
             assert key == "PROMPT_REGISTRY_PINS"
-            parsed = json.loads(val)
-            assert parsed[_KNOWN_ID] == "1.0.0"
+            assert isinstance(val, dict), (
+                "write_setting must receive a plain dict, not a pre-JSON-encoded "
+                "string — env_io._encode_value() does the JSON encoding"
+            )
+            assert val[_KNOWN_ID] == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# TestPinWriteEncoding (regression for the double-JSON-encoding bug)
+# ---------------------------------------------------------------------------
+
+class TestPinWriteEncoding:
+    def test_no_pre_encoded_pins_dict_in_source(self):
+        """None of the three PROMPT_REGISTRY_PINS write sites (set pin,
+        rollback, clear pin) may pre-``json.dumps`` the pins dict before
+        handing it to ``env_io.write_setting`` — that double-encodes."""
+        panels_src = Path(
+            _REPO_ROOT / "gui" / "panels" / "prompt_registry.py"
+        ).read_text()
+        assert "json.dumps(dict(sorted(reg._pins.items())))" not in panels_src
+
+        write_calls = re.findall(
+            r'env_io\.write_setting\("PROMPT_REGISTRY_PINS",\s*(\w+)\)', panels_src
+        )
+        assert len(write_calls) == 3, f"expected 3 write sites, found {write_calls}"
+        for var_name in write_calls:
+            assert "json" not in var_name.lower(), (
+                f"write_setting called with {var_name!r} — looks pre-JSON-encoded"
+            )
+
+    def test_env_io_pins_roundtrip_dict_not_double_encoded(self, tmp_path, monkeypatch):
+        """End-to-end: write_setting(dict) round-trips to the same dict. The
+        historical bug (passing json.dumps(dict) instead) round-trips to a
+        STRING instead of a dict — exactly the silent-discard bug
+        PromptRegistry._build_registry_from_settings()'s isinstance(pins, dict)
+        check would hit."""
+        import gui.env_io as env_io_mod
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        monkeypatch.setattr(env_io_mod, "ENV_PATH", env_file)
+
+        pins = {_KNOWN_ID: "1.0.0", "other.prompt": "2.3.4"}
+        env_io_mod.write_setting("PROMPT_REGISTRY_PINS", pins)
+        parsed = json.loads(env_io_mod.get_value("PROMPT_REGISTRY_PINS"))
+        assert isinstance(parsed, dict)
+        assert parsed == pins
+
+        # Sanity check documenting the bug this guards against: pre-dumping
+        # before calling write_setting really does round-trip to a str.
+        env_io_mod.write_setting("PROMPT_REGISTRY_PINS", json.dumps(pins))
+        parsed_buggy = json.loads(env_io_mod.get_value("PROMPT_REGISTRY_PINS"))
+        assert isinstance(parsed_buggy, str)

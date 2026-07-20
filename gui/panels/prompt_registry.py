@@ -65,7 +65,7 @@ def _pr_resolve_source(reg, prompt_id: str) -> Tuple[str, str]:
         try:
             versions = cache.list_versions(prompt_id)
             if versions:
-                return versions[-1], "cache"
+                return versions[0], "cache"
         except Exception:
             pass
     # Baseline
@@ -356,9 +356,8 @@ def render_prompt_registry() -> None:
                     else:
                         reg._pins[selected_id] = pin_target
                         try:
-                            import json
-                            pins_json = json.dumps(dict(sorted(reg._pins.items())))
-                            env_io.write_setting("PROMPT_REGISTRY_PINS", pins_json)
+                            pins_dict = dict(sorted(reg._pins.items()))
+                            env_io.write_setting("PROMPT_REGISTRY_PINS", pins_dict)
                             st.success(
                                 f"Pinned `{selected_id}` → `{pin_target}`. "
                                 "Saved to `.env`; effective on next launch."
@@ -387,9 +386,8 @@ def render_prompt_registry() -> None:
                     if ok:
                         new_pin = reg._pins.get(selected_id)
                         try:
-                            import json
-                            pins_json = json.dumps(dict(sorted(reg._pins.items())))
-                            env_io.write_setting("PROMPT_REGISTRY_PINS", pins_json)
+                            pins_dict = dict(sorted(reg._pins.items()))
+                            env_io.write_setting("PROMPT_REGISTRY_PINS", pins_dict)
                             st.success(
                                 f"Rolled back `{selected_id}` → `{new_pin}`. "
                                 "Saved to `.env`; effective on next launch."
@@ -413,9 +411,8 @@ def render_prompt_registry() -> None:
             if st.button("🗑️ Clear pin", key="pr_clear_pin"):
                 reg._pins.pop(selected_id, None)
                 try:
-                    import json
-                    pins_json = json.dumps(dict(sorted(reg._pins.items())))
-                    env_io.write_setting("PROMPT_REGISTRY_PINS", pins_json)
+                    pins_dict = dict(sorted(reg._pins.items()))
+                    env_io.write_setting("PROMPT_REGISTRY_PINS", pins_dict)
                     st.success(
                         f"Pin for `{selected_id}` cleared. "
                         "Will resolve to remote latest on next launch."
