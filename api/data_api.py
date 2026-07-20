@@ -25,6 +25,7 @@ data-facing service, not the kill-switch/daemon control plane.
 """
 from __future__ import annotations
 
+import base64
 import hmac
 import logging
 import math
@@ -41,6 +42,19 @@ from data.robinhood_portfolio import fetch_account_snapshot
 from data.portfolio_sync import build_sync_report
 from data_engine import DataEngine
 
+# ── On-demand AI generation (Section: /data/ai/*) ──────────────────────────
+# Imported by NAME (not by submodule reference) so tests can monkeypatch each
+# generator directly on this module's namespace, e.g.
+# ``monkeypatch.setattr(data_api, "generate_for_symbol_row", fake)``.
+# None of these modules import streamlit at module top (verified) and this
+# file carries no AST import guard (unlike ``api/pilots_api.py`` /
+# ``api/state_api.py``), so importing them here is safe and intentional.
+from gui.ai_insights_panel import insights_status
+from gui.llm_commentary_panel import commentary_status, generate_for_symbol_row
+from llm.chart_insight import generate_chart_pattern_read, render_price_chart_png
+from llm.research import generate_research_brief
+from pilots.scoring import load_snapshot
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -53,7 +67,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "PUT"],
+    allow_methods=["GET", "PUT", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -74,6 +88,41 @@ def require_token(
     presented = credentials.credentials if credentials else ""
     if not hmac.compare_digest(presented, token):
         raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+
+
+def require_ai_capability_enabled(flag_name: str, capability_label: str):
+    """Return a FastAPI dependency that 403s when the named settings flag is False.
+
+    Checked in ADDITION to ``require_token``, not instead of it -- the three
+    ``/data/ai/*`` generation endpoints below call out to paid external LLM
+    APIs, so an auth check alone isn't enough; a capability opt-in must also
+    pass. Mirrors ``api/pilots_api.py``'s ``require_llm_writes_enabled``-style
+    fail-closed dependency factories, but gates a FEATURE flag (does the
+    operator want this generator to run at all) rather than a config-WRITE
+    flag (can this token mutate ``.env``) -- there is no persistence/rollback
+    concern here, only "should this endpoint spend money."
+
+    NOT wired into any of the three ``/data/ai/*`` endpoints below as a hard
+    block, deliberately: each of those endpoints' "capability is off" state is
+    an HONEST, EXPECTED response (mirrors the Streamlit AI Insights tab's
+    inline info caption), not an error -- the caller wants a 200 with
+    ``{"available": false, "reason": "disabled"}`` so the webapp can render a
+    "turn this on in .env" hint, not a bare 403. Each handler checks its
+    capability flag inline (via ``commentary_status()`` / ``insights_status()``
+    / a direct ``settings.OPAL_RESEARCH_ENABLED`` read) instead. This factory
+    is kept as the reusable fail-closed-403 primitive for a FUTURE endpoint
+    that genuinely wants a hard block on a disabled capability rather than a
+    self-describing soft-fail body.
+    """
+
+    def _dependency() -> None:
+        if not getattr(settings, flag_name, False):
+            raise HTTPException(
+                status_code=403,
+                detail=f"{capability_label} is disabled ({flag_name}=false).",
+            )
+
+    return _dependency
 
 
 def _clean_nan(obj: Any) -> Any:
@@ -285,3 +334,218 @@ def get_account() -> Dict[str, Any]:
     if snapshot is None:
         raise HTTPException(status_code=404, detail="No account snapshot available")
     return _clean_nan(snapshot.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# On-demand AI generation — /data/ai/*
+# ---------------------------------------------------------------------------
+# Three POST endpoints (not GET: they call out to a paid external LLM API on
+# every uncached hit, so they must never be treated as a cacheable read) that
+# port the Streamlit AI Insights tab's (``gui/panels/ai_insights.py``)
+# on-demand generation flows onto the webapp's data API. Each underlying
+# generator (``generate_for_symbol_row`` / ``generate_chart_pattern_read`` /
+# ``generate_research_brief``) ALREADY self-caches to
+# ``output/llm_commentary_cache.json`` via ``llm/cache.py`` — this file adds
+# NO new caching layer, it is a thin, stateless HTTP wrapper. Every failure
+# mode (capability off, missing key, generator returned ``None``, generator
+# raised) is a soft-fail 200 with an honest ``reason`` field, never a 500
+# (CONSTRAINT #6) -- these are expected, self-describing states the frontend
+# renders inline, not exceptional ones.
+
+
+def _find_signal_row(symbol: str) -> Optional[Dict[str, Any]]:
+    """Return the raw ``signals[]`` entry for ``symbol`` from the current
+    snapshot, or ``None`` when there is no snapshot or no matching entry.
+
+    Mirrors ``gui/panels/ai_insights.py``'s own lookup
+    (``sig_df[sig_df["symbol"] == selected].iloc[0].to_dict()``) but without
+    a pandas round-trip. Never raises (CONSTRAINT #6).
+    """
+    snapshot = load_snapshot()
+    if not isinstance(snapshot, dict):
+        return None
+    signals = snapshot.get("signals")
+    if not isinstance(signals, list):
+        return None
+    for sig in signals:
+        if isinstance(sig, dict) and str(sig.get("symbol") or "").upper() == symbol:
+            return sig
+    return None
+
+
+@app.post("/data/ai/commentary/{symbol}", dependencies=[Depends(require_token)])
+def generate_commentary(symbol: str) -> Dict[str, Any]:
+    """On-demand Claude analyst note for ``symbol`` (Tier 9 analyst rationale).
+
+    Ports ``gui/panels/ai_insights.py``'s "Claude analyst note" section
+    (``_render_llm_commentary_button`` / ``gui.llm_commentary_panel``) to a
+    stateless HTTP call. Gate: ``settings.LLM_COMMENTARY_ENABLED`` +
+    ``settings.ANTHROPIC_API_KEY`` (via ``commentary_status``).
+
+    Response shape (always 200 on a soft-fail, 404 only when the symbol
+    itself isn't in the current snapshot -- never a fabricated row):
+    ``{"available": bool, "reason": Optional[str], "payload": Optional[dict]}``
+    where ``reason`` is one of ``"disabled"``, ``"missing_key"``,
+    ``"generation_failed"``, or ``None`` on success. ``payload`` is an
+    ``AnalystRationale.model_dump()``-shaped dict on success.
+    """
+    sym = symbol.upper()
+    row = _find_signal_row(sym)
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"{sym} not found in current snapshot signals"
+        )
+
+    status = commentary_status(settings)
+    if status == "disabled":
+        return _clean_nan({"available": False, "reason": "disabled", "payload": None})
+    if status == "missing_key":
+        return _clean_nan({"available": False, "reason": "missing_key", "payload": None})
+
+    try:
+        payload = generate_for_symbol_row(row)
+    except Exception as exc:  # dead-letter — a generator bug must never 500 this endpoint
+        logger.warning("data_api: commentary generation failed for %s: %s", sym, exc)
+        return _clean_nan({"available": False, "reason": "generation_failed", "payload": None})
+
+    if payload is None:
+        return _clean_nan({"available": False, "reason": "generation_failed", "payload": None})
+    return _clean_nan({"available": True, "reason": None, "payload": payload})
+
+
+@app.post("/data/ai/chart/{symbol}", dependencies=[Depends(require_token)])
+def generate_chart_insight(symbol: str) -> Dict[str, Any]:
+    """On-demand Gemini Vision chart-pattern read for ``symbol`` (Tier 9 Scope 3).
+
+    Ports ``gui/panels/ai_insights.py``'s "Gemini chart pattern
+    interpretation" section (``_render_gemini_chart_section``) to a stateless
+    HTTP call: fetch 252 daily bars via the same
+    ``data.market_data.get_provider().get_intraday_bars`` path, render a PNG
+    chart, then (capability permitting) send it to Gemini Vision.
+
+    Gate: ``settings.LLM_COMMENTARY_ENABLED`` + ``settings.GEMINI_API_KEY``
+    via ``gui.ai_insights_panel.insights_status`` -- the SAME status
+    classifier ``render_ai_insights()`` uses to gate this exact section
+    (deliberately NOT ``gui.llm_commentary_panel.commentary_status``, which
+    additionally requires ``ANTHROPIC_API_KEY`` -- that's the Claude
+    analyst-note gate, a different key requirement than the chart section
+    actually uses at its real call site, ``_get_vision_provider()``).
+
+    Response shape (always 200 on a soft-fail -- there is no 404 path, an
+    unknown/no-data symbol just yields ``"no_bars"``):
+    ``{"available": bool, "reason": Optional[str], "payload": Optional[dict],
+    "chart_png_base64": Optional[str]}``. The rendered chart PNG is returned
+    base64-encoded whenever it was successfully rendered -- INCLUDING when
+    the AI read itself is disabled, missing a key, or failed -- so the
+    frontend can always show the deterministic chart even when the AI
+    narrative is unavailable.
+    """
+    sym = symbol.upper()
+
+    try:
+        bars = get_provider().get_intraday_bars(sym, lookback_days=252)
+    except Exception as exc:
+        logger.info("data_api: chart bars fetch failed for %s: %s", sym, exc)
+        bars = None
+    if bars is None or bars.empty:
+        return _clean_nan(
+            {"available": False, "reason": "no_bars", "payload": None, "chart_png_base64": None}
+        )
+
+    try:
+        png = render_price_chart_png(sym, bars)
+    except Exception as exc:
+        logger.warning("data_api: chart render failed for %s: %s", sym, exc)
+        png = None
+    if not png:
+        return _clean_nan(
+            {
+                "available": False,
+                "reason": "chart_render_failed",
+                "payload": None,
+                "chart_png_base64": None,
+            }
+        )
+    chart_b64 = base64.b64encode(png).decode("ascii")
+
+    status = insights_status(settings)
+    if status == "disabled":
+        return _clean_nan(
+            {"available": False, "reason": "disabled", "payload": None, "chart_png_base64": chart_b64}
+        )
+    if status == "missing_key":
+        return _clean_nan(
+            {
+                "available": False,
+                "reason": "missing_key",
+                "payload": None,
+                "chart_png_base64": chart_b64,
+            }
+        )
+
+    try:
+        result = generate_chart_pattern_read(sym, bars)
+    except Exception as exc:  # dead-letter — a generator bug must never 500 this endpoint
+        logger.warning("data_api: chart pattern generation failed for %s: %s", sym, exc)
+        return _clean_nan(
+            {
+                "available": False,
+                "reason": "generation_failed",
+                "payload": None,
+                "chart_png_base64": chart_b64,
+            }
+        )
+
+    if result is None:
+        return _clean_nan(
+            {
+                "available": False,
+                "reason": "generation_failed",
+                "payload": None,
+                "chart_png_base64": chart_b64,
+            }
+        )
+
+    payload = result.model_dump() if hasattr(result, "model_dump") else result
+    return _clean_nan(
+        {"available": True, "reason": None, "payload": payload, "chart_png_base64": chart_b64}
+    )
+
+
+@app.post("/data/ai/research/{symbol}", dependencies=[Depends(require_token)])
+def generate_research(symbol: str) -> Dict[str, Any]:
+    """On-demand Opal grounded research brief for ``symbol`` (Tier 9 Scope 4).
+
+    Ports ``gui/panels/ai_insights.py``'s "Opal research brief" section
+    (``_render_opal_research_section``) to a stateless HTTP call. Gate:
+    ``settings.OPAL_RESEARCH_ENABLED`` alone -- mirrors that function's own
+    gate check exactly (it does not consult ``commentary_status`` /
+    ``insights_status``; Opal has its own independent master switch,
+    decoupled from ``LLM_COMMENTARY_ENABLED``). No separate "missing_key"
+    state is surfaced here (the provider layer routes between
+    ``OPENAI_API_KEY`` / ``GEMINI_API_KEY`` internally); a missing key simply
+    makes ``generate_research_brief`` return ``None``, which this endpoint
+    reports as ``"generation_failed"`` -- identical to what the Streamlit
+    section does (no dedicated missing-key caption for Opal either).
+
+    Response shape (always 200 on a soft-fail; no 404 path -- research is not
+    scoped to a snapshot's symbol universe):
+    ``{"available": bool, "reason": Optional[str], "payload": Optional[dict]}``
+    where ``payload`` is a ``ResearchBrief.model_dump()``-shaped dict on
+    success.
+    """
+    sym = symbol.upper()
+    if not getattr(settings, "OPAL_RESEARCH_ENABLED", False):
+        return _clean_nan({"available": False, "reason": "disabled", "payload": None})
+
+    try:
+        result = generate_research_brief(sym, context={})
+    except Exception as exc:  # dead-letter — a generator bug must never 500 this endpoint
+        logger.warning("data_api: research brief generation failed for %s: %s", sym, exc)
+        return _clean_nan({"available": False, "reason": "generation_failed", "payload": None})
+
+    if result is None:
+        return _clean_nan({"available": False, "reason": "generation_failed", "payload": None})
+
+    payload = result.model_dump() if hasattr(result, "model_dump") else result
+    return _clean_nan({"available": True, "reason": None, "payload": payload})
