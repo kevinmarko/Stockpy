@@ -275,10 +275,28 @@ export function Observability() {
               }
             />
             <Tile label="CAGR" value={fmtPct(data.portfolio_risk.cagr, 1, { fromFraction: true })} />
+            <Tile
+              label="Portfolio heat"
+              value={
+                data.portfolio_heat.heat_pct == null
+                  ? "—"
+                  : `${fmtPct(data.portfolio_heat.heat_pct, 1, { fromFraction: true })} / ${
+                      data.portfolio_heat.max_portfolio_heat == null
+                        ? "—"
+                        : fmtPct(data.portfolio_heat.max_portfolio_heat, 0, { fromFraction: true })
+                    }`
+              }
+              tone={data.portfolio_heat.over_limit ? "neg" : undefined}
+            />
           </div>
           {data.portfolio_risk.reason && (
             <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>
               {data.portfolio_risk.reason}
+            </p>
+          )}
+          {data.portfolio_heat.reason && (
+            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 4 }}>
+              Portfolio heat: {data.portfolio_heat.reason}
             </p>
           )}
 

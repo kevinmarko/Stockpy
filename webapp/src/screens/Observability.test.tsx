@@ -31,6 +31,14 @@ const COLD_START: ObservabilitySummary = {
     min_snapshots_required: 20,
     reason: "No account snapshots yet — run the pipeline to start accumulating equity history.",
   },
+  portfolio_heat: {
+    heat_pct: null,
+    max_portfolio_heat: 0.06,
+    over_limit: null,
+    n_positions: 0,
+    as_of: null,
+    reason: "No account snapshot yet — run `python3 main.py --refresh-account` to populate.",
+  },
   equity_curve: { range: "1Y", points: [], reason: "No account snapshots yet." },
   regime: {
     as_of: null,
@@ -68,6 +76,22 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(await screen.findByText("Max drawdown")).toBeInTheDocument();
     // The mock's sharpe_ratio (1.18) renders as a real number, not "—".
     expect(await screen.findByText("1.18")).toBeInTheDocument();
+  });
+
+  it("renders the portfolio heat tile from the mock", async () => {
+    renderScreen();
+    expect(await screen.findByText("Portfolio heat")).toBeInTheDocument();
+    // mock.ts's mockPortfolioHeat: 2.1% heat / 6% ceiling.
+    expect(await screen.findByText("2.1% / 6%")).toBeInTheDocument();
+  });
+
+  it("a cold-start portfolio heat (heat_pct null) renders '—' and its reason, never a fabricated 0%", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(await screen.findByText("Portfolio heat")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Portfolio heat: No account snapshot yet/)
+    ).toBeInTheDocument();
   });
 
   it("renders the regime badges from the mock", async () => {

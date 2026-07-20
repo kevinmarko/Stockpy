@@ -1254,11 +1254,14 @@ class TestObservabilitySummary:
         assert resp.status_code == 200
         body = resp.json()
         assert set(body) == {
-            "portfolio_risk", "equity_curve", "regime", "forecast_skill", "risk_gate_blocks",
+            "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
+            "forecast_skill", "risk_gate_blocks",
         }
         assert body["portfolio_risk"]["sharpe_ratio"] is None
         assert body["portfolio_risk"]["n_snapshots"] == 0
         assert body["portfolio_risk"]["reason"]
+        assert body["portfolio_heat"]["heat_pct"] is None
+        assert body["portfolio_heat"]["reason"]
         assert body["equity_curve"]["range"] == "1Y"
         assert body["equity_curve"]["points"] == []
         assert body["regime"]["market_regime"] is None

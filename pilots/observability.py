@@ -1,7 +1,7 @@
 """pilots/observability.py — Mission-Control summary for the PWA (READ-ONLY).
 =============================================================================
 
-Ports the four highest-value sections of the retired Streamlit Command
+Ports the highest-value sections of the retired Streamlit Command
 Center's "Observability / Mission Control" tab
 (``gui/panels/observability.py``) into a single composite read for the mobile
 ``GET /observability/summary`` endpoint:
@@ -15,6 +15,14 @@ Center's "Observability / Mission Control" tab
    (``gui/panels/observability.py::_render_observability_equity_curve``); both
    are legitimate but answer different questions, and this endpoint
    deliberately follows the account-level one per the task's brief.
+1b. **Portfolio heat** — aggregate adverse open-position P&L / total account
+   equity, against ``settings.MAX_PORTFOLIO_HEAT``, sourced from the latest
+   ``data.historical_store.HistoricalStore.latest_account_snapshot()`` — the
+   same two inputs (per-position ``unrealized_pl``, account ``equity``)
+   ``execution/risk_gate.py::portfolio_heat_check`` reads to gate live BUY
+   orders. See :func:`portfolio_heat_metric`'s docstring for why this does
+   NOT reproduce either of the two legacy Streamlit "Portfolio Heat" tiles'
+   computations verbatim (both were found to be non-functional in practice).
 2. **Equity + drawdown + regime overlay** — the same account equity curve,
    plus a vectorized running peak-to-trough drawdown %, plus the current
    macro-regime telemetry already written to ``output/state_snapshot.json``
@@ -72,6 +80,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "observability_summary",
     "portfolio_risk_metrics",
+    "portfolio_heat_metric",
     "equity_curve_with_drawdown",
     "regime_overlay",
     "portfolio_forecast_skill",
@@ -172,6 +181,113 @@ def portfolio_risk_metrics() -> Dict[str, Any]:
         "n_snapshots": n_snapshots,
         "min_snapshots_required": MIN_SNAPSHOTS_FOR_STATS,
         "reason": reason,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1b. Portfolio heat — aggregate adverse open-position P&L vs. total equity,
+#     against the configured settings.MAX_PORTFOLIO_HEAT ceiling.
+# ---------------------------------------------------------------------------
+
+
+def _empty_portfolio_heat(n_positions: int = 0, reason: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "heat_pct": None,
+        "max_portfolio_heat": _finite_or_none(settings.MAX_PORTFOLIO_HEAT),
+        "over_limit": None,
+        "n_positions": n_positions,
+        "as_of": None,
+        "reason": reason or (
+            "No account snapshot yet — run `python3 main.py --refresh-account` "
+            "to populate."
+        ),
+    }
+
+
+def portfolio_heat_metric() -> Dict[str, Any]:
+    """Live "Portfolio Heat" — aggregate adverse open-position P&L as a
+    fraction of total account equity — against the configured
+    ``settings.MAX_PORTFOLIO_HEAT`` ceiling.
+
+    This intentionally reproduces ``execution/risk_gate.py::portfolio_heat_check``'s
+    EXACT formula (the one that actually gates new BUY orders in production):
+    ``sum(abs(unrealized_pl) for adverse positions) / account.equity``. It does
+    NOT reproduce either of the two legacy Streamlit computations that share
+    the same tile label, both of which were found on inspection to be
+    non-functional in practice:
+
+    * ``gui/panels/report_viewer.py``'s Report tab builds a ``pos_df`` with
+      ``Symbol``/``Kelly Target`` columns and passes it to
+      ``evaluation_engine.EvaluationEngine.calculate_portfolio_heat``, but that
+      method actually looks for ``position_size``/``stop_loss_pct`` columns —
+      neither present — so it always short-circuits to a static ``0.0``.
+    * ``gui/panels/observability.py``'s Mission Control panel reads
+      ``TransactionsStore.open_trades_df()`` for an ``unrealized_pnl`` column,
+      but the ``Trade`` ORM model (``transactions_store.py``) has never had
+      that column (or a ``market_value`` one) — the trades table only tracks
+      entry/exit price and shares — so that tile's heat/gross/net metrics are
+      likewise always "—" in practice today.
+
+    The one place unrealized P&L per position AND total account equity are
+    BOTH actually persisted together is the latest ``AccountSnapshot`` written
+    by ``data/historical_store.py::HistoricalStore.save_account_snapshot`` —
+    each ``PortfolioPosition`` carries ``unrealized_pl``, the snapshot carries
+    ``total_equity`` — the same two inputs ``risk_gate.py``'s live gate reads
+    from ``RiskContext.open_positions`` / ``account.equity``. This function
+    reads that snapshot via ``HistoricalStore(readonly=True)`` (already an
+    allowed import for this AST-guarded module — see file docstring).
+
+    Returns the honest empty shape (``heat_pct=None``, never a fabricated
+    ``0.0`` — CONSTRAINT #4) when no account snapshot is persisted yet, or its
+    ``total_equity`` is missing/non-positive/non-finite. Never raises
+    (CONSTRAINT #6).
+    """
+    try:
+        from data.historical_store import HistoricalStore
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
+        logger.debug("portfolio_heat_metric import failed: %s", exc)
+        return _empty_portfolio_heat()
+
+    try:
+        snapshot = HistoricalStore(readonly=True).latest_account_snapshot()
+    except Exception as exc:  # noqa: BLE001 — dead-letter: cold/unreadable DB
+        logger.warning("portfolio_heat_metric: latest_account_snapshot failed: %s", exc)
+        return _empty_portfolio_heat()
+
+    if snapshot is None:
+        return _empty_portfolio_heat()
+
+    positions = snapshot.positions or {}
+    total_equity = _finite_or_none(getattr(snapshot, "total_equity", None))
+    if total_equity is None or total_equity <= 0:
+        return _empty_portfolio_heat(
+            n_positions=len(positions),
+            reason=(
+                "Total account equity unavailable or non-positive — cannot "
+                "compute the heat denominator honestly."
+            ),
+        )
+
+    try:
+        adverse = sum(
+            abs(pl)
+            for p in positions.values()
+            if (pl := _finite_or_none(getattr(p, "unrealized_pl", None))) is not None and pl < 0
+        )
+        heat_pct = float(adverse) / total_equity
+    except Exception as exc:  # noqa: BLE001 — dead-letter
+        logger.warning("portfolio_heat_metric: computation failed: %s", exc)
+        return _empty_portfolio_heat(n_positions=len(positions))
+
+    max_heat = _finite_or_none(settings.MAX_PORTFOLIO_HEAT)
+    fetched_at = getattr(snapshot, "fetched_at", None)
+    return {
+        "heat_pct": heat_pct,
+        "max_portfolio_heat": max_heat,
+        "over_limit": (max_heat is not None and heat_pct > max_heat),
+        "n_positions": len(positions),
+        "as_of": fetched_at.isoformat() if fetched_at is not None else None,
+        "reason": None,
     }
 
 
@@ -547,6 +663,7 @@ def observability_summary(
     (CONSTRAINT #6) — a failure in one never blocks the other three."""
     return {
         "portfolio_risk": portfolio_risk_metrics(),
+        "portfolio_heat": portfolio_heat_metric(),
         "equity_curve": equity_curve_with_drawdown(equity_range),
         "regime": regime_overlay(snapshot),
         "forecast_skill": portfolio_forecast_skill(horizon_days),

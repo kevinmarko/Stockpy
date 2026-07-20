@@ -66,6 +66,7 @@ import type {
   Portfolio,
   PortfolioAttribution,
   PortfolioForecastSkill,
+  PortfolioHeatMetric,
   PortfolioRiskMetrics,
   RealizedPerformance,
   RegimeOverlay,
@@ -2448,9 +2449,26 @@ function mockRiskGateBlocks(): RiskGateBlockLog {
   return { entries, count: entries.length, reason: null };
 }
 
+// Comfortably under the 6% default MAX_PORTFOLIO_HEAT ceiling — a healthy
+// steady-state reading, not the alarming edge case (see over_limit tests for
+// that branch).
+function mockPortfolioHeat(): PortfolioHeatMetric {
+  const maxHeat = 0.06;
+  const heatPct = 0.021;
+  return {
+    heat_pct: heatPct,
+    max_portfolio_heat: maxHeat,
+    over_limit: heatPct > maxHeat,
+    n_positions: 4,
+    as_of: new Date(Date.now() - 20 * 60_000).toISOString(),
+    reason: null,
+  };
+}
+
 function mockObservabilitySummary(range: PerfRange, horizon: number): ObservabilitySummary {
   return {
     portfolio_risk: mockPortfolioRisk(),
+    portfolio_heat: mockPortfolioHeat(),
     equity_curve: mockEquityDrawdownCurve(range),
     regime: mockRegimeOverlay(),
     forecast_skill: mockPortfolioForecastSkill(horizon),

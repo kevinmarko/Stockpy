@@ -1196,16 +1196,17 @@ def get_observability_summary(
     horizon: int = Query(30, ge=1, le=365),
 ) -> Dict[str, Any]:
     """Composite Mission-Control summary — the PWA's port of the retired
-    Streamlit Command Center's Observability tab (bounded to four sections):
+    Streamlit Command Center's Observability tab (bounded to five sections):
     portfolio risk metrics (Sharpe/Calmar/MaxDD/MaxDD-duration/CAGR), the
-    account equity curve + drawdown, the current macro-regime overlay, the
-    portfolio-wide forecast-skill reliability curve + weights, and the last
-    ~100 risk-gate block-log entries.
+    live portfolio heat (aggregate adverse open P&L vs. total equity, against
+    ``MAX_PORTFOLIO_HEAT``), the account equity curve + drawdown, the current
+    macro-regime overlay, the portfolio-wide forecast-skill reliability curve
+    + weights, and the last ~100 risk-gate block-log entries.
 
-    Composes FOUR independently-degrading sections (``pilots.observability
+    Composes FIVE independently-degrading sections (``pilots.observability
     .observability_summary`` — see that module's docstring for the full
     per-section contract); one section's cold-start/failure never blocks the
-    other three, and every section carries its own honest ``reason`` when
+    others, and every section carries its own honest ``reason`` when
     empty. ``range`` zooms the equity curve only (risk metrics always use the
     full history — Sharpe/CAGR need enough samples to be meaningful);
     ``horizon`` selects the forecast-skill horizon (10/30/60/90 are the
