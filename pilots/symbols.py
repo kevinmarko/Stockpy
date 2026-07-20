@@ -11,9 +11,9 @@ detail pages (``GET /symbols/{ticker}``).
 Design invariants (identical to the rest of the Pilots read layer):
 
 * **Read-only / persisted-state only** — reuses ``scoring.load_snapshot`` inputs
-  and ``scoring.pilot_holdings``; imports only ``pilots.catalog`` +
-  ``pilots.scoring`` (no heavy engines), so ``api/pilots_api.py`` stays inside
-  the import-guard allow-list.
+  and ``scoring.pilot_holdings``; imports only ``pilots.catalog``,
+  ``pilots.scoring``, and ``settings`` (no heavy engines), so
+  ``api/pilots_api.py`` stays inside the import-guard allow-list.
 * **Honesty (CONSTRAINT #4)** — a field the active snapshot does not carry is
   emitted as ``None``, NEVER a fabricated ``0.0``. Two orchestrator writers exist
   (``main_orchestrator._write_state_snapshot`` = rich;
@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
+
+from settings import settings
 
 from pilots import catalog, scoring
 
@@ -342,6 +344,21 @@ def symbol_detail(
                 "hmm_risk_on": cf(sig.get("hmm_risk_on")),
                 "macro_status": _clean_str(sig.get("macro_status")),
             },
+            # Position-sizing decomposition — Kelly Target before vs. after the
+            # HMM regime multiplier + meta-label composite were applied (ports
+            # gui/panels/strategy_matrix.py::_render_regime_multiplier_impact).
+            # `cf` preserves a genuine 0.0 (e.g. kelly_target_post_regime==0.0
+            # when the regime multiplier zeroed sizing, or meta_label_composite
+            # ==0.0 when a MetaLabeler hard-gated the signal) — never coerced
+            # into a fabricated no-op. null when the active snapshot writer
+            # didn't compute a value (CONSTRAINT #4).
+            "sizing": {
+                "kelly_target_pre_regime": cf(sig.get("kelly_target_pre_regime")),
+                "kelly_target_post_regime": cf(sig.get("kelly_target_post_regime")),
+                "regime_multiplier": cf(sig.get("regime_multiplier")),
+                "meta_label_composite": cf(sig.get("meta_label_composite")),
+                "max_position_weight": settings.MAX_POSITION_WEIGHT,
+            },
             "held_by_pilots": held_by_pilots(symbol, snapshot, pilots=pilots),
         }
     except Exception as exc:  # noqa: BLE001
@@ -363,13 +380,16 @@ def compare_symbols(snapshot: Any, tickers: List[str]) -> Dict[str, Any]:
     fed its grouped bar chart.
 
     Every field is read straight off the SAME ``signals[]`` entry
-    :func:`symbol_detail` reshapes — no recomputation, no engine import. Two
-    of those fields (``meta_label_composite``, ``regime_multiplier``) are only
-    ever populated by the advisory snapshot writer (``reporting/state_snapshot.py``);
-    the richer ``main_orchestrator`` writer does not carry them at all, so they
-    honestly degrade to ``None`` on that path rather than a fabricated ``1.0``
-    default (CONSTRAINT #4) — this function never bakes in the writer's own
-    ``ki.get(..., 1.0)`` fallback, it only reads what is actually persisted.
+    :func:`symbol_detail` reshapes — no recomputation, no engine import.
+    ``meta_label_composite``/``regime_multiplier`` (and, on :func:`symbol_detail`,
+    the fuller ``sizing`` group's ``kelly_target_pre_regime``/
+    ``kelly_target_post_regime``) are now persisted by BOTH snapshot writers
+    (``reporting/state_snapshot.py`` = advisory, ``main_orchestrator`` = rich —
+    see ``pipeline/production_steps.py``'s sizing-decomposition threading) —
+    they still honestly degrade to ``None`` when the strategy engine produced
+    no value for a symbol that cycle, never a fabricated ``1.0``/``0.0``
+    default (CONSTRAINT #4); this function only ever reads what is actually
+    persisted, never bakes in a writer's own fallback.
 
     A requested symbol not found in the snapshot's ``signals[]`` (typo, or it
     rolled out of this cycle's universe) still gets a row — ``found: False``

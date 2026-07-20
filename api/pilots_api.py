@@ -939,10 +939,12 @@ def get_symbols_compare(
     multi-resource view, not a single-resource lookup, so it never 404s
     (CONSTRAINT #6). Every numeric leaf is ``null`` when the active snapshot
     writer didn't compute it, never a fabricated default (CONSTRAINT #4) —
-    notably ``meta_label_composite``/``regime_multiplier`` are only ever
-    populated by the advisory snapshot writer, not the richer orchestrator
-    one, and this endpoint reads exactly what was persisted rather than
-    baking in the writer's own fallback default. ``modules`` is the sorted
+    ``meta_label_composite``/``regime_multiplier`` are now persisted by BOTH
+    snapshot writers (advisory and orchestrator — see
+    ``pipeline/production_steps.py``'s sizing-decomposition threading), but
+    this endpoint reads exactly what was persisted rather than baking in
+    either writer's own fallback default, so a symbol the strategy engine
+    skipped that cycle still nulls honestly. ``modules`` is the sorted
     union of every found symbol's score-component module names, for the
     frontend's grouped bar chart x-axis."""
     parsed = [s.strip().upper() for s in symbols_param.split(",")]

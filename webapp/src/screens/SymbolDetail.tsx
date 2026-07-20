@@ -1,5 +1,14 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from "recharts";
 import { api } from "../api/client";
 import type {
   AiChartResponse,
@@ -71,6 +80,100 @@ function StatRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+/**
+ * Regime-multiplier sizing impact — Kelly Target before vs. after the HMM
+ * regime multiplier + meta-label composite were applied. Ports
+ * `gui/panels/strategy_matrix.py::_render_regime_multiplier_impact`, sitting
+ * next to the Advisory section's "Kelly target" row: this card explains that
+ * number rather than duplicating a symbol picker (the legacy panel's
+ * selectbox is redundant here — we're already on one symbol's page).
+ *
+ * Gates on BOTH pre AND post being non-null (a fix over the legacy panel,
+ * which only NaN-checked pre and could render a literal "nan%" for post) and
+ * treats every leaf independently — `0` is a real, meaningful value here
+ * (e.g. a MetaLabeler hard-gating `meta_label_composite` to 0), never
+ * coerced via `??` into looking like "not computed".
+ */
+function RegimeSizingCard({
+  sizing,
+  symbol,
+}: {
+  sizing: SymbolDetailT["sizing"];
+  symbol: string;
+}) {
+  const { kelly_target_pre_regime: pre, kelly_target_post_regime: post, regime_multiplier, meta_label_composite } = sizing;
+
+  if (pre == null || post == null) {
+    return (
+      <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="regime-sizing-card">
+        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Regime sizing impact</h2>
+        <p style={{ color: theme.textMuted, fontSize: 13, marginTop: 10 }}>
+          Pre/post-regime Kelly Target breakdown is not available for {symbol}{" "}
+          (missing from the latest snapshot, or the strategy engine didn't
+          run for this symbol this cycle).
+        </p>
+      </section>
+    );
+  }
+
+  const deltaPp = (post - pre) * 100;
+  const chartData = [
+    { label: "Pre-regime", value: +(pre * 100).toFixed(2) },
+    { label: "Post-regime", value: +(post * 100).toFixed(2) },
+  ];
+
+  return (
+    <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="regime-sizing-card">
+      <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Regime sizing impact</h2>
+      <p style={{ margin: "0 0 10px", fontSize: 13, color: theme.textMuted }}>
+        Kelly Target before vs. after the HMM regime multiplier + meta-label
+        composite were applied.
+      </p>
+      <div className="list">
+        <StatRow label="Kelly Target (pre-regime)" value={fmtPct(pre, 2, { fromFraction: true })} />
+        <StatRow
+          label="Kelly Target (post-regime)"
+          value={
+            <span>
+              {fmtPct(post, 2, { fromFraction: true })}{" "}
+              <span style={{ color: deltaPp >= 0 ? theme.growth : theme.decline, fontSize: 12 }}>
+                ({deltaPp >= 0 ? "+" : ""}
+                {deltaPp.toFixed(2)}pp)
+              </span>
+            </span>
+          }
+        />
+        <StatRow label="HMM regime multiplier" value={regime_multiplier == null ? "—" : regime_multiplier.toFixed(3)} />
+      </div>
+
+      <div style={{ height: 160, marginTop: 12 }} data-testid="regime-sizing-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+            <XAxis dataKey="label" stroke={theme.textMuted} fontSize={11} tickLine={false} />
+            <YAxis stroke={theme.textMuted} fontSize={10} tickLine={false} unit="%" />
+            <Tooltip
+              contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
+              labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
+              itemStyle={{ fontSize: 11 }}
+              formatter={(v: number) => `${v.toFixed(2)}%`}
+            />
+            <Bar dataKey="value" fill={theme.accent} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <p style={{ margin: "10px 0 0", fontSize: 12, color: theme.textMuted }} data-testid="regime-sizing-meta-label">
+        Meta-label composite currently{" "}
+        {meta_label_composite == null ? "—" : meta_label_composite.toFixed(3)}{" "}
+        (multiplied in alongside the regime multiplier, then re-clamped to{" "}
+        {fmtPct(sizing.max_position_weight, 0, { fromFraction: true })} max
+        position weight).
+      </p>
+    </section>
+  );
+}
+
 export function SymbolDetail() {
   const { ticker = "" } = useParams();
   const nav = useNavigate();
@@ -111,7 +214,7 @@ export function SymbolDetail() {
     );
   }
 
-  const { identity, advisory, factors, ranges, risk, held_by_pilots } = data;
+  const { identity, advisory, factors, ranges, risk, sizing, held_by_pilots } = data;
   const sc = factors.score_components;
   const hasComponents = sc != null && Object.keys(sc).length > 0;
 
@@ -169,6 +272,8 @@ export function SymbolDetail() {
           </p>
         )}
       </section>
+
+      <RegimeSizingCard sizing={sizing} symbol={data.symbol} />
 
       {/* Decision journal — per-symbol log of what the operator actually did
           with this signal. Shared DecisionModal with the Calibration screen's

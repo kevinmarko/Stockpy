@@ -83,7 +83,24 @@ SHARED_SIGNAL_FIELDS = {
     "mfe",
     "mae",
     "edge_ratio",
+    # Position-sizing decomposition (webapp Strategy Matrix / Symbol Detail
+    # "regime sizing impact" views) — reached ORCHESTRATOR parity via
+    # pipeline/production_steps.py's Meta_Label_Composite/Regime_Multiplier/
+    # Kelly_Target_{Pre,Post}_Regime threading into eval_results + the column
+    # projection loop (mirrors the pre-existing Score_Components pattern).
+    "meta_label_composite",
+    "regime_multiplier",
+    "kelly_target_pre_regime",
+    "kelly_target_post_regime",
 }
+
+# The four sizing-decomposition fields, tested together below (mirrors _TRIPLET).
+_SIZING_QUARTET = (
+    "meta_label_composite",
+    "regime_multiplier",
+    "kelly_target_pre_regime",
+    "kelly_target_post_regime",
+)
 
 # Full parity — the advisory writer now emits every per-signal field the
 # orchestrator writer does. Kept (empty) so test_orchestrator_superset_documented
@@ -164,13 +181,18 @@ def orchestrator_signals(tmp_path, monkeypatch):
             "News_Sentiment": 0.42,
             "Realized Slippage": 0.0011,
             "CoVaR Proxy": -0.05,
+            "Meta_Label_Composite": 0.0,  # genuine hard-gate — must survive as 0.0, not 1.0/null
+            "Regime_Multiplier": 0.75,
+            "Kelly_Target_Pre_Regime": 0.04,
+            "Kelly_Target_Post_Regime": 0.0,  # clamp(0.04 * 0.75 * 0.0, ...) == 0.0
         },
         {
             "Symbol": "MSFT",
             "Action Signal": "HOLD",
             "Price": 300.0,
             "Shares": 0.0,
-            # News_Sentiment / Realized Slippage / CoVaR Proxy absent → null.
+            # News_Sentiment / Realized Slippage / CoVaR Proxy / the sizing
+            # quartet absent → null.
         },
     ]
     final_df = pd.DataFrame(rows)
@@ -267,6 +289,84 @@ class TestTripletSourcedFromKeyIndicators:
         assert sig["news_sentiment"] == pytest.approx(0.33)
         assert sig["realized_slippage"] == pytest.approx(0.002)
         assert sig["covar_proxy"] == pytest.approx(-0.07)
+
+
+class TestSizingQuartetPresence:
+    def test_advisory_has_sizing_keys(self, advisory_signals):
+        for key in _SIZING_QUARTET:
+            assert key in advisory_signals[0], f"advisory missing {key}"
+
+    def test_orchestrator_has_sizing_keys(self, orchestrator_signals):
+        for key in _SIZING_QUARTET:
+            assert key in orchestrator_signals[0], f"orchestrator missing {key}"
+
+
+class TestSizingQuartetNullHonesty:
+    """Mirrors TestTripletNullHonesty. The load-bearing case here is a GENUINE
+    0.0 (a MetaLabeler hard-gate, or a regime multiplier zeroing sizing) —
+    it must round-trip as 0.0, distinct from both a fabricated 1.0 default
+    and a null "not computed" (CONSTRAINT #4)."""
+
+    def test_orchestrator_sizing_round_trips_including_a_genuine_zero(self, orchestrator_signals):
+        sig = _by_symbol(orchestrator_signals, "AAPL")
+        assert sig["meta_label_composite"] == 0.0
+        assert sig["meta_label_composite"] is not None
+        assert sig["regime_multiplier"] == pytest.approx(0.75)
+        assert sig["kelly_target_pre_regime"] == pytest.approx(0.04)
+        assert sig["kelly_target_post_regime"] == 0.0
+        assert sig["kelly_target_post_regime"] is not None
+
+    def test_orchestrator_sizing_is_null_when_absent(self, orchestrator_signals):
+        sig = _by_symbol(orchestrator_signals, "MSFT")
+        for key in _SIZING_QUARTET:
+            assert sig[key] is None, f"{key} must be null when the column is absent"
+
+    def test_advisory_sizing_round_trips_including_a_genuine_zero(self, tmp_path, monkeypatch):
+        """Regression test for the fixed `or 1.0` bug: a genuine 0.0
+        meta_label_composite (a real MetaLabeler hard-gate) must survive
+        reporting/state_snapshot.py's writer, not be silently rewritten to a
+        fabricated 1.0."""
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        rec = _recommendation(
+            "AAPL",
+            meta_label_composite=0.0,
+            regime_multiplier=0.75,
+            kelly_target_pre_regime=0.04,
+            kelly_target_post_regime=0.0,
+        )
+        result = SimpleNamespace(snapshot=SimpleNamespace(positions={}), recommendations=[rec])
+        ss.write_state_snapshot(result, _macro())
+        sig = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))["signals"][0]
+        assert sig["meta_label_composite"] == 0.0
+        assert sig["meta_label_composite"] is not None
+        assert sig["kelly_target_post_regime"] == 0.0
+        assert sig["kelly_target_post_regime"] is not None
+
+    def test_advisory_sizing_is_null_when_absent(self, advisory_signals):
+        # The base fixture rec has no sizing decomposition in key_indicators.
+        sig = advisory_signals[0]
+        for key in _SIZING_QUARTET:
+            assert sig[key] is None, f"{key} must be null when absent from key_indicators"
+
+    def test_advisory_snapshot_is_valid_strict_json(self, tmp_path, monkeypatch):
+        """Regression test for the fixed raw-NaN-into-json.dumps bug: when the
+        strategy engine didn't produce kelly_target_pre_regime/post_regime for
+        a symbol, the advisory writer must emit JSON null, never a bare `NaN`
+        token (invalid RFC-8259 — json.loads tolerates it, but strict parsers
+        like the webapp's JSON.parse do not)."""
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}), recommendations=[_recommendation("AAPL")]
+        )
+        ss.write_state_snapshot(result, _macro())
+        raw = (tmp_path / "state_snapshot.json").read_text(encoding="utf-8")
+        assert "NaN" not in raw, "snapshot contains a bare NaN token — invalid strict JSON"
+        # json.loads with parse_constant raising proves no NaN/Infinity token
+        # anywhere in the document, not just in the two fields under test.
+        json.loads(
+            raw,
+            parse_constant=lambda tok: (_ for _ in ()).throw(ValueError(f"invalid JSON constant: {tok}")),
+        )
 
 
 class TestAdvisoryNewFieldsRoundTrip:

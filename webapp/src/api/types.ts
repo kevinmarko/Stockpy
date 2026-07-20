@@ -300,6 +300,21 @@ export interface SymbolDetail {
     hmm_risk_on: number | null;
     macro_status: string | null;
   };
+  /**
+   * Position-sizing decomposition — Kelly Target before vs. after the HMM
+   * regime multiplier + meta-label composite were applied (ports
+   * `gui/panels/strategy_matrix.py::_render_regime_multiplier_impact`).
+   * `0` is a real, meaningful value for every leaf here (e.g. a MetaLabeler
+   * hard-gating a signal to `meta_label_composite: 0`) — never treat it as
+   * falsy/absent. `null` means the active snapshot writer didn't compute it.
+   */
+  sizing: {
+    kelly_target_pre_regime: number | null;
+    kelly_target_post_regime: number | null;
+    regime_multiplier: number | null;
+    meta_label_composite: number | null;
+    max_position_weight: number;
+  };
   held_by_pilots: SymbolHeldBy[];
 }
 
@@ -308,10 +323,11 @@ export interface SymbolDetail {
  * counterpart of the legacy Streamlit Strategy Matrix's "Symbol Comparison"
  * table (`gui/panels/strategy_matrix.py::_render_symbol_comparison`). Every
  * numeric/string leaf is `null` when the active snapshot writer never
- * computed it — NEVER a fabricated default (CONSTRAINT #4). Notably
- * `meta_label_composite`/`regime_multiplier` are only ever populated by the
- * advisory snapshot writer, not the richer orchestrator one, so `null` there
- * is expected/honest, not a bug.
+ * computed it — NEVER a fabricated default (CONSTRAINT #4).
+ * `meta_label_composite`/`regime_multiplier` are persisted by BOTH snapshot
+ * writers (advisory and orchestrator), but `null` is still expected/honest —
+ * not a bug — whenever the strategy engine didn't produce a value for that
+ * symbol this cycle.
  *
  * `found: false` means the requested ticker isn't in the latest snapshot
  * (typo, or it rolled out of the tracked universe this cycle) — every other
@@ -1006,6 +1022,40 @@ export interface StrategyModuleRow {
   pinned_zero: boolean;
 }
 
+/** One fixed [lo, hi) bucket of the meta-label confidence histogram. */
+export interface MetaLabelBin {
+  lo: number;
+  hi: number;
+  count: number;
+}
+
+/**
+ * Portfolio-wide distribution of `meta_label_composite` (GET /strategy/matrix,
+ * ports `gui/panels/strategy_matrix.py::_render_meta_label_distribution`).
+ * `bins` are FIXED over [0, 1] (20 bins) rather than auto-ranged, so a
+ * degenerate all-1.0 dataset (the common case with no MetaLabelers
+ * registered) still renders as an honest spike on a full-width axis instead
+ * of a meaningless single bar.
+ *
+ * `all_unity: true` is the EXPECTED, correct state pre-Stage-4 (no
+ * MetaLabelers registered in `ml.meta_labeling.global_meta_registry` → every
+ * module's `meta_label_proba` defaults to 1.0, a multiplicative no-op) — the
+ * UI must explain this, not present it as broken. `n_gated` counts symbols
+ * with a genuine `0.0` (hard-gated below `min_confidence`) — distinct from
+ * `missing` (the writer never computed a value for that symbol at all).
+ */
+export interface MetaLabelDistribution {
+  bins: MetaLabelBin[];
+  count: number;
+  missing: number;
+  n_gated: number;
+  all_unity: boolean;
+  min: number | null;
+  max: number | null;
+  min_confidence: number;
+  reason: string | null;
+}
+
 /** GET /strategy/matrix — the signal-module weight/enablement matrix. */
 export interface StrategyMatrix {
   as_of: string | null;
@@ -1021,6 +1071,7 @@ export interface StrategyMatrix {
   /** Whether an .env write is pending against the running (in-process) values. */
   env_drift: { detected: boolean; keys: string[]; note: string };
   reason: string | null;
+  meta_label: MetaLabelDistribution;
 }
 
 /** Body for PUT /strategy/modules. `weights` must cover EVERY known module. */

@@ -705,6 +705,19 @@ class StrategyEvalStep(PipelineStep):
                     # does. {} (never fabricated) when the strategy engine
                     # didn't produce a breakdown for this ticker.
                     'Score_Components': strategy_output.get('Score_Components') or {},
+                    # Position-sizing decomposition (strategy_engine.py
+                    # evaluate_security() lines ~388-408) — threaded through so
+                    # _write_state_snapshot can surface the pre/post-regime Kelly
+                    # breakdown the same way reporting/state_snapshot.py's
+                    # advisory writer already does. Bare .get() — NEVER `or 1.0`/
+                    # `or 0.0` here: a genuine 0.0 (e.g. a MetaLabeler hard-gating
+                    # the signal below settings.META_LABEL_MIN_CONFIDENCE) must
+                    # survive, and an absent key must stay None, not be coerced
+                    # into a fabricated no-op (CONSTRAINT #4).
+                    'Meta_Label_Composite': strategy_output.get('Meta_Label_Composite'),
+                    'Regime_Multiplier': strategy_output.get('Regime_Multiplier'),
+                    'Kelly_Target_Pre_Regime': strategy_output.get('Kelly_Target_Pre_Regime'),
+                    'Kelly_Target_Post_Regime': strategy_output.get('Kelly_Target_Post_Regime'),
                 }
 
             except Exception as ticker_exc:
@@ -742,12 +755,17 @@ class StrategyEvalStep(PipelineStep):
         except Exception as dl_exc:
             telemetry.warning("Failed to write dead-letter report: %s", dl_exc)
 
+        _SIZING_DECOMPOSITION_COLS = (
+            'Meta_Label_Composite', 'Regime_Multiplier',
+            'Kelly_Target_Pre_Regime', 'Kelly_Target_Post_Regime',
+        )
         for col in [
             'Edge Ratio', 'Action Signal', 'Advice', 'Actionable Advice Signal',
             'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number',
             'Kelly Target', 'Option Strategy', 'buyRange', 'sellRange',
             'Strategy Explainer Notes', 'Robinhood Shares', 'Robinhood Avg Cost',
-            'Robinhood Dividends', 'Robinhood Advice', 'Score_Components'
+            'Robinhood Dividends', 'Robinhood Advice', 'Score_Components',
+            *_SIZING_DECOMPOSITION_COLS,
         ]:
             if col in ['Edge Ratio', 'Kelly Target', 'Robinhood Shares', 'Robinhood Avg Cost', 'Robinhood Dividends', 'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number']:
                 default_val = 0.0 if col != 'is_dividend_sustainable' else 0
@@ -756,6 +774,21 @@ class StrategyEvalStep(PipelineStep):
                 # Dict-valued column — "" is not a sensible default (CONSTRAINT #4:
                 # an empty breakdown, not a fabricated one).
                 ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, {}))
+            elif col in _SIZING_DECOMPOSITION_COLS:
+                # Position-sizing decomposition (Meta_Label_Composite/
+                # Regime_Multiplier/Kelly_Target_{Pre,Post}_Regime) — deliberately
+                # NOT in config.COLUMN_SCHEMA (like Score_Components above): these
+                # are read-only diagnostic fields for the webapp's Strategy Matrix/
+                # Symbol Detail screens, not a Sheets/HTML-report column or a
+                # quant_platform.db field. Adding them to COLUMN_SCHEMA would
+                # trigger a Sheets column + a DailySignals DDL migration for no
+                # reason (config.get_headers() drives both; pandera is
+                # strict=False so a non-schema column here is already safe).
+                # Default None (-> NaN), NEVER 0.0/1.0 — a fabricated sizing
+                # value is actively misleading (CONSTRAINT #4), and 0.0 is a
+                # real, operationally significant value (a MetaLabeler hard
+                # gate) that must never be confused with "not computed".
+                ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, None))
             else:
                 ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, ""))
 

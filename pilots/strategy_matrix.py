@@ -97,6 +97,104 @@ def _resolve_effective_weights(
     return {**default_weights, **override}
 
 
+def _coerce_float(value: Any) -> Optional[float]:
+    """Coerce *value* to a finite float, or ``None`` when not possible.
+
+    Duplicated from ``pilots.scoring._coerce_float`` (see module docstring for
+    why this file can't import ``pilots.scoring`` — actually it can, that
+    restriction is only for ``signals``/heavy engines; this is duplicated
+    purely to keep this module's dependency surface exactly what its docstring
+    promises: ``settings`` + stdlib only). NaN/inf collapse to ``None``, never
+    a fabricated ``0.0`` — a real ``0.0`` (e.g. a MetaLabeler hard gate) is
+    preserved as-is (CONSTRAINT #4)."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):  # NaN / inf guard
+        return None
+    return f
+
+
+_META_LABEL_BIN_COUNT = 20
+_NO_META_LABEL_REASON = (
+    "No meta_label_composite values in this snapshot — either no snapshot "
+    "exists yet, or it was written by a pipeline path that doesn't persist "
+    "the sizing decomposition. Run the pipeline to populate it."
+)
+
+
+def _meta_label_distribution(snapshot: Optional[dict]) -> Dict[str, Any]:
+    """Portfolio-wide distribution of ``meta_label_composite`` across every
+    symbol in the snapshot — the read-only data behind the Strategy Matrix
+    screen's "Meta-Label Confidence Distribution" section (ports
+    ``gui/panels/strategy_matrix.py::_render_meta_label_distribution``).
+
+    A symbol contributes to ``values``/the histogram only when its snapshot
+    entry carries a real, finite ``meta_label_composite`` — an absent key or a
+    non-numeric value is counted in ``missing``, never coerced into a
+    fabricated ``1.0`` (CONSTRAINT #4; the legacy panel's ``or 1.0`` did
+    exactly this, which also silently destroyed every genuine ``0.0`` before
+    it could be counted — ``n_gated`` here does not repeat that bug).
+
+    Bins are FIXED over ``[0, 1]`` (20 bins, matching the legacy chart's
+    ``nbins=20``) rather than auto-ranged over the data — a deliberate
+    deviation: auto-ranging a degenerate single-value dataset (every symbol at
+    exactly 1.0, the common case with no MetaLabelers registered) produces a
+    meaningless single-bar chart with no axis context, whereas fixed [0,1]
+    bins let that same case render as an honest spike in the top bin of a
+    full-width axis.
+
+    ``all_unity`` mirrors the legacy panel's explicit "this is correct, not a
+    bug" branch (tolerance ``1e-9``): with no MetaLabelers registered in
+    ``ml.meta_labeling.global_meta_registry``, every module's
+    ``meta_label_proba`` defaults to 1.0 (a multiplicative no-op), so a single
+    spike at 1.0 is the CORRECT rendering of the current, pre-Stage-4 state.
+    """
+    values: List[float] = []
+    missing = 0
+    for sig in (snapshot or {}).get("signals") or []:
+        if not isinstance(sig, dict):
+            continue
+        if "meta_label_composite" not in sig:
+            missing += 1
+            continue
+        v = _coerce_float(sig.get("meta_label_composite"))
+        if v is None:
+            missing += 1
+            continue
+        values.append(v)
+
+    bin_width = 1.0 / _META_LABEL_BIN_COUNT
+    bins: List[Dict[str, Any]] = [
+        {"lo": round(i * bin_width, 4), "hi": round((i + 1) * bin_width, 4), "count": 0}
+        for i in range(_META_LABEL_BIN_COUNT)
+    ]
+    n_gated = 0
+    for v in values:
+        if v == 0.0:
+            n_gated += 1
+        # Clamp into [0, 1] for bin placement — a value outside that range is
+        # still a real, counted value (min/max below reflect the true range),
+        # it just lands in the nearest edge bin rather than being dropped.
+        idx = min(_META_LABEL_BIN_COUNT - 1, max(0, int(min(max(v, 0.0), 1.0) / bin_width)))
+        bins[idx]["count"] += 1
+
+    return {
+        "bins": bins,
+        "count": len(values),
+        "missing": missing,
+        "n_gated": n_gated,
+        "all_unity": bool(values) and all(abs(v - 1.0) < 1e-9 for v in values),
+        "min": min(values) if values else None,
+        "max": max(values) if values else None,
+        "min_confidence": settings.META_LABEL_MIN_CONFIDENCE,
+        "reason": None if values else _NO_META_LABEL_REASON,
+    }
+
+
 def _snapshot_module_symbol_counts(snapshot: Optional[dict]) -> Dict[str, int]:
     """Map ``module_name -> number of symbols whose score_components carried it``
     in the last run. Empty when there's no snapshot."""
@@ -203,4 +301,5 @@ def strategy_matrix(snapshot_path: Optional[str] = None) -> Dict[str, Any]:
         "disabled": disabled,
         "max_weight": _MAX_WEIGHT,
         "reason": None if snapshot is not None else _NO_SNAPSHOT_REASON,
+        "meta_label": _meta_label_distribution(snapshot),
     }

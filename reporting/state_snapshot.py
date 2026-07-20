@@ -96,10 +96,19 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 # score_components is the one non-scalar field, carried
                 # separately on the Recommendation dataclass (None when the
                 # strategy engine failed this cycle — never fabricated).
-                "meta_label_composite": float(ki.get("meta_label_composite", 1.0) or 1.0),
-                "regime_multiplier": float(ki.get("regime_multiplier", 1.0) or 1.0),
-                "kelly_target_pre_regime": ki.get("kelly_target_pre_regime", float("nan")),
-                "kelly_target_post_regime": ki.get("kelly_target_post_regime", float("nan")),
+                # Routed through _safe_float_or_none (never a fabricated 1.0
+                # default, never `or 1.0` silently rewriting a genuine 0.0 —
+                # CONSTRAINT #4): a MetaLabeler hard-gating a signal below
+                # settings.META_LABEL_MIN_CONFIDENCE is a real 0.0 that must
+                # survive, distinct from "not computed" (null). Also fixes
+                # kelly_target_pre_regime/post_regime previously receiving a
+                # raw float("nan") default, which json.dumps() below serializes
+                # as a bare `NaN` token — invalid RFC-8259 JSON (Python's own
+                # json.loads tolerates it, but no other consumer must).
+                "meta_label_composite": _safe_float_or_none(ki.get("meta_label_composite")),
+                "regime_multiplier": _safe_float_or_none(ki.get("regime_multiplier")),
+                "kelly_target_pre_regime": _safe_float_or_none(ki.get("kelly_target_pre_regime")),
+                "kelly_target_post_regime": _safe_float_or_none(ki.get("kelly_target_post_regime")),
                 "score_components": rec.score_components or {},
                 # Tactical price bands (gui/panels/report_viewer.py's "Tactical
                 # Ranges" table already reads these keys) + suggested SELL exit
