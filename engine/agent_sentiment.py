@@ -48,7 +48,7 @@ async def analyze_sentiment(ticker: str) -> Dict[str, Any]:
 
     config = LocalAgentConfig(
         api_key=api_key,
-        model="gemini-2.5-flash",
+        model="gemini-3.5-flash",
         tools=[get_recent_news],
         response_schema=SentimentOutput,
         system_instructions=(
