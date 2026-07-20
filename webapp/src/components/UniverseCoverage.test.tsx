@@ -1,14 +1,16 @@
 /**
  * UniverseCoverage.test.tsx — the read-only coverage-reconciliation
- * diagnostic (FULL/EQUITY_ONLY/UNCOVERED breakdown). Covers the summary
- * counts, the per-symbol rows (against the real mock API), the "Coverage
- * gaps only" filter, and the honest cold-start/reason state.
+ * diagnostic (FULL/STALE/QUOTES_ONLY/EQUITY_ONLY/UNCOVERED/UNKNOWN
+ * breakdown). Covers the summary counts, the per-symbol rows (against the
+ * real mock API, which spans all six data.portfolio_sync.CoverageStatus
+ * values), the "Coverage gaps only" filter, and the honest empty state for a
+ * genuinely untracked universe.
  */
 import { render, screen, fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UniverseCoverage } from "./UniverseCoverage";
 import { api } from "../api/client";
-import type { UniverseCoverageResponse } from "../api/types";
+import type { SyncReportResponse } from "../api/types";
 
 describe("UniverseCoverage (real mock API)", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -16,9 +18,22 @@ describe("UniverseCoverage (real mock API)", () => {
   it("renders summary counts and per-symbol rows", async () => {
     render(<UniverseCoverage />);
     expect(await screen.findByTestId("universe-coverage")).toBeInTheDocument();
-    // The mock fixture has DUK (equity_only) and T (uncovered) as the two gaps.
+    // The mock fixture has DUK (equity_only) and T (uncovered) among its gaps.
     expect(screen.getByTestId("universe-coverage-row-DUK")).toBeInTheDocument();
     expect(screen.getByTestId("universe-coverage-row-AAPL")).toBeInTheDocument();
+  });
+
+  it("renders a row for every one of the six coverage states", async () => {
+    render(<UniverseCoverage />);
+    await screen.findByTestId("universe-coverage");
+    // AAPL/MSFT/COST = full, NVDA = stale, V = quotes_only, DUK = equity_only,
+    // T = uncovered, XOM = unknown — mirrors the mock's ROWS fixture exactly.
+    for (const symbol of ["AAPL", "NVDA", "V", "DUK", "T", "XOM"]) {
+      expect(screen.getByTestId(`universe-coverage-row-${symbol}`)).toBeInTheDocument();
+    }
+    expect(screen.getByTestId("universe-coverage-row-NVDA")).toHaveTextContent("Stale");
+    expect(screen.getByTestId("universe-coverage-row-V")).toHaveTextContent("Quotes only");
+    expect(screen.getByTestId("universe-coverage-row-XOM")).toHaveTextContent("Unknown");
   });
 
   it("a gap row shows its diagnostic and a non-full coverage badge", async () => {
@@ -43,26 +58,25 @@ describe("UniverseCoverage (real mock API)", () => {
     expect(screen.getByTestId("universe-coverage-row-DUK")).toBeInTheDocument();
   });
 
-  it("renders the honest empty state with the server's reason on a cold start", async () => {
-    const empty: UniverseCoverageResponse = {
-      generated_at: null,
-      provider_source: null,
-      fundamentals_source: null,
-      counts: { full: 0, stale: 0, quotes_only: 0, equity_only: 0, uncovered: 0, unknown: 0 },
-      n_total: 0,
-      symbols: [],
-      reason: "No sync report yet — use Sync Now to discover and reconcile the tracked universe.",
+  it("renders the honest empty state when nothing is tracked yet", async () => {
+    const empty: SyncReportResponse = {
+      generated_at: new Date().toISOString(),
+      positions: [],
+      watchlists: {},
+      symbols: {},
+      provider_source: "",
+      fundamentals_source: "",
     };
-    vi.spyOn(api, "getUniverseCoverage").mockResolvedValue(empty);
+    vi.spyOn(api, "getSyncReport").mockResolvedValue(empty);
     render(<UniverseCoverage />);
     expect(await screen.findByTestId("universe-coverage-empty")).toHaveTextContent(
-      "No sync report yet",
+      "No symbols tracked yet",
     );
     expect(screen.queryByTestId("universe-coverage")).not.toBeInTheDocument();
   });
 
   it("an API error renders ErrorState with a retry, not a crash", async () => {
-    vi.spyOn(api, "getUniverseCoverage").mockRejectedValue(new Error("boom"));
+    vi.spyOn(api, "getSyncReport").mockRejectedValue(new Error("boom"));
     render(<UniverseCoverage />);
     expect(await screen.findByText(/boom/)).toBeInTheDocument();
   });

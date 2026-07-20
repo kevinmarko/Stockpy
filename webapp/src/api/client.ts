@@ -65,7 +65,7 @@ import type {
   SymbolDetail,
   SymbolCompareResponse,
   UniverseResponse,
-  UniverseCoverageResponse,
+  SyncReportResponse,
   RecommendationsResponse,
   UniverseListResponse,
   Thresholds,
@@ -195,9 +195,6 @@ const liveApi = {
       `/pilots/${encodeURIComponent(id)}/performance?range=${range}`
     ),
   getUniverse: () => http<UniverseResponse>("/universe"),
-  // Coverage-reconciliation diagnostic (FULL/EQUITY_ONLY/UNCOVERED breakdown)
-  // — distinct from GET /data/universe's plain add/remove list.
-  getUniverseCoverage: () => http<UniverseCoverageResponse>("/universe/coverage"),
   // Ranked BUY picks from the latest snapshot (pilots base, :8602).
   getRecommendations: (limit = 25) =>
     http<RecommendationsResponse>(`/recommendations?limit=${limit}`),
@@ -302,6 +299,11 @@ const liveApi = {
     http<QuotesResponse>(
       `/data/quotes?symbols=${encodeURIComponent(symbols.join(","))}`
     ),
+  // Live portfolio & watchlist coverage-reconciliation report — computed
+  // fresh on every call from data.portfolio_sync.build_sync_report (data
+  // base, :8603). Distinct from getDataUniverse's plain add/remove list:
+  // this is the FULL/EQUITY_ONLY/UNCOVERED market-data coverage breakdown.
+  getSyncReport: () => http<SyncReportResponse>("/data/sync-report"),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
   getSentimentDynamics: (symbol: string) =>

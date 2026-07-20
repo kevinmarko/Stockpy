@@ -97,8 +97,8 @@ import type {
   SymbolCompareRow,
   SymbolCompareResponse,
   UniverseResponse,
-  UniverseCoverageResponse,
-  UniverseCoverageRow,
+  SyncReportResponse,
+  SyncReportSymbol,
   RecommendationsResponse,
   Recommendation,
   UniverseListResponse,
@@ -2989,55 +2989,64 @@ export const mockApi = {
     return delay({ symbols });
   },
 
-  async getUniverseCoverage(): Promise<UniverseCoverageResponse> {
-    // Most tracked symbols have FULL coverage; a couple deliberately don't,
-    // so the "Coverage gaps only" filter and the honest-null numeric leaves
-    // (no live quote for an EQUITY_ONLY/UNCOVERED symbol) both have something
-    // real to show, mirroring the mock's DUK-style honest-null convention
-    // used elsewhere (getSymbol, getSymbolsCompare).
-    const GAPS: Record<string, CoverageStatus> = {
-      DUK: "equity_only",
-      T: "uncovered",
+  async getSyncReport(): Promise<SyncReportResponse> {
+    // A realistic multi-symbol fixture spanning all SIX
+    // data.portfolio_sync.CoverageStatus values (not just FULL/EQUITY_ONLY/
+    // UNCOVERED), so the component's badge styling and "Coverage gaps only"
+    // filter both have something honest to show for every state. Mirrors the
+    // shape GET /data/sync-report actually returns: a ticker-keyed map, not a
+    // pre-sorted array with server-computed counts (the component reshapes it
+    // client-side, same as the live endpoint forces it to).
+    const ROWS: Record<string, { coverage: CoverageStatus; held: boolean; diagnostic: string }> = {
+      AAPL: { coverage: "full", held: true, diagnostic: "" },
+      MSFT: { coverage: "full", held: true, diagnostic: "" },
+      NVDA: { coverage: "stale", held: true, diagnostic: "" },
+      V: { coverage: "quotes_only", held: true, diagnostic: "fundamentals:empty" },
+      COST: { coverage: "full", held: true, diagnostic: "" },
+      // Held in Robinhood but no live quote — a real position with unknown
+      // current price, matching data.portfolio_sync.SymbolStatus (avg_cost is
+      // NaN only when not held, not when merely uncovered).
+      DUK: { coverage: "equity_only", held: true, diagnostic: "quote:NotFoundError" },
+      // On a watchlist only (never held) and unreachable on both legs.
+      T: { coverage: "uncovered", held: false, diagnostic: "quote:NotFoundError,fundamentals:empty" },
+      // Probe was skipped entirely (offline/degraded mode) — never a
+      // fabricated FULL/UNCOVERED guess when the probe didn't actually run.
+      XOM: { coverage: "unknown", held: false, diagnostic: "probe_skipped" },
     };
-    const counts: Record<CoverageStatus, number> = {
-      full: 0, stale: 0, quotes_only: 0, equity_only: 0, uncovered: 0, unknown: 0,
-    };
-    const symbols: UniverseCoverageRow[] = [...SYMBOL_UNIVERSE].sort().map((symbol) => {
-      const coverage = GAPS[symbol] ?? "full";
-      counts[coverage] += 1;
+
+    const symbols: Record<string, SyncReportSymbol> = {};
+    for (const symbol of Object.keys(ROWS).sort()) {
+      const { coverage, held, diagnostic } = ROWS[symbol];
+      // FULL/STALE/QUOTES_ONLY all mean the quote leg succeeded — only
+      // fundamentals coverage (and, for STALE, freshness) differs.
+      const covered = coverage === "full" || coverage === "stale" || coverage === "quotes_only";
       const rng = seeded([...symbol].reduce((a, c) => a + c.charCodeAt(0), 0));
-      const covered = coverage === "full";
-      // avg_cost/quantity/held are a real Robinhood holding fact, independent
-      // of market-data coverage — DUK is both held AND equity_only (a real
-      // position with no live quote), matching data.portfolio_sync.SymbolStatus
-      // (avg_cost is NaN only when not held, not when uncovered).
       const position = PORTFOLIO.positions.find((p) => p.symbol === symbol);
-      const held = position != null;
-      return {
+      symbols[symbol] = {
         symbol,
         coverage,
         held,
-        quantity: position?.qty ?? 0,
-        avg_cost: held ? position.avg_cost : null,
+        quantity: held ? position?.qty ?? 10 : 0,
+        avg_cost: held ? position?.avg_cost ?? +(50 + rng() * 300).toFixed(2) : null,
         current_price: covered ? +(50 + rng() * 400).toFixed(2) : null,
         cost_basis_delta_per_share: covered && held ? +((rng() - 0.5) * 40).toFixed(2) : null,
         market_value: covered ? +(1000 + rng() * 9000).toFixed(2) : null,
-        is_stale_quote: false,
-        quote_source: covered ? "alpaca" : null,
-        has_fundamentals: covered,
+        is_stale_quote: coverage === "stale",
+        quote_source: covered ? "alpaca" : "",
+        has_fundamentals: coverage === "full" || coverage === "stale",
         forecast_available: covered,
-        watchlists: [],
-        diagnostic: covered ? null : "quote:NotFoundError",
+        watchlists: held ? [] : ["file:watchlist.txt"],
+        diagnostic,
       };
-    });
+    }
+
     return delay({
       generated_at: new Date(Date.now() - 5_400_000).toISOString(),
-      provider_source: "alpaca",
-      fundamentals_source: "yahoo",
-      counts,
-      n_total: symbols.length,
+      positions: PORTFOLIO.positions.map((p) => p.symbol),
+      watchlists: { "file:watchlist.txt": ["T", "XOM"] },
       symbols,
-      reason: null,
+      provider_source: "alpaca",
+      fundamentals_source: "yahoo_computed",
     });
   },
 

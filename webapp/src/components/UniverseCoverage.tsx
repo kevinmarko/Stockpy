@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api/client";
-import type { CoverageStatus, UniverseCoverageResponse } from "../api/types";
+import type { CoverageStatus, SyncReportResponse, SyncReportSymbol } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, MetricBadge } from "./ui";
 import { theme } from "../theme";
@@ -13,9 +13,14 @@ import { timeAgo } from "../format";
  * the sibling `UniverseManager` component (`GET/PUT /data/universe`); this
  * only surfaces what market-data coverage each tracked symbol actually has.
  *
- * Reads a persisted cache the GUI's "Sync Now" button populates — this
- * component never triggers a live sync itself (no "Sync Now" button here;
- * that stays an operator/GUI action with real network cost).
+ * Reads `GET /data/sync-report`, which recomputes
+ * `data.portfolio_sync.build_sync_report` live on every call — NOT a GUI-only
+ * cache file — so this works on a headless deploy with nobody running
+ * `streamlit run gui/app.py`. The endpoint returns the raw ticker-keyed
+ * `SyncReport` shape; this component reshapes it into a sorted row list and
+ * summary counts client-side. There is no "Sync Now" button here: this
+ * component never triggers a live probe itself, it only reads what the last
+ * request computed.
  */
 
 const COVERAGE_LABEL: Record<CoverageStatus, string> = {
@@ -45,8 +50,8 @@ function CoverageBadge({ coverage }: { coverage: CoverageStatus }) {
 }
 
 export function UniverseCoverage() {
-  const { data, loading, error, status, reload } = useApi<UniverseCoverageResponse>(
-    () => api.getUniverseCoverage(),
+  const { data, loading, error, status, reload } = useApi<SyncReportResponse>(
+    () => api.getSyncReport(),
     [],
   );
   const [gapsOnly, setGapsOnly] = useState(false);
@@ -56,36 +61,54 @@ export function UniverseCoverage() {
     return <ErrorState message={error ?? "No data"} status={status} onRetry={reload} />;
   }
 
-  if (data.symbols.length === 0) {
+  // GET /data/sync-report returns the raw data.portfolio_sync.SyncReport
+  // shape (a ticker-keyed map) — sort it into a stable display order here
+  // rather than pushing that reshaping onto the backend.
+  const rows: SyncReportSymbol[] = Object.values(data.symbols).sort((a, b) =>
+    a.symbol.localeCompare(b.symbol),
+  );
+
+  if (rows.length === 0) {
     return (
       <div className="empty" data-testid="universe-coverage-empty" style={{ marginTop: 12 }}>
-        {data.reason ?? "No coverage data yet."}
+        No symbols tracked yet — a held position or a Robinhood/watchlist-file
+        entry will appear here once one exists.
       </div>
     );
   }
 
-  const rows = gapsOnly ? data.symbols.filter((r) => r.coverage !== "full") : data.symbols;
+  const counts: Record<CoverageStatus, number> = {
+    full: 0,
+    stale: 0,
+    quotes_only: 0,
+    equity_only: 0,
+    uncovered: 0,
+    unknown: 0,
+  };
+  for (const r of rows) counts[r.coverage] += 1;
+
+  const filtered = gapsOnly ? rows.filter((r) => r.coverage !== "full") : rows;
 
   return (
     <div data-testid="universe-coverage" style={{ marginTop: 16 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-        <MetricBadge label="Symbols" value={String(data.n_total)} />
-        <MetricBadge label="Full" value={String(data.counts.full)} good />
+        <MetricBadge label="Symbols" value={String(rows.length)} />
+        <MetricBadge label="Full" value={String(counts.full)} good />
         <MetricBadge
           label="Equity only"
-          value={String(data.counts.equity_only)}
-          good={data.counts.equity_only === 0}
+          value={String(counts.equity_only)}
+          good={counts.equity_only === 0}
         />
         <MetricBadge
           label="Uncovered"
-          value={String(data.counts.uncovered)}
-          good={data.counts.uncovered === 0}
+          value={String(counts.uncovered)}
+          good={counts.uncovered === 0}
         />
       </div>
 
       {data.generated_at && (
         <p style={{ fontSize: 12, color: theme.textMuted, margin: "0 0 10px" }}>
-          Last sync {timeAgo(data.generated_at)}
+          Last checked {timeAgo(data.generated_at)}
           {data.provider_source && ` · ${data.provider_source}`}
         </p>
       )}
@@ -100,13 +123,13 @@ export function UniverseCoverage() {
         Coverage gaps only
       </label>
 
-      {rows.length === 0 ? (
+      {filtered.length === 0 ? (
         <div className="empty" data-testid="universe-coverage-no-gaps" style={{ padding: 16 }}>
           No coverage gaps — everything is FULL.
         </div>
       ) : (
         <div className="list">
-          {rows.map((r) => (
+          {filtered.map((r) => (
             <div key={r.symbol} className="row" data-testid={`universe-coverage-row-${r.symbol}`}>
               <div className="row-main">
                 <span className="row-title" style={{ fontWeight: 600 }}>

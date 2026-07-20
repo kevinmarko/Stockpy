@@ -190,47 +190,46 @@ export interface UniverseResponse {
 export type CoverageStatus = "full" | "stale" | "quotes_only" | "equity_only" | "uncovered" | "unknown";
 
 /**
- * GET /universe/coverage — one row of the portfolio-sync coverage-
- * reconciliation diagnostic (the read-only counterpart of
- * `gui/panels/live_inventory.py`'s coverage table). Ticker add/remove itself
- * is a SEPARATE concern, already covered by `UniverseManager`'s
- * `GET/PUT /data/universe` — this is only the FULL/EQUITY_ONLY/UNCOVERED
- * breakdown. Every numeric leaf is `null` when the cached probe didn't
- * resolve it (e.g. no live quote for an EQUITY_ONLY symbol) — never a
- * fabricated 0.0 (CONSTRAINT #4).
+ * One entry of `GET /data/sync-report`'s `symbols` map — mirrors
+ * `data.portfolio_sync.SymbolStatus.to_dict()` exactly. `quantity` is a real
+ * `0.0` for a genuinely un-held symbol (not a null-worthy "unknown"); every
+ * other numeric leaf is `null` when the live probe didn't resolve it (e.g. no
+ * quote for an EQUITY_ONLY symbol) — never a fabricated 0.0 (CONSTRAINT #4).
  */
-export interface UniverseCoverageRow {
+export interface SyncReportSymbol {
   symbol: string;
   coverage: CoverageStatus;
   held: boolean;
-  quantity: number | null;
+  quantity: number;
   avg_cost: number | null;
   current_price: number | null;
   cost_basis_delta_per_share: number | null;
   market_value: number | null;
   is_stale_quote: boolean;
-  quote_source: string | null;
+  quote_source: string;
   has_fundamentals: boolean;
   forecast_available: boolean;
   watchlists: string[];
-  diagnostic: string | null;
+  diagnostic: string;
 }
 
 /**
- * GET /universe/coverage — reads the persisted `cache/sync_report.json`
- * written by the GUI's "Sync Now" button; never triggers a live market-data
- * probe itself. `reason` is set (and `symbols`/`counts` degrade to an
- * empty/zeroed shape) on a cold start (no sync run yet) or an empty/corrupt
- * cache.
+ * GET /data/sync-report — live portfolio & watchlist coverage-reconciliation
+ * report (holdings ∪ Robinhood/file watchlists), computed fresh on every call
+ * from `data.portfolio_sync.build_sync_report` — NOT read from a GUI-only
+ * cache file, so this also works on a headless deploy where nobody has ever
+ * run `streamlit run gui/app.py`. `symbols` is keyed by ticker; an empty map
+ * is a genuine "nothing tracked yet" state (no held positions, no Robinhood/
+ * file watchlists) — this live endpoint has no persisted-cache "cold start"
+ * concept the way a GUI-cache reader would.
  */
-export interface UniverseCoverageResponse {
-  generated_at: string | null;
-  provider_source: string | null;
-  fundamentals_source: string | null;
-  counts: Record<CoverageStatus, number>;
-  n_total: number;
-  symbols: UniverseCoverageRow[];
-  reason: string | null;
+export interface SyncReportResponse {
+  generated_at: string;
+  positions: string[];
+  watchlists: Record<string, string[]>;
+  symbols: Record<string, SyncReportSymbol>;
+  provider_source: string;
+  fundamentals_source: string;
 }
 
 /**
