@@ -1136,6 +1136,24 @@ export interface PortfolioRiskMetrics {
   reason: string | null; // present when n_snapshots < min_snapshots_required
 }
 
+/**
+ * Live "Portfolio Heat" — aggregate adverse open-position P&L as a fraction
+ * of total account equity, against the configured `max_portfolio_heat`
+ * ceiling. Sourced server-side from the latest persisted account snapshot
+ * (same two inputs — per-position unrealized P&L, account equity —
+ * execution/risk_gate.py's live pre-trade gate reads). `heat_pct`/`over_limit`
+ * are `null` when no account snapshot is persisted yet, or its total equity
+ * is missing/non-positive (never a fabricated 0 — CONSTRAINT #4).
+ */
+export interface PortfolioHeatMetric {
+  heat_pct: number | null; // fraction, e.g. 0.032 = 3.2%
+  max_portfolio_heat: number | null; // the configured ceiling (settings.MAX_PORTFOLIO_HEAT)
+  over_limit: boolean | null;
+  n_positions: number;
+  as_of: string | null; // ISO timestamp of the account snapshot this reads
+  reason: string | null; // present when heat_pct is null
+}
+
 /** One point of the account equity + drawdown series. */
 export interface EquityDrawdownPoint {
   date: string; // ISO date
@@ -1199,6 +1217,7 @@ export interface RiskGateBlockLog {
 
 export interface ObservabilitySummary {
   portfolio_risk: PortfolioRiskMetrics;
+  portfolio_heat: PortfolioHeatMetric;
   equity_curve: EquityDrawdownCurve;
   regime: RegimeOverlay;
   forecast_skill: PortfolioForecastSkill;
