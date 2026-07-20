@@ -187,6 +187,34 @@ export interface UniverseResponse {
 }
 
 /**
+ * One symbol's latest quote from `GET /data/quotes?symbols=...`
+ * (`api/data_api.py`, backed by `data.market_data.CompositeProvider`).
+ * `is_stale` is `true` on every yfinance-sourced quote by design (~15 min
+ * delayed feed); `false` only for a real-time source (Alpaca). Every numeric
+ * leaf is `null` when the provider didn't return it (NEVER a fabricated 0 —
+ * CONSTRAINT #4).
+ */
+export interface Quote {
+  symbol: string;
+  price: number | null;
+  bid: number | null;
+  ask: number | null;
+  timestamp: string | null; // ISO 8601 UTC
+  is_stale: boolean;
+  source: string;
+}
+
+/**
+ * `GET /data/quotes` response: keyed by the (uppercased) requested symbol.
+ * A symbol the provider couldn't resolve for ANY reason (rate-limited,
+ * delisted, network error, ...) is simply OMITTED from this dict — the
+ * endpoint dead-letters per-symbol rather than failing the whole request or
+ * returning a placeholder row (CONSTRAINT #4). Callers must treat a missing
+ * key as "unreachable", never assume success.
+ */
+export type QuotesResponse = Record<string, Quote>;
+
+/**
  * GET /recommendations — the platform's current BUY picks from the latest
  * snapshot, ranked by conviction (then score). One clickable "here's what we'd
  * buy" row per pick. Every numeric leaf is `null` when the snapshot couldn't

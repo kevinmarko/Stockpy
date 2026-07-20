@@ -107,6 +107,7 @@ import type {
   Bar,
   Fundamentals,
   MacroSnapshot,
+  QuotesResponse,
   SignalBreakdown,
   SignalModuleScore,
   ForecastResult,
@@ -3920,6 +3921,46 @@ export const mockApi = {
       // honest null: FRED hadn't published today's real yield yet
       real_yield_10y: null,
     });
+  },
+
+  // Mirrors api/data_api.py::get_quotes's real per-symbol dead-letter
+  // contract exactly: a symbol the provider can't resolve is simply OMITTED
+  // from the response dict, never a fabricated placeholder row (CONSTRAINT
+  // #4). "V" is the fixed honesty-fixture symbol for the "unreachable"
+  // branch -- it's a real, always-present member of SYMBOL_UNIVERSE (a
+  // PORTFOLIO position), so MarketDataHealth's tracked-universe check always
+  // exercises it. Every OTHER symbol resolves, alternating realtime
+  // (Alpaca, fresh) vs. delayed (yfinance, `is_stale: true` by design -- see
+  // CLAUDE.md's Market-data layer note) by a deterministic hash so at least
+  // one stale row is always present too, never an all-green fixture.
+  async getDataQuotes(symbols: string[]): Promise<QuotesResponse> {
+    const out: QuotesResponse = {};
+    for (const raw of symbols) {
+      const sym = raw.trim().toUpperCase();
+      if (!sym || sym === "V") continue; // dead-lettered: provider fetch failed
+      const rng = seeded(sym.charCodeAt(0) * 31 + sym.length * 7);
+      const delayed = sym.charCodeAt(0) % 2 === 1; // odd leading char -> yfinance (delayed feed)
+      const base = 40 + (sym.charCodeAt(sym.length - 1) % 40) * 5;
+      const price = +(base + rng() * 20).toFixed(2);
+      out[sym] = {
+        symbol: sym,
+        price,
+        bid: +(price - 0.05).toFixed(2),
+        ask: +(price + 0.05).toFixed(2),
+        timestamp: new Date(Date.now() - (delayed ? 15 * 60_000 : 2_000)).toISOString(),
+        is_stale: delayed,
+        source: delayed ? "yfinance" : "alpaca",
+      };
+    }
+    // Realistic per-call timing variance: deterministic per the first
+    // requested symbol (so a test asserting on a specific symbol's latency
+    // bucket is reproducible) rather than the module's flat 260ms default --
+    // the whole point of this fixture is to exercise the client's own
+    // performance.now() measurement with a genuinely varying number.
+    const primary = symbols[0]?.trim().toUpperCase() ?? "";
+    const jitter = seeded(primary.length * 17 + 3);
+    const ms = 40 + Math.round(jitter() * 220);
+    return delay(out, ms);
   },
 
   async getRecommendations(limit = 25): Promise<RecommendationsResponse> {
