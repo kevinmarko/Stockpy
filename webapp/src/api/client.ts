@@ -37,6 +37,7 @@ import type {
   KillSwitchActionResult,
   LlmSettingUpdateResult,
   LlmStatus,
+  MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
   OptionsMatrix,
@@ -229,6 +230,11 @@ const liveApi = {
     http<ObservabilitySummary>(
       `/observability/summary?range=${range}&horizon=${horizon}`
     ),
+  putMacroGate: (enabled: boolean, reason: string) =>
+    http<MacroGateUpdateResult>("/observability/macro-gate", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, reason }),
+    }),
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
   getStrategyHealth: () => http<StrategyHealthRow[]>("/strategy/health"),
   // ---- Recommendation Tracking & Calibration (default pilots base, :8602) ----

@@ -53,6 +53,7 @@ import type {
   LlmProviderTelemetry,
   LlmSettingUpdateResult,
   LlmStatus,
+  MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
   OptionsDirective,
@@ -826,6 +827,30 @@ function writeKillSwitch(active: boolean, reason: string | null) {
       localStorage.removeItem(KILL_SWITCH_KEY);
       localStorage.removeItem(KILL_SWITCH_REASON_KEY);
     }
+  } catch {
+    /* ignore quota */
+  }
+}
+
+// ---- Local macro-regime-gate simulation (localStorage) so the Observability
+// screen's toggle (PUT /observability/macro-gate) has a visible, persistent
+// round-trip effect in the demo, same convention as the kill-switch marker
+// above. `null` (key absent) means "use the default" (true, matching
+// settings.MACRO_REGIME_GATE_ENABLED's own default) rather than defaulting to
+// false, which would misrepresent the real out-of-box posture. ----
+const MACRO_GATE_KEY = "stockpy.mock.macro_regime_gate_enabled";
+
+function readMacroGateEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(MACRO_GATE_KEY);
+    return raw === null ? true : raw === "1";
+  } catch {
+    return true;
+  }
+}
+function writeMacroGateEnabled(enabled: boolean) {
+  try {
+    localStorage.setItem(MACRO_GATE_KEY, enabled ? "1" : "0");
   } catch {
     /* ignore quota */
   }
@@ -2388,8 +2413,13 @@ function mockRegimeOverlay(): RegimeOverlay {
     yield_curve: 0.42,
     hmm_risk_on_probability: 0.78,
     kill_switch_active: ks.active,
-    macro_regime_gate_enabled: true,
+    macro_regime_gate_enabled: readMacroGateEnabled(),
     reason: null,
+    // Always writable in the mock (matches mockLlmStatus's convention above)
+    // so the demo can exercise the write flow with zero config.
+    macro_gate_writable: true,
+    macro_gate_writable_note:
+      "Writes persist to .env and apply on the next daemon/pipeline launch.",
   };
 }
 
@@ -3364,6 +3394,22 @@ export const mockApi = {
     horizon = 30
   ): Promise<ObservabilitySummary> {
     return delay(mockObservabilitySummary(range, horizon));
+  },
+
+  async putMacroGate(enabled: boolean, _reason: string): Promise<MacroGateUpdateResult> {
+    writeMacroGateEnabled(enabled);
+    return delay(
+      {
+        written: ["MACRO_REGIME_GATE_ENABLED"],
+        enabled,
+        applies: "next_daemon_restart",
+        note:
+          "Written to .env. settings is not patched in-process — this API " +
+          "and any already-launched pipeline still use the previous value " +
+          "until restarted.",
+      },
+      150
+    );
   },
 
   async getStrategyMatrix(): Promise<StrategyMatrix> {

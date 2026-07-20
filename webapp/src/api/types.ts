@@ -1161,6 +1161,25 @@ export interface RegimeOverlay {
   kill_switch_active: boolean | null;
   macro_regime_gate_enabled: boolean | null;
   reason: string | null; // present when no state snapshot exists yet
+  /** Tracks MACRO_GATE_WRITES_ENABLED -- false means PUT /observability/macro-gate
+   * is disabled server-side (403). Mirrors LlmStatus.writable. */
+  macro_gate_writable: boolean;
+  macro_gate_writable_note: string;
+}
+
+/** Body for PUT /observability/macro-gate. `reason` is required (fat-finger
+ * guard, not a security control) -- mirrors PauseRequest/ResumeRequest. */
+export interface MacroGateUpdate {
+  enabled: boolean;
+  reason: string;
+}
+
+/** PUT /observability/macro-gate result. `enabled` echoes the request body. */
+export interface MacroGateUpdateResult {
+  written: string[];
+  enabled: boolean;
+  applies: "next_daemon_restart";
+  note: string;
 }
 
 /** Portfolio-wide (all-symbol) forecast reliability + skill weights for one horizon. */

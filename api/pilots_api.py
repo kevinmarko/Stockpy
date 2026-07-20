@@ -56,7 +56,7 @@ Two independent bearer-token guards (both ``HTTPBearer(auto_error=False)`` +
     different risk than reading persisted state (mirrors
     ``api/control_api.py``'s ``ORCHESTRATOR_DAEMON_TOKEN`` posture).
 
-Four additional FAIL-CLOSED master-switch guards stack ON TOP of the command
+Several additional FAIL-CLOSED master-switch guards stack ON TOP of the command
 token for the writes with real persistence/rollback cost, each a dedicated
 ``settings`` flag deliberately kept out of ``gui/env_io.py``'s ALLOWED_KEYS
 (hand-set in ``.env`` only): ``require_brokerage_connect_enabled``
@@ -65,10 +65,15 @@ token for the writes with real persistence/rollback cost, each a dedicated
 ``PUT /automation/execution-mode``),
 ``require_strategy_writes_enabled`` (``PUT /strategy/modules`` — signal weights +
 disabled-module set to ``.env``; its own flag so signal tuning cannot ride in on
-the automation flag), and ``require_llm_writes_enabled`` (``PUT /llm/setting`` —
+the automation flag), ``require_llm_writes_enabled`` (``PUT /llm/setting`` —
 AI-capability toggle + provider-selection writes to ``.env``; its own flag so
-AI-capability writes cannot ride in on either of the other two). ``GET
-/strategy/matrix`` and ``GET /llm/status`` are read-only (``require_read_token``).
+AI-capability writes cannot ride in on either of the other two), and
+``require_macro_gate_writes_enabled`` (``PUT /observability/macro-gate`` —
+flips ``MACRO_REGIME_GATE_ENABLED``, the recession/credit-event BUY-veto
+bypass, to ``.env``; its own flag so this genuine risk-management kill switch
+cannot ride in on any sibling flag). ``GET /strategy/matrix``, ``GET
+/llm/status``, and ``GET /observability/summary`` are read-only
+(``require_read_token``).
 
 CORS mirrors ``state_api.py`` (``settings.CORS_ALLOWED_ORIGINS``) but allows
 GET, POST and PUT (state_api is GET-only).
@@ -393,6 +398,26 @@ def require_general_settings_writes_enabled() -> None:
         )
 
 
+def require_macro_gate_writes_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``PUT /observability/macro-gate``
+    (flips ``MACRO_REGIME_GATE_ENABLED`` -> ``.env``). A DEDICATED flag
+    (``settings.MACRO_GATE_WRITES_ENABLED``), NOT
+    ``GENERAL_SETTINGS_WRITES_ENABLED``/``STRATEGY_WRITES_ENABLED``/
+    ``AUTOMATION_WRITES_ENABLED``/``LLM_WRITES_ENABLED``/
+    ``AGENTIC_DISCOVERY_ENABLED``: this is the operator-controlled bypass for
+    ``PreTradeRiskGate.macro_kill_switch_check`` (the recession/credit-event BUY
+    veto), its own risk class, and must not ride in on any sibling flag. Mirrors
+    ``require_general_settings_writes_enabled`` exactly — deliberately NOT
+    GUI-writable, hand-set in ``.env`` only. ``GET /observability/summary`` is
+    read-only and NOT gated by this flag (``require_read_token`` alone, matching
+    every other GET here)."""
+    if not settings.MACRO_GATE_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Macro gate writes are disabled (MACRO_GATE_WRITES_ENABLED=false).",
+        )
+
+
 if not settings.STATE_API_TOKEN:
     logger.warning(
         "STATE_API_TOKEN not set — Pilots read endpoints are UNAUTHENTICATED. "
@@ -612,6 +637,22 @@ class LlmSettingUpdateRequest(BaseModel):
 
     key: str = Field(..., min_length=1)
     value: Union[bool, str]
+
+
+class MacroGateUpdateRequest(BaseModel):
+    """Body for ``PUT /observability/macro-gate``. A single-key ``.env`` write
+    (``MACRO_REGIME_GATE_ENABLED``) — mirrors ``LlmSettingUpdateRequest``'s
+    single-scalar shape, not ``StrategyModulesUpdateRequest``'s multi-key atomic
+    write (there is only ever one key here). ``reason`` is REQUIRED (non-empty)
+    — a fat-finger guard mirroring ``PauseRequest``/``ResumeRequest``, NOT a
+    security control (the real gates are the command token and
+    ``MACRO_GATE_WRITES_ENABLED``); it is not persisted anywhere today (no
+    audit-log surface exists yet for this endpoint) but is validated so the
+    webapp's confirm-modal contract stays honest — a caller cannot skip typing
+    one."""
+
+    enabled: bool
+    reason: str = Field(..., min_length=1)
 
 
 class ScanConfigRequest(BaseModel):
@@ -1211,10 +1252,63 @@ def get_observability_summary(
     ``horizon`` selects the forecast-skill horizon (10/30/60/90 are the
     horizons the pipeline actually forecasts, but any 1-365 is accepted
     leniently, matching ``GET /symbols/{ticker}/forecast``). Never raises
-    (CONSTRAINT #6); never fabricates a metric (CONSTRAINT #4)."""
-    return observability.observability_summary(
+    (CONSTRAINT #6); never fabricates a metric (CONSTRAINT #4).
+
+    Adds two API-layer fields to the ``regime`` section only (mirrors ``GET
+    /strategy/matrix``'s ``writable``/``note`` addition over its pure reader's
+    payload): ``macro_gate_writable`` (tracks ``MACRO_GATE_WRITES_ENABLED``,
+    the master switch for ``PUT /observability/macro-gate``) and
+    ``macro_gate_writable_note``. The pure reader's ``regime`` dict is left
+    otherwise untouched."""
+    payload = observability.observability_summary(
         equity_range=range, horizon_days=horizon, snapshot=_load_snapshot(),
     )
+    macro_gate_writable = bool(settings.MACRO_GATE_WRITES_ENABLED)
+    payload["regime"]["macro_gate_writable"] = macro_gate_writable
+    payload["regime"]["macro_gate_writable_note"] = (
+        "Writes persist to .env and apply on the next daemon/pipeline launch."
+        if macro_gate_writable
+        else "Writes are disabled (MACRO_GATE_WRITES_ENABLED=false)."
+    )
+    return payload
+
+
+@app.put(
+    "/observability/macro-gate",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_macro_gate_writes_enabled),
+    ],
+)
+def put_macro_gate(body: MacroGateUpdateRequest) -> Dict[str, Any]:
+    """Write ``MACRO_REGIME_GATE_ENABLED`` to ``.env`` — the operator-controlled
+    bypass for ``PreTradeRiskGate.macro_kill_switch_check`` (the recession/
+    credit-event BUY veto; see ``risk_gate.py`` and CLAUDE.md). This is the
+    webapp port of the Streamlit Command Center's Observability tab toggle
+    (``gui/panels/observability.py`` lines 131-195), which has written this
+    same key via ``gui.env_io.write_setting`` for a long time — this endpoint
+    is a NEW write path onto an EXISTING GUI-writable key, gated by its own
+    dedicated ``MACRO_GATE_WRITES_ENABLED`` flag (see that flag's docstring in
+    ``settings.py`` for why it is not allowed to ride in on any sibling
+    writes-enabled flag).
+
+    Single-key ``.env``-ONLY write via ``gui.env_io.write_setting`` (does NOT
+    patch the running ``settings`` singleton), so ``applies`` is always
+    ``"next_daemon_restart"`` and the echoed ``enabled`` reflects the REQUEST
+    BODY, not ``settings`` (which would return the stale pre-write value and
+    read as a failed write). ``reason`` is required non-empty (fat-finger
+    guard, not a security control) but is not persisted anywhere today."""
+    env_io.write_setting("MACRO_REGIME_GATE_ENABLED", body.enabled)
+    return {
+        "written": ["MACRO_REGIME_GATE_ENABLED"],
+        "enabled": body.enabled,
+        "applies": "next_daemon_restart",
+        "note": (
+            "Written to .env. settings is not patched in-process — this API "
+            "and any already-launched pipeline still use the previous value "
+            "until restarted."
+        ),
+    }
 
 
 @app.get("/alerts", dependencies=[Depends(require_read_token)])

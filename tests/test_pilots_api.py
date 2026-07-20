@@ -1334,6 +1334,146 @@ class TestObservabilitySummary:
         assert wrong.status_code == 401
         assert ok.status_code == 200
 
+    def test_regime_carries_writable_fields(self, tmp_path):
+        class _EmptyStore:
+            def account_snapshot_history(self, since=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", False):
+                with mock.patch(
+                    "data.historical_store.HistoricalStore", return_value=_EmptyStore()
+                ):
+                    with mock.patch(
+                        "forecasting.forecast_tracker.ForecastTracker",
+                        side_effect=RuntimeError("unavailable"),
+                    ):
+                        resp = client.get("/observability/summary")
+        regime = resp.json()["regime"]
+        assert regime["macro_gate_writable"] is False
+        assert "MACRO_GATE_WRITES_ENABLED=false" in regime["macro_gate_writable_note"]
+
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", True):
+                with mock.patch(
+                    "data.historical_store.HistoricalStore", return_value=_EmptyStore()
+                ):
+                    with mock.patch(
+                        "forecasting.forecast_tracker.ForecastTracker",
+                        side_effect=RuntimeError("unavailable"),
+                    ):
+                        resp2 = client.get("/observability/summary")
+        assert resp2.json()["regime"]["macro_gate_writable"] is True
+
+
+# ===========================================================================
+# PUT /observability/macro-gate — MACRO_REGIME_GATE_ENABLED write path
+# ===========================================================================
+
+
+class TestMacroGateWrite:
+    def test_fails_closed_when_macro_gate_writes_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", False):
+                resp = client.put(
+                    "/observability/macro-gate",
+                    json={"enabled": False, "reason": "false-positive VIX spike"},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 403
+        assert "MACRO_GATE_WRITES_ENABLED" in resp.json()["detail"]
+
+    def test_fails_closed_when_follow_token_unset(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/observability/macro-gate",
+                    json={"enabled": False, "reason": "false-positive VIX spike"},
+                    headers={"Authorization": "Bearer anything"},
+                )
+        assert resp.status_code == 403
+
+    def test_fails_closed_with_wrong_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/observability/macro-gate",
+                    json={"enabled": False, "reason": "false-positive VIX spike"},
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+    def test_empty_reason_rejected_422(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/observability/macro-gate",
+                    json={"enabled": False, "reason": ""},
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 422
+
+    def test_happy_path_disables_gate(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                    resp = client.put(
+                        "/observability/macro-gate",
+                        json={"enabled": False, "reason": "idiosyncratic vol, not systemic"},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 200
+        w.assert_called_once_with("MACRO_REGIME_GATE_ENABLED", False)
+        body = resp.json()
+        assert body["written"] == ["MACRO_REGIME_GATE_ENABLED"]
+        assert body["applies"] == "next_daemon_restart"
+        # Echoes the REQUEST BODY, not settings (which would show the stale
+        # pre-write value and read as a failed write).
+        assert body["enabled"] is False
+
+    def test_happy_path_enables_gate(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                    resp = client.put(
+                        "/observability/macro-gate",
+                        json={"enabled": True, "reason": "re-enabling before going live"},
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 200
+        w.assert_called_once_with("MACRO_REGIME_GATE_ENABLED", True)
+        assert resp.json()["enabled"] is True
+
+    def test_write_never_logs_token(self, caplog):
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "MACRO_GATE_WRITES_ENABLED", True):
+                    with mock.patch.object(pilots_api.env_io, "write_setting"):
+                        client.put(
+                            "/observability/macro-gate",
+                            json={"enabled": False, "reason": "test"},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert _CMD_TOKEN not in caplog.text
+
+
+class TestMacroGateWritesInvariants:
+    def test_macro_regime_gate_enabled_key_stays_allowlisted(self):
+        """The TARGET key this endpoint writes has been GUI-writable via the
+        Streamlit Observability tab for a long time (gui/panels/observability.py)
+        — this new write path must not require (or accidentally break) that."""
+        assert "MACRO_REGIME_GATE_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
+
+    def test_macro_gate_writes_enabled_is_not_gui_writable(self):
+        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
+        must never flip this GATING flag on. Neither allowlisted nor secret —
+        hand-set only. (Distinct from the assertion above: that one is about
+        the TARGET key MACRO_REGIME_GATE_ENABLED, which SHOULD stay allowlisted;
+        this one is about the NEW master switch that guards this endpoint,
+        which must NOT be.)"""
+        assert "MACRO_GATE_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "MACRO_GATE_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
 
 # ---------------------------------------------------------------------------
 # Architectural guard: no heavy-engine imports in api/pilots_api.py
