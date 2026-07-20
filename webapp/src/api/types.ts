@@ -186,6 +186,52 @@ export interface UniverseResponse {
   symbols: UniverseSymbol[];
 }
 
+/** One coverage-status bucket — mirrors data.portfolio_sync.CoverageStatus's values exactly. */
+export type CoverageStatus = "full" | "stale" | "quotes_only" | "equity_only" | "uncovered" | "unknown";
+
+/**
+ * One entry of `GET /data/sync-report`'s `symbols` map — mirrors
+ * `data.portfolio_sync.SymbolStatus.to_dict()` exactly. `quantity` is a real
+ * `0.0` for a genuinely un-held symbol (not a null-worthy "unknown"); every
+ * other numeric leaf is `null` when the live probe didn't resolve it (e.g. no
+ * quote for an EQUITY_ONLY symbol) — never a fabricated 0.0 (CONSTRAINT #4).
+ */
+export interface SyncReportSymbol {
+  symbol: string;
+  coverage: CoverageStatus;
+  held: boolean;
+  quantity: number;
+  avg_cost: number | null;
+  current_price: number | null;
+  cost_basis_delta_per_share: number | null;
+  market_value: number | null;
+  is_stale_quote: boolean;
+  quote_source: string;
+  has_fundamentals: boolean;
+  forecast_available: boolean;
+  watchlists: string[];
+  diagnostic: string;
+}
+
+/**
+ * GET /data/sync-report — live portfolio & watchlist coverage-reconciliation
+ * report (holdings ∪ Robinhood/file watchlists), computed fresh on every call
+ * from `data.portfolio_sync.build_sync_report` — NOT read from a GUI-only
+ * cache file, so this also works on a headless deploy where nobody has ever
+ * run `streamlit run gui/app.py`. `symbols` is keyed by ticker; an empty map
+ * is a genuine "nothing tracked yet" state (no held positions, no Robinhood/
+ * file watchlists) — this live endpoint has no persisted-cache "cold start"
+ * concept the way a GUI-cache reader would.
+ */
+export interface SyncReportResponse {
+  generated_at: string;
+  positions: string[];
+  watchlists: Record<string, string[]>;
+  symbols: Record<string, SyncReportSymbol>;
+  provider_source: string;
+  fundamentals_source: string;
+}
+
 /**
  * One symbol's latest quote from `GET /data/quotes?symbols=...`
  * (`api/data_api.py`, backed by `data.market_data.CompositeProvider`).

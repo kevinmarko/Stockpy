@@ -65,6 +65,7 @@ import type {
   SymbolDetail,
   SymbolCompareResponse,
   UniverseResponse,
+  SyncReportResponse,
   RecommendationsResponse,
   UniverseListResponse,
   Thresholds,
@@ -298,6 +299,11 @@ const liveApi = {
     http<QuotesResponse>(
       `/data/quotes?symbols=${encodeURIComponent(symbols.join(","))}`
     ),
+  // Live portfolio & watchlist coverage-reconciliation report — computed
+  // fresh on every call from data.portfolio_sync.build_sync_report (data
+  // base, :8603). Distinct from getDataUniverse's plain add/remove list:
+  // this is the FULL/EQUITY_ONLY/UNCOVERED market-data coverage breakdown.
+  getSyncReport: () => http<SyncReportResponse>("/data/sync-report"),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
   getSentimentDynamics: (symbol: string) =>
