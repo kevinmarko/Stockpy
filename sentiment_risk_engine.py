@@ -208,9 +208,14 @@ class SentimentRiskEngine:
 
         # Extract agent values (already honest: SentimentOutput is a required
         # pydantic model, so any structured response carries real floats).
-        score = agent_data.get("sentiment_score")
-        intensity = agent_data.get("sentiment_intensity")
-        credibility = agent_data.get("credibility_score")
+        if isinstance(agent_data, dict):
+            score = agent_data.get("sentiment_score")
+            intensity = agent_data.get("sentiment_intensity")
+            credibility = agent_data.get("credibility_score")
+        else:
+            score = getattr(agent_data, "sentiment_score", None)
+            intensity = getattr(agent_data, "sentiment_intensity", None)
+            credibility = getattr(agent_data, "credibility_score", None)
 
         return SentimentResult(
             ticker=ticker,
