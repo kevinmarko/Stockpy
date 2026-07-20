@@ -265,3 +265,86 @@ def test_symbol_signals_no_bars_empty_modules(monkeypatch):
     assert body["action"] == "HOLD"
     assert body["final_score"] is None  # honest: not computable → null
     assert body["modules"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /metrics/sentiment/{symbol}  (SentimentRiskEngine mocked for determinism)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSentimentEngine:
+    """Stand-in for SentimentRiskEngine — returns a canned SentimentResult."""
+
+    def __init__(self, result):
+        self._result = result
+
+    async def get_live_sentiment(self, ticker, date, returns):
+        return self._result
+
+
+def test_sentiment_unavailable_returns_honest_200_not_exception(monkeypatch):
+    """Agent unavailable is a legitimate, expected state (matching the
+    api/pilots_api.py cold-start-degrades-to-honest-empty-shape convention):
+    an honest 200 with null sentiment fields + source, NEVER an HTTPException."""
+    from sentiment_risk_engine import SentimentResult
+
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+
+    canned = SentimentResult(
+        ticker="AAPL",
+        date=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        sentiment_score=None,
+        sentiment_intensity=None,
+        credibility_score=None,
+        # Independent GARCH computation — can be real even when the agent
+        # itself is unavailable.
+        volatility_persistence=0.93,
+        source="unavailable",
+    )
+    monkeypatch.setattr(metrics_api, "SentimentRiskEngine", lambda: _FakeSentimentEngine(canned))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "unavailable"
+    assert body["sentiment_score"] is None
+    assert body["sentiment_intensity"] is None
+    assert body["credibility_score"] is None
+    assert body["volatility_persistence"] == 0.93
+
+
+def test_sentiment_agent_success_returns_populated_shape(monkeypatch):
+    from sentiment_risk_engine import SentimentResult
+
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+
+    canned = SentimentResult(
+        ticker="AAPL",
+        date=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        sentiment_score=0.4,
+        sentiment_intensity=0.7,
+        credibility_score=0.85,
+        volatility_persistence=0.9,
+        source="antigravity_agent",
+    )
+    monkeypatch.setattr(metrics_api, "SentimentRiskEngine", lambda: _FakeSentimentEngine(canned))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "antigravity_agent"
+    assert body["sentiment_score"] == 0.4
+    assert body["sentiment_intensity"] == 0.7
+    assert body["credibility_score"] == 0.85
+
+
+def test_sentiment_404_no_bars(monkeypatch):
+    """Genuinely missing bar data (can't compute returns at all) still 404s."""
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: None)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/ZZZZ")
+    assert resp.status_code == 404

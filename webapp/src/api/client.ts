@@ -59,6 +59,7 @@ import type {
   StrategyHealthRow,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
+  SentimentDynamics,
   TunablesResponse,
   TunablesUpdateResult,
   SymbolDetail,
@@ -289,6 +290,8 @@ const liveApi = {
     }),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
+  getSentimentDynamics: (symbol: string) =>
+    http<SentimentDynamics>(`/metrics/sentiment/${encodeURIComponent(symbol)}`),
   // ---- On-demand AI generation (data base, :8603) — operator-triggered only,
   // never auto-run. Each POST returns an honest available/reason/payload
   // envelope (llm/schemas.py-backed); a non-2xx still throws ApiError the
