@@ -126,6 +126,7 @@ from pilots import (
     commands as commands_reader,
     discovery as discovery_reader,
     forecast_skill,
+    gravity_audit as gravity_audit_reader,
     models,
     observability,
     options,
@@ -184,6 +185,16 @@ import data.brokerage_credentials as brokerage_credentials
 # tests can `mock.patch.object(pilots_api, ...)`.
 import gui.ai_control_center as ai_control_center
 import llm.status_store as llm_status_store
+
+# AI Gravity audit runner READ side (GET /gravity/audit-status). `gui.gravity_ai_panel`
+# is Streamlit-free + dependency-light by design (json/logging/dataclasses/pathlib/
+# typing at module top; `settings` imported lazily inside each function) — the SAME
+# reasoning as `gui.ai_control_center` above, so it's imported directly here rather
+# than duplicated under `pilots/`. It never constructs a provider or makes a network
+# call; it only reads `output/gravity_ai_audit.json` (written by a separate, opt-in
+# CLI/GUI-triggered run — this API exposes no trigger for it, see the endpoint's own
+# docstring). Imported at module top so tests can `mock.patch.object(pilots_api, ...)`.
+import gui.gravity_ai_panel as gravity_ai_panel
 
 # Robinhood execution-queue READ side (GET /execution-queue). Reuses the
 # existing Streamlit-free, dependency-light reader the GUI Launcher tab already
@@ -1667,6 +1678,66 @@ def get_strategy_validation_trend() -> Dict[str, Any]:
         reports_dir=_reports_dir(),
         history_dir=_validation_history_dir(),
     )
+
+
+@app.get("/gravity/audit-status", dependencies=[Depends(require_read_token)])
+def get_gravity_audit_status() -> Dict[str, Any]:
+    """Read-only port of ``gui/panels/gravity_audit.py``'s two audit sections
+    (retired Streamlit Command Center Safety tab): the AI Gravity audit runner
+    (Claude auditor + Gemini cross-checker) and the legacy, purely structural
+    Gravity Review Suite (Pandera schema conformance, lookahead-bias
+    perturbation, signal-registry health, sizing/risk gates — no LLM calls
+    despite the filename ``Gravity AI Review Suite.py``).
+
+    Deliberately NO trigger endpoint for either side — a considered scope cut,
+    not an oversight:
+
+    * The AI runner (``engine.gravity_ai_runner.run_all()``) is a synchronous,
+      SEQUENTIAL sweep of up to 8 steps x up to 2 providers (Claude then
+      Gemini, never concurrent) — a real multi-minute, real-dollar-cost
+      operation with no incremental-progress channel over a stateless
+      request/response API (the source feature's live "Step n/7…" ticker is a
+      Streamlit ``st.status()`` widget bound to the SAME process issuing the
+      callback; it doesn't degrade to "fire and forget" without inventing new
+      async-job infrastructure this API doesn't have).
+    * The legacy suite is heavier still (its own code comment: up to ~10
+      minutes, which is why it was already moved off a blocking
+      ``subprocess.run(timeout=600)`` onto a detached-process + 3s live-tail
+      pattern in the desktop GUI) — with no mobile-appropriate equivalent to
+      that live tail either.
+
+    Both surfaces read only already-persisted artifacts:
+    ``output/gravity_ai_audit.json`` (via ``gui.gravity_ai_panel`` — Streamlit-
+    free by design, same posture as ``gui.ai_control_center`` above) and the
+    trailing JSON verdict in ``output/gravity_run.log`` (via
+    ``pilots.gravity_audit.legacy_audit_status`` — see that module's docstring
+    for why the log is durable across restarts, not merely Streamlit session
+    state). Neither read ever constructs an LLM provider or launches a
+    subprocess. Never 500s (CONSTRAINT #6); every leaf is null/honest-reason
+    when unavailable, never fabricated (CONSTRAINT #4)."""
+    status = gravity_ai_panel.runner_status(settings)
+    report = gravity_ai_panel.load_audit_report()
+    summary = gravity_ai_panel.summarise_run(report)
+    ai_audit = {
+        "status": status,
+        "enabled": summary.enabled,
+        "generated_at": summary.generated_at if summary.generated_at != "—" else None,
+        "health": summary.health,
+        "health_caption": gravity_ai_panel.health_caption(summary),
+        "total_steps": summary.total_steps,
+        "claude_passed": summary.claude_passed,
+        "claude_failed": summary.claude_failed,
+        "claude_skipped": summary.claude_skipped,
+        "gemini_passed": summary.gemini_passed,
+        "gemini_failed": summary.gemini_failed,
+        "gemini_skipped": summary.gemini_skipped,
+        "disagreements": summary.disagreements,
+        "steps": gravity_ai_panel.step_rows(report),
+    }
+    return {
+        "ai_audit": ai_audit,
+        "legacy_audit": gravity_audit_reader.legacy_audit_status(),
+    }
 
 
 # ---------------------------------------------------------------------------

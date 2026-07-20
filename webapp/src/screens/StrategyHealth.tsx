@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { CurvePoint, StrategyHealthGate, StrategyHealthRow, Thresholds } from "../api/types";
+import type {
+  CurvePoint,
+  GravityAiAuditStep,
+  GravityAuditStatus,
+  StrategyHealthGate,
+  StrategyHealthRow,
+  Thresholds,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { DeployableBadge, ErrorState, Loading } from "../components/ui";
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
 import { ValidationTrend } from "../components/ValidationTrend";
 import { loadThresholds } from "../help/thresholds";
-import { fmtNum, fmtPct } from "../format";
+import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
 
 /**
@@ -171,6 +178,222 @@ function HealthCard({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Gravity Audit — read-only port of the retired Streamlit Command Center's
+// Safety tab (gui/panels/gravity_audit.py). Two independent sub-sections:
+// the AI Gravity audit runner (Claude auditor + Gemini cross-checker) and the
+// legacy, purely structural Gravity Review Suite. DELIBERATELY no "run a new
+// audit" trigger on either — both are real-cost/multi-minute operations with
+// no incremental-progress channel over this API's request/response shape.
+// See GET /gravity/audit-status's own docstring (api/pilots_api.py) for the
+// full reasoning.
+// ---------------------------------------------------------------------------
+
+const thL: React.CSSProperties = {
+  textAlign: "left",
+  padding: "6px 8px",
+  color: theme.textMuted,
+  fontWeight: 600,
+  borderBottom: `1px solid ${theme.border}`,
+};
+const tdL: React.CSSProperties = {
+  textAlign: "left",
+  padding: "6px 8px",
+  borderBottom: `1px solid ${theme.border}`,
+  verticalAlign: "top",
+};
+
+const AI_HEALTH_STYLE: Record<
+  GravityAuditStatus["ai_audit"]["health"],
+  { color: string; background: string; border: string }
+> = {
+  clean: { color: theme.growth, background: "rgba(16, 185, 129, 0.1)", border: "rgba(16, 185, 129, 0.28)" },
+  warn: { color: theme.caution, background: "rgba(245, 158, 11, 0.1)", border: "rgba(245, 158, 11, 0.28)" },
+  fail: { color: theme.decline, background: "rgba(239, 68, 68, 0.1)", border: "rgba(239, 68, 68, 0.28)" },
+  empty: { color: theme.textMuted, background: theme.surface2, border: theme.border },
+};
+
+const AI_STATUS_NOTE: Record<GravityAuditStatus["ai_audit"]["status"], string | null> = {
+  disabled:
+    "AI Gravity runner is off. Set GRAVITY_AI_RUNNER_ENABLED=true plus ANTHROPIC_API_KEY and GEMINI_API_KEY on the desktop console to enable it — the structural audit below is unaffected.",
+  missing_key:
+    "GRAVITY_AI_RUNNER_ENABLED is on but neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is set.",
+  partial_key:
+    "Only one provider key is configured — the runner records the missing side as skipped; disagreement detection needs both.",
+  ready: null,
+};
+
+function Banner({
+  color,
+  background,
+  border,
+  children,
+}: {
+  color: string;
+  background: string;
+  border: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        color,
+        background,
+        border: `1px solid ${border}`,
+        borderRadius: "var(--r-md)",
+        padding: "10px 12px",
+        fontSize: 12.5,
+        lineHeight: 1.45,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function AiAuditStepTable({ steps }: { steps: GravityAiAuditStep[] }) {
+  return (
+    <div style={{ overflowX: "auto", marginTop: 10 }}>
+      <table style={{ width: "100%", fontSize: 12, minWidth: 420, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={thL}>Step</th>
+            <th style={thL}>Claude</th>
+            <th style={thL}>Gemini</th>
+            <th style={thL}>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {steps.map((s, i) => (
+            <tr key={`${s.step_number ?? i}-${s.step_title}`}>
+              <td style={tdL}>
+                {s.step_number != null ? `${s.step_number}. ` : ""}
+                {s.step_title}
+                {s.disagreement && (
+                  <span className="badge badge-warn" style={{ marginLeft: 6 }}>
+                    ⚠ disagree
+                  </span>
+                )}
+              </td>
+              <td style={tdL}>{s.claude}</td>
+              <td style={tdL}>{s.gemini}</td>
+              <td style={{ ...tdL, color: theme.textMuted }}>{s.notes || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function GravityAuditSection() {
+  const { data, loading, error, status, reload } = useApi<GravityAuditStatus>(
+    () => api.getGravityAuditStatus(),
+    []
+  );
+
+  return (
+    <section style={{ marginTop: 24 }}>
+      <h2 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 4px" }}>🛡️ Gravity Audit</h2>
+      <p style={{ color: theme.textMuted, fontSize: 12.5, lineHeight: 1.5, marginBottom: 12 }}>
+        The platform's own structural + AI-cross-checked self-audit — read-only
+        here; a new run is triggered from the desktop Command Center's Safety
+        tab.
+      </p>
+
+      {loading && <Loading lines={3} />}
+      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+      {!loading && !error && data && (
+        <>
+          {/* ---- AI Gravity audit runner ---- */}
+          <div className="card card-pad" style={{ marginBottom: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 10,
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>AI Gravity Audit (Claude + Gemini)</div>
+              <span className="chip">{data.ai_audit.status}</span>
+            </div>
+
+            {AI_STATUS_NOTE[data.ai_audit.status] && (
+              <p style={{ color: theme.textSecondary, fontSize: 12.5, lineHeight: 1.5, marginBottom: 10 }}>
+                {AI_STATUS_NOTE[data.ai_audit.status]}
+              </p>
+            )}
+
+            <Banner {...AI_HEALTH_STYLE[data.ai_audit.health]}>{data.ai_audit.health_caption}</Banner>
+
+            {data.ai_audit.total_steps > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+                <span className="chip">{data.ai_audit.total_steps} steps</span>
+                <span className="chip">
+                  Claude {data.ai_audit.claude_passed}✓ / {data.ai_audit.claude_failed}✗
+                </span>
+                <span className="chip">
+                  Gemini {data.ai_audit.gemini_passed}✓ / {data.ai_audit.gemini_failed}✗
+                </span>
+                <span className="chip">{data.ai_audit.disagreements} disagreement(s)</span>
+                <span className="chip">Last run {timeAgo(data.ai_audit.generated_at)}</span>
+              </div>
+            )}
+
+            {data.ai_audit.steps.length > 0 && <AiAuditStepTable steps={data.ai_audit.steps} />}
+          </div>
+
+          {/* ---- Legacy structural Gravity Review Suite ---- */}
+          <div className="card card-pad">
+            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 10 }}>
+              Legacy Structural Audit
+            </div>
+            <p style={{ color: theme.textMuted, fontSize: 11.5, lineHeight: 1.5, marginBottom: 10 }}>
+              Pandera schema conformance, lookahead-bias perturbation,
+              signal-registry health, sizing/risk gates — no LLM calls.
+            </p>
+            {data.legacy_audit.available ? (
+              <>
+                <Banner
+                  {...(data.legacy_audit.all_passed
+                    ? AI_HEALTH_STYLE.clean
+                    : AI_HEALTH_STYLE.fail)}
+                >
+                  {data.legacy_audit.all_passed
+                    ? "✅ All steps passed on the last run."
+                    : "❌ At least one step failed on the last run — not cleared for live."}
+                </Banner>
+                <div style={{ overflowX: "auto", marginTop: 10 }}>
+                  <table style={{ width: "100%", fontSize: 12, minWidth: 320, borderCollapse: "collapse" }}>
+                    <tbody>
+                      {data.legacy_audit.steps.map((s) => (
+                        <tr key={s.step}>
+                          <td style={tdL}>{s.step}</td>
+                          <td style={{ ...tdL, textAlign: "right" }}>
+                            <span className={s.passed ? "badge badge-good" : "badge badge-bad"}>
+                              {s.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <p style={{ color: theme.textSecondary, fontSize: 12.5, lineHeight: 1.5 }}>
+                {data.legacy_audit.reason}
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function StrategyHealth() {
   const nav = useNavigate();
   const { data, loading, error, status, reload } = useApi<StrategyHealthRow[]>(
@@ -325,6 +548,8 @@ export function StrategyHealth() {
         tail-scenario stress gate for options-selling strategies. Thresholds are
         never loosened to force a green badge.
       </p>
+
+      <GravityAuditSection />
     </div>
   );
 }
