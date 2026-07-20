@@ -303,6 +303,49 @@ export interface SymbolDetail {
   held_by_pilots: SymbolHeldBy[];
 }
 
+/**
+ * GET /symbols/compare — one row of the symbol-vs-symbol comparison, the API
+ * counterpart of the legacy Streamlit Strategy Matrix's "Symbol Comparison"
+ * table (`gui/panels/strategy_matrix.py::_render_symbol_comparison`). Every
+ * numeric/string leaf is `null` when the active snapshot writer never
+ * computed it — NEVER a fabricated default (CONSTRAINT #4). Notably
+ * `meta_label_composite`/`regime_multiplier` are only ever populated by the
+ * advisory snapshot writer, not the richer orchestrator one, so `null` there
+ * is expected/honest, not a bug.
+ *
+ * `found: false` means the requested ticker isn't in the latest snapshot
+ * (typo, or it rolled out of the tracked universe this cycle) — every other
+ * leaf is `null` and `reason` explains why. This is NOT an error; the row
+ * still renders (with dashes) alongside the symbols that did resolve.
+ */
+export interface SymbolCompareRow {
+  symbol: string;
+  found: boolean;
+  reason: string | null;
+  score: number | null;
+  action: string | null;
+  kelly_target: number | null;
+  conviction: number | null;
+  garch_vol: number | null;
+  meta_label_composite: number | null;
+  regime_multiplier: number | null;
+  score_components: Record<string, number> | null;
+}
+
+/**
+ * GET /symbols/compare — 2-5 symbols side by side. `as_of` is the snapshot
+ * timestamp the comparison reflects; `null` on a cold start (no snapshot
+ * yet), in which case every row in `symbols` is honestly `found: false`.
+ * `modules` is the sorted union of every FOUND symbol's `score_components`
+ * keys — the shared x-axis for a grouped bar chart so a symbol whose
+ * aggregator skipped a module this cycle still lines up against the others.
+ */
+export interface SymbolCompareResponse {
+  as_of: string | null;
+  symbols: SymbolCompareRow[];
+  modules: string[];
+}
+
 /** GET /brokerage/status — whether local RH credentials are configured. */
 export interface BrokerageStatus {
   connected: boolean;

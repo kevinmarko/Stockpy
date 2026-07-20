@@ -223,6 +223,108 @@ def test_symbol_detail_cold_start_404(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# GET /symbols/compare — symbol-vs-symbol comparison
+# ---------------------------------------------------------------------------
+
+
+def test_symbols_compare_shape_and_values():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/compare?symbols=AAPL,MSFT")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"as_of", "symbols", "modules"}
+    assert body["as_of"] == "2026-07-11T21:05:00+00:00"
+    assert [r["symbol"] for r in body["symbols"]] == ["AAPL", "MSFT"]
+    aapl = body["symbols"][0]
+    assert set(aapl) == {
+        "symbol", "found", "reason", "score", "action", "kelly_target",
+        "conviction", "garch_vol", "meta_label_composite", "regime_multiplier",
+        "score_components",
+    }
+    assert aapl["found"] is True
+    assert aapl["score"] == 96.8
+    assert aapl["action"] == "BUY"
+    assert aapl["garch_vol"] == 0.243
+    assert isinstance(aapl["score_components"], dict) and aapl["score_components"]
+    assert isinstance(body["modules"], list) and body["modules"] == sorted(body["modules"])
+
+
+def test_symbols_compare_not_shadowed_by_ticker_route():
+    # Regression guard for the FastAPI route-ordering trap: /symbols/compare
+    # must match its own handler, not get captured as ticker="compare" by the
+    # earlier-declared-in-file-order... (it's declared BEFORE /symbols/{ticker}
+    # precisely to avoid this). A shadowed route would 404 with
+    # _UNKNOWN_SYMBOL_DETAIL instead of returning the comparison shape.
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/compare?symbols=AAPL,MSFT")
+    assert resp.status_code == 200
+    assert "symbols" in resp.json()
+    assert "identity" not in resp.json()  # would be present if it hit get_symbol_detail
+
+
+def test_symbols_compare_case_insensitive_and_deduped():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/compare?symbols=aapl,AAPL,  Aapl ,msft")
+    assert resp.status_code == 200
+    body = resp.json()
+    # 3 case/whitespace variants of AAPL dedup to one row; MSFT is the second.
+    assert len(body["symbols"]) == 2
+    assert body["symbols"][0]["symbol"] == "AAPL"
+    assert body["symbols"][1]["symbol"] == "MSFT"
+
+
+def test_symbols_compare_unknown_symbol_gets_honest_row_not_404():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/compare?symbols=AAPL,ZZZ")
+    assert resp.status_code == 200
+    rows = {r["symbol"]: r for r in resp.json()["symbols"]}
+    assert rows["AAPL"]["found"] is True
+    assert rows["ZZZ"]["found"] is False
+    assert rows["ZZZ"]["reason"] == "Not tracked in the latest snapshot."
+    assert rows["ZZZ"]["score"] is None
+
+
+def test_symbols_compare_cold_start_never_404s(tmp_path):
+    with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+        resp = client.get("/symbols/compare?symbols=AAPL,MSFT")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["as_of"] is None
+    for row in body["symbols"]:
+        assert row["found"] is False
+        assert row["reason"] == pilots_api._MISSING_SNAPSHOT_DETAIL
+
+
+def test_symbols_compare_too_few_symbols_422():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/compare?symbols=AAPL")
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["error"] == "too_few_symbols"
+
+
+def test_symbols_compare_too_few_symbols_after_dedup_422():
+    # AAPL,aapl de-duplicates to a single symbol -> still below the floor.
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/compare?symbols=AAPL,aapl")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "too_few_symbols"
+
+
+def test_symbols_compare_too_many_symbols_422():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/compare?symbols=AAPL,MSFT,NVDA,JPM,XOM,JNJ")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "too_many_symbols"
+
+
+def test_symbols_compare_missing_query_param_422():
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/symbols/compare")
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # GET /universe — the symbol-autocomplete source
 # ---------------------------------------------------------------------------
 

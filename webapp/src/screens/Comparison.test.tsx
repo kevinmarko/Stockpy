@@ -32,6 +32,15 @@ describe("Comparison screen (R2)", () => {
     expect(await within(recs).findByTestId("rec-row-NVDA")).toBeInTheDocument();
   });
 
+  // Symbol-vs-symbol comparison — a separate card from Pilot-vs-Pilot above,
+  // independent of any pilot being selected. Full behavior coverage lives in
+  // SymbolComparison.test.tsx; this is just the mount/wiring smoke test.
+  it("renders the symbol comparison card independent of pilot selection", async () => {
+    renderComparison();
+    expect(await screen.findByTestId("symbol-comparison")).toBeInTheDocument();
+    expect(screen.getByText("Symbol Comparison")).toBeInTheDocument();
+  });
+
   // T1.2: Toggle Pilot Checkbox
   it("checks a pilot strategy and renders the metrics table", async () => {
     renderComparison();

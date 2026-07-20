@@ -913,6 +913,68 @@ def get_recommendations(
     }
 
 
+@app.get("/symbols/compare", dependencies=[Depends(require_read_token)])
+def get_symbols_compare(
+    symbols_param: str = Query(..., alias="symbols", min_length=1),
+) -> Dict[str, Any]:
+    """Side-by-side comparison of 2-5 operator-selected symbols from the latest
+    persisted snapshot — the API counterpart of
+    ``gui/panels/strategy_matrix.py::_render_symbol_comparison``.
+
+    NOTE ordering: this route is declared BEFORE ``GET /symbols/{ticker}`` so
+    ``/symbols/compare`` matches here rather than being captured as
+    ``ticker="compare"`` — FastAPI matches routes in declaration order, static
+    paths do not automatically win over an earlier parameterized one.
+
+    ``symbols`` is a comma-separated ticker list (e.g. ``AAPL,MSFT,NVDA``),
+    upper-cased and de-duplicated server-side (first occurrence wins). 422
+    with a stable tag when the de-duplicated count falls outside
+    ``[symbols.COMPARE_MIN_SYMBOLS, symbols.COMPARE_MAX_SYMBOLS]`` (2-5) — the
+    frontend branches on ``error``, never the message.
+
+    Reads only persisted state (the snapshot's ``signals[]``) — never calls an
+    engine. A requested symbol absent from the snapshot (typo, or it rolled
+    out of this cycle's universe) still gets a row (``found: false`` + an
+    honest ``reason``) rather than failing the whole comparison — this is a
+    multi-resource view, not a single-resource lookup, so it never 404s
+    (CONSTRAINT #6). Every numeric leaf is ``null`` when the active snapshot
+    writer didn't compute it, never a fabricated default (CONSTRAINT #4) —
+    notably ``meta_label_composite``/``regime_multiplier`` are only ever
+    populated by the advisory snapshot writer, not the richer orchestrator
+    one, and this endpoint reads exactly what was persisted rather than
+    baking in the writer's own fallback default. ``modules`` is the sorted
+    union of every found symbol's score-component module names, for the
+    frontend's grouped bar chart x-axis."""
+    parsed = [s.strip().upper() for s in symbols_param.split(",")]
+    deduped: List[str] = []
+    seen: set = set()
+    for s in parsed:
+        if s and s not in seen:
+            seen.add(s)
+            deduped.append(s)
+
+    if len(deduped) < symbols.COMPARE_MIN_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "too_few_symbols",
+                "message": f"Select at least {symbols.COMPARE_MIN_SYMBOLS} symbols to compare.",
+                "min": symbols.COMPARE_MIN_SYMBOLS,
+            },
+        )
+    if len(deduped) > symbols.COMPARE_MAX_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "too_many_symbols",
+                "message": f"Select at most {symbols.COMPARE_MAX_SYMBOLS} symbols to compare.",
+                "max": symbols.COMPARE_MAX_SYMBOLS,
+            },
+        )
+
+    return symbols.compare_symbols(_load_snapshot(), deduped)
+
+
 @app.get("/symbols/{ticker}", dependencies=[Depends(require_read_token)])
 def get_symbol_detail(ticker: str) -> Any:
     """Per-symbol detail for one ticker from the latest persisted snapshot, plus

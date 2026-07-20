@@ -91,6 +91,8 @@ import type {
   TunablesResponse,
   TunablesUpdateResult,
   SymbolDetail,
+  SymbolCompareRow,
+  SymbolCompareResponse,
   UniverseResponse,
   RecommendationsResponse,
   Recommendation,
@@ -3053,6 +3055,90 @@ export const mockApi = {
       held_by_pilots,
     };
     return delay(detail);
+  },
+
+  async getSymbolsCompare(tickers: string[]): Promise<SymbolCompareResponse> {
+    // Mirrors the real endpoint's own validation (2-5 symbols after
+    // upper-case + de-dupe) so the mock/live parity gate exercises the error
+    // path too, not just the happy path.
+    const deduped = Array.from(
+      new Set(tickers.map((t) => t.trim().toUpperCase()).filter(Boolean))
+    );
+    if (deduped.length < 2) {
+      throw new ApiError("Select at least 2 symbols to compare.", 422);
+    }
+    if (deduped.length > 5) {
+      throw new ApiError("Select at most 5 symbols to compare.", 422);
+    }
+
+    const rows: SymbolCompareRow[] = deduped.map((sym) => {
+      if (!SYMBOL_UNIVERSE.has(sym)) {
+        // Honest "not tracked" row — never a hard failure for the whole
+        // request over one bad ticker (mirrors the backend contract).
+        return {
+          symbol: sym,
+          found: false,
+          reason: "Not tracked in the latest snapshot.",
+          score: null,
+          action: null,
+          kelly_target: null,
+          conviction: null,
+          garch_vol: null,
+          meta_label_composite: null,
+          regime_multiplier: null,
+          score_components: null,
+        };
+      }
+
+      const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0));
+      const scores = CATALOG.flatMap((p) =>
+        p.holdings.filter((x) => x.symbol === sym).map((x) => x.score)
+      );
+      const score = scores.length
+        ? +(scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(3)
+        : null;
+      const conviction = score == null ? null : +(0.55 + score * 0.35).toFixed(2);
+      const action = score != null && score >= 0.5 ? "BUY" : "HOLD";
+      const kelly_target = score == null ? null : +(Math.max(score, 0) * 0.1).toFixed(4);
+
+      // DUK deliberately carries no meta_label_composite/regime_multiplier —
+      // those two fields are ONLY ever populated by the advisory snapshot
+      // writer, not the richer main_orchestrator one (see
+      // pilots/symbols.py::compare_symbols' docstring); this fixture exercises
+      // that honest-null branch instead of pretending every symbol always has
+      // them.
+      const hasRegimeFields = sym !== "DUK";
+
+      return {
+        symbol: sym,
+        found: true,
+        reason: null,
+        score,
+        action,
+        kelly_target,
+        conviction,
+        garch_vol: +(0.15 + rng() * 0.35).toFixed(3),
+        meta_label_composite: hasRegimeFields ? 1.0 : null,
+        regime_multiplier: hasRegimeFields ? +(0.8 + rng() * 0.4).toFixed(2) : null,
+        score_components: {
+          momentum: +rng().toFixed(3),
+          trend: +rng().toFixed(3),
+          value: +((rng() - 0.5) * 2).toFixed(3),
+        },
+      };
+    });
+
+    const modules = Array.from(
+      new Set(
+        rows.flatMap((r) => (r.score_components ? Object.keys(r.score_components) : []))
+      )
+    ).sort();
+
+    return delay({
+      as_of: new Date(Date.now() - 5_400_000).toISOString(),
+      symbols: rows,
+      modules,
+    });
   },
 
   async getPortfolio(): Promise<Portfolio> {

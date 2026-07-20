@@ -38,12 +38,22 @@ from pilots import catalog, scoring
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "compare_symbols",
     "find_signal",
     "held_by_pilots",
     "list_recommendations",
     "list_universe",
     "symbol_detail",
 ]
+
+# Mirrors gui/panels/strategy_matrix.py::_render_symbol_comparison's
+# `st.multiselect(..., max_selections=3)` hard cap, with a little headroom on
+# the API side to match Comparison.tsx's existing Pilot-vs-Pilot selector cap
+# (5) — the PWA's own symbol multi-select UI keeps the legacy "2-3
+# recommended" guidance, but the endpoint itself doesn't need to hard-fail a
+# future 4th/5th symbol.
+COMPARE_MIN_SYMBOLS = 2
+COMPARE_MAX_SYMBOLS = 5
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +347,99 @@ def symbol_detail(
     except Exception as exc:  # noqa: BLE001
         logger.debug("symbol_detail(%s) failed: %s", ticker, exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Symbol-vs-symbol comparison (GET /symbols/compare)
+# ---------------------------------------------------------------------------
+
+def compare_symbols(snapshot: Any, tickers: List[str]) -> Dict[str, Any]:
+    """Side-by-side comparison payload for 2-5 operator-selected symbols.
+
+    Mirrors ``gui/panels/strategy_matrix.py::_render_symbol_comparison`` — the
+    same columns the legacy Streamlit table renders (final blended score,
+    action, Kelly Target, conviction, GARCH vol, meta-label composite, regime
+    multiplier) plus the per-module weighted score-component breakdown that
+    fed its grouped bar chart.
+
+    Every field is read straight off the SAME ``signals[]`` entry
+    :func:`symbol_detail` reshapes — no recomputation, no engine import. Two
+    of those fields (``meta_label_composite``, ``regime_multiplier``) are only
+    ever populated by the advisory snapshot writer (``reporting/state_snapshot.py``);
+    the richer ``main_orchestrator`` writer does not carry them at all, so they
+    honestly degrade to ``None`` on that path rather than a fabricated ``1.0``
+    default (CONSTRAINT #4) — this function never bakes in the writer's own
+    ``ki.get(..., 1.0)`` fallback, it only reads what is actually persisted.
+
+    A requested symbol not found in the snapshot's ``signals[]`` (typo, or it
+    rolled out of this cycle's universe) still gets a row — ``found: False``
+    with an honest ``reason`` and every other leaf ``null`` — rather than
+    failing the whole comparison over one bad symbol (mirrors the "one bad
+    ticker can't abort a batch" convention used elsewhere in this codebase).
+    Duplicate tickers (case/whitespace-insensitive) are de-duplicated,
+    first-occurrence wins, preserving the caller's order.
+
+    ``modules`` is the sorted union of every FOUND symbol's
+    ``score_components`` keys — the x-axis for the grouped bar chart, computed
+    here (not client-side) so every symbol renders bars on the same set of
+    modules even when one symbol's aggregator skipped a module this cycle.
+
+    Never raises (CONSTRAINT #6); degrades to ``{"as_of": None, "symbols": [],
+    "modules": []}`` on totally malformed input.
+    """
+    try:
+        cf = scoring._coerce_float
+        cold_start = not isinstance(snapshot, dict)
+        as_of = None if cold_start else snapshot.get("timestamp")
+
+        rows: List[dict] = []
+        seen: set = set()
+        modules: set = set()
+        for raw in tickers or []:
+            symbol = str(raw or "").upper().strip()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+
+            sig = None if cold_start else find_signal(snapshot, symbol)
+            if sig is None:
+                rows.append({
+                    "symbol": symbol,
+                    "found": False,
+                    "reason": (
+                        "No state snapshot yet — run the pipeline first."
+                        if cold_start else
+                        "Not tracked in the latest snapshot."
+                    ),
+                    "score": None,
+                    "action": None,
+                    "kelly_target": None,
+                    "conviction": None,
+                    "garch_vol": None,
+                    "meta_label_composite": None,
+                    "regime_multiplier": None,
+                    "score_components": None,
+                })
+                continue
+
+            components = _clean_components(sig.get("score_components"))
+            if components:
+                modules.update(components.keys())
+            rows.append({
+                "symbol": symbol,
+                "found": True,
+                "reason": None,
+                "score": cf(sig.get("score")),
+                "action": _clean_str(sig.get("advisory_action")) or _clean_str(sig.get("action")),
+                "kelly_target": cf(sig.get("kelly_target")),
+                "conviction": cf(sig.get("advisory_conviction")),
+                "garch_vol": cf(sig.get("garch_vol")),
+                "meta_label_composite": cf(sig.get("meta_label_composite")),
+                "regime_multiplier": cf(sig.get("regime_multiplier")),
+                "score_components": components,
+            })
+
+        return {"as_of": as_of, "symbols": rows, "modules": sorted(modules)}
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("compare_symbols(%s) failed: %s", tickers, exc)
+        return {"as_of": None, "symbols": [], "modules": []}
