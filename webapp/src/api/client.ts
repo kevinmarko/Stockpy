@@ -73,6 +73,7 @@ import type {
   Bar,
   Fundamentals,
   MacroSnapshot,
+  QuotesResponse,
   SignalBreakdown,
   ForecastResult,
   CommandManifest,
@@ -288,6 +289,15 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify(symbols),
     }),
+  // Latest quote(s) for a comma-separated symbol list (data base, :8603). The
+  // Market Data connection diagnostic (Data Explorer) calls this ONE symbol
+  // at a time so it can time each round trip independently with
+  // `performance.now()` and build a genuine per-symbol latency/health picture
+  // -- see components/MarketDataHealth.tsx for the full rationale.
+  getDataQuotes: (symbols: string[]) =>
+    http<QuotesResponse>(
+      `/data/quotes?symbols=${encodeURIComponent(symbols.join(","))}`
+    ),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
   getSentimentDynamics: (symbol: string) =>

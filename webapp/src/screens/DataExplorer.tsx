@@ -7,6 +7,7 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { PerfLine } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { RecommendedStocks } from "../components/RecommendedStocks";
+import { MarketDataHealth } from "../components/MarketDataHealth";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
@@ -155,6 +156,8 @@ export function DataExplorer() {
       </section>
 
       <MacroSection />
+
+      <MarketDataHealth />
     </div>
   );
 }
