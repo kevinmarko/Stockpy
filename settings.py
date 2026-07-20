@@ -1236,6 +1236,37 @@ class Settings(BaseSettings):
             "flag."
         ),
     )
+    # Master switch for the Pilots API's Macro Regime Gate WRITE endpoint
+    # (api/pilots_api.py PUT /observability/macro-gate -- flips
+    # MACRO_REGIME_GATE_ENABLED itself to .env). A DEDICATED flag, not
+    # GENERAL_SETTINGS_WRITES_ENABLED/STRATEGY_WRITES_ENABLED/AUTOMATION_WRITES_ENABLED/
+    # LLM_WRITES_ENABLED/AGENTIC_DISCOVERY_ENABLED: this is not a sizing/forecasting
+    # tunable riding alongside dozens of others -- it is THE operator-controlled
+    # bypass for PreTradeRiskGate.macro_kill_switch_check (the recession/credit-event
+    # BUY veto; see risk_gate.py). Disabling it, even accidentally via a shared
+    # flag some unrelated feature also gates, would silently remove that veto. Its
+    # own risk class, must not ride in on any sibling flag. Mirrors
+    # GENERAL_SETTINGS_WRITES_ENABLED / STRATEGY_WRITES_ENABLED /
+    # LLM_WRITES_ENABLED / AGENTIC_DISCOVERY_ENABLED exactly: default False,
+    # deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug must never flip
+    # it on; hand-set in .env only), and also requires FOLLOW_API_TOKEN. Note
+    # MACRO_REGIME_GATE_ENABLED itself (the key this endpoint writes) IS already
+    # in ALLOWED_KEYS -- the Streamlit GUI's Observability tab has written it
+    # directly for a long time (gui/panels/observability.py); this flag governs
+    # only whether the NEW Pilots-API/webapp write path may do the same, it does
+    # not change the target key's own GUI-writability. GET /observability/summary
+    # is read-only and NOT gated by this flag (require_read_token alone, matching
+    # every other GET here).
+    MACRO_GATE_WRITES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables PUT /observability/macro-gate on the Pilots API (flips "
+            "MACRO_REGIME_GATE_ENABLED -> .env). Off by default; also requires "
+            "FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so "
+            "this recession/credit-event BUY-veto bypass cannot ride in on any "
+            "other writes-enabled flag."
+        ),
+    )
     # Cap on candidates GET /agentic/discovery returns (and on what the
     # agentic-discovery skill is expected to write per scan) — keeps the Discovery
     # section of the Agentic Trading tab bounded regardless of how many symbols a

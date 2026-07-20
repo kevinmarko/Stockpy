@@ -3,10 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { ObservabilitySummary, PerfRange, RiskGateBlockEntry } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Tile } from "../components/ui";
+import { useMutation } from "../hooks/useMutation";
+import { Button, ErrorState, Input, Loading, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { RangeToggle } from "../components/RangeToggle";
 import { DrawdownArea, PerfLine } from "../components/charts";
+import { Modal } from "../components/Modal";
+import { Toggle } from "../components/Toggle";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -61,7 +64,125 @@ function SectionHeading({ title, sub }: { title: string; sub?: string }) {
   );
 }
 
-function RegimeBadgeRow({ regime }: { regime: ObservabilitySummary["regime"] }) {
+/**
+ * MacroGateControl — the webapp port of the Streamlit Command Center's
+ * Observability tab toggle (gui/panels/observability.py:131-195). Mirrors
+ * KillSwitchToggle's UX exactly: a Toggle that opens a confirm Modal
+ * requiring a typed reason (a fat-finger guard, NOT a security control — the
+ * real gates are the command token and MACRO_GATE_WRITES_ENABLED, server-side).
+ * A bare toggle-flip is NOT appropriate for a control this close to a genuine
+ * risk-management kill switch (see CLAUDE.md's MACRO_REGIME_GATE_ENABLED
+ * section: it vetoes new BUY orders during RECESSION/CREDIT EVENT regimes).
+ *
+ * Renders nothing when the current state is unknown (`macro_regime_gate_enabled
+ * === null`, e.g. the writer omitted it that cycle) — never fabricates a
+ * checked state for a value that wasn't actually persisted (CONSTRAINT #4).
+ * The Toggle itself is disabled (with `macro_gate_writable_note` shown) when
+ * the server has `MACRO_GATE_WRITES_ENABLED=false`, so the control degrades
+ * honestly instead of silently 403-ing on click.
+ */
+function MacroGateControl({
+  regime,
+  onChanged,
+}: {
+  regime: ObservabilitySummary["regime"];
+  onChanged: () => void;
+}) {
+  const [confirmKind, setConfirmKind] = useState<"enable" | "disable" | null>(null);
+  const [inputReason, setInputReason] = useState("");
+  const putMutation = useMutation((enabled: boolean, reason: string) =>
+    api.putMacroGate(enabled, reason)
+  );
+
+  if (regime.macro_regime_gate_enabled === null) return null;
+
+  const on = regime.macro_regime_gate_enabled;
+  const writable = regime.macro_gate_writable;
+
+  const openConfirm = (next: boolean) => {
+    setInputReason("");
+    setConfirmKind(next ? "enable" : "disable");
+  };
+
+  const confirmAction = async () => {
+    if (confirmKind === null) return;
+    await putMutation.run(confirmKind === "enable", inputReason);
+    setConfirmKind(null);
+    onChanged();
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <Toggle
+        checked={on}
+        onChange={openConfirm}
+        label={on ? "Macro regime gate: ON" : "Macro regime gate: OFF"}
+        disabled={!writable}
+        pending={putMutation.pending}
+      />
+      {!on && (
+        <p style={{ color: theme.caution, fontSize: 12, marginTop: 6 }}>
+          Technical BUY signals run without a macro veto. Re-enable before going live.
+        </p>
+      )}
+      {!writable && (
+        <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 6 }}>
+          {regime.macro_gate_writable_note}
+        </p>
+      )}
+      {putMutation.error && (
+        <div className="notice notice-warn" style={{ marginTop: 8 }}>
+          <span>⚠️</span>
+          <span>{putMutation.error}</span>
+        </div>
+      )}
+
+      {confirmKind && (
+        <Modal
+          ariaLabel={confirmKind === "disable" ? "Disable macro regime gate" : "Enable macro regime gate"}
+          onClose={() => setConfirmKind(null)}
+        >
+          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
+            {confirmKind === "disable" ? "Disable macro regime gate?" : "Enable macro regime gate?"}
+          </h2>
+          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+            {confirmKind === "disable"
+              ? "Technical BUY signals will run without a veto during RECESSION/CREDIT EVENT regimes (Sahm Rule ≥ 0.5, VIX > 30, or HY OAS > 6%). Always re-enable before going live."
+              : "Restores the autonomous macro veto — new BUY orders will be blocked during RECESSION/CREDIT EVENT regimes."}
+          </p>
+          <Input
+            label="Reason"
+            value={inputReason}
+            onChange={(e) => setInputReason(e.target.value)}
+            hint="Required."
+          />
+          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+            <Button variant="neutral" onClick={() => setConfirmKind(null)} style={{ flex: 1 }}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={confirmAction}
+              disabled={!inputReason.trim()}
+              pending={putMutation.pending}
+              style={{ flex: 2 }}
+            >
+              {confirmKind === "disable" ? "Disable" : "Enable"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function RegimeBadgeRow({
+  regime,
+  onChanged,
+}: {
+  regime: ObservabilitySummary["regime"];
+  onChanged: () => void;
+}) {
   if (regime.reason) {
     return <div className="empty" style={{ padding: 16 }}>{regime.reason}</div>;
   }
@@ -78,30 +199,30 @@ function RegimeBadgeRow({ regime }: { regime: ObservabilitySummary["regime"] }) 
     },
   ];
   return (
-    <div
-      data-testid="regime-badges"
-      style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}
-    >
-      {badges.map((b) => (
-        <span
-          key={b.label}
-          className="chip"
-          style={
-            b.label === "Regime"
-              ? { color: regimeColor(regime.market_regime), fontWeight: 700 }
-              : undefined
-          }
-        >
-          {b.label}: {b.value}
-        </span>
-      ))}
-      {regime.kill_switch_active && (
-        <span className="badge badge-bad">Kill switch ACTIVE</span>
-      )}
-      {regime.macro_regime_gate_enabled === false && (
-        <span className="badge badge-warn">Macro regime gate OFF</span>
-      )}
-    </div>
+    <>
+      <div
+        data-testid="regime-badges"
+        style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}
+      >
+        {badges.map((b) => (
+          <span
+            key={b.label}
+            className="chip"
+            style={
+              b.label === "Regime"
+                ? { color: regimeColor(regime.market_regime), fontWeight: 700 }
+                : undefined
+            }
+          >
+            {b.label}: {b.value}
+          </span>
+        ))}
+        {regime.kill_switch_active && (
+          <span className="badge badge-bad">Kill switch ACTIVE</span>
+        )}
+      </div>
+      <MacroGateControl regime={regime} onChanged={onChanged} />
+    </>
   );
 }
 
@@ -317,7 +438,7 @@ export function Observability() {
               <DrawdownArea data={data.equity_curve.points} />
             </>
           )}
-          <RegimeBadgeRow regime={data.regime} />
+          <RegimeBadgeRow regime={data.regime} onChanged={reload} />
 
           {/* 3. Forecast skill (portfolio-wide) */}
           <SectionHeading
