@@ -1,7 +1,9 @@
 # Known issue: CNN-LSTM forecaster deadlocks on TensorFlow eager execution
 
-**Status: open, blocking.** Discovered 2026-07-19/20 while enabling the CNN-LSTM
-forecaster path in `forecasting_engine.py` (tracked in
+**Status: open, blocking.** Tracked in
+[issue #381](https://github.com/kevinmarko/Stockpy/issues/381). Discovered
+2026-07-19/20 while enabling the CNN-LSTM forecaster path in
+`forecasting_engine.py` (tracked in
 [PR #377](https://github.com/kevinmarko/Stockpy/pull/377), which shipped only the
 safe half — the idempotent `setup.sh` and the numpy-safe `requirements-optional.txt`
 — and explicitly deferred this deadlock as follow-up work). Do not consider
@@ -231,6 +233,8 @@ repeated full-cost reproductions of the real forecaster.
 
 ## Related
 
+- [Issue #381](https://github.com/kevinmarko/Stockpy/issues/381) — the tracking
+  ticket for this deadlock; this doc is the full technical record it links to.
 - [PR #377](https://github.com/kevinmarko/Stockpy/pull/377) — shipped the safe tooling
   half (idempotent `setup.sh`, `requirements-optional.txt`) and deferred this deadlock.
 - `forecasting_engine.py`'s `TENSORFLOW_AVAILABLE` guard (~line 40) and
