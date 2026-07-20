@@ -1112,15 +1112,27 @@ const STRATEGY_DRIFT_KEY = "stockpy.mock.strategy_drift";
 
 // Base module table (a representative subset of the real 17). regime_multiplier
 // is pinned to weight 0 and cannot be edited.
-const STRATEGY_BASE: { name: string; weight: number; pinned: boolean; scored: number }[] = [
-  { name: "macro_regime", weight: 45, pinned: false, scored: 20 },
-  { name: "macd_momentum", weight: 20, pinned: false, scored: 20 },
-  { name: "aroon_trend", weight: 15, pinned: false, scored: 20 },
-  { name: "graham_value", weight: 20, pinned: false, scored: 18 },
-  { name: "dividend_quality", weight: 15, pinned: false, scored: 12 },
-  { name: "multifactor", weight: 15, pinned: false, scored: 19 },
-  { name: "cross_sectional_momentum", weight: 15, pinned: false, scored: 20 },
-  { name: "regime_multiplier", weight: 0, pinned: true, scored: 20 },
+const STRATEGY_BASE: {
+  name: string;
+  weight: number;
+  pinned: boolean;
+  scored: number;
+  // Version registry (backlog item #13a): a fixed 12-hex-char fingerprint +
+  // an age-in-days for last_modified. All eight of these are real, currently
+  // registered signals/*.py modules, so a real hash/mtime is the honest
+  // fixture (CONSTRAINT #4) -- versionHash: null is reserved for a module
+  // with no file on disk, which none of these currently are.
+  versionHash: string;
+  modifiedDaysAgo: number;
+}[] = [
+  { name: "macro_regime", weight: 45, pinned: false, scored: 20, versionHash: "a1b2c3d4e5f6", modifiedDaysAgo: 12 },
+  { name: "macd_momentum", weight: 20, pinned: false, scored: 20, versionHash: "1a2b3c4d5e6f", modifiedDaysAgo: 40 },
+  { name: "aroon_trend", weight: 15, pinned: false, scored: 20, versionHash: "9f8e7d6c5b4a", modifiedDaysAgo: 88 },
+  { name: "graham_value", weight: 20, pinned: false, scored: 18, versionHash: "0d1e2f3a4b5c", modifiedDaysAgo: 5 },
+  { name: "dividend_quality", weight: 15, pinned: false, scored: 12, versionHash: "6c5b4a39281f", modifiedDaysAgo: 61 },
+  { name: "multifactor", weight: 15, pinned: false, scored: 19, versionHash: "3e4f5a6b7c8d", modifiedDaysAgo: 2 },
+  { name: "cross_sectional_momentum", weight: 15, pinned: false, scored: 20, versionHash: "7a8b9c0d1e2f", modifiedDaysAgo: 30 },
+  { name: "regime_multiplier", weight: 0, pinned: true, scored: 20, versionHash: "f1e2d3c4b5a6", modifiedDaysAgo: 200 },
 ];
 
 function readStrategyOverrides(): { weights: Record<string, number>; disabled: string[] } | null {
@@ -1181,6 +1193,8 @@ function mockStrategyMatrix(): StrategyMatrix {
       contributed_last_run: true,
       symbols_scored: b.scored,
       pinned_zero: b.pinned,
+      version_hash: b.versionHash,
+      last_modified: new Date(Date.now() - b.modifiedDaysAgo * 86_400_000).toISOString(),
     };
   });
   return {

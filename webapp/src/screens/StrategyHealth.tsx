@@ -77,16 +77,48 @@ function StressGateChip({
   );
 }
 
-/** DSR run-over-run, the primary deployability metric, as a tiny sparkline. */
-function trendToCurve(row: StrategyHealthRow): CurvePoint[] {
+/** Which run-over-run metric the sparkline currently plots. */
+type TrendMetricKey = StrategyHealthGate["key"];
+
+// Whether a LOWER or HIGHER value is the "better" direction for each metric —
+// mirrors pilots/strategy_health.py's `_GATE_SPECS` tuple exactly (never
+// re-guessed here): pbo/max_drawdown are "below" (lower is better), dsr/sharpe
+// are "above" (higher is better). Drives the sparkline's green/red coloring so
+// e.g. a FALLING PBO trend still renders as "positive", not red.
+const TREND_METRIC_DIRECTION: Record<TrendMetricKey, "above" | "below"> = {
+  pbo: "below",
+  dsr: "above",
+  sharpe: "above",
+  max_drawdown: "below",
+};
+
+/** Run-over-run values for the selected metric, as a tiny sparkline. */
+function trendToCurve(row: StrategyHealthRow, metric: TrendMetricKey): CurvePoint[] {
   return row.trend
-    .filter((t): t is typeof t & { report_date: string; dsr: number } => t.report_date != null && t.dsr != null)
-    .map((t) => ({ date: t.report_date, value: t.dsr }));
+    .filter((t): t is typeof t & { report_date: string } =>
+      t.report_date != null && t[metric] != null
+    )
+    .map((t) => ({ date: t.report_date, value: t[metric] as number }));
 }
 
-function HealthCard({ row, thresholds }: { row: StrategyHealthRow; thresholds: Thresholds | null }) {
+function HealthCard({
+  row,
+  thresholds,
+  metric,
+}: {
+  row: StrategyHealthRow;
+  thresholds: Thresholds | null;
+  metric: TrendMetricKey;
+}) {
   const hasGates = row.gates.length > 0;
-  const curve = useMemo(() => trendToCurve(row), [row]);
+  const curve = useMemo(() => trendToCurve(row, metric), [row, metric]);
+  const direction = TREND_METRIC_DIRECTION[metric];
+  const trendingBetter =
+    curve.length >= 2
+      ? direction === "below"
+        ? curve[curve.length - 1].value <= curve[0].value
+        : curve[curve.length - 1].value >= curve[0].value
+      : true;
 
   return (
     <section className="card card-pad" style={{ marginBottom: 12 }}>
@@ -123,9 +155,9 @@ function HealthCard({ row, thresholds }: { row: StrategyHealthRow; thresholds: T
           {curve.length >= 2 && (
             <div style={{ marginTop: 10 }}>
               <div style={{ fontSize: 11, color: theme.textMuted, marginBottom: 2 }}>
-                DSR, last {curve.length} runs
+                {GATE_SHORT_LABEL[metric]}, last {curve.length} runs
               </div>
-              <Sparkline data={curve} positive={curve[curve.length - 1].value >= curve[0].value} />
+              <Sparkline data={curve} positive={trendingBetter} />
             </div>
           )}
         </>
@@ -170,6 +202,13 @@ export function StrategyHealth() {
     return { total: data.length, evaluated: evaluated.length, deployableCount, noBacktestCount };
   }, [data]);
 
+  // Which metric every card's run-over-run sparkline plots — one screen-wide
+  // selector rather than a per-card control, so switching it re-plots every
+  // Pilot's trend at once. Defaults to DSR (the primary deployability metric,
+  // matching this screen's pre-existing behavior before this selector shipped).
+  const [trendMetric, setTrendMetric] = useState<TrendMetricKey>("dsr");
+  const hasAnyTrend = !!data?.some((r) => r.trend.length >= 2);
+
   return (
     <div className="screen">
       <button
@@ -203,20 +242,55 @@ export function StrategyHealth() {
           </div>
         ) : (
           <>
-            {summary && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "4px 0 14px" }}>
-                <span className="chip">
-                  {summary.deployableCount}/{summary.evaluated} evaluated deployable
-                </span>
-                {summary.noBacktestCount > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                margin: "4px 0 14px",
+              }}
+            >
+              {summary && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   <span className="chip">
-                    {summary.noBacktestCount} without a backtest yet
+                    {summary.deployableCount}/{summary.evaluated} evaluated deployable
                   </span>
-                )}
-              </div>
-            )}
+                  {summary.noBacktestCount > 0 && (
+                    <span className="chip">
+                      {summary.noBacktestCount} without a backtest yet
+                    </span>
+                  )}
+                </div>
+              )}
+              {hasAnyTrend && (
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: theme.textMuted }}>
+                  Trend metric
+                  <select
+                    value={trendMetric}
+                    onChange={(e) => setTrendMetric(e.target.value as TrendMetricKey)}
+                    data-testid="trend-metric-select"
+                    style={{
+                      background: theme.surface2,
+                      color: theme.textSecondary,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: 6,
+                      padding: "4px 8px",
+                      fontSize: 12,
+                    }}
+                  >
+                    {(Object.keys(GATE_SHORT_LABEL) as TrendMetricKey[]).map((key) => (
+                      <option key={key} value={key}>
+                        {GATE_SHORT_LABEL[key]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
             {data.map((row) => (
-              <HealthCard key={row.pilot_id} row={row} thresholds={thresholds} />
+              <HealthCard key={row.pilot_id} row={row} thresholds={thresholds} metric={trendMetric} />
             ))}
           </>
         )

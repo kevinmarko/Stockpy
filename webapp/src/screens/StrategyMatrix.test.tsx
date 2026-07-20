@@ -41,9 +41,9 @@ function baseMatrix(overrides: Partial<StrategyMatrixT> = {}): StrategyMatrixT {
     regime_overrides_active: false,
     weights_source: "running_process_settings",
     modules: [
-      { name: "macro_regime", weight: 45, effective_weight: 45, effective_weight_regime: null, enabled: true, source: "both", contributed_last_run: true, symbols_scored: 20, pinned_zero: false },
-      { name: "macd_momentum", weight: 20, effective_weight: 20, effective_weight_regime: null, enabled: true, source: "both", contributed_last_run: true, symbols_scored: 20, pinned_zero: false },
-      { name: "regime_multiplier", weight: 0, effective_weight: 0, effective_weight_regime: null, enabled: true, source: "both", contributed_last_run: true, symbols_scored: 20, pinned_zero: true },
+      { name: "macro_regime", weight: 45, effective_weight: 45, effective_weight_regime: null, enabled: true, source: "both", contributed_last_run: true, symbols_scored: 20, pinned_zero: false, version_hash: "a1b2c3d4e5f6", last_modified: new Date(Date.now() - 5 * 86_400_000).toISOString() },
+      { name: "macd_momentum", weight: 20, effective_weight: 20, effective_weight_regime: null, enabled: true, source: "both", contributed_last_run: true, symbols_scored: 20, pinned_zero: false, version_hash: "1a2b3c4d5e6f", last_modified: new Date(Date.now() - 40 * 86_400_000).toISOString() },
+      { name: "regime_multiplier", weight: 0, effective_weight: 0, effective_weight_regime: null, enabled: true, source: "both", contributed_last_run: true, symbols_scored: 20, pinned_zero: true, version_hash: "f1e2d3c4b5a6", last_modified: new Date(Date.now() - 200 * 86_400_000).toISOString() },
     ],
     disabled: [],
     max_weight: 100,
@@ -147,6 +147,43 @@ describe("StrategyMatrix screen", () => {
     await userEvent.type(input, "150");
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("button", { name: /Save changes/ })).toBeDisabled();
+  });
+
+  describe("Strategy Version Registry (backlog item #13a)", () => {
+    it("renders each module's version-hash fingerprint and a relative last-modified time", async () => {
+      vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(baseMatrix());
+      renderScreen();
+      await screen.findByText("macro_regime");
+      const row = screen.getByText("macro_regime").closest("section")!;
+      expect(within(row).getByText(/va1b2c3d4e5f6/)).toBeInTheDocument();
+      expect(within(row).getByText(/modified/)).toBeInTheDocument();
+    });
+
+    it("a module with no file on disk shows an honest 'no file' label instead of a fabricated hash", async () => {
+      vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(
+        baseMatrix({
+          modules: [
+            {
+              name: "orphan_module",
+              weight: 5,
+              effective_weight: 5,
+              effective_weight_regime: null,
+              enabled: true,
+              source: "weights",
+              contributed_last_run: false,
+              symbols_scored: null,
+              pinned_zero: false,
+              version_hash: null,
+              last_modified: null,
+            },
+          ],
+        }),
+      );
+      renderScreen();
+      await screen.findByText("orphan_module");
+      const row = screen.getByText("orphan_module").closest("section")!;
+      expect(within(row).getByText("no file on disk")).toBeInTheDocument();
+    });
   });
 
   describe("Meta-label confidence distribution", () => {

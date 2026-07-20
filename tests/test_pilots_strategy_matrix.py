@@ -8,7 +8,9 @@ Covers: the SIGNAL_WEIGHTS ∪ snapshot-score_components module union and per-ro
 ``source`` provenance; graceful degradation on a missing / corrupt snapshot;
 PARITY of the duplicated ``_resolve_effective_weights`` / ``_MAX_WEIGHT`` against
 the real ``signals.aggregator`` originals (tests are NOT AST-guarded, so importing
-``signals`` here is fine); and a dependency-light ALLOWLIST guard over
+``signals`` here is fine); per-module ``version_hash``/``last_modified`` (backlog
+item #13a's inline sha256+mtime fingerprint, deliberately independent of
+``gui.strategy_registry``); and a dependency-light ALLOWLIST guard over
 ``pilots/strategy_matrix.py``, ``pilots/options.py``, and
 ``pilots/strategy_health.py`` (each promises a narrow, specific import surface —
 see the guard test's own docstring for why ``import signals`` on the API import
@@ -113,6 +115,80 @@ def test_pinned_zero_flag(tmp_path, monkeypatch):
     by = {m["name"]: m for m in out["modules"]}
     assert by["regime_multiplier"]["pinned_zero"] is True
     assert by["macd_momentum"]["pinned_zero"] is False
+
+
+# ---------------------------------------------------------------------------
+# Version registry (backlog item #13a) — version_hash / last_modified
+# ---------------------------------------------------------------------------
+
+
+def test_version_hash_and_last_modified_for_real_file(tmp_path, monkeypatch):
+    """A module whose ``<signals_dir>/<name>.py`` file exists gets a stable
+    12-hex-char sha256 prefix + an ISO-8601 UTC last_modified string."""
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {"real_module": 10.0}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    monkeypatch.setattr(settings, "REGIME_SIGNAL_WEIGHTS", {}, raising=False)
+    signals_dir = tmp_path / "signals"
+    signals_dir.mkdir()
+    (signals_dir / "real_module.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    out = sm.strategy_matrix(signals_dir=signals_dir)
+    row = next(m for m in out["modules"] if m["name"] == "real_module")
+
+    import hashlib
+
+    expected_hash = hashlib.sha256(b"VALUE = 1\n").hexdigest()[:12]
+    assert row["version_hash"] == expected_hash
+    assert len(row["version_hash"]) == 12
+    assert row["last_modified"] is not None
+    # Parses as a real ISO-8601 timestamp (never raises).
+    from datetime import datetime
+
+    datetime.fromisoformat(row["last_modified"])
+
+
+def test_version_hash_changes_when_file_content_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {"m": 1.0}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    monkeypatch.setattr(settings, "REGIME_SIGNAL_WEIGHTS", {}, raising=False)
+    signals_dir = tmp_path / "signals"
+    signals_dir.mkdir()
+    f = signals_dir / "m.py"
+    f.write_text("VALUE = 1\n", encoding="utf-8")
+    hash_before = sm.strategy_matrix(signals_dir=signals_dir)["modules"][0]["version_hash"]
+
+    f.write_text("VALUE = 2\n", encoding="utf-8")
+    hash_after = sm.strategy_matrix(signals_dir=signals_dir)["modules"][0]["version_hash"]
+
+    assert hash_before != hash_after
+
+
+def test_version_hash_none_when_no_corresponding_file(tmp_path, monkeypatch):
+    """A snapshot-only orphan name (or a typo'd SIGNAL_WEIGHTS key) with no
+    ``signals/<name>.py`` on disk gets ``None``, never a fabricated hash
+    (CONSTRAINT #4)."""
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {"typoed_key": 5.0}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    monkeypatch.setattr(settings, "REGIME_SIGNAL_WEIGHTS", {}, raising=False)
+    signals_dir = tmp_path / "signals"
+    signals_dir.mkdir()  # empty — no files at all
+
+    out = sm.strategy_matrix(signals_dir=signals_dir)
+    row = next(m for m in out["modules"] if m["name"] == "typoed_key")
+    assert row["version_hash"] is None
+    assert row["last_modified"] is None
+
+
+def test_default_signals_dir_resolves_to_real_repo_signals_directory():
+    """With no override, fingerprints are read from the real ``signals/``
+    directory — a real registered module (``macd_momentum.py``, confirmed on
+    disk) resolves to a real, non-None fingerprint."""
+    out = sm.strategy_matrix()
+    row = next((m for m in out["modules"] if m["name"] == "macd_momentum"), None)
+    assert row is not None
+    assert row["version_hash"] is not None
+    assert len(row["version_hash"]) == 12
+    assert row["last_modified"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +416,11 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     path = pathlib.Path(__file__).resolve().parent.parent / "pilots" / f"{module_name}.py"
     roots = _import_roots(path.read_text(encoding="utf-8"))
     allowed = {"__future__", "json", "logging", "math", "pathlib", "typing", "settings"}
+    if module_name == "strategy_matrix":
+        # Backlog item #13a's inline sha256+mtime version fingerprint —
+        # stdlib only, deliberately NOT gui.strategy_registry (see this
+        # module's docstring for the ~700-module import trap that avoids).
+        allowed = allowed | {"hashlib", "datetime"}
     if module_name == "strategy_health":
         allowed = allowed | {"pilots", "validation"}
     if module_name == "discovery":

@@ -1578,6 +1578,11 @@ def get_strategy_matrix() -> Dict[str, Any]:
     ``output/state_snapshot.json`` (never imports ``signals`` / any heavy engine;
     see ``pilots/strategy_matrix.py``'s docstring for why).
 
+    Each module row also carries ``version_hash``/``last_modified`` (backlog
+    item #13a's Strategy Version Registry — a sha256-prefix fingerprint + mtime
+    of ``signals/<name>.py``, read directly off disk; ``None`` for a module
+    with no corresponding file).
+
     Adds three API-layer fields to the pure reader's payload: ``writable`` (tracks
     ``STRATEGY_WRITES_ENABLED``), ``note``, and ``env_drift`` (whether an ``.env``
     write is pending against the running values). Never 500s (CONSTRAINT #6)."""

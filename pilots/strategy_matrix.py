@@ -32,11 +32,26 @@ Two constants are DUPLICATED from ``signals.aggregator`` (which can't be importe
 here) and PINNED against the originals by ``tests/test_pilots_strategy_matrix.py``:
 ``_MAX_WEIGHT`` (≡ ``MAX_SANE_SIGNAL_WEIGHT``) and ``_resolve_effective_weights``
 (≡ ``resolve_regime_weights``).
+
+**Version registry (``version_hash`` / ``last_modified`` per module, backlog
+item #13a)** — a sha256-prefix fingerprint + file mtime for each module's
+``signals/<name>.py`` file, read directly off disk (``hashlib`` + ``pathlib``
+only, no import of the ``signals`` package). This deliberately does NOT reuse
+``gui.strategy_registry.list_strategy_versions`` — that function's default
+code path does ``from signals.registry import global_registry`` / ``import
+signals`` to enumerate the live registry, which is exactly the ~700-module
+trap this module's docstring (above) warns about. The fingerprint format
+(sha256, first 12 hex chars) mirrors that function's for operator-visible
+consistency with the desktop Strategy Matrix tab, but the computation here is
+independent and reads only the file bytes + mtime — never the module's own
+Python code.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -47,6 +62,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["strategy_matrix"]
 
 _SNAPSHOT_FILENAME = "state_snapshot.json"
+_HASH_PREFIX_LEN = 12
 
 # Duplicated from signals.aggregator (see module docstring) — pinned by tests.
 _MAX_WEIGHT: float = 100.0
@@ -65,6 +81,31 @@ _NO_SNAPSHOT_REASON = (
 
 def _default_snapshot_path() -> Path:
     return settings.OUTPUT_DIR / _SNAPSHOT_FILENAME
+
+
+def _default_signals_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / "signals"
+
+
+def _module_fingerprint(signals_dir: Path, name: str) -> "tuple[Optional[str], Optional[str]]":
+    """Return ``(version_hash, last_modified)`` for ``<signals_dir>/<name>.py``.
+
+    ``version_hash`` is a sha256 prefix (``_HASH_PREFIX_LEN`` hex chars);
+    ``last_modified`` is an ISO-8601 UTC timestamp string. Both are ``None``
+    (never fabricated — CONSTRAINT #4) when the module has no corresponding
+    file on disk (e.g. an orphan snapshot-only name, a typo'd config key, or
+    a module defined without its own file) or the read fails for any reason
+    (CONSTRAINT #6 — a hashing failure degrades silently, it never raises)."""
+    candidate = signals_dir / f"{name}.py"
+    try:
+        if not candidate.is_file():
+            return None, None
+        digest = hashlib.sha256(candidate.read_bytes()).hexdigest()[:_HASH_PREFIX_LEN]
+        mtime = datetime.fromtimestamp(candidate.stat().st_mtime, tz=timezone.utc).isoformat()
+        return digest, mtime
+    except OSError as exc:  # noqa: BLE001 — dead-letter, never fatal
+        logger.debug("strategy_matrix: fingerprint read failed for %s: %s", name, exc)
+        return None, None
 
 
 def _read_json_object(path: Path) -> Optional[dict]:
@@ -212,7 +253,11 @@ def _snapshot_module_symbol_counts(snapshot: Optional[dict]) -> Dict[str, int]:
     return counts
 
 
-def strategy_matrix(snapshot_path: Optional[str] = None) -> Dict[str, Any]:
+def strategy_matrix(
+    snapshot_path: Optional[str] = None,
+    *,
+    signals_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
     """Assemble the signal-module matrix from ``settings`` + the persisted
     ``output/state_snapshot.json``.
 
@@ -227,10 +272,16 @@ def strategy_matrix(snapshot_path: Optional[str] = None) -> Dict[str, Any]:
       also ``None`` when overrides are inactive, i.e. it applies to every regime) /
       ``enabled`` / ``source`` (``"weights"`` | ``"snapshot"`` | ``"both"``) /
       ``contributed_last_run`` / ``symbols_scored`` (``None`` with no snapshot) /
-      ``pinned_zero``.
+      ``pinned_zero`` / ``version_hash`` (sha256 prefix of ``signals/<name>.py``,
+      ``None`` when the module has no file on disk) / ``last_modified`` (that
+      file's mtime, ISO-8601 UTC; ``None`` alongside ``version_hash``).
+
+    ``signals_dir`` overrides where module fingerprints are read from (test
+    injection only — production callers always get the real ``signals/`` dir).
     """
     path = Path(snapshot_path) if snapshot_path else _default_snapshot_path()
     snapshot = _read_json_object(path)
+    resolved_signals_dir = signals_dir if signals_dir is not None else _default_signals_dir()
 
     configured: Dict[str, float] = dict(settings.SIGNAL_WEIGHTS or {})
     disabled: List[str] = list(settings.DISABLED_SIGNAL_MODULES or [])
@@ -274,6 +325,7 @@ def strategy_matrix(snapshot_path: Optional[str] = None) -> Dict[str, Any]:
             source = "snapshot"
 
         effective_weight = resolved.get(name) if resolved is not None else None
+        version_hash, last_modified = _module_fingerprint(resolved_signals_dir, name)
 
         modules.append(
             {
@@ -289,6 +341,8 @@ def strategy_matrix(snapshot_path: Optional[str] = None) -> Dict[str, Any]:
                 # no snapshot at all.
                 "symbols_scored": symbol_counts.get(name, 0) if snapshot is not None else None,
                 "pinned_zero": name in _PINNED_ZERO_WEIGHT_MODULES,
+                "version_hash": version_hash,
+                "last_modified": last_modified,
             }
         )
 

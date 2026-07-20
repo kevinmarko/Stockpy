@@ -311,6 +311,14 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
                         ? "configured, not scored last run"
                         : `${m.symbols_scored ?? "—"} symbols scored`}
                   </div>
+                  <div
+                    style={{ fontSize: 11, color: theme.textMuted, marginTop: 2, fontFamily: "monospace" }}
+                    title="sha256-prefix fingerprint of signals/<name>.py + its last-modified time"
+                  >
+                    {m.version_hash
+                      ? `v${m.version_hash} · modified ${timeAgo(m.last_modified)}`
+                      : "no file on disk"}
+                  </div>
                 </div>
                 <Toggle
                   checked={enabled}
