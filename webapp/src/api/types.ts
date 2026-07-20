@@ -1094,6 +1094,10 @@ export interface StrategyModuleRow {
   symbols_scored: number | null;
   /** Structurally pinned to weight 0.0 (e.g. regime_multiplier). */
   pinned_zero: boolean;
+  /** sha256-prefix (12 hex chars) fingerprint of signals/<name>.py; null when the module has no file on disk. */
+  version_hash: string | null;
+  /** ISO-8601 UTC mtime of signals/<name>.py; null alongside version_hash. */
+  last_modified: string | null;
 }
 
 /** One fixed [lo, hi) bucket of the meta-label confidence histogram. */

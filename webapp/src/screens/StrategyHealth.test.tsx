@@ -5,7 +5,8 @@
  * options-selling stress gate, a genuinely-null gate value, a pilot with no
  * validated backtest at all, and an empty catalog.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrategyHealth } from "./StrategyHealth";
@@ -186,5 +187,48 @@ describe("StrategyHealth screen (real mock API)", () => {
       "title",
       "Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < — drawdown"
     );
+  });
+
+  describe("Trend metric selector (backlog item #7.1)", () => {
+    it("defaults to DSR and switching the selector re-labels and re-plots every card's sparkline", async () => {
+      renderScreen();
+      const card = (await screen.findByText("Trend Follower")).closest("section")!;
+      // Default: DSR sparkline caption.
+      expect(within(card).getByText(/DSR, last 3 runs/)).toBeInTheDocument();
+
+      const select = screen.getByTestId("trend-metric-select") as HTMLSelectElement;
+      await userEvent.selectOptions(select, "pbo");
+      expect(within(card).getByText(/PBO, last 3 runs/)).toBeInTheDocument();
+      expect(within(card).queryByText(/DSR, last 3 runs/)).not.toBeInTheDocument();
+
+      await userEvent.selectOptions(select, "sharpe");
+      expect(within(card).getByText(/Sharpe, last 3 runs/)).toBeInTheDocument();
+
+      await userEvent.selectOptions(select, "max_drawdown");
+      expect(within(card).getByText(/Max DD, last 3 runs/)).toBeInTheDocument();
+    });
+
+    it("hides the selector entirely when no pilot has run-over-run history", async () => {
+      const rows: StrategyHealthRow[] = [
+        {
+          pilot_id: "solo",
+          pilot_name: "Solo Pilot",
+          strategy_id: "solo_strategy",
+          deployable: true,
+          gates: [
+            { key: "pbo", label: "PBO", value: 0.2, threshold: 0.5, direction: "below", passed: true },
+          ],
+          is_options_selling: false,
+          stress_gate_passed: true,
+          report_date: "2026-07-01",
+          trend: [],
+          reason: null,
+        },
+      ];
+      vi.spyOn(api, "getStrategyHealth").mockResolvedValueOnce(rows);
+      renderScreen();
+      await screen.findByText("Solo Pilot");
+      expect(screen.queryByTestId("trend-metric-select")).not.toBeInTheDocument();
+    });
   });
 });
