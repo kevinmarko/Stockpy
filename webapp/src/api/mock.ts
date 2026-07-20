@@ -64,7 +64,13 @@ import type {
   ObservabilitySummary,
   OptionsDirective,
   OptionsMatrix,
+  OptionsRecomputeRequest,
+  OptionsRecomputeResult,
+  PairsAnalyzeRequest,
+  PairsAnalyzeResult,
   PairsRadar,
+  PairsScanRequest,
+  PairsScanResult,
   PerfRange,
   PerformanceResponse,
   PilotDetail,
@@ -1743,7 +1749,20 @@ function mockRollingBeta(ticker: string, window = 60): RollingBeta {
   return { symbol: sym, window: win, series, reason: null };
 }
 
-// ---- ML registry fixture (honest: two un-validated / not-deployable) ----
+// Rider 13b (Needs Retrain age flag): mirrors gui.help_content.
+// MODEL_RETRAIN_WINDOW_DAYS (30) -- the mock has no live Python process to
+// import from, so this is the fixture layer's honest snapshot of that
+// constant, not an invented number. daysSinceTrained/age_days/needs_retrain
+// below mirror pilots/models.py's own server-side computation exactly.
+const MODEL_RETRAIN_WINDOW_DAYS = 30;
+
+function daysSinceTrained(trainedDate: string): number {
+  const then = new Date(`${trainedDate}T00:00:00Z`).getTime();
+  return Math.floor((Date.now() - then) / 86_400_000);
+}
+
+// ---- ML registry fixture (honest: two un-validated / not-deployable; one
+// stale -- exercises BOTH the fresh and "Needs Retrain" badge states) ----
 const MODELS: ModelRow[] = [
   {
     name: "lgbm_ranker",
@@ -1754,6 +1773,8 @@ const MODELS: ModelRow[] = [
     n_train: 260,
     deployable: false,
     notes: "LightGBM LambdaRank — modest weight until validated at >200 OOS dates.",
+    age_days: daysSinceTrained("2026-07-06"),
+    needs_retrain: daysSinceTrained("2026-07-06") >= MODEL_RETRAIN_WINDOW_DAYS,
   },
   {
     name: "meta_labeler_timeseries_momentum",
@@ -1764,16 +1785,38 @@ const MODELS: ModelRow[] = [
     n_train: 3499,
     deployable: false,
     notes: "Binary classifier predicting P(timeseries_momentum correct).",
+    age_days: daysSinceTrained("2026-07-06"),
+    needs_retrain: daysSinceTrained("2026-07-06") >= MODEL_RETRAIN_WINDOW_DAYS,
   },
   {
+    // Deliberately trained well outside the 30-day window (unlike its two
+    // siblings above) so the fixture exercises the "Needs Retrain" badge's
+    // TRUE branch, not just the fresh/false one.
     name: "meta_labeler_cross_sectional_momentum",
     role: "meta_labeler",
-    trained_date: "2026-07-06",
+    trained_date: "2026-05-20",
     cpcv_dsr: null,
     pbo: null,
     n_train: 3460,
     deployable: false,
     notes: "Binary classifier predicting P(cross_sectional_momentum correct).",
+    age_days: daysSinceTrained("2026-05-20"),
+    needs_retrain: daysSinceTrained("2026-05-20") >= MODEL_RETRAIN_WINDOW_DAYS,
+  },
+  {
+    // A newly-registered model with no training run yet -- trained_date null
+    // is a real, valid state (pilots/models.py never fabricates an age/flag
+    // for it): age_days/needs_retrain must both be null, not a guessed value.
+    name: "cnn_lstm_price_forecaster",
+    role: "forecast_overlay",
+    trained_date: null,
+    cpcv_dsr: null,
+    pbo: null,
+    n_train: null,
+    deployable: false,
+    notes: "Registered but not yet trained -- no dated run to compute an age from.",
+    age_days: null,
+    needs_retrain: null,
   },
 ];
 
@@ -3128,6 +3171,7 @@ export const mockApi = {
       robinhood_max_notional_per_order: 0.0,
       follow_min_amount: 100.0,
       agentic_max_candidates: 25,
+      retrain_window_days: MODEL_RETRAIN_WINDOW_DAYS,
     });
   },
 
@@ -3774,6 +3818,204 @@ export const mockApi = {
 
   async getPairs(): Promise<PairsRadar> {
     return delay(mockPairs());
+  },
+
+  // ---- On-demand Options/Pairs recompute (webapp porting backlog 8a/8b) ----
+  // "ZZZ" is this file's existing dead-letter/no-data convention (see the
+  // OPTIONS_DIRECTIVES fixture row above) -- reused here so a symbol/pair
+  // typo exercises the SAME honest degrade path a real unresolved ticker
+  // would hit against the live API, not a happy-path-only fixture.
+  async analyzePairs(req: PairsAnalyzeRequest): Promise<PairsAnalyzeResult> {
+    const symY = req.symbol_y.trim().toUpperCase();
+    const symX = req.symbol_x.trim().toUpperCase();
+    const notFoundBase = {
+      ticker1: symY,
+      ticker2: symX,
+      found: false as const,
+      p_value: null,
+      half_life: null,
+      half_life_tradeable: null,
+      z_score: null,
+      beta: null,
+      rolling_p: null,
+      position: null,
+      signal: "No signal — insufficient history",
+      aligned_bars: 0,
+      z_score_series: [],
+    };
+    if (!symY || !symX) {
+      return delay({ ...notFoundBase, reason: "Both Symbol Y and Symbol X are required." }, 250);
+    }
+    if (symY === symX) {
+      return delay(
+        { ...notFoundBase, reason: "Symbol Y and Symbol X must be different tickers." },
+        250
+      );
+    }
+    if (symY === "ZZZ" || symX === "ZZZ") {
+      return delay(
+        {
+          ...notFoundBase,
+          reason: `Insufficient aligned history for ${symY}/${symX} — one or both symbols may be unavailable from the provider.`,
+        },
+        450
+      );
+    }
+
+    const rng = seeded([...symY, ...symX].reduce((a, c) => a + c.charCodeAt(0), 0));
+    const z = +((rng() - 0.5) * 6).toFixed(2);
+    const halfLife = +(8 + rng() * 40).toFixed(1);
+    const rollingP = +(rng() * 0.15).toFixed(4);
+    const position = z > 2 ? -1 : z < -2 ? 1 : 0;
+    const halfLifeTradeable = halfLife >= 5 && halfLife <= 60 && rollingP <= 0.1;
+    const signal =
+      rollingP > 0.1
+        ? "No signal — not cointegrated (ADF p>0.10)"
+        : Math.abs(z) > 4
+          ? "STOP — |z|>4 (exit spread)"
+          : Math.abs(z) > 2
+            ? z > 0
+              ? "ENTER SHORT spread"
+              : "ENTER LONG spread"
+            : "Flat — no entry (|z|<2)";
+    const n = 90;
+    const series = Array.from({ length: n }, (_, i) => ({
+      date: new Date(Date.now() - (n - i) * 86_400_000).toISOString().slice(0, 10),
+      z_score: +(Math.sin(i / 9 + rng()) * 2 + (rng() - 0.5)).toFixed(2),
+    }));
+    series[series.length - 1] = { date: series[series.length - 1].date, z_score: z };
+
+    return delay(
+      {
+        ticker1: symY,
+        ticker2: symX,
+        found: true,
+        reason: null,
+        p_value: +(rng() * 0.05).toFixed(4),
+        half_life: halfLife,
+        half_life_tradeable: halfLifeTradeable,
+        z_score: z,
+        beta: +(0.5 + rng()).toFixed(3),
+        rolling_p: rollingP,
+        position,
+        signal,
+        aligned_bars: 240,
+        z_score_series: series,
+      },
+      450
+    );
+  },
+
+  async scanPairs(req: PairsScanRequest): Promise<PairsScanResult> {
+    const requested = Array.from(
+      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))
+    );
+    const known = new Set(["XOM", "CVX", "V", "JPM", "MSFT", "AAPL", "HD", "COST"]);
+    const missing = requested.filter((s) => !known.has(s));
+    const usable = requested.filter((s) => known.has(s));
+
+    if (usable.length < 2) {
+      return delay(
+        {
+          pairs: [],
+          missing,
+          aligned_symbols: usable.length,
+          aligned_bars: usable.length > 0 ? 240 : 0,
+          reason:
+            "Insufficient aligned history to scan — need at least two symbols with ~60+ overlapping daily bars after the inner-join.",
+        },
+        400
+      );
+    }
+
+    const usableSet = new Set(usable);
+    const pairs = mockPairs().pairs.filter(
+      (p) => usableSet.has(p.ticker1) && usableSet.has(p.ticker2)
+    );
+    return delay(
+      {
+        pairs,
+        missing,
+        aligned_symbols: usable.length,
+        aligned_bars: 240,
+        reason:
+          pairs.length > 0
+            ? null
+            : "No cointegrated pairs found for this universe at the selected p-value with a 5–60 day half-life.",
+      },
+      500
+    );
+  },
+
+  async recomputeOptions(req: OptionsRecomputeRequest): Promise<OptionsRecomputeResult> {
+    const requested = Array.from(
+      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))
+    );
+    const directives: OptionsDirective[] = [];
+    const errors: string[] = [];
+    for (const sym of requested) {
+      const existing = OPTIONS_BY_SYMBOL[sym];
+      if (existing) {
+        directives.push(existing);
+        if (existing.Strategy == null) {
+          errors.push(`${sym}: insufficient bars to compute directive`);
+        }
+        continue;
+      }
+      // Unknown symbol (not one of the 5 pre-baked fixture rows) -- synthesize
+      // a plausible directive so the recompute form works for any ticker, not
+      // just the fixed matrix. Deterministic per-symbol seed, not random.
+      const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0));
+      const price = +(40 + rng() * 350).toFixed(2);
+      const sigma = +(0.15 + rng() * 0.35).toFixed(3);
+      const ivrProxy = +(rng() * 100).toFixed(1);
+      const bullish = rng() > 0.45;
+      const sellRegime = ivrProxy > (req.ivr_sell_threshold ?? 50);
+      const strategy = sellRegime
+        ? bullish
+          ? "Put Credit Spread"
+          : "Iron Condor"
+        : bullish
+          ? "Call Debit Spread"
+          : "Cash";
+      const action = strategy === "Cash" ? "Wait" : sellRegime ? "Sell to Open" : "Buy to Open";
+      const netPremium = strategy === "Cash" ? 0 : +((sellRegime ? 1 : -1) * (0.3 + rng()) * 2).toFixed(2);
+      directives.push({
+        Symbol: sym,
+        Price: price,
+        Stale: false,
+        Strategy: strategy,
+        Action: action,
+        Trend_Bias: bullish ? "Bullish" : "Bearish",
+        Sigma_GARCH: sigma,
+        IVR_Proxy: ivrProxy,
+        Aroon_Oscillator: +((rng() - 0.5) * 100).toFixed(1),
+        Coppock_Curve: +((rng() - 0.5) * 20).toFixed(1),
+        Net_Premium: netPremium,
+        Realizable_Daily_Theta: strategy === "Cash" ? 0 : +(netPremium * 0.03).toFixed(3),
+        ATM_Delta: +(0.4 + rng() * 0.2).toFixed(3),
+        ATM_Gamma: +(rng() * 0.05).toFixed(4),
+        ATM_Vega: +(rng() * 0.15).toFixed(3),
+        ATM_Theta_Daily: +(-rng() * 0.05).toFixed(3),
+        Short_Strike: strategy === "Cash" ? null : +(price * (sellRegime ? 0.97 : 1.03)).toFixed(2),
+        Long_Strike: strategy === "Cash" ? null : +(price * (sellRegime ? 0.94 : 1.06)).toFixed(2),
+        Short_Delta: strategy === "Cash" ? null : +(sellRegime ? -0.3 : 0.3).toFixed(2),
+        Long_Delta: strategy === "Cash" ? null : +(sellRegime ? -0.15 : 0.15).toFixed(2),
+        Legs: [],
+        Integrity_OK: true,
+        Integrity_Issues: [],
+      });
+    }
+    return delay(
+      {
+        directives,
+        errors,
+        vix: 15.2,
+        market_regime: "RISK ON",
+        target_dte: req.target_dte ?? 30,
+      },
+      600
+    );
   },
 
   async getObservabilitySummary(

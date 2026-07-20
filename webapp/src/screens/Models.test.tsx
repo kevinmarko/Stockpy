@@ -2,7 +2,7 @@
  * Models.test.tsx — the ML registry sub-page renders model cards with honest
  * deployable badges and renders "—" (never a fabricated 0) for null metrics.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Models } from "./Models";
@@ -36,6 +36,25 @@ describe("Models screen (real mock API)", () => {
     expect(screen.getAllByText(/—/).length).toBeGreaterThan(0);
   });
 
+  it("flags a stale model with the Needs Retrain badge, never on a fresh one", async () => {
+    // Mock fixture: meta_labeler_cross_sectional_momentum is trained well
+    // outside the 30-day window (needs_retrain: true); the other two dated
+    // models are fresh (needs_retrain: false); cnn_lstm_price_forecaster has
+    // no trained_date at all (needs_retrain: null) -- exactly ONE badge.
+    renderModels();
+    await screen.findByText("meta_labeler_cross_sectional_momentum");
+    expect(screen.getAllByText("⏱ Needs retrain").length).toBe(1);
+  });
+
+  it("a model with no trained_date renders an honest '—' age, never a guessed retrain flag", async () => {
+    renderModels();
+    // cnn_lstm_price_forecaster: trained_date/age_days/needs_retrain all
+    // null -- must render the dash, not "NaNd ago" or a fabricated badge.
+    const card = (await screen.findByText("cnn_lstm_price_forecaster")).closest("section")!;
+    expect(within(card).getByText("Trained —")).toBeInTheDocument();
+    expect(within(card).queryByText("⏱ Needs retrain")).not.toBeInTheDocument();
+  });
+
   it("an empty registry renders the honest empty state", async () => {
     vi.spyOn(api, "getModels").mockResolvedValueOnce([]);
     renderModels();
@@ -59,6 +78,7 @@ describe("Models screen (real mock API)", () => {
       robinhood_max_notional_per_order: 0.0,
       follow_min_amount: 100.0,
       agentic_max_candidates: 25,
+      retrain_window_days: 30,
     });
     renderModels();
     expect(

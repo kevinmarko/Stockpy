@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 
 from settings import settings
 from data.historical_store import HistoricalStore
@@ -41,6 +42,8 @@ from data.market_data import MarketDataError, get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
 from data.portfolio_sync import build_sync_report
 from data_engine import DataEngine
+import options_ondemand
+import pairs_ondemand
 
 # ── On-demand AI generation (Section: /data/ai/*) ──────────────────────────
 # Imported by NAME (not by submodule reference) so tests can monkeypatch each
@@ -344,6 +347,227 @@ def get_account() -> Dict[str, Any]:
     if snapshot is None:
         raise HTTPException(status_code=404, detail="No account snapshot available")
     return _clean_nan(snapshot.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# On-demand Options / Pairs recompute — /data/options/recompute,
+# /data/pairs/analyze, /data/pairs/scan
+# ---------------------------------------------------------------------------
+# Backlog items 8a/8b: the persisted-snapshot views (GET /options, GET /pairs
+# on api/pilots_api.py) only ever serve the LAST PIPELINE-WRITTEN artifact —
+# there was no way for an operator to recompute against parameters/symbols
+# they choose. These heavy engines (technical_options_engine,
+# pairs.cointegration / signals.pairs_trading / statsmodels) must live here,
+# not on the AST-guarded api/pilots_api.py. Mirrors GET /symbols/compare's
+# (PR #379) "cap the input, stay synchronous, 422 outside the cap" convention
+# rather than building a job/poll pattern — these are single-request,
+# bounded-size computations, not a whole-pipeline run.
+
+
+def _dedupe_symbols(symbols: List[str]) -> List[str]:
+    """Upper-case + de-dup a symbol list, first occurrence wins, order
+    preserved. Never raises on malformed input (a non-string entry is
+    stringified)."""
+    seen: set = set()
+    out: List[str] = []
+    for s in symbols or []:
+        u = str(s or "").strip().upper()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+class PairsAnalyzeRequest(BaseModel):
+    """Body for ``POST /data/pairs/analyze``. One named pair — the wedge for
+    backlog item 8a. ``symbol_y`` is the dependent leg, ``symbol_x`` the hedge
+    leg (mirrors ``gui/panels/pairs.py``'s "Analyze a pair" mode)."""
+
+    symbol_y: str = Field(..., min_length=1, max_length=12)
+    symbol_x: str = Field(..., min_length=1, max_length=12)
+
+
+class PairsScanRequest(BaseModel):
+    """Body for ``POST /data/pairs/scan``. An operator-chosen symbol list —
+    2-15 after de-dup (422 with a stable tag outside that range, see
+    ``pairs_ondemand.SCAN_MIN_SYMBOLS``/``SCAN_MAX_SYMBOLS``)."""
+
+    symbols: List[str] = Field(..., min_length=1, max_length=64)
+    p_threshold: float = Field(0.05, ge=0.01, le=0.10)
+    max_pairs: int = Field(20, ge=1, le=50)
+
+
+class OptionsRecomputeRequest(BaseModel):
+    """Body for ``POST /data/options/recompute``. A capped, operator-chosen
+    symbol list (1-8 after de-dup — see
+    ``options_ondemand.RECOMPUTE_MIN_SYMBOLS``/``RECOMPUTE_MAX_SYMBOLS``) plus
+    the same directive controls ``gui/panels/options_matrix.py`` exposes.
+    Every field defaults to the engine constant, so an untouched request
+    reproduces the pipeline writer's own defaults byte-for-byte."""
+
+    symbols: List[str] = Field(..., min_length=1, max_length=64)
+    target_dte: int = Field(30, ge=1, le=120)
+    delta_target_scale: float = Field(1.0, ge=0.25, le=2.0)
+    ivr_sell_threshold: float = Field(50.0, ge=0.0, le=100.0)
+    ivr_buy_threshold: float = Field(30.0, ge=0.0, le=100.0)
+    risk_free_rate_pct: Optional[float] = Field(
+        None, ge=0.0, le=15.0,
+        description="Annualized %, e.g. 4.5. None -> settings.RISK_FREE_RATE.",
+    )
+    strike_grid: float = Field(0.50, ge=0.5, le=10.0)
+    delta_tolerance: float = Field(0.05, ge=0.01, le=0.25)
+
+
+@app.post("/data/pairs/analyze", dependencies=[Depends(require_token)])
+def analyze_pairs_ondemand(body: PairsAnalyzeRequest) -> Dict[str, Any]:
+    """On-demand cointegration + spread-signal analysis for ONE named pair.
+
+    Ports ``gui/panels/pairs.py``'s "Analyze a pair" mode to a stateless HTTP
+    call. Advisory only (CONSTRAINT: no order code). Symbol Y and Symbol X
+    must differ and both be non-empty (422 with a stable tag) — beyond that,
+    this never 422s on an unresolved/degenerate pair: "no cointegration" or
+    "insufficient history" is an honest, common, EXPECTED outcome for
+    statistical arbitrage, surfaced as ``found: false`` + a ``reason``, not a
+    client error (CONSTRAINT #6). Every numeric leaf is ``null`` when the
+    underlying primitive is unavailable (CONSTRAINT #4).
+    """
+    sym_y = body.symbol_y.strip().upper()
+    sym_x = body.symbol_x.strip().upper()
+    if not sym_y or not sym_x:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "missing_symbol",
+                "message": "Both Symbol Y and Symbol X are required.",
+            },
+        )
+    if sym_y == sym_x:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "identical_symbols",
+                "message": "Symbol Y and Symbol X must be different tickers.",
+            },
+        )
+
+    provider = get_provider()
+    result = pairs_ondemand.analyze_pair(sym_y, sym_x, provider)
+    return _clean_nan(result)
+
+
+@app.post("/data/pairs/scan", dependencies=[Depends(require_token)])
+def scan_pairs_ondemand(body: PairsScanRequest) -> Dict[str, Any]:
+    """On-demand cointegration scan over an operator-chosen symbol list.
+
+    Ports ``gui/panels/pairs.py``'s "Scan for pairs" mode. 2-15 distinct
+    symbols after upper-casing + de-dup (422 with a stable tag outside that
+    range, mirroring ``GET /symbols/compare``'s convention). A symbol that
+    fails to fetch is dead-lettered into the response's ``missing`` list
+    rather than aborting the whole scan (CONSTRAINT #6); an honest empty
+    ``pairs: []`` + ``reason`` is a valid 200, not an error (statistical
+    arbitrage candidates are genuinely rare).
+    """
+    deduped = _dedupe_symbols(body.symbols)
+    if len(deduped) < pairs_ondemand.SCAN_MIN_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "too_few_symbols",
+                "message": f"Enter at least {pairs_ondemand.SCAN_MIN_SYMBOLS} distinct symbols to scan.",
+                "min": pairs_ondemand.SCAN_MIN_SYMBOLS,
+            },
+        )
+    if len(deduped) > pairs_ondemand.SCAN_MAX_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "too_many_symbols",
+                "message": f"Enter at most {pairs_ondemand.SCAN_MAX_SYMBOLS} symbols to scan.",
+                "max": pairs_ondemand.SCAN_MAX_SYMBOLS,
+            },
+        )
+
+    provider = get_provider()
+    result = pairs_ondemand.scan_pairs(
+        deduped, provider, p_threshold=body.p_threshold, max_pairs=body.max_pairs
+    )
+    return _clean_nan(result)
+
+
+@app.post("/data/options/recompute", dependencies=[Depends(require_token)])
+def recompute_options_ondemand(body: OptionsRecomputeRequest) -> Dict[str, Any]:
+    """On-demand premium-selling directive recompute over a capped symbol
+    list, with adjustable delta-scale/IVR/risk-free-rate/strike-grid/DTE
+    controls.
+
+    Ports ``gui/panels/options_matrix.py``'s controls form + per-symbol
+    compute loop to a stateless HTTP call. 1-8 symbols after de-dup (422 with
+    a stable tag outside that range — each symbol pays a GJR-GARCH MLE fit,
+    the heaviest per-symbol compute in this codebase). A bad symbol
+    dead-letters into its own error-shaped row in ``directives`` (never aborts
+    the batch — CONSTRAINT #6); its message is also collected into
+    ``errors``. The VRP regime gate (VIX>=30 / CREDIT EVENT) is forwarded from
+    the latest persisted snapshot's macro state, exactly as the live pipeline
+    does — no premium-selling advice in a stress regime.
+    """
+    deduped = _dedupe_symbols(body.symbols)
+    if len(deduped) < options_ondemand.RECOMPUTE_MIN_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "too_few_symbols",
+                "message": f"Enter at least {options_ondemand.RECOMPUTE_MIN_SYMBOLS} symbol.",
+                "min": options_ondemand.RECOMPUTE_MIN_SYMBOLS,
+            },
+        )
+    if len(deduped) > options_ondemand.RECOMPUTE_MAX_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "too_many_symbols",
+                "message": f"Enter at most {options_ondemand.RECOMPUTE_MAX_SYMBOLS} symbols.",
+                "max": options_ondemand.RECOMPUTE_MAX_SYMBOLS,
+            },
+        )
+
+    snapshot = load_snapshot()
+    vix, market_regime = options_ondemand.macro_from_snapshot(snapshot)
+    risk_free_rate_pct = (
+        body.risk_free_rate_pct
+        if body.risk_free_rate_pct is not None
+        else float(settings.RISK_FREE_RATE) * 100.0
+    )
+
+    provider = get_provider()
+    rows: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for sym in deduped:
+        result = options_ondemand.compute_directive_row(
+            sym,
+            provider=provider,
+            target_dte=body.target_dte,
+            vix=vix,
+            market_regime=market_regime,
+            risk_free_rate=risk_free_rate_pct / 100.0,
+            ivr_sell_threshold=body.ivr_sell_threshold,
+            ivr_buy_threshold=body.ivr_buy_threshold,
+            delta_target_scale=body.delta_target_scale,
+            delta_tolerance=body.delta_tolerance,
+            strike_grid=body.strike_grid,
+        )
+        rows.append(result["row"])
+        if result["error"]:
+            errors.append(result["error"])
+
+    return _clean_nan(
+        {
+            "directives": rows,
+            "errors": errors,
+            "vix": vix,
+            "market_regime": market_regime,
+            "target_dte": body.target_dte,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -432,6 +432,7 @@ def test_thresholds_shape_and_live_values():
         PBO_MAX,
         STRESS_MAX_DRAWDOWN,
     )
+    from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
 
     resp = client.get("/thresholds")
     assert resp.status_code == 200
@@ -440,7 +441,7 @@ def test_thresholds_shape_and_live_values():
         "pbo_max", "dsr_min", "net_sharpe_min", "max_drawdown_max",
         "stress_max_drawdown", "kelly_fraction", "kelly_cap",
         "robinhood_max_notional_per_order", "follow_min_amount",
-        "agentic_max_candidates",
+        "agentic_max_candidates", "retrain_window_days",
     }
     assert body["pbo_max"] == PBO_MAX
     assert body["dsr_min"] == DSR_MIN
@@ -452,6 +453,7 @@ def test_thresholds_shape_and_live_values():
     assert body["robinhood_max_notional_per_order"] == settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
     assert body["follow_min_amount"] == settings.FOLLOW_MIN_AMOUNT
     assert body["agentic_max_candidates"] == float(settings.AGENTIC_MAX_CANDIDATES)
+    assert body["retrain_window_days"] == float(MODEL_RETRAIN_WINDOW_DAYS)
 
 
 def test_thresholds_never_depends_on_snapshot(tmp_path):
@@ -1256,12 +1258,33 @@ class TestModelsRegistry:
         row = rows[0]
         assert set(row) >= {
             "name", "role", "trained_date", "cpcv_dsr", "pbo",
-            "n_train", "deployable", "notes",
+            "n_train", "deployable", "notes", "age_days", "needs_retrain",
         }
         # Un-validated models keep null metrics, never a fabricated 0.
         assert any(r["cpcv_dsr"] is None for r in rows) or all(
             r["cpcv_dsr"] is not None for r in rows
         )
+
+    def test_needs_retrain_age_flag_is_consistent_with_trained_date(self):
+        """Rider 13b: age_days/needs_retrain are computed off the SAME
+        MODEL_RETRAIN_WINDOW_DAYS constant GET /thresholds' retrain_window_days
+        surfaces -- never independently re-derived/hard-coded in either place."""
+        from datetime import date, datetime
+        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+
+        resp = client.get("/models")
+        rows = resp.json()
+        checked_any = False
+        for row in rows:
+            if row["trained_date"] is None:
+                assert row["age_days"] is None and row["needs_retrain"] is None
+                continue
+            trained = datetime.strptime(row["trained_date"], "%Y-%m-%d").date()
+            expected_age = (date.today() - trained).days
+            assert row["age_days"] == expected_age
+            assert row["needs_retrain"] == (expected_age >= MODEL_RETRAIN_WINDOW_DAYS)
+            checked_any = True
+        assert checked_any  # ml/registry.yaml has at least one dated model
 
 
 class TestOptionsMatrix:

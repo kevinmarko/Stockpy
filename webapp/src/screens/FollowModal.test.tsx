@@ -136,6 +136,7 @@ describe("resolveMinAmount (priority: result.min_amount > live thresholds > hone
     robinhood_max_notional_per_order: 2500,
     follow_min_amount: 100,
     agentic_max_candidates: 25,
+    retrain_window_days: 30,
   };
 
   // min_amount deliberately differs from THRESHOLDS.follow_min_amount to

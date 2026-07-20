@@ -4,10 +4,12 @@ import { api } from "../api/client";
 import type {
   OptionsDirective,
   OptionsMatrix as OptionsMatrixT,
+  OptionsRecomputeResult,
   Portfolio,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, StaleDataNotice } from "../components/ui";
+import { useMutation } from "../hooks/useMutation";
+import { Button, ErrorState, Input, Loading, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
@@ -517,6 +519,218 @@ function RollupStat({ label, value }: { label: string; value: string }) {
   );
 }
 
+const RECOMPUTE_MIN_SYMBOLS = 1;
+const RECOMPUTE_MAX_SYMBOLS = 8;
+
+/**
+ * "Recompute with custom parameters" — the on-demand action for backlog item
+ * 8b. Ports gui/panels/options_matrix.py's controls form (delta-scale/IVR
+ * thresholds/risk-free-rate/strike-grid/DTE + an arbitrary symbol list) to a
+ * capped, operator-triggered HTTP call. The persisted matrix above stays the
+ * default view; this computes live against parameters the operator chooses,
+ * for a small symbol list (1-8), not the whole tracked universe.
+ */
+function OptionsRecomputeSection() {
+  const [symbolsText, setSymbolsText] = useState("");
+  const [targetDte, setTargetDte] = useState(30);
+  const [deltaScale, setDeltaScale] = useState(1.0);
+  const [ivrSell, setIvrSell] = useState(50);
+  const [ivrBuy, setIvrBuy] = useState(30);
+  const [riskFreeRatePct, setRiskFreeRatePct] = useState("");
+  const [strikeGrid, setStrikeGrid] = useState(0.5);
+  const [deltaTolerance, setDeltaTolerance] = useState(0.05);
+  const [openSymbol, setOpenSymbol] = useState<string | null>(null);
+
+  const mutation = useMutation(() => {
+    const rfr = parseFloat(riskFreeRatePct);
+    return api.recomputeOptions({
+      symbols: parsedSymbols,
+      target_dte: targetDte,
+      delta_target_scale: deltaScale,
+      ivr_sell_threshold: ivrSell,
+      ivr_buy_threshold: ivrBuy,
+      risk_free_rate_pct: Number.isFinite(rfr) ? rfr : null,
+      strike_grid: strikeGrid,
+      delta_tolerance: deltaTolerance,
+    });
+  });
+  const result: OptionsRecomputeResult | null = mutation.result ?? null;
+
+  const parsedSymbols = symbolsText
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  const uniqueCount = new Set(parsedSymbols).size;
+  const canSubmit = uniqueCount >= RECOMPUTE_MIN_SYMBOLS && uniqueCount <= RECOMPUTE_MAX_SYMBOLS;
+
+  const directives = result?.directives ?? [];
+  const openDirective = openSymbol
+    ? directives.find((d) => d.Symbol === openSymbol) ?? null
+    : null;
+
+  return (
+    <section className="card card-pad" style={{ marginTop: 16 }}>
+      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Recompute with custom parameters</h2>
+      <p style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+        Compute a fresh premium-selling directive for up to {RECOMPUTE_MAX_SYMBOLS} symbols you
+        pick, with your own delta-scale/IVR/risk-free-rate/strike-grid controls — computed live,
+        not from the pipeline's last run.
+      </p>
+
+      <Input
+        label={`Symbols (comma or space separated, ${RECOMPUTE_MIN_SYMBOLS}-${RECOMPUTE_MAX_SYMBOLS})`}
+        value={symbolsText}
+        onChange={(e) => setSymbolsText(e.target.value)}
+        hint={`${uniqueCount} distinct symbol${uniqueCount === 1 ? "" : "s"} entered.`}
+        invalid={uniqueCount > 0 && !canSubmit}
+      />
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+        <div style={{ flex: "1 1 100px" }}>
+          <Input
+            label="Target DTE"
+            type="number"
+            min={1}
+            max={120}
+            value={targetDte}
+            onChange={(e) => setTargetDte(Number(e.target.value) || 30)}
+          />
+        </div>
+        <div style={{ flex: "1 1 100px" }}>
+          <Input
+            label="Delta ×"
+            type="number"
+            min={0.25}
+            max={2.0}
+            step={0.05}
+            value={deltaScale}
+            onChange={(e) => setDeltaScale(Number(e.target.value) || 1.0)}
+          />
+        </div>
+        <div style={{ flex: "1 1 100px" }}>
+          <Input
+            label="IVR sell >"
+            type="number"
+            min={0}
+            max={100}
+            value={ivrSell}
+            onChange={(e) => setIvrSell(Number(e.target.value) || 0)}
+          />
+        </div>
+        <div style={{ flex: "1 1 100px" }}>
+          <Input
+            label="IVR buy <"
+            type="number"
+            min={0}
+            max={100}
+            value={ivrBuy}
+            onChange={(e) => setIvrBuy(Number(e.target.value) || 0)}
+          />
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+        <div style={{ flex: "1 1 100px" }}>
+          <Input
+            label="Risk-free rate % (blank = default)"
+            type="number"
+            min={0}
+            max={15}
+            step={0.25}
+            value={riskFreeRatePct}
+            onChange={(e) => setRiskFreeRatePct(e.target.value)}
+          />
+        </div>
+        <div style={{ flex: "1 1 100px" }}>
+          <Input
+            label="Strike grid $"
+            type="number"
+            min={0.5}
+            max={10}
+            step={0.5}
+            value={strikeGrid}
+            onChange={(e) => setStrikeGrid(Number(e.target.value) || 0.5)}
+          />
+        </div>
+        <div style={{ flex: "1 1 100px" }}>
+          <Input
+            label="Delta tolerance"
+            type="number"
+            min={0.01}
+            max={0.25}
+            step={0.01}
+            value={deltaTolerance}
+            onChange={(e) => setDeltaTolerance(Number(e.target.value) || 0.05)}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <Button
+          variant="primary"
+          pending={mutation.pending}
+          disabled={!canSubmit}
+          onClick={() => mutation.run()}
+        >
+          Recompute
+        </Button>
+      </div>
+
+      {mutation.error && (
+        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+          <span>{mutation.error}</span>
+        </div>
+      )}
+
+      {result && (
+        <div style={{ marginTop: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              marginBottom: 12,
+              fontSize: 12.5,
+              color: theme.textSecondary,
+            }}
+          >
+            <span className="chip">Target DTE {result.target_dte}</span>
+            <span className="chip">VIX {fmtNum(result.vix, 1)}</span>
+            <span className="chip">{result.market_regime ?? "—"}</span>
+          </div>
+
+          {result.errors.length > 0 && (
+            <div className="notice notice-warn" style={{ marginBottom: 12 }}>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {result.errors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {directives.length === 0 ? (
+            <div className="empty" style={{ padding: 18 }}>
+              No directives computed.
+            </div>
+          ) : (
+            directives.map((d) => (
+              <DirectiveCard key={d.Symbol} d={d} onOpen={() => setOpenSymbol(d.Symbol)} />
+            ))
+          )}
+        </div>
+      )}
+
+      {openDirective && (
+        <DetailSheet
+          d={openDirective}
+          dte={result?.target_dte ?? 30}
+          onClose={() => setOpenSymbol(null)}
+        />
+      )}
+    </section>
+  );
+}
+
 export function OptionsMatrix() {
   const nav = useNavigate();
   const { data, loading, error, status, stale, cachedAt, reload } = useApi<OptionsMatrixT>(
@@ -526,6 +740,7 @@ export function OptionsMatrix() {
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("premium");
   const [openSymbol, setOpenSymbol] = useState<string | null>(null);
+  const [showRecompute, setShowRecompute] = useState(false);
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
@@ -702,6 +917,18 @@ export function OptionsMatrix() {
           onClose={() => setOpenSymbol(null)}
         />
       )}
+
+      <button
+        type="button"
+        onClick={() => setShowRecompute((v) => !v)}
+        aria-expanded={showRecompute}
+        className="btn btn-neutral"
+        style={{ marginTop: 20, width: "100%" }}
+      >
+        {showRecompute ? "▲ Hide" : "▼"} Recompute with custom parameters
+      </button>
+
+      {showRecompute && <OptionsRecomputeSection />}
     </div>
   );
 }

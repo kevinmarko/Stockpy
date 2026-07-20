@@ -40,8 +40,25 @@ function ModelCard({ m, thresholds }: { m: ModelRow; thresholds: Thresholds | nu
           value={m.pbo == null ? "—" : fmtNum(m.pbo, 2)}
           good={m.pbo == null || thresholds == null ? null : m.pbo < thresholds.pbo_max}
         />
-        <MetricBadge label="Trained" value={fmtDate(m.trained_date)} />
+        <MetricBadge
+          label="Trained"
+          value={
+            m.age_days == null ? fmtDate(m.trained_date) : `${fmtDate(m.trained_date)} (${m.age_days}d ago)`
+          }
+        />
         <MetricBadge label="N" value={m.n_train == null ? "—" : String(m.n_train)} />
+        {m.needs_retrain === true && (
+          <span
+            className="badge badge-warn"
+            title={
+              thresholds == null
+                ? "Older than the retrain window."
+                : `Trained more than ${thresholds.retrain_window_days} days ago — flagged for the next retraining job.`
+            }
+          >
+            ⏱ Needs retrain
+          </span>
+        )}
       </div>
       {m.notes && (
         <p style={{ color: theme.textSecondary, fontSize: 12.5, lineHeight: 1.5, marginTop: 12 }}>
@@ -127,6 +144,10 @@ export function Models() {
         Deployable = CPCV-DSR &gt; {fmtNum(thresholds?.dsr_min, 2)} AND PBO &lt;{" "}
         {fmtNum(thresholds?.pbo_max, 2)}. Metrics are never loosened to force a
         green badge.
+        <br />
+        Needs retrain = trained more than{" "}
+        {thresholds?.retrain_window_days == null ? "—" : thresholds.retrain_window_days}{" "}
+        days ago.
       </p>
     </div>
   );
