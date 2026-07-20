@@ -11,6 +11,35 @@
 import logging
 import warnings
 from datetime import datetime, timezone
+
+# TensorFlow MUST be imported before pandas/pyarrow/prophet/statsmodels -- see
+# docs/known_issues/cnn_lstm_tf_deadlock.md ("Round 3" findings). In this macOS
+# arm64 + Framework-Python + TF 2.21.0 + pyarrow 24.0.0 environment, whichever
+# library's own copy of the colliding Abseil sync primitive
+# (`AbslInternalPerThreadSemWait_lts_20250814`, independently compiled into both
+# libtensorflow_framework.2.dylib and pyarrow's libarrow.2400.dylib) performs the
+# first *Python-level* module initialization "wins" ownership of that symbol for
+# the rest of the process. `pandas` (imported by this module directly, and
+# transitively by `statsmodels`/`prophet`) eagerly imports pyarrow at import time
+# (`pandas.compat.pyarrow`'s version-gate probe) purely to check its version --
+# with ZERO Arrow-backed dtypes ever used anywhere in this codebase. If that
+# pandas-triggered pyarrow import happens before TensorFlow's own import, the
+# first real multi-threaded TF eager op (e.g. a Conv1D/LSTM `.fit()` -- NOT a
+# trivial op like `tf.constant(1) + tf.constant(1)`) deadlocks the main thread
+# inside `TFE_Execute -> absl::Notification::WaitForNotification` forever (0% CPU,
+# confirmed via native stack trace, verified reproducible 5/5 in isolation and
+# 1/1 through this real module). Importing TensorFlow FIRST avoids the collision
+# (verified 3/3 clean runs with real, non-zero forecasts). This ordering has no
+# effect when TensorFlow is absent (ImportError -> TENSORFLOW_AVAILABLE=False,
+# exactly as before) and no behavioral effect on any other forecaster.
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import Conv1D, LSTM, Dense, MaxPooling1D
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
@@ -25,6 +54,9 @@ warnings.filterwarnings("ignore")
 logger = logging.getLogger("ForecastingEngine")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+if not TENSORFLOW_AVAILABLE:
+    logger.debug("tensorflow library not available. Hybrid CNN-LSTM will fall back.")
+
 # Import libraries with robust fallback flags
 try:
     from prophet import Prophet  # type: ignore
@@ -32,15 +64,6 @@ try:
 except ImportError:
     PROPHET_AVAILABLE = False
     logger.debug("prophet library not available. Prophet forecasting will fall back.")
-
-try:
-    import tensorflow as tf
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Conv1D, LSTM, Dense, MaxPooling1D
-    TENSORFLOW_AVAILABLE = True
-except ImportError:
-    TENSORFLOW_AVAILABLE = False
-    logger.debug("tensorflow library not available. Hybrid CNN-LSTM will fall back.")
 
 
 # Hardcoded fallback used when no valid empirical artifact/override is
