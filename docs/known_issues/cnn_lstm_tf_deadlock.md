@@ -1,14 +1,29 @@
 # Known issue: CNN-LSTM forecaster deadlocks on TensorFlow eager execution
 
-**Status: open, blocking.** Tracked in
+**Status: root cause found, fix implemented and verified end-to-end (2026-07-20,
+Round 3) — fix PR open, not yet merged.** Tracked in
 [issue #381](https://github.com/kevinmarko/Stockpy/issues/381). Discovered
 2026-07-19/20 while enabling the CNN-LSTM forecaster path in
 `forecasting_engine.py` (tracked in
 [PR #377](https://github.com/kevinmarko/Stockpy/pull/377), which shipped only the
 safe half — the idempotent `setup.sh` and the numpy-safe `requirements-optional.txt`
-— and explicitly deferred this deadlock as follow-up work). Do not consider
-CNN-LSTM "enabled" until this is resolved and a real, non-hung forecast is produced
-end-to-end.
+— and explicitly deferred this deadlock as follow-up work).
+
+**Round 3 result, in one line:** the deadlock is triggered by *import order*, not
+merely by which libraries are present. `pandas` (imported directly by
+`forecasting_engine.py`, and transitively by `prophet`/`statsmodels`) eagerly
+imports `pyarrow` purely to version-gate a feature flag — if that happens before
+TensorFlow's own import, the first *real* (non-trivial, multi-threaded) TF eager op
+deadlocks; if TensorFlow is imported first, the identical training call completes
+cleanly. The fix — reordering `forecasting_engine.py`'s imports so `tensorflow` is
+imported before `pandas`/`prophet`/`statsmodels` — is implemented and verified with
+real, non-zero, non-hung forecasts produced end-to-end through the actual
+`run_cnn_lstm_forecast()` code path (see "Round 3" below and
+[PR #387](https://github.com/kevinmarko/Stockpy/pull/387)). CNN-LSTM itself is
+still gated behind optional TensorFlow installation
+(`requirements-optional.txt`, unchanged scope) — this fix removes the reason it
+was kept dormant when TensorFlow *is* installed, but promoting TF to a default
+dependency is a separate decision outside this doc's scope.
 
 ## Why this matters
 
@@ -229,37 +244,154 @@ confirmed via `nm`, see above) is not disconfirmed by this — Attempt 5 shows m
 *presence* of PyArrow isn't sufficient on its own, which narrows the collision's
 role without ruling it out as a contributing factor once other pieces are present.
 
-## Recommended next diagnostic step
+## Round 3 (2026-07-20): the recommended next step, executed — root cause found, fix verified
 
-Import the real `forecasting_engine.ForecastingEngine` (pulling in its actual full
-dependency graph — numba/pandas-ta, arch, h5py, SQLAlchemy, PyArrow via pandas,
-everything) and call `run_cnn_lstm_forecast` on **synthetic** data instead of real
-`HistoricalStore`/AAPL data:
+### Attempt 7 — the recipe as literally written (300 rows): a false negative caused by a separate, real bug
 
-```python
-import pandas as pd, numpy as np
-from forecasting_engine import ForecastingEngine
+Running the exact recipe above (`PYTHONPATH=. .venv/bin/python3 -u` script, real
+`forecasting_engine.ForecastingEngine`, 300 synthetic rows, `horizons=(10, 30, 60,
+90)`) **did not hang** — but it also never reached `model.fit()`. It returned
+`{10: 0.0, 30: 0.0, 60: 0.0, 90: 0.0}` in well under a second, which looks like a
+"clean run" but is actually the `zero_result` sentinel from a silent early return.
 
-dates = pd.date_range(end="2026-07-19", periods=300)
-bars = pd.DataFrame({
-    "Open": np.random.rand(300) * 10 + 150,
-    "High": np.random.rand(300) * 10 + 155,
-    "Low": np.random.rand(300) * 10 + 145,
-    "Close": np.random.rand(300) * 10 + 150,
-    "Volume": np.random.randint(1e6, 5e6, 300),
-}, index=dates)
+Root cause of the false negative: `run_cnn_lstm_forecast`'s insufficient-history
+gate (`forecasting_engine.py` ~line 609,
+`if len(df_features) < n_reserve + lookback + 10: return zero_result`, where
+`n_reserve = lookback + max_h = 60 + 90 = 150`) requires only 220 rows to pass, but
+`make_direct_multistep_windows` (~line 472) needs the **train** slice
+(`len(df_features) - n_reserve`) to itself be `>= n_reserve` to build even one
+supervised window — i.e. the true minimum is `2 * n_reserve = 300` rows, not 220.
+With exactly 300 raw bars, `build_lstm_features` drops ~21 warm-up rows, leaving
+279 — enough to pass the gate (220) but not enough to build a single window (300),
+so `make_direct_multistep_windows` returns empty arrays and
+`if len(X_seq) == 0: return zero_result` fires silently with **no exception, no log
+line** (this is a distinct code path from the caught-and-logged `except Exception`
+at the bottom of the function). **This is a real, separate, previously-unknown
+latent bug** in the production gate — worth its own fix, but out of scope for this
+deadlock investigation since it never affects the ~504-day (`BARS_BACKFILL_DAYS`)
+real-data path this codebase actually uses; flagged as a follow-up.
 
-ForecastingEngine().run_cnn_lstm_forecast(bars, horizons=(10, 30, 60, 90), ticker="SYNTH")
-print("unreachable if the bug reproduces")
+### Attempt 7c — corrected recipe (600 rows): reproduces the deadlock on pure synthetic data
+
+Re-running the same real `ForecastingEngine` with 600 synthetic rows (579 after
+feature dropna, comfortably above the true 300-row minimum) actually reached
+`model.fit()` — and **hung**, sustained 0% CPU / `S` state for 2m38s before being
+killed. A fresh `sample <pid> 3` capture showed the **identical** stack signature to
+Attempt 1 (2577/2577 samples pinned to one frame):
+
+```
+TFE_Execute (libtensorflow_cc.2.dylib)
+  → tensorflow::EagerKernelExecute → ... → ProcessFunctionLibraryRuntime::RunSync
+    → absl::Notification::WaitForNotification() (libtensorflow_framework.2.dylib)
+      → absl::Mutex::Block → AbslInternalPerThreadSemWait_lts_20250814 (libarrow.2400.dylib)
+        → PthreadWaiter::Wait → _pthread_cond_wait → __psynch_cvwait
 ```
 
-- **Hangs** → isolates the cause to `forecasting_engine.py`'s import graph/execution
-  context itself, independent of the real AAPL data or `HistoricalStore` — narrows
-  the search to which of numba/arch/h5py/SQLAlchemy (individually or combined)
-  triggers it, testable by importing them one at a time before a trivial TF op.
-- **Does not hang** → the trigger depends on something about the real data path
-  (`HistoricalStore`, the real DB, or the real AAPL values) rather than the import
-  graph alone — a much less likely but not yet excluded possibility.
+34 total threads sampled: 1 main thread stuck as above, 32 idle in
+`Eigen::ThreadPoolTempl::WaitForWork`, 2 idle in GCD `__workq_kernreturn` — the same
+"full idle pool, main thread deadlocked waiting on one of them" shape as Attempt 1.
+
+**This directly answers the question the recommended next step was designed to
+answer: the deadlock reproduces on pure synthetic data through
+`forecasting_engine.py`'s real import graph and execution context. It is NOT
+something about the real AAPL data path, `HistoricalStore`, or the real database.**
+
+### Attempts 8–13 — narrowing beyond Attempts 4-6: the real trigger is import ORDER, not import PRESENCE
+
+Attempts 4-6 (previous round) concluded that neither "TF alone" nor "TF + PyArrow"
+reproduces the hang with a *trivial* op, and that even the real Conv1D/LSTM
+architecture with a real `.fit()` call runs clean *in isolation from PyArrow*. Round
+3 re-examined that isolation and found it was never actually achieved:
+
+| # | Script | Result |
+|---|---|---|
+| 8 | `statsmodels` (ARIMA + ExponentialSmoothing, actually `.fit()`) + `sklearn.MinMaxScaler` + TF, real Conv1D/LSTM/Dense `.fit()` | **Hung** (fresh matching stack trace, `libarrow.2400.dylib` symbol present). |
+| 9 | Instrumented import trace: `sys.modules` checked after each import in Attempt 8's sequence | `pyarrow` appears in `sys.modules` immediately after `from statsmodels.tsa.arima.model import ARIMA` — **before sklearn or tensorflow are even imported**. |
+| — | `python3 -c "import pandas as pd"` alone, nothing else | `pyarrow` already in `sys.modules` afterward. Confirmed: **pandas 2.3.3's `pandas.compat.pyarrow` unconditionally does `import pyarrow as pa` at pandas-import time**, purely to version-gate a feature flag — regardless of whether any Arrow-backed dtype is ever used anywhere in this codebase (it never is). |
+| 10 | `pandas` alone (no statsmodels/sklearn) + TF, real `.fit()` | **Hung** (sustained 0% CPU, 1m50s+). |
+| 11 | Explicit `import pyarrow` (PR #386's own Attempt 5 import) + TF, but a **real** `.fit()` instead of Attempt 5's trivial op | **Hung**, reproduced twice (2/2). This means Attempt 5's "no hang" result was a property of the *trivial op*, not of PyArrow's absence — Attempt 5 never actually tested a real training call. |
+| 12 | Clean baseline: `numpy` + `tensorflow` only (**no** explicit pandas/pyarrow import at all) + real `.fit()` | **No hang**, 3/3 repeat runs, ~0.8-0.9s each, real predictions returned. |
+| — | `lsof` on the Attempt-12 process | **Surprise**: `libarrow.2400.dylib` (and the rest of PyArrow's native libraries) were already mapped into the process, and `'pyarrow' in sys.modules` was `True` — **merely `import tensorflow` transitively imports and fully initializes the real `pyarrow` package** in this dependency set, with no pandas or pyarrow import anywhere in the user script. |
+| 13 | Import-**order** swap: `import tensorflow` FIRST, `import pandas` SECOND (pandas finds pyarrow already in `sys.modules` from TF's own transitive import and just rebinds the name — no re-initialization), then real `.fit()` | **No hang**, 3/3 repeat runs, real predictions each time. |
+
+**What this establishes, correcting the previous round's interpretation:** PyArrow's
+native libraries are *always* loaded once TensorFlow is imported in this dependency
+set (TF 2.21.0 + pyarrow 24.0.0, macOS arm64) — Attempts 4 and 5 never had a true
+"PyArrow-absent" baseline, they only ever tested a trivial op, which apparently
+never engages the code path where the collision matters. The real, load-bearing
+discriminator is **which library's Python-level module initialization happens
+first**: when `pandas` (or an explicit `import pyarrow`) runs its own full
+Python-level init *before* TensorFlow's, the two libraries' independently-compiled
+copies of `AbslInternalPerThreadSemWait_lts_20250814` end up in a state where a real
+multi-threaded TF eager op (Conv1D/LSTM `.fit()`, not a trivial constant-add) can
+signal a `Notification` that the waiting thread never observes. When TensorFlow's
+own import runs first — whether or not `pandas`/`pyarrow` are imported afterward —
+this does not happen, 3/3 clean runs with no counterexample found. `prophet`
+(confirmed installed, v1.3.0, itself pandas-based) was also confirmed to trigger the
+same transitive pyarrow-before-TF ordering in the *original* file, since its `try`
+block sits before the `tensorflow` `try` block — so the fix has to move TF's import
+above **both** `pandas` and `prophet`, not just the explicit `import pandas as pd`
+line.
+
+This is consistent with — and sharpens rather than contradicts — the confirmed
+Abseil ODR collision (`nm` evidence, unchanged from the original writeup): the
+collision is real and always latent once both libraries are loaded, but it only
+*manifests* as an observable deadlock when (a) a substantial multi-threaded TF eager
+op actually exercises the racing code path, and (b) PyArrow's own Python-level
+initialization — not just its `.dylib` being mapped — ran before TensorFlow's.
+
+**Caveat on determinism:** this is empirically a very strong, repeatable pattern (5/5
+hangs across every "pyarrow-initialized-before-TF + real training" trial; 6/6 clean
+runs across every "TF-initialized-first" trial, whether or not pandas followed) but
+the underlying bug class (a race on a duplicated synchronization primitive) is not
+guaranteed deterministic in principle. No counterexample was observed in this round,
+but treat "import TF first" as a very strong empirical mitigation rather than a
+mathematically proven guarantee.
+
+### The fix
+
+`forecasting_engine.py`'s import block was reordered so the `tensorflow`/`keras`
+`try/except` runs first — before `numpy`, `pandas`, `statsmodels`, `scikit-learn`,
+and `prophet` — with `TENSORFLOW_AVAILABLE` computed exactly as before and no
+behavioral change to any other forecaster. See
+[PR #387](https://github.com/kevinmarko/Stockpy/pull/387) for the exact diff.
+
+### End-to-end verification
+
+With the reordered import applied to the real `forecasting_engine.py` (not a copy —
+verified against the actual file on the fix branch), the exact Attempt-7c synthetic
+recipe (600 rows, `horizons=(10, 30, 60, 90)`, driven through `ForecastingEngine()
+.run_cnn_lstm_forecast(...)`) now returns real, varied, non-zero predictions in
+~1-2 seconds, e.g.:
+
+```
+RESULT={10: 177.996..., 30: 163.417..., 60: 168.583..., 90: 159.735...}  (took 1.5s)
+```
+
+Reproduced 4/4 across the isolated microbenchmark (Attempt 13) and the real-module
+test (Attempts 14/15), with zero hangs. The full existing test suite for
+forecasting was also re-run against the fix (`tests/test_forecasting_engine.py`,
+`tests/test_forecasting_lookahead.py`, `tests/test_forecasting_improvements.py`,
+`tests/test_forecast_model_persistence.py`, `tests/test_forecast_parallel.py`,
+`tests/test_forecasting_engine_config_loader.py`, everything matching `-k forecast`
+repo-wide, plus `test_bug_fixes.py`/`test_engine_context.py`/
+`test_sector_forecast_backtest.py`/`test_forecast_tracker.py`/
+`test_forecast_skill_uplift.py`/`test_quantitative_models.py`/`test_metrics_api.py`/
+`test_advisory.py`) — **all passing, zero failures**, confirming the reorder has no
+observable effect on any other forecaster or on the mocked-TensorFlow test suite
+(those tests inject a mock into `sys.modules['tensorflow']` before importing
+`forecasting_engine`, so internal import order within the module is irrelevant to
+them).
+
+### Follow-up flagged, not fixed here
+
+The insufficient-history gate bug found in Attempt 7 (`forecasting_engine.py` ~line
+609 undercounts the rows required for `make_direct_multistep_windows` to produce
+any training windows when `max(horizons)` is large relative to available history —
+true minimum is `2 * (lookback + max_h)`, the gate only checks
+`lookback + max_h + lookback + 10`) is real but does not affect the production
+504-day backfill path; it's flagged as a separate, smaller follow-up rather than
+bundled into this fix.
 
 ## What was ruled out
 
@@ -278,7 +410,23 @@ print("unreachable if the bug reproduces")
   present, but presence alone isn't sufficient).
 - The real Conv1D/LSTM model architecture and `.fit()` training call as the sole
   cause, independent of the rest of `forecasting_engine.py`'s import graph
-  (Attempt 6 — no hang on synthetic data with the exact real architecture).
+  (Attempt 6 — no hang on synthetic data with the exact real architecture; **note,
+  Round 3**: this was later understood to be because Attempt 6, like 4 and 5, never
+  achieved a true PyArrow-absent baseline — TensorFlow itself transitively loads
+  PyArrow's native libraries in this dependency set — see Attempt 12).
+- The real AAPL data path / `HistoricalStore` / the live database as a required
+  ingredient (Round 3, Attempt 7c — the deadlock reproduces on pure synthetic data
+  through the real `forecasting_engine.py` import graph, with a stack trace matching
+  Attempt 1 exactly).
+- `numba`/`pandas_ta_classic`, `arch`/GARCH, and SQLAlchemy/`HistoricalStore` as
+  *necessary* ingredients (Round 3, Attempts 8-10 — none of these were imported
+  anywhere in the reproducing scripts; `statsmodels` + `sklearn` + `pandas`, or even
+  `pandas` alone, combined with a real TF `.fit()` call, is sufficient).
+- Mere *presence* of PyArrow's native libraries being mapped into the process as
+  sufficient on its own (Round 3, Attempt 12 — TensorFlow itself transitively loads
+  them and it still doesn't hang; the load-bearing factor is *which library's
+  Python-level module init ran first*, not merely whether PyArrow's `.dylib` is
+  mapped — see Attempts 9-13).
 
 ## Related
 
@@ -286,7 +434,17 @@ print("unreachable if the bug reproduces")
   ticket for this deadlock; this doc is the full technical record it links to.
 - [PR #377](https://github.com/kevinmarko/Stockpy/pull/377) — shipped the safe tooling
   half (idempotent `setup.sh`, `requirements-optional.txt`) and deferred this deadlock.
-- `forecasting_engine.py`'s `TENSORFLOW_AVAILABLE` guard (~line 40) and
-  `run_cnn_lstm_forecast` (~line 500) — the code path this blocks.
+- [PR #380](https://github.com/kevinmarko/Stockpy/pull/380) — the original writeup
+  (Attempt 1, the confirmed native stack trace, the `nm`-verified Abseil ODR
+  collision).
+- [PR #386](https://github.com/kevinmarko/Stockpy/pull/386) — Attempts 4-6, the
+  discriminator experiments that (in hindsight, per Round 3) never achieved a true
+  PyArrow-absent baseline.
+- [PR #387](https://github.com/kevinmarko/Stockpy/pull/387) — the Round 3 import-order fix to
+  `forecasting_engine.py`, verified end-to-end with real, non-hung, non-zero
+  forecasts.
+- `forecasting_engine.py`'s `TENSORFLOW_AVAILABLE` guard (now the very first
+  executable import block in the file, before `pandas`/`prophet`/`statsmodels`) and
+  `run_cnn_lstm_forecast` (~line 500) — the code path this blocks/blocked.
 - `forecasting/forecast_tracker.py` — the skill tracker CNN-LSTM would feed once
   this is resolved; currently has zero `cnn_lstm` rows in the live database.
