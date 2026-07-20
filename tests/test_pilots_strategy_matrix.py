@@ -390,7 +390,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -436,4 +436,13 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # re (strict ticker-shape validation), dataclasses (result container),
         # datetime (audit-comment timestamp).
         allowed = allowed | {"os", "re", "dataclasses", "datetime"}
+    if module_name == "validation_trend":
+        # pilots.validation_trend reuses scripts.snapshot_diff's rotated-
+        # snapshot reader (list_rotated_snapshots/load_snapshot) — confirmed
+        # dependency-light by inspection (that module's own top-level imports
+        # are argparse/json/logging/dataclasses/datetime/pathlib/typing only,
+        # zero heavy engines) — rather than duplicating its filename-parsing
+        # regex logic a second time. datetime is used for a best-effort
+        # chronological sort of the regime-transition points.
+        allowed = allowed | {"scripts", "datetime"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"

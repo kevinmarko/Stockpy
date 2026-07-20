@@ -1,0 +1,17 @@
+{
+  "strategy_id": "multifactor_lowvol_size",
+  "deployable": false,
+  "family_deployable": null,
+  "family_bh_significant": null,
+  "pbo": 0.28,
+  "dsr": 0.93,
+  "sharpe": 0.61,
+  "max_drawdown": 0.22,
+  "is_options_selling": false,
+  "stress_gate_passed": true,
+  "start_date": "2010-01-01",
+  "end_date": "2024-12-31",
+  "report_date": "2026-07-14",
+  "n_trials": 12,
+  "family_multiple_testing": null
+}

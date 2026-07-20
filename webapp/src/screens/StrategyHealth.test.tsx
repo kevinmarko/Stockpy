@@ -233,4 +233,20 @@ describe("StrategyHealth screen (real mock API)", () => {
       expect(screen.queryByTestId("trend-metric-select")).not.toBeInTheDocument();
     });
   });
+
+  it("renders the cross-strategy validation section below the per-pilot cards, including a strategy not wired to any Pilot", async () => {
+    renderScreen();
+    await screen.findByText("Trend Follower");
+    expect(await screen.findByText("Cross-strategy validation")).toBeInTheDocument();
+    // multifactor_lowvol_size has no pilots.catalog Pilot pointing at it --
+    // invisible above in the per-pilot cards, but must appear here.
+    expect(await screen.findByTestId("validation-trend-row-multifactor_lowvol_size")).toBeInTheDocument();
+  });
+
+  it("does not render the cross-strategy section when the catalog itself is empty", async () => {
+    vi.spyOn(api, "getStrategyHealth").mockResolvedValueOnce([]);
+    renderScreen();
+    await screen.findByText("No pilots in the catalog yet.");
+    expect(screen.queryByText("Cross-strategy validation")).not.toBeInTheDocument();
+  });
 });

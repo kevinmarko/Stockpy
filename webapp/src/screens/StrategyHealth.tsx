@@ -6,6 +6,7 @@ import { useApi } from "../hooks/useApi";
 import { DeployableBadge, ErrorState, Loading } from "../components/ui";
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
+import { ValidationTrend } from "../components/ValidationTrend";
 import { loadThresholds } from "../help/thresholds";
 import { fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
@@ -294,6 +295,18 @@ export function StrategyHealth() {
             ))}
           </>
         )
+      )}
+
+      {!loading && !error && data && data.length > 0 && (
+        <>
+          <h2 style={{ fontSize: 15, margin: "24px 0 4px" }}>Cross-strategy validation</h2>
+          <p style={{ margin: "0 0 14px", fontSize: 13, color: theme.textMuted }}>
+            Every strategy <code>validation.harness</code> has validated, not just the
+            ones above wired to a Pilot — plus the run-over-run trend and macro-regime
+            timeline behind those numbers.
+          </p>
+          <ValidationTrend />
+        </>
       )}
 
       <p
