@@ -1,7 +1,14 @@
 # Known issue: CNN-LSTM forecaster deadlocks on TensorFlow eager execution
 
-**Status: root cause found, fix implemented and verified end-to-end (2026-07-20,
-Round 3) — fix PR open, not yet merged.** Tracked in
+**Status: open, blocking. The Round 3 "fix" (PR #387, merged) is confirmed
+INSUFFICIENT for real production use — see Round 4 below.** Do not enable
+CNN-LSTM. Round 3's mitigation (reordering imports inside `forecasting_engine.py`)
+only prevents the deadlock when that module happens to be the first thing in the
+whole process to trigger a `pandas`/`pyarrow` import — which is true in an isolated
+test script, but **not true in `main.py`, `main_orchestrator.py`, or
+`pipeline/production_steps.py`**, all of which import `pandas` before
+`forecasting_engine` is ever reached. The real production pipeline would still
+deadlock on its first CNN-LSTM fit. Tracked in
 [issue #381](https://github.com/kevinmarko/Stockpy/issues/381). Discovered
 2026-07-19/20 while enabling the CNN-LSTM forecaster path in
 `forecasting_engine.py` (tracked in
@@ -393,6 +400,91 @@ true minimum is `2 * (lookback + max_h)`, the gate only checks
 504-day backfill path; it's flagged as a separate, smaller follow-up rather than
 bundled into this fix.
 
+## Round 4 (2026-07-20): independent verification reveals the Round 3 fix is insufficient
+
+PR #387 was merged based on Round 3's end-to-end verification. An independent
+re-verification (separate from the agent that did Round 3, run against the actual
+merged code on `main`, not a branch) caught a gap in that verification's test
+harness: **every Round 3 test script imported `forecasting_engine` (or
+`ForecastingEngine`) as the first thing in the process**, before ever touching
+`pandas`/`numpy` itself. That matches Round 3's own reproduction scripts, but not
+how this codebase's real entry points actually work.
+
+### The gap, demonstrated directly
+
+Two scripts, otherwise byte-for-byte identical (600-row synthetic data, default
+`horizons=(10, 30, 60, 90)`, real `ForecastingEngine().run_cnn_lstm_forecast(...)`),
+differing only in whether the *caller* imports `pandas`/`numpy` before or after
+importing `forecasting_engine`:
+
+```python
+# v1 — hangs (confirmed via a fresh native stack trace, identical to Attempt 1)
+import pandas as pd
+import numpy as np
+from forecasting_engine import ForecastingEngine   # too late — pandas already
+                                                     # pulled in pyarrow
+```
+
+```python
+# v2 — works (real, varied, non-zero result: {10: 150.43, 30: 150.98, 60: 151.55, 90: 151.72})
+from forecasting_engine import ForecastingEngine   # first — pandas/numpy imported after
+import pandas as pd
+import numpy as np
+```
+
+This confirms the Round 3 mechanism precisely (import order, not import presence)
+**and** confirms it operates at **process scope, not module scope** —
+`forecasting_engine.py`'s internal reordering only has an effect if nothing else in
+the process already triggered a `pandas`/`pyarrow` import first. It cannot "undo" an
+import that already happened before `forecasting_engine.py` itself was ever reached.
+
+### Real exposure: the actual entry points import pandas first
+
+```
+pipeline/production_steps.py:8   import pandas as pd     (before any forecasting_engine import)
+main_orchestrator.py:34          import pandas as pd     (before any forecasting_engine import)
+main.py                          imports pandas near the top as well
+```
+
+`pipeline/production_steps.py` is the actual production forecasting step
+(`ForecastingStep.run` → `_forecast_one` → `generate_forecast` →
+`run_cnn_lstm_forecast`, per the "Why this matters" section above). Since it
+imports `pandas` at line 8, well before `forecasting_engine` is ever imported,
+**the merged fix does not prevent the deadlock in the real pipeline.** The fix is a
+real, verified mitigation for the narrow case of `forecasting_engine.py` being the
+first module-with-heavy-deps imported in a process — which happened to be true of
+every Round 3 test script, but is not true of `main.py`, `main_orchestrator.py`, or
+`pipeline/production_steps.py`.
+
+### What an actual fix needs
+
+Given the constraint operates at process scope, options include (not yet
+implemented or evaluated in depth):
+
+1. **Import `tensorflow` at the very top of every real entry point** (`main.py`,
+   `main_orchestrator.py`, and anything else that might transitively reach
+   `run_cnn_lstm_forecast`) — before those files' own `pandas`/`numpy` imports.
+   Fragile: couples unrelated entry points to one forecaster's internal dependency
+   quirk, and silently breaks again if any new entry point is added or any existing
+   one's import order shifts.
+2. **Run CNN-LSTM training in a genuinely separate OS process** (e.g. via
+   `multiprocessing` with a fresh interpreter, or `concurrent.futures.ProcessPoolExecutor`)
+   spawned before that child process's own `pandas` import — sidesteps the
+   process-wide constraint entirely since import order is scoped per-process, at
+   the cost of IPC overhead and serialization of the model/data across the process
+   boundary. Not yet attempted or evaluated.
+3. **Eliminate the ODR collision at its source** — e.g. build/vendor a TensorFlow
+   wheel that doesn't export the colliding Abseil symbol, or file/track upstream on
+   `tensorflow`/`pyarrow` to fix the symbol visibility. Correct long-term fix, not
+   actionable quickly.
+
+PR #387 remains merged (it is a real, harmless, narrowly-effective improvement —
+it does not regress anything and the reordering has zero effect on any other
+forecaster), but **does not itself close this issue.** CNN-LSTM must stay dormant
+until one of the above (or another approach) is implemented and verified against
+the actual entry point(s) that reach `run_cnn_lstm_forecast` in production, not
+just an isolated test script.
+
 ## What was ruled out
 
 - SQLite/WAL lock contention with the concurrently-running orchestrator daemon (WAL
@@ -441,10 +533,15 @@ bundled into this fix.
   discriminator experiments that (in hindsight, per Round 3) never achieved a true
   PyArrow-absent baseline.
 - [PR #387](https://github.com/kevinmarko/Stockpy/pull/387) — the Round 3 import-order fix to
-  `forecasting_engine.py`, verified end-to-end with real, non-hung, non-zero
-  forecasts.
+  `forecasting_engine.py`. Merged, real and harmless, but per Round 4 below,
+  **insufficient on its own** — does not protect the actual production entry points.
+- [PR #388](https://github.com/kevinmarko/Stockpy/pull/388) — Round 3's docs writeup
+  (superseded in part by Round 4's correction above).
 - `forecasting_engine.py`'s `TENSORFLOW_AVAILABLE` guard (now the very first
   executable import block in the file, before `pandas`/`prophet`/`statsmodels`) and
   `run_cnn_lstm_forecast` (~line 500) — the code path this blocks/blocked.
+- `pipeline/production_steps.py` (line 8), `main_orchestrator.py` (line 34),
+  `main.py` — the real entry points that import `pandas` before
+  `forecasting_engine`, and so remain exposed to the deadlock despite PR #387.
 - `forecasting/forecast_tracker.py` — the skill tracker CNN-LSTM would feed once
   this is resolved; currently has zero `cnn_lstm` rows in the live database.
