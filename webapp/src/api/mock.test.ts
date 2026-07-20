@@ -257,6 +257,7 @@ describe("mock API — /symbols/{ticker} contract", () => {
         "ranges",
         "reason",
         "risk",
+        "sizing",
         "symbol",
       ].sort()
     );
@@ -266,6 +267,10 @@ describe("mock API — /symbols/{ticker} contract", () => {
     expect(d.factors).toHaveProperty("score_components");
     expect(d.ranges).toHaveProperty("buy_range");
     expect(d.risk).toHaveProperty("hmm_risk_on");
+    expect(d.sizing).toHaveProperty("kelly_target_pre_regime");
+    expect(d.sizing).toHaveProperty("kelly_target_post_regime");
+    expect(d.sizing).toHaveProperty("regime_multiplier");
+    expect(d.sizing).toHaveProperty("meta_label_composite");
   });
 
   it("normalizes the ticker to uppercase", async () => {

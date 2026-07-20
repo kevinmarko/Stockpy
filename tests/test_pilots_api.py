@@ -178,7 +178,7 @@ def test_symbol_detail_shape_and_values():
     assert body["reason"] is None
     assert set(body) == {
         "symbol", "as_of", "reason",
-        "identity", "advisory", "factors", "ranges", "risk", "held_by_pilots",
+        "identity", "advisory", "factors", "ranges", "risk", "sizing", "held_by_pilots",
     }
     assert body["identity"] == {
         "sector": "Information Technology", "price": 224.15, "action": "BUY", "shares": 40.0,
@@ -191,6 +191,13 @@ def test_symbol_detail_shape_and_values():
         assert body["risk"][k] is None
     for k in ("xsec_12_1m", "xsec_momentum_rank"):
         assert body["factors"][k] is None
+    # Position-sizing decomposition — real values from the fixture (the
+    # "no MetaLabelers/HMM adjustment active" honest 1.0 state).
+    assert body["sizing"]["kelly_target_pre_regime"] == 0.041
+    assert body["sizing"]["kelly_target_post_regime"] == 0.041
+    assert body["sizing"]["regime_multiplier"] == 1.0
+    assert body["sizing"]["meta_label_composite"] == 1.0
+    assert body["sizing"]["max_position_weight"] == settings.MAX_POSITION_WEIGHT
     # Reverse cross-link: AAPL is held by trend-following; deep-value excluded.
     held_ids = {p["pilot_id"] for p in body["held_by_pilots"]}
     assert "trend-following" in held_ids
@@ -2616,12 +2623,27 @@ class TestStrategyMatrixRead:
             resp = client.get("/strategy/matrix")
         assert resp.status_code == 200
         body = resp.json()
-        for key in ("modules", "disabled", "max_weight", "writable", "note", "env_drift", "reason"):
+        for key in ("modules", "disabled", "max_weight", "writable", "note", "env_drift", "reason", "meta_label"):
             assert key in body
         assert len(body["modules"]) > 0
         row = body["modules"][0]
         for key in ("name", "weight", "effective_weight", "enabled", "source", "pinned_zero"):
             assert key in row
+        for key in ("bins", "count", "missing", "n_gated", "all_unity", "min", "max", "min_confidence", "reason"):
+            assert key in body["meta_label"]
+
+    def test_meta_label_reflects_the_fixture_snapshot(self):
+        # tests/fixtures/state_snapshot.json's 8 signals all carry
+        # meta_label_composite == 1.0 (the honest "no MetaLabelers registered"
+        # state) -- proves GET /strategy/matrix actually threads
+        # pilots.strategy_matrix._meta_label_distribution's real output
+        # through, not a stub.
+        with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+            resp = client.get("/strategy/matrix")
+        ml = resp.json()["meta_label"]
+        assert ml["count"] == 8
+        assert ml["all_unity"] is True
+        assert ml["n_gated"] == 0
 
     def test_fail_open_read_with_no_token(self):
         with mock.patch.object(settings, "STATE_API_TOKEN", None):

@@ -45,7 +45,11 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "reliability diagram":
     "The chart on the Calibration screen. Points on the diagonal are perfectly calibrated; above the line = underconfident, below = overconfident. Bins with too little data read 'insufficient', never a fabricated win rate.",
   "kelly target": (t) =>
-    `The suggested fraction of your capital for one position, from the fractional (half-) Kelly formula using your real trade history, capped at ${fmtPct(t?.kelly_cap, 0, { fromFraction: true })} and then by a per-name advisory ceiling. 0.14 means 'up to 14% of capital' — still advisory only.`,
+    `The suggested fraction of your capital for one position, from the fractional (half-) Kelly formula using your real trade history, capped at ${fmtPct(t?.kelly_cap, 0, { fromFraction: true })} and then by a per-name advisory ceiling. 0.14 means 'up to 14% of capital' — still advisory only. The final number is 'post-regime': the pre-regime Kelly figure gets multiplied by the HMM regime multiplier and the meta-label composite before the cap is applied — see 'regime multiplier' and 'meta-label composite' for the breakdown.`,
+  "regime multiplier":
+    "A 0-1 multiplier on Kelly Target driven by the HMM's risk-on probability — it shrinks suggested position size in a bearish regime and defaults to 1.0 (no effect) when the HMM hasn't run. It carries zero directional score of its own; it only adjusts sizing.",
+  "meta-label composite":
+    "The geometric mean of every active signal module's confidence that a signal is correct (P(signal correct)), multiplied into Kelly Target alongside the regime multiplier. A value of exactly 1.0 for every symbol is expected, not a bug, until real MetaLabelers are trained and registered — it's the honest 'no-op' default. A hard 0.0 means a registered MetaLabeler gated the signal below the platform's minimum confidence.",
   "edge ratio":
     "Post-trade quality: how far a trade ran in your favor (MFE) versus against you (MAE). An edge ratio ≥ 1 means favorable excursion dominated adverse excursion.",
   "mfe / mae":
@@ -262,8 +266,16 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "symbol-detail": {
     title: "Symbol Detail",
     description:
-      "Deep dive on one symbol: the advisory recommendation, factor exposure, risk & regime, rolling beta, forecast skill, and the persisted options directive — plus three on-demand AI generation cards you can trigger yourself: a Claude analyst note, a Gemini chart-pattern read, and an Opal research brief. Each AI card is independent and generated only when you click its Generate button; an honest, provider-specific message explains why a card has nothing to show (e.g. a disabled capability or a missing API key) rather than a generic error.",
-    keyConcepts: ["advisory only", "kelly target", "analyst note", "chart-pattern read", "research brief"],
+      "Deep dive on one symbol: the advisory recommendation, the regime-multiplier sizing breakdown behind that Kelly Target, factor exposure, risk & regime, rolling beta, forecast skill, and the persisted options directive — plus three on-demand AI generation cards you can trigger yourself: a Claude analyst note, a Gemini chart-pattern read, and an Opal research brief. Each AI card is independent and generated only when you click its Generate button; an honest, provider-specific message explains why a card has nothing to show (e.g. a disabled capability or a missing API key) rather than a generic error.",
+    keyConcepts: [
+      "advisory only",
+      "kelly target",
+      "regime multiplier",
+      "meta-label composite",
+      "analyst note",
+      "chart-pattern read",
+      "research brief",
+    ],
   },
 };
 

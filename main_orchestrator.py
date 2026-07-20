@@ -618,6 +618,22 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     # weight vector. {} (never fabricated) when the strategy
                     # engine produced no breakdown for this ticker.
                     "score_components": row.get("Score_Components") or {},
+                    # Position-sizing decomposition (see
+                    # pipeline/production_steps.py's _SIZING_DECOMPOSITION_COLS
+                    # threading) so the webapp's Strategy Matrix / Symbol Detail
+                    # screens can show Kelly Target before vs. after the HMM
+                    # regime multiplier + meta-label composite were applied.
+                    # Same snake_case spelling reporting/state_snapshot.py's
+                    # advisory writer uses, so both writers converge and no
+                    # reader ever needs to branch on writer identity. null
+                    # (never fabricated 1.0/0.0 — CONSTRAINT #4) when the
+                    # strategy engine didn't produce a value for this ticker;
+                    # a genuine 0.0 (e.g. a MetaLabeler hard gate) is preserved,
+                    # never coerced into a fabricated no-op.
+                    "meta_label_composite": _safe_float_or_none(row.get("Meta_Label_Composite")),
+                    "regime_multiplier": _safe_float_or_none(row.get("Regime_Multiplier")),
+                    "kelly_target_pre_regime": _safe_float_or_none(row.get("Kelly_Target_Pre_Regime")),
+                    "kelly_target_post_regime": _safe_float_or_none(row.get("Kelly_Target_Post_Regime")),
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

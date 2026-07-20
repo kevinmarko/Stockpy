@@ -271,8 +271,8 @@ def _render_meta_label_distribution() -> None:
     ]
     if not values:
         st.info(
-            "meta_label_composite is not present in this snapshot (written by "
-            "main_orchestrator.py, which does not yet persist this field)."
+            "meta_label_composite is not present in this snapshot — the "
+            "strategy engine did not produce a value for any symbol this cycle."
         )
         return
 
@@ -340,11 +340,15 @@ def _render_regime_multiplier_impact() -> None:
 
     pre = sig.get("kelly_target_pre_regime")
     post = sig.get("kelly_target_post_regime")
-    if pre is None or post is None or (isinstance(pre, float) and pd.isna(pre)):
+    if (
+        pre is None or post is None
+        or (isinstance(pre, float) and pd.isna(pre))
+        or (isinstance(post, float) and pd.isna(post))
+    ):
         st.info(
             f"Pre/post-regime Kelly Target breakdown is not available for {selected} "
-            "(missing from this snapshot — written by main_orchestrator.py, which "
-            "does not yet persist this field, or the strategy engine failed this cycle)."
+            "(missing from this snapshot, or the strategy engine didn't run for "
+            "this symbol this cycle)."
         )
         return
 

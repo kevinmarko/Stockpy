@@ -77,6 +77,8 @@ import type {
   RiskGateBlockEntry,
   RiskGateBlockLog,
   RealizedTrade,
+  MetaLabelBin,
+  MetaLabelDistribution,
   RollingBeta,
   RunRecord,
   SectorSlice,
@@ -1126,6 +1128,34 @@ function readStrategyOverrides(): { weights: Record<string, number>; disabled: s
   }
 }
 
+// Honest fixture (CONSTRAINT #4): reflects the platform's REAL current state,
+// not a fabricated pretty spread. As of this writing zero MetaLabelers are
+// registered in ml.meta_labeling.global_meta_registry, so meta_label_proba
+// defaults to 1.0 (a multiplicative no-op) for every module -> every symbol's
+// meta_label_composite is a genuine 1.0. Mirrors the backend's fixed [0,1]
+// 20-bin logic exactly: a value of 1.0 lands in the LAST bin (index 19, range
+// [0.95, 1.0]), never spread across a fabricated distribution.
+function mockMetaLabelDistribution(): MetaLabelDistribution {
+  const symbolCount = 20; // matches STRATEGY_BASE's per-module `scored` count
+  const binWidth = 1 / 20;
+  const bins: MetaLabelBin[] = Array.from({ length: 20 }, (_, i) => ({
+    lo: Math.round(i * binWidth * 10000) / 10000,
+    hi: Math.round((i + 1) * binWidth * 10000) / 10000,
+    count: i === 19 ? symbolCount : 0,
+  }));
+  return {
+    bins,
+    count: symbolCount,
+    missing: 0,
+    n_gated: 0,
+    all_unity: true,
+    min: 1.0,
+    max: 1.0,
+    min_confidence: 0.4, // settings.META_LABEL_MIN_CONFIDENCE default
+    reason: null,
+  };
+}
+
 function mockStrategyMatrix(): StrategyMatrix {
   const ov = readStrategyOverrides();
   const disabled = ov?.disabled ?? [];
@@ -1169,6 +1199,7 @@ function mockStrategyMatrix(): StrategyMatrix {
         }
       : { detected: false, keys: [], note: "" },
     reason: null,
+    meta_label: mockMetaLabelDistribution(),
   };
 }
 
@@ -3053,6 +3084,28 @@ export const mockApi = {
         covar_proxy: +(rng() * 0.5).toFixed(3),
         hmm_risk_on: +(0.5 + rng() * 0.5).toFixed(2),
       },
+      // DUK exercises the honest-null branch (mirrors getSymbolsCompare's
+      // hasRegimeFields convention) — the strategy engine didn't produce a
+      // sizing decomposition for it this cycle. meta_label_composite is a
+      // genuine 1.0 for every other symbol (the platform's real current
+      // state: no MetaLabelers registered), never a fabricated spread.
+      sizing:
+        sym === "DUK"
+          ? {
+              kelly_target_pre_regime: null,
+              kelly_target_post_regime: null,
+              regime_multiplier: null,
+              meta_label_composite: null,
+              max_position_weight: 1.0,
+            }
+          : {
+              kelly_target_pre_regime:
+                position_pct == null ? null : +(position_pct * 0.55).toFixed(4),
+              kelly_target_post_regime: position_pct == null ? null : +(position_pct * 0.5).toFixed(4),
+              regime_multiplier: +(0.8 + rng() * 0.4).toFixed(3),
+              meta_label_composite: 1.0,
+              max_position_weight: 1.0,
+            },
       held_by_pilots,
     };
     return delay(detail);
@@ -3103,11 +3156,10 @@ export const mockApi = {
       const kelly_target = score == null ? null : +(Math.max(score, 0) * 0.1).toFixed(4);
 
       // DUK deliberately carries no meta_label_composite/regime_multiplier —
-      // those two fields are ONLY ever populated by the advisory snapshot
-      // writer, not the richer main_orchestrator one (see
-      // pilots/symbols.py::compare_symbols' docstring); this fixture exercises
-      // that honest-null branch instead of pretending every symbol always has
-      // them.
+      // both fields are null whenever the strategy engine didn't produce a
+      // value for a symbol that cycle (see pilots/symbols.py::compare_symbols'
+      // docstring); this fixture exercises that honest-null branch instead of
+      // pretending every symbol always has them.
       const hasRegimeFields = sym !== "DUK";
 
       return {

@@ -13,7 +13,26 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StrategyMatrix } from "./StrategyMatrix";
 import { api } from "../api/client";
-import type { StrategyMatrix as StrategyMatrixT } from "../api/types";
+import type { MetaLabelDistribution, StrategyMatrix as StrategyMatrixT } from "../api/types";
+
+function allUnityMetaLabel(): MetaLabelDistribution {
+  const bins = Array.from({ length: 20 }, (_, i) => ({
+    lo: +(i * 0.05).toFixed(2),
+    hi: +((i + 1) * 0.05).toFixed(2),
+    count: i === 19 ? 20 : 0,
+  }));
+  return {
+    bins,
+    count: 20,
+    missing: 0,
+    n_gated: 0,
+    all_unity: true,
+    min: 1.0,
+    max: 1.0,
+    min_confidence: 0.4,
+    reason: null,
+  };
+}
 
 function baseMatrix(overrides: Partial<StrategyMatrixT> = {}): StrategyMatrixT {
   return {
@@ -32,6 +51,7 @@ function baseMatrix(overrides: Partial<StrategyMatrixT> = {}): StrategyMatrixT {
     note: "Writes persist to .env and apply on the next daemon/pipeline launch.",
     env_drift: { detected: false, keys: [], note: "" },
     reason: null,
+    meta_label: allUnityMetaLabel(),
     ...overrides,
   };
 }
@@ -127,5 +147,73 @@ describe("StrategyMatrix screen", () => {
     await userEvent.type(input, "150");
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("button", { name: /Save changes/ })).toBeDisabled();
+  });
+
+  describe("Meta-label confidence distribution", () => {
+    it("an all-1.0 distribution renders the chart plus the honest 'not a bug' info box", async () => {
+      vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(baseMatrix());
+      renderScreen();
+      const section = await screen.findByTestId("meta-label-section");
+      expect(within(section).getByTestId("meta-label-chart")).toBeInTheDocument();
+      const notice = within(section).getByTestId("meta-label-all-unity-notice");
+      expect(notice).toHaveTextContent("Every symbol shows exactly 1.0");
+      expect(notice).toHaveTextContent("NOT fabricated");
+      // The n_gated caption is NOT shown when all_unity — it's the alternate branch.
+      expect(within(section).queryByTestId("meta-label-gated-caption")).not.toBeInTheDocument();
+    });
+
+    it("a mixed distribution with a genuine hard-gate shows the n_gated count, not the all-unity box", async () => {
+      vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(
+        baseMatrix({
+          meta_label: {
+            bins: Array.from({ length: 20 }, (_, i) => ({
+              lo: +(i * 0.05).toFixed(2),
+              hi: +((i + 1) * 0.05).toFixed(2),
+              // one symbol hard-gated to 0.0 (bin 0), the rest at 1.0 (bin 19)
+              count: i === 0 ? 1 : i === 19 ? 19 : 0,
+            })),
+            count: 20,
+            missing: 0,
+            n_gated: 1,
+            all_unity: false,
+            min: 0.0,
+            max: 1.0,
+            min_confidence: 0.4,
+            reason: null,
+          },
+        }),
+      );
+      renderScreen();
+      const section = await screen.findByTestId("meta-label-section");
+      expect(within(section).queryByTestId("meta-label-all-unity-notice")).not.toBeInTheDocument();
+      const caption = within(section).getByTestId("meta-label-gated-caption");
+      expect(caption).toHaveTextContent("20 symbols");
+      expect(caption).toHaveTextContent("1 currently hard-gated to 0.0");
+      expect(caption).toHaveTextContent("0.40");
+    });
+
+    it("an empty distribution (no snapshot data) renders the honest reason, not a fabricated chart", async () => {
+      vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(
+        baseMatrix({
+          meta_label: {
+            bins: [],
+            count: 0,
+            missing: 0,
+            n_gated: 0,
+            all_unity: false,
+            min: null,
+            max: null,
+            min_confidence: 0.4,
+            reason: "No meta_label_composite values in this snapshot.",
+          },
+        }),
+      );
+      renderScreen();
+      const section = await screen.findByTestId("meta-label-section");
+      expect(within(section).getByTestId("meta-label-empty")).toHaveTextContent(
+        "No meta_label_composite values in this snapshot.",
+      );
+      expect(within(section).queryByTestId("meta-label-chart")).not.toBeInTheDocument();
+    });
   });
 });

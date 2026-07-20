@@ -245,6 +245,33 @@ class TestStateSnapshot:
         # a fabricated/blank value and not the literal "nan".
         assert aapl_signal["sector"] == "Technology"
 
+    def test_sizing_decomposition_populated_via_real_run_pipeline(self, orchestrator_run):
+        """Same chain as test_score_components_populated_via_real_run_pipeline
+        above, for the position-sizing decomposition StrategyEngine.
+        evaluate_security() returns alongside Score_Components in the SAME
+        dict (strategy_engine.py's Meta_Label_Composite/Regime_Multiplier/
+        Kelly_Target_Pre_Regime/Kelly_Target_Post_Regime) -- confirms
+        pipeline/production_steps.py's threading of THOSE four keys into
+        eval_results + the dashboard_df column-projection loop (previously
+        only Score_Components was threaded) actually reaches
+        state_snapshot.json via a REAL run_pipeline() call, not just a
+        hand-built DataFrame (see tests/test_state_snapshot_parity.py for the
+        unit-level null-honesty/genuine-zero coverage of the writer itself).
+        """
+        snap = _read_json(orchestrator_run["output_dir"] / "state_snapshot.json")
+        aapl_signal = next(s for s in snap["signals"] if s["symbol"] == "AAPL")
+        for key in (
+            "meta_label_composite", "regime_multiplier",
+            "kelly_target_pre_regime", "kelly_target_post_regime",
+        ):
+            assert key in aapl_signal, f"state_snapshot.json signal missing {key!r}"
+            # Real strategy-engine output for a scored symbol: a real float,
+            # never a fabricated placeholder and never a string/NaN leak.
+            assert isinstance(aapl_signal[key], float), (
+                f"{key} should be a real float from a symbol the strategy "
+                f"engine actually scored, got {aapl_signal[key]!r}"
+            )
+
     def test_advisory_loop_ran_and_populated_advisory_action(self, orchestrator_run):
         """The only externally-observable proof that Step 3b (the advisory
         evaluation loop) actually executed and wrote back into final_df is

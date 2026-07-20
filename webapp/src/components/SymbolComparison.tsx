@@ -42,9 +42,9 @@ const CHART_COLORS = ["#38bdf8", "#10b981", "#f59e0b", "#a855f7", "#ec4899"];
  * Honesty (CONSTRAINT #4): a symbol not in the latest snapshot still renders
  * a row (labeled "not tracked"), never silently dropped or hard-failed. Every
  * null numeric leaf renders "—", never a fabricated 0. `meta_label_composite`/
- * `regime_multiplier` are legitimately `null` when the active snapshot writer
- * doesn't carry them (the richer main_orchestrator writer doesn't compute
- * them at all) — that is an honest absence, not a bug.
+ * `regime_multiplier` are legitimately `null` whenever the strategy engine
+ * didn't produce a value for that symbol this cycle — an honest absence, not
+ * a bug.
  */
 export function SymbolComparison() {
   const [selected, setSelected] = useState<string[]>(() => {

@@ -1,7 +1,20 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from "recharts";
 import { api } from "../api/client";
-import type { StrategyMatrix as StrategyMatrixT, StrategyModuleRow } from "../api/types";
+import type {
+  MetaLabelDistribution,
+  StrategyMatrix as StrategyMatrixT,
+  StrategyModuleRow,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading } from "../components/ui";
@@ -79,8 +92,100 @@ export function StrategyMatrix() {
 
       {loading && <Loading lines={4} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-      {!loading && !error && data && <MatrixEditor data={data} onReload={reload} />}
+      {!loading && !error && data && (
+        <>
+          <MetaLabelSection dist={data.meta_label} />
+          <MatrixEditor data={data} onReload={reload} />
+        </>
+      )}
     </div>
+  );
+}
+
+/**
+ * Portfolio-wide distribution of `meta_label_composite` — ports
+ * `gui/panels/strategy_matrix.py::_render_meta_label_distribution`. Rides the
+ * screen's single existing `GET /strategy/matrix` fetch, no second request.
+ *
+ * The `all_unity` info box is load-bearing, not decorative: with no
+ * MetaLabelers registered in `ml.meta_labeling.global_meta_registry` (the
+ * platform's current state), every module's `meta_label_proba` defaults to
+ * 1.0 (a multiplicative no-op), so a single spike at 1.0 is the CORRECT
+ * rendering — without this explanation an operator reads a one-bar chart as
+ * broken.
+ */
+function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
+  const chartData = useMemo(
+    () =>
+      dist.bins.map((b) => ({
+        label: `${b.lo.toFixed(2)}–${b.hi.toFixed(2)}`,
+        count: b.count,
+      })),
+    [dist.bins],
+  );
+
+  return (
+    <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="meta-label-section">
+      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Meta-label confidence distribution</h2>
+      <p style={{ margin: "0 0 10px", fontSize: 13, color: theme.textMuted }}>
+        Distribution of meta-label confidence (geometric mean of active
+        modules' P(signal correct)) across all symbols in the last snapshot.
+      </p>
+
+      {dist.count === 0 ? (
+        <div className="empty" data-testid="meta-label-empty" style={{ padding: 20 }}>
+          {dist.reason ?? "No meta-label data available."}
+        </div>
+      ) : (
+        <>
+          <div style={{ height: 220 }} data-testid="meta-label-chart">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                <XAxis
+                  dataKey="label"
+                  stroke={theme.textMuted}
+                  fontSize={9}
+                  tickLine={false}
+                  interval={1}
+                  angle={-45}
+                  textAnchor="end"
+                  height={50}
+                />
+                <YAxis stroke={theme.textMuted} fontSize={10} tickLine={false} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
+                  labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
+                  itemStyle={{ fontSize: 11 }}
+                />
+                <Bar dataKey="count" fill={theme.accent} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {dist.all_unity ? (
+            <div className="notice notice-info" style={{ marginTop: 10 }} data-testid="meta-label-all-unity-notice">
+              <span>ℹ️</span>
+              <span>
+                Every symbol shows exactly 1.0 — this is expected pre-Stage-4-deployment.
+                No MetaLabelers are currently registered in{" "}
+                <code>ml.meta_labeling.global_meta_registry</code>, so{" "}
+                <code>meta_label_proba</code> defaults to 1.0 (a multiplicative
+                no-op) for every signal module. This is NOT fabricated
+                variation; the distribution will spread once real MetaLabelers
+                are trained and registered.
+              </span>
+            </div>
+          ) : (
+            <p style={{ margin: "10px 0 0", fontSize: 12.5, color: theme.textMuted }} data-testid="meta-label-gated-caption">
+              {dist.count} symbols. {dist.n_gated} currently hard-gated to 0.0
+              (a registered MetaLabeler's P(correct) fell below{" "}
+              {dist.min_confidence.toFixed(2)}).
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

@@ -169,6 +169,103 @@ def test_effective_weight_resolved_when_overrides_active_and_regime_known(tmp_pa
 
 
 # ---------------------------------------------------------------------------
+# Meta-label confidence distribution (_meta_label_distribution / the
+# "meta_label" field on strategy_matrix()'s return)
+# ---------------------------------------------------------------------------
+
+
+def _meta_label_signals(values):
+    """Build a signals[] list, one entry per value. `None` means the key is
+    OMITTED entirely (the "never computed" case, distinct from a coerce-to-
+    None non-numeric value)."""
+    out = []
+    for i, v in enumerate(values):
+        sig = {"symbol": f"SYM{i}"}
+        if v is not None:
+            sig["meta_label_composite"] = v
+        out.append(sig)
+    return out
+
+
+def test_all_unity_distribution(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    path = _write_snapshot(tmp_path, signals=_meta_label_signals([1.0] * 5))
+    ml = sm.strategy_matrix(snapshot_path=path)["meta_label"]
+    assert ml["count"] == 5
+    assert ml["missing"] == 0
+    assert ml["n_gated"] == 0
+    assert ml["all_unity"] is True
+    assert ml["min"] == pytest.approx(1.0)
+    assert ml["max"] == pytest.approx(1.0)
+    assert ml["reason"] is None
+    # All 5 land in the top bin ([0.95, 1.0]); every other bin is empty.
+    assert ml["bins"][-1]["count"] == 5
+    assert sum(b["count"] for b in ml["bins"][:-1]) == 0
+    assert sum(b["count"] for b in ml["bins"]) == ml["count"]
+
+
+def test_mixed_distribution_with_genuine_hard_gate(tmp_path, monkeypatch):
+    """Regression test for the fixed `or 1.0` bug: a real 0.0 (a MetaLabeler
+    hard-gate) must be COUNTED by n_gated, not silently rewritten away."""
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    path = _write_snapshot(
+        tmp_path, signals=_meta_label_signals([1.0, 1.0, 0.0, 0.5])
+    )
+    ml = sm.strategy_matrix(snapshot_path=path)["meta_label"]
+    assert ml["count"] == 4
+    assert ml["n_gated"] == 1
+    assert ml["all_unity"] is False
+    assert ml["min"] == pytest.approx(0.0)
+    assert ml["max"] == pytest.approx(1.0)
+
+
+def test_missing_and_non_numeric_values_counted_as_missing_not_fabricated(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    signals = _meta_label_signals([1.0, None])  # None -> key omitted entirely
+    signals.append({"symbol": "SYM_NAN", "meta_label_composite": float("nan")})
+    signals.append({"symbol": "SYM_INF", "meta_label_composite": float("inf")})
+    signals.append({"symbol": "SYM_STR", "meta_label_composite": "not-a-number"})
+    path = _write_snapshot(tmp_path, signals=signals)
+    ml = sm.strategy_matrix(snapshot_path=path)["meta_label"]
+    assert ml["count"] == 1  # only the real 1.0
+    assert ml["missing"] == 4  # omitted key + NaN + inf + non-numeric
+    assert ml["reason"] is None  # values is non-empty -> no "empty" reason
+
+
+def test_empty_snapshot_gives_honest_reason_not_a_fabricated_chart(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    path = _write_snapshot(tmp_path, signals=[])
+    ml = sm.strategy_matrix(snapshot_path=path)["meta_label"]
+    assert ml["count"] == 0
+    assert ml["all_unity"] is False  # never true on an empty set
+    assert ml["min"] is None
+    assert ml["max"] is None
+    assert ml["reason"] is not None
+    assert sum(b["count"] for b in ml["bins"]) == 0
+
+
+def test_no_snapshot_at_all_gives_meta_label_with_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    out = sm.strategy_matrix(snapshot_path=str(tmp_path / "does_not_exist.json"))
+    assert out["meta_label"]["count"] == 0
+    assert out["meta_label"]["reason"] is not None
+
+
+def test_min_confidence_sourced_from_settings_not_a_literal(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "SIGNAL_WEIGHTS", {}, raising=False)
+    monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", [], raising=False)
+    monkeypatch.setattr(settings, "META_LABEL_MIN_CONFIDENCE", 0.55, raising=False)
+    path = _write_snapshot(tmp_path, signals=[])
+    ml = sm.strategy_matrix(snapshot_path=path)["meta_label"]
+    assert ml["min_confidence"] == pytest.approx(0.55)
+
+
+# ---------------------------------------------------------------------------
 # Parity with the real signals.aggregator (duplicated to stay off the API import path)
 # ---------------------------------------------------------------------------
 

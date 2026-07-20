@@ -77,7 +77,7 @@ class TestSymbolDetail:
         d = symbol_detail(snapshot, "AAPL")
         assert set(d) == {
             "symbol", "as_of", "reason",
-            "identity", "advisory", "factors", "ranges", "risk",
+            "identity", "advisory", "factors", "ranges", "risk", "sizing",
             "held_by_pilots",
         }
 
@@ -134,6 +134,40 @@ class TestSymbolDetail:
         for k in ("mfe", "mae", "edge_ratio", "macro_status"):
             assert risk[k] is None, k
             assert risk[k] != 0.0  # honest null, never a fabricated 0.0
+
+    def test_sizing_present_values(self, snapshot):
+        sizing = symbol_detail(snapshot, "AAPL")["sizing"]
+        assert sizing["kelly_target_pre_regime"] == pytest.approx(0.041)
+        assert sizing["kelly_target_post_regime"] == pytest.approx(0.041)
+        assert sizing["regime_multiplier"] == pytest.approx(1.0)
+        assert sizing["meta_label_composite"] == pytest.approx(1.0)
+        # Sourced from settings.MAX_POSITION_WEIGHT, not the snapshot.
+        from settings import settings as _settings
+        assert sizing["max_position_weight"] == _settings.MAX_POSITION_WEIGHT
+
+    def test_sizing_absent_fields_are_none(self):
+        # T's real fixture-adjacent case: a symbol whose snapshot entry simply
+        # never carries the sizing decomposition (e.g. main_orchestrator wrote
+        # it before pipeline/production_steps.py threaded these four keys).
+        snap = {"timestamp": "t", "signals": [{"symbol": "ZZ", "price": 10.0}]}
+        sizing = symbol_detail(snap, "ZZ")["sizing"]
+        for k in ("kelly_target_pre_regime", "kelly_target_post_regime", "regime_multiplier", "meta_label_composite"):
+            assert sizing[k] is None, k
+
+    def test_sizing_genuine_zero_kept_not_coerced_to_none_or_one(self):
+        # Regression test for the fixed `or 1.0` bug: a real hard-gate (0.0)
+        # must survive symbol_detail's coercion untouched — never silently
+        # rewritten to a fabricated no-op (1.0) or dropped to None.
+        snap = {"timestamp": "t", "signals": [{
+            "symbol": "ZZ", "price": 10.0,
+            "meta_label_composite": 0.0,
+            "kelly_target_post_regime": 0.0,
+        }]}
+        sizing = symbol_detail(snap, "ZZ")["sizing"]
+        assert sizing["meta_label_composite"] == 0.0
+        assert sizing["meta_label_composite"] is not None
+        assert sizing["kelly_target_post_regime"] == 0.0
+        assert sizing["kelly_target_post_regime"] is not None
 
     def test_fixture_absent_factor_fields_are_none(self, snapshot):
         f = symbol_detail(snapshot, "AAPL")["factors"]

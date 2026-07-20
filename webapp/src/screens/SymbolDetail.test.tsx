@@ -310,4 +310,40 @@ describe("SymbolDetail screen (real mock API)", () => {
       await within(researchSection).findByText(/OPAL_RESEARCH_ENABLED/);
     });
   });
+
+  describe("Regime sizing impact card", () => {
+    it("a symbol with a full sizing decomposition renders pre/post Kelly, the pp delta, and the multiplier", async () => {
+      renderSymbol("AAPL");
+      const card = (
+        await screen.findByRole("heading", { name: "Regime sizing impact" })
+      ).closest("section") as HTMLElement;
+
+      expect(within(card).getByText("Kelly Target (pre-regime)")).toBeInTheDocument();
+      expect(within(card).getByText("Kelly Target (post-regime)")).toBeInTheDocument();
+      expect(within(card).getByText("HMM regime multiplier")).toBeInTheDocument();
+      // pp delta is rendered alongside the post-regime value, signed.
+      expect(within(card).getByText(/\(.*pp\)/)).toBeInTheDocument();
+      expect(within(card).getByTestId("regime-sizing-chart")).toBeInTheDocument();
+      expect(within(card).getByTestId("regime-sizing-meta-label")).toHaveTextContent(
+        "Meta-label composite currently 1.000",
+      );
+      // Never a raw NaN anywhere in the card (the direct regression test for
+      // the legacy panel's asymmetric pre/post NaN-check bug).
+      expect(card.textContent).not.toMatch(/NaN/i);
+    });
+
+    it("a symbol missing the sizing decomposition (DUK) renders the honest unavailable message, never a fabricated or NaN value", async () => {
+      renderSymbol("DUK");
+      const card = (
+        await screen.findByRole("heading", { name: "Regime sizing impact" })
+      ).closest("section") as HTMLElement;
+
+      expect(card.textContent).toContain(
+        "Pre/post-regime Kelly Target breakdown is not available for DUK",
+      );
+      expect(within(card).queryByTestId("regime-sizing-chart")).not.toBeInTheDocument();
+      expect(within(card).queryByText("Kelly Target (pre-regime)")).not.toBeInTheDocument();
+      expect(card.textContent).not.toMatch(/NaN/i);
+    });
+  });
 });
