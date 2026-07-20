@@ -4,7 +4,7 @@
  * honesty invariant (a null factor/risk leaf renders "—", never a fabricated
  * value), and the honest 404 for an unknown ticker.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -135,6 +135,179 @@ describe("SymbolDetail screen (real mock API)", () => {
       // the newly-logged entry renders.
       await screen.findByText("⏭ Passed");
       expect(screen.queryByText("No decisions logged yet for NVDA.")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("On-demand AI generation cards", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("Claude analyst note: Generate renders headline / why_now / key risks / invalidation for a known symbol", async () => {
+      const user = userEvent.setup();
+      renderSymbol("AAPL");
+      await screen.findByRole("heading", { name: "AAPL" });
+      const section = screen
+        .getByRole("heading", { name: "Claude analyst note" })
+        .closest("section") as HTMLElement;
+
+      await user.click(within(section).getByRole("button", { name: "Generate" }));
+
+      expect(await within(section).findByText(/Mean-reversion entry/)).toBeInTheDocument();
+      expect(within(section).getByText(/shallow, orderly dip/)).toBeInTheDocument();
+      expect(within(section).getByText(/Key risks/)).toBeInTheDocument();
+      expect(within(section).getByText(/Invalidation:/)).toBeInTheDocument();
+    });
+
+    it("Claude analyst note: an honest missing_key reason renders the specific operator-facing message, never a generic error", async () => {
+      const user = userEvent.setup();
+      renderSymbol("NVDA");
+      await screen.findByRole("heading", { name: "NVDA" });
+      const section = screen
+        .getByRole("heading", { name: "Claude analyst note" })
+        .closest("section") as HTMLElement;
+
+      await user.click(within(section).getByRole("button", { name: "Generate" }));
+
+      expect(
+        await within(section).findByText(
+          "Claude commentary is enabled, but ANTHROPIC_API_KEY is not configured."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it("Gemini chart read: Generate renders the chart image plus pattern / support / resistance / narrative for a known symbol", async () => {
+      const user = userEvent.setup();
+      renderSymbol("AAPL");
+      await screen.findByRole("heading", { name: "AAPL" });
+      const section = screen
+        .getByRole("heading", { name: "Gemini chart read" })
+        .closest("section") as HTMLElement;
+
+      await user.click(within(section).getByRole("button", { name: "Generate" }));
+
+      expect(await within(section).findByRole("img", { name: "AAPL price chart" })).toBeInTheDocument();
+      expect(within(section).getByText("ascending triangle")).toBeInTheDocument();
+      expect(within(section).getByText(/consolidating in a tightening range/)).toBeInTheDocument();
+    });
+
+    it("Gemini chart read: the chart image renders even when available is false (generation_failed) -- the chart itself still worked", async () => {
+      const user = userEvent.setup();
+      renderSymbol("NVDA");
+      await screen.findByRole("heading", { name: "NVDA" });
+      const section = screen
+        .getByRole("heading", { name: "Gemini chart read" })
+        .closest("section") as HTMLElement;
+
+      await user.click(within(section).getByRole("button", { name: "Generate" }));
+
+      expect(await within(section).findByRole("img", { name: "NVDA price chart" })).toBeInTheDocument();
+      expect(
+        within(section).getByText(
+          "The chart rendered, but Gemini couldn't generate a pattern read for it right now — try again."
+        )
+      ).toBeInTheDocument();
+      // The honest-failure branch never renders pattern/support/resistance fields.
+      expect(within(section).queryByText("ascending triangle")).not.toBeInTheDocument();
+    });
+
+    it("Opal research brief: Generate renders thesis context / catalysts / risk factors / recent developments / sources for a known symbol", async () => {
+      const user = userEvent.setup();
+      renderSymbol("AAPL");
+      await screen.findByRole("heading", { name: "AAPL" });
+      const section = screen
+        .getByRole("heading", { name: "Opal research brief" })
+        .closest("section") as HTMLElement;
+
+      await user.click(within(section).getByRole("button", { name: "Generate" }));
+
+      expect(await within(section).findByText(/Q3 earnings call/)).toBeInTheDocument();
+      expect(within(section).getByText("Catalysts")).toBeInTheDocument();
+      expect(within(section).getByText("Risk factors")).toBeInTheDocument();
+      expect(within(section).getByText("Recent developments")).toBeInTheDocument();
+      expect(within(section).getByText(/Finnhub headlines/)).toBeInTheDocument();
+    });
+
+    it("Opal research brief: an honest disabled reason renders the specific operator-facing message, never a generic error", async () => {
+      const user = userEvent.setup();
+      renderSymbol("NVDA");
+      await screen.findByRole("heading", { name: "NVDA" });
+      const section = screen
+        .getByRole("heading", { name: "Opal research brief" })
+        .closest("section") as HTMLElement;
+
+      await user.click(within(section).getByRole("button", { name: "Generate" }));
+
+      expect(
+        await within(section).findByText(
+          "Opal research briefs are off. An operator can enable it via OPAL_RESEARCH_ENABLED in .env."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it("clicking each card's Generate button calls the matching client method with the current symbol", async () => {
+      const user = userEvent.setup();
+      const commentarySpy = vi.spyOn(api, "generateCommentary");
+      const chartSpy = vi.spyOn(api, "generateChart");
+      const researchSpy = vi.spyOn(api, "generateResearch");
+
+      renderSymbol("AAPL");
+      await screen.findByRole("heading", { name: "AAPL" });
+
+      const commentarySection = screen
+        .getByRole("heading", { name: "Claude analyst note" })
+        .closest("section") as HTMLElement;
+      await user.click(within(commentarySection).getByRole("button", { name: "Generate" }));
+      expect(commentarySpy).toHaveBeenCalledWith("AAPL");
+
+      const chartSection = screen
+        .getByRole("heading", { name: "Gemini chart read" })
+        .closest("section") as HTMLElement;
+      await user.click(within(chartSection).getByRole("button", { name: "Generate" }));
+      expect(chartSpy).toHaveBeenCalledWith("AAPL");
+
+      const researchSection = screen
+        .getByRole("heading", { name: "Opal research brief" })
+        .closest("section") as HTMLElement;
+      await user.click(within(researchSection).getByRole("button", { name: "Generate" }));
+      expect(researchSpy).toHaveBeenCalledWith("AAPL");
+    });
+
+    it("a request still in flight disables the Generate button (spinner state)", async () => {
+      const user = userEvent.setup();
+      renderSymbol("AAPL");
+      await screen.findByRole("heading", { name: "AAPL" });
+      const section = screen
+        .getByRole("heading", { name: "Claude analyst note" })
+        .closest("section") as HTMLElement;
+      const button = within(section).getByRole("button", { name: "Generate" });
+
+      await user.click(button);
+      // useMutation sets pending synchronously before the mock's delay()
+      // resolves -- the button must be disabled and aria-busy for that window.
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-busy", "true");
+
+      await within(section).findByText(/Invalidation:/);
+      expect(button).not.toBeDisabled();
+    });
+
+    it("one card failing/being disabled never blocks the other two -- NVDA's missing_key commentary still lets the chart and research cards render their own results", async () => {
+      const user = userEvent.setup();
+      renderSymbol("NVDA");
+      await screen.findByRole("heading", { name: "NVDA" });
+
+      const commentarySection = screen
+        .getByRole("heading", { name: "Claude analyst note" })
+        .closest("section") as HTMLElement;
+      await user.click(within(commentarySection).getByRole("button", { name: "Generate" }));
+      await within(commentarySection).findByText(/ANTHROPIC_API_KEY is not configured/);
+
+      const researchSection = screen
+        .getByRole("heading", { name: "Opal research brief" })
+        .closest("section") as HTMLElement;
+      await user.click(within(researchSection).getByRole("button", { name: "Generate" }));
+      // NVDA's research fixture is the honest disabled branch too -- confirms
+      // it renders its OWN reason independent of the commentary card's state.
+      await within(researchSection).findByText(/OPAL_RESEARCH_ENABLED/);
     });
   });
 });

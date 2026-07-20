@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
+  AiChartResponse,
+  AiCommentaryResponse,
+  AiResearchResponse,
   ForecastSkill,
   OptionsDirective,
   RollingBeta,
@@ -9,9 +12,11 @@ import type {
   SymbolOptions,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Loading, MetricBadge } from "../components/ui";
 import { PerfLine } from "../components/charts";
 import { DecisionModal } from "../components/DecisionModal";
+import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { realizableTheta } from "../optionsHonesty";
@@ -136,6 +141,8 @@ export function SymbolDetail() {
       {data.reason && (
         <p style={{ color: theme.textMuted, fontSize: 13, marginTop: 10 }}>{data.reason}</p>
       )}
+
+      <TabGuide tabKey="symbol-detail" />
 
       {/* Advisory */}
       <section className="card card-pad" style={{ margin: "16px 0" }}>
@@ -369,6 +376,14 @@ export function SymbolDetail() {
         )}
       </section>
 
+      {/* On-demand AI generation — Claude analyst note, Gemini chart-pattern
+          read, Opal research brief. Each is operator-triggered only (never
+          generated automatically) and fully independent: one card failing or
+          being disabled never blocks the other two. */}
+      <CommentaryCard symbol={data.symbol} />
+      <ChartReadCard symbol={data.symbol} />
+      <ResearchBriefCard symbol={data.symbol} />
+
       {/* Held by Pilots — the Stockpy reverse cross-link */}
       <section className="card card-pad" style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>
@@ -433,6 +448,230 @@ function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
         <StatRow label="IVR proxy" value={fmtNum(d.IVR_Proxy ?? null, 1)} />
       </div>
     </>
+  );
+}
+
+// ---- On-demand AI generation cards -----------------------------------------
+// Operator-facing copy per honest `reason` — never a generic "error"; each
+// message names the specific env var / condition the backend reported so an
+// operator knows exactly what to do next.
+
+const COMMENTARY_REASON_COPY: Record<NonNullable<AiCommentaryResponse["reason"]>, string> = {
+  disabled: "Claude commentary is off. An operator can enable it via LLM_COMMENTARY_ENABLED in .env.",
+  missing_key: "Claude commentary is enabled, but ANTHROPIC_API_KEY is not configured.",
+  generation_failed: "Claude couldn't generate a note for this symbol right now — try again.",
+};
+
+const CHART_REASON_COPY: Record<NonNullable<AiChartResponse["reason"]>, string> = {
+  disabled: "Gemini chart reads are off. An operator can enable it via LLM_COMMENTARY_ENABLED in .env.",
+  missing_key: "Gemini chart reads are enabled, but GEMINI_API_KEY is not configured.",
+  no_bars: "Not enough cached price history to render a chart for this symbol yet.",
+  chart_render_failed: "The chart couldn't be rendered for this symbol right now — try again.",
+  generation_failed: "The chart rendered, but Gemini couldn't generate a pattern read for it right now — try again.",
+};
+
+const RESEARCH_REASON_COPY: Record<NonNullable<AiResearchResponse["reason"]>, string> = {
+  disabled: "Opal research briefs are off. An operator can enable it via OPAL_RESEARCH_ENABLED in .env.",
+  generation_failed: "Opal couldn't generate a research brief for this symbol right now — try again.",
+};
+
+/** Honest empty/disabled-state box — reused by all three AI cards. */
+function ReasonNotice({ text }: { text: string }) {
+  return (
+    <div className="empty" style={{ padding: 18, marginTop: 12 }}>
+      {text}
+    </div>
+  );
+}
+
+/** Small labelled bullet list — reused for key_risks / support / resistance /
+ * catalysts / risk_factors / recent_developments. Renders nothing for an
+ * empty list rather than an empty heading (CONSTRAINT #4 — several of these
+ * fields may legitimately be empty, not every empty case is an error). */
+function BulletList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 4 }}>{title}</div>
+      <ul style={{ margin: 0, paddingLeft: 18 }}>
+        {items.map((it, i) => (
+          <li
+            key={i}
+            style={{ fontSize: 13.5, lineHeight: 1.5, color: theme.textSecondary, marginBottom: 2 }}
+          >
+            {it}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Shared header row: title + Generate button (disabled/spinner while pending). */
+function AiCardHeader({
+  title,
+  subtitle,
+  pending,
+  onGenerate,
+}: {
+  title: string;
+  subtitle: string;
+  pending: boolean;
+  onGenerate: () => void;
+}) {
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <h2 style={{ fontSize: 16, margin: 0 }}>{title}</h2>
+        <Button variant="neutral" pending={pending} onClick={onGenerate}>
+          Generate
+        </Button>
+      </div>
+      <p style={{ color: theme.textMuted, fontSize: 12, margin: "4px 0 0" }}>{subtitle}</p>
+    </>
+  );
+}
+
+/** Claude analyst-grade narrative: headline / why-now / key risks / invalidation. */
+function CommentaryCard({ symbol }: { symbol: string }) {
+  const mutation = useMutation(() => api.generateCommentary(symbol));
+  const data = mutation.result;
+
+  return (
+    <section className="card card-pad" style={{ marginBottom: 16 }}>
+      <AiCardHeader
+        title="Claude analyst note"
+        subtitle={`On-demand Claude narrative for ${symbol} — not generated automatically.`}
+        pending={mutation.pending}
+        onGenerate={() => mutation.run()}
+      />
+      {mutation.error && (
+        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+          <span>{mutation.error}</span>
+        </div>
+      )}
+      {data && !data.available && (
+        <ReasonNotice
+          text={
+            data.reason
+              ? COMMENTARY_REASON_COPY[data.reason]
+              : "Claude couldn't generate a note for this symbol right now — try again."
+          }
+        />
+      )}
+      {data?.available && data.payload && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>{data.payload.headline}</div>
+          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: 8 }}>
+            {data.payload.why_now}
+          </p>
+          <BulletList title="Key risks" items={data.payload.key_risks} />
+          <p style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 10, lineHeight: 1.5 }}>
+            <strong style={{ color: theme.textSecondary }}>Invalidation:</strong>{" "}
+            {data.payload.invalidation}
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Gemini Vision chart-pattern read. Renders the chart image whenever
+ * `chart_png_base64` is present, independent of `available` — the chart can
+ * render fine even when the AI narrative failed. */
+function ChartReadCard({ symbol }: { symbol: string }) {
+  const mutation = useMutation(() => api.generateChart(symbol));
+  const data = mutation.result;
+
+  return (
+    <section className="card card-pad" style={{ marginBottom: 16 }}>
+      <AiCardHeader
+        title="Gemini chart read"
+        subtitle={`On-demand chart-pattern read for ${symbol} — not generated automatically.`}
+        pending={mutation.pending}
+        onGenerate={() => mutation.run()}
+      />
+      {mutation.error && (
+        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+          <span>{mutation.error}</span>
+        </div>
+      )}
+      {data?.chart_png_base64 && (
+        <img
+          src={`data:image/png;base64,${data.chart_png_base64}`}
+          alt={`${symbol} price chart`}
+          style={{ width: "100%", borderRadius: "var(--r-md)", marginTop: 12, display: "block" }}
+        />
+      )}
+      {data?.available && data.payload && (
+        <div style={{ marginTop: 12 }}>
+          <div className="list">
+            <StatRow label="Pattern" value={data.payload.pattern_name} />
+            <StatRow label="Trend" value={data.payload.trend_direction} />
+            <StatRow label="Confidence" value={data.payload.confidence} />
+          </div>
+          <BulletList title="Support" items={data.payload.support_levels} />
+          <BulletList title="Resistance" items={data.payload.resistance_levels} />
+          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: 10 }}>
+            {data.payload.narrative}
+          </p>
+        </div>
+      )}
+      {data && !data.available && (
+        <ReasonNotice
+          text={
+            data.reason
+              ? CHART_REASON_COPY[data.reason]
+              : "Gemini couldn't generate a chart read for this symbol right now — try again."
+          }
+        />
+      )}
+    </section>
+  );
+}
+
+/** Opal (OpenAI/Gemini) grounded research brief — qualitative-only, sourced
+ * from real retrieved news/earnings. */
+function ResearchBriefCard({ symbol }: { symbol: string }) {
+  const mutation = useMutation(() => api.generateResearch(symbol));
+  const data = mutation.result;
+
+  return (
+    <section className="card card-pad" style={{ marginBottom: 16 }}>
+      <AiCardHeader
+        title="Opal research brief"
+        subtitle={`On-demand grounded research brief for ${symbol} — not generated automatically.`}
+        pending={mutation.pending}
+        onGenerate={() => mutation.run()}
+      />
+      {mutation.error && (
+        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+          <span>{mutation.error}</span>
+        </div>
+      )}
+      {data && !data.available && (
+        <ReasonNotice
+          text={
+            data.reason
+              ? RESEARCH_REASON_COPY[data.reason]
+              : "Opal couldn't generate a research brief for this symbol right now — try again."
+          }
+        />
+      )}
+      {data?.available && data.payload && (
+        <div style={{ marginTop: 12 }}>
+          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5 }}>
+            {data.payload.thesis_context}
+          </p>
+          <BulletList title="Catalysts" items={data.payload.catalysts} />
+          <BulletList title="Risk factors" items={data.payload.risk_factors} />
+          <BulletList title="Recent developments" items={data.payload.recent_developments} />
+          <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 10 }}>
+            {data.payload.sources_note}
+          </p>
+        </div>
+      )}
+    </section>
   );
 }
 

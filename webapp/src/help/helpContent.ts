@@ -117,6 +117,12 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "The pre-trade check that vetoes a new BUY when the macro regime looks dangerous (Sahm Rule ≥ 0.5, VIX > 30, or HY OAS > 6%). Mission Control's block log lists every order it actually stopped, and why. Operators can switch it off for hybrid mode, in which technical signals run without the macro override.",
   "orchestrator daemon":
     "The always-on background process that keeps the platform's heavy engines warm between cycles instead of paying full startup cost on every run. Its own internal timer can run cycles on a schedule independent of a manual trigger from the Pipeline screen.",
+  "analyst note":
+    "An on-demand Claude-written narrative for one symbol — a one-sentence headline, a why-now catalyst paragraph, 1-3 key-risk bullets, and an invalidation condition that would void the thesis. Grounded in the platform's own deterministic numbers, never inventing new ones, and only generated when you click Generate — nothing here runs automatically.",
+  "chart-pattern read":
+    "An on-demand Gemini Vision interpretation of a symbol's recent price chart — a pattern label (e.g. 'ascending triangle'), qualitative support/resistance levels, and a short narrative. Advisory only; it never feeds back into the deterministic pipeline, and the chart image itself can render even when the AI read fails.",
+  "research brief":
+    "An on-demand grounded research summary (Opal) synthesized from real retrieved news, earnings, and macro context for one symbol — thesis context, catalysts, risk factors, and recent developments. Qualitative only by construction: no price target or score is ever fabricated, and a list is left empty rather than filled with an invented item.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -252,6 +258,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "Operate the platform without SSHing into the host: pipeline status and manual triggers, the automated run schedule, the kill switch and execution mode, which tickers are tracked, your brokerage connection, active Pilot follows, and app/update status — all in one place.",
     keyConcepts: ["kill switch", "execution mode", "advisory only"],
+  },
+  "symbol-detail": {
+    title: "Symbol Detail",
+    description:
+      "Deep dive on one symbol: the advisory recommendation, factor exposure, risk & regime, rolling beta, forecast skill, and the persisted options directive — plus three on-demand AI generation cards you can trigger yourself: a Claude analyst note, a Gemini chart-pattern read, and an Opal research brief. Each AI card is independent and generated only when you click its Generate button; an honest, provider-specific message explains why a card has nothing to show (e.g. a disabled capability or a missing API key) rather than a generic error.",
+    keyConcepts: ["advisory only", "kelly target", "analyst note", "chart-pattern read", "research brief"],
   },
 };
 
