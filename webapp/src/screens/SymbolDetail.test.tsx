@@ -47,6 +47,27 @@ describe("SymbolDetail screen (real mock API)", () => {
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
   });
 
+  it("shows the pre → post regime Kelly Target delta for a symbol that carries the fields", async () => {
+    renderSymbol("AAPL");
+    await screen.findByRole("heading", { name: "AAPL" });
+    const row = screen.getByText("Kelly target (pre → post regime)").closest(".row") as HTMLElement;
+    const value = row.querySelector(".num") as HTMLElement;
+    // "0.00% → 0.00% (+0.00pp)"-shaped value, not a bare "—".
+    expect(value.textContent).toContain("→");
+    expect(value.textContent).toContain("pp)");
+  });
+
+  it("DUK deliberately carries no regime/meta-label fields — renders '—', not a fabricated delta", async () => {
+    // Mirrors the mock's compare_symbols fixture: DUK is the one symbol that
+    // exercises the honest-null branch (only the advisory writer persists
+    // these fields).
+    renderSymbol("DUK");
+    await screen.findByRole("heading", { name: "DUK" });
+    const row = screen.getByText("Kelly target (pre → post regime)").closest(".row") as HTMLElement;
+    const value = row.querySelector(".num") as HTMLElement;
+    expect(value.textContent).toBe("—");
+  });
+
   it("renders the Forecast skill and Options premium sections", async () => {
     renderSymbol("AAPL");
     await screen.findByRole("heading", { name: "AAPL" });

@@ -299,6 +299,16 @@ export interface SymbolDetail {
     edge_ratio: number | null;
     hmm_risk_on: number | null;
     macro_status: string | null;
+    /** Only ever populated by the advisory snapshot writer, not the richer
+     * main_orchestrator one — null there is expected/honest, not a bug. */
+    meta_label_composite: number | null;
+    regime_multiplier: number | null;
+    /** Kelly Target before the HMM regime multiplier + meta-label composite
+     * were multiplied in and re-clamped. */
+    kelly_target_pre_regime: number | null;
+    /** Kelly Target after — compare against kelly_target_pre_regime to see
+     * how much current macro conditions are discounting/boosting sizing. */
+    kelly_target_post_regime: number | null;
   };
   held_by_pilots: SymbolHeldBy[];
 }
@@ -1006,6 +1016,34 @@ export interface StrategyModuleRow {
   pinned_zero: boolean;
 }
 
+/** One 0.1-wide bucket of the meta-label confidence histogram. */
+export interface MetaLabelBin {
+  bin_start: number;
+  bin_end: number;
+  count: number;
+}
+
+/**
+ * Portfolio-wide histogram of `meta_label_composite` across the latest
+ * snapshot's signals (GET /strategy/matrix's `meta_label_distribution`) — the
+ * API counterpart of
+ * `gui/panels/strategy_matrix.py::_render_meta_label_distribution`.
+ *
+ * `all_neutral: true` is the documented pre-Stage-4-deployment default: no
+ * MetaLabeler is registered yet, so every composite is exactly 1.0 by design
+ * (a single spike, not a bug). `gated_count` is how many symbols are
+ * currently hard-gated to exactly 0.0. `bins` is `[]` with a `reason` when
+ * there's no snapshot yet, or when no signal in the latest snapshot carries
+ * the field at all (only the advisory writer persists it).
+ */
+export interface MetaLabelDistribution {
+  bins: MetaLabelBin[];
+  count: number;
+  gated_count: number;
+  all_neutral: boolean;
+  reason: string | null;
+}
+
 /** GET /strategy/matrix — the signal-module weight/enablement matrix. */
 export interface StrategyMatrix {
   as_of: string | null;
@@ -1020,6 +1058,7 @@ export interface StrategyMatrix {
   note: string;
   /** Whether an .env write is pending against the running (in-process) values. */
   env_drift: { detected: boolean; keys: string[]; note: string };
+  meta_label_distribution: MetaLabelDistribution;
   reason: string | null;
 }
 

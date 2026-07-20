@@ -114,13 +114,94 @@ def _snapshot_module_symbol_counts(snapshot: Optional[dict]) -> Dict[str, int]:
     return counts
 
 
+_META_LABEL_BIN_COUNT = 10  # 0.1-wide buckets across [0.0, 1.0]
+
+_NO_META_LABEL_FIELD_REASON = (
+    "No signals carry meta_label_composite in the latest snapshot (only the "
+    "advisory orchestrator's writer persists this field)."
+)
+
+
+def _meta_label_distribution(snapshot: Optional[dict]) -> Dict[str, Any]:
+    """Portfolio-wide histogram of ``meta_label_composite`` across the last
+    snapshot's ``signals[]`` — the read-layer counterpart of
+    ``gui/panels/strategy_matrix.py::_render_meta_label_distribution``.
+
+    Only signals that actually carry the key are counted — the advisory
+    snapshot writer is the only writer that persists it today (the richer
+    main_orchestrator writer does not), so an absent key is an honest "not
+    computed this cycle", never a fabricated 0.0/1.0 (CONSTRAINT #4).
+
+    Bins are FIXED at ``[0.0, 1.0]`` in ``_META_LABEL_BIN_COUNT``-wide buckets
+    (the metric is a bounded composite probability — geometric mean of active
+    modules' P(signal correct) — not an unbounded score), so the shape is
+    comparable run over run. A value outside ``[0, 1]`` (should not happen) is
+    clamped into the nearest edge bin rather than dropped or raising
+    (CONSTRAINT #6).
+
+    Returns ``{"bins": [...], "count", "gated_count", "all_neutral", "reason"}``.
+    ``all_neutral=True`` mirrors the legacy panel's documented pre-Stage-4
+    case: no ``MetaLabeler`` registered yet, so every composite is exactly
+    1.0 by design — a single spike, not a bug. ``gated_count`` is the number
+    of symbols hard-gated to exactly 0.0 (a registered MetaLabeler's P(correct)
+    fell below ``settings.META_LABEL_MIN_CONFIDENCE``).
+    """
+    if snapshot is None:
+        return {
+            "bins": [],
+            "count": 0,
+            "gated_count": 0,
+            "all_neutral": False,
+            "reason": _NO_SNAPSHOT_REASON,
+        }
+
+    values: List[float] = []
+    for sig in snapshot.get("signals") or []:
+        if not isinstance(sig, dict) or "meta_label_composite" not in sig:
+            continue
+        raw = sig.get("meta_label_composite")
+        try:
+            f = float(raw) if raw is not None else 1.0
+        except (TypeError, ValueError):
+            continue
+        values.append(f)
+
+    if not values:
+        return {
+            "bins": [],
+            "count": 0,
+            "gated_count": 0,
+            "all_neutral": False,
+            "reason": _NO_META_LABEL_FIELD_REASON,
+        }
+
+    edges = [round(i / _META_LABEL_BIN_COUNT, 2) for i in range(_META_LABEL_BIN_COUNT + 1)]
+    counts = [0] * _META_LABEL_BIN_COUNT
+    for v in values:
+        clamped = min(max(v, 0.0), 1.0)
+        idx = min(int(clamped * _META_LABEL_BIN_COUNT), _META_LABEL_BIN_COUNT - 1)
+        counts[idx] += 1
+
+    return {
+        "bins": [
+            {"bin_start": edges[i], "bin_end": edges[i + 1], "count": counts[i]}
+            for i in range(_META_LABEL_BIN_COUNT)
+        ],
+        "count": len(values),
+        "gated_count": sum(1 for v in values if v == 0.0),
+        "all_neutral": all(abs(v - 1.0) < 1e-9 for v in values),
+        "reason": None,
+    }
+
+
 def strategy_matrix(snapshot_path: Optional[str] = None) -> Dict[str, Any]:
     """Assemble the signal-module matrix from ``settings`` + the persisted
     ``output/state_snapshot.json``.
 
     Returns a dict with ``as_of``, ``market_regime``, ``regime_overrides_active``,
     ``weights_source``, ``modules`` (one row per module — see below), ``disabled``,
-    ``max_weight``, and ``reason`` (``None`` unless the snapshot is absent).
+    ``max_weight``, ``meta_label_distribution`` (see :func:`_meta_label_distribution`),
+    and ``reason`` (``None`` unless the snapshot is absent).
 
     Each ``modules`` row:
       ``name`` / ``weight`` (configured, ``None`` if absent) /
@@ -202,5 +283,6 @@ def strategy_matrix(snapshot_path: Optional[str] = None) -> Dict[str, Any]:
         "modules": modules,
         "disabled": disabled,
         "max_weight": _MAX_WEIGHT,
+        "meta_label_distribution": _meta_label_distribution(snapshot),
         "reason": None if snapshot is not None else _NO_SNAPSHOT_REASON,
     }

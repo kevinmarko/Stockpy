@@ -1578,7 +1578,11 @@ def get_strategy_matrix() -> Dict[str, Any]:
 
     Adds three API-layer fields to the pure reader's payload: ``writable`` (tracks
     ``STRATEGY_WRITES_ENABLED``), ``note``, and ``env_drift`` (whether an ``.env``
-    write is pending against the running values). Never 500s (CONSTRAINT #6)."""
+    write is pending against the running values). Also carries the reader's own
+    ``meta_label_distribution`` — a portfolio-wide histogram of
+    ``meta_label_composite`` across the latest snapshot's signals, the API
+    counterpart of ``gui/panels/strategy_matrix.py::_render_meta_label_distribution``.
+    Never 500s (CONSTRAINT #6)."""
     payload = strategy_matrix_reader.strategy_matrix(snapshot_path=_snapshot_path())
     writable = bool(settings.STRATEGY_WRITES_ENABLED)
     payload["writable"] = writable

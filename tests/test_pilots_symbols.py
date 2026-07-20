@@ -135,6 +135,40 @@ class TestSymbolDetail:
             assert risk[k] is None, k
             assert risk[k] != 0.0  # honest null, never a fabricated 0.0
 
+    def test_regime_and_meta_label_fields_present_values(self, snapshot):
+        # The fixture is advisory-style, so these ARE persisted (unlike the
+        # main_orchestrator writer) — pre-Stage-4 neutral defaults (1.0/1.0).
+        risk = symbol_detail(snapshot, "AAPL")["risk"]
+        assert risk["meta_label_composite"] == pytest.approx(1.0)
+        assert risk["regime_multiplier"] == pytest.approx(1.0)
+        assert risk["kelly_target_pre_regime"] == pytest.approx(0.041)
+        assert risk["kelly_target_post_regime"] == pytest.approx(0.041)
+
+    def test_regime_multiplier_can_discount_sizing(self, snapshot):
+        # NVDA is the one fixture symbol where the regime multiplier actually
+        # moved the needle: pre 6.2% -> post 5.0%, a real macro discount.
+        risk = symbol_detail(snapshot, "NVDA")["risk"]
+        assert risk["kelly_target_pre_regime"] == pytest.approx(0.062)
+        assert risk["kelly_target_post_regime"] == pytest.approx(0.05)
+
+    def test_kelly_target_pre_regime_zero_is_kept_not_nulled(self, snapshot):
+        # T's fixture row is genuinely 0.0 pre- and post-regime — a real
+        # zero-sized recommendation, not a placeholder (unlike price).
+        risk = symbol_detail(snapshot, "T")["risk"]
+        assert risk["kelly_target_pre_regime"] == 0.0
+        assert risk["kelly_target_post_regime"] == 0.0
+
+    def test_regime_and_meta_label_fields_absent_are_none(self):
+        # A main_orchestrator-style snapshot never persists these fields —
+        # honest null, never a fabricated 1.0/0.0 default (CONSTRAINT #4).
+        snap = {"timestamp": "t", "signals": [{"symbol": "ZZ", "price": 10.0}]}
+        risk = symbol_detail(snap, "ZZ")["risk"]
+        for k in (
+            "meta_label_composite", "regime_multiplier",
+            "kelly_target_pre_regime", "kelly_target_post_regime",
+        ):
+            assert risk[k] is None, k
+
     def test_fixture_absent_factor_fields_are_none(self, snapshot):
         f = symbol_detail(snapshot, "AAPL")["factors"]
         for k in ("xsec_12_1m", "xsec_momentum_rank"):

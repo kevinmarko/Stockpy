@@ -53,6 +53,29 @@ function ActionBadge({ action }: { action: string | null }) {
   );
 }
 
+/**
+ * Kelly Target before vs. after the HMM regime multiplier + meta-label
+ * composite were multiplied in and re-clamped — the per-symbol port of
+ * `gui/panels/strategy_matrix.py::_render_regime_multiplier_impact`. Either
+ * leg can legitimately be `null` (only the advisory snapshot writer persists
+ * these, not the richer main_orchestrator one) — renders "—", never a
+ * fabricated delta.
+ */
+function RegimeSizingDelta({ pre, post }: { pre: number | null; post: number | null }) {
+  if (pre == null || post == null) return <span style={{ color: theme.textMuted }}>—</span>;
+  const deltaPp = (post - pre) * 100;
+  const positive = deltaPp >= 0;
+  return (
+    <span>
+      {fmtPct(pre, 2, { fromFraction: true })} → {fmtPct(post, 2, { fromFraction: true })}{" "}
+      <span style={{ color: positive ? theme.growth : theme.decline, fontSize: 11 }}>
+        ({positive ? "+" : ""}
+        {deltaPp.toFixed(2)}pp)
+      </span>
+    </span>
+  );
+}
+
 /** A label / value row inside a card (value already formatted, "—" for null). */
 function StatRow({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -295,6 +318,12 @@ export function SymbolDetail() {
           <StatRow label="MFE" value={fmtNum(risk.mfe, 2)} />
           <StatRow label="MAE" value={fmtNum(risk.mae, 2)} />
           <StatRow label="Edge ratio" value={fmtNum(risk.edge_ratio, 2)} />
+          <StatRow label="Meta-label composite" value={fmtNum(risk.meta_label_composite, 2)} />
+          <StatRow label="HMM regime multiplier" value={fmtNum(risk.regime_multiplier, 3)} />
+          <StatRow
+            label="Kelly target (pre → post regime)"
+            value={<RegimeSizingDelta pre={risk.kelly_target_pre_regime} post={risk.kelly_target_post_regime} />}
+          />
         </div>
       </section>
 

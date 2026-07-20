@@ -31,6 +31,17 @@ function baseMatrix(overrides: Partial<StrategyMatrixT> = {}): StrategyMatrixT {
     writable: true,
     note: "Writes persist to .env and apply on the next daemon/pipeline launch.",
     env_drift: { detected: false, keys: [], note: "" },
+    meta_label_distribution: {
+      bins: Array.from({ length: 10 }, (_, i) => ({
+        bin_start: +(i / 10).toFixed(1),
+        bin_end: +((i + 1) / 10).toFixed(1),
+        count: i === 9 ? 20 : 0,
+      })),
+      count: 20,
+      gated_count: 0,
+      all_neutral: true,
+      reason: null,
+    },
     reason: null,
     ...overrides,
   };
@@ -127,5 +138,62 @@ describe("StrategyMatrix screen", () => {
     await userEvent.type(input, "150");
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("button", { name: /Save changes/ })).toBeDisabled();
+  });
+
+  describe("meta-label confidence histogram", () => {
+    it("renders the chart and the all-neutral note when every symbol is 1.0", async () => {
+      vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(baseMatrix());
+      renderScreen();
+      expect(await screen.findByTestId("meta-label-histogram-chart")).toBeInTheDocument();
+      expect(screen.getByText(/Every symbol shows exactly 1.0/)).toBeInTheDocument();
+    });
+
+    it("shows gated_count instead of the all-neutral note once confidences spread out", async () => {
+      vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(
+        baseMatrix({
+          meta_label_distribution: {
+            bins: [
+              { bin_start: 0, bin_end: 0.1, count: 2 },
+              { bin_start: 0.1, bin_end: 0.2, count: 0 },
+              { bin_start: 0.2, bin_end: 0.3, count: 0 },
+              { bin_start: 0.3, bin_end: 0.4, count: 0 },
+              { bin_start: 0.4, bin_end: 0.5, count: 0 },
+              { bin_start: 0.5, bin_end: 0.6, count: 0 },
+              { bin_start: 0.6, bin_end: 0.7, count: 0 },
+              { bin_start: 0.7, bin_end: 0.8, count: 3 },
+              { bin_start: 0.8, bin_end: 0.9, count: 0 },
+              { bin_start: 0.9, bin_end: 1.0, count: 15 },
+            ],
+            count: 20,
+            gated_count: 2,
+            all_neutral: false,
+            reason: null,
+          },
+        }),
+      );
+      renderScreen();
+      expect(await screen.findByTestId("meta-label-histogram-chart")).toBeInTheDocument();
+      expect(screen.queryByText(/Every symbol shows exactly 1.0/)).not.toBeInTheDocument();
+      expect(screen.getByText(/2 currently hard-gated/)).toBeInTheDocument();
+    });
+
+    it("renders an honest empty state with the reason on a cold start", async () => {
+      vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(
+        baseMatrix({
+          meta_label_distribution: {
+            bins: [],
+            count: 0,
+            gated_count: 0,
+            all_neutral: false,
+            reason: "No state snapshot yet — run the pipeline to populate the Strategy Matrix.",
+          },
+        }),
+      );
+      renderScreen();
+      expect(await screen.findByTestId("meta-label-histogram-empty")).toHaveTextContent(
+        "No state snapshot yet",
+      );
+      expect(screen.queryByTestId("meta-label-histogram-chart")).not.toBeInTheDocument();
+    });
   });
 });

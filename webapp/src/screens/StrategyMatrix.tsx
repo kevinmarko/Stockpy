@@ -1,7 +1,20 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from "recharts";
 import { api } from "../api/client";
-import type { StrategyMatrix as StrategyMatrixT, StrategyModuleRow } from "../api/types";
+import type {
+  MetaLabelDistribution,
+  StrategyMatrix as StrategyMatrixT,
+  StrategyModuleRow,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading } from "../components/ui";
@@ -81,6 +94,76 @@ export function StrategyMatrix() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && <MatrixEditor data={data} onReload={reload} />}
     </div>
+  );
+}
+
+/**
+ * Read-only portfolio-wide histogram of `meta_label_composite` — the PWA port
+ * of `gui/panels/strategy_matrix.py::_render_meta_label_distribution`. Lives
+ * above the editable module list since it's a diagnostic over the same
+ * signal-module data, not something this screen writes.
+ */
+function MetaLabelHistogram({ dist }: { dist: MetaLabelDistribution }) {
+  const chartData = dist.bins.map((b) => ({
+    label: `${b.bin_start.toFixed(1)}-${b.bin_end.toFixed(1)}`,
+    count: b.count,
+  }));
+
+  return (
+    <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="meta-label-histogram">
+      <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Meta-Label Confidence Distribution</h2>
+      <p style={{ margin: "0 0 12px", fontSize: 13, color: theme.textMuted }}>
+        Distribution of meta-label confidence (geometric mean of active modules'
+        P(signal correct)) across all symbols in the last snapshot.
+      </p>
+
+      {dist.bins.length === 0 ? (
+        <div className="empty" data-testid="meta-label-histogram-empty" style={{ padding: 24 }}>
+          {dist.reason ?? "No meta-label data yet."}
+        </div>
+      ) : (
+        <>
+          <div style={{ height: 220 }} data-testid="meta-label-histogram-chart">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                <XAxis dataKey="label" stroke={theme.textMuted} fontSize={10} tickLine={false} />
+                <YAxis
+                  stroke={theme.textMuted}
+                  fontSize={10}
+                  tickLine={false}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
+                  labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
+                  itemStyle={{ fontSize: 11 }}
+                />
+                <Bar dataKey="count" fill={theme.accent} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {dist.all_neutral ? (
+            <div className="notice notice-info" style={{ marginTop: 12 }}>
+              <span>
+                Every symbol shows exactly 1.0 — expected pre-Stage-4-deployment. No
+                MetaLabelers are currently registered, so meta-label confidence
+                defaults to 1.0 (a multiplicative no-op) for every signal module.
+                This will spread out once real MetaLabelers are trained and
+                registered.
+              </span>
+            </div>
+          ) : (
+            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 12 }}>
+              {dist.count} symbols. {dist.gated_count} currently hard-gated to 0.0
+              (a registered MetaLabeler's P(correct) fell below the configured
+              minimum confidence).
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -184,6 +267,8 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
           </span>
         </div>
       )}
+
+      <MetaLabelHistogram dist={data.meta_label_distribution} />
 
       {/* Module rows */}
       <div>

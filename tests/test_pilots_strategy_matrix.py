@@ -169,6 +169,94 @@ def test_effective_weight_resolved_when_overrides_active_and_regime_known(tmp_pa
 
 
 # ---------------------------------------------------------------------------
+# Meta-label confidence histogram (meta_label_distribution)
+# ---------------------------------------------------------------------------
+
+
+def test_meta_label_distribution_missing_snapshot_has_reason(tmp_path):
+    out = sm.strategy_matrix(snapshot_path=str(tmp_path / "does_not_exist.json"))
+    dist = out["meta_label_distribution"]
+    assert dist["bins"] == []
+    assert dist["count"] == 0
+    assert dist["gated_count"] == 0
+    assert dist["all_neutral"] is False
+    assert dist["reason"] is not None
+
+
+def test_meta_label_distribution_field_absent_on_every_signal_has_reason(tmp_path):
+    # main_orchestrator-style snapshot: signals exist, but none carry the key
+    # at all (only the advisory writer persists it) — distinct from a missing
+    # snapshot, and must not fabricate a 1.0 default for the histogram.
+    path = _write_snapshot(tmp_path, signals=[{"symbol": "AAA", "score": 50.0}])
+    dist = sm.strategy_matrix(snapshot_path=path)["meta_label_distribution"]
+    assert dist["bins"] == []
+    assert dist["count"] == 0
+    assert dist["all_neutral"] is False
+    assert dist["reason"] is not None
+
+
+def test_meta_label_distribution_all_neutral_pre_stage4_default(tmp_path):
+    path = _write_snapshot(
+        tmp_path,
+        signals=[
+            {"symbol": "AAA", "meta_label_composite": 1.0},
+            {"symbol": "BBB", "meta_label_composite": 1.0},
+        ],
+    )
+    dist = sm.strategy_matrix(snapshot_path=path)["meta_label_distribution"]
+    assert dist["all_neutral"] is True
+    assert dist["count"] == 2
+    assert dist["gated_count"] == 0
+    # A single spike in the top bin, not spread out — correct pre-Stage-4 shape.
+    assert dist["bins"][-1]["count"] == 2
+    assert sum(b["count"] for b in dist["bins"][:-1]) == 0
+
+
+def test_meta_label_distribution_buckets_and_gated_count(tmp_path):
+    path = _write_snapshot(
+        tmp_path,
+        signals=[
+            {"symbol": "AAA", "meta_label_composite": 1.0},   # top bin [0.9, 1.0]
+            {"symbol": "BBB", "meta_label_composite": 0.72},  # [0.7, 0.8]
+            {"symbol": "CCC", "meta_label_composite": 0.0},   # hard-gated, bottom bin
+            {"symbol": "DDD", "score": 50.0},                 # no key -> excluded
+        ],
+    )
+    dist = sm.strategy_matrix(snapshot_path=path)["meta_label_distribution"]
+    assert dist["reason"] is None
+    assert dist["count"] == 3  # DDD excluded, not counted as a fabricated 1.0
+    assert dist["gated_count"] == 1
+    assert dist["all_neutral"] is False
+    by_start = {b["bin_start"]: b["count"] for b in dist["bins"]}
+    assert by_start[0.0] == 1
+    assert by_start[0.7] == 1
+    assert by_start[0.9] == 1
+    assert len(dist["bins"]) == 10
+
+
+def test_meta_label_distribution_clamps_out_of_range_value(tmp_path):
+    # Should not happen in practice, but a stray >1.0 value must clamp into
+    # the top bin rather than crash or silently drop (CONSTRAINT #6).
+    path = _write_snapshot(
+        tmp_path, signals=[{"symbol": "AAA", "meta_label_composite": 1.4}]
+    )
+    dist = sm.strategy_matrix(snapshot_path=path)["meta_label_distribution"]
+    assert dist["count"] == 1
+    assert dist["bins"][-1]["count"] == 1
+
+
+def test_meta_label_distribution_null_value_defaults_to_neutral(tmp_path):
+    # Key present but explicitly null in JSON -> the documented no-op default
+    # (1.0), matching the legacy panel's `s.get("meta_label_composite", 1.0) or 1.0`.
+    path = _write_snapshot(
+        tmp_path, signals=[{"symbol": "AAA", "meta_label_composite": None}]
+    )
+    dist = sm.strategy_matrix(snapshot_path=path)["meta_label_distribution"]
+    assert dist["count"] == 1
+    assert dist["all_neutral"] is True
+
+
+# ---------------------------------------------------------------------------
 # Parity with the real signals.aggregator (duplicated to stay off the API import path)
 # ---------------------------------------------------------------------------
 

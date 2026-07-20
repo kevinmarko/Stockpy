@@ -77,6 +77,8 @@ import type {
   RiskGateBlockEntry,
   RiskGateBlockLog,
   RealizedTrade,
+  MetaLabelBin,
+  MetaLabelDistribution,
   RollingBeta,
   RunRecord,
   SectorSlice,
@@ -1126,6 +1128,21 @@ function readStrategyOverrides(): { weights: Record<string, number>; disabled: s
   }
 }
 
+// Pre-Stage-4-deployment default: no MetaLabeler is registered, so every
+// tracked symbol's composite is exactly 1.0 — a single spike at the top bin,
+// mirroring the real backend's `all_neutral` case (see
+// pilots/strategy_matrix.py::_meta_label_distribution's docstring).
+function mockMetaLabelDistribution(): MetaLabelDistribution {
+  const bins: MetaLabelBin[] = Array.from({ length: 10 }, (_, i) => ({
+    bin_start: +(i / 10).toFixed(2),
+    bin_end: +((i + 1) / 10).toFixed(2),
+    count: 0,
+  }));
+  const count = SYMBOL_UNIVERSE.size;
+  bins[bins.length - 1].count = count;
+  return { bins, count, gated_count: 0, all_neutral: true, reason: null };
+}
+
 function mockStrategyMatrix(): StrategyMatrix {
   const ov = readStrategyOverrides();
   const disabled = ov?.disabled ?? [];
@@ -1168,6 +1185,7 @@ function mockStrategyMatrix(): StrategyMatrix {
             "previous values. Restart to apply.",
         }
       : { detected: false, keys: [], note: "" },
+    meta_label_distribution: mockMetaLabelDistribution(),
     reason: null,
   };
 }
@@ -3004,6 +3022,22 @@ export const mockApi = {
     const held = PORTFOLIO.positions.find((p) => p.symbol === sym);
     const conviction = score == null ? null : +(0.55 + score * 0.35).toFixed(2);
     const action = score != null && score >= 0.5 ? "BUY" : "HOLD";
+    const kelly_target = position_pct == null ? null : +(position_pct * 0.5).toFixed(4);
+
+    // DUK deliberately carries no regime/meta-label fields — those four are
+    // ONLY ever populated by the advisory snapshot writer, not the richer
+    // main_orchestrator one (see pilots/symbols.py::symbol_detail's docstring);
+    // this fixture exercises that honest-null branch (mirrors getSymbolsCompare
+    // below).
+    const hasRegimeFields = sym !== "DUK";
+    const regime_multiplier = hasRegimeFields ? +(0.8 + rng() * 0.4).toFixed(2) : null;
+    // kelly_target IS the post-regime value; pre-regime backs out the
+    // multiplier so the two numbers stay internally consistent.
+    const kelly_target_post_regime = hasRegimeFields ? kelly_target : null;
+    const kelly_target_pre_regime =
+      hasRegimeFields && kelly_target_post_regime != null && regime_multiplier
+        ? +(kelly_target_post_regime / regime_multiplier).toFixed(4)
+        : null;
 
     const detail: SymbolDetail = {
       symbol: sym,
@@ -3022,7 +3056,7 @@ export const mockApi = {
         rationale: held_by_pilots.length
           ? `Held by ${held_by_pilots.length} Pilot(s); largest allocation in ${held_by_pilots[0].name}.`
           : "Portfolio position with no active Pilot signal.",
-        kelly_target: position_pct == null ? null : +(position_pct * 0.5).toFixed(4),
+        kelly_target,
         score,
       },
       factors: {
@@ -3052,6 +3086,10 @@ export const mockApi = {
         macro_status: null,
         covar_proxy: +(rng() * 0.5).toFixed(3),
         hmm_risk_on: +(0.5 + rng() * 0.5).toFixed(2),
+        meta_label_composite: hasRegimeFields ? 1.0 : null,
+        regime_multiplier,
+        kelly_target_pre_regime,
+        kelly_target_post_regime,
       },
       held_by_pilots,
     };

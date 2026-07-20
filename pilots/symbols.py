@@ -341,6 +341,16 @@ def symbol_detail(
                 "edge_ratio": cf(sig.get("edge_ratio")),
                 "hmm_risk_on": cf(sig.get("hmm_risk_on")),
                 "macro_status": _clean_str(sig.get("macro_status")),
+                # meta_label_composite/regime_multiplier/kelly_target_pre_regime/
+                # kelly_target_post_regime are only ever populated by the advisory
+                # snapshot writer (reporting/state_snapshot.py), never by the
+                # richer main_orchestrator writer — see compare_symbols' docstring
+                # above for the same caveat. Read exactly what was persisted,
+                # never the writer's own ki.get(..., 1.0)/(..., nan) fallback.
+                "meta_label_composite": cf(sig.get("meta_label_composite")),
+                "regime_multiplier": cf(sig.get("regime_multiplier")),
+                "kelly_target_pre_regime": cf(sig.get("kelly_target_pre_regime")),
+                "kelly_target_post_regime": cf(sig.get("kelly_target_post_regime")),
             },
             "held_by_pilots": held_by_pilots(symbol, snapshot, pilots=pilots),
         }
