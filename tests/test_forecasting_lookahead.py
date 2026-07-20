@@ -38,8 +38,23 @@ sys.modules['tensorflow.keras.layers'] = mock_layers
 sys.modules['tensorflow.keras.callbacks'] = mock_callbacks
 
 import forecasting_engine
-# Force TENSORFLOW_AVAILABLE to be True for testing
+# Force TENSORFLOW_AVAILABLE to be True for testing.
 forecasting_engine.TENSORFLOW_AVAILABLE = True
+# Sequential/Conv1D/LSTM/Dense/MaxPooling1D are bound at forecasting_engine's
+# MODULE level only if `import tensorflow` succeeded at the time the module
+# was FIRST imported process-wide -- which, once another test module (e.g.
+# test_forecasting_engine.py, collected earlier alphabetically) has already
+# imported the real forecasting_engine, is whatever the real environment
+# provided (names simply absent if real TensorFlow isn't installed), no
+# matter what sys.modules['tensorflow'] is reassigned to afterwards or what
+# TENSORFLOW_AVAILABLE is overridden to above. Bind these five names directly
+# onto the already-imported module so the mocks apply regardless of pytest's
+# module collection/import order.
+forecasting_engine.Sequential = mock_models.Sequential
+forecasting_engine.Conv1D = mock_layers.Conv1D
+forecasting_engine.LSTM = mock_layers.LSTM
+forecasting_engine.Dense = mock_layers.Dense
+forecasting_engine.MaxPooling1D = mock_layers.MaxPooling1D
 
 import pytest
 from sklearn.preprocessing import MinMaxScaler
