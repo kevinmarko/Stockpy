@@ -572,6 +572,103 @@ class TestRiskGateBlockLog:
 
 
 # ---------------------------------------------------------------------------
+# circuit_breaker_summary — merged kill-switch + risk-gate-block severity view
+# (calls gui.circuit_breakers directly; see that module's own
+# tests/test_circuit_breakers.py for the underlying derivation logic).
+# ---------------------------------------------------------------------------
+
+
+class TestCircuitBreakerSummary:
+    def test_cold_start_is_honest_empty(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            out = obs.circuit_breaker_summary()
+        assert out["trips"] == []
+        assert out["counts"] == {"critical": 0, "warning": 0, "total": 0}
+        assert out["window_hours"] == 24
+        assert out["reason"]
+
+    def test_kill_switch_active_surfaces_as_critical_trip_first(self, tmp_path):
+        (tmp_path / "KILL_SWITCH").write_text("Manual halt from operator", encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            out = obs.circuit_breaker_summary()
+        assert out["counts"] == {"critical": 1, "warning": 0, "total": 1}
+        assert out["trips"][0]["name"] == "global_kill_switch"
+        assert out["trips"][0]["severity"] == "CRITICAL"
+        assert "Manual halt" in out["trips"][0]["summary"]
+        assert out["reason"] is None
+
+    def test_block_log_trips_carry_threshold_and_observed(self, tmp_path):
+        now = datetime.now(timezone.utc)
+        log_path = tmp_path / "risk_gate_blocks.jsonl"
+        log_path.write_text(
+            json.dumps({
+                "check_name": "daily_loss_limit",
+                "strategy_id": "momentum",
+                "threshold": 0.05,
+                "observed": 0.07,
+                "timestamp": now.isoformat(),
+            }) + "\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            out = obs.circuit_breaker_summary()
+        assert out["counts"] == {"critical": 1, "warning": 0, "total": 1}
+        trip = out["trips"][0]
+        assert trip["name"] == "daily_loss_limit"
+        assert trip["severity"] == "CRITICAL"
+        assert trip["threshold"] == pytest.approx(0.05)
+        assert trip["observed"] == pytest.approx(0.07)
+        assert trip["triggered_at"] is not None
+
+    def test_old_blocks_outside_window_are_dropped(self, tmp_path):
+        stale = datetime.now(timezone.utc) - timedelta(hours=48)
+        log_path = tmp_path / "risk_gate_blocks.jsonl"
+        log_path.write_text(
+            json.dumps({
+                "check_name": "max_correlation",
+                "symbol": "AMD",
+                "timestamp": stale.isoformat(),
+            }) + "\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            out = obs.circuit_breaker_summary()
+        assert out["trips"] == []
+        assert out["counts"] == {"critical": 0, "warning": 0, "total": 0}
+        assert out["reason"]
+
+    def test_missing_threshold_never_leaks_a_fabricated_nan(self, tmp_path):
+        """Regression companion to tests/test_circuit_breakers.py's own NaN
+        test — confirms the fix is actually visible through this composite
+        reader's full round-trip, not just at gui.circuit_breakers directly."""
+        now = datetime.now(timezone.utc)
+        log_path = tmp_path / "risk_gate_blocks.jsonl"
+        log_path.write_text(
+            json.dumps({
+                "check_name": "portfolio_heat",
+                "timestamp": now.isoformat(),
+            }) + "\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            out = obs.circuit_breaker_summary()
+        trip = out["trips"][0]
+        assert trip["threshold"] is None
+        assert "nan" not in trip["summary"].lower()
+
+    def test_import_failure_degrades_to_empty(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "gui.circuit_breakers.collect_circuit_breaker_trips",
+                side_effect=RuntimeError("boom"),
+            ):
+                out = obs.circuit_breaker_summary()
+        assert out["trips"] == []
+        assert out["counts"] == {"critical": 0, "warning": 0, "total": 0}
+        assert out["reason"]
+
+
+# ---------------------------------------------------------------------------
 # observability_summary — composite, independent-degradation contract
 # ---------------------------------------------------------------------------
 
@@ -592,7 +689,7 @@ class TestObservabilitySummary:
 
         assert set(out) == {
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
-            "forecast_skill", "risk_gate_blocks",
+            "forecast_skill", "risk_gate_blocks", "circuit_breakers",
         }
 
     def test_one_section_failure_never_blocks_the_others(self, tmp_path):
@@ -619,8 +716,14 @@ class TestObservabilitySummary:
         assert out["portfolio_heat"]["reason"]
         assert out["equity_curve"]["points"] == []
         assert out["forecast_skill"]["reason"]
-        # ...while the two sections independent of HistoricalStore/ForecastTracker
+        # ...while the sections independent of HistoricalStore/ForecastTracker
         # still work.
         assert out["regime"]["market_regime"] == "RISK ON"
         assert out["regime"]["reason"] is None
         assert out["risk_gate_blocks"]["count"] == 1
+        # circuit_breakers also reads risk_gate_blocks.jsonl directly (via
+        # gui.circuit_breakers), independent of HistoricalStore/ForecastTracker
+        # too -- the fixture's block has no "check_name", so it's skipped, but
+        # the section still degrades honestly rather than raising.
+        assert out["circuit_breakers"]["trips"] == []
+        assert out["circuit_breakers"]["reason"]

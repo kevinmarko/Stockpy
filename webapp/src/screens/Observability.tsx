@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { ObservabilitySummary, PerfRange, RiskGateBlockEntry } from "../api/types";
+import type {
+  CircuitBreakerTrip,
+  ObservabilitySummary,
+  PerfRange,
+  RiskGateBlockEntry,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Tile } from "../components/ui";
@@ -331,6 +336,82 @@ function BlockLogRow({ entry }: { entry: RiskGateBlockEntry }) {
   );
 }
 
+/** Severity chip for one circuit-breaker trip. Reuses the existing
+ * `badge`/`badge-bad`/`badge-warn` CSS classes already applied elsewhere on
+ * this screen (e.g. the "Kill switch ACTIVE" badge above) rather than
+ * inventing a new visual pattern. */
+function SeverityBadge({ severity }: { severity: CircuitBreakerTrip["severity"] }) {
+  return (
+    <span className={`badge ${severity === "CRITICAL" ? "badge-bad" : "badge-warn"}`}>
+      {severity}
+    </span>
+  );
+}
+
+/** One deduped, severity-classified circuit-breaker trip (gui/circuit_breakers.py,
+ * ported from the legacy Streamlit Gravity Audit tab's merged kill-switch +
+ * risk-gate-block dashboard). Distinct from BlockLogRow below: this is the
+ * classified/deduped-within-window projection, not the raw JSONL tail. */
+function CircuitBreakerRow({ trip }: { trip: CircuitBreakerTrip }) {
+  return (
+    <div className="card card-pad" style={{ marginBottom: 8 }} data-testid="circuit-breaker-row">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <SeverityBadge severity={trip.severity} />
+          <span style={{ fontWeight: 700, fontSize: 13.5 }}>{trip.name}</span>
+        </span>
+        <span style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap" }}>
+          {trip.triggered_at ? timeAgo(trip.triggered_at) : "—"}
+        </span>
+      </div>
+      <div style={{ fontSize: 12.5, color: theme.textSecondary, marginTop: 4, lineHeight: 1.4 }}>
+        {trip.summary}
+      </div>
+      {(trip.threshold != null || trip.observed != null) && (
+        <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 4 }}>
+          {trip.threshold != null && `Threshold: ${fmtNum(trip.threshold, 3)}`}
+          {trip.threshold != null && trip.observed != null && " · "}
+          {trip.observed != null && `Observed: ${fmtNum(trip.observed, 3)}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** KPI strip (Tile — the same primitive the Portfolio risk section above
+ * already uses) + the trip list. Renders the honest empty state (no
+ * fabricated "all clear" tile) when nothing is tripped. */
+function CircuitBreakerSection({
+  breakers,
+}: {
+  breakers: ObservabilitySummary["circuit_breakers"];
+}) {
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
+        <Tile
+          label="Critical trips"
+          value={breakers.counts.critical}
+          tone={breakers.counts.critical > 0 ? "neg" : undefined}
+        />
+        <Tile
+          label="Warning trips"
+          value={breakers.counts.warning}
+          tone={breakers.counts.warning > 0 ? "neg" : undefined}
+        />
+        <Tile label="Total" value={breakers.counts.total} />
+      </div>
+      {breakers.trips.length === 0 ? (
+        <div className="empty" style={{ padding: 16 }}>
+          {breakers.reason ?? "No active circuit-breaker trips."}
+        </div>
+      ) : (
+        breakers.trips.map((t, i) => <CircuitBreakerRow key={`${t.name}-${i}`} trip={t} />)
+      )}
+    </div>
+  );
+}
+
 export function Observability() {
   const nav = useNavigate();
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
@@ -362,8 +443,8 @@ export function Observability() {
       <h1 className="screen-title">Mission Control</h1>
       <p className="screen-sub">
         Account risk stats, the equity curve, the macro regime, forecast
-        skill, and blocked orders — one read-only view over what the engine
-        already computed.
+        skill, circuit breakers, and blocked orders — one read-only view over
+        what the engine already computed.
       </p>
 
       <TabGuide tabKey="observability" />
@@ -450,10 +531,19 @@ export function Observability() {
           </div>
           <ForecastSkillSection skill={data.forecast_skill} />
 
-          {/* 4. Risk gate block log */}
+          {/* 4. Circuit breakers — merged kill-switch + risk-gate-block
+              severity dashboard: deduped within a rolling window, classified
+              CRITICAL/WARNING, with a KPI strip up top. */}
+          <SectionHeading
+            title="Circuit breakers"
+            sub={`Deduped trips in the last ${data.circuit_breakers.window_hours}h — kill switch + risk-gate blocks, by severity`}
+          />
+          <CircuitBreakerSection breakers={data.circuit_breakers} />
+
+          {/* 5. Risk gate block log (raw, undeduped JSONL tail) */}
           <SectionHeading
             title="Risk gate block log"
-            sub={`Last ${data.risk_gate_blocks.count} blocked order(s)`}
+            sub={`Last ${data.risk_gate_blocks.count} blocked order(s), raw log`}
           />
           {data.risk_gate_blocks.entries.length === 0 ? (
             <div className="empty" style={{ padding: 20 }}>

@@ -47,6 +47,23 @@ Center's "Observability / Mission Control" tab
    ``output/risk_gate_blocks.jsonl``. Ported verbatim (not imported) from
    ``gui/panels/_shared.py::load_block_log`` per this effort's scope, since
    ``api/pilots_api.py`` never reaches into ``gui.panels.*`` internals.
+5. **Circuit breaker dashboard** — the merged kill-switch + risk-gate-block
+   severity view from ``gui/panels/gravity_audit.py
+   ::_render_circuit_breaker_dashboard``. Unlike section 4 above,
+   ``gui/circuit_breakers.py`` is NOT under ``gui.panels.*`` (it imports only
+   ``json``/``logging``/``dataclasses``/``datetime``/``pathlib``/``typing`` —
+   no streamlit, no heavy engines), so the "don't reach into gui.panels.*
+   internals" rationale that justified re-porting ``load_block_log`` in
+   section 4 does NOT apply here — this calls
+   ``gui.circuit_breakers.collect_circuit_breaker_trips``/``summarise_trips``
+   directly rather than adding a THIRD local copy of the same derivation.
+   ``gui.daemon_client``/``gui.env_io``/``gui.ai_control_center``/
+   ``gui.robinhood_execution_panel`` are already imported directly at
+   ``api/pilots_api.py``'s module top, confirming ``gui.*`` (as opposed to
+   ``gui.panels.*``) is an established, safe import surface for this
+   AST-guarded API (see ``tests/test_pilots_api.py
+   ::test_pilots_api_never_imports_heavy_engines``'s ``forbidden_modules``,
+   which does not include ``gui``).
 
 Design invariants (identical to the rest of the Pilots read layer):
 
@@ -85,6 +102,7 @@ __all__ = [
     "regime_overlay",
     "portfolio_forecast_skill",
     "risk_gate_block_log",
+    "circuit_breaker_summary",
 ]
 
 # Approximate calendar-day windows for the equity-curve zoom, matching
@@ -648,6 +666,100 @@ def risk_gate_block_log(n: int = 100) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 5. Circuit breaker dashboard — merged kill-switch + risk-gate-block severity
+# view. Calls gui.circuit_breakers directly (lazy import) rather than
+# re-deriving the classification here — see module docstring section 5 for
+# why this is NOT the same situation as section 4's local load_block_log port.
+# ---------------------------------------------------------------------------
+
+
+def _empty_circuit_breakers(window_hours: int = 24, reason: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "trips": [],
+        "counts": {"critical": 0, "warning": 0, "total": 0},
+        "window_hours": window_hours,
+        "reason": reason or "No active circuit-breaker trips.",
+    }
+
+
+def circuit_breaker_summary(window_hours: int = 24) -> Dict[str, Any]:
+    """Merged kill-switch + risk-gate-block severity dashboard — the PWA's
+    port of ``gui/panels/gravity_audit.py::_render_circuit_breaker_dashboard``.
+
+    Calls ``gui.circuit_breakers.collect_circuit_breaker_trips`` +
+    ``summarise_trips`` directly (lazy import, matching this module's own
+    convention for ``data.historical_store``/``forecasting.forecast_tracker``)
+    against the SAME two files the GUI panel reads:
+    ``settings.OUTPUT_DIR / "KILL_SWITCH"`` and
+    ``settings.OUTPUT_DIR / "risk_gate_blocks.jsonl"``. The kill switch (when
+    active) always sorts first; the remaining trips are deduped to the most
+    recent one per ``(check, strategy)`` within ``window_hours`` and sorted
+    newest-first — see ``gui/circuit_breakers.py``'s own docstrings for the
+    full dedup/classification contract (adding a new breaker means adding a
+    check inside ``execution/risk_gate.py`` and tagging it in that module's
+    ``_KNOWN_CHECKS``, never editing this function).
+
+    Each trip carries ``severity`` (``"CRITICAL"``/``"WARNING"``),
+    ``threshold``/``observed`` (``None`` when the underlying block didn't
+    record one — never fabricated, CONSTRAINT #4), and ``triggered_at`` (an
+    ISO timestamp string, ``None`` for events that don't carry one, e.g. a
+    kill-switch sentinel with no readable mtime). ``counts`` feeds the PWA's
+    KPI strip. Returns the honest empty shape (empty ``trips``, zeroed
+    ``counts``, a ``reason``) when nothing is tripped, the derivation module
+    can't be imported, or the underlying files can't be read. Never raises
+    (CONSTRAINT #6)."""
+    try:
+        from gui.circuit_breakers import collect_circuit_breaker_trips, summarise_trips
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
+        logger.debug("circuit_breaker_summary import failed: %s", exc)
+        return _empty_circuit_breakers(window_hours)
+
+    try:
+        trips = collect_circuit_breaker_trips(
+            kill_switch_sentinel=settings.OUTPUT_DIR / "KILL_SWITCH",
+            block_log_path=settings.OUTPUT_DIR / "risk_gate_blocks.jsonl",
+            window=timedelta(hours=window_hours),
+        )
+    except Exception as exc:  # noqa: BLE001 — dead-letter
+        logger.warning("circuit_breaker_summary: collect_circuit_breaker_trips failed: %s", exc)
+        return _empty_circuit_breakers(
+            window_hours, reason="Circuit-breaker derivation unavailable."
+        )
+
+    try:
+        tally = summarise_trips(trips)
+    except Exception as exc:  # noqa: BLE001 — dead-letter
+        logger.debug("circuit_breaker_summary: summarise_trips failed: %s", exc)
+        tally = {"CRITICAL": 0, "WARNING": 0, "TOTAL": len(trips)}
+
+    entries = [
+        {
+            "name": t.name,
+            "severity": t.severity,
+            "summary": t.summary,
+            "triggered_at": t.triggered_at.isoformat() if t.triggered_at else None,
+            "threshold": _finite_or_none(t.threshold),
+            "observed": _finite_or_none(t.observed),
+        }
+        for t in trips
+    ]
+
+    return {
+        "trips": entries,
+        "counts": {
+            "critical": int(tally.get("CRITICAL", 0) or 0),
+            "warning": int(tally.get("WARNING", 0) or 0),
+            "total": int(tally.get("TOTAL", len(entries)) or 0),
+        },
+        "window_hours": window_hours,
+        "reason": (
+            None if entries
+            else f"No active circuit-breaker trips in the last {window_hours}h."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Composite
 # ---------------------------------------------------------------------------
 
@@ -658,9 +770,9 @@ def observability_summary(
     horizon_days: int = 30,
     snapshot: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    """Bundle all four Mission-Control sections into one payload for
+    """Bundle all SIX Mission-Control sections into one payload for
     ``GET /observability/summary``. Each section degrades independently
-    (CONSTRAINT #6) — a failure in one never blocks the other three."""
+    (CONSTRAINT #6) — a failure in one never blocks the other five."""
     return {
         "portfolio_risk": portfolio_risk_metrics(),
         "portfolio_heat": portfolio_heat_metric(),
@@ -668,4 +780,5 @@ def observability_summary(
         "regime": regime_overlay(snapshot),
         "forecast_skill": portfolio_forecast_skill(horizon_days),
         "risk_gate_blocks": risk_gate_block_log(),
+        "circuit_breakers": circuit_breaker_summary(),
     }

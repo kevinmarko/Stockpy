@@ -1364,7 +1364,7 @@ class TestObservabilitySummary:
         body = resp.json()
         assert set(body) == {
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
-            "forecast_skill", "risk_gate_blocks",
+            "forecast_skill", "risk_gate_blocks", "circuit_breakers",
         }
         assert body["portfolio_risk"]["sharpe_ratio"] is None
         assert body["portfolio_risk"]["n_snapshots"] == 0
@@ -1379,6 +1379,34 @@ class TestObservabilitySummary:
         assert body["forecast_skill"]["reliability_curve"] == []
         assert body["risk_gate_blocks"]["entries"] == []
         assert body["risk_gate_blocks"]["count"] == 0
+        assert body["circuit_breakers"]["trips"] == []
+        assert body["circuit_breakers"]["counts"] == {"critical": 0, "warning": 0, "total": 0}
+        assert body["circuit_breakers"]["reason"]
+
+    def test_circuit_breakers_surface_kill_switch_through_the_composite(self, tmp_path):
+        """End-to-end wiring check: GET /observability/summary's new
+        circuit_breakers section reflects a real KILL_SWITCH sentinel file,
+        not just pilots/observability.py's own unit tests."""
+        (tmp_path / "KILL_SWITCH").write_text("halted", encoding="utf-8")
+
+        class _EmptyStore:
+            def account_snapshot_history(self, since=None):
+                return pd.DataFrame()
+
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch(
+                "data.historical_store.HistoricalStore", return_value=_EmptyStore()
+            ):
+                with mock.patch(
+                    "forecasting.forecast_tracker.ForecastTracker",
+                    side_effect=RuntimeError("unavailable"),
+                ):
+                    resp = client.get("/observability/summary")
+
+        breakers = resp.json()["circuit_breakers"]
+        assert breakers["counts"]["critical"] == 1
+        assert breakers["trips"][0]["name"] == "global_kill_switch"
+        assert breakers["trips"][0]["severity"] == "CRITICAL"
 
     def test_reads_regime_from_persisted_snapshot_fixture(self, tmp_path):
         (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
