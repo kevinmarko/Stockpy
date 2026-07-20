@@ -1403,6 +1403,60 @@ export interface StrategyHealthRow {
 }
 
 // ---------------------------------------------------------------------------
+// GET /strategy/validation-trend — the CROSS-STRATEGY counterpart to
+// GET /strategy/health. `strategy/health` is scoped to catalog Pilots only
+// (joined on Pilot.validation_strategy_id); a strategy validated by
+// `validation.harness` but not yet wired to any Pilot never appears there.
+// This endpoint reads EVERY reports/*_validation_summary.json on disk
+// regardless of Pilot mapping, plus a macro-regime transition timeline (a
+// data domain `strategy/health` never touches). Ports
+// gui/panels/gravity_audit.py::_render_validation_stress_regime_section.
+// Each of the three sections degrades independently server-side
+// (pilots/validation_trend.py) with its own honest `*_reason` string — never
+// fabricated (CONSTRAINT #4).
+// ---------------------------------------------------------------------------
+
+export interface ValidationTrendStrategyRow {
+  strategy_id: string;
+  deployable: boolean | null;
+  pbo: number | null;
+  dsr: number | null;
+  sharpe: number | null;
+  max_drawdown: number | null;
+  is_options_selling: boolean | null;
+  stress_gate_passed: boolean | null;
+  report_date: string | null;
+}
+
+export interface ValidationTrendPoint {
+  report_date: string | null;
+  pbo: number | null;
+  dsr: number | null;
+  sharpe: number | null;
+  max_drawdown: number | null;
+  deployable: boolean | null;
+}
+
+export interface RegimeTransitionPoint {
+  timestamp: string;
+  market_regime: string;
+}
+
+export interface ValidationTrendSnapshot {
+  strategies: ValidationTrendStrategyRow[];
+  strategies_reason: string | null;
+  // Keyed by strategy_id; only strategies with >= 2 recorded harness runs
+  // appear (CONSTRAINT #4 — never a fabricated single-point trend).
+  trend: Record<string, ValidationTrendPoint[]>;
+  trend_reason: string | null;
+  // TRANSITIONS only (rows where the regime differs from the immediately
+  // preceding rotated snapshot), not every raw snapshot.
+  regime_timeline: RegimeTransitionPoint[];
+  n_rotated_snapshots: number;
+  regime_reason: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // GET /observability/summary — Mission Control composite: portfolio risk
 // metrics, the account equity curve + drawdown, the current macro-regime
 // overlay, portfolio-wide forecast skill, and the risk-gate block log. Every

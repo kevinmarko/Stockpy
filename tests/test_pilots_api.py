@@ -19,6 +19,7 @@ import ast
 import json
 import os
 import pathlib
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -2945,6 +2946,199 @@ class TestStrategyHealth:
         assert by_key["dsr"] == thresholds.DSR_MIN
         assert by_key["sharpe"] == thresholds.NET_SHARPE_MIN
         assert by_key["max_drawdown"] == thresholds.MAX_DRAWDOWN_MAX
+
+
+# ---------------------------------------------------------------------------
+# GET /strategy/validation-trend — cross-strategy validation snapshot +
+# run-over-run trend + macro-regime timeline. The CROSS-STRATEGY counterpart
+# to TestStrategyHealth above: reads every reports/*_validation_summary.json
+# on disk regardless of catalog Pilot mapping, so
+# tests/fixtures/multifactor_lowvol_size_validation_summary.json (a strategy
+# with NO pilots.catalog Pilot pointing at it) is the key fixture proving the
+# "invisible on /strategy/health" gap this endpoint closes.
+# ---------------------------------------------------------------------------
+
+
+class TestStrategyValidationTrend:
+    def test_cross_strategy_snapshot_includes_pilot_and_orphan_strategies(self, tmp_path, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        # tmp_path (empty) for OUTPUT_DIR only -- keeps the regime-timeline
+        # section's list_rotated_snapshots() from touching (or mkdir'ing) the
+        # real repo output/history/ dir; this test doesn't assert on regime.
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        assert resp.status_code == 200
+        body = resp.json()
+        ids = {row["strategy_id"] for row in body["strategies"]}
+        # timeseries_momentum is wired to the trend-following Pilot; it also
+        # already appears on GET /strategy/health. multifactor_lowvol_size is
+        # NOT wired to any pilots.catalog Pilot -- it would be invisible on
+        # /strategy/health entirely, but must appear here.
+        assert "timeseries_momentum" in ids
+        assert "multifactor_lowvol_size" in ids
+        assert body["strategies_reason"] is None
+        # Deterministic, sorted by strategy_id.
+        assert [r["strategy_id"] for r in body["strategies"]] == sorted(ids)
+
+    def test_snapshot_row_schema_matches_legacy_panel_columns(self, tmp_path, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        row = next(
+            r for r in resp.json()["strategies"] if r["strategy_id"] == "multifactor_lowvol_size"
+        )
+        assert row == {
+            "strategy_id": "multifactor_lowvol_size",
+            "deployable": False,
+            "pbo": 0.28,
+            "dsr": 0.93,
+            "sharpe": 0.61,
+            "max_drawdown": 0.22,
+            "is_options_selling": False,
+            "stress_gate_passed": True,
+            "report_date": "2026-07-14",
+        }
+
+    def test_cold_start_no_reports_dir_is_honest_not_500(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(tmp_path / "does_not_exist"))
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["strategies"] == []
+        assert body["strategies_reason"]
+        assert body["trend"] == {}
+        assert body["trend_reason"]
+        assert body["regime_timeline"] == []
+        assert body["n_rotated_snapshots"] == 0
+        assert body["regime_reason"]
+
+    def test_corrupt_summary_file_skipped_never_500(self, tmp_path, monkeypatch):
+        (tmp_path / "good_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "good", "deployable": True, "pbo": 0.1,
+                        "dsr": 0.99, "sharpe": 1.5, "max_drawdown": 0.05,
+                        "is_options_selling": False, "stress_gate_passed": True,
+                        "report_date": "2026-07-01"}),
+            encoding="utf-8",
+        )
+        (tmp_path / "corrupt_validation_summary.json").write_text(
+            "{not valid json,,,", encoding="utf-8"
+        )
+        monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(tmp_path))
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        assert resp.status_code == 200
+        ids = {r["strategy_id"] for r in resp.json()["strategies"]}
+        assert ids == {"good"}
+
+    def test_literal_nan_in_summary_file_is_nulled_not_reserialized(self, tmp_path, monkeypatch):
+        # json.loads accepts a bare NaN token as a Python extension; a summary
+        # written this way must never round-trip back out as an invalid JSON
+        # NaN literal (mirrors the bug fixed in pilots/live_inventory.py).
+        (tmp_path / "nanstrat_validation_summary.json").write_text(
+            '{"strategy_id": "nanstrat", "deployable": false, "pbo": NaN, '
+            '"dsr": 0.9, "sharpe": Infinity, "max_drawdown": 0.1, '
+            '"is_options_selling": false, "stress_gate_passed": null, '
+            '"report_date": "2026-07-01"}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(tmp_path))
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        assert resp.status_code == 200
+        assert "NaN" not in resp.text
+        assert "Infinity" not in resp.text
+        row = next(r for r in resp.json()["strategies"] if r["strategy_id"] == "nanstrat")
+        assert row["pbo"] is None
+        assert row["sharpe"] is None
+        assert row["stress_gate_passed"] is None
+
+    def test_trend_requires_at_least_two_runs(self, tmp_path, monkeypatch):
+        (tmp_path / "onerun_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "onerun", "deployable": True}), encoding="utf-8"
+        )
+        history_dir = tmp_path / "history"
+        history_dir.mkdir()
+        (history_dir / "onerun_validation_history.jsonl").write_text(
+            json.dumps({"report_date": "2026-06-01", "dsr": 0.9}) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(pilots_api, "_validation_history_dir", lambda: str(history_dir))
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        body = resp.json()
+        assert "onerun" not in body["trend"]
+        assert body["trend_reason"]
+
+    def test_trend_populated_oldest_first_for_two_plus_runs(self, tmp_path, monkeypatch):
+        (tmp_path / "tworun_validation_summary.json").write_text(
+            json.dumps({"strategy_id": "tworun", "deployable": True}), encoding="utf-8"
+        )
+        history_dir = tmp_path / "history"
+        history_dir.mkdir()
+        rows = [
+            {"report_date": "2026-06-01", "pbo": 0.4, "dsr": 0.90, "sharpe": 0.40,
+             "max_drawdown": 0.20, "deployable": False},
+            {"report_date": "2026-06-15", "pbo": 0.18, "dsr": 0.972, "sharpe": 1.14,
+             "max_drawdown": 0.176, "deployable": True},
+        ]
+        (history_dir / "tworun_validation_history.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(pilots_api, "_validation_history_dir", lambda: str(history_dir))
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        body = resp.json()
+        assert [t["report_date"] for t in body["trend"]["tworun"]] == ["2026-06-01", "2026-06-15"]
+        assert body["trend_reason"] is None
+
+    def test_regime_timeline_needs_two_rotated_snapshots(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(tmp_path))
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        body = resp.json()
+        assert body["regime_timeline"] == []
+        assert body["n_rotated_snapshots"] == 0
+        assert body["regime_reason"]
+
+    def test_regime_timeline_only_shows_transitions(self, tmp_path, monkeypatch):
+        from scripts.snapshot_diff import rotate_snapshot
+
+        base_ts = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+        def _snap(offset_hours: int, regime: str) -> dict:
+            ts = base_ts + timedelta(hours=offset_hours)
+            return {"timestamp": ts.isoformat(), "market_regime": regime}
+
+        # RISK ON -> RISK ON (no change) -> RISK OFF -> RISK OFF (no change).
+        # Only the two genuine transitions (offsets 0 and 48) should render.
+        rotate_snapshot(_snap(0, "RISK ON"), tmp_path, max_age_days=0)
+        rotate_snapshot(_snap(24, "RISK ON"), tmp_path, max_age_days=0)
+        rotate_snapshot(_snap(48, "RISK OFF"), tmp_path, max_age_days=0)
+        rotate_snapshot(_snap(72, "RISK OFF"), tmp_path, max_age_days=0)
+
+        monkeypatch.setattr(pilots_api, "_reports_dir", lambda: str(tmp_path))
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/strategy/validation-trend")
+        body = resp.json()
+        assert body["n_rotated_snapshots"] == 4
+        assert [t["market_regime"] for t in body["regime_timeline"]] == ["RISK ON", "RISK OFF"]
+        assert body["regime_reason"] is None
+
+    def test_fail_open_read_with_no_token(self, tmp_path, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), \
+                mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/strategy/validation-trend")
+        assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self, tmp_path, monkeypatch):
+        _point_reports_at_fixtures(monkeypatch)
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), \
+                mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/strategy/validation-trend", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------

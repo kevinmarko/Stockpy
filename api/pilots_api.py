@@ -138,6 +138,7 @@ from pilots import (
     strategy_health,
     strategy_matrix as strategy_matrix_reader,
     symbols,
+    validation_trend as validation_trend_reader,
 )
 from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
@@ -1634,6 +1635,35 @@ def get_strategy_health() -> List[Dict[str, Any]]:
     ``deployable=None`` + empty ``gates`` + an honest ``reason`` — never a
     fabricated gate result (CONSTRAINT #4). Never 500s (CONSTRAINT #6)."""
     return strategy_health.strategy_health_rows(
+        reports_dir=_reports_dir(),
+        history_dir=_validation_history_dir(),
+    )
+
+
+@app.get("/strategy/validation-trend", dependencies=[Depends(require_read_token)])
+def get_strategy_validation_trend() -> Dict[str, Any]:
+    """Cross-strategy validation snapshot + run-over-run trend + macro-regime
+    timeline — the CROSS-STRATEGY counterpart to ``GET /strategy/health``.
+
+    ``GET /strategy/health`` is scoped to catalog Pilots only (one row per
+    ``pilots.catalog.list_pilots()`` entry, joined on
+    ``Pilot.validation_strategy_id``); a strategy validated by
+    ``validation.harness`` but not yet wired to any Pilot never appears
+    there. This endpoint instead reads EVERY
+    ``reports/*_validation_summary.json`` on disk regardless of Pilot
+    mapping — an operator's "how does candidate strategy A compare to
+    candidate B right now, before I decide whether to promote either one to
+    a Pilot" view. It also surfaces a macro-regime TRANSITION timeline from
+    the rotated ``output/history/`` snapshots, a data domain
+    ``GET /strategy/health`` never touches.
+
+    Ports ``gui/panels/gravity_audit.py::_render_validation_stress_regime_section``
+    (the legacy Safety tab's "Validation & Stress Trend" section). Each of
+    the three sections (``strategies``, ``trend``, ``regime_timeline``)
+    degrades independently with its own honest ``*_reason`` string when its
+    underlying data doesn't exist yet — never fabricated (CONSTRAINT #4).
+    Never 500s (CONSTRAINT #6)."""
+    return validation_trend_reader.validation_trend_snapshot(
         reports_dir=_reports_dir(),
         history_dir=_validation_history_dir(),
     )

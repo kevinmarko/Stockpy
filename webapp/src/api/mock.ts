@@ -97,6 +97,7 @@ import type {
   StrategyMatrix,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
+  ValidationTrendSnapshot,
   TunableField,
   TunableFieldType,
   TunablesResponse,
@@ -2016,6 +2017,102 @@ const STRATEGY_HEALTH_ROWS: StrategyHealthRow[] = [
       "no validation summary found for 'forecast_direction_arima_hw' (run the validation pipeline first)",
   },
 ];
+
+// ---- Validation Trend (cross-strategy snapshot + trend + regime timeline) ----
+// Deliberately includes TWO strategies with no pilots.catalog Pilot pointing
+// at them (multifactor_lowvol_size, cross_sectional_momentum) -- the exact
+// gap GET /strategy/health can never close, since it only iterates catalog
+// Pilots. Both are real STRATEGY_REGISTRY names from
+// docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-07 fix pass.
+const VALIDATION_TREND_SNAPSHOT: ValidationTrendSnapshot = {
+  strategies: [
+    {
+      strategy_id: "cross_sectional_momentum",
+      deployable: true,
+      pbo: 0.22,
+      dsr: 0.961,
+      sharpe: 0.78,
+      max_drawdown: 0.18,
+      is_options_selling: false,
+      stress_gate_passed: true,
+      report_date: "2026-07-15",
+    },
+    {
+      strategy_id: "garch_vol_target",
+      deployable: false,
+      pbo: 0.62,
+      dsr: 0.958,
+      sharpe: 0.44,
+      max_drawdown: 0.34,
+      is_options_selling: false,
+      stress_gate_passed: true,
+      report_date: "2026-07-08",
+    },
+    {
+      strategy_id: "multifactor_lowvol_size",
+      // Not deployable yet (DSR just under the 0.95 bar) -- no Pilot has
+      // been wired to this strategy_id, so it is INVISIBLE on
+      // GET /strategy/health entirely. This is the row that demonstrates
+      // this section's whole reason for existing.
+      deployable: false,
+      pbo: 0.28,
+      dsr: 0.93,
+      sharpe: 0.61,
+      max_drawdown: 0.22,
+      is_options_selling: false,
+      stress_gate_passed: true,
+      report_date: "2026-07-14",
+    },
+    {
+      strategy_id: "short_vol_condor_pit",
+      deployable: false,
+      pbo: 0.11,
+      dsr: 0.981,
+      sharpe: 1.34,
+      max_drawdown: 0.09,
+      is_options_selling: true,
+      stress_gate_passed: false,
+      report_date: "2026-07-05",
+    },
+    {
+      strategy_id: "timeseries_momentum",
+      deployable: true,
+      pbo: 0.31,
+      dsr: 0.972,
+      sharpe: 1.12,
+      max_drawdown: 0.19,
+      is_options_selling: false,
+      stress_gate_passed: true,
+      report_date: "2026-07-11",
+    },
+  ],
+  strategies_reason: null,
+  trend: {
+    timeseries_momentum: [
+      { report_date: "2026-05-04", pbo: 0.34, dsr: 0.951, sharpe: 0.94, max_drawdown: 0.21, deployable: true },
+      { report_date: "2026-06-01", pbo: 0.24, dsr: 0.964, sharpe: 1.03, max_drawdown: 0.2, deployable: true },
+      { report_date: "2026-07-06", pbo: 0.31, dsr: 0.972, sharpe: 1.12, max_drawdown: 0.19, deployable: true },
+    ],
+    multifactor_lowvol_size: [
+      { report_date: "2026-06-10", pbo: 0.41, dsr: 0.89, sharpe: 0.42, max_drawdown: 0.27, deployable: false },
+      { report_date: "2026-06-28", pbo: 0.33, dsr: 0.91, sharpe: 0.52, max_drawdown: 0.24, deployable: false },
+      { report_date: "2026-07-14", pbo: 0.28, dsr: 0.93, sharpe: 0.61, max_drawdown: 0.22, deployable: false },
+    ],
+    // garch_vol_target, short_vol_condor_pit, cross_sectional_momentum: only
+    // 0-1 recorded runs so far -- honestly omitted, not fabricated
+    // (CONSTRAINT #4). Mirrors STRATEGY_HEALTH_ROWS's own
+    // dip-buyer/edge-garch "trend: []" precedent.
+  },
+  trend_reason: null,
+  regime_timeline: [
+    { timestamp: "2026-05-12T14:00:00+00:00", market_regime: "RISK ON" },
+    { timestamp: "2026-06-03T09:30:00+00:00", market_regime: "NEUTRAL" },
+    { timestamp: "2026-06-19T11:15:00+00:00", market_regime: "RISK OFF" },
+    { timestamp: "2026-07-02T08:00:00+00:00", market_regime: "RISK ON" },
+  ],
+  n_rotated_snapshots: 47,
+  regime_reason: null,
+};
 
 // ---- Options premium matrix fixture ----
 // Hand-written to exercise every honesty branch the screen must handle. The
@@ -4047,6 +4144,10 @@ export const mockApi = {
 
   async getStrategyHealth(): Promise<StrategyHealthRow[]> {
     return delay(STRATEGY_HEALTH_ROWS);
+  },
+
+  async getValidationTrend(): Promise<ValidationTrendSnapshot> {
+    return delay(VALIDATION_TREND_SNAPSHOT);
   },
 
   // ---- Recommendation Tracking & Calibration ----

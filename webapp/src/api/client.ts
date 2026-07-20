@@ -65,6 +65,7 @@ import type {
   StrategyHealthRow,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
+  ValidationTrendSnapshot,
   SentimentDynamics,
   TunablesResponse,
   TunablesUpdateResult,
@@ -278,6 +279,7 @@ const liveApi = {
     }),
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
   getStrategyHealth: () => http<StrategyHealthRow[]>("/strategy/health"),
+  getValidationTrend: () => http<ValidationTrendSnapshot>("/strategy/validation-trend"),
   // ---- Recommendation Tracking & Calibration (default pilots base, :8602) ----
   getCalibrationSummary: (horizon = 30) =>
     http<CalibrationSummary>(`/calibration/summary?horizon=${horizon}`),
