@@ -62,6 +62,7 @@ import type {
   TunablesResponse,
   TunablesUpdateResult,
   SymbolDetail,
+  SymbolCompareResponse,
   UniverseResponse,
   RecommendationsResponse,
   UniverseListResponse,
@@ -197,6 +198,12 @@ const liveApi = {
   getThresholds: () => http<Thresholds>("/thresholds"),
   getSymbol: (ticker: string) =>
     http<SymbolDetail>(`/symbols/${encodeURIComponent(ticker)}`),
+  // Symbol-vs-symbol comparison (2-5 tickers); server de-dupes/upper-cases,
+  // so the raw list is passed through as-is.
+  getSymbolsCompare: (tickers: string[]) =>
+    http<SymbolCompareResponse>(
+      `/symbols/compare?symbols=${encodeURIComponent(tickers.join(","))}`
+    ),
   getPortfolio: () => http<Portfolio>("/portfolio"),
   getEquityCurve: (range: PerfRange) =>
     http<{ range: PerfRange; curve: CurvePoint[] | null }>(

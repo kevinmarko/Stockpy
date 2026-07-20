@@ -6,6 +6,7 @@ import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading } from "../components/ui";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
+import { SymbolComparison } from "../components/SymbolComparison";
 import { TabGuide } from "../components/TabGuide";
 import { FollowModal } from "./FollowModal";
 import { theme } from "../theme";
@@ -231,6 +232,11 @@ export function Comparison() {
 
       {/* Recommended stocks — the platform's current BUY picks (click → detail). */}
       <RecommendedStocks />
+
+      {/* Symbol-vs-symbol comparison — a separate entity from Pilot-vs-Pilot
+          above (tickers, not strategies), so it's its own always-visible card
+          rather than nested inside the Pilot-selection-dependent block below. */}
+      <SymbolComparison />
 
       {/* Row Error Banner for fetch failures */}
       {Object.keys(fetchErrors).length > 0 && (

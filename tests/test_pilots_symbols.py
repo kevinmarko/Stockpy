@@ -17,6 +17,7 @@ import pytest
 from pilots.catalog import get_pilot
 from pilots.scoring import load_snapshot
 from pilots.symbols import (
+    compare_symbols,
     find_signal,
     held_by_pilots,
     list_recommendations,
@@ -439,3 +440,101 @@ class TestListRecommendations:
         assert list_recommendations({"signals": "nope"}) == []
         assert list_recommendations({"signals": None}) == []
         assert list_recommendations({"signals": [123, "x", {"no_symbol": 1}]}) == []
+
+
+# ---------------------------------------------------------------------------
+# compare_symbols — the symbol-vs-symbol comparison (GET /symbols/compare)
+# ---------------------------------------------------------------------------
+
+class TestCompareSymbols:
+    def test_row_shape_and_as_of(self, snapshot):
+        result = compare_symbols(snapshot, ["AAPL", "MSFT"])
+        assert result["as_of"] == "2026-07-11T21:05:00+00:00"
+        assert len(result["symbols"]) == 2
+        for row in result["symbols"]:
+            assert set(row) == {
+                "symbol", "found", "reason", "score", "action", "kelly_target",
+                "conviction", "garch_vol", "meta_label_composite",
+                "regime_multiplier", "score_components",
+            }
+
+    def test_values_carried_through_for_found_symbol(self, snapshot):
+        row = compare_symbols(snapshot, ["AAPL"])["symbols"][0]
+        assert row["found"] is True
+        assert row["reason"] is None
+        assert row["score"] == pytest.approx(96.8)
+        assert row["action"] == "BUY"
+        assert row["kelly_target"] == pytest.approx(0.041)
+        assert row["conviction"] == pytest.approx(0.72)
+        assert row["garch_vol"] == pytest.approx(0.243)
+        assert row["meta_label_composite"] == pytest.approx(1.0)
+        assert row["regime_multiplier"] == pytest.approx(1.0)
+        assert isinstance(row["score_components"], dict) and row["score_components"]
+
+    def test_action_prefers_advisory_action_over_raw(self):
+        snap = {"timestamp": "t", "signals": [
+            {"symbol": "AAPL", "advisory_action": "HOLD", "action": "BUY"}]}
+        row = compare_symbols(snap, ["AAPL"])["symbols"][0]
+        assert row["action"] == "HOLD"
+
+    def test_unknown_symbol_gets_honest_row_not_a_hard_failure(self, snapshot):
+        result = compare_symbols(snapshot, ["AAPL", "ZZZ"])
+        rows = {r["symbol"]: r for r in result["symbols"]}
+        assert rows["AAPL"]["found"] is True
+        zz = rows["ZZZ"]
+        assert zz["found"] is False
+        assert zz["reason"] == "Not tracked in the latest snapshot."
+        for k in ("score", "action", "kelly_target", "conviction", "garch_vol",
+                  "meta_label_composite", "regime_multiplier", "score_components"):
+            assert zz[k] is None, k
+
+    def test_cold_start_all_rows_honest_not_found(self):
+        result = compare_symbols(None, ["AAPL", "MSFT"])
+        assert result["as_of"] is None
+        assert len(result["symbols"]) == 2
+        for row in result["symbols"]:
+            assert row["found"] is False
+            assert row["reason"] == "No state snapshot yet — run the pipeline first."
+
+    def test_absent_regime_fields_are_none_not_a_fabricated_default(self):
+        # Simulates the richer main_orchestrator writer, which does NOT carry
+        # garch_vol/meta_label_composite/regime_multiplier at all (unlike the
+        # advisory writer). Must degrade to null, never bake in the advisory
+        # writer's own `ki.get(..., 1.0)` fallback.
+        snap = {"timestamp": "t", "signals": [
+            {"symbol": "ZZ", "score": 10.0, "action": "BUY", "kelly_target": 0.01}]}
+        row = compare_symbols(snap, ["ZZ", "QQ"])["symbols"][0]
+        assert row["found"] is True
+        assert row["garch_vol"] is None
+        assert row["meta_label_composite"] is None
+        assert row["regime_multiplier"] is None
+
+    def test_empty_score_components_is_none_not_empty_dict(self):
+        snap = {"timestamp": "t", "signals": [
+            {"symbol": "ZZ", "score": 1.0, "score_components": {}}]}
+        row = compare_symbols(snap, ["ZZ", "QQ"])["symbols"][0]
+        assert row["score_components"] is None
+
+    def test_modules_is_sorted_union_of_found_symbols_only(self):
+        snap = {"timestamp": "t", "signals": [
+            {"symbol": "A", "score_components": {"b_mod": 1.0, "a_mod": 2.0}},
+            {"symbol": "B", "score_components": {"c_mod": 3.0}},
+        ]}
+        result = compare_symbols(snap, ["A", "B", "ZZZ"])
+        assert result["modules"] == ["a_mod", "b_mod", "c_mod"]
+
+    def test_duplicate_symbols_deduped_first_occurrence_wins(self, snapshot):
+        result = compare_symbols(snapshot, ["AAPL", "aapl", "  AAPL  "])
+        assert len(result["symbols"]) == 1
+        assert result["symbols"][0]["symbol"] == "AAPL"
+
+    def test_blank_and_empty_tickers_skipped(self, snapshot):
+        result = compare_symbols(snapshot, ["AAPL", "", "   "])
+        assert len(result["symbols"]) == 1
+
+    def test_cold_start_and_malformed_never_raise(self):
+        assert compare_symbols(None, ["AAPL"])["symbols"][0]["found"] is False
+        assert compare_symbols({}, [])["symbols"] == []
+        assert compare_symbols("not a dict", ["AAPL"])["symbols"][0]["found"] is False
+        assert compare_symbols({"signals": "nope"}, ["AAPL"])["symbols"][0]["found"] is False
+        assert compare_symbols(None, None)["symbols"] == []
