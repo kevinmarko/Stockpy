@@ -2,6 +2,8 @@
 credentials.json
 secrets.py
 .env
+.env.bak*
+.env.*.bak
 
 # Operator-local ticker list (personal, not shared codebase state)
 watchlist.txt
