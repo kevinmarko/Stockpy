@@ -1329,6 +1329,89 @@ export interface ForecastResult {
 }
 
 // ---------------------------------------------------------------------------
+// On-demand AI generation (data_api.py :8603, llm/schemas.py) — POST
+// /data/ai/commentary/{symbol}, /data/ai/chart/{symbol}, /data/ai/research/{symbol}.
+// Each call is operator-triggered (never automatic), qualitative-only
+// (CONSTRAINT #4 — no field here is a fabricated numeric price target or
+// score), and independently honest: `available: false` always carries a
+// specific `reason`, `payload` is `null` in that case, never a partial guess.
+// ---------------------------------------------------------------------------
+
+/**
+ * Claude analyst-grade narrative for a single symbol (llm/schemas.py
+ * `AnalystRationale`). `key_risks` is 1-3 short bullets when present.
+ */
+export interface AnalystRationalePayload {
+  headline: string;
+  why_now: string;
+  key_risks: string[];
+  invalidation: string;
+}
+
+/** POST /data/ai/commentary/{symbol} response. */
+export interface AiCommentaryResponse {
+  available: boolean;
+  reason: "disabled" | "missing_key" | "generation_failed" | null;
+  payload: AnalystRationalePayload | null;
+}
+
+/**
+ * Gemini Vision chart-pattern interpretation (llm/schemas.py
+ * `ChartPatternRead`). `support_levels` / `resistance_levels` are qualitative
+ * descriptions (never numeric), each list capped at 3 items.
+ */
+export interface ChartPatternPayload {
+  pattern_name: string;
+  trend_direction: "bullish" | "bearish" | "neutral";
+  support_levels: string[];
+  resistance_levels: string[];
+  narrative: string;
+  confidence: "low" | "medium" | "high";
+}
+
+/**
+ * POST /data/ai/chart/{symbol} response. `chart_png_base64` may be non-null
+ * even when `available` is `false` (the chart rendered fine but the AI read
+ * failed, e.g. `reason: "generation_failed"`) — render the image whenever
+ * `chart_png_base64` is present, independent of `available`/`payload`.
+ */
+export interface AiChartResponse {
+  available: boolean;
+  reason:
+    | "disabled"
+    | "missing_key"
+    | "no_bars"
+    | "chart_render_failed"
+    | "generation_failed"
+    | null;
+  payload: ChartPatternPayload | null;
+  chart_png_base64: string | null;
+}
+
+/**
+ * Opal (OpenAI/Gemini) grounded research brief (llm/schemas.py
+ * `ResearchBrief`). `catalysts`/`risk_factors`/`recent_developments` are
+ * PLAIN STRING lists (each item a short bullet, NOT nested objects) drawn
+ * from real retrieved news/earnings/macro — may be empty when the grounding
+ * packet yielded none, never fabricated to fill the list.
+ */
+export interface ResearchBriefPayload {
+  thesis_context: string;
+  catalysts: string[];
+  risk_factors: string[];
+  recent_developments: string[];
+  data_confidence: "low" | "medium" | "high";
+  sources_note: string;
+}
+
+/** POST /data/ai/research/{symbol} response. */
+export interface AiResearchResponse {
+  available: boolean;
+  reason: "disabled" | "generation_failed" | null;
+  payload: ResearchBriefPayload | null;
+}
+
+// ---------------------------------------------------------------------------
 // Recommendation Tracking & Calibration (pilots/calibration.py) — GET
 // /calibration/summary, GET /calibration/edge-by-strategy, POST /decisions.
 // ---------------------------------------------------------------------------

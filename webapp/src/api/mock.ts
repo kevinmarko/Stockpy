@@ -12,6 +12,9 @@ import type {
   AgenticDiscovery,
   AgenticStatus,
   AgentLoopStatus,
+  AiChartResponse,
+  AiCommentaryResponse,
+  AiResearchResponse,
   AlertsFeed,
   AutomationSchedule,
   AutomationStatus,
@@ -781,6 +784,13 @@ function writeFollows(fs: Follow[]) {
 const MOCK_MODE = "review" as const; // paper-first: nothing is ever placed
 const NOTIONAL_CAP = 2500;
 const MIN_AMOUNT = 100;
+
+// A real (if trivial) 1x1 transparent PNG, base64-encoded — stands in for the
+// live endpoint's actual rendered chart image so <img src="data:image/png;..."/>
+// has something real to decode in the mock, without needing a chart library
+// here just to produce fixture bytes.
+const MOCK_CHART_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 // ---- Local brokerage-connect simulation (localStorage; never stores the
 // actual credential strings — only a boolean "connected" marker, matching the
@@ -3401,6 +3411,98 @@ export const mockApi = {
       directive,
       reason: directive ? null : "No options directive for this symbol yet.",
     });
+  },
+
+  // ---- On-demand AI generation (data base, :8603) ----
+  // Deliberately keyed off `NVDA` for the honest `available: false` branch of
+  // ALL THREE (a different `reason` each time) so a single symbol exercises
+  // every disabled/error rendering path; every other symbol gets the
+  // available:true happy path. Never automatic — only called from a Generate
+  // button click (see SymbolDetail.tsx).
+  async generateCommentary(ticker: string): Promise<AiCommentaryResponse> {
+    const sym = ticker.trim().toUpperCase();
+    if (sym === "NVDA") {
+      return delay({ available: false, reason: "missing_key", payload: null }, 400);
+    }
+    return delay(
+      {
+        available: true,
+        reason: null,
+        payload: {
+          headline: `Mean-reversion entry on a healthy uptrend for ${sym}.`,
+          why_now: `${sym} pulled back to its rising 50-day average on below-average volume while the broader regime stays risk-on — the kind of shallow, orderly dip the signal is designed to buy rather than a breakdown to avoid.`,
+          key_risks: [
+            "A broad market risk-off shift would compress conviction across the whole book, not just this name.",
+            "Elevated implied volatility ahead of the next earnings print could reprice the setup quickly.",
+          ],
+          invalidation: `A daily close below the 200-day SMA invalidates the uptrend thesis for ${sym}.`,
+        },
+      },
+      400
+    );
+  },
+
+  async generateChart(ticker: string): Promise<AiChartResponse> {
+    const sym = ticker.trim().toUpperCase();
+    if (sym === "NVDA") {
+      // The chart itself rendered fine — only the AI narrative failed. The
+      // image must still render on the card even though available is false.
+      return delay(
+        {
+          available: false,
+          reason: "generation_failed",
+          payload: null,
+          chart_png_base64: MOCK_CHART_PNG_BASE64,
+        },
+        400
+      );
+    }
+    return delay(
+      {
+        available: true,
+        reason: null,
+        payload: {
+          pattern_name: "ascending triangle",
+          trend_direction: "bullish",
+          support_levels: ["recent low near the 50-day average", "prior breakout zone"],
+          resistance_levels: ["swing high from the last rally"],
+          narrative: `${sym} is consolidating in a tightening range with a flat resistance line and rising higher-lows underneath it — a classic ascending-triangle continuation setup. A close above the recent swing high would confirm the breakout; volume has been contracting into the apex, typical ahead of a resolution.`,
+          confidence: "medium",
+        },
+        chart_png_base64: MOCK_CHART_PNG_BASE64,
+      },
+      400
+    );
+  },
+
+  async generateResearch(ticker: string): Promise<AiResearchResponse> {
+    const sym = ticker.trim().toUpperCase();
+    if (sym === "NVDA") {
+      return delay({ available: false, reason: "disabled", payload: null }, 400);
+    }
+    return delay(
+      {
+        available: true,
+        reason: null,
+        payload: {
+          thesis_context: `${sym}'s setup is grounded in a mix of steady demand trends and a favorable macro backdrop, with no major red flags in the most recently retrieved news or earnings coverage.`,
+          catalysts: [
+            "Q3 earnings call scheduled in the next few weeks",
+            "Analyst day presentation flagged for early next month",
+          ],
+          risk_factors: [
+            "Input cost commentary in the most recent earnings call flagged margin pressure",
+          ],
+          recent_developments: [
+            "Reported quarterly results modestly ahead of consensus estimates",
+            "Announced a new product line extension covered by several trade outlets",
+          ],
+          data_confidence: "medium",
+          sources_note: "Based on 4 Finnhub headlines from the past 7 days and the most recent earnings date.",
+        },
+      },
+      400
+    );
   },
 
   async getPairs(): Promise<PairsRadar> {

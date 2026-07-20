@@ -1236,6 +1236,35 @@ class Settings(BaseSettings):
             "flag."
         ),
     )
+    # Master switch for api/data_api.py's three on-demand AI generation endpoints
+    # (POST /data/ai/commentary|chart|research/{symbol} -- Claude analyst note,
+    # Gemini chart-vision read, Opal research brief). A DEDICATED flag, distinct
+    # from LLM_COMMENTARY_ENABLED/OPAL_RESEARCH_ENABLED (those gate whether the
+    # underlying CAPABILITY exists at all, originally for the Streamlit desktop
+    # button only) and from GENERAL_SETTINGS_WRITES_ENABLED (an .env config
+    # write, not a paid external API call). This flag instead gates whether
+    # that capability is remotely TRIGGERABLE over HTTP at all: api/data_api.py
+    # is fail-open by design (see its module docstring) when STATE_API_TOKEN is
+    # unset -- the documented zero-config default -- so without this flag,
+    # anyone able to reach the data API could trigger real, paid Claude/Gemini/
+    # Opal calls the instant an operator turns on the Streamlit-side capability
+    # flag for their own desktop use. Default False: nothing is remotely
+    # triggerable until this is explicitly, separately opted into. Never
+    # GUI-writable — hand-set in .env only (deliberately NOT in
+    # gui/env_io.py's ALLOWED_KEYS). Turning it back to False (and restarting
+    # the data API process) immediately stops all three endpoints (403), on
+    # top of each generator's own existing capability flag as a second,
+    # independent kill switch.
+    AI_GENERATION_API_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables POST /data/ai/{commentary,chart,research}/{symbol} on the "
+            "Data API. Off by default -- exposing paid Claude/Gemini/Opal calls "
+            "over a fail-open HTTP API is its own risk/cost class, separate from "
+            "the underlying capability being enabled for the Streamlit GUI. "
+            "Never GUI-writable — hand-set in .env only."
+        ),
+    )
     # Master switch for the Pilots API's Macro Regime Gate WRITE endpoint
     # (api/pilots_api.py PUT /observability/macro-gate -- flips
     # MACRO_REGIME_GATE_ENABLED itself to .env). A DEDICATED flag, not

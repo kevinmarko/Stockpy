@@ -13,6 +13,9 @@ import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type {
   AgenticDiscovery,
   AgenticStatus,
+  AiChartResponse,
+  AiCommentaryResponse,
+  AiResearchResponse,
   AlertsFeed,
   AutomationSchedule,
   AutomationStatus,
@@ -279,6 +282,22 @@ const liveApi = {
     }),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
+  // ---- On-demand AI generation (data base, :8603) — operator-triggered only,
+  // never auto-run. Each POST returns an honest available/reason/payload
+  // envelope (llm/schemas.py-backed); a non-2xx still throws ApiError the
+  // normal way via http()'s shared error path.
+  generateCommentary: (symbol: string) =>
+    http<AiCommentaryResponse>(`/data/ai/commentary/${encodeURIComponent(symbol)}`, {
+      method: "POST",
+    }),
+  generateChart: (symbol: string) =>
+    http<AiChartResponse>(`/data/ai/chart/${encodeURIComponent(symbol)}`, {
+      method: "POST",
+    }),
+  generateResearch: (symbol: string) =>
+    http<AiResearchResponse>(`/data/ai/research/${encodeURIComponent(symbol)}`, {
+      method: "POST",
+    }),
   getForecastResult: (symbol: string) =>
     http<ForecastResult>(`/metrics/forecast/${encodeURIComponent(symbol)}`),
   setStrategyModules: (body: StrategyModulesUpdate) =>
