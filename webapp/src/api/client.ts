@@ -44,7 +44,13 @@ import type {
   ModelRow,
   ObservabilitySummary,
   OptionsMatrix,
+  OptionsRecomputeRequest,
+  OptionsRecomputeResult,
+  PairsAnalyzeRequest,
+  PairsAnalyzeResult,
   PairsRadar,
+  PairsScanRequest,
+  PairsScanResult,
   PerfRange,
   PerformanceResponse,
   PilotDetail,
@@ -239,6 +245,28 @@ const liveApi = {
   getSymbolOptions: (ticker: string) =>
     http<SymbolOptions>(`/symbols/${encodeURIComponent(ticker)}/options`),
   getPairs: () => http<PairsRadar>("/pairs"),
+  // ---- On-demand Options/Pairs recompute (data base, :8603) — webapp porting
+  // backlog items 8a/8b. Distinct from getOptions/getPairs above (which only
+  // ever serve the last PIPELINE-WRITTEN artifact): these POSTs recompute
+  // synchronously against operator-chosen parameters/symbols, capped small.
+  // A 422 (too few/many symbols, identical Y/X) throws ApiError the normal
+  // way via http()'s shared error path -- callers enforce the cap client-side
+  // (matching SymbolComparison.tsx's precedent) so this is rarely hit live.
+  analyzePairs: (req: PairsAnalyzeRequest) =>
+    http<PairsAnalyzeResult>("/data/pairs/analyze", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  scanPairs: (req: PairsScanRequest) =>
+    http<PairsScanResult>("/data/pairs/scan", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  recomputeOptions: (req: OptionsRecomputeRequest) =>
+    http<OptionsRecomputeResult>("/data/options/recompute", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
   getObservabilitySummary: (range: PerfRange, horizon = 30) =>
     http<ObservabilitySummary>(
       `/observability/summary?range=${range}&horizon=${horizon}`

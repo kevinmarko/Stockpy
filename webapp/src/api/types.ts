@@ -322,6 +322,14 @@ export interface Thresholds {
   follow_min_amount: number;
   /** Live settings.AGENTIC_MAX_CANDIDATES — cap on GET /agentic/discovery's candidate list. */
   agentic_max_candidates: number;
+  /**
+   * Live gui.help_content.MODEL_RETRAIN_WINDOW_DAYS — the same constant
+   * ml.meta_labeling.MetaLabeler.needs_retrain() uses. Display-text only: the
+   * Models screen's per-model `needs_retrain`/`age_days` flag (GET /models)
+   * is already computed server-side against this same constant — this key
+   * exists so static explainer copy can quote the window without a literal.
+   */
+  retrain_window_days: number;
 }
 
 /**
@@ -770,7 +778,17 @@ export interface RollingBeta {
   reason: string | null;
 }
 
-/** GET /models — ML model registry row (ml/registry.yaml). */
+/**
+ * GET /models — ML model registry row (ml/registry.yaml).
+ *
+ * `age_days`/`needs_retrain` (webapp porting backlog rider 13b) are computed
+ * server-side in `pilots/models.py` against the SAME
+ * `gui.help_content.MODEL_RETRAIN_WINDOW_DAYS` constant `GET /thresholds`'
+ * `retrain_window_days` surfaces for display text — never re-derive the flag
+ * client-side from `trained_date` date math. Both are `null` when
+ * `trained_date` itself is null/unparseable (CONSTRAINT #4: no fabricated
+ * flag on a model with no dated training run).
+ */
 export interface ModelRow {
   name: string;
   role: string | null;
@@ -780,6 +798,8 @@ export interface ModelRow {
   n_train: number | null;
   deployable: boolean | null;
   notes: string | null;
+  age_days: number | null;
+  needs_retrain: boolean | null;
 }
 
 /**
@@ -874,6 +894,101 @@ export interface PairsRadar {
   universe: string[];
   pairs: PairRow[];
   reason: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// On-demand Options / Pairs recompute (webapp porting backlog items 8a/8b) —
+// api/data_api.py POSTs, distinct from GET /options / GET /pairs above (which
+// only ever serve the LAST PIPELINE-WRITTEN artifact). These are synchronous,
+// request-scoped, operator-triggered computations against parameters/symbols
+// the operator chooses, capped to a small size (see each request type's docs).
+// ---------------------------------------------------------------------------
+
+/** Body for POST /data/pairs/analyze — one named pair. */
+export interface PairsAnalyzeRequest {
+  symbol_y: string;
+  symbol_x: string;
+}
+
+/**
+ * POST /data/pairs/analyze response. Shaped like `PairRow` (`ticker1` = Y /
+ * `ticker2` = X) plus a `found`/`reason` honesty envelope — `found: false`
+ * (insufficient history, no cointegration, a degenerate pair) is an honest,
+ * common, EXPECTED 200, not an error. `z_score_series` backs the frontend's
+ * own mini chart (the server renders nothing itself).
+ */
+export interface PairsAnalyzeResult {
+  ticker1: string;
+  ticker2: string;
+  found: boolean;
+  reason: string | null;
+  p_value: number | null;
+  half_life: number | null;
+  half_life_tradeable: boolean | null;
+  z_score: number | null;
+  beta: number | null;
+  rolling_p: number | null;
+  position: number | null;
+  signal: string;
+  aligned_bars: number;
+  z_score_series: { date: string; z_score: number }[];
+}
+
+/** Body for POST /data/pairs/scan — an operator-chosen symbol list (2-15
+ * after de-dup; 422 with a stable tag outside that range). */
+export interface PairsScanRequest {
+  symbols: string[];
+  p_threshold?: number;
+  max_pairs?: number;
+}
+
+/**
+ * POST /data/pairs/scan response. `pairs` rows match `PairRow` exactly;
+ * `missing` lists symbols that failed to fetch (dead-lettered, not aborted).
+ * An honest empty `pairs: []` + `reason` is a valid 200 — statistical
+ * arbitrage candidates are genuinely rare.
+ */
+export interface PairsScanResult {
+  pairs: PairRow[];
+  missing: string[];
+  aligned_symbols: number;
+  aligned_bars: number;
+  reason: string | null;
+}
+
+/**
+ * Body for POST /data/options/recompute — a capped symbol list (1-8 after
+ * de-dup; 422 with a stable tag outside that range) plus the same directive
+ * controls `gui/panels/options_matrix.py` exposes. Every field is optional;
+ * an omitted field uses the engine's own default (so an empty-but-symbols
+ * request reproduces the pipeline writer's defaults byte-for-byte).
+ */
+export interface OptionsRecomputeRequest {
+  symbols: string[];
+  target_dte?: number;
+  delta_target_scale?: number;
+  ivr_sell_threshold?: number;
+  ivr_buy_threshold?: number;
+  risk_free_rate_pct?: number | null;
+  strike_grid?: number;
+  delta_tolerance?: number;
+}
+
+/**
+ * POST /data/options/recompute response. `directives` rows match
+ * `OptionsDirective` exactly (reuses the same card/detail-sheet rendering as
+ * `GET /options`). A symbol that failed to compute still gets an
+ * error-shaped row in `directives` (never aborts the batch) AND its message
+ * in `errors`. `vix`/`market_regime` are the macro state actually forwarded
+ * into the VRP regime gate for this compute (from the latest persisted
+ * snapshot, or the neutral default when none exists).
+ */
+export interface OptionsRecomputeResult {
+  directives: OptionsDirective[];
+  errors: string[];
+  vix: number | null;
+  market_regime: string | null;
+  target_dte: number;
 }
 
 /**

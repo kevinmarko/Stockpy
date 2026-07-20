@@ -1458,8 +1458,20 @@ def get_thresholds() -> Dict[str, float]:
     see ``settings.AGENTIC_MAX_CANDIDATES``'s docstring ("never re-typed as a
     literal in the reader or the webapp").
 
+    ``retrain_window_days`` backs the Models screen's "Needs Retrain" badge
+    (webapp porting backlog rider 13b) — imported live from
+    ``gui.help_content.MODEL_RETRAIN_WINDOW_DAYS`` (the same constant
+    ``ml.meta_labeling.MetaLabeler.needs_retrain()`` uses), never re-typed as
+    a literal, so ``Models.tsx``'s static explainer text can quote the window
+    the same way it already quotes ``dsr_min``/``pbo_max``. ``GET /models``
+    itself computes ``needs_retrain``/``age_days`` per-model server-side
+    (``pilots/models.py``) using this same constant — this key is for display
+    text only, not for the frontend to re-derive the flag itself.
+
     These are config constants, not persisted pipeline state — always
     available, no cold-start empty case, never 404s/500s."""
+    from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+
     return {
         "pbo_max": PBO_MAX,
         "dsr_min": DSR_MIN,
@@ -1471,6 +1483,7 @@ def get_thresholds() -> Dict[str, float]:
         "robinhood_max_notional_per_order": settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER,
         "follow_min_amount": settings.FOLLOW_MIN_AMOUNT,
         "agentic_max_candidates": float(settings.AGENTIC_MAX_CANDIDATES),
+        "retrain_window_days": float(MODEL_RETRAIN_WINDOW_DAYS),
     }
 
 

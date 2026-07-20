@@ -79,6 +79,7 @@ describe("TabGuide", () => {
       robinhood_max_notional_per_order: 2500,
       follow_min_amount: 100,
       agentic_max_candidates: 25,
+      retrain_window_days: 30,
     });
     const user = userEvent.setup();
     render(<TabGuide tabKey="strategy-health" />);

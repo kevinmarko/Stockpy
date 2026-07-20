@@ -11,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OptionsMatrix } from "./OptionsMatrix";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { OptionsMatrix as OptionsMatrixT, Portfolio } from "../api/types";
 
 function renderScreen() {
@@ -20,6 +20,13 @@ function renderScreen() {
       <OptionsMatrix />
     </MemoryRouter>,
   );
+}
+
+async function openRecompute() {
+  renderScreen();
+  const user = userEvent.setup();
+  await user.click(await screen.findByText(/Recompute with custom parameters/));
+  return user;
 }
 
 describe("OptionsMatrix screen (real mock API)", () => {
@@ -133,5 +140,68 @@ describe("OptionsMatrix screen (real mock API)", () => {
     // exactly 1 symbol contributes.
     expect(await screen.findByText(/across 1 held symbol/)).toBeInTheDocument();
     expect(screen.getByText(/Σ Δ delta/)).toBeInTheDocument();
+  });
+
+  describe("Recompute with custom parameters (on-demand, backlog item 8b)", () => {
+    it("is hidden until the recompute section is expanded", async () => {
+      renderScreen();
+      await screen.findByRole("heading", { name: "Options premium" });
+      expect(screen.queryByLabelText(/Symbols \(comma or space separated/)).not.toBeInTheDocument();
+      const user = userEvent.setup();
+      await user.click(await screen.findByText(/Recompute with custom parameters/));
+      expect(screen.getByLabelText(/Symbols \(comma or space separated/)).toBeInTheDocument();
+    });
+
+    it("Recompute stays disabled outside the 1-8 symbol range", async () => {
+      const user = await openRecompute();
+      const input = screen.getByLabelText(/Symbols \(comma or space separated/);
+      const button = screen.getByRole("button", { name: "Recompute" });
+      expect(button).toBeDisabled(); // 0 symbols
+
+      await user.type(input, "AAPL");
+      expect(button).toBeEnabled();
+
+      await user.clear(input);
+      await user.type(input, Array.from({ length: 9 }, (_, i) => `SYM${i}`).join(","));
+      expect(button).toBeDisabled(); // 9 > cap of 8
+    });
+
+    it("recomputes and renders a directive card for a fresh symbol", async () => {
+      const user = await openRecompute();
+      await user.type(screen.getByLabelText(/Symbols \(comma or space separated/), "TSLA");
+      await user.click(screen.getByRole("button", { name: "Recompute" }));
+
+      // TSLA isn't one of the persisted-matrix fixture symbols -- confirms the
+      // recompute actually ran against the requested symbol, not a cached row.
+      await waitFor(() => {
+        expect(screen.getAllByText("TSLA").length).toBeGreaterThan(0);
+      });
+      // The persisted view above also shows a "Target DTE 30" chip -- confirm
+      // the recompute result rendered its OWN context row too (>= 2 total).
+      expect(screen.getAllByText(/Target DTE 30/).length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("dead-letters a bad symbol into an inline error without hiding the good ones", async () => {
+      const user = await openRecompute();
+      // "ZZZ" is the mock's existing dead-letter/no-data fixture symbol.
+      await user.type(screen.getByLabelText(/Symbols \(comma or space separated/), "AAPL, ZZZ");
+      await user.click(screen.getByRole("button", { name: "Recompute" }));
+
+      expect(
+        await screen.findByText(/insufficient bars to compute directive/),
+      ).toBeInTheDocument();
+      expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
+    });
+
+    it("a server error renders inline, not a generic failure", async () => {
+      vi.spyOn(api, "recomputeOptions").mockRejectedValueOnce(
+        new ApiError("Enter at most 8 symbols.", 422),
+      );
+      const user = await openRecompute();
+      await user.type(screen.getByLabelText(/Symbols \(comma or space separated/), "AAPL");
+      await user.click(screen.getByRole("button", { name: "Recompute" }));
+
+      expect(await screen.findByText("Enter at most 8 symbols.")).toBeInTheDocument();
+    });
   });
 });
