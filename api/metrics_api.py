@@ -192,6 +192,43 @@ def get_options(symbol: str) -> Dict[str, Any]:
     return _clean_nan(directive)
 
 
+@app.get("/metrics/sentiment/{symbol}", dependencies=[Depends(require_token)])
+async def get_sentiment(symbol: str) -> Dict[str, Any]:
+    """Live Sentiment Dynamics for ``symbol``, backed by Antigravity Agent."""
+    symbol = symbol.upper()
+    bars = _fetch_bars(symbol, 252)
+    if bars is None:
+        raise HTTPException(status_code=404, detail=f"No bar data available for {symbol}")
+        
+    from datetime import datetime
+    import pandas as pd
+    from sentiment_risk_engine import SentimentRiskEngine
+    
+    # We need the close series for returns to compute the leverage effect
+    returns = bars['Close'].pct_change().dropna()
+    date = datetime.now()
+    
+    try:
+        engine = SentimentRiskEngine()
+        sentiment_dto = await engine.get_live_sentiment(symbol, date, returns)
+    except Exception as exc:
+        logger.warning("metrics_api: sentiment dynamics failed for %s: %s", symbol, exc)
+        raise HTTPException(status_code=404, detail="Sentiment calculation failed")
+        
+    # Convert DTO to dict for the API response
+    result = {
+        "ticker": sentiment_dto.ticker,
+        "date": sentiment_dto.date.isoformat(),
+        "sentiment_score": sentiment_dto.sentiment_score,
+        "sentiment_intensity": sentiment_dto.sentiment_intensity,
+        "credibility_score": sentiment_dto.credibility_score,
+        "volatility_persistence": sentiment_dto.volatility_persistence
+    }
+    
+    return _clean_nan(result)
+
+
+
 @app.get("/metrics/signals/registry", dependencies=[Depends(require_token)])
 def get_signal_registry() -> Dict[str, Any]:
     """Registered signal modules and their configured weights.

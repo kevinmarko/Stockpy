@@ -1243,6 +1243,16 @@ export interface MacroGateUpdateResult {
   note: string;
 }
 
+/** GET /metrics/sentiment/{symbol} — Data structure for the Sentiment Dynamics feature. */
+export interface SentimentDynamics {
+  ticker: string;
+  date: string;
+  sentiment_score: number;
+  sentiment_intensity: number;
+  credibility_score: number;
+  volatility_persistence: number;
+}
+
 /** Portfolio-wide (all-symbol) forecast reliability + skill weights for one horizon. */
 export interface PortfolioForecastSkill {
   horizon_days: number;

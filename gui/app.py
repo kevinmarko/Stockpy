@@ -293,6 +293,7 @@ tab_labels = [
     "🛰️ Market Data",
     "📊 Observability",
     "📊 Analytics",
+    "💬 Sentiment Dynamics",
     "🔗 Pairs",
     "📡 Live Inventory",
     "❓ Help",
@@ -310,7 +311,7 @@ tab_labels = [
 st.caption(
     "🗂️ **Tab groups** — "
     "**Operate:** 🚀 Launcher · 🧩 Strategy Matrix · 🛰️ Market Data · 📡 Live Inventory   |   "
-    "**Analyze:** 📈 Reports · 🧮 Options · 📊 Observability · 📊 Analytics · 🔗 Pairs   |   "
+    "**Analyze:** 📈 Reports · 🧮 Options · 📊 Observability · 📊 Analytics · 💬 Sentiment Dynamics · 🔗 Pairs   |   "
     "**Validate:** 🛡️ Gravity Audit · 🔬 Validation Lab · 📁 Report Library   |   "
     "**AI:** 🪄 AI Insights · 🎛️ AI Control Center · 📝 Prompts   |   "
     "**Configure:** ⚙️ Settings · 📒 Paper Monitor · ❓ Help"
@@ -339,20 +340,22 @@ with tabs[8]:
 with tabs[9]:
     safe_panel(panels.render_analytics)
 with tabs[10]:
-    safe_panel(panels.render_pairs)
+    safe_panel(panels.render_sentiment_dynamics)
 with tabs[11]:
-    safe_panel(panels.render_live_inventory)
+    safe_panel(panels.render_pairs)
 with tabs[12]:
-    safe_panel(panels.render_help)
+    safe_panel(panels.render_live_inventory)
 with tabs[13]:
-    safe_panel(panels.render_prompt_registry)
+    safe_panel(panels.render_help)
 with tabs[14]:
-    safe_panel(panels.render_ai_insights)
+    safe_panel(panels.render_prompt_registry)
 with tabs[15]:
-    safe_panel(panels.render_ai_control_center)
+    safe_panel(panels.render_ai_insights)
 with tabs[16]:
-    safe_panel(panels.render_reports_library)
+    safe_panel(panels.render_ai_control_center)
 with tabs[17]:
+    safe_panel(panels.render_reports_library)
+with tabs[18]:
     safe_panel(panels.render_validation_lab)
 
 st.caption(f"Rendered {panels.utcnow_str()} · read-only, file-backed · secrets stay in .env")
