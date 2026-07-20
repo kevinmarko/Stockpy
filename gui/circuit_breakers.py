@@ -256,10 +256,20 @@ def derive_block_log_trips(
         else:
             name, severity, template = defaults
             try:
+                if threshold is None and "{threshold" in template:
+                    # No observed threshold to report. Don't fall through to
+                    # `template.format(threshold=float("nan"))`: Python's
+                    # "{:.0%}".format(float("nan")) renders the literal string
+                    # "nan%" without raising, so the `except` below would
+                    # never catch it and a fabricated "nan%" would silently
+                    # reach the operator (CONSTRAINT #4). Raise here instead
+                    # so this case takes the same honest generic-summary path
+                    # as a genuine formatting failure.
+                    raise ValueError("no threshold recorded for this trip")
                 summary = template.format(
                     symbol=symbol or "—",
                     strategy=strategy or "—",
-                    threshold=threshold if threshold is not None else float("nan"),
+                    threshold=threshold,
                 )
             except (KeyError, ValueError):
                 summary = f"{name} blocked {symbol or strategy or 'order'}"

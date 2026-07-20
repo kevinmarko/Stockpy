@@ -152,6 +152,22 @@ class TestDeriveBlockLogTrips:
         strategies = sorted(t.detail.get("strategy_id") for t in trips)
         assert strategies == ["mean_reversion", "momentum"]
 
+    @pytest.mark.parametrize("check", ["portfolio_heat", "daily_loss_limit"])
+    def test_missing_threshold_never_renders_fabricated_nan_percent(self, check: str) -> None:
+        """Regression: a known check whose summary template needs
+        ``{threshold:.0%}`` but has no recorded threshold must fall back to
+        the generic summary, never silently render the literal string
+        "nan%" (CONSTRAINT #4). Before the fix, the missing threshold was
+        smuggled in as ``float("nan")``, and
+        ``"{:.0%}".format(float("nan"))`` renders "nan%" without raising —
+        so the surrounding ``except (KeyError, ValueError)`` never caught it
+        and the fabricated value reached the operator undetected."""
+        trips = derive_block_log_trips([_block(check)], now=_NOW)
+        assert len(trips) == 1
+        assert "nan" not in trips[0].summary.lower()
+        assert trips[0].summary == f"{check} blocked order"
+        assert trips[0].threshold is None
+
 
 class TestCollectAndSummarise:
     def test_collect_orders_kill_switch_first(self, tmp_path: Path) -> None:

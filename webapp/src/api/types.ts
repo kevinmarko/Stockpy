@@ -1424,6 +1424,37 @@ export interface RiskGateBlockLog {
   reason: string | null;
 }
 
+/**
+ * One derived circuit-breaker trip — the merged kill-switch + risk-gate-block
+ * severity view (`gui/circuit_breakers.py`, ported from the legacy Streamlit
+ * `gui/panels/gravity_audit.py::_render_circuit_breaker_dashboard`). Unlike
+ * `RiskGateBlockEntry` (the raw, undeduped JSONL tail), each trip here is
+ * already classified by severity and deduped to the most recent one per
+ * (check, strategy) within the composite's `window_hours` — the kill switch,
+ * when active, always sorts first.
+ */
+export interface CircuitBreakerTrip {
+  name: string; // stable breaker id, e.g. "global_kill_switch", "portfolio_heat"
+  severity: "CRITICAL" | "WARNING";
+  summary: string; // one-line operator-facing description
+  triggered_at: string | null; // ISO timestamp; null when the record carries none
+  threshold: number | null; // the configured limit; null when not recorded (CONSTRAINT #4)
+  observed: number | null; // the value that crossed it; null when not recorded
+}
+
+export interface CircuitBreakerCounts {
+  critical: number;
+  warning: number;
+  total: number;
+}
+
+export interface CircuitBreakerSummary {
+  trips: CircuitBreakerTrip[];
+  counts: CircuitBreakerCounts; // feeds the KPI strip
+  window_hours: number;
+  reason: string | null; // present when trips is empty
+}
+
 export interface ObservabilitySummary {
   portfolio_risk: PortfolioRiskMetrics;
   portfolio_heat: PortfolioHeatMetric;
@@ -1431,6 +1462,7 @@ export interface ObservabilitySummary {
   regime: RegimeOverlay;
   forecast_skill: PortfolioForecastSkill;
   risk_gate_blocks: RiskGateBlockLog;
+  circuit_breakers: CircuitBreakerSummary;
 }
 
 // ---------------------------------------------------------------------------

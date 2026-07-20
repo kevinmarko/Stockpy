@@ -1301,14 +1301,21 @@ def get_observability_summary(
     horizon: int = Query(30, ge=1, le=365),
 ) -> Dict[str, Any]:
     """Composite Mission-Control summary — the PWA's port of the retired
-    Streamlit Command Center's Observability tab (bounded to five sections):
+    Streamlit Command Center's Observability tab (bounded to six sections):
     portfolio risk metrics (Sharpe/Calmar/MaxDD/MaxDD-duration/CAGR), the
     live portfolio heat (aggregate adverse open P&L vs. total equity, against
     ``MAX_PORTFOLIO_HEAT``), the account equity curve + drawdown, the current
     macro-regime overlay, the portfolio-wide forecast-skill reliability curve
-    + weights, and the last ~100 risk-gate block-log entries.
+    + weights, the last ~100 risk-gate block-log entries, and (NEW) the
+    merged kill-switch + risk-gate-block circuit-breaker dashboard —
+    severity-classified, 24h-deduped trips with threshold/observed values
+    and a counts-by-severity KPI strip, ported from ``gui/panels
+    /gravity_audit.py::_render_circuit_breaker_dashboard`` via
+    ``gui.circuit_breakers`` (see ``pilots/observability.py
+    ::circuit_breaker_summary`` — no new endpoint, this rides the existing
+    composite).
 
-    Composes FIVE independently-degrading sections (``pilots.observability
+    Composes SIX independently-degrading sections (``pilots.observability
     .observability_summary`` — see that module's docstring for the full
     per-section contract); one section's cold-start/failure never blocks the
     others, and every section carries its own honest ``reason`` when

@@ -119,6 +119,11 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     // Sahm/VIX/HY-OAS trigger levels are fixed constants in the macro kill-switch
     // check, not Thresholds API fields — same documented-literal precedent as above.
     "The pre-trade check that vetoes a new BUY when the macro regime looks dangerous (Sahm Rule ≥ 0.5, VIX > 30, or HY OAS > 6%). Mission Control's block log lists every order it actually stopped, and why. Operators can switch it off for hybrid mode, in which technical signals run without the macro override.",
+  "circuit breaker":
+    // The 24h dedup window is a documented literal default (gui/circuit_breakers.py
+    // ::collect_circuit_breaker_trips's `window` parameter), not a Thresholds API
+    // field — same "documented literal" precedent as "half-life"/"iv rank" above.
+    "The kill switch plus every risk-gate block, merged into one severity-classified view: CRITICAL (halts everything, e.g. the kill switch or a daily loss limit) or WARNING (a single order blocked). Deduped to the most recent trip per breaker within a rolling 24h window so a chatty block log doesn't bury the signal — an unresolved trip stays visible until a newer one for that same breaker supersedes it.",
   "orchestrator daemon":
     "The always-on background process that keeps the platform's heavy engines warm between cycles instead of paying full startup cost on every run. Its own internal timer can run cycles on a schedule independent of a manual trigger from the Pipeline screen.",
   "analyst note":
@@ -248,8 +253,8 @@ export const TAB_HELP: Record<string, TabHelp> = {
   observability: {
     title: "Mission Control",
     description:
-      "The platform's single risk-telemetry surface: macro regime (VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on probability), portfolio-wide equity/drawdown history, forecast-model skill weights, and the risk-gate block log — every order the pre-trade gate actually vetoed, and why.",
-    keyConcepts: ["hmm regime", "risk gate"],
+      "The platform's single risk-telemetry surface: macro regime (VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on probability), portfolio-wide equity/drawdown history, forecast-model skill weights, the circuit-breaker dashboard (kill switch + risk-gate blocks, deduped and classified CRITICAL/WARNING within a rolling window), and the raw risk-gate block log — every order the pre-trade gate actually vetoed, and why.",
+    keyConcepts: ["hmm regime", "risk gate", "circuit breaker"],
   },
   pipeline: {
     title: "Pipeline",

@@ -34,6 +34,8 @@ import type {
   BrokerageDisconnectResult,
   BrokerageStatus,
   CalibrationSummary,
+  CircuitBreakerSummary,
+  CircuitBreakerTrip,
   ControlStatus,
   CorrelationCluster,
   DecisionCreateRequest,
@@ -2543,6 +2545,52 @@ function mockPortfolioHeat(): PortfolioHeatMetric {
   };
 }
 
+// Deliberately mixes a CRITICAL and two WARNING trips (rather than an
+// all-clear fixture) so the severity chips/KPI strip exercise both colors by
+// default, matching mockRiskGateBlocks' own AMD/TSLA scenario above (same
+// checks, same symbols) -- these are the deduped/classified projection of
+// that same underlying block log, not independent data. The third trip
+// deliberately has threshold/observed/triggered_at ALL null -- a real,
+// legitimate shape (e.g. gui/circuit_breakers.py's max_position_size check
+// carries no threshold field, and a kill-switch sentinel with no readable
+// mtime carries no triggered_at) -- so mock mode actually demonstrates the
+// null-guard rendering path, not just the fully-populated one.
+function mockCircuitBreakers(): CircuitBreakerSummary {
+  const now = Date.now();
+  const trips: CircuitBreakerTrip[] = [
+    {
+      name: "portfolio_heat",
+      severity: "CRITICAL",
+      summary: "Portfolio heat exceeded 5%",
+      triggered_at: new Date(now - 6 * 3600_000).toISOString(),
+      threshold: 0.05,
+      observed: 0.064,
+    },
+    {
+      name: "max_correlation",
+      severity: "WARNING",
+      summary: "Correlation cap blocked AMD",
+      triggered_at: new Date(now - 40 * 60_000).toISOString(),
+      threshold: 0.8,
+      observed: 0.86,
+    },
+    {
+      name: "max_position_size",
+      severity: "WARNING",
+      summary: "Position size limit blocked NVDA",
+      triggered_at: null,
+      threshold: null,
+      observed: null,
+    },
+  ];
+  return {
+    trips,
+    counts: { critical: 1, warning: 2, total: 3 },
+    window_hours: 24,
+    reason: null,
+  };
+}
+
 function mockObservabilitySummary(range: PerfRange, horizon: number): ObservabilitySummary {
   return {
     portfolio_risk: mockPortfolioRisk(),
@@ -2551,6 +2599,7 @@ function mockObservabilitySummary(range: PerfRange, horizon: number): Observabil
     regime: mockRegimeOverlay(),
     forecast_skill: mockPortfolioForecastSkill(horizon),
     risk_gate_blocks: mockRiskGateBlocks(),
+    circuit_breakers: mockCircuitBreakers(),
   };
 }
 

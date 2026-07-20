@@ -1,9 +1,9 @@
 /**
  * Observability.test.tsx — the Mission Control screen renders each of the
- * four sections from the mock (portfolio risk, equity/drawdown/regime,
- * forecast skill, risk-gate block log), and renders every honesty branch
- * (null metrics -> "—", empty/cold-start -> the persisted reason) rather than
- * a fabricated number, never a hard failure.
+ * sections from the mock (portfolio risk, equity/drawdown/regime, forecast
+ * skill, circuit breakers, risk-gate block log), and renders every honesty
+ * branch (null metrics -> "—", empty/cold-start -> the persisted reason)
+ * rather than a fabricated number, never a hard failure.
  */
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -66,6 +66,12 @@ const COLD_START: ObservabilitySummary = {
     reason: "No forecast history yet — run the pipeline to accumulate it.",
   },
   risk_gate_blocks: { entries: [], count: 0, reason: "No risk-gate blocks logged yet." },
+  circuit_breakers: {
+    trips: [],
+    counts: { critical: 0, warning: 0, total: 0 },
+    window_hours: 24,
+    reason: "No active circuit-breaker trips in the last 24h.",
+  },
 };
 
 describe("Observability (Mission Control) screen (real mock API)", () => {
@@ -127,6 +133,47 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     const rows = await screen.findAllByTestId("risk-gate-block-row");
     expect(rows.length).toBeGreaterThan(0);
     expect(within(rows[0]).getByText(/AMD|TSLA/)).toBeInTheDocument();
+  });
+
+  it("renders the circuit-breaker KPI strip and severity chips from the mock", async () => {
+    renderScreen();
+    expect(await screen.findByText("Circuit breakers")).toBeInTheDocument();
+    expect(await screen.findByText("Critical trips")).toBeInTheDocument();
+    expect(await screen.findByText("Warning trips")).toBeInTheDocument();
+    const rows = await screen.findAllByTestId("circuit-breaker-row");
+    // mock.ts's mockCircuitBreakers: one CRITICAL (portfolio_heat) + two
+    // WARNING (max_correlation, max_position_size) trips.
+    expect(rows.length).toBe(3);
+    expect(within(rows[0]).getByText("CRITICAL")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("WARNING")).toBeInTheDocument();
+    expect(within(rows[2]).getByText("WARNING")).toBeInTheDocument();
+    expect(within(rows[0]).getByText(/Threshold: 0.05/)).toBeInTheDocument();
+    expect(within(rows[0]).getByText(/Observed: 0.064/)).toBeInTheDocument();
+  });
+
+  it("a trip with null threshold/observed/triggered_at never renders a fabricated value", async () => {
+    renderScreen();
+    const rows = await screen.findAllByTestId("circuit-breaker-row");
+    // The third mock trip (max_position_size) carries no threshold/observed
+    // (that check's summary template has none) and no triggered_at (mirrors
+    // a kill-switch sentinel with no readable mtime) -- confirm the row
+    // renders its "—" timestamp fallback and omits the threshold/observed
+    // line entirely, rather than fabricating "Threshold: null" or similar.
+    const nullTrip = rows[2];
+    expect(within(nullTrip).getByText(/NVDA/)).toBeInTheDocument();
+    expect(within(nullTrip).getByText("—")).toBeInTheDocument();
+    expect(within(nullTrip).queryByText(/Threshold:/)).not.toBeInTheDocument();
+    expect(within(nullTrip).queryByText(/Observed:/)).not.toBeInTheDocument();
+  });
+
+  it("cold-start circuit breakers render the honest empty reason, never a fabricated 'all clear' tile", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(await screen.findByText("Circuit breakers")).toBeInTheDocument();
+    expect(
+      await screen.findByText("No active circuit-breaker trips in the last 24h.")
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("circuit-breaker-row")).not.toBeInTheDocument();
   });
 
   it("cold start: every section renders its honest reason, never a fabricated value", async () => {
