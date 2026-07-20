@@ -3,10 +3,10 @@
 This file holds the detailed, dated changelog of every Tier/Task/Scope feature shipped
 since 2026-06, moved out of `CLAUDE.md` on 2026-07-05 to keep that file under the
 context-budget char limit. `CLAUDE.md` still carries the **current, load-bearing**
-architecture reference (flat module list, standing operator rules, domain split,
-conventions); this file is the **archival "why does X exist and what shipped in the
-PR that added it" record** — read it when you need the full backstory, test surface,
-or Gravity-audit-step details for a specific subsystem named below.
+architecture reference (flat module list, standing operator rules, conventions); this
+file is the **archival "why does X exist and what shipped in the PR that added it"
+record** — read it when you need the full backstory, test surface, or Gravity-audit-step
+details for a specific subsystem named below.
 
 Sections in this file (search for the `##` heading):
 - Autopilot "Pilots" makeover — consumer-style marketplace over Stockpy's own strategies: `pilots/` (Phase 1), `api/pilots_api.py` (Phase 2), `pilots/mirror.py` gated follow-mirror (Phase 3), the `webapp/` PWA, decisions D1/D2/D3 (2026-07-12/13)

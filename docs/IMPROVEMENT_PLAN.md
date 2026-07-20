@@ -13,8 +13,8 @@ in `CLAUDE.md`), and earlier phases de-risk later ones.
 
 1. **Never refactor structure and change behavior in the same PR.** If a later phase
    regresses, `git bisect` lands on a single-concern commit.
-2. **Single-agent ownership** (`CLAUDE.md`): Claude Code owns the entire repo, including
-   `gui/` and Gravity tooling — no domain split to coordinate with another agent.
+2. **Ad-hoc agent assignment** (`CLAUDE.md`): both Claude Code and Antigravity IDE work this repo,
+   including `gui/` and Gravity tooling — task assignment is per-task, not a fixed file-domain split.
 3. **Baseline-anchored** — Phase 0 captures a green test + Gravity + latency baseline that
    every later phase diffs against.
 

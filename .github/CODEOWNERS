@@ -1,4 +1,6 @@
-# Claude Code owns the entire repo — single-agent workflow.
+# kevinmarko reviews the entire repo. Claude Code and Antigravity IDE both work
+# on this codebase (ad-hoc task assignment, no fixed per-agent file domain) —
+# review ownership is unaffected by which agent authored a given PR.
 
 signals/                    @kevinmarko
 strategy_engine.py          @kevinmarko

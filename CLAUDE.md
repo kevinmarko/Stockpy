@@ -4,9 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Branch Workflow
 
-Claude Code is the sole agent working on this repo (Antigravity IDE is retired — the prior
-multi-agent domain split and per-agent branch prefixes no longer apply; the whole codebase
-is Claude Code's to edit).
+Antigravity IDE has resumed working on this repo alongside Claude Code (as of 2026-07-20). There is
+**no fixed multi-agent domain split or per-agent branch-prefix convention** this time — the operator
+assigns work to each agent per-task, ad hoc, rather than via a structural file-domain split. Do not
+defer to, flag PRs for, or avoid editing any file on the assumption another agent owns it; any file
+may be worked on by whichever agent is assigned the task at hand. Branch naming (lowercase-kebab, e.g.
+`fix-hmm-lookahead`) is unchanged and applies the same way regardless of which agent opens the branch.
 
 ### Start-of-session checklist
 1. `git fetch origin && git rebase origin/main` — sync from main before starting.

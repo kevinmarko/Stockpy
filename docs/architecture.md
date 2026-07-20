@@ -210,13 +210,9 @@ flowchart TD
 
 ## Module Ownership
 
-Claude Code owns the entire repo — single-agent workflow, no domain split.
-
-| Domain | Files |
-|--------|-------|
-| Signal modules, strategy sizing, ML, regime, validation | `signals/`, `strategy_engine.py`, `sizing/`, `ml/`, `regime/`, `macro_engine.py`, `validation/`, `execution/`, `tests/` |
-| GUI, observability, reporting, scripts | `gui/`, `observability/`, `diagnostics_and_visuals.py`, `scripts/` |
-| Config, DTOs, data layer, orchestrators, requirements | `config.py`, `dto_models.py`, `data/`, `data_engine.py`, `main.py`, `main_orchestrator.py`, `requirements.txt` |
+Both Claude Code and Antigravity IDE work on this repo. There is no fixed per-domain file split —
+the operator assigns work to whichever agent per task, ad hoc, so a static ownership table would
+misrepresent the actual arrangement. Any agent may touch any file for the task it's assigned.
 
 ---
 
