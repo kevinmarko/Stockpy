@@ -65,6 +65,7 @@ import type {
   SymbolDetail,
   SymbolCompareResponse,
   UniverseResponse,
+  UniverseCoverageResponse,
   RecommendationsResponse,
   UniverseListResponse,
   Thresholds,
@@ -194,6 +195,9 @@ const liveApi = {
       `/pilots/${encodeURIComponent(id)}/performance?range=${range}`
     ),
   getUniverse: () => http<UniverseResponse>("/universe"),
+  // Coverage-reconciliation diagnostic (FULL/EQUITY_ONLY/UNCOVERED breakdown)
+  // — distinct from GET /data/universe's plain add/remove list.
+  getUniverseCoverage: () => http<UniverseCoverageResponse>("/universe/coverage"),
   // Ranked BUY picks from the latest snapshot (pilots base, :8602).
   getRecommendations: (limit = 25) =>
     http<RecommendationsResponse>(`/recommendations?limit=${limit}`),

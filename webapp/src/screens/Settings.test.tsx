@@ -764,4 +764,9 @@ describe("Settings screen — Tracked universe", () => {
     expect(await screen.findByText("Tracked universe")).toBeInTheDocument();
     expect(await screen.findByTestId("universe-chip-AAPL")).toBeInTheDocument();
   });
+
+  it("renders the coverage-reconciliation diagnostic alongside the manager", async () => {
+    renderSettings();
+    expect(await screen.findByTestId("universe-coverage")).toBeInTheDocument();
+  });
 });

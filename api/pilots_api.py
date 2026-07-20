@@ -126,6 +126,7 @@ from pilots import (
     commands as commands_reader,
     discovery as discovery_reader,
     forecast_skill,
+    live_inventory,
     models,
     observability,
     options,
@@ -887,6 +888,30 @@ def get_universe() -> Dict[str, Any]:
     advisory action when present, else the raw signal action, else ``null`` — it
     only decorates the suggestion and is never fabricated (CONSTRAINT #4)."""
     return {"symbols": symbols.list_universe(_load_snapshot())}
+
+
+@app.get("/universe/coverage", dependencies=[Depends(require_read_token)])
+def get_universe_coverage() -> Dict[str, Any]:
+    """Portfolio-sync coverage-reconciliation diagnostic — the read-only
+    counterpart of ``gui/panels/live_inventory.py``'s coverage table (ticker
+    add/remove itself is already covered by ``UniverseManager``'s ``GET/PUT
+    /data/universe``; this is only the missing FULL/EQUITY_ONLY/UNCOVERED
+    breakdown).
+
+    Reads the persisted ``cache/sync_report.json`` written by the GUI's
+    "Sync Now" button (``data.portfolio_sync.async_sync_now``) — this
+    endpoint NEVER triggers a live market-data probe itself, only the GUI/CLI
+    trigger does. Declared as a static sibling route of ``GET /universe``
+    (no ordering trap: FastAPI never confuses two static paths regardless of
+    declaration order, unlike a parameterized route). Returns
+    ``{"generated_at", "provider_source", "fundamentals_source", "counts"
+    (one key per coverage status), "n_total", "symbols": [...], "reason"}`` —
+    ``reason`` is set and the collections degrade to an empty/zeroed shape on
+    a cold start (no sync run yet) or a corrupt/empty cache; never 500s
+    (CONSTRAINT #6). Every numeric leaf is ``null`` when the cached probe
+    didn't resolve it (e.g. no live quote for an EQUITY_ONLY symbol), never a
+    fabricated 0.0 (CONSTRAINT #4)."""
+    return live_inventory.universe_coverage()
 
 
 @app.get("/recommendations", dependencies=[Depends(require_read_token)])

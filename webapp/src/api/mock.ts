@@ -22,6 +22,7 @@ import type {
   BrinsonFachlerRow,
   BrinsonFachlerSectorDetail,
   CommandManifest,
+  CoverageStatus,
   DiscoveryCandidate,
   ExecutionQueue,
   ScanConfig,
@@ -96,6 +97,8 @@ import type {
   SymbolCompareRow,
   SymbolCompareResponse,
   UniverseResponse,
+  UniverseCoverageResponse,
+  UniverseCoverageRow,
   RecommendationsResponse,
   Recommendation,
   UniverseListResponse,
@@ -2984,6 +2987,58 @@ export const mockApi = {
       .sort()
       .map((symbol) => ({ symbol, action: ACTIONS[symbol] ?? null }));
     return delay({ symbols });
+  },
+
+  async getUniverseCoverage(): Promise<UniverseCoverageResponse> {
+    // Most tracked symbols have FULL coverage; a couple deliberately don't,
+    // so the "Coverage gaps only" filter and the honest-null numeric leaves
+    // (no live quote for an EQUITY_ONLY/UNCOVERED symbol) both have something
+    // real to show, mirroring the mock's DUK-style honest-null convention
+    // used elsewhere (getSymbol, getSymbolsCompare).
+    const GAPS: Record<string, CoverageStatus> = {
+      DUK: "equity_only",
+      T: "uncovered",
+    };
+    const counts: Record<CoverageStatus, number> = {
+      full: 0, stale: 0, quotes_only: 0, equity_only: 0, uncovered: 0, unknown: 0,
+    };
+    const symbols: UniverseCoverageRow[] = [...SYMBOL_UNIVERSE].sort().map((symbol) => {
+      const coverage = GAPS[symbol] ?? "full";
+      counts[coverage] += 1;
+      const rng = seeded([...symbol].reduce((a, c) => a + c.charCodeAt(0), 0));
+      const covered = coverage === "full";
+      // avg_cost/quantity/held are a real Robinhood holding fact, independent
+      // of market-data coverage — DUK is both held AND equity_only (a real
+      // position with no live quote), matching data.portfolio_sync.SymbolStatus
+      // (avg_cost is NaN only when not held, not when uncovered).
+      const position = PORTFOLIO.positions.find((p) => p.symbol === symbol);
+      const held = position != null;
+      return {
+        symbol,
+        coverage,
+        held,
+        quantity: position?.qty ?? 0,
+        avg_cost: held ? position.avg_cost : null,
+        current_price: covered ? +(50 + rng() * 400).toFixed(2) : null,
+        cost_basis_delta_per_share: covered && held ? +((rng() - 0.5) * 40).toFixed(2) : null,
+        market_value: covered ? +(1000 + rng() * 9000).toFixed(2) : null,
+        is_stale_quote: false,
+        quote_source: covered ? "alpaca" : null,
+        has_fundamentals: covered,
+        forecast_available: covered,
+        watchlists: [],
+        diagnostic: covered ? null : "quote:NotFoundError",
+      };
+    });
+    return delay({
+      generated_at: new Date(Date.now() - 5_400_000).toISOString(),
+      provider_source: "alpaca",
+      fundamentals_source: "yahoo",
+      counts,
+      n_total: symbols.length,
+      symbols,
+      reason: null,
+    });
   },
 
   async getThresholds(): Promise<Thresholds> {

@@ -186,6 +186,53 @@ export interface UniverseResponse {
   symbols: UniverseSymbol[];
 }
 
+/** One coverage-status bucket — mirrors data.portfolio_sync.CoverageStatus's values exactly. */
+export type CoverageStatus = "full" | "stale" | "quotes_only" | "equity_only" | "uncovered" | "unknown";
+
+/**
+ * GET /universe/coverage — one row of the portfolio-sync coverage-
+ * reconciliation diagnostic (the read-only counterpart of
+ * `gui/panels/live_inventory.py`'s coverage table). Ticker add/remove itself
+ * is a SEPARATE concern, already covered by `UniverseManager`'s
+ * `GET/PUT /data/universe` — this is only the FULL/EQUITY_ONLY/UNCOVERED
+ * breakdown. Every numeric leaf is `null` when the cached probe didn't
+ * resolve it (e.g. no live quote for an EQUITY_ONLY symbol) — never a
+ * fabricated 0.0 (CONSTRAINT #4).
+ */
+export interface UniverseCoverageRow {
+  symbol: string;
+  coverage: CoverageStatus;
+  held: boolean;
+  quantity: number | null;
+  avg_cost: number | null;
+  current_price: number | null;
+  cost_basis_delta_per_share: number | null;
+  market_value: number | null;
+  is_stale_quote: boolean;
+  quote_source: string | null;
+  has_fundamentals: boolean;
+  forecast_available: boolean;
+  watchlists: string[];
+  diagnostic: string | null;
+}
+
+/**
+ * GET /universe/coverage — reads the persisted `cache/sync_report.json`
+ * written by the GUI's "Sync Now" button; never triggers a live market-data
+ * probe itself. `reason` is set (and `symbols`/`counts` degrade to an
+ * empty/zeroed shape) on a cold start (no sync run yet) or an empty/corrupt
+ * cache.
+ */
+export interface UniverseCoverageResponse {
+  generated_at: string | null;
+  provider_source: string | null;
+  fundamentals_source: string | null;
+  counts: Record<CoverageStatus, number>;
+  n_total: number;
+  symbols: UniverseCoverageRow[];
+  reason: string | null;
+}
+
 /**
  * One symbol's latest quote from `GET /data/quotes?symbols=...`
  * (`api/data_api.py`, backed by `data.market_data.CompositeProvider`).

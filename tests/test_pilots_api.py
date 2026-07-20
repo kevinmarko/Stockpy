@@ -363,6 +363,97 @@ def test_universe_cold_start_empty_not_404(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# GET /universe/coverage — the portfolio-sync coverage-reconciliation diagnostic
+# ---------------------------------------------------------------------------
+
+
+def _patched_sync_cache_path(tmp_path):
+    """data.portfolio_sync._CACHE_PATH is a hardcoded module-level Path (not
+    settings-driven like _snapshot_path()), so tests patch it directly."""
+    import data.portfolio_sync as portfolio_sync
+
+    return mock.patch.object(portfolio_sync, "_CACHE_PATH", tmp_path / "sync_report.json")
+
+
+def test_universe_coverage_cold_start_has_reason_not_404(tmp_path):
+    with _patched_sync_cache_path(tmp_path):
+        resp = client.get("/universe/coverage")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reason"] is not None
+    assert body["symbols"] == []
+    assert body["n_total"] == 0
+    assert body["counts"] == {
+        "full": 0, "stale": 0, "quotes_only": 0,
+        "equity_only": 0, "uncovered": 0, "unknown": 0,
+    }
+
+
+def test_universe_coverage_shape_and_values(tmp_path):
+    import data.portfolio_sync as portfolio_sync
+
+    cache = {
+        "generated_at": "2026-07-20T12:00:00+00:00",
+        "positions": ["AAPL"],
+        "watchlists": {},
+        "provider_source": "alpaca",
+        "fundamentals_source": "yahoo",
+        "symbols": {
+            "AAPL": {
+                "symbol": "AAPL", "coverage": "full", "held": True,
+                "quantity": 40.0, "avg_cost": 150.0, "current_price": 224.15,
+                "cost_basis_delta_per_share": 74.15, "market_value": 8966.0,
+                "is_stale_quote": False, "quote_source": "alpaca",
+                "has_fundamentals": True, "forecast_available": True,
+                "watchlists": [], "diagnostic": "",
+            },
+            "ZZZ": {
+                "symbol": "ZZZ", "coverage": "equity_only", "held": True,
+                "quantity": 10.0, "avg_cost": 5.0, "current_price": float("nan"),
+                "cost_basis_delta_per_share": float("nan"), "market_value": float("nan"),
+                "is_stale_quote": False, "quote_source": "",
+                "has_fundamentals": False, "forecast_available": False,
+                "watchlists": [], "diagnostic": "quote:NotFoundError",
+            },
+        },
+    }
+    path = tmp_path / "sync_report.json"
+    path.write_text(json.dumps(cache), encoding="utf-8")
+
+    with mock.patch.object(portfolio_sync, "_CACHE_PATH", path):
+        resp = client.get("/universe/coverage")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reason"] is None
+    assert body["n_total"] == 2
+    assert body["counts"]["full"] == 1
+    assert body["counts"]["equity_only"] == 1
+    assert body["provider_source"] == "alpaca"
+    zzz = next(r for r in body["symbols"] if r["symbol"] == "ZZZ")
+    # NaN in the cache must never leak as a literal NaN token or a fabricated 0.0.
+    assert zzz["current_price"] is None
+    assert zzz["market_value"] is None
+
+
+def test_universe_coverage_corrupt_cache_never_500s(tmp_path):
+    path = tmp_path / "sync_report.json"
+    path.write_text("{not valid json", encoding="utf-8")
+    import data.portfolio_sync as portfolio_sync
+
+    with mock.patch.object(portfolio_sync, "_CACHE_PATH", path):
+        resp = client.get("/universe/coverage")
+    assert resp.status_code == 200
+    assert resp.json()["reason"] is not None
+
+
+def test_universe_coverage_no_auth_required(tmp_path):
+    # Fail-open read tier, same as GET /universe — no token supplied here.
+    with _patched_sync_cache_path(tmp_path):
+        resp = client.get("/universe/coverage")
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # GET /recommendations — the ranked BUY-picks feed
 # ---------------------------------------------------------------------------
 

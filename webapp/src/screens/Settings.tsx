@@ -27,6 +27,7 @@ import { Modal } from "../components/Modal";
 import { PwaStatusSection } from "../components/PwaStatusSection";
 import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { UniverseManager } from "../components/UniverseManager";
+import { UniverseCoverage } from "../components/UniverseCoverage";
 import { TabGuide } from "../components/TabGuide";
 import { fmtAge, fmtDate, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -132,6 +133,7 @@ export function Settings() {
         sub="Add or remove any stock. Changes take effect on the next pipeline run — raw data for any symbol is explorable immediately in Data Explorer."
       >
         <UniverseManager />
+        <UniverseCoverage />
       </SectionCard>
 
       <SignalModulesLink />
