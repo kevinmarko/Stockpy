@@ -1,0 +1,33 @@
+# Optional heavy forecasting dependencies — NOT installed by CI or the base
+# `./setup.sh`. Install locally with `./setup.sh --optional` or
+# `./.venv/bin/pip install -r requirements-optional.txt`.
+#
+# What this enables
+# -----------------
+# TensorFlow activates the hybrid CNN-LSTM forecaster in forecasting_engine.py
+# (guarded by TENSORFLOW_AVAILABLE). Without it, run_cnn_lstm_forecast() returns
+# zeros and CNN-LSTM silently contributes nothing to the multi-model ensemble
+# blend or the inverse-RMSE skill tracker (forecasting/forecast_tracker.py) —
+# exactly the graceful-degradation pattern Prophet uses. Everything else in the
+# platform runs identically whether or not this file is installed.
+#
+# Why it is separate from requirements.txt
+# ----------------------------------------
+# TensorFlow is a ~500MB install and its CNN-LSTM path is a local, opt-in model.
+# Keeping it out of requirements.txt keeps CI lean (CI installs requirements.txt
+# only) and leaves the two TF-dormant tests fast.
+#
+# numpy safety (load-bearing — do not weaken)
+# -------------------------------------------
+# requirements.txt pins `numpy>=2.0,<2.3` (the <2.3 ceiling is enforced by
+# numba==0.61.2 via pandas-ta/vectorbt). TensorFlow < 2.19 caps numpy below 2.2
+# and would DOWNGRADE it, breaking numba's JIT paths. TF >= 2.19 accepts numpy
+# 2.2.x, so the floor below keeps numpy exactly where requirements.txt wants it.
+# Verified via `pip install --dry-run`: TF 2.21 leaves numpy 2.2.6 untouched and
+# adds only net-new packages (keras, ml_dtypes, h5py, wrapt, …) — no downgrades.
+#
+# Platform note: on Apple Silicon macOS the plain `tensorflow` package ships
+# native arm64 CPU wheels — do NOT use the deprecated `tensorflow-macos`, and
+# `tensorflow-metal` (GPU) is unnecessary for this tiny model and adds version
+# churn, so it is intentionally omitted.
+tensorflow>=2.19
