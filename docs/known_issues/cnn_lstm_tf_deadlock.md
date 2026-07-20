@@ -194,30 +194,72 @@ artifact of the verification script.
    same Abseil version without hiding their symbols.
 
 The evidence doesn't cleanly discriminate between these — both would produce an
-identical outward hang. See the recommended next step below.
+identical outward hang. See Attempts 4-6 below, which executed exactly this
+discriminator and produced a surprising result: **neither theory reproduces the
+hang in isolation.**
+
+### Attempts 4-6 — the discriminator experiments (executed 2026-07-20)
+
+The binary-search experiment proposed above was run, plus one further narrowing
+step. All three completed cleanly — **no hang in any of them**:
+
+| # | Script | Result |
+|---|---|---|
+| 4 | `import tensorflow` only, one trivial eager op (`tf.constant(1) + tf.constant(1)`) | ✅ Completed instantly. |
+| 5 | `import pyarrow` then `tensorflow`, same trivial op | ✅ Completed instantly. |
+| 6 | The **real** `Sequential([Conv1D, MaxPooling1D, LSTM, Dense])` architecture, real `.compile()` + `.fit()` call (50 epochs, `validation_split=0.2`, `EarlyStopping`) on synthetic random data shaped to match production (`X: (160, 60, 10)`, `Y: (160, 4)`) — **no** `pyarrow`, `numba`, `arch`, or `HistoricalStore` in the process at all | ✅ `model.fit()` returned, `model.predict()` produced a real result. |
+
+This is a meaningfully different outcome than the two theories predicted. Both
+theory 1 (bare Framework-Python/GCD vs. any TF eager op) and theory 2 (mere
+co-loading of PyArrow) are now **disconfirmed in their simplest form** — a trivial
+op runs fine in both cases, and even the *real* model architecture with the *real*
+`.fit()` training call runs fine in total isolation from PyArrow, numba, and arch.
+
+**What this actually establishes:** the deadlock requires something specific to
+the *full* combination present in `forecasting_engine.py`'s real import graph and
+execution context — not TensorFlow/Keras training in isolation, and not merely
+PyArrow being co-loaded. The confirmed Attempt-1 trace still stands (the hang is
+genuinely inside TF's eager execution, not in numba/pandas-ta feature engineering
+beforehand), so the trigger is some interaction between TF's eager execution and
+one or more of the other libraries loaded before it in the real code path — numba/
+llvmlite (via `pandas_ta`), `arch` (GARCH), h5py, SQLAlchemy, or some combination,
+possibly still involving the confirmed Abseil/PyArrow ODR collision but only when
+triggered alongside something else. The Abseil symbol-collision finding (directly
+confirmed via `nm`, see above) is not disconfirmed by this — Attempt 5 shows mere
+*presence* of PyArrow isn't sufficient on its own, which narrows the collision's
+role without ruling it out as a contributing factor once other pieces are present.
 
 ## Recommended next diagnostic step
 
-Re-running attempts 2/3 with a fresh trace would only confirm the env-var fixes
-didn't change the *symptom* — it can't separate the two theories, since both predict
-the same observable hang. A cheaper, more decisive experiment:
+Import the real `forecasting_engine.ForecastingEngine` (pulling in its actual full
+dependency graph — numba/pandas-ta, arch, h5py, SQLAlchemy, PyArrow via pandas,
+everything) and call `run_cnn_lstm_forecast` on **synthetic** data instead of real
+`HistoricalStore`/AAPL data:
 
-1. Run a **minimal script that imports only `tensorflow`** (no `pyarrow`, no
-   `pandas`, no `HistoricalStore`) and executes one trivial eager op:
-   ```python
-   import tensorflow as tf
-   print(tf.constant(1) + tf.constant(1))
-   ```
-   under the same Framework Python.
-   - **Hangs anyway** → isolates the cause to Python/TF/macOS threading alone,
-     independent of Arrow. Points at theory 1 (Accelerate/GCD).
-   - **Does not hang** → re-add just `import pyarrow` before the same trivial op.
-     If *that* combination hangs, it strongly implicates the Abseil symbol collision
-     (theory 2) as the actual trigger, not merely a coincidental hazard sitting on
-     the call path.
+```python
+import pandas as pd, numpy as np
+from forecasting_engine import ForecastingEngine
 
-This binary-search approach resolves the ambiguity in one bounded test rather than
-repeated full-cost reproductions of the real forecaster.
+dates = pd.date_range(end="2026-07-19", periods=300)
+bars = pd.DataFrame({
+    "Open": np.random.rand(300) * 10 + 150,
+    "High": np.random.rand(300) * 10 + 155,
+    "Low": np.random.rand(300) * 10 + 145,
+    "Close": np.random.rand(300) * 10 + 150,
+    "Volume": np.random.randint(1e6, 5e6, 300),
+}, index=dates)
+
+ForecastingEngine().run_cnn_lstm_forecast(bars, horizons=(10, 30, 60, 90), ticker="SYNTH")
+print("unreachable if the bug reproduces")
+```
+
+- **Hangs** → isolates the cause to `forecasting_engine.py`'s import graph/execution
+  context itself, independent of the real AAPL data or `HistoricalStore` — narrows
+  the search to which of numba/arch/h5py/SQLAlchemy (individually or combined)
+  triggers it, testable by importing them one at a time before a trivial TF op.
+- **Does not hang** → the trigger depends on something about the real data path
+  (`HistoricalStore`, the real DB, or the real AAPL values) rather than the import
+  graph alone — a much less likely but not yet excluded possibility.
 
 ## What was ruled out
 
@@ -230,6 +272,13 @@ repeated full-cost reproductions of the real forecaster.
 - The new-vs-legacy Keras engine as the sole cause (`TF_USE_LEGACY_KERAS=1` + `tf-keras`
   — no change; though note this doesn't fully rule out Keras 3 as *a* contributing
   factor, only that reverting it alone isn't sufficient).
+- TensorFlow eager execution in isolation as the sole cause (Attempt 4 — no hang).
+- Mere co-loading of PyArrow as the sole trigger (Attempt 5 — no hang; the confirmed
+  Abseil ODR collision may still be a contributing factor once other pieces are
+  present, but presence alone isn't sufficient).
+- The real Conv1D/LSTM model architecture and `.fit()` training call as the sole
+  cause, independent of the rest of `forecasting_engine.py`'s import graph
+  (Attempt 6 — no hang on synthetic data with the exact real architecture).
 
 ## Related
 
