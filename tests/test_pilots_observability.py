@@ -106,6 +106,169 @@ class TestPortfolioRiskMetrics:
 
 
 # ---------------------------------------------------------------------------
+# portfolio_heat_metric
+# ---------------------------------------------------------------------------
+
+
+class _Pos:
+    """Minimal stand-in for data.robinhood_portfolio.PortfolioPosition —
+    portfolio_heat_metric only reads .unrealized_pl off each position."""
+
+    def __init__(self, unrealized_pl):
+        self.unrealized_pl = unrealized_pl
+
+
+class _Snapshot:
+    """Minimal stand-in for data.historical_store's reconstructed
+    AccountSnapshot — portfolio_heat_metric only reads .positions,
+    .total_equity, and .fetched_at."""
+
+    def __init__(self, positions, total_equity, fetched_at=None):
+        self.positions = positions
+        self.total_equity = total_equity
+        self.fetched_at = fetched_at
+
+
+class TestPortfolioHeatMetric:
+    def test_cold_start_no_snapshot(self):
+        class _Store:
+            def latest_account_snapshot(self):
+                return None
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=_Store()):
+            out = obs.portfolio_heat_metric()
+
+        assert out["heat_pct"] is None
+        assert out["over_limit"] is None
+        assert out["n_positions"] == 0
+        assert out["max_portfolio_heat"] == pytest.approx(settings.MAX_PORTFOLIO_HEAT)
+        assert out["reason"]
+
+    def test_historical_store_construction_failure_degrades_to_empty(self):
+        with mock.patch(
+            "data.historical_store.HistoricalStore", side_effect=RuntimeError("db locked")
+        ):
+            out = obs.portfolio_heat_metric()
+        assert out["heat_pct"] is None
+        assert out["reason"]
+
+    def test_missing_total_equity_is_honest_none_not_fabricated(self):
+        snap = _Snapshot(positions={"AAPL": _Pos(-50.0)}, total_equity=None)
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return snap
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=_Store()):
+            out = obs.portfolio_heat_metric()
+
+        assert out["heat_pct"] is None
+        assert out["n_positions"] == 1
+        assert "equity" in out["reason"].lower()
+
+    def test_non_positive_total_equity_is_honest_none(self):
+        snap = _Snapshot(positions={}, total_equity=0.0)
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return snap
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=_Store()):
+            out = obs.portfolio_heat_metric()
+
+        assert out["heat_pct"] is None
+        assert out["reason"]
+
+    def test_all_profitable_positions_yield_zero_heat(self):
+        snap = _Snapshot(
+            positions={"AAPL": _Pos(120.0), "MSFT": _Pos(50.0)},
+            total_equity=10_000.0,
+        )
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return snap
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=_Store()):
+            out = obs.portfolio_heat_metric()
+
+        assert out["heat_pct"] == pytest.approx(0.0)
+        assert out["over_limit"] is False
+        assert out["n_positions"] == 2
+        assert out["reason"] is None
+
+    def test_heat_matches_risk_gate_formula_exactly(self):
+        # Mirrors execution/risk_gate.py::portfolio_heat_check's own formula:
+        # sum(abs(unrealized_pl) for adverse positions) / account.equity.
+        snap = _Snapshot(
+            positions={
+                "AAPL": _Pos(-300.0),   # adverse
+                "MSFT": _Pos(-200.0),   # adverse
+                "NVDA": _Pos(400.0),    # profitable — excluded from the numerator
+            },
+            total_equity=10_000.0,
+        )
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return snap
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=_Store()):
+            out = obs.portfolio_heat_metric()
+
+        assert out["heat_pct"] == pytest.approx((300.0 + 200.0) / 10_000.0)
+        assert out["n_positions"] == 3
+        assert out["reason"] is None
+
+    def test_over_limit_flag_true_when_heat_exceeds_configured_ceiling(self):
+        snap = _Snapshot(
+            positions={"TSLA": _Pos(-900.0)},
+            total_equity=10_000.0,  # 9% heat
+        )
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return snap
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=_Store()):
+            with mock.patch.object(settings, "MAX_PORTFOLIO_HEAT", 0.06):
+                out = obs.portfolio_heat_metric()
+
+        assert out["heat_pct"] == pytest.approx(0.09)
+        assert out["max_portfolio_heat"] == pytest.approx(0.06)
+        assert out["over_limit"] is True
+
+    def test_non_finite_unrealized_pl_is_skipped_not_fatal(self):
+        snap = _Snapshot(
+            positions={"AAPL": _Pos(float("nan")), "MSFT": _Pos(-100.0)},
+            total_equity=1_000.0,
+        )
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return snap
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=_Store()):
+            out = obs.portfolio_heat_metric()
+
+        assert out["heat_pct"] == pytest.approx(0.1)  # only the -100.0 counts
+        assert out["reason"] is None
+
+    def test_as_of_reflects_snapshot_fetched_at(self):
+        ts = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+        snap = _Snapshot(positions={}, total_equity=5_000.0, fetched_at=ts)
+
+        class _Store:
+            def latest_account_snapshot(self):
+                return snap
+
+        with mock.patch("data.historical_store.HistoricalStore", return_value=_Store()):
+            out = obs.portfolio_heat_metric()
+
+        assert out["as_of"] == ts.isoformat()
+
+
+# ---------------------------------------------------------------------------
 # equity_curve_with_drawdown
 # ---------------------------------------------------------------------------
 
@@ -428,7 +591,8 @@ class TestObservabilitySummary:
                     out = obs.observability_summary()
 
         assert set(out) == {
-            "portfolio_risk", "equity_curve", "regime", "forecast_skill", "risk_gate_blocks",
+            "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
+            "forecast_skill", "risk_gate_blocks",
         }
 
     def test_one_section_failure_never_blocks_the_others(self, tmp_path):
@@ -449,8 +613,10 @@ class TestObservabilitySummary:
                 ):
                     out = obs.observability_summary(snapshot=snapshot)
 
-        # The two DB-dependent sections degrade honestly...
+        # The three DB-dependent sections degrade honestly...
         assert out["portfolio_risk"]["reason"]
+        assert out["portfolio_heat"]["heat_pct"] is None
+        assert out["portfolio_heat"]["reason"]
         assert out["equity_curve"]["points"] == []
         assert out["forecast_skill"]["reason"]
         # ...while the two sections independent of HistoricalStore/ForecastTracker

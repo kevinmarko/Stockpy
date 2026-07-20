@@ -1136,6 +1136,24 @@ export interface PortfolioRiskMetrics {
   reason: string | null; // present when n_snapshots < min_snapshots_required
 }
 
+/**
+ * Live "Portfolio Heat" — aggregate adverse open-position P&L as a fraction
+ * of total account equity, against the configured `max_portfolio_heat`
+ * ceiling. Sourced server-side from the latest persisted account snapshot
+ * (same two inputs — per-position unrealized P&L, account equity —
+ * execution/risk_gate.py's live pre-trade gate reads). `heat_pct`/`over_limit`
+ * are `null` when no account snapshot is persisted yet, or its total equity
+ * is missing/non-positive (never a fabricated 0 — CONSTRAINT #4).
+ */
+export interface PortfolioHeatMetric {
+  heat_pct: number | null; // fraction, e.g. 0.032 = 3.2%
+  max_portfolio_heat: number | null; // the configured ceiling (settings.MAX_PORTFOLIO_HEAT)
+  over_limit: boolean | null;
+  n_positions: number;
+  as_of: string | null; // ISO timestamp of the account snapshot this reads
+  reason: string | null; // present when heat_pct is null
+}
+
 /** One point of the account equity + drawdown series. */
 export interface EquityDrawdownPoint {
   date: string; // ISO date
@@ -1161,6 +1179,25 @@ export interface RegimeOverlay {
   kill_switch_active: boolean | null;
   macro_regime_gate_enabled: boolean | null;
   reason: string | null; // present when no state snapshot exists yet
+  /** Tracks MACRO_GATE_WRITES_ENABLED -- false means PUT /observability/macro-gate
+   * is disabled server-side (403). Mirrors LlmStatus.writable. */
+  macro_gate_writable: boolean;
+  macro_gate_writable_note: string;
+}
+
+/** Body for PUT /observability/macro-gate. `reason` is required (fat-finger
+ * guard, not a security control) -- mirrors PauseRequest/ResumeRequest. */
+export interface MacroGateUpdate {
+  enabled: boolean;
+  reason: string;
+}
+
+/** PUT /observability/macro-gate result. `enabled` echoes the request body. */
+export interface MacroGateUpdateResult {
+  written: string[];
+  enabled: boolean;
+  applies: "next_daemon_restart";
+  note: string;
 }
 
 /** Portfolio-wide (all-symbol) forecast reliability + skill weights for one horizon. */
@@ -1199,6 +1236,7 @@ export interface RiskGateBlockLog {
 
 export interface ObservabilitySummary {
   portfolio_risk: PortfolioRiskMetrics;
+  portfolio_heat: PortfolioHeatMetric;
   equity_curve: EquityDrawdownCurve;
   regime: RegimeOverlay;
   forecast_skill: PortfolioForecastSkill;

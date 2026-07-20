@@ -1590,71 +1590,6 @@ window into the queue, the outcomes, and the reconciliation.
 
 ---
 
-## AI Insights & AI Control Center
-
-Tier 9 added three **operator-triggered, opt-in** LLM agents — Claude (per-symbol analyst
-notes), Gemini (alert text + chart-pattern vision), and Opal (front-of-pipeline research
-briefs, on OpenAI or Gemini) — plus a Gravity AI audit runner. All four are **off by
-default**, **soft-fail** to the deterministic template/signal when disabled or the
-API key is missing, and **never touch numeric pipeline scalars** (Kelly Target, score,
-regime) — they only add commentary/context alongside the existing deterministic output.
-
-### 🎛️ AI Control Center tab
-
-One place to turn every AI option on or off, run each on demand, and start/stop a
-recurring pipeline run — nothing here runs autonomously:
-
-- **Section A — master switches.** Toggles `LLM_COMMENTARY_ENABLED` (gates both Claude
-  commentary and Gemini alerts/vision), the Gravity AI runner, and `OPAL_RESEARCH_ENABLED`
-  (independent switch for the Opal research agent). Each capability shows a
-  ready / disabled / missing-key / not-built badge.
-- **Section B — on-demand actions.** Run a per-symbol Claude note, Gemini chart-vision
-  read, or Opal research brief without waiting for a full pipeline cycle.
-- **Section C — Gravity AI audit.** Runs the same audit as the 🛡️ Gravity Audit tab.
-- **Section D — run control.** Start/stop an `--interval` or `--agent` orchestrator run;
-  you can stop it at any time.
-
-Provider API keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) are
-**secret-only in `.env`** — never GUI-writable, per the same `gui/env_io.py` allowlist
-that protects every other secret. Toggle changes take effect on the **next** launch.
-
-### 🪄 AI Insights tab
-
-Four sections, front-of-pipeline first, for a symbol you pick from the current signal
-universe:
-
-0. **🔬 Opal research brief** — gated by its own `OPAL_RESEARCH_ENABLED` switch
-   (independent of the Claude/Gemini gate below) and routed via
-   `OPAL_RESEARCH_PROVIDER` (`openai` or `gemini` — requires the matching API key).
-   Rendered first since Opal's output threads into the Claude analyst call when both
-   are enabled.
-1. **🤖 Claude analyst note** — a plain-English per-symbol rationale, the same helper
-   used by the Reports tab's drill-down button.
-2. **📈 Gemini chart-pattern interpretation** — renders a 252-bar price chart and, on
-   click, sends it to Gemini Vision for a pattern read.
-3. **🔍 Aggregate Claude vs. Gemini disagreement** — one row per watchlist symbol
-   showing the deterministic action alongside the Claude and Gemini verdicts and
-   whether they disagree; populated as you run sections 1 and 2 across symbols.
-
-Every section degrades independently — one section's failure (e.g. a missing API key)
-renders an inline message without breaking the rest of the tab.
-
-### Relevant environment variables
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `LLM_COMMENTARY_ENABLED` | `false` | Master switch for Claude analyst notes + Gemini alerts/vision |
-| `ANTHROPIC_API_KEY` | _(none)_ | Required for Claude analyst notes |
-| `GEMINI_API_KEY` | _(none)_ | Required for Gemini alerts, chart vision, and Opal when `OPAL_RESEARCH_PROVIDER=gemini` |
-| `OPAL_RESEARCH_ENABLED` | `false` | Independent master switch for the Opal research agent |
-| `OPAL_RESEARCH_PROVIDER` | `openai` | `openai` or `gemini` — which backend runs Opal |
-| `OPENAI_API_KEY` | _(none)_ | Required when `OPAL_RESEARCH_PROVIDER=openai` |
-
-See `docs/FEATURE_TIER_HISTORY.md` (Tier 9 sections) for the full build history of
-each agent, and `docs/OPAL_BUILD_SPEC.md` for Opal's design record.
-
----
-
 ## In-App Help & Glossary
 
 The **❓ Help tab** in the Command Center (`streamlit run gui/app.py`) gives instant access
@@ -1888,6 +1823,20 @@ start/stop AI-adjacent scheduled runs:
 
 Provider API keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
 are secret-only and can never be set from the GUI — edit `.env` directly.
+
+### Relevant environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_COMMENTARY_ENABLED` | `false` | Master switch for Claude analyst notes + Gemini alerts/vision |
+| `ANTHROPIC_API_KEY` | _(none)_ | Required for Claude analyst notes |
+| `GEMINI_API_KEY` | _(none)_ | Required for Gemini alerts, chart vision, and Opal when `OPAL_RESEARCH_PROVIDER=gemini` |
+| `OPAL_RESEARCH_ENABLED` | `false` | Independent master switch for the Opal research agent |
+| `OPAL_RESEARCH_PROVIDER` | `openai` | `openai` or `gemini` — which backend runs Opal |
+| `OPENAI_API_KEY` | _(none)_ | Required when `OPAL_RESEARCH_PROVIDER=openai` |
+
+See `docs/FEATURE_TIER_HISTORY.md` (Tier 9 sections) for the full build history of
+each agent, and `docs/OPAL_BUILD_SPEC.md` for Opal's design record.
 
 ### Standing rule
 

@@ -56,6 +56,7 @@ import type {
   LlmProviderTelemetry,
   LlmSettingUpdateResult,
   LlmStatus,
+  MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
   OptionsDirective,
@@ -69,6 +70,7 @@ import type {
   Portfolio,
   PortfolioAttribution,
   PortfolioForecastSkill,
+  PortfolioHeatMetric,
   PortfolioRiskMetrics,
   RealizedPerformance,
   RegimeOverlay,
@@ -836,6 +838,30 @@ function writeKillSwitch(active: boolean, reason: string | null) {
       localStorage.removeItem(KILL_SWITCH_KEY);
       localStorage.removeItem(KILL_SWITCH_REASON_KEY);
     }
+  } catch {
+    /* ignore quota */
+  }
+}
+
+// ---- Local macro-regime-gate simulation (localStorage) so the Observability
+// screen's toggle (PUT /observability/macro-gate) has a visible, persistent
+// round-trip effect in the demo, same convention as the kill-switch marker
+// above. `null` (key absent) means "use the default" (true, matching
+// settings.MACRO_REGIME_GATE_ENABLED's own default) rather than defaulting to
+// false, which would misrepresent the real out-of-box posture. ----
+const MACRO_GATE_KEY = "stockpy.mock.macro_regime_gate_enabled";
+
+function readMacroGateEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(MACRO_GATE_KEY);
+    return raw === null ? true : raw === "1";
+  } catch {
+    return true;
+  }
+}
+function writeMacroGateEnabled(enabled: boolean) {
+  try {
+    localStorage.setItem(MACRO_GATE_KEY, enabled ? "1" : "0");
   } catch {
     /* ignore quota */
   }
@@ -2398,8 +2424,13 @@ function mockRegimeOverlay(): RegimeOverlay {
     yield_curve: 0.42,
     hmm_risk_on_probability: 0.78,
     kill_switch_active: ks.active,
-    macro_regime_gate_enabled: true,
+    macro_regime_gate_enabled: readMacroGateEnabled(),
     reason: null,
+    // Always writable in the mock (matches mockLlmStatus's convention above)
+    // so the demo can exercise the write flow with zero config.
+    macro_gate_writable: true,
+    macro_gate_writable_note:
+      "Writes persist to .env and apply on the next daemon/pipeline launch.",
   };
 }
 
@@ -2458,9 +2489,26 @@ function mockRiskGateBlocks(): RiskGateBlockLog {
   return { entries, count: entries.length, reason: null };
 }
 
+// Comfortably under the 6% default MAX_PORTFOLIO_HEAT ceiling — a healthy
+// steady-state reading, not the alarming edge case (see over_limit tests for
+// that branch).
+function mockPortfolioHeat(): PortfolioHeatMetric {
+  const maxHeat = 0.06;
+  const heatPct = 0.021;
+  return {
+    heat_pct: heatPct,
+    max_portfolio_heat: maxHeat,
+    over_limit: heatPct > maxHeat,
+    n_positions: 4,
+    as_of: new Date(Date.now() - 20 * 60_000).toISOString(),
+    reason: null,
+  };
+}
+
 function mockObservabilitySummary(range: PerfRange, horizon: number): ObservabilitySummary {
   return {
     portfolio_risk: mockPortfolioRisk(),
+    portfolio_heat: mockPortfolioHeat(),
     equity_curve: mockEquityDrawdownCurve(range),
     regime: mockRegimeOverlay(),
     forecast_skill: mockPortfolioForecastSkill(horizon),
@@ -3466,6 +3514,22 @@ export const mockApi = {
     horizon = 30
   ): Promise<ObservabilitySummary> {
     return delay(mockObservabilitySummary(range, horizon));
+  },
+
+  async putMacroGate(enabled: boolean, _reason: string): Promise<MacroGateUpdateResult> {
+    writeMacroGateEnabled(enabled);
+    return delay(
+      {
+        written: ["MACRO_REGIME_GATE_ENABLED"],
+        enabled,
+        applies: "next_daemon_restart",
+        note:
+          "Written to .env. settings is not patched in-process — this API " +
+          "and any already-launched pipeline still use the previous value " +
+          "until restarted.",
+      },
+      150
+    );
   },
 
   async getStrategyMatrix(): Promise<StrategyMatrix> {
