@@ -460,35 +460,3 @@ def test_dto_pipeline():
 
 if __name__ == "__main__":
     test_dto_pipeline()
-
-# =============================================================================
-# 5. SENTIMENT DTO
-# =============================================================================
-class SentimentDTO(BaseDTO):
-    """
-    Represents social media sentiment dynamics for an asset, capturing asymmetric 
-    volatility metrics, sentiment intensity, and credibility-filtered scores.
-    """
-    def __init__(self, ticker: str, date: datetime,
-                 sentiment_score: float = 0.0,
-                 sentiment_intensity: float = 0.0,
-                 credibility_score: float = 1.0,
-                 volatility_persistence: float = 0.95):
-        self.ticker: str = ticker.upper().strip()
-        self.date: datetime = date
-        self.sentiment_score: float = self._to_float(sentiment_score)
-        self.sentiment_intensity: float = max(0.0, self._to_float(sentiment_intensity))
-        # Credibility bound between 0 and 1
-        self.credibility_score: float = max(0.0, min(1.0, self._to_float(credibility_score)))
-        self.volatility_persistence: float = self._to_float(volatility_persistence)
-        
-    @property
-    def filtered_sentiment(self) -> float:
-        """
-        Applies a credibility penalty. Low-credibility sources (e.g. rumors) 
-        are dampened to prevent erratic signal generation.
-        """
-        return self.sentiment_score * self.credibility_score
-
-    def __repr__(self) -> str:
-        return f"<SentimentDTO {self.ticker} @ {self.date.strftime('%Y-%m-%d')} - Score: {self.sentiment_score:.2f} (Credibility: {self.credibility_score:.2f})>"

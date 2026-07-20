@@ -3936,6 +3936,9 @@ export const mockApi = {
   },
 
   async getSentimentDynamics(symbol: string): Promise<SentimentDynamics> {
+    // Illustrative "available" example (this repo's USE_MOCK convention) —
+    // the real endpoint can also return source: "unavailable" with all
+    // three agent-derived fields null; see SentimentDynamics.test.tsx.
     return delay<SentimentDynamics>({
       ticker: symbol.toUpperCase(),
       date: new Date().toISOString(),
@@ -3943,6 +3946,7 @@ export const mockApi = {
       sentiment_intensity: 0.72,
       credibility_score: 0.85,
       volatility_persistence: 0.94,
+      source: "antigravity_agent",
     });
   },
 

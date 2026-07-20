@@ -1243,14 +1243,26 @@ export interface MacroGateUpdateResult {
   note: string;
 }
 
-/** GET /metrics/sentiment/{symbol} — Data structure for the Sentiment Dynamics feature. */
+/**
+ * GET /metrics/sentiment/{symbol} — Sentiment Dynamics: Antigravity-agent
+ * news sentiment plus GJR-GARCH asymmetric-volatility persistence.
+ *
+ * Honesty contract: `source` distinguishes real Antigravity-agent output
+ * ("antigravity_agent") from an honest cold-start/unconfigured-agent
+ * degradation ("unavailable" — sentiment_score/sentiment_intensity/
+ * credibility_score are all `null`, never a guessed number).
+ * `volatility_persistence` is computed independently via a real per-request
+ * GJR-GARCH fit over price history, so it can be a real number even when
+ * `source === "unavailable"` (or `null` itself on insufficient history).
+ */
 export interface SentimentDynamics {
   ticker: string;
   date: string;
-  sentiment_score: number;
-  sentiment_intensity: number;
-  credibility_score: number;
-  volatility_persistence: number;
+  sentiment_score: number | null;
+  sentiment_intensity: number | null;
+  credibility_score: number | null;
+  volatility_persistence: number | null;
+  source: "antigravity_agent" | "unavailable";
 }
 
 /** Portfolio-wide (all-symbol) forecast reliability + skill weights for one horizon. */

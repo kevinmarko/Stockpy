@@ -1003,6 +1003,26 @@ TAB_HELP: Dict[str, TabHelp] = {
         ("advisory mode", "state snapshot", "kelly target"),
         "#12-the-observability-dashboard",
     ),
+    "sentiment_dynamics": _t(
+        "sentiment_dynamics",
+        "💬 Sentiment Dynamics",
+        "Two DISTINCT, independent sentiment signals for a chosen symbol — "
+        "never conflated. (1) News Catalyst Sentiment: the always-on "
+        "pipeline's real `news_sentiment` field (FinBERT / keyword-lexicon "
+        "over recent Finnhub headlines), read straight from the latest "
+        "state snapshot. (2) Antigravity Agent + GJR-GARCH: an on-demand "
+        "LLM-agent news read (sentiment / intensity / credibility) plus a "
+        "real per-request GJR-GARCH(1,1,1) fit measuring the asymmetric "
+        "leverage effect and shock persistence (α+β+γ/2) over price history. "
+        "When the Antigravity agent is unavailable (SDK missing, no "
+        "GEMINI_API_KEY, or a failed call) the tab shows an honest "
+        "'unavailable' note and blank '—' fields rather than a guessed "
+        "number — the GARCH persistence metric is computed independently "
+        "and can still show a real value. Read-only and advisory-only; no "
+        "orders are ever placed from this tab.",
+        ("garch vol",),
+        "#sentiment-dynamics-tab",
+    ),
     "pairs": _t(
         "pairs",
         "🔗 Pairs",
@@ -1257,6 +1277,17 @@ SECTION_HELP: Dict[str, str] = {
     "report_viewer.llm_commentary_off": (
         "LLM commentary is off.  Set `LLM_COMMENTARY_ENABLED=true` and "
         "`ANTHROPIC_API_KEY=…` in `.env`, then relaunch the GUI."
+    ),
+    "sentiment_dynamics.news_catalyst": (
+        "The always-on pipeline's real `news_sentiment` field for this symbol "
+        "(FinBERT / keyword-lexicon over recent Finnhub headlines), read from "
+        "the latest state snapshot — not the on-demand Antigravity section below."
+    ),
+    "sentiment_dynamics.antigravity_agent": (
+        "On-demand: an Antigravity LLM agent reads recent headlines for "
+        "sentiment/intensity/credibility, plus a real per-request GJR-GARCH(1,1,1) "
+        "fit over price history for the asymmetric leverage effect and shock "
+        "persistence. Independent of the News Catalyst section above."
     ),
 }
 
@@ -1550,6 +1581,35 @@ METRIC_HELP: Dict[str, str] = {
         f"gates), per the registry's own gate.  ❌ otherwise; '—' when the "
         f"registry does not record a deployable flag.  Deployability is separate "
         f"from freshness — a deployable model can still be stale."
+    ),
+
+    # ── Sentiment Dynamics tab ────────────────────────────────────────────
+    "sentiment_dynamics.news_sentiment": (
+        "The pipeline's real `news_sentiment` field for this symbol, roughly "
+        "in [-1, +1] (FinBERT / keyword-lexicon over recent Finnhub headlines). "
+        "This section is omitted entirely when the symbol has no scored news — "
+        "never shown as a fabricated neutral 0."
+    ),
+    "sentiment_dynamics.sentiment_score": (
+        "Antigravity agent's read of recent news, -1.0 (extremely negative) to "
+        "1.0 (extremely positive). '—' when the agent is unavailable — never a "
+        "fabricated 0."
+    ),
+    "sentiment_dynamics.sentiment_intensity": (
+        "Antigravity agent's read of news volume / emotional magnitude, 0.1 to "
+        "1.0. '—' when the agent is unavailable — never a fabricated default."
+    ),
+    "sentiment_dynamics.credibility_score": (
+        "Antigravity agent's read of source credibility, 0.1 (rumor-like) to "
+        "1.0 (official/verified). '—' when the agent is unavailable — never a "
+        "fabricated default."
+    ),
+    "sentiment_dynamics.volatility_persistence": (
+        "GJR-GARCH(1,1,1) α+β+γ/2 — how long a volatility shock takes to decay. "
+        "Computed independently of the Antigravity agent from real price "
+        "history, so it can still show a value even when the agent itself is "
+        "unavailable. '—' when fewer than 100 daily return observations exist "
+        "or the fit fails — never a fabricated default."
     ),
 }
 

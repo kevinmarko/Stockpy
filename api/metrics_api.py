@@ -24,6 +24,7 @@ from __future__ import annotations
 import hmac
 import logging
 import math
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -37,6 +38,7 @@ from data.market_data import MarketDataError, get_provider
 from processing_engine import ProcessingEngine
 from forecasting_engine import ForecastingEngine
 from technical_options_engine import build_premium_directive, validate_directive_integrity
+from sentiment_risk_engine import SentimentRiskEngine
 from signals.registry import global_registry
 from signals.aggregator import SignalAggregator
 from signals.base import SignalContext
@@ -194,39 +196,49 @@ def get_options(symbol: str) -> Dict[str, Any]:
 
 @app.get("/metrics/sentiment/{symbol}", dependencies=[Depends(require_token)])
 async def get_sentiment(symbol: str) -> Dict[str, Any]:
-    """Live Sentiment Dynamics for ``symbol``, backed by Antigravity Agent."""
+    """Sentiment Dynamics for ``symbol`` — Antigravity Agent news sentiment
+    plus GJR-GARCH asymmetric-volatility persistence.
+
+    Honesty contract (CONSTRAINT #4): an unconfigured/unavailable agent (SDK
+    missing, no ``GEMINI_API_KEY``, or a failed live call) is a legitimate,
+    expected state — matching the cold-start-degrades-to-honest-empty-shape
+    convention used throughout ``api/pilots_api.py`` — so it degrades to a
+    normal 200 response with ``sentiment_score``/``sentiment_intensity``/
+    ``credibility_score`` all ``null`` and ``"source": "unavailable"``,
+    NEVER an ``HTTPException``. Only genuinely missing bar data (can't compute
+    returns at all) 404s.
+
+    ``SentimentRiskEngine.get_live_sentiment`` is the single fixed engine call
+    shared with the Streamlit ``gui/panels/sentiment_dynamics.py`` panel — one
+    honesty contract enforced centrally, not two divergent implementations.
+    """
     symbol = symbol.upper()
     bars = _fetch_bars(symbol, 252)
     if bars is None:
         raise HTTPException(status_code=404, detail=f"No bar data available for {symbol}")
-        
-    from datetime import datetime
-    import pandas as pd
-    from sentiment_risk_engine import SentimentRiskEngine
-    
+
     # We need the close series for returns to compute the leverage effect
     returns = bars['Close'].pct_change().dropna()
     date = datetime.now()
-    
+
     try:
         engine = SentimentRiskEngine()
-        sentiment_dto = await engine.get_live_sentiment(symbol, date, returns)
+        sentiment_result = await engine.get_live_sentiment(symbol, date, returns)
     except Exception as exc:
         logger.warning("metrics_api: sentiment dynamics failed for %s: %s", symbol, exc)
         raise HTTPException(status_code=404, detail="Sentiment calculation failed")
-        
-    # Convert DTO to dict for the API response
-    result = {
-        "ticker": sentiment_dto.ticker,
-        "date": sentiment_dto.date.isoformat(),
-        "sentiment_score": sentiment_dto.sentiment_score,
-        "sentiment_intensity": sentiment_dto.sentiment_intensity,
-        "credibility_score": sentiment_dto.credibility_score,
-        "volatility_persistence": sentiment_dto.volatility_persistence
-    }
-    
-    return _clean_nan(result)
 
+    result = {
+        "ticker": sentiment_result.ticker,
+        "date": sentiment_result.date.isoformat(),
+        "sentiment_score": sentiment_result.sentiment_score,
+        "sentiment_intensity": sentiment_result.sentiment_intensity,
+        "credibility_score": sentiment_result.credibility_score,
+        "volatility_persistence": sentiment_result.volatility_persistence,
+        "source": sentiment_result.source,
+    }
+
+    return _clean_nan(result)
 
 
 @app.get("/metrics/signals/registry", dependencies=[Depends(require_token)])

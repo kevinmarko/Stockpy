@@ -1931,6 +1931,49 @@ check once it is deployable **and** its report is less than 30 days old.
 
 ---
 
+## Sentiment Dynamics Tab
+
+The **💬 Sentiment Dynamics** tab is a per-symbol, on-demand view of two
+independent sentiment signals plus a real GJR-GARCH asymmetric-volatility
+computation. It never fabricates a number when data isn't available — every
+metric is either a genuine computed/fetched value or an honest "—" with an
+explanatory note.
+
+### Two distinct signals
+
+1. **News Catalyst Sentiment** — the same `news_sentiment` field the
+   always-on pipeline's `NewsCatalystSignal` already computes from recent
+   Finnhub headlines (FinBERT neural score, or a keyword-lexicon fallback)
+   and persists into `output/state_snapshot.json`. A symbol with no scored
+   news shows an honest empty state rather than a fabricated neutral score.
+2. **Antigravity Agent Sentiment + GJR-GARCH Volatility** — an on-demand call
+   to `sentiment_risk_engine.SentimentRiskEngine.get_live_sentiment()`, which
+   asks a Google Antigravity LLM agent (`engine/agent_sentiment.py`) to score
+   recent news headlines for sentiment, intensity, and source credibility,
+   plus a real per-request GJR-GARCH(1,1,1) fit
+   (`compute_asymmetric_volatility()`) over the symbol's price history to
+   measure the asymmetric leverage effect and shock persistence
+   (α + β + γ/2). These are independent computations shown together, not one
+   signal — don't conflate them with News Catalyst Sentiment above.
+
+### When the Antigravity agent is unavailable
+
+The agent requires the `google.antigravity` SDK to be installed and a
+`GEMINI_API_KEY` set in `.env`. When either is missing, or the live call
+fails, the tab shows an honest **"unavailable"** note and blanks (`—`) for
+Sentiment Score / Intensity / Credibility — it never falls back to a
+fabricated placeholder number. The GJR-GARCH Volatility Persistence metric is
+computed independently of the agent, so it can still show a real value even
+when the agent itself is unavailable (as long as there are at least 100 daily
+return observations to fit on).
+
+The same `SentimentRiskEngine` methods back both this tab and the
+`GET /metrics/sentiment/{symbol}` endpoint in `api/metrics_api.py` (used by
+the Pilots PWA's `/sentiment` screen) — one honesty contract enforced
+centrally, not two divergent implementations.
+
+---
+
 ## 21. Running the Read-Only State API Securely
 
 The platform ships a small, **standalone read-only API** (`api/state_api.py`)

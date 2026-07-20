@@ -8,7 +8,8 @@ import { SymbolInput } from "../components/SymbolInput";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
-function getScoreColor(score: number): string {
+function getScoreColor(score: number | null): string {
+  if (score == null) return theme.textSecondary;
   if (score > 0.2) return theme.growth;
   if (score < -0.2) return theme.decline;
   return theme.textSecondary;
@@ -17,6 +18,19 @@ function getScoreColor(score: number): string {
 function Breakdown({ d }: { d: SentimentDynamicsData }) {
   return (
     <>
+      {d.source === "unavailable" && (
+        <div className="notice notice-info" style={{ marginBottom: 16 }}>
+          <span>
+            🔌 <strong>Antigravity agent unavailable for this request</strong> — the
+            agent isn't configured (SDK/API key) or the live call failed. Sentiment
+            Score / Intensity / Credibility below are honestly blank ("—") rather
+            than guessed. Vol Persistence is unaffected — it's computed
+            independently from price history via a real GJR-GARCH fit, not the
+            agent.
+          </span>
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
         <Tile
           label="Sentiment Score"
