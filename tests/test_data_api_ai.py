@@ -96,6 +96,17 @@ def _stop(patches):
         p.stop()
 
 
+@pytest.fixture(autouse=True)
+def _ai_generation_api_enabled(monkeypatch):
+    """Every test below exercises a specific endpoint's OWN capability-flag
+    behavior (LLM_COMMENTARY_ENABLED, OPAL_RESEARCH_ENABLED, ...), not the
+    master ``AI_GENERATION_API_ENABLED`` gate added afterward — default it to
+    ``True`` here so those tests are unaffected. The dedicated
+    ``TestAiGenerationApiEnabledGate`` class below explicitly overrides it
+    back to ``False`` to test the 403 branch itself."""
+    monkeypatch.setattr(settings, "AI_GENERATION_API_ENABLED", True)
+
+
 # ---------------------------------------------------------------------------
 # Auth (require_token) — reuse the existing fail-open/fail-closed posture
 # ---------------------------------------------------------------------------
@@ -145,6 +156,64 @@ def test_require_ai_capability_enabled_passes_when_flag_on():
     dep = data_api.require_ai_capability_enabled("LLM_COMMENTARY_ENABLED", "Commentary")
     with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", True):
         assert dep() is None  # no exception
+
+
+# ---------------------------------------------------------------------------
+# AI_GENERATION_API_ENABLED — the master gate wired onto all three endpoints.
+# api/data_api.py is fail-open when STATE_API_TOKEN is unset (the documented
+# zero-config default), so this flag is the ONLY thing standing between "an
+# operator enabled LLM_COMMENTARY_ENABLED for their own Streamlit desktop use"
+# and "anyone who can reach the data API can trigger a paid Claude call."
+# Default False (see settings.py); the autouse fixture above flips it True for
+# every OTHER test in this file, so these tests explicitly override it back.
+# ---------------------------------------------------------------------------
+
+
+def test_commentary_403_when_ai_generation_api_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "AI_GENERATION_API_ENABLED", False)
+    monkeypatch.setattr(data_api, "load_snapshot", lambda: _snapshot(["AAPL"]))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", True), \
+         mock.patch.object(settings, "ANTHROPIC_API_KEY", "sk-ant-test"):
+        resp = client.post("/data/ai/commentary/AAPL")
+    # 403, not 200 -- even though the underlying capability is fully enabled
+    # and configured, the master HTTP-exposure gate takes precedence.
+    assert resp.status_code == 403
+    assert "AI_GENERATION_API_ENABLED" in resp.json()["detail"]
+
+
+def test_chart_403_when_ai_generation_api_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "AI_GENERATION_API_ENABLED", False)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.post("/data/ai/chart/AAPL")
+    assert resp.status_code == 403
+
+
+def test_research_403_when_ai_generation_api_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "AI_GENERATION_API_ENABLED", False)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.post("/data/ai/research/AAPL")
+    assert resp.status_code == 403
+
+
+def test_commentary_reaches_capability_logic_when_ai_generation_api_enabled(monkeypatch):
+    # Sanity check for the fixture itself: with the master gate on (the
+    # autouse default) but the underlying capability off, the endpoint still
+    # reaches its own soft-fail branch (200, not 403) -- proving the two gates
+    # are independent, not that the master gate silently swallows everything.
+    monkeypatch.setattr(data_api, "load_snapshot", lambda: _snapshot(["AAPL"]))
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", False):
+        resp = client.post("/data/ai/commentary/AAPL")
+    assert resp.status_code == 200
+    assert resp.json() == {"available": False, "reason": "disabled", "payload": None}
+
+
+def test_ai_generation_api_enabled_is_not_gui_writable():
+    from gui import env_io
+
+    assert "AI_GENERATION_API_ENABLED" not in env_io.ALLOWED_KEYS
+    assert "AI_GENERATION_API_ENABLED" not in env_io.SECRET_KEYS
 
 
 # ---------------------------------------------------------------------------

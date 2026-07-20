@@ -102,17 +102,19 @@ def require_ai_capability_enabled(flag_name: str, capability_label: str):
     flag (can this token mutate ``.env``) -- there is no persistence/rollback
     concern here, only "should this endpoint spend money."
 
-    NOT wired into any of the three ``/data/ai/*`` endpoints below as a hard
-    block, deliberately: each of those endpoints' "capability is off" state is
-    an HONEST, EXPECTED response (mirrors the Streamlit AI Insights tab's
-    inline info caption), not an error -- the caller wants a 200 with
-    ``{"available": false, "reason": "disabled"}`` so the webapp can render a
-    "turn this on in .env" hint, not a bare 403. Each handler checks its
-    capability flag inline (via ``commentary_status()`` / ``insights_status()``
-    / a direct ``settings.OPAL_RESEARCH_ENABLED`` read) instead. This factory
-    is kept as the reusable fail-closed-403 primitive for a FUTURE endpoint
-    that genuinely wants a hard block on a disabled capability rather than a
-    self-describing soft-fail body.
+    Used here as the HARD master gate on all three ``/data/ai/*`` endpoints via
+    ``settings.AI_GENERATION_API_ENABLED`` (see that field's docstring in
+    ``settings.py``) — a SEPARATE concern from each endpoint's own per-
+    capability soft-fail below (``{"available": false, "reason": "disabled"}``
+    for ``LLM_COMMENTARY_ENABLED``/``OPAL_RESEARCH_ENABLED`` etc., an HONEST,
+    EXPECTED response mirroring the Streamlit AI Insights tab's inline info
+    caption, not an error). ``api/data_api.py`` is fail-open by design when
+    ``STATE_API_TOKEN`` is unset, so a hard 403 here is the ONLY thing that
+    stops these three endpoints from being remotely triggerable — paid
+    external API calls — the moment an operator enables the underlying
+    capability for their own Streamlit desktop use. Off by default; two
+    independent kill switches exist: this flag (all three endpoints, 403) and
+    each capability's own existing flag (one generator, honest soft-fail 200).
     """
 
     def _dependency() -> None:
@@ -123,6 +125,14 @@ def require_ai_capability_enabled(flag_name: str, capability_label: str):
             )
 
     return _dependency
+
+
+# The master gate for all three /data/ai/* endpoints below (see
+# require_ai_capability_enabled's docstring) — defined once so the flag name/
+# label aren't repeated at each of the three call sites.
+_require_ai_generation_enabled = require_ai_capability_enabled(
+    "AI_GENERATION_API_ENABLED", "On-demand AI generation"
+)
 
 
 def _clean_nan(obj: Any) -> Any:
@@ -373,7 +383,10 @@ def _find_signal_row(symbol: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-@app.post("/data/ai/commentary/{symbol}", dependencies=[Depends(require_token)])
+@app.post(
+    "/data/ai/commentary/{symbol}",
+    dependencies=[Depends(require_token), Depends(_require_ai_generation_enabled)],
+)
 def generate_commentary(symbol: str) -> Dict[str, Any]:
     """On-demand Claude analyst note for ``symbol`` (Tier 9 analyst rationale).
 
@@ -413,7 +426,10 @@ def generate_commentary(symbol: str) -> Dict[str, Any]:
     return _clean_nan({"available": True, "reason": None, "payload": payload})
 
 
-@app.post("/data/ai/chart/{symbol}", dependencies=[Depends(require_token)])
+@app.post(
+    "/data/ai/chart/{symbol}",
+    dependencies=[Depends(require_token), Depends(_require_ai_generation_enabled)],
+)
 def generate_chart_insight(symbol: str) -> Dict[str, Any]:
     """On-demand Gemini Vision chart-pattern read for ``symbol`` (Tier 9 Scope 3).
 
@@ -512,7 +528,10 @@ def generate_chart_insight(symbol: str) -> Dict[str, Any]:
     )
 
 
-@app.post("/data/ai/research/{symbol}", dependencies=[Depends(require_token)])
+@app.post(
+    "/data/ai/research/{symbol}",
+    dependencies=[Depends(require_token), Depends(_require_ai_generation_enabled)],
+)
 def generate_research(symbol: str) -> Dict[str, Any]:
     """On-demand Opal grounded research brief for ``symbol`` (Tier 9 Scope 4).
 
