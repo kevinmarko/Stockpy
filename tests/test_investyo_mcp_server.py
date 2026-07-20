@@ -2750,3 +2750,379 @@ class TestFollowPilot:
 
         result = srv.follow_pilot("trend-following", 500)
         assert "Failed to follow pilot" in result
+
+
+# ---------------------------------------------------------------------------
+# Prompt Registry version-control tools (Backlog item 9): get_registry_prompt_status,
+# get_registry_prompt, diff_registry_prompt, pin_registry_prompt,
+# rollback_registry_prompt, sync_prompt_registry.
+#
+# Uses REAL PromptRegistry + CacheManager instances (mirrors the fixture
+# pattern in tests/test_prompt_registry_cli.py) rather than a MagicMock, so
+# these tests exercise the actual resolution chain / cache / rollback logic
+# the new tools wrap, not just their own control flow. The singleton is
+# injected by monkeypatching prompt_registry.get_registry directly (the same
+# approach TestPromptRegistryWiring above already uses), since every new tool
+# does a local `from prompt_registry import get_registry` inside its body.
+# ---------------------------------------------------------------------------
+
+
+class _PRFakeStore:
+    def __init__(self, manifest):
+        self._manifest = manifest
+
+    def fetch_manifest(self):
+        return self._manifest
+
+
+class _PRFailingStore:
+    def fetch_manifest(self):
+        from prompt_registry.store import RegistryFetchError
+        raise RegistryFetchError("forced failure")
+
+
+def _pr_make_record(body, key=None):
+    from prompt_registry.models import PromptRecord
+    from prompt_registry.signing import compute_sha256, sign
+
+    sha = compute_sha256(body)
+    sig = sign(body, key) if key else "unsigned"
+    return PromptRecord(body=body, sha256=sha, signature=sig, created_at="2026-06-30T00:00:00Z")
+
+
+def _pr_make_manifest(entries, key=None):
+    from prompt_registry.models import PromptVersion, RegistryManifest
+
+    prompts = {}
+    for pid, body in entries.items():
+        prompts[pid] = PromptVersion(latest="1.0.0", versions={"1.0.0": _pr_make_record(body, key=key)})
+    return RegistryManifest(registry_version="test-mcp", signing_alg="HMAC-SHA256", prompts=prompts)
+
+
+def _pr_make_registry(tmp_path, *, manifest=None, pins=None, enabled=True, store=None):
+    from prompt_registry.cache import CacheManager
+    from prompt_registry.registry import PromptRegistry
+
+    cache = CacheManager(tmp_path)
+    s = store if store is not None else (_PRFakeStore(manifest) if manifest else None)
+    reg = PromptRegistry(store=s, cache=cache, pins=pins or {}, enabled=enabled)
+    if manifest is not None:
+        reg._manifest = manifest
+    return reg
+
+
+def _pr_inject(monkeypatch, reg):
+    import prompt_registry as pr_pkg
+
+    monkeypatch.setattr(pr_pkg, "get_registry", lambda: reg)
+
+
+class TestGetRegistryPromptStatus:
+    def test_no_ids_found_message(self, monkeypatch, tmp_path):
+        import prompt_registry.cache as cache_mod
+
+        monkeypatch.setattr(cache_mod, "list_baseline_ids", lambda: [])
+        reg = _pr_make_registry(tmp_path, enabled=False)
+        _pr_inject(monkeypatch, reg)
+
+        assert "No prompt IDs found" in srv.get_registry_prompt_status()
+
+    def test_renders_markdown_table_with_pin_and_cache_counts(self, monkeypatch, tmp_path):
+        manifest = _pr_make_manifest({"custom.test.prompt": "REMOTE BODY"})
+        reg = _pr_make_registry(tmp_path, manifest=manifest, pins={"custom.pinned.prompt": "2.0.0"})
+        reg._cache.write("custom.pinned.prompt", "1.0.0", _pr_make_record("v1 body"))
+        reg._cache.write("custom.pinned.prompt", "2.0.0", _pr_make_record("v2 body"))
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.get_registry_prompt_status()
+
+        assert "custom.test.prompt" in result
+        assert "remote" in result
+        assert "custom.pinned.prompt" in result
+        assert "2.0.0" in result  # pinned version shown in its own column
+        assert "| 2 |" in result  # cache count of 2 cached versions
+
+    def test_disabled_registry_shows_banner(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path, enabled=False, pins={"custom.test.prompt": "1.0.0"})
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.get_registry_prompt_status()
+
+        assert "disabled" in result.lower()
+
+
+class TestGetRegistryPrompt:
+    def test_resolved_body_no_version_uses_remote(self, monkeypatch, tmp_path):
+        manifest = _pr_make_manifest({"custom.test.prompt": "REMOTE BODY TEXT"})
+        reg = _pr_make_registry(tmp_path, manifest=manifest)
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.get_registry_prompt("custom.test.prompt")
+
+        assert "REMOTE BODY TEXT" in result
+        assert "custom.test.prompt" in result
+
+    def test_specific_version_found_in_cache(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("CACHED BODY"))
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.get_registry_prompt("custom.test.prompt", version="1.0.0")
+
+        assert "CACHED BODY" in result
+
+    def test_specific_version_not_found(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.get_registry_prompt("custom.test.prompt", version="9.9.9")
+
+        assert "not found" in result
+
+    def test_unknown_id_degrades_to_sentinel_message(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.get_registry_prompt("totally_unknown_prompt_id_zzz")
+
+        assert "no body" in result.lower()
+
+    def test_baseline_fallback_when_no_pin_remote_or_cache(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.get_registry_prompt("master_preprompt")
+
+        # Baseline is always present for a known baseline id (CONSTRAINT #4).
+        assert "ADVISORY_ONLY" in result
+
+
+class TestDiffRegistryPrompt:
+    def test_diff_produces_unified_diff(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("line one\nline two\n"))
+        reg._cache.write("custom.test.prompt", "2.0.0", _pr_make_record("line one\nline TWO CHANGED\n"))
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.diff_registry_prompt("custom.test.prompt", "1.0.0", "2.0.0")
+
+        assert "-line two" in result
+        assert "+line TWO CHANGED" in result
+
+    def test_no_differences_between_identical_versions(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("same body\n"))
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.diff_registry_prompt("custom.test.prompt", "1.0.0", "1.0.0")
+
+        assert "No differences" in result
+
+    def test_version_a_not_found(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.diff_registry_prompt("custom.test.prompt", "9.9.9", "1.0.0")
+
+        assert "9.9.9" in result and "not found" in result
+
+    def test_version_b_not_found(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.diff_registry_prompt("custom.test.prompt", "1.0.0", "9.9.9")
+
+        assert "9.9.9" in result and "not found" in result
+
+
+class TestPinRegistryPrompt:
+    def test_missing_version_returns_error_and_does_not_set_pin(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.pin_registry_prompt("custom.test.prompt", "9.9.9")
+
+        assert "not found" in result
+        assert "pin NOT set" in result
+        assert "custom.test.prompt" not in reg._pins
+
+    def test_valid_version_sets_pin_and_writes_env(self, monkeypatch, tmp_path):
+        import gui.env_io as env_io
+
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
+        _pr_inject(monkeypatch, reg)
+
+        env_file = tmp_path / ".env"
+        monkeypatch.setattr(env_io, "ENV_PATH", env_file)
+
+        result = srv.pin_registry_prompt("custom.test.prompt", "1.0.0")
+
+        assert "Pinned" in result
+        assert reg._pins["custom.test.prompt"] == "1.0.0"
+        written = json.loads(env_file.read_text(encoding="utf-8").split("=", 1)[1].strip().strip("'\""))
+        assert written == {"custom.test.prompt": "1.0.0"}
+
+    def test_pin_passes_a_real_dict_not_a_pre_encoded_json_string(self, monkeypatch, tmp_path):
+        """Regression guard: gui/panels/prompt_registry.py's Streamlit tab calls
+        env_io.write_setting("PROMPT_REGISTRY_PINS", json.dumps(...)) -- since
+        write_setting's _encode_value() ALSO json.dumps()'s JSON-classified
+        keys, that pre-encodes the value TWICE, writing a JSON string literal
+        wrapping the real dict rather than the dict itself. This tool must
+        pass the dict straight through instead."""
+        import gui.env_io as env_io
+
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
+        _pr_inject(monkeypatch, reg)
+
+        captured = {}
+        monkeypatch.setattr(
+            env_io, "write_setting",
+            lambda key, value: captured.setdefault(key, value) or "",
+        )
+
+        srv.pin_registry_prompt("custom.test.prompt", "1.0.0")
+
+        assert captured["PROMPT_REGISTRY_PINS"] == {"custom.test.prompt": "1.0.0"}
+        assert isinstance(captured["PROMPT_REGISTRY_PINS"], dict)
+
+    def test_env_write_failure_degrades_to_in_memory_pin(self, monkeypatch, tmp_path):
+        import gui.env_io as env_io
+
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("body"))
+        _pr_inject(monkeypatch, reg)
+
+        def _raise(*a, **k):
+            raise env_io.DisallowedKeyError("simulated allowlist regression")
+
+        monkeypatch.setattr(env_io, "write_setting", _raise)
+
+        result = srv.pin_registry_prompt("custom.test.prompt", "1.0.0")
+
+        assert "in-memory" in result
+        assert reg._pins["custom.test.prompt"] == "1.0.0"  # pin still applied this session
+
+
+class TestRollbackRegistryPrompt:
+    def test_no_older_cached_version_reports_honestly(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("only version"))
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.rollback_registry_prompt("custom.test.prompt")
+
+        assert "Cannot roll back" in result
+        assert "no older cached version" in result
+
+    def test_no_cached_versions_at_all_reports_honestly(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path)
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.rollback_registry_prompt("never_cached_prompt_id")
+
+        assert "Cannot roll back" in result
+
+    def test_rollback_success_writes_env(self, monkeypatch, tmp_path):
+        import gui.env_io as env_io
+        import time as _time
+
+        reg = _pr_make_registry(tmp_path)
+        reg._cache.write("custom.test.prompt", "1.0.0", _pr_make_record("v1"))
+        _time.sleep(0.01)
+        reg._cache.write("custom.test.prompt", "2.0.0", _pr_make_record("v2"))
+        _pr_inject(monkeypatch, reg)
+
+        env_file = tmp_path / ".env"
+        monkeypatch.setattr(env_io, "ENV_PATH", env_file)
+
+        result = srv.rollback_registry_prompt("custom.test.prompt")
+
+        assert "Rolled back" in result
+        assert reg._pins["custom.test.prompt"] == "1.0.0"
+        assert "PROMPT_REGISTRY_PINS" in env_file.read_text(encoding="utf-8")
+
+
+class TestSyncPromptRegistry:
+    def test_disabled_registry_reports_honestly(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path, enabled=False)
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.sync_prompt_registry()
+
+        assert "disabled" in result.lower()
+
+    def test_no_store_configured_reports_honestly(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path, enabled=True, store=None)
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.sync_prompt_registry()
+
+        assert "No remote store configured" in result
+
+    def test_successful_sync_reports_manifest_info(self, monkeypatch, tmp_path):
+        manifest = _pr_make_manifest({"custom.test.prompt": "REMOTE BODY"})
+        reg = _pr_make_registry(tmp_path, enabled=True, store=_PRFakeStore(manifest))
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.sync_prompt_registry()
+
+        assert "Sync complete" in result
+        assert "test-mcp" in result
+
+    def test_failed_sync_reports_failure(self, monkeypatch, tmp_path):
+        reg = _pr_make_registry(tmp_path, enabled=True, store=_PRFailingStore())
+        _pr_inject(monkeypatch, reg)
+
+        result = srv.sync_prompt_registry()
+
+        assert "Sync failed" in result
+
+
+# ---------------------------------------------------------------------------
+# read_platform_logs — logs/investyo.log path fix
+# ---------------------------------------------------------------------------
+
+
+class TestReadPlatformLogsFindsLogsSubdirectory:
+    """Regression test for the path bug: read_platform_logs used to only
+    os.listdir(".") for *.log files, so it never found the REAL rotating log
+    file alerting.py::setup_logging actually writes (logs/investyo.log, one
+    directory down). Fixed to also look inside logs/."""
+
+    def test_finds_investyo_log_in_logs_subdir(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "investyo.log").write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+        result = srv.read_platform_logs(lines=2)
+
+        assert "investyo.log" in result
+        assert "line2" in result
+        assert "line3" in result
+
+    def test_still_finds_cwd_log_files_too(self, monkeypatch, tmp_path):
+        """Backward-compat: a *.log file directly in the cwd (not under
+        logs/) is still found -- pins the pre-existing behavior/test."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "app.log").write_text("a\nb\n", encoding="utf-8")
+
+        result = srv.read_platform_logs(lines=10)
+
+        assert "app.log" in result
+
+    def test_finds_both_logs_subdir_and_cwd_files(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "investyo.log").write_text("db line\n", encoding="utf-8")
+        (tmp_path / "other.log").write_text("other line\n", encoding="utf-8")
+
+        result = srv.read_platform_logs(lines=10)
+
+        assert "investyo.log" in result
+        assert "other.log" in result
