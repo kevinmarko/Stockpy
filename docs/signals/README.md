@@ -50,7 +50,7 @@ for the before/after metrics and reasoning.
 | [`relative_strength`](relative_strength.md) | 10.0 | `signals/relative_strength.py` | Stock return vs SPY 12-month excess return | Relative Strength (`relative-strength`) | `relative_strength_xsec` (`deployable=True`, 2026-07 fix) |
 | [`sortino_drawdown`](sortino_drawdown.md) | 10.0 | `signals/sortino_drawdown.py` | Sortino Ratio quality reward + max drawdown penalty | Risk-Adjusted (`risk-adjusted`) | `sortino_drawdown` (`deployable=True`, 2026-07 fix) |
 | [`rsi2_mean_reversion`](rsi2_mean_reversion.md) | 10.0 | `signals/rsi2_mean_reversion.py` | Connors RSI(2) long-only mean reversion (regime-gated) | Dip Buyer (`dip-buyer`) | `rsi2_mean_reversion` (`deployable=False` — genuinely weak net-of-cost edge, see doc) |
-| [`news_catalyst`](news_catalyst.md) | 10.0 | `signals/news_catalyst.py` | FinBERT / lexicon headline sentiment (earnings-proximity gated) | News Catalyst (`news-catalyst`) | — (point-in-time news, not price-only) |
+| [`news_catalyst`](news_catalyst.md) | 10.0 | `signals/news_catalyst.py` | FinBERT / lexicon headline sentiment (earnings-proximity + regime-gated) | News Catalyst (`news-catalyst`) | — (point-in-time news, not price-only) |
 | [`lgbm_ranker`](lgbm_ranker.md) | 0.10 | `signals/lgbm_ranker.py` | LightGBM cross-sectional rank (dormant — contributes 0.0 until a model is trained) | — (dormant; no Pilot until it passes the model DSR gate) | — |
 | [`regime_multiplier`](regime_multiplier.md) | **0.0** | `signals/regime_multiplier.py` | HMM risk-on probability carried as Kelly-size scalar only | — (a sizing multiplier, not alpha — structurally can't back a Pilot) | — |
 

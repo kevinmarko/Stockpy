@@ -3,7 +3,7 @@
 **File:** `signals/news_catalyst.py`  
 **Default weight:** 10.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Always active (but scoring degrades gracefully when FINNHUB_API_KEY is absent)  
+**Regime gate:** Suppressed (not just down-weighted) during `RECESSION`/`CREDIT EVENT` regimes or `VIX > 30` — see [Regime Gate](#regime-gate) below. Scoring also degrades gracefully when `FINNHUB_API_KEY` is absent.  
 **Hook pattern:** Two-phase `pre_compute` / `compute`  
 **Pilot:** News Catalyst (`news-catalyst`, `pilots/catalog.py`) — no backtest curve
 (`validation_strategy_id=None`); backtesting headline sentiment needs point-in-time news
@@ -56,6 +56,24 @@ compute(row, context):
 
 Rate courtesy sleep: 0.12 s per symbol ≈ 8 calls/s, safely under Finnhub's 60/min
 free-tier ceiling.
+
+---
+
+## Regime Gate
+
+News/social sentiment is noisiest exactly when it matters least — during systemic panics,
+headline flow reflects fear and forced deleveraging rather than idiosyncratic company
+information. `NewsCatalystSignal.is_active_in_regime()` returns `False` (fully suppressing
+the module's contribution to `final_score`/`score_log`, per `SignalAggregator.aggregate()`'s
+handling of regime-gated modules) whenever:
+
+- `macro.market_regime` is `RECESSION` or `CREDIT EVENT`, OR
+- `macro.vix > 30.0`
+
+This mirrors `signals/rsi2_mean_reversion.py`'s regime gate exactly (same thresholds), rather
+than inventing a parallel mechanism. `compute()` still runs every cycle regardless — its raw
+score remains visible in the aggregator's `outputs` dict for introspection — but a suppressed
+cycle contributes nothing to the aggregate score, the explainer log, or `meta_label_composite`.
 
 ---
 

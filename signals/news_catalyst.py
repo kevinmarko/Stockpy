@@ -48,10 +48,18 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from dto_models import MacroEconomicDTO
 from signals.base import SignalModule, SignalContext, SignalOutput
 from signals.registry import global_registry
 
 logger = logging.getLogger(__name__)
+
+# Regimes during which social/news sentiment is suppressed entirely (RISK-OFF).
+# Same thresholds as signals/rsi2_mean_reversion.py's regime gate: sentiment is
+# noisiest exactly when it matters least (panics, credit events), and this is
+# the platform's existing signal-level regime-gate pattern, not a new one.
+_RISK_OFF_REGIMES = {"RECESSION", "CREDIT EVENT"}
+_VIX_RISK_OFF_THRESHOLD = 30.0
 
 # ---------------------------------------------------------------------------
 # FinBERT pipeline — lazy process-level singleton
@@ -285,6 +293,21 @@ class NewsCatalystSignal(SignalModule):
         # Per-cycle caches populated by pre_compute
         self._news_scores: Dict[str, float] = {}          # symbol → averaged score
         self._earnings_dt: Dict[str, Optional[datetime]] = {}  # symbol → next earnings
+
+    def is_active_in_regime(self, macro: MacroEconomicDTO) -> bool:
+        """RISK-OFF gate: suppressed during RECESSION/CREDIT EVENT or VIX > 30.
+
+        News/social sentiment is noisiest exactly when it matters least — during
+        systemic panics, headline flow reflects fear and forced deleveraging
+        rather than idiosyncratic company information, so the module is
+        switched off entirely (mirrors signals/rsi2_mean_reversion.py's
+        regime gate) rather than down-weighted.
+        """
+        if macro.market_regime in _RISK_OFF_REGIMES:
+            return False
+        if macro.vix > _VIX_RISK_OFF_THRESHOLD:
+            return False
+        return True
 
     def pre_compute(
         self,
