@@ -3507,27 +3507,6 @@ export const mockApi = {
     return delay(mockControlStatus(), 120);
   },
 
-  async getControlRunStatus(runId: string): Promise<RunRecord> {
-    const known = CONTROL_RUN_HISTORY.find((r) => r.run_id === runId);
-    if (known) return delay(known, 80);
-    // An unknown id is treated as a just-triggered run still in flight: honest
-    // nulls for finished_at/duration (never fabricated) while it runs.
-    return delay(
-      {
-        run_id: runId,
-        state: "running",
-        mode: "full",
-        started_at: new Date(Date.now() - 4_000).toISOString(),
-        finished_at: null,
-        duration_seconds: null,
-        error: null,
-        reason: "manual",
-        progress: null,
-      },
-      80
-    );
-  },
-
   async getRunHistory(limit = 50): Promise<RunRecord[]> {
     return delay(RUN_HISTORY_DURABLE.slice(0, limit), 140);
   },
