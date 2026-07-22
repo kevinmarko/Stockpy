@@ -997,6 +997,30 @@ class Settings(BaseSettings):
             "entirely."
         ),
     )
+    SENTIMENT_AUDIT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True, sentiment-ingestion sources write each ingested "
+            "document to HistoricalStore's sentiment_ingestion_audit table "
+            "(via HistoricalStore.save_sentiment_documents()) -- the per-"
+            "document point-in-time archive underlying the credibility-"
+            "weighted sentiment signal (Sentiment Pipeline Phase 2+). Same "
+            "on/off shape as NEWS_HISTORY_CAPTURE_ENABLED. Dead-lettered: any "
+            "capture failure is logged and never crashes the pipeline."
+        ),
+    )
+    SENTIMENT_PIT_MIN_MONTHS: int = Field(
+        default=6,
+        description=(
+            "Minimum months of accumulated point-in-time history in "
+            "news_history / sentiment_ingestion_audit required before the "
+            "validation harness may make a deployability claim for a "
+            "sentiment-derived signal -- matches the '~6-12 months' policy "
+            "already documented in docs/signals/news_catalyst.md. Read by "
+            "the validation gating check, never re-typed as a literal "
+            "elsewhere."
+        ),
+    )
 
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
