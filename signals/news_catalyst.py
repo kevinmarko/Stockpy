@@ -312,6 +312,47 @@ class NewsCatalystSignal(SignalModule):
             return False
         return True
 
+    def _run_multi_source_ingestion(self, symbols: List[str]) -> None:
+        """Fetch, credibility-score, and archive multi-source documents
+        (Sentiment Pipeline Phase 3/4: Yahoo RSS/GDELT/Reddit/EDGAR, and
+        Finnhub too if an operator opts it into ``settings.SENTIMENT_SOURCES``)
+        for every symbol in the universe, once per cycle.
+
+        This is the ONLY call site that invokes
+        ``data.sentiment_sources.CompositeSentimentSource`` in the live
+        pipeline -- without it, ``sentiment_ingestion_audit`` never
+        accumulates rows no matter how much time passes. Dead-letter
+        resilient per-symbol (CONSTRAINT #6): one symbol's ingestion failure
+        never blocks the others or the rest of ``pre_compute``.
+
+        Gated behind ``settings.SENTIMENT_INGESTION_ENABLED`` (default
+        ``False``) -- a complete no-op, no network call attempted, until an
+        operator opts in. Two of the four sources (Yahoo RSS, GDELT) need no
+        API key, so this is the only way they stay quiet by default the same
+        way Finnhub/Reddit/EDGAR already do via absent credentials.
+        """
+        try:
+            from settings import settings as _settings
+            if not _settings.SENTIMENT_INGESTION_ENABLED:
+                return
+            if not _settings.SENTIMENT_AUDIT_ENABLED:
+                return
+            from data.sentiment_sources import get_sentiment_source
+            source = get_sentiment_source()
+            source.reset_cycle()
+            for symbol in symbols:
+                try:
+                    source.fetch_and_archive(symbol)
+                except Exception as exc:
+                    logger.warning(
+                        "NewsCatalystSignal: multi-source ingestion failed for %s: %s",
+                        symbol, exc,
+                    )
+        except Exception as exc:
+            logger.warning(
+                "NewsCatalystSignal: multi-source ingestion setup failed: %s", exc
+            )
+
     def _read_sentiment_credibility_aggregate(self) -> None:
         """Read this trading day's multi-source credibility-weighted
         aggregate from ``sentiment_ingestion_audit`` (Sentiment Pipeline
@@ -351,9 +392,26 @@ class NewsCatalystSignal(SignalModule):
         self._news_scores = {}
         self._earnings_dt = {}
 
-        # Multi-source credibility-weighted aggregate (Sentiment Pipeline Phase
-        # 4) -- independent of Finnhub configuration, so Reddit/GDELT/EDGAR
-        # documents still surface even when FINNHUB_API_KEY is unset.
+        # Collect symbols from the universe DataFrame -- computed up front so
+        # both the multi-source ingestion run below and the Finnhub-specific
+        # loop can use it, regardless of whether Finnhub is configured.
+        symbol_col = "Symbol" if "Symbol" in universe_df.columns else None
+        if symbol_col is None and len(universe_df.columns) > 0:
+            symbol_col = universe_df.columns[0]
+        symbols: List[str] = (
+            list(universe_df[symbol_col].dropna().astype(str).str.upper().unique())
+            if symbol_col is not None else []
+        )
+
+        # Multi-source ingestion + credibility scoring + archive (Sentiment
+        # Pipeline Phase 3/4) -- runs every cycle, independent of Finnhub
+        # configuration, so Reddit/GDELT/EDGAR/Yahoo RSS documents accumulate
+        # in sentiment_ingestion_audit even when FINNHUB_API_KEY is unset.
+        # This is the write side; _read_sentiment_credibility_aggregate()
+        # right after is the same-cycle read side (this cycle's own writes
+        # land under TODAY's trading_day and are picked up by the read below,
+        # since both resolve "now" via the same HistoricalStore.resolve_trading_day()).
+        self._run_multi_source_ingestion(symbols)
         self._read_sentiment_credibility_aggregate()
         context.sentiment_credibility_scores = dict(self._sentiment_credibility)
 
@@ -370,15 +428,6 @@ class NewsCatalystSignal(SignalModule):
             return
 
         pipeline = _get_finbert_pipeline() if _settings.FINBERT_ENABLED else None
-
-        # Collect symbols from the universe DataFrame
-        symbol_col = "Symbol" if "Symbol" in universe_df.columns else None
-        if symbol_col is None and len(universe_df.columns) > 0:
-            symbol_col = universe_df.columns[0]
-        symbols: List[str] = (
-            list(universe_df[symbol_col].dropna().astype(str).str.upper().unique())
-            if symbol_col is not None else []
-        )
 
         lookback = int(_settings.NEWS_LOOKBACK_DAYS)
         suppress_h = float(_settings.NEWS_EARNINGS_SUPPRESS_HOURS)
