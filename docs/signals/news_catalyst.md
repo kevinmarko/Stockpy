@@ -13,6 +13,16 @@ live score to `HistoricalStore.news_history` (`settings.NEWS_HISTORY_CAPTURE_ENA
 default on) so real point-in-time history accumulates going forward — a genuine
 backtest becomes possible after roughly 6-12+ months, but not before.
 
+**Multi-source credibility blend (Sentiment Pipeline Phase 3-4, 2026-07):** `compute()`'s
+score is now a renormalized weighted blend of the Finnhub-headline component above and a
+multi-source (Reddit/GDELT/EDGAR/Yahoo RSS) credibility-weighted social aggregate read from
+`sentiment_ingestion_audit` (see `data/sentiment_sources.py`, `signals/credibility.py`,
+`settings.SENTIMENT_SOCIAL_BLEND_WEIGHT`). Gracefully degrades to headline-only when no
+social documents exist for a symbol this trading day. Three new introspection columns
+(`Credibility_Weighted_Sentiment`, `Bot_Activity_Ratio`, `Aggregated_Source_Credibility`)
+surface the raw social aggregate independently of the blended score — see
+[Multi-Source Credibility Blend](#multi-source-credibility-blend) below.
+
 ---
 
 ## Rationale
@@ -127,11 +137,42 @@ but requires a ~400 MB model download on first use and a GPU or fast CPU for inf
 
 ---
 
+## Multi-Source Credibility Blend
+
+`pre_compute()` additionally reads the current trading day's aggregate from
+`HistoricalStore.get_sentiment_aggregate_by_symbol()` — populated at ingest time by
+`data/sentiment_sources.py`'s `CompositeSentimentSource` (Yahoo RSS/GDELT/Reddit/EDGAR/Finnhub
+documents, deduplicated, trading-day-rolled) and `signals/credibility.py`'s per-document
+credibility scoring (`S_authority`/`S_humanity`/`S_verification` sub-scores → a
+`credibility_weight` in `[0.1, 1.0]` that discounts low-authority/bot-like social documents at
+the aggregate level, before this signal ever sees them).
+
+`compute()`'s final score is:
+
+```
+score = (1 - w) * headline_score + w * credibility_weighted_social_score
+```
+
+where `w = settings.SENTIMENT_SOCIAL_BLEND_WEIGHT` (default 0.4) — the two weights always sum
+to 1.0 by construction. When no social documents exist for a symbol this trading day, `w`'s
+contribution is skipped entirely and the score is headline-only (`News_Sentiment`'s own meaning
+is never altered by this blend).
+
+Institutional/editorial sources (Finnhub, Yahoo RSS, GDELT, EDGAR) carry no author/follower
+metadata and are treated as fully credible (`credibility_weight = 1.0`) by policy, not by a
+fabricated per-document measurement — this is a deliberate modeling choice documented in
+`signals/credibility.py`'s module docstring, not an attempt to infer authority for editorial copy.
+
+---
+
 ## Config / New Columns
 
 Added to `config.COLUMN_SCHEMA`:
-- `News_Sentiment` — average headline score ∈ [−1, +1]
+- `News_Sentiment` — average headline score ∈ [−1, +1] (Finnhub-headline component only, unchanged meaning)
 - `Earnings_Date` — next earnings date as ISO string or empty
+- `Credibility_Weighted_Sentiment` — mean credibility-weighted social score for the trading day (NaN if no social documents)
+- `Bot_Activity_Ratio` — mean `is_bot` flag across the trading day's social documents (percent)
+- `Aggregated_Source_Credibility` — mean `credibility_weight` across the trading day's social documents
 
 `Correlation_Cluster` (also in COLUMN_SCHEMA) is populated on-demand in the GUI Reports
 tab via `research_engine.compute_correlation_clusters()`, not by this module.

@@ -176,3 +176,107 @@ class TestSaveSentimentDocuments:
                 "SELECT trading_day FROM sentiment_ingestion_audit"
             ).fetchone()[0]
         assert trading_day == "2026-07-22"
+
+
+class TestGetSentimentAggregateBySymbol:
+    """Sentiment Pipeline Phase 4 -- per-symbol read aggregation."""
+
+    def _seed(self, store, rows):
+        store.save_sentiment_documents(rows)
+
+    def _doc(self, **overrides):
+        base = dict(
+            as_of=datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc),  # 10:00 ET
+            symbol="AAPL",
+            source_name="finnhub",
+            text_content="test",
+            raw_sentiment_score=0.5,
+        )
+        base.update(overrides)
+        return base
+
+    def test_no_rows_returns_empty_dict(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        assert store.get_sentiment_aggregate_by_symbol("2026-07-21") == {}
+
+    def test_aggregates_mean_final_weighted_score(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        self._seed(store, [
+            self._doc(final_weighted_score=0.4),
+            self._doc(final_weighted_score=0.8),
+        ])
+        result = store.get_sentiment_aggregate_by_symbol("2026-07-21")
+        assert result["AAPL"]["credibility_weighted_sentiment"] == pytest.approx(0.6)
+
+    def test_aggregates_bot_activity_ratio(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        self._seed(store, [
+            self._doc(is_bot=1),
+            self._doc(is_bot=0),
+            self._doc(is_bot=0),
+            self._doc(is_bot=0),
+        ])
+        result = store.get_sentiment_aggregate_by_symbol("2026-07-21")
+        assert result["AAPL"]["bot_activity_ratio"] == pytest.approx(0.25)
+
+    def test_aggregates_source_credibility(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        self._seed(store, [
+            self._doc(credibility_weight=0.5),
+            self._doc(credibility_weight=1.0),
+        ])
+        result = store.get_sentiment_aggregate_by_symbol("2026-07-21")
+        assert result["AAPL"]["aggregated_source_credibility"] == pytest.approx(0.75)
+
+    def test_null_credibility_weight_yields_nan_not_crash(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        self._seed(store, [self._doc()])  # credibility_weight defaults to None/NULL
+        result = store.get_sentiment_aggregate_by_symbol("2026-07-21")
+        import math
+        assert math.isnan(result["AAPL"]["aggregated_source_credibility"])
+
+    def test_separate_symbols_aggregated_independently(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        self._seed(store, [
+            self._doc(symbol="AAPL", final_weighted_score=0.9),
+            self._doc(symbol="MSFT", final_weighted_score=-0.2),
+        ])
+        result = store.get_sentiment_aggregate_by_symbol("2026-07-21")
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+        assert result["AAPL"]["credibility_weighted_sentiment"] == pytest.approx(0.9)
+        assert result["MSFT"]["credibility_weighted_sentiment"] == pytest.approx(-0.2)
+
+    def test_scoped_strictly_to_trading_day_no_leakage(self, tmp_path):
+        """Leakage-critical: a document whose as_of rolled to t+1 at write
+        time must be invisible to a read for trading day t."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        self._seed(store, [
+            self._doc(final_weighted_score=0.9),  # trading_day 2026-07-21
+            self._doc(
+                as_of=datetime(2026, 7, 21, 20, 1, tzinfo=timezone.utc),  # 16:01 ET -> rolls to 07-22
+                final_weighted_score=-0.9,
+            ),
+        ])
+        today_result = store.get_sentiment_aggregate_by_symbol("2026-07-21")
+        tomorrow_result = store.get_sentiment_aggregate_by_symbol("2026-07-22")
+        assert today_result["AAPL"]["credibility_weighted_sentiment"] == pytest.approx(0.9)
+        assert tomorrow_result["AAPL"]["credibility_weighted_sentiment"] == pytest.approx(-0.9)
+
+    def test_read_failure_returns_empty_dict(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a read failure must never raise."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        monkeypatch.setattr(store, "Session", _boom)
+        result = store.get_sentiment_aggregate_by_symbol("2026-07-21")  # must not raise
+        assert result == {}

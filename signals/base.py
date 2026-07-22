@@ -56,6 +56,15 @@ class SignalContext:
     # Next earnings dates as ISO-date strings keyed by symbol ("" = unknown).
     # Populated by NewsCatalystSignal.pre_compute() alongside news_sentiment_scores.
     earnings_dates: Dict[str, str] = field(default_factory=dict)
+    # Multi-source credibility-weighted sentiment aggregate (Sentiment Pipeline
+    # Phase 4), keyed by symbol, each a dict with keys
+    # "credibility_weighted_sentiment", "bot_activity_ratio",
+    # "aggregated_source_credibility". Populated once per cycle by
+    # NewsCatalystSignal.pre_compute() from
+    # HistoricalStore.get_sentiment_aggregate_by_symbol(). Empty dict when no
+    # multi-source social documents exist for this trading day (distinct from
+    # news_sentiment_scores, which is Finnhub-headline-only).
+    sentiment_credibility_scores: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
 
 @dataclass

@@ -53,6 +53,7 @@ def _make_signal() -> NewsCatalystSignal:
     s = object.__new__(NewsCatalystSignal)
     s._news_scores = {}
     s._earnings_dt = {}
+    s._sentiment_credibility = {}
     return s
 
 
@@ -381,7 +382,10 @@ class TestNewsHistoryArchive:
                         with patch("data.historical_store.HistoricalStore", mock_store_cls):
                             sig.pre_compute(universe, ctx)
 
-        mock_store_cls.assert_called_once()
+        # pre_compute() now also constructs HistoricalStore once for the Phase
+        # 4 credibility-aggregate read (_read_sentiment_credibility_aggregate),
+        # in addition to this archive write -- assert the write itself, not
+        # the raw constructor call count.
         mock_store_instance.save_news_sentiment.assert_called_once()
         call_args = mock_store_instance.save_news_sentiment.call_args
         assert call_args[0][0] == sig._news_scores
@@ -475,6 +479,100 @@ class TestFetchHelpers:
 # ===========================================================================
 # TestSettings
 # ===========================================================================
+
+class TestSentimentCredibilityBlend:
+    """Sentiment Pipeline Phase 4 -- credibility-aggregate read + compute() blend."""
+
+    def test_read_aggregate_populates_cache(self):
+        sig = _make_signal()
+        mock_store_instance = MagicMock()
+        mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {
+            "AAPL": {"credibility_weighted_sentiment": 0.5, "bot_activity_ratio": 0.1,
+                     "aggregated_source_credibility": 0.8},
+        }
+        mock_store_cls = MagicMock(return_value=mock_store_instance)
+        with patch("data.historical_store.HistoricalStore", mock_store_cls):
+            sig._read_sentiment_credibility_aggregate()
+        assert sig._sentiment_credibility == {
+            "AAPL": {"credibility_weighted_sentiment": 0.5, "bot_activity_ratio": 0.1,
+                     "aggregated_source_credibility": 0.8},
+        }
+
+    def test_read_aggregate_failure_degrades_to_empty(self):
+        sig = _make_signal()
+        with patch("data.historical_store.HistoricalStore", side_effect=RuntimeError("db down")):
+            sig._read_sentiment_credibility_aggregate()  # must not raise
+        assert sig._sentiment_credibility == {}
+
+    def test_pre_compute_populates_context_sentiment_credibility_scores(self):
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_store_instance = MagicMock()
+        mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {
+            "AAPL": {"credibility_weighted_sentiment": 0.3, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+        mock_store_cls = MagicMock(return_value=mock_store_instance)
+        with patch.dict(os.environ, {"FINNHUB_API_KEY": ""}, clear=False):
+            with patch("data.historical_store.HistoricalStore", mock_store_cls):
+                sig.pre_compute(universe, ctx)
+        assert ctx.sentiment_credibility_scores == {
+            "AAPL": {"credibility_weighted_sentiment": 0.3, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+
+    def test_compute_blends_headline_and_social(self):
+        sig = _make_signal()
+        sig._news_scores = {"AAPL": 0.8}
+        sig._earnings_dt = {}
+        sig._sentiment_credibility = {
+            "AAPL": {"credibility_weighted_sentiment": 0.0, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+        row = pd.Series({"Symbol": "AAPL", "Ticker": "AAPL"})
+        with patch("settings.settings.SENTIMENT_SOCIAL_BLEND_WEIGHT", 0.4):
+            out = sig.compute(row, _make_context())
+        # 0.6 * 0.8 (headline) + 0.4 * 0.0 (social) = 0.48
+        assert abs(out.score - 0.48) < 1e-6
+        assert "social blend" in out.explanation
+
+    def test_compute_degrades_to_headline_only_without_social_data(self):
+        sig = _make_signal()
+        sig._news_scores = {"AAPL": 0.6}
+        sig._earnings_dt = {}
+        sig._sentiment_credibility = {}  # no social documents this cycle
+        row = pd.Series({"Symbol": "AAPL", "Ticker": "AAPL"})
+        out = sig.compute(row, _make_context())
+        assert abs(out.score - 0.6) < 1e-6
+        assert "social blend" not in out.explanation
+
+    def test_compute_blend_weight_zero_is_headline_only(self):
+        sig = _make_signal()
+        sig._news_scores = {"AAPL": 0.6}
+        sig._earnings_dt = {}
+        sig._sentiment_credibility = {
+            "AAPL": {"credibility_weighted_sentiment": 0.9, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+        row = pd.Series({"Symbol": "AAPL", "Ticker": "AAPL"})
+        with patch("settings.settings.SENTIMENT_SOCIAL_BLEND_WEIGHT", 0.0):
+            out = sig.compute(row, _make_context())
+        assert abs(out.score - 0.6) < 1e-6
+
+    def test_compute_blend_weight_one_is_social_only(self):
+        sig = _make_signal()
+        sig._news_scores = {"AAPL": 0.6}
+        sig._earnings_dt = {}
+        sig._sentiment_credibility = {
+            "AAPL": {"credibility_weighted_sentiment": 0.9, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+        row = pd.Series({"Symbol": "AAPL", "Ticker": "AAPL"})
+        with patch("settings.settings.SENTIMENT_SOCIAL_BLEND_WEIGHT", 1.0):
+            out = sig.compute(row, _make_context())
+        assert abs(out.score - 0.9) < 1e-6
+
 
 class TestRegimeGate:
     """is_active_in_regime suppression (mirrors tests/test_rsi2_regime_gate.py)."""

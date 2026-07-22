@@ -293,6 +293,9 @@ class NewsCatalystSignal(SignalModule):
         # Per-cycle caches populated by pre_compute
         self._news_scores: Dict[str, float] = {}          # symbol → averaged score
         self._earnings_dt: Dict[str, Optional[datetime]] = {}  # symbol → next earnings
+        # Multi-source credibility-weighted aggregate (Sentiment Pipeline Phase 4),
+        # keyed by symbol -- see _read_sentiment_credibility_aggregate().
+        self._sentiment_credibility: Dict[str, Dict[str, float]] = {}
 
     def is_active_in_regime(self, macro: MacroEconomicDTO) -> bool:
         """RISK-OFF gate: suppressed during RECESSION/CREDIT EVENT or VIX > 30.
@@ -308,6 +311,26 @@ class NewsCatalystSignal(SignalModule):
         if macro.vix > _VIX_RISK_OFF_THRESHOLD:
             return False
         return True
+
+    def _read_sentiment_credibility_aggregate(self) -> None:
+        """Read this trading day's multi-source credibility-weighted
+        aggregate from ``sentiment_ingestion_audit`` (Sentiment Pipeline
+        Phase 2-4: ``data/sentiment_sources.py`` writes it, ``signals/
+        credibility.py`` scores it). Read-only, no network I/O -- pure DB
+        aggregation query. Dead-letter resilient (CONSTRAINT #6): any
+        failure degrades to an empty dict, never raises.
+        """
+        try:
+            from data.historical_store import HistoricalStore
+            trading_day = HistoricalStore.resolve_trading_day(datetime.now(timezone.utc))
+            self._sentiment_credibility = HistoricalStore().get_sentiment_aggregate_by_symbol(
+                trading_day
+            )
+        except Exception as exc:
+            logger.warning(
+                "NewsCatalystSignal: sentiment credibility aggregate read failed: %s", exc
+            )
+            self._sentiment_credibility = {}
 
     def pre_compute(
         self,
@@ -327,6 +350,12 @@ class NewsCatalystSignal(SignalModule):
 
         self._news_scores = {}
         self._earnings_dt = {}
+
+        # Multi-source credibility-weighted aggregate (Sentiment Pipeline Phase
+        # 4) -- independent of Finnhub configuration, so Reddit/GDELT/EDGAR
+        # documents still surface even when FINNHUB_API_KEY is unset.
+        self._read_sentiment_credibility_aggregate()
+        context.sentiment_credibility_scores = dict(self._sentiment_credibility)
 
         client = build_finnhub_client()
         if client is None:
@@ -416,10 +445,30 @@ class NewsCatalystSignal(SignalModule):
             logger.warning("NewsCatalystSignal: news_history archive failed: %s", exc)
 
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
-        """Return the pre-computed sentiment score for this symbol."""
+        """Return the credibility-weighted blend of the Finnhub-headline
+        score and the multi-source social sentiment aggregate for this symbol.
+
+        Gracefully degrades to headline-only (``News_Sentiment``'s own
+        meaning is unchanged) when no multi-source social documents exist
+        for this symbol this trading day -- never a fabricated social score
+        (CONSTRAINT #4). See ``settings.SENTIMENT_SOCIAL_BLEND_WEIGHT``.
+        """
+        from settings import settings as _settings
+
         symbol = str(row.get("Symbol", row.get("Ticker", ""))).upper()
-        score = self._news_scores.get(symbol, 0.0)
+        headline_score = self._news_scores.get(symbol, 0.0)
         confidence = 0.75 if symbol in self._news_scores else 0.5
+
+        social_entry = self._sentiment_credibility.get(symbol)
+        blend_suffix = ""
+        if social_entry is not None:
+            social_score = social_entry.get("credibility_weighted_sentiment", 0.0)
+            social_weight = max(0.0, min(1.0, float(_settings.SENTIMENT_SOCIAL_BLEND_WEIGHT)))
+            headline_weight = 1.0 - social_weight
+            score = headline_weight * headline_score + social_weight * social_score
+            blend_suffix = f" [social blend w={social_weight:.2f}]"
+        else:
+            score = headline_score
 
         if score > 0.1:
             direction = f"positive (+{score:.2f})"
@@ -437,7 +486,7 @@ class NewsCatalystSignal(SignalModule):
             score=score,
             confidence=confidence,
             explanation=(
-                f"News sentiment: {direction}{suffix}."
+                f"News sentiment: {direction}{suffix}{blend_suffix}."
             ),
         )
 

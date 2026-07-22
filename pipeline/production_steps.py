@@ -482,6 +482,30 @@ class StrategyEvalStep(PipelineStep):
             ctx.dashboard_df['Earnings_Date'] = ctx.dashboard_df['Symbol'].map(
                 lambda x: shared_context.earnings_dates.get(str(x).upper(), "")
             )
+
+        # Sentiment Pipeline Phase 4 -- multi-source credibility-weighted
+        # aggregate, keyed by symbol with keys "credibility_weighted_sentiment"
+        # (-> Credibility_Weighted_Sentiment), "bot_activity_ratio"
+        # (-> Bot_Activity_Ratio), "aggregated_source_credibility"
+        # (-> Aggregated_Source_Credibility). NaN when no multi-source social
+        # documents exist for a symbol this trading day (distinct from
+        # News_Sentiment, which is Finnhub-headline-only) -- same write-back
+        # pattern as the Value_Z/etc multifactor columns above.
+        _SENTIMENT_CREDIBILITY_COLS = {
+            'Credibility_Weighted_Sentiment': 'credibility_weighted_sentiment',
+            'Bot_Activity_Ratio': 'bot_activity_ratio',
+            'Aggregated_Source_Credibility': 'aggregated_source_credibility',
+        }
+        for col in _SENTIMENT_CREDIBILITY_COLS:
+            ctx.dashboard_df[col] = float('nan')
+        for col, context_key in _SENTIMENT_CREDIBILITY_COLS.items():
+            ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(
+                lambda x: shared_context.sentiment_credibility_scores.get(str(x).upper(), {}).get(
+                    context_key, float('nan')
+                )
+                if shared_context.sentiment_credibility_scores else float('nan')
+            )
+
         ctx.dashboard_df['Correlation_Cluster'] = float('nan')
 
         # docs/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns

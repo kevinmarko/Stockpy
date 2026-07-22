@@ -1639,6 +1639,65 @@ class HistoricalStore:
         except Exception as exc:
             logger.warning("HistoricalStore.save_sentiment_documents failed: %s", exc)
 
+    def get_sentiment_aggregate_by_symbol(self, trading_day: str) -> Dict[str, Dict[str, float]]:
+        """Aggregate ``sentiment_ingestion_audit`` rows for one trading day,
+        one dict per symbol -- read-only, vectorized pandas aggregation (no
+        per-row Python loop), consumed by
+        ``signals.news_catalyst.NewsCatalystSignal.pre_compute()``.
+
+        Returns ``{}`` on any failure or when no rows exist for the day
+        (CONSTRAINT #6 -- never raises). Each per-symbol dict has keys
+        ``credibility_weighted_sentiment`` (mean ``final_weighted_score``),
+        ``bot_activity_ratio`` (mean ``is_bot``), and
+        ``aggregated_source_credibility`` (mean ``credibility_weight``,
+        ``NaN``-safe when every row for that symbol has a ``NULL`` weight).
+
+        Strictly scoped to ``trading_day`` -- this is the leakage-critical
+        read side of ``resolve_trading_day()``'s write-side roll: a document
+        whose ``as_of`` rolled to ``t+1`` at write time is simply absent from
+        a query for trading day ``t``, so it can never influence day ``t``'s
+        aggregate.
+        """
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    cursor = conn.execute(
+                        """
+                        SELECT symbol, final_weighted_score, is_bot, credibility_weight
+                        FROM sentiment_ingestion_audit
+                        WHERE trading_day = ?
+                        """,
+                        (trading_day,),
+                    )
+                    rows = cursor.fetchall()
+            if not rows:
+                return {}
+            df = pd.DataFrame(
+                rows, columns=["symbol", "final_weighted_score", "is_bot", "credibility_weight"]
+            )
+            grouped = df.groupby("symbol").agg(
+                credibility_weighted_sentiment=("final_weighted_score", "mean"),
+                bot_activity_ratio=("is_bot", "mean"),
+                aggregated_source_credibility=("credibility_weight", "mean"),
+            )
+            return {
+                str(symbol): {
+                    "credibility_weighted_sentiment": float(row["credibility_weighted_sentiment"]),
+                    "bot_activity_ratio": float(row["bot_activity_ratio"]),
+                    "aggregated_source_credibility": (
+                        float(row["aggregated_source_credibility"])
+                        if pd.notna(row["aggregated_source_credibility"]) else float("nan")
+                    ),
+                }
+                for symbol, row in grouped.iterrows()
+            }
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_sentiment_aggregate_by_symbol failed: %s", exc)
+            return {}
+
     @staticmethod
     def _resolve_data_engine(data_engine):
         """Resolve an injectable DataEngine or construct the real singleton."""
