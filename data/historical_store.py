@@ -53,6 +53,9 @@ macro_history       — FRED series values keyed by (series_id, date)
 news_history        — forward-archived per-symbol news-sentiment score (write-only
                        today; no backtest reader exists yet — see
                        signals/news_catalyst.py and pilots/catalog.py)
+sentiment_ingestion_audit — per-DOCUMENT sentiment ingestion audit trail
+                       (Sentiment Pipeline Phase 2), keyed by ingest_id;
+                       see save_sentiment_documents() / resolve_trading_day()
 """
 
 from __future__ import annotations
@@ -64,7 +67,8 @@ import os
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -243,6 +247,68 @@ CREATE INDEX IF NOT EXISTS idx_news_history_symbol
     ON news_history (symbol)
 """
 
+# Timezone used by resolve_trading_day() -- same ZoneInfo pattern already used
+# by execution/risk_gate.py and engine/advisory_agent.py for RTH detection.
+_SENTIMENT_ET = ZoneInfo("America/New_York")
+_SENTIMENT_MARKET_CLOSE_HOUR = 16  # 4:00 PM ET
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — sentiment_ingestion_audit (Sentiment Pipeline Phase 2)
+#
+# Per-DOCUMENT audit trail — one row per ingested headline/post, not the daily
+# per-symbol aggregate ``news_history`` already stores. Exists so that once
+# multi-source ingestion (Phase 3) and credibility scoring (Phase 4) land, the
+# raw inputs behind any given cycle's aggregate score are reconstructable for
+# a genuine point-in-time backtest later (see ``settings.SENTIMENT_PIT_MIN_MONTHS``).
+#
+# No FK on symbol: symbol is a free-text dimension (sentiment tracks watched
+# symbols, not just held positions), and ``account_positions`` has a
+# COMPOSITE PK (snapshot_id, symbol) so ``symbol`` alone would not even be a
+# valid FK target.
+#
+# ``trading_day`` (not just ``as_of``) is the leakage-critical column: any
+# document published after the US market close rolls to the NEXT trading day
+# (see ``HistoricalStore.resolve_trading_day``) so a 4:01pm ET headline can
+# never be aggregated into "today's" close-to-close signal.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SENTIMENT_INGESTION_AUDIT_DDL = """
+CREATE TABLE IF NOT EXISTS sentiment_ingestion_audit (
+    ingest_id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    as_of                 TEXT    NOT NULL,
+    trading_day           TEXT    NOT NULL,
+    symbol                TEXT    NOT NULL,
+    source_name           TEXT    NOT NULL,
+    author_handle         TEXT,
+    text_content          TEXT    NOT NULL,
+    raw_sentiment_score   REAL    NOT NULL,
+    s_authority           REAL,
+    s_humanity            REAL,
+    s_verification        REAL,
+    credibility_weight    REAL,
+    is_bot                INTEGER DEFAULT 0,
+    final_weighted_score  REAL    NOT NULL,
+    fetched_at            TEXT    NOT NULL
+)
+"""
+
+_SENTIMENT_INGESTION_AUDIT_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_sentiment_audit_day_sym
+    ON sentiment_ingestion_audit (trading_day, symbol)
+"""
+
+_SENTIMENT_INGESTION_AUDIT_ASOF_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_sentiment_audit_asof
+    ON sentiment_ingestion_audit (as_of)
+"""
+
+# Column order for the batch INSERT in save_sentiment_documents().
+_SENTIMENT_AUDIT_INSERT_COLS = (
+    "as_of, trading_day, symbol, source_name, author_handle, text_content, "
+    "raw_sentiment_score, s_authority, s_humanity, s_verification, "
+    "credibility_weight, is_bot, final_weighted_score, fetched_at"
+)
+
 # Column order returned by SELECT for price_bars reconstruction.
 _SELECT_COLS = "open, high, low, close, adj_close, volume"
 
@@ -361,6 +427,9 @@ class HistoricalStore:
                 conn.execute(_MACRO_HISTORY_INDEX_DDL)
                 conn.execute(_NEWS_HISTORY_DDL)
                 conn.execute(_NEWS_HISTORY_INDEX_DDL)
+                conn.execute(_SENTIMENT_INGESTION_AUDIT_DDL)
+                conn.execute(_SENTIMENT_INGESTION_AUDIT_INDEX_DDL)
+                conn.execute(_SENTIMENT_INGESTION_AUDIT_ASOF_INDEX_DDL)
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
             finally:
@@ -1471,6 +1540,104 @@ class HistoricalStore:
             )
         except Exception as exc:
             logger.warning("HistoricalStore.save_news_sentiment failed: %s", exc)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public API — sentiment_ingestion_audit (Sentiment Pipeline Phase 2)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def resolve_trading_day(as_of_utc: datetime) -> str:
+        """Resolve a document timestamp to its trading-day label (YYYY-MM-DD).
+
+        Leakage-critical rule: any timestamp at/after the 16:00 America/New_York
+        market close rolls to the NEXT trading day -- a document published after
+        today's close cannot be attributed to today's close-to-close signal.
+        Weekend timestamps (and the weekend a post-close Friday roll lands on)
+        also roll forward to the following Monday. No holiday calendar is
+        applied (same documented limitation as
+        ``engine.advisory_agent.is_us_market_open`` -- would require
+        ``pandas_market_calendars``, not a project dependency).
+
+        Parameters
+        ----------
+        as_of_utc : datetime
+            The document's raw publish/post timestamp. Naive datetimes are
+            assumed UTC.
+        """
+        if as_of_utc.tzinfo is None:
+            as_of_utc = as_of_utc.replace(tzinfo=timezone.utc)
+        as_of_et = as_of_utc.astimezone(_SENTIMENT_ET)
+        if as_of_et.hour >= _SENTIMENT_MARKET_CLOSE_HOUR:
+            as_of_et = as_of_et + timedelta(days=1)
+        while as_of_et.weekday() >= 5:  # Saturday=5, Sunday=6 -> roll to Monday
+            as_of_et = as_of_et + timedelta(days=1)
+        return as_of_et.strftime("%Y-%m-%d")
+
+    def save_sentiment_documents(self, documents: List[Dict[str, Any]]) -> None:
+        """Persist a batch of ingested sentiment documents, one row each.
+
+        Each dict in ``documents`` must carry: ``as_of`` (datetime), ``symbol``,
+        ``source_name``, ``text_content``, ``raw_sentiment_score``. Optional
+        credibility keys (``author_handle``, ``s_authority``, ``s_humanity``,
+        ``s_verification``, ``credibility_weight``, ``is_bot``) default to
+        ``None``/``0`` for sources with no credibility signal (e.g. Finnhub
+        headlines) -- never fabricated (CONSTRAINT #4). ``final_weighted_score``
+        defaults to ``raw_sentiment_score`` when no ``credibility_weight`` is
+        supplied. ``trading_day`` is derived here via ``resolve_trading_day()``
+        so callers never compute it ad-hoc.
+
+        Dead-letter resilient (CONSTRAINT #6): any failure is logged and
+        swallowed so an ingestion-side write can never block the live pipeline.
+        """
+        if not documents:
+            return
+        try:
+            now_ts = self._now_utc_iso()
+            rows = []
+            for doc in documents:
+                as_of = doc["as_of"]
+                credibility_weight = doc.get("credibility_weight")
+                raw_score = float(doc["raw_sentiment_score"])
+                final_score = (
+                    float(doc["final_weighted_score"])
+                    if doc.get("final_weighted_score") is not None
+                    else raw_score
+                )
+                rows.append((
+                    pd.Timestamp(as_of).isoformat(),
+                    self.resolve_trading_day(as_of),
+                    str(doc["symbol"]).upper(),
+                    str(doc["source_name"]),
+                    doc.get("author_handle"),
+                    str(doc["text_content"]),
+                    raw_score,
+                    doc.get("s_authority"),
+                    doc.get("s_humanity"),
+                    doc.get("s_verification"),
+                    credibility_weight,
+                    int(doc.get("is_bot") or 0),
+                    final_score,
+                    now_ts,
+                ))
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.executemany(
+                        f"""
+                        INSERT INTO sentiment_ingestion_audit
+                            ({_SENTIMENT_AUDIT_INSERT_COLS})
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+            logger.debug(
+                "HistoricalStore: inserted %d sentiment_ingestion_audit rows.",
+                len(rows),
+            )
+        except Exception as exc:
+            logger.warning("HistoricalStore.save_sentiment_documents failed: %s", exc)
 
     @staticmethod
     def _resolve_data_engine(data_engine):
