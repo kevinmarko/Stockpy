@@ -651,6 +651,12 @@ class CompositeSentimentSource:
 
     @staticmethod
     def _archive(docs: List[SentimentDocument]) -> None:
+        """Score (Phase 4 credibility) then persist a batch of documents.
+
+        Credibility scoring runs once per batch here -- the only call site
+        -- so ``signals/credibility.py``'s per-author cadence statistic sees
+        the whole cycle's documents at once (see its module docstring).
+        """
         if not docs:
             return
         try:
@@ -658,7 +664,20 @@ class CompositeSentimentSource:
             if not _settings.SENTIMENT_AUDIT_ENABLED:
                 return
             from data.historical_store import HistoricalStore
-            HistoricalStore().save_sentiment_documents([doc.to_audit_row() for doc in docs])
+            from signals.credibility import score_documents
+
+            scores = score_documents(docs)
+            rows = []
+            for doc, score in zip(docs, scores):
+                row = doc.to_audit_row()
+                row["s_authority"] = score.s_authority
+                row["s_humanity"] = score.s_humanity
+                row["s_verification"] = score.s_verification
+                row["credibility_weight"] = score.credibility_weight
+                row["is_bot"] = int(score.is_bot)
+                row["final_weighted_score"] = doc.raw_sentiment_score * score.credibility_weight
+                rows.append(row)
+            HistoricalStore().save_sentiment_documents(rows)
         except Exception as exc:
             logger.warning("CompositeSentimentSource: audit archive failed: %s", exc)
 

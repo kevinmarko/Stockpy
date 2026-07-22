@@ -1745,6 +1745,19 @@ class Settings(BaseSettings):
             "full score is used."
         ),
     )
+    SENTIMENT_SOCIAL_BLEND_WEIGHT: float = Field(
+        default=0.4,
+        description=(
+            "Weight in [0, 1] on the multi-source credibility-weighted social "
+            "sentiment component of NewsCatalystSignal.compute()'s blended "
+            "score; the Finnhub-headline component gets (1 - this weight) -- "
+            "the two always sum to 1.0 by construction (fixes the reviewed "
+            "plan's M6 finding: unnormalized w1=0.4/w2=0.1 weights). Applied "
+            "only when multi-source social documents exist for a symbol this "
+            "trading day; gracefully degrades to headline-only (weight 1.0) "
+            "otherwise -- never a fabricated social score (CONSTRAINT #4)."
+        ),
+    )
 
     # --- Correlation Cluster Awareness (Tier 2.5, research_engine.py) ---
     # Controls the on-demand hierarchical clustering computed in the GUI

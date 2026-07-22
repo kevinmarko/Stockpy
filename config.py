@@ -158,6 +158,18 @@ COLUMN_SCHEMA = [
     {"header": "Earnings Date", "key": "Earnings_Date", "format": "string"},
 
     # ==========================================================
+    # --- SENTIMENT CREDIBILITY (Sentiment Pipeline Phase 4, signals/credibility.py) ---
+    # Populated by NewsCatalystSignal.pre_compute() via orchestrator writeback,
+    # aggregating the current trading day's sentiment_ingestion_audit rows
+    # (data/sentiment_sources.py, data/historical_store.py). NaN when no
+    # multi-source social documents exist for a symbol this cycle -- distinct
+    # from News_Sentiment (Finnhub-headline-only), never a fabricated 0.0.
+    # ==========================================================
+    {"header": "Credibility Weighted Sentiment", "key": "Credibility_Weighted_Sentiment", "format": "number"},
+    {"header": "Bot Activity Ratio", "key": "Bot_Activity_Ratio", "format": "percent"},
+    {"header": "Aggregated Source Credibility", "key": "Aggregated_Source_Credibility", "format": "number"},
+
+    # ==========================================================
     # --- CORRELATION CLUSTER (Tier 2.5, research_engine.py) ---
     # Populated on-demand by the GUI Reports tab; NaN in the main
     # orchestrator run (no historical batch fetch required).
