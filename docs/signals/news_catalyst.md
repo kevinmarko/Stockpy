@@ -139,6 +139,17 @@ but requires a ~400 MB model download on first use and a GPU or fast CPU for inf
 
 ## Multi-Source Credibility Blend
 
+**Opt-in master switch:** `pre_compute()`'s multi-source ingestion step (the write side —
+`_run_multi_source_ingestion()`, calling `data/sentiment_sources.py`'s `CompositeSentimentSource`)
+is gated behind `settings.SENTIMENT_INGESTION_ENABLED`, **default `False`**. Until an operator
+sets it `True` in `.env`, this is a complete no-op — no network call is attempted for any symbol,
+and `sentiment_ingestion_audit` never accumulates a single row no matter how much time passes.
+This exists because two of the four sources (Yahoo RSS, GDELT) need no API key, so — unlike
+Finnhub/Reddit/EDGAR, which already degrade to a no-op when their credentials are absent — they
+have no other way to stay quiet by default. **Turning this on is the one action required** for
+the point-in-time archive to start accumulating toward `SENTIMENT_PIT_MIN_MONTHS`; nothing else
+needs to be done afterward — it runs automatically every cycle from then on.
+
 `pre_compute()` additionally reads the current trading day's aggregate from
 `HistoricalStore.get_sentiment_aggregate_by_symbol()` — populated at ingest time by
 `data/sentiment_sources.py`'s `CompositeSentimentSource` (Yahoo RSS/GDELT/Reddit/EDGAR/Finnhub

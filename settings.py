@@ -997,6 +997,24 @@ class Settings(BaseSettings):
             "entirely."
         ),
     )
+    SENTIMENT_INGESTION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for NewsCatalystSignal.pre_compute()'s multi-source "
+            "ingestion step (data/sentiment_sources.py's CompositeSentimentSource "
+            "-- Yahoo RSS/GDELT/Reddit/EDGAR). False (the default) is a complete "
+            "no-op: no network call is attempted for any symbol, matching this "
+            "codebase's convention for opt-in networked features "
+            "(ORCHESTRATOR_DAEMON_ENABLED, GRAVITY_AI_RUNNER_ENABLED, "
+            "PILOTS_API_ENABLED all default False the same way). This exists "
+            "because two of the four sources (Yahoo RSS, GDELT) need no API key "
+            "and so have no other way to stay quiet by default -- unlike "
+            "Finnhub/Reddit/EDGAR, which already degrade to a no-op when their "
+            "credentials are absent. Set True in .env to actually start "
+            "accumulating sentiment_ingestion_audit history; until then, "
+            "SENTIMENT_PIT_MIN_MONTHS never starts counting."
+        ),
+    )
     SENTIMENT_AUDIT_ENABLED: bool = Field(
         default=True,
         description=(
@@ -1006,7 +1024,9 @@ class Settings(BaseSettings):
             "document point-in-time archive underlying the credibility-"
             "weighted sentiment signal (Sentiment Pipeline Phase 2+). Same "
             "on/off shape as NEWS_HISTORY_CAPTURE_ENABLED. Dead-lettered: any "
-            "capture failure is logged and never crashes the pipeline."
+            "capture failure is logged and never crashes the pipeline. Has no "
+            "effect while SENTIMENT_INGESTION_ENABLED is False (nothing is ever "
+            "fetched to archive in the first place)."
         ),
     )
     SENTIMENT_PIT_MIN_MONTHS: int = Field(
@@ -1030,14 +1050,19 @@ class Settings(BaseSettings):
     # never blocks the others (CONSTRAINT #6). A paid feed can be added later
     # as a SentimentSource subclass without changing this list's shape.
     SENTIMENT_SOURCES: str = Field(
-        default="finnhub,yahoo_rss,gdelt,reddit,edgar",
+        default="yahoo_rss,gdelt,reddit,edgar",
         description=(
             "Comma-separated list of enabled data/sentiment_sources.py "
             "provider names. Mirrors the MARKET_DATA_PROVIDER selection "
             "pattern in data/market_data.py, but as a fan-out set rather "
             "than a mutually-exclusive choice -- every listed source "
             "contributes documents each cycle. Removing a name disables "
-            "that source without touching code."
+            "that source without touching code. 'finnhub' is EXCLUDED from "
+            "the default: NewsCatalystSignal.pre_compute() already fetches "
+            "and scores Finnhub headlines directly every cycle (writing to "
+            "news_history); adding 'finnhub' here too would double-fetch the "
+            "same API per symbol per cycle. Add it explicitly only if the "
+            "direct Finnhub path is ever retired in favor of this composite."
         ),
     )
     SENTIMENT_INGESTION_LOOKBACK_DAYS: int = Field(

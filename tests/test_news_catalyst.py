@@ -44,6 +44,21 @@ from signals.news_catalyst import (
 from signals.registry import SignalRegistry
 
 
+@pytest.fixture(autouse=True)
+def _mock_multi_source_ingestion(monkeypatch):
+    """Prevent every test in this file from making real network calls via
+    the Sentiment Pipeline Phase 3/4 multi-source ingestion path --
+    NewsCatalystSignal.pre_compute() now unconditionally calls
+    data.sentiment_sources.get_sentiment_source() (see
+    _run_multi_source_ingestion), independent of Finnhub configuration.
+    Without this, Yahoo RSS/GDELT/Reddit/EDGAR would all be hit for real on
+    every pre_compute() call in this file.
+    """
+    monkeypatch.setattr(
+        "data.sentiment_sources.get_sentiment_source", lambda: MagicMock()
+    )
+
+
 # ===========================================================================
 # Helper fixtures
 # ===========================================================================
@@ -479,6 +494,91 @@ class TestFetchHelpers:
 # ===========================================================================
 # TestSettings
 # ===========================================================================
+
+class TestMultiSourceIngestion:
+    """_run_multi_source_ingestion() -- the only call site that invokes
+    CompositeSentimentSource in the live pipeline. Without it,
+    sentiment_ingestion_audit never accumulates rows regardless of how much
+    time passes -- these tests pin down that it actually runs when enabled,
+    and stays a true no-op (no network attempted) by default."""
+
+    def test_disabled_by_default_is_a_noop(self):
+        """SENTIMENT_INGESTION_ENABLED defaults False -- no source is ever
+        constructed or called. This is the fast-path every other test file
+        in this repo relies on (e.g. main.py/main_orchestrator.py tests that
+        build a real universe and call pre_compute transitively)."""
+        sig = _make_signal()
+        with patch("data.sentiment_sources.get_sentiment_source") as mock_getter:
+            sig._run_multi_source_ingestion(["AAPL"])
+        mock_getter.assert_not_called()
+
+    def test_calls_fetch_and_archive_for_every_symbol(self):
+        sig = _make_signal()
+        mock_source = MagicMock()
+        with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
+            with patch("data.sentiment_sources.get_sentiment_source", return_value=mock_source):
+                sig._run_multi_source_ingestion(["AAPL", "MSFT", "GOOG"])
+        assert mock_source.fetch_and_archive.call_count == 3
+        called_symbols = {c.args[0] for c in mock_source.fetch_and_archive.call_args_list}
+        assert called_symbols == {"AAPL", "MSFT", "GOOG"}
+
+    def test_calls_reset_cycle_once(self):
+        sig = _make_signal()
+        mock_source = MagicMock()
+        with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
+            with patch("data.sentiment_sources.get_sentiment_source", return_value=mock_source):
+                sig._run_multi_source_ingestion(["AAPL"])
+        mock_source.reset_cycle.assert_called_once()
+
+    def test_respects_sentiment_audit_enabled_gate(self):
+        sig = _make_signal()
+        mock_source = MagicMock()
+        with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
+            with patch("settings.settings.SENTIMENT_AUDIT_ENABLED", False):
+                with patch("data.sentiment_sources.get_sentiment_source", return_value=mock_source):
+                    sig._run_multi_source_ingestion(["AAPL"])
+        mock_source.fetch_and_archive.assert_not_called()
+
+    def test_per_symbol_failure_does_not_block_others(self):
+        sig = _make_signal()
+        mock_source = MagicMock()
+        mock_source.fetch_and_archive.side_effect = [RuntimeError("boom"), None, None]
+        with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
+            with patch("data.sentiment_sources.get_sentiment_source", return_value=mock_source):
+                sig._run_multi_source_ingestion(["AAPL", "MSFT", "GOOG"])  # must not raise
+        assert mock_source.fetch_and_archive.call_count == 3
+
+    def test_setup_failure_never_raises(self):
+        sig = _make_signal()
+        with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
+            with patch(
+                "data.sentiment_sources.get_sentiment_source",
+                side_effect=RuntimeError("singleton construction failed"),
+            ):
+                sig._run_multi_source_ingestion(["AAPL"])  # must not raise
+
+    def test_empty_symbol_list_is_a_noop(self):
+        sig = _make_signal()
+        mock_source = MagicMock()
+        with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
+            with patch("data.sentiment_sources.get_sentiment_source", return_value=mock_source):
+                sig._run_multi_source_ingestion([])
+        mock_source.fetch_and_archive.assert_not_called()
+
+    def test_runs_regardless_of_finnhub_configuration(self):
+        """pre_compute() must run multi-source ingestion even when
+        FINNHUB_API_KEY is unset (Reddit/GDELT/EDGAR/Yahoo RSS don't need it),
+        as long as SENTIMENT_INGESTION_ENABLED is explicitly turned on."""
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_source = MagicMock()
+        with patch.dict(os.environ, {"FINNHUB_API_KEY": ""}, clear=False):
+            with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
+                with patch("data.sentiment_sources.get_sentiment_source", return_value=mock_source):
+                    sig.pre_compute(universe, ctx)
+        mock_source.fetch_and_archive.assert_called_once_with("AAPL")
+
 
 class TestSentimentCredibilityBlend:
     """Sentiment Pipeline Phase 4 -- credibility-aggregate read + compute() blend."""
