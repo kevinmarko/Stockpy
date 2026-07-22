@@ -384,8 +384,6 @@ const liveApi = {
   // running / 423 kill-switch-paused / 401/403 auth) throws ApiError the normal
   // way; the screen branches on ApiError.status to render each honestly.
   getControlStatus: () => http<ControlStatus>("/status"),
-  getControlRunStatus: (runId: string) =>
-    http<RunRecord>(`/run/${encodeURIComponent(runId)}/status`),
   postControlRun: () =>
     http<{ run_id: string; state: string }>("/run", { method: "POST" }),
   postControlPipelineData: () =>
