@@ -1022,6 +1022,87 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Multi-source sentiment ingestion (Sentiment Pipeline Phase 3,
+    # data/sentiment_sources.py) ---
+    # Free-first sources by default (Yahoo RSS, GDELT, Reddit, SEC/EDGAR,
+    # existing Finnhub). Each source is independently try/excepted in
+    # CompositeSentimentSource -- one source's outage or missing credentials
+    # never blocks the others (CONSTRAINT #6). A paid feed can be added later
+    # as a SentimentSource subclass without changing this list's shape.
+    SENTIMENT_SOURCES: str = Field(
+        default="finnhub,yahoo_rss,gdelt,reddit,edgar",
+        description=(
+            "Comma-separated list of enabled data/sentiment_sources.py "
+            "provider names. Mirrors the MARKET_DATA_PROVIDER selection "
+            "pattern in data/market_data.py, but as a fan-out set rather "
+            "than a mutually-exclusive choice -- every listed source "
+            "contributes documents each cycle. Removing a name disables "
+            "that source without touching code."
+        ),
+    )
+    SENTIMENT_INGESTION_LOOKBACK_DAYS: int = Field(
+        default=1,
+        description=(
+            "Calendar days of lookback each CompositeSentimentSource.fetch_all() "
+            "cycle requests from every enabled source (Yahoo RSS/GDELT/Reddit/"
+            "EDGAR/Finnhub). Deliberately shorter than NEWS_LOOKBACK_DAYS "
+            "(the Finnhub-only headline signal's own 7-day window): these are "
+            "higher-velocity sources meant to be polled frequently, with the "
+            "rolling dedup hash absorbing any overlap between cycles rather "
+            "than relying on a wide backward window."
+        ),
+    )
+    SENTIMENT_DESENTENCIZE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, ingested document text has periods replaced with "
+            "semicolons before FinBERT scoring (a real but marginal trick to "
+            "discourage sentence-boundary truncation on run-on social posts). "
+            "Off by default: it can corrupt numerics ($4.50), cashtags "
+            "($AAPL), and abbreviations (U.S.) -- see "
+            "tests/test_sentiment_sources.py's desentencize-safety cases "
+            "before enabling."
+        ),
+    )
+    REDDIT_CLIENT_ID: str = Field(
+        default="",
+        description="Reddit API OAuth2 script-app client ID. Empty disables RedditSource.",
+    )
+    REDDIT_CLIENT_SECRET: str = Field(
+        default="",
+        description="Reddit API OAuth2 script-app client secret. Empty disables RedditSource.",
+    )
+    REDDIT_USER_AGENT: str = Field(
+        default="stockpy-sentiment-ingestion/0.1",
+        description=(
+            "User-Agent header sent with every Reddit API request, per "
+            "Reddit's API rules (a generic/missing User-Agent is rate-limited "
+            "more aggressively). Operators should set this to something "
+            "identifying their own deployment."
+        ),
+    )
+    EDGAR_USER_AGENT: str = Field(
+        default="",
+        description=(
+            "User-Agent header sent with every SEC EDGAR request, per SEC's "
+            "fair-access policy (must identify the requester, e.g. "
+            "'Company Name admin@example.com'). Empty disables EdgarSource "
+            "rather than send a non-compliant request that risks an IP block."
+        ),
+    )
+    SENTIMENT_MAX_DOCUMENTS_PER_CYCLE: int = Field(
+        default=2000,
+        description=(
+            "Per-cycle document budget shared across all symbols in "
+            "CompositeSentimentSource -- the 'bounded queue with backpressure' "
+            "this pipeline runs locally instead of a distributed queue. Once "
+            "reached, lower-priority sources (social feeds) are skipped for "
+            "the remainder of the cycle while higher-priority sources "
+            "(Finnhub, EDGAR) keep running; never touches order/broker code "
+            "under any pressure condition."
+        ),
+    )
+
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
     # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.

@@ -223,6 +223,15 @@ SECRET_KEYS: tuple[str, ...] = (
     # OpenAI credential for Opal, the research agent (Tier 9 Scope 4,
     # llm/research.py).  CONSTRAINT #3 — never GUI-writable; hand-edit .env.
     "OPENAI_API_KEY",
+    # data/sentiment_sources.py's RedditSource OAuth2 script-app credentials
+    # (Sentiment Pipeline Phase 3). CONSTRAINT #3 — never GUI-writable.
+    "REDDIT_CLIENT_ID",
+    "REDDIT_CLIENT_SECRET",
+    # SEC EDGAR requires this to identify the requester per its fair-access
+    # policy — not a credential in the auth sense, but a per-operator value
+    # that shouldn't be GUI-editable any more than the other source configs
+    # above; classified here rather than ALLOWED_KEYS for the same reason.
+    "EDGAR_USER_AGENT",
 )
 
 # Keys whose values are JSON-encoded structures (lists/dicts) in .env.
