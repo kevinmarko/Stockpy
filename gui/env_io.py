@@ -85,6 +85,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MAX_CORRELATION",
     "DAILY_LOSS_LIMIT_PCT",
     "MAX_ORDER_RATE_PER_MIN",
+    "EXECUTION_PRIORITY_QUEUE_ENABLED",
+    "EXECUTION_QUEUE_LEAK_RATE_PER_SEC",
     "HMM_RISK_OFF_BLOCK_THRESHOLD",
     "RISK_GATE_ENFORCE_MARKET_HOURS",
     "MACRO_REGIME_GATE_ENABLED",
@@ -127,6 +129,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
     "MARKET_DATA_BARS_TTL_SECONDS",
+    # Opt-in real-time WS quote ingestion (data/market_data_ws.py). Non-secret
+    # tunables only; Alpaca credentials stay in SECRET_KEYS.
+    "MARKET_DATA_WS_ENABLED",
+    "MARKET_DATA_WS_STALE_SECONDS",
+    "MARKET_DATA_WS_SYMBOLS",
     # Forecasting / fundamentals tunables (non-secret; see forecasting_engine.py
     # + data/market_data.py). FINNHUB_API_KEY stays in SECRET_KEYS below.
     "FORECAST_USE_GARCH_SIGMA",   # bool — GJR-GARCH sigma into Monte Carlo (rollback lever)
