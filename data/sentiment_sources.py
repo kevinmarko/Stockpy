@@ -38,6 +38,19 @@ exhausted, remaining lower-priority sources are skipped for the rest of the
 cycle. Call ``CompositeSentimentSource.reset_cycle()`` once per orchestrator
 cycle before iterating symbols.
 
+Two more bounds close the gap a per-request ``timeout`` alone leaves open --
+a per-request timeout bounds ONE call, but nothing previously bounded the
+whole cycle if a source kept timing out symbol after symbol:
+
+- **Wall-clock ceiling** (``settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE``,
+  default 60s): once elapsed (tracked from ``reset_cycle()``), ``fetch_all()``
+  returns immediately for every remaining symbol this cycle -- fails fast and
+  moves on rather than stalling the whole pipeline refresh.
+- **Per-source circuit breaker** (``settings.SENTIMENT_CIRCUIT_BREAKER_THRESHOLD``,
+  default 3): after that many consecutive failures for one source within a
+  cycle, that source is skipped for the rest of the cycle instead of being
+  re-attempted (and re-timing-out) for every remaining symbol.
+
 Credibility-field honesty
 --------------------------
 ``SentimentDocument`` carries optional credibility-relevant raw inputs
@@ -64,6 +77,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -548,6 +562,10 @@ class CompositeSentimentSource:
     def __init__(self, sources: Optional[Dict[str, SentimentSource]] = None) -> None:
         self._sources = sources if sources is not None else self._build_enabled_sources()
         self._documents_this_cycle = 0
+        self._consecutive_failures: Dict[str, int] = {}
+        self._tripped_sources: set = set()
+        self._cycle_deadline: Optional[float] = None
+        self._deadline_logged = False
 
     @staticmethod
     def _build_enabled_sources() -> Dict[str, SentimentSource]:
@@ -574,9 +592,17 @@ class CompositeSentimentSource:
         return sources
 
     def reset_cycle(self) -> None:
-        """Reset the per-cycle document budget. Call once per orchestrator
-        cycle before iterating symbols."""
+        """Reset the per-cycle document budget, circuit breaker, and
+        wall-clock ceiling. Call once per orchestrator cycle before
+        iterating symbols."""
+        from settings import settings as _settings
         self._documents_this_cycle = 0
+        self._consecutive_failures = {}
+        self._tripped_sources = set()
+        self._deadline_logged = False
+        self._cycle_deadline = time.monotonic() + float(
+            _settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE
+        )
 
     def fetch_all(self, symbol: str, since: Optional[datetime] = None) -> List[SentimentDocument]:
         """Fetch and merge documents for ``symbol`` from every enabled source.
@@ -585,10 +611,25 @@ class CompositeSentimentSource:
         document budget (``settings.SENTIMENT_MAX_DOCUMENTS_PER_CYCLE``) is
         reached, remaining lower-priority sources are skipped for the rest of
         the cycle -- data-only backpressure, never touches orders (see module
-        docstring's C1 note).
+        docstring's C1 note). Also bounded by a wall-clock ceiling
+        (``settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE``, tracked from
+        ``reset_cycle()``) and a per-source circuit breaker
+        (``settings.SENTIMENT_CIRCUIT_BREAKER_THRESHOLD`` consecutive
+        failures) -- see the module docstring's Backpressure section.
         """
         from settings import settings as _settings
         from data.historical_store import HistoricalStore  # lazy import (project convention)
+
+        if self._cycle_deadline is not None and time.monotonic() >= self._cycle_deadline:
+            if not self._deadline_logged:
+                logger.warning(
+                    "CompositeSentimentSource: per-cycle wall-clock budget "
+                    "(%.0f s) exceeded; skipping ingestion for the rest of "
+                    "this cycle.",
+                    _settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE,
+                )
+                self._deadline_logged = True
+            return []
 
         if since is None:
             since = datetime.now(timezone.utc) - timedelta(
@@ -598,11 +639,14 @@ class CompositeSentimentSource:
         merged: List[SentimentDocument] = []
         seen_hashes: set = set()
         budget = int(_settings.SENTIMENT_MAX_DOCUMENTS_PER_CYCLE)
+        breaker_threshold = int(_settings.SENTIMENT_CIRCUIT_BREAKER_THRESHOLD)
 
         ordered_names = [n for n in _SOURCE_PRIORITY if n in self._sources]
         ordered_names += [n for n in self._sources if n not in _SOURCE_PRIORITY]
 
         for name in ordered_names:
+            if name in self._tripped_sources:
+                continue
             if self._documents_this_cycle >= budget:
                 logger.warning(
                     "CompositeSentimentSource: per-cycle document budget (%d) "
@@ -613,11 +657,22 @@ class CompositeSentimentSource:
             source = self._sources[name]
             try:
                 docs = source.fetch(symbol, since)
+                self._consecutive_failures[name] = 0
             except Exception as exc:
                 logger.warning(
                     "CompositeSentimentSource: source %r failed for %s: %s",
                     name, symbol, exc,
                 )
+                failures = self._consecutive_failures.get(name, 0) + 1
+                self._consecutive_failures[name] = failures
+                if failures >= breaker_threshold:
+                    self._tripped_sources.add(name)
+                    logger.warning(
+                        "CompositeSentimentSource: source %r tripped the "
+                        "circuit breaker after %d consecutive failures; "
+                        "skipping it for the rest of this cycle.",
+                        name, failures,
+                    )
                 continue
             for doc in docs:
                 trading_day = HistoricalStore.resolve_trading_day(doc.as_of)
