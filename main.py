@@ -97,6 +97,24 @@ from typing import Any, Dict, List, Optional
 #   So an explicit shell export ALWAYS wins over the .env file.
 from dotenv import load_dotenv as _load_dotenv
 
+# ---------------------------------------------------------------------------
+# TensorFlow, if installed, MUST be imported before pandas/pyarrow -- defense
+# in depth for the CNN-LSTM/TensorFlow deadlock (issue #381, docs/known_issues/
+# cnn_lstm_tf_deadlock.md). forecasting_engine.py's own import reorder (PR
+# #387) only protects a process where IT is the first thing to touch pandas;
+# main.py imports pandas below, well before forecasting_engine is ever
+# reached, so without this guard the real entry point stays exposed. A no-op
+# when TensorFlow isn't installed (ImportError -> nothing changes). The
+# primary fix is CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED (settings.py), which
+# runs CNN-LSTM fit/predict in an isolated subprocess and doesn't depend on
+# any entry point's import order at all; this import is a cheap second layer
+# for the case isolation is left off.
+# ---------------------------------------------------------------------------
+try:
+    import tensorflow  # noqa: F401
+except ImportError:
+    pass
+
 import numpy as np
 import pandas as pd
 

@@ -1,5 +1,24 @@
 """Concrete PipelineStep implementations for the production async orchestrator: data fetch, run_pipeline, options/GARCH analysis, indicator processing, multi-horizon forecasting, strategy + advisory overlay, gated broker execution, and state-snapshot / report rendering. Each step reads and writes the shared RunContext."""
 
+# ---------------------------------------------------------------------------
+# TensorFlow, if installed, MUST be imported before pandas/pyarrow -- defense
+# in depth for the CNN-LSTM/TensorFlow deadlock (issue #381, docs/known_issues/
+# cnn_lstm_tf_deadlock.md). forecasting_engine.py's own import reorder (PR
+# #387) only protects a process where IT is the first thing to touch pandas;
+# this module (the actual forecasting step run by main_orchestrator.py) is
+# imported after this file's own `import pandas as pd` below in every real
+# call chain, so without this guard the real production forecasting step
+# stays exposed. A no-op when TensorFlow isn't installed. The primary fix is
+# CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED (settings.py), which isolates
+# CNN-LSTM fit/predict in a subprocess and doesn't depend on any entry
+# point's import order at all; this import is a cheap second layer for the
+# case isolation is left off.
+# ---------------------------------------------------------------------------
+try:
+    import tensorflow  # noqa: F401
+except ImportError:
+    pass
+
 import asyncio
 import logging
 import os
