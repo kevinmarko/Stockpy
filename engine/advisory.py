@@ -30,7 +30,7 @@ import math
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Tuple
 
 import pandas as pd
 
@@ -39,6 +39,12 @@ from data.robinhood_portfolio import AccountSnapshot, PortfolioPosition
 from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
 from sizing.kelly import estimate_win_rate_and_payoff, fractional_kelly
 from sizing.vol_target import volatility_target_weight
+
+# Advisory's own single-name ceiling (CONFIG["max_single_position_pct"]) is a
+# distinct, deliberately-tighter constraint than settings.MAX_POSITION_WEIGHT
+# (see CONFIG's "Advisory-layer position size cap" note below) -- kept as its
+# own binding-constraint string so the audit trail never conflates the two.
+ADVISORY_MAX_POSITION_PCT = "advisory_max_position_pct"
 
 # Module-level imports of the heavy engines so that test monkeypatching via
 # mock.patch("engine.advisory.<ClassName>") resolves correctly.  These are
@@ -415,6 +421,18 @@ class Recommendation:
         GICS sector string sourced from the symbol's ``FundamentalDataDTO``;
         ``""`` when fundamentals were unavailable or the DTO carries no sector
         (never fabricated — CONSTRAINT #4).
+    sizing_was_capped : bool
+        True iff advisory's OWN sizing ceiling bound when computing
+        ``suggested_position_pct`` above -- ``CONFIG["kelly_cap"]`` or the
+        tighter ``CONFIG["max_single_position_pct"]`` single-name ceiling.
+        Deliberately independent of StrategyEngine's guardrail telemetry
+        (``key_indicators["kelly_raw_was_capped"]``, informational only) and
+        of ``settings.MAX_POSITION_WEIGHT`` -- see CONFIG's "Advisory-layer
+        position size cap" note. False when the action isn't BUY (nothing
+        was sized) or the sizing call failed.
+    sizing_binding_constraint : str or None
+        Which constraint bound (``"kelly_cap"``, ``"vol_target_leverage"``,
+        or ``"advisory_max_position_pct"``), or ``None`` when nothing bound.
     """
 
     symbol: str
@@ -469,6 +487,20 @@ class Recommendation:
     # default keeps existing positional ``Recommendation(...)`` constructions
     # unaffected.
     sector: str = ""
+    # Guardrail telemetry for THIS advisory recommendation's own sizing path
+    # (_compute_kelly_sizing -> suggested_position_pct above) -- deliberately
+    # separate from StrategyEngine's Kelly Target guardrail telemetry (which
+    # is informational-only here, surfaced via key_indicators["kelly_raw"]
+    # and not what this recommendation actually sizes on). True iff advisory's
+    # OWN cap (CONFIG["kelly_cap"]=0.20 or the tighter
+    # CONFIG["max_single_position_pct"]=0.05 single-name ceiling -- see the
+    # "Advisory-layer position size cap" note in CONFIG above) bound. NOT
+    # stored in key_indicators: that dict is float-only (every value is passed
+    # through math.isnan()), so a string constraint name cannot live there.
+    # Trailing default keeps existing positional ``Recommendation(...))``
+    # constructions unaffected.
+    sizing_was_capped: bool = False
+    sizing_binding_constraint: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1088,11 +1120,15 @@ def evaluate(
     # Step 10 — Kelly-based position sizing (BUY only)
     # ──────────────────────────────────────────────────────────────────────────
     suggested_position_pct: float = 0.0
+    sizing_was_capped: bool = False
+    sizing_binding_constraint: Optional[str] = None
     if final_action == "BUY":
-        suggested_position_pct = _compute_kelly_sizing(
-            garch_vol=garch_vol,
-            transactions_store=resolved_store,
-            max_pct=CONFIG["max_single_position_pct"],
+        suggested_position_pct, sizing_was_capped, sizing_binding_constraint = (
+            _compute_kelly_sizing_detailed(
+                garch_vol=garch_vol,
+                transactions_store=resolved_store,
+                max_pct=CONFIG["max_single_position_pct"],
+            )
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1231,6 +1267,14 @@ def evaluate(
         # isn't present yet; NaN when absent (CONSTRAINT #4).
         "current_ratio": _safe_float(getattr(fund_dto, "current_ratio", float("nan")), nan),
         "kelly_raw": kelly_fraction_raw,
+        # Informational only -- StrategyEngine's OWN guardrail telemetry for
+        # kelly_raw above (NOT this recommendation's actual sizing decision;
+        # see Recommendation.sizing_was_capped for that). Encoded as 0.0/1.0
+        # (not a bool) because every key_indicators value is passed through
+        # math.isnan() below -- a bool survives that (bool is an int subtype)
+        # but a string binding-constraint name would raise, so that lives on
+        # Recommendation.sizing_binding_constraint instead, not here.
+        "kelly_raw_was_capped": 1.0 if strategy_out.get("Sizing_Was_Capped") else 0.0,
         # GUI Strategy Matrix decomposition scalars (additive) — sourced from
         # StrategyEngine.evaluate_security()'s Score_Components/meta-label/
         # regime-multiplier fields (see strategy_engine.py). Scalars only;
@@ -1336,6 +1380,10 @@ def evaluate(
         # dead-letter structure: on any fundamentals failure fund_dto is the
         # neutral _default_fund_dto() (sector="Unknown"), so this read is safe.
         sector=(fund_dto.sector or ""),
+        # Guardrail telemetry for THIS recommendation's own sizing path (Step 10
+        # above) -- see the Recommendation.sizing_was_capped docstring note.
+        sizing_was_capped=sizing_was_capped,
+        sizing_binding_constraint=sizing_binding_constraint,
     )
 
 
@@ -1410,6 +1458,38 @@ def _compute_kelly_sizing(
     max_pct : float
         Hard ceiling from CONFIG["max_single_position_pct"].
     """
+    final_pct, _was_capped, _binding_constraint = _compute_kelly_sizing_detailed(
+        garch_vol, transactions_store, max_pct
+    )
+    return final_pct
+
+
+def _compute_kelly_sizing_detailed(
+    garch_vol: Optional[float],
+    transactions_store: Optional[Any],
+    max_pct: float,
+) -> Tuple[float, bool, Optional[str]]:
+    """Returns ``(final_pct, was_capped, binding_constraint)`` -- see
+    ``_compute_kelly_sizing`` for the position-size contract and parameters.
+
+    ``was_capped`` / ``binding_constraint`` are new guardrail telemetry
+    (``Recommendation.sizing_was_capped`` / ``.sizing_binding_constraint``)
+    reporting whether advisory's OWN cap bound: either ``CONFIG["kelly_cap"]``
+    (the fractional-Kelly formula's own cap) or the tighter
+    ``CONFIG["max_single_position_pct"]`` single-name ceiling -- deliberately
+    decoupled from ``settings.KELLY_CAP`` / ``settings.MAX_POSITION_WEIGHT``
+    (see CONFIG's "Advisory-layer position size cap" note above), so this is
+    NOT routed through ``sizing.position_sizer.size_position()``'s full
+    pipeline (which composes a regime multiplier / meta-label composite this
+    call site has no equivalent of). It DOES reuse that module's own
+    ``detect_raw_cap_binding()`` / ``clamp_with_binding()`` comparison
+    helpers (CONSTRAINT #7 -- integrate, don't reinvent even the cap-
+    detection arithmetic a second time) plus its ``KELLY_CAP`` /
+    ``VOL_TARGET_LEVERAGE`` constraint-name strings for a consistent
+    audit-trail vocabulary across both sizing paths; ``ADVISORY_MAX_POSITION_PCT``
+    is advisory-specific since its ceiling is governed by a different,
+    tighter setting than StrategyEngine's ``MAX_POSITION_WEIGHT``.
+    """
     try:
         if transactions_store is None:
             # Defensive: evaluate() now always passes the resolved singleton, so
@@ -1428,22 +1508,46 @@ def _compute_kelly_sizing(
                 cap=CONFIG["kelly_cap"],
             )
             if not math.isnan(raw):
-                return float(max(0.0, min(max_pct, raw)))
+                return _clamp_and_report(raw, max_pct, path_tag="aggregate_kelly", kelly_cap=CONFIG["kelly_cap"])
 
         # Insufficient trade history — fall back to volatility targeting
         if garch_vol is not None and garch_vol > 0.0:
-            raw = volatility_target_weight(
-                garch_vol,
-                target_vol=0.10,
-                max_leverage=2.0,
+            max_leverage = 2.0
+            raw = volatility_target_weight(garch_vol, target_vol=0.10, max_leverage=max_leverage)
+            return _clamp_and_report(
+                raw, max_pct, path_tag="vol_target_fallback", max_leverage=max_leverage,
             )
-            return float(max(0.0, min(max_pct, raw)))
 
     except Exception as exc:
         logger.warning("advisory._compute_kelly_sizing failed — %s; returning 0.0", exc)
 
     # Cannot size — 0.0 means "recommend BUY but defer to analyst discretion"
-    return 0.0
+    return 0.0, False, None
+
+
+def _clamp_and_report(
+    raw: float,
+    max_pct: float,
+    *,
+    path_tag: str,
+    kelly_cap: Optional[float] = None,
+    max_leverage: Optional[float] = None,
+) -> Tuple[float, bool, Optional[str]]:
+    """Shared tail of ``_compute_kelly_sizing_detailed``'s two branches:
+    detect the raw formula's own cap, clamp to ``max_pct``, and report
+    whichever bound (the clamp wins if both did, matching
+    ``size_position()``'s "most recent/most restrictive constraint wins"
+    convention) -- entirely via ``sizing.position_sizer``'s reusable helpers.
+    """
+    from sizing.position_sizer import detect_raw_cap_binding, clamp_with_binding
+
+    raw_cap_hit = detect_raw_cap_binding(
+        path_tag, raw, kelly_cap if kelly_cap is not None else 0.0,
+        max_leverage if max_leverage is not None else 0.0,
+    )
+    final_pct, clamp_hit = clamp_with_binding(raw, max_pct, ADVISORY_MAX_POSITION_PCT)
+    binding = clamp_hit or raw_cap_hit
+    return final_pct, binding is not None, binding
 
 
 def _build_rationale(

@@ -180,6 +180,16 @@ def _signal_lookup(snap: dict) -> Dict[str, dict]:
     return out
 
 
+def _or_neutral(value: Any, neutral: float = 1.0) -> float:
+    """CONSTRAINT #4: a genuine 0.0 (e.g. a MetaLabeler hard gate, or HMM
+    risk_on_probability=0.0) must survive as 0.0 -- ``value or neutral``
+    would silently fabricate it into the neutral default, since 0.0 is falsy
+    in Python. Only a truly missing/NaN value falls back to ``neutral``."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return neutral
+    return float(value)
+
+
 def _render_score_decomposition() -> None:
     """Section 1 — per-symbol score-component breakdown (bar chart).
 
@@ -354,8 +364,9 @@ def _render_regime_multiplier_impact() -> None:
 
     pre = float(pre)
     post = float(post)
-    regime_mult = float(sig.get("regime_multiplier", 1.0) or 1.0)
-    meta_comp = float(sig.get("meta_label_composite", 1.0) or 1.0)
+
+    regime_mult = _or_neutral(sig.get("regime_multiplier"))
+    meta_comp = _or_neutral(sig.get("meta_label_composite"))
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Kelly Target (pre-regime)", f"{pre * 100:.2f}%")
@@ -385,6 +396,22 @@ def _render_regime_multiplier_impact() -> None:
         f"Meta-label composite currently {meta_comp:.3f} (multiplied in alongside "
         "the regime multiplier, then re-clamped to `settings.MAX_POSITION_WEIGHT`)."
     )
+
+    # Guardrail telemetry (sizing/position_sizer.py) -- did a HARD ceiling
+    # (KELLY_CAP, MAX_POSITION_WEIGHT, the portfolio-wide gross cap, or
+    # cap-aware escalation) bind for this symbol, distinct from the routine
+    # regime-multiplier derating shown above (never itself flagged as capped
+    # -- see sizing/position_sizer.py's module docstring for why).
+    was_capped = sig.get("sizing_was_capped")
+    binding_constraint = sig.get("sizing_binding_constraint")
+    if was_capped:
+        st.warning(
+            f"🧢 Sizing was capped this cycle — binding constraint: "
+            f"**{binding_constraint or 'unknown'}**.",
+            icon="🧢",
+        )
+    elif was_capped is not None:
+        st.caption("No sizing ceiling bound for this symbol this cycle.")
 
 
 def _render_symbol_comparison() -> None:

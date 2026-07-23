@@ -70,6 +70,16 @@ def rec_to_sheet_row(
         "Actionable Advice Signal": f"{rec.action}: {rec.strategy}",
         "Score": round(_f("score", 50.0), 2),
         "Kelly Target": round(_f("kelly_raw"), 6),
+        # Guardrail telemetry (sizing/position_sizer.py). Mirrors "Kelly
+        # Target" above's existing per-path duality: on the advisory path
+        # "Kelly Target" is StrategyEngine's informational kelly_raw value
+        # (the REAL recommended sizing is "Advisory_Position_Pct" below), so
+        # these two describe rec.sizing_was_capped/.sizing_binding_constraint
+        # -- advisory's OWN sizing decision (CONFIG["kelly_cap"] /
+        # CONFIG["max_single_position_pct"]) -- rather than kelly_raw's cap
+        # state (see engine.advisory.Recommendation docstring).
+        "Sizing_Was_Capped": "Yes" if rec.sizing_was_capped else "No",
+        "Sizing_Binding_Constraint": rec.sizing_binding_constraint or "",
         "Edge Ratio": 0.0,
 
         # ── Technical indicators ─────────────────────────────────────────────

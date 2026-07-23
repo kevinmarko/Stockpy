@@ -57,6 +57,7 @@ import pytest
 import main_orchestrator as mo
 from main_orchestrator import (
     EngineContext,
+    _safe_bool_or_none,
     _safe_float_or_none,
     _write_state_snapshot,
     compute_xsec_momentum_ranks,
@@ -118,6 +119,36 @@ class TestSafeFloatOrNone:
         out = _safe_float_or_none(7)
         assert out == pytest.approx(7.0)
         assert isinstance(out, float)
+
+
+class TestSafeBoolOrNone:
+    """_safe_bool_or_none: the tri-state "Yes"/"No"/unknown -> True/False/None
+    coercion for dashboard_df's Sizing_Was_Capped column. Guards against the
+    CONSTRAINT #4 regression a plain `str(x).strip().lower() == "yes"` would
+    reintroduce: a dead-lettered ticker (None -- never computed this cycle)
+    must NOT collapse into the ACTIVE FALSE CLAIM False ("no ceiling bound")."""
+
+    def test_yes_is_true(self):
+        assert _safe_bool_or_none("Yes") is True
+
+    def test_no_is_false(self):
+        assert _safe_bool_or_none("No") is False
+
+    def test_none_stays_none(self):
+        # The dead-lettered-ticker case: pipeline/production_steps.py defaults
+        # a missing eval_results entry to None, never "".
+        assert _safe_bool_or_none(None) is None
+
+    def test_nan_stays_none(self):
+        assert _safe_bool_or_none(float("nan")) is None
+        assert _safe_bool_or_none(np.nan) is None
+
+    def test_empty_string_stays_none(self):
+        assert _safe_bool_or_none("") is None
+
+    def test_case_and_whitespace_insensitive(self):
+        assert _safe_bool_or_none("  YES  ") is True
+        assert _safe_bool_or_none("no") is False
 
 
 # ===========================================================================

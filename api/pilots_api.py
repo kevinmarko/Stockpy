@@ -2854,6 +2854,17 @@ _TUNABLE_GROUPS: List[tuple] = [
             # legitimate config (bounded in practice by MAX_LEVERAGE's own 10.0
             # ceiling above), not a typo.
             ("MAX_POSITION_WEIGHT", "float", {"min": 0.0, "max": 5.0, "step": 0.05}),
+            # Portfolio-level gross exposure cap + cap-aware escalation +
+            # cap-event audit/alerting (sizing/position_sizer.py,
+            # sizing/cap_audit_store.py). Same typo-guardrail widening
+            # convention as MAX_POSITION_WEIGHT above.
+            ("MAX_PORTFOLIO_GROSS", "float", {"min": 0.0, "max": 20.0, "step": 0.1}),
+            ("SIZING_CAP_ESCALATION_ENABLED", "bool", {}),
+            ("SIZING_CAP_ESCALATION_THRESHOLD_CYCLES", "int", {"min": 1, "max": 100, "step": 1}),
+            ("SIZING_CAP_ESCALATION_FACTOR", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("SIZING_CAP_AUDIT_ENABLED", "bool", {}),
+            ("SIZING_CAP_ALERT_ENABLED", "bool", {}),
+            ("SIZING_CAP_ALERT_THRESHOLD_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
         ],
     ),
     (

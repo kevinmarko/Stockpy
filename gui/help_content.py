@@ -155,6 +155,9 @@ _CONV_DELTA = settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD
 _RH_QUEUE_STALE_MIN = int(_RH_QUEUE_STALE_SECONDS // 60)
 _RH_MAX_NOTIONAL = settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
 _PROGRESS_POLL_SECONDS = settings.PROGRESS_POLL_SECONDS
+_SIZING_CAP_ALERT_THRESHOLD_PCT = int(settings.SIZING_CAP_ALERT_THRESHOLD_PCT * 100)
+_SIZING_CAP_ESCALATION_THRESHOLD_CYCLES = settings.SIZING_CAP_ESCALATION_THRESHOLD_CYCLES
+_SIZING_CAP_ESCALATION_FACTOR = settings.SIZING_CAP_ESCALATION_FACTOR
 # Retrain window (days) used by the Analytics ML-model-monitoring section to
 # flag a stale model. No dedicated setting exists, so this mirrors the default
 # ml.meta_labeling.MetaLabeler(retrain_freq_days=30) cadence and the LGBM ranker's
@@ -1247,6 +1250,18 @@ SECTION_HELP: Dict[str, str] = {
         "Values are sourced from the last orchestrator run's state snapshot "
         "(FRED data).  They reflect conditions at pipeline execution time, "
         "not real-time — run the orchestrator to refresh."
+    ),
+    "observability.sizing_cap_audit": (
+        "Durable log of position-sizing guardrail events — `sizing/"
+        "position_sizer.py`'s `was_capped`/`binding_constraint` telemetry, "
+        "persisted every cycle (`sizing/cap_audit_store.py`) instead of being "
+        "overwritten. Shows which names have hit KELLY_CAP, "
+        "MAX_POSITION_WEIGHT, the portfolio-wide MAX_PORTFOLIO_GROSS cap, or "
+        f"cap-aware escalation (a name capped {_SIZING_CAP_ESCALATION_THRESHOLD_CYCLES} "
+        f"consecutive cycles is down-weighted {_SIZING_CAP_ESCALATION_FACTOR:.2f}x when "
+        f"enabled), and how often — not just this cycle's snapshot. A "
+        f"threshold alert fires when ≥{_SIZING_CAP_ALERT_THRESHOLD_PCT}% of names "
+        "are capped in one cycle."
     ),
     "strategy_health_gates": (
         "Sourced from `output/gravity_verification_report.json` (written by the "

@@ -600,6 +600,50 @@ class Settings(BaseSettings):
     # in one name, but no added leverage on top of full allocation.
     MAX_POSITION_WEIGHT: float = 1.0
 
+    # --- Portfolio-level gross exposure cap (sizing/position_sizer.py) ---
+    # Applied ACROSS a cycle's whole universe (after every name's own
+    # MAX_POSITION_WEIGHT clamp), on top of -- not instead of -- the per-name
+    # ceiling above. Uses apply_portfolio_gross_cap(): the risk-aware
+    # portfolio_vol_target path when a covariance matrix is supplied, else a
+    # sum-of-|weight| gross-exposure fallback. Conservative default (3.0 =
+    # 300% gross, i.e. non-binding for a typical <10-name book at
+    # MAX_POSITION_WEIGHT=1.0) until the Phase 2b backtest sweep picks a
+    # deliberately-tuned value.
+    MAX_PORTFOLIO_GROSS: float = 3.0
+
+    # --- Cap-aware escalation (sizing/position_sizer.py + sizing/cap_audit_store.py) ---
+    # Opt-in (default False): a name that binds the same hard sizing ceiling
+    # for >= SIZING_CAP_ESCALATION_THRESHOLD_CYCLES consecutive cycles gets
+    # its weight further scaled by SIZING_CAP_ESCALATION_FACTOR. Disabled by
+    # default so existing deployments see no behavior change until an
+    # operator explicitly enables it.
+    SIZING_CAP_ESCALATION_ENABLED: bool = False
+    SIZING_CAP_ESCALATION_THRESHOLD_CYCLES: int = 5
+    SIZING_CAP_ESCALATION_FACTOR: float = 0.5
+
+    # --- Cap-event audit + alerting (sizing/cap_audit_store.py) ---
+    # Durable log of every cycle's capping events, independent of the
+    # in-memory dashboard_df. Best-effort write (see RunHistoryStore
+    # precedent): a DB failure only logs a warning, never blocks a run.
+    SIZING_CAP_AUDIT_ENABLED: bool = True
+    # Opt-in (default False): KELLY_CAP binding is a routine, expected event
+    # for an established aggregate-Kelly book, not itself a new risk signal --
+    # an unconditional alert here would start emitting brand-new WARNING
+    # console/file log lines for every EXISTING deployment the moment this
+    # ships, regardless of whether the operator wants sizing-cap alerting at
+    # all (the console/file channels in observability.alerts.send_alert are
+    # always-on, independent of whether discord/slack/email are configured).
+    # Mirrors this repo's convention for new default-off behavior toggles
+    # (FORECAST_SKILL_WEIGHTING_ENABLED, ORCHESTRATOR_DAEMON_ENABLED, etc.).
+    SIZING_CAP_ALERT_ENABLED: bool = False
+    # Fires observability.alerts.send_alert("WARNING", ...) -- the platform's
+    # unified multi-channel dispatcher (console/file always-on, plus
+    # discord/slack/email when configured; NOT the separate legacy
+    # ALERT_WEBHOOK_URL POST, which is order_manager.py's reconciliation-drift-
+    # specific mechanism) -- when SIZING_CAP_ALERT_ENABLED is True AND the
+    # fraction of names capped in one cycle meets or exceeds this threshold.
+    SIZING_CAP_ALERT_THRESHOLD_PCT: float = 0.30
+
     # --- Runtime / IO ---
     OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])

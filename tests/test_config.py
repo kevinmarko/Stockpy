@@ -61,7 +61,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 94
+    EXPECTED_COLUMN_COUNT = 96
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -226,6 +226,10 @@ class TestAdvisoryColumnCoverage:
         "Action Signal" and "Advice"/"Strategy Explainer Notes" -- see the
         PR description for the full case-by-case reasoning) -- they are not
         expected to appear anywhere below.
+      - "Sizing_Was_Capped"/"Sizing_Binding_Constraint" (sizing/position_sizer.py
+        guardrail telemetry) map onto rec.sizing_was_capped/
+        .sizing_binding_constraint -- advisory's OWN sizing decision, not
+        kelly_raw's (see rec_to_sheet_row's inline comment).
     """
 
     # The complete, exact set of COLUMN_SCHEMA *keys* that
@@ -236,7 +240,7 @@ class TestAdvisoryColumnCoverage:
     KNOWN_ADVISORY_MAPPED_KEYS = frozenset({
         "Symbol", "Price",
         "Action Signal", "Advice", "Actionable Advice Signal", "Score",
-        "Kelly Target", "Edge Ratio",
+        "Kelly Target", "Sizing_Was_Capped", "Sizing_Binding_Constraint", "Edge Ratio",
         "RSI", "RSI_2", "MACD_Line", "ATR", "Aroon Oscillator",
         "Sortino Ratio", "Max Drawdown", "RS vs SPY", "GARCH_Vol",
         "Forecast_30", "Forecast_30_Pct",
@@ -289,9 +293,9 @@ class TestAdvisoryColumnCoverage:
             f"Keys in COLUMN_SCHEMA but in neither set: {all_keys - (mapped | unmapped)}; "
             f"keys in one of the sets but no longer in COLUMN_SCHEMA: {(mapped | unmapped) - all_keys}"
         )
-        assert len(mapped) == 33
+        assert len(mapped) == 35
         assert len(unmapped) == 61
-        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 94
+        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 96
 
     def test_rec_to_sheet_row_emits_exactly_the_known_mapped_keys(self) -> None:
         """AST/behavioral cross-check: call rec_to_sheet_row() for real and

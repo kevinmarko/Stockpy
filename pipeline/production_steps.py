@@ -525,6 +525,7 @@ class StrategyEvalStep(PipelineStep):
 
         # Strategy evaluation loop
         strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target',
+                         'Sizing_Was_Capped', 'Sizing_Binding_Constraint',
                          'Option Strategy', 'buyRange', 'sellRange', 'Strategy Explainer Notes',
                          'Robinhood Shares', 'Robinhood Avg Cost', 'Robinhood Dividends', 'Robinhood Advice']
         for col in strategy_cols:
@@ -714,6 +715,13 @@ class StrategyEvalStep(PipelineStep):
                     'book_value': fund_dto.book_value,
                     'graham_number': fund_dto.graham_number,
                     'Kelly Target': float(strategy_output['Kelly Target']),
+                    # Guardrail telemetry (sizing/position_sizer.py) -- schema-driven
+                    # ("format": "string" in config.COLUMN_SCHEMA), so serialize the
+                    # bool/Optional[str] into the Sheet-friendly text convention
+                    # ("Yes"/"No" + the constraint name or "") that every other
+                    # string strategy_col in this loop already defaults to.
+                    'Sizing_Was_Capped': "Yes" if strategy_output.get('Sizing_Was_Capped') else "No",
+                    'Sizing_Binding_Constraint': strategy_output.get('Sizing_Binding_Constraint') or "",
                     'Option Strategy': tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '') if ticker in tech_opt_indicators else strategy_output['Option Strategy'],
                     'buyRange': strategy_output['buyRange'],
                     'sellRange': strategy_output['sellRange'],
@@ -783,10 +791,22 @@ class StrategyEvalStep(PipelineStep):
             'Meta_Label_Composite', 'Regime_Multiplier',
             'Kelly_Target_Pre_Regime', 'Kelly_Target_Post_Regime',
         )
+        # Guardrail telemetry (sizing/position_sizer.py) -- UNLIKE
+        # _SIZING_DECOMPOSITION_COLS these ARE real config.COLUMN_SCHEMA
+        # columns ("format": "string", nullable=True), but the same CONSTRAINT
+        # #4 concern applies: a ticker missing from eval_results (dead-lettered
+        # -- its strategy evaluation raised this cycle, see dead_letter.json)
+        # must NOT default to "" here, because "" is downstream coerced into
+        # the ACTIVE FALSE CLAIM "No sizing ceiling bound" (main_orchestrator.py
+        # / the GUI) rather than "not computed". None is the honest default;
+        # every ticker that DID reach the 'results' stage still gets its real
+        # "Yes"/"No" + constraint-name string via eval_results.get(x, {}).
+        _SIZING_GUARDRAIL_COLS = ('Sizing_Was_Capped', 'Sizing_Binding_Constraint')
         for col in [
             'Edge Ratio', 'Action Signal', 'Advice', 'Actionable Advice Signal',
             'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number',
-            'Kelly Target', 'Option Strategy', 'buyRange', 'sellRange',
+            'Kelly Target', 'Sizing_Was_Capped', 'Sizing_Binding_Constraint',
+            'Option Strategy', 'buyRange', 'sellRange',
             'Strategy Explainer Notes', 'Robinhood Shares', 'Robinhood Avg Cost',
             'Robinhood Dividends', 'Robinhood Advice', 'Score_Components',
             *_SIZING_DECOMPOSITION_COLS,
@@ -798,6 +818,10 @@ class StrategyEvalStep(PipelineStep):
                 # Dict-valued column — "" is not a sensible default (CONSTRAINT #4:
                 # an empty breakdown, not a fabricated one).
                 ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, {}))
+            elif col in _SIZING_GUARDRAIL_COLS:
+                # None (never "" -- see the comment on _SIZING_GUARDRAIL_COLS
+                # above) for a ticker missing from eval_results entirely.
+                ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get(col, None))
             elif col in _SIZING_DECOMPOSITION_COLS:
                 # Position-sizing decomposition (Meta_Label_Composite/
                 # Regime_Multiplier/Kelly_Target_{Pre,Post}_Regime) — deliberately
@@ -898,6 +922,107 @@ class StrategyEvalStep(PipelineStep):
                 ctx.dashboard_df["DualMomentum_Signal"] = "N/A"
         else:
             ctx.dashboard_df["DualMomentum_Signal"] = "disabled"
+
+        # ---------------------------------------------------------------------
+        # PORTFOLIO-LEVEL GROSS EXPOSURE CAP (sizing/position_sizer.py)
+        # ---------------------------------------------------------------------
+        # Applied ACROSS the whole cycle's universe, AFTER every name's own
+        # per-symbol sizing (Kelly/vol-target + MAX_POSITION_WEIGHT clamp +
+        # regime/meta-label composition) and after the Dual Momentum overlay
+        # above, so it sees the FINAL per-name weights. Scales every name
+        # uniformly (never alters relative sizing between names) via
+        # apply_portfolio_gross_cap(); this is the new constraint layered on
+        # top of -- not instead of -- the existing per-name ceiling. A name
+        # whose weight is reduced here has its guardrail telemetry overridden
+        # to "portfolio_gross": applied chronologically last, it is the most
+        # authoritative reason a position ended up smaller than its raw
+        # Kelly/vol-target recommendation for this cycle.
+        try:
+            from sizing.position_sizer import apply_portfolio_gross_cap
+
+            per_name = dict(zip(ctx.dashboard_df["Symbol"], ctx.dashboard_df["Kelly Target"]))
+            cap_result = apply_portfolio_gross_cap(per_name, max_gross=settings.MAX_PORTFOLIO_GROSS)
+            if cap_result.was_capped:
+                telemetry.info(
+                    "Portfolio gross cap bound this cycle: scale_factor=%.4f "
+                    "(max_gross=%.2f, method=%s).",
+                    cap_result.scale_factor, settings.MAX_PORTFOLIO_GROSS, cap_result.method,
+                )
+                ctx.dashboard_df["Kelly Target"] = ctx.dashboard_df["Symbol"].map(
+                    lambda x: cap_result.scaled_weights.get(x, per_name.get(x, 0.0))
+                )
+                # Only mark names whose weight actually moved (a 0.0 name is
+                # trivially unaffected by a uniform scalar) -- avoids fabricating
+                # a "capped" flag on a name that never had exposure to cap.
+                _affected = ctx.dashboard_df["Symbol"].map(lambda x: abs(per_name.get(x, 0.0)) > 1e-9)
+                ctx.dashboard_df.loc[_affected, "Sizing_Was_Capped"] = "Yes"
+                ctx.dashboard_df.loc[_affected, "Sizing_Binding_Constraint"] = "portfolio_gross"
+        except Exception as portfolio_cap_exc:
+            telemetry.warning(f"Portfolio gross cap application failed (non-critical): {portfolio_cap_exc}")
+
+        # ---------------------------------------------------------------------
+        # CAP-EVENT AUDIT LOG + THRESHOLD ALERT (sizing/cap_audit_store.py)
+        # ---------------------------------------------------------------------
+        # Persist this cycle's FINAL guardrail telemetry (after the portfolio
+        # cap above) to the durable sizing_cap_events table, and (opt-in, see
+        # settings.SIZING_CAP_ALERT_ENABLED below) fire a WARNING alert if an
+        # unusually large fraction of names were capped this cycle. Both are
+        # best-effort: a DB/alert-channel hiccup only logs a warning, never
+        # affects the run's own sizing decisions (CONSTRAINT #6) or its
+        # SUCCEEDED/FAILED state.
+        try:
+            if settings.SIZING_CAP_AUDIT_ENABLED and not ctx.dashboard_df.empty:
+                from sizing.cap_audit_store import CapAuditStore
+
+                cycle_id = datetime.now(timezone.utc).isoformat()
+                events = []
+                for _, row in ctx.dashboard_df.iterrows():
+                    # None (never "" -- see _SIZING_GUARDRAIL_COLS above) means
+                    # this ticker's strategy evaluation never reached the
+                    # 'results' stage this cycle (dead-lettered). Skip it
+                    # entirely rather than writing a fabricated was_capped=False
+                    # row -- CONSTRAINT #4: no event recorded is honest; a
+                    # false "not capped" event would corrupt the escalation
+                    # rule's consecutive-capped-cycles read for this symbol.
+                    _raw_capped = row.get("Sizing_Was_Capped")
+                    if _raw_capped is None or (isinstance(_raw_capped, float) and pd.isna(_raw_capped)):
+                        continue
+                    events.append({
+                        "symbol": row["Symbol"],
+                        "raw_weight": None,  # not retained at this cycle-wide stage; see per-symbol Kelly_Target_Pre_Regime
+                        "final_weight": float(row["Kelly Target"]) if pd.notna(row["Kelly Target"]) else None,
+                        "binding_constraint": (row.get("Sizing_Binding_Constraint") or None),
+                        "was_capped": str(_raw_capped).strip().lower() == "yes",
+                        "cycle_id": cycle_id,
+                    })
+                CapAuditStore().record_cap_events(events, cycle_id=cycle_id)
+        except Exception as audit_exc:
+            telemetry.warning(f"Sizing cap-event audit write failed (non-critical): {audit_exc}")
+
+        try:
+            if settings.SIZING_CAP_ALERT_ENABLED and not ctx.dashboard_df.empty:
+                _capped_mask = ctx.dashboard_df["Sizing_Was_Capped"].astype(str).str.strip().str.lower() == "yes"
+                _capped_frac = float(_capped_mask.mean())
+                if _capped_frac >= settings.SIZING_CAP_ALERT_THRESHOLD_PCT:
+                    from observability.alerts import send_alert as _sizing_cap_alert
+
+                    _capped_symbols = ctx.dashboard_df.loc[_capped_mask, "Symbol"].tolist()
+                    _sizing_cap_alert(
+                        "WARNING",
+                        f"Position sizing: {_capped_frac:.0%} of names capped this cycle "
+                        f"(>= {settings.SIZING_CAP_ALERT_THRESHOLD_PCT:.0%} threshold): "
+                        f"{', '.join(_capped_symbols[:20])}"
+                        + (f" (+{len(_capped_symbols) - 20} more)" if len(_capped_symbols) > 20 else ""),
+                        extra={
+                            "type": "sizing_cap_threshold",
+                            "capped_fraction": _capped_frac,
+                            "threshold": settings.SIZING_CAP_ALERT_THRESHOLD_PCT,
+                            "capped_symbols": _capped_symbols,
+                        },
+                        dedup_key="sizing_cap_threshold",
+                    )
+        except Exception as alert_exc:
+            telemetry.warning(f"Sizing cap-threshold alert failed (non-critical): {alert_exc}")
 
 
 class BrokerExecutionStep(PipelineStep):

@@ -100,6 +100,14 @@ COLUMN_SCHEMA = [
     {"header": "Advice", "key": "Advice", "format": "string"},
     {"header": "Actionable Advice Signal", "key": "Actionable Advice Signal", "format": "string"},
     {"header": "Kelly Size", "key": "Kelly Target", "format": "percent"},
+    # Guardrail telemetry (sizing/position_sizer.py, sizing.size_position()) --
+    # did any HARD sizing ceiling bind this cycle (KELLY_CAP, MAX_LEVERAGE,
+    # MAX_POSITION_WEIGHT, the portfolio-level MAX_PORTFOLIO_GROSS cap, or
+    # cap-aware escalation), and which one. "Yes"/"No" + the constraint name
+    # (or "") -- deliberately NOT true merely because the HMM regime
+    # multiplier < 1.0; see sizing/position_sizer.py's module docstring.
+    {"header": "Sizing Capped", "key": "Sizing_Was_Capped", "format": "string"},
+    {"header": "Sizing Binding Constraint", "key": "Sizing_Binding_Constraint", "format": "string"},
     {"header": "Option Strategy", "key": "Option Strategy", "format": "string"},
     {"header": "Buy Range", "key": "buyRange", "format": "string"},
     # Dedicated sell-side range produced by strategy_engine.apply_sell_side_range.

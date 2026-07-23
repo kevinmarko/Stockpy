@@ -28,6 +28,7 @@ from sizing.kelly import (
     MIN_TRADES_REQUIRED,
 )
 from sizing.vol_target import volatility_target_weight
+from sizing.position_sizer import size_position
 
 logger = logging.getLogger(__name__)
 
@@ -172,16 +173,26 @@ class StrategyEngine:
     and macroeconomic parameters into high-conviction allocation instructions.
     """
     
-    def __init__(self, risk_free_rate: float = 0.0425, transactions_store: Optional[Any] = None):
+    def __init__(
+        self,
+        risk_free_rate: float = 0.0425,
+        transactions_store: Optional[Any] = None,
+        cap_audit_store: Optional[Any] = None,
+    ):
         """
         Args:
             risk_free_rate: Annualized risk-free rate used elsewhere in the engine.
             transactions_store: Optional injected TransactionsStore (for testing
                 with an in-memory DB). Defaults to a real TransactionsStore()
                 instance lazily constructed on first use.
+            cap_audit_store: Optional injected sizing.cap_audit_store.CapAuditStore
+                (for testing with an in-memory DB). Only read from when
+                settings.SIZING_CAP_ESCALATION_ENABLED is True; defaults to a
+                real CapAuditStore() instance lazily constructed on first use.
         """
         self.risk_free_rate = risk_free_rate
         self._transactions_store = transactions_store
+        self._cap_audit_store = cap_audit_store
 
     # =============================================================================
     # 1. CORE STRATEGY KERNEL
@@ -385,11 +396,9 @@ class StrategyEngine:
         # PHASE 7 & 8: OPTIONS & SIZING
         # ---------------------------------------------------------------------
         option_strategy, option_details = self._select_options_overlay(bar, fundamentals, signal, is_strong_uptrend, atr)
-        kelly_fraction, sizing_path_tag = self._calculate_kelly_sizing(garch_vol, strategy_id=strategy_id)
-        # Snapshot the pre-regime-multiplier Kelly weight (already clamped to
-        # MAX_POSITION_WEIGHT by _calculate_kelly_sizing) so the GUI can show
-        # "before macro discount" vs. "after macro discount" side by side.
-        kelly_fraction_pre_regime = kelly_fraction
+        raw_weight, kelly_fraction_pre_regime, sizing_path_tag = self._calculate_kelly_sizing_detailed(
+            garch_vol, strategy_id=strategy_id
+        )
 
         # HMM regime second opinion (signals/regime_multiplier.py) scales the
         # final Kelly Target down when the HMM's risk_on_probability is low --
@@ -402,10 +411,51 @@ class StrategyEngine:
         # meta_label_composite is the geometric mean of active signal modules'
         # meta_label_proba values (Stage 4 placeholder, always 1.0 currently).
         # Applied multiplicatively alongside the HMM regime multiplier.
-        kelly_fraction = max(0.0, min(
-            kelly_fraction * regime_multiplier * meta_label_composite,
-            settings.MAX_POSITION_WEIGHT
-        ))
+        #
+        # Cap-aware escalation (opt-in, settings.SIZING_CAP_ESCALATION_ENABLED,
+        # default False): reads this symbol's recent capping history from the
+        # durable audit log ONLY when enabled, so a disabled operator sees
+        # zero added DB reads and zero behavior change (CONSTRAINT #6 -- an
+        # audit-log outage degrades to CapEventSummary(0), never raises).
+        recent_cap_events = None
+        if settings.SIZING_CAP_ESCALATION_ENABLED:
+            try:
+                recent_cap_events = self.cap_audit_store.get_consecutive_capped_cycles(
+                    ticker, strategy_id=strategy_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "size_position: cap-history read failed for %s (%s); "
+                    "escalation skipped this cycle.", ticker, exc,
+                )
+
+        # size_position() is the single ordered sizing-composition pipeline
+        # (sizing/position_sizer.py): it composes pre_regime * regime *
+        # meta-label, re-clamps to MAX_POSITION_WEIGHT, and reports WHICH
+        # constraint (if any) bound -- guardrail telemetry that did not exist
+        # before this. The portfolio-level gross cap is a separate, cycle-wide
+        # post-pass applied by the orchestrator (pipeline/production_steps.py),
+        # not here (this call only ever sees one symbol at a time).
+        sizing_decision = size_position(
+            kelly_fraction_pre_regime,
+            regime_multiplier=regime_multiplier,
+            meta_label_composite=meta_label_composite,
+            max_position_weight=settings.MAX_POSITION_WEIGHT,
+            path_tag=sizing_path_tag,
+            raw_weight=raw_weight,
+            kelly_cap=settings.KELLY_CAP,
+            max_leverage=settings.MAX_LEVERAGE,
+            recent_cap_events=recent_cap_events,
+            escalation_threshold=(
+                settings.SIZING_CAP_ESCALATION_THRESHOLD_CYCLES
+                if settings.SIZING_CAP_ESCALATION_ENABLED else None
+            ),
+            escalation_factor=(
+                settings.SIZING_CAP_ESCALATION_FACTOR
+                if settings.SIZING_CAP_ESCALATION_ENABLED else None
+            ),
+        )
+        kelly_fraction = sizing_decision.final_weight
 
         # ---------------------------------------------------------------------
         # PHASE 9: COMPILE VERBOSE NOTES
@@ -438,6 +488,13 @@ class StrategyEngine:
             "Regime_Multiplier": float(regime_multiplier),
             "Kelly_Target_Pre_Regime": float(kelly_fraction_pre_regime),
             "Kelly_Target_Post_Regime": float(kelly_fraction),
+            # New guardrail telemetry (sizing/position_sizer.py) -- did any
+            # hard sizing ceiling (KELLY_CAP, MAX_POSITION_WEIGHT, or
+            # cap-aware escalation) bind this cycle, and which one. Never
+            # true merely because the HMM regime multiplier < 1.0 -- see
+            # sizing/position_sizer.py's module docstring for why.
+            "Sizing_Was_Capped": bool(sizing_decision.was_capped),
+            "Sizing_Binding_Constraint": sizing_decision.binding_constraint,
             "GARCH_Vol": float(garch_vol) if garch_vol is not None else float("nan"),
             "Option Strategy": option_strategy,
             "buyRange": tactical_range,
@@ -546,6 +603,31 @@ class StrategyEngine:
                 self._transactions_store = _OfflineTransactionsStore()
         return self._transactions_store
 
+    @property
+    def cap_audit_store(self):
+        """Lazily constructs a real CapAuditStore if none was injected.
+
+        Only consulted when ``settings.SIZING_CAP_ESCALATION_ENABLED`` is
+        True (see ``evaluate_security``'s ``size_position`` call). A DB
+        connectivity failure degrades to ``_OfflineCapAuditStore`` -- a
+        stub reporting zero consecutive capped cycles -- rather than raising,
+        mirroring ``transactions_store``'s degrade contract (CONSTRAINT #6):
+        an audit-log outage must never itself cause escalation, nor abort
+        sizing for a symbol.
+        """
+        if self._cap_audit_store is None:
+            from sizing.cap_audit_store import CapAuditStore, _OfflineCapAuditStore
+            try:
+                self._cap_audit_store = CapAuditStore()
+            except Exception as exc:
+                logger.error(
+                    "CapAuditStore unavailable (%s: %s); cap-aware escalation "
+                    "will see zero consecutive capped cycles for this instance.",
+                    type(exc).__name__, exc,
+                )
+                self._cap_audit_store = _OfflineCapAuditStore()
+        return self._cap_audit_store
+
     def _calculate_kelly_sizing(
         self,
         realized_vol: Optional[float] = None,
@@ -563,8 +645,6 @@ class StrategyEngine:
               3. Otherwise bootstraps 1_000 resamples and takes the
                  5th-percentile Kelly fraction -- the conservative/epistemic-
                  humility sizing -- tagged "bootstrap_kelly_5th_pct(...)".
-          - Either path is then clamped to ``settings.MAX_POSITION_WEIGHT``
-            in the caller (``evaluate_security``).
 
         When ``strategy_id`` is None (backward-compatible global aggregate path):
           - Calls ``estimate_win_rate_and_payoff(all_closed_trades)`` on the
@@ -573,15 +653,43 @@ class StrategyEngine:
             total closed trades exist. Tagged "aggregate_kelly" or
             "vol_target_fallback" accordingly.
 
-        The final weight is NOT clamped here; ``evaluate_security()`` applies
-        ``min(weight, settings.MAX_POSITION_WEIGHT)`` after multiplying by the
-        regime and meta-label composites.
+        The returned weight IS already clamped to ``settings.MAX_POSITION_WEIGHT``
+        here -- this is a directly-tested contract (``tests/test_kelly_no_history.py``,
+        ``tests/test_kelly_order_sizing.py``, ``Gravity AI Review Suite.py`` step 16
+        all call this method standalone and assert the clamp fires), so it is
+        preserved exactly as-is. ``evaluate_security()`` composes a SECOND,
+        separate multiplication (the HMM regime multiplier and meta-label
+        composite) on top of this already-clamped value via
+        ``sizing.position_sizer.size_position()``, re-clamping once more --
+        see that function's docstring for the full ordered pipeline.
+        """
+        _raw_weight, clamped_weight, path_tag = self._calculate_kelly_sizing_detailed(
+            realized_vol, strategy_id=strategy_id
+        )
+        return clamped_weight, path_tag
+
+    def _calculate_kelly_sizing_detailed(
+        self,
+        realized_vol: Optional[float] = None,
+        strategy_id: Optional[str] = None,
+    ) -> Tuple[float, float, str]:
+        """Returns ``(raw_weight, clamped_weight, path_tag)`` -- the pre- and
+        post-``MAX_POSITION_WEIGHT``-clamp weights plus the sizing path tag.
+
+        ``_calculate_kelly_sizing`` (the public, back-compat-tested entry
+        point) wraps this and returns only the last two elements.
+        ``evaluate_security`` calls this directly so it can feed BOTH the raw
+        and clamped weights into ``sizing.position_sizer.size_position()`` for
+        full guardrail telemetry (detecting whether the raw KELLY_CAP /
+        MAX_LEVERAGE saturated, and whether this clamp itself bound), without
+        computing the sizing path -- including the per-strategy path's
+        1_000-resample bootstrap -- a second time.
         """
         raw_weight, path_tag = self._raw_kelly_or_vol_target_sizing(
             realized_vol, strategy_id=strategy_id
         )
-        # Clamp: enforce single-name ceiling before returning.
-        return max(0.0, min(raw_weight, settings.MAX_POSITION_WEIGHT)), path_tag
+        clamped_weight = max(0.0, min(raw_weight, settings.MAX_POSITION_WEIGHT))
+        return raw_weight, clamped_weight, path_tag
 
     def _raw_kelly_or_vol_target_sizing(
         self,
