@@ -107,10 +107,14 @@ _SIZING_QUARTET = (
     "kelly_target_post_regime",
 )
 
-# Full parity — the advisory writer now emits every per-signal field the
-# orchestrator writer does. Kept (empty) so test_orchestrator_superset_documented
-# still guards against a NEW orchestrator-only field silently appearing.
-ORCHESTRATOR_ONLY_FIELDS: set[str] = set()
+# The advisory writer (main.py path) has no GDELT sector-heat source wired
+# up -- Sector_Heat_Factor is populated only in pipeline/production_steps.py,
+# which the orchestrator path runs and the advisory path does not. Genuinely
+# orchestrator-only, not an oversight; revisit if/when the advisory path
+# grows a sector-heat source of its own.
+ORCHESTRATOR_ONLY_FIELDS: set[str] = {
+    "sector_heat_factor",
+}
 
 
 # ── Advisory writer fixture (Recommendation / RunResult stubs) ───────────────
