@@ -16,15 +16,31 @@ Data sources
 
 Sentiment scorer
 ----------------
-If ``transformers`` is installed (with a PyTorch or TensorFlow backend),
-uses `ProsusAI/finbert <https://huggingface.co/ProsusAI/finbert>`_ — a
-BERT model fine-tuned on 10 000 financial news sentences.  Loaded once
-per process and cached as a module-level singleton.
+If ``transformers`` is installed (with a PyTorch or TensorFlow backend --
+see ``requirements-optional.txt`` for a CPU-only torch pin), uses
+`ProsusAI/finbert <https://huggingface.co/ProsusAI/finbert>`_ — a BERT
+model fine-tuned on 10 000 financial news sentences.  Loaded once per
+process and cached as a module-level singleton.
 
 If ``transformers`` is unavailable or the model fails to load, falls back
 to a curated 80-word financial keyword lexicon.  Set
 ``FINBERT_ENABLED=false`` in ``.env`` to force the lexicon even when
 ``transformers`` is installed.
+
+Batched scoring + cache
+------------------------
+``score_headlines()`` is the batched scoring entry point: it encodes
+``settings.FINBERT_BATCH_SIZE`` (default 16) headlines per forward pass
+instead of one call per headline, and returns the full 3-class softmax
+(``{"positive", "neutral", "negative"}``) per headline rather than a single
+collapsed scalar. Results are cached by a SHA-256 hash of the headline text
+in ``data/historical_store.py``'s ``finbert_score_cache`` table (gated by
+``settings.FINBERT_SCORE_CACHE_ENABLED``, default ``True``), so an
+unchanged headline seen again in a later cycle's lookback window is not
+re-scored. ``_score_headline()`` remains a thin, cache-bypassing wrapper
+around ``score_headlines()`` for a single item, preserving its exact
+pre-batching signature/return contract for existing callers (e.g.
+``data/sentiment_sources.py``).
 
 Earnings-proximity adjustment
 ------------------------------
@@ -40,6 +56,7 @@ Auto-registered with ``global_registry`` at module import time (imported by
 ``signals/__init__.py`` for every ``SignalAggregator`` cycle).
 """
 
+import hashlib
 import logging
 import os
 import time
@@ -140,23 +157,197 @@ def _lexicon_sentiment(headline: str) -> float:
     return (pos - neg) / total
 
 
+def _content_hash(headline: str) -> str:
+    """SHA-256 hex digest of headline text — the ``finbert_score_cache`` PK.
+
+    Content-hash, not date/cycle-keyed. Caching a FinBERT/lexicon score by
+    unchanged headline TEXT is NOT a lookahead risk: the score is a pure,
+    deterministic function of the text alone (neither FinBERT nor the
+    lexicon has any notion of "when" they scored a string), so identical
+    text always yields the identical score regardless of which trading
+    cycle reads it. A lookahead bug would require a cache read to surface
+    information from a cycle that hasn't happened yet; a content-hash
+    lookup can only ever return a score for text THIS cycle already fetched
+    from Finnhub, so there is no channel through which a future cycle's
+    headline could leak into an earlier cycle's read. See
+    tests/test_news_catalyst.py::TestFinbertScoreCacheLookaheadSafety.
+    """
+    return hashlib.sha256((headline or "").encode("utf-8")).hexdigest()
+
+
+def _lexicon_softmax(headline: str) -> Dict[str, float]:
+    """Represent the keyword lexicon's signed score as a softmax-shaped dict
+    for API uniformity with FinBERT's genuine 3-class distribution.
+
+    NOT a calibrated probability distribution — the keyword lexicon has no
+    notion of confidence — deliberately constructed so exactly one of
+    ``positive``/``negative`` is nonzero at a time (magnitude
+    ``abs(_lexicon_sentiment(headline))``), with the remaining mass reported
+    honestly as ``neutral``. This guarantees ``positive - negative`` (see
+    ``_distribution_to_signed``) exactly reconstructs the original
+    ``_lexicon_sentiment()`` scalar — the backward-compatibility property
+    ``_score_headline()`` depends on.
+    """
+    s = _lexicon_sentiment(headline)
+    positive = max(0.0, s)
+    negative = max(0.0, -s)
+    neutral = 1.0 - positive - negative
+    return {"positive": positive, "neutral": neutral, "negative": negative}
+
+
+def _distribution_to_signed(dist: Dict[str, float]) -> float:
+    """Collapse a 3-class softmax distribution to a single signed score in
+    [-1, +1]: the net probability mass, ``positive - negative``.
+
+    For the lexicon fallback (see ``_lexicon_softmax``) this exactly
+    reproduces the original ``_lexicon_sentiment()`` scalar, since exactly
+    one of ``positive``/``negative`` is ever nonzero. For a genuine FinBERT
+    distribution this is a principled account of BOTH tails of the
+    distribution (unlike the pre-batching behavior, which only ever looked
+    at the single argmax class's own probability and discarded the rest) —
+    still bounded in [-1, 1] since ``positive``/``negative`` are each in
+    [0, 1].
+    """
+    return float(dist.get("positive", 0.0)) - float(dist.get("negative", 0.0))
+
+
+def score_headlines(
+    headlines: List[str],
+    pipeline: Optional[Any] = None,
+    *,
+    batch_size: Optional[int] = None,
+    use_cache: bool = True,
+) -> List[Dict[str, float]]:
+    """Score a batch of headlines, returning one full-softmax dict per
+    headline (same order as ``headlines``):
+    ``{"positive": float, "neutral": float, "negative": float}``.
+
+    - Encodes real FinBERT inference in batches of ``batch_size`` (default
+      ``settings.FINBERT_BATCH_SIZE``, 16) headlines per forward pass
+      instead of the old one-headline-at-a-time loop.
+    - Truncates each headline to 512 characters before it reaches the
+      pipeline — the pipeline itself was already constructed with
+      ``truncation=True, max_length=512`` (see ``_get_finbert_pipeline``);
+      this mirrors that same limit at the call site.
+    - When ``use_cache`` and ``settings.FINBERT_SCORE_CACHE_ENABLED`` are
+      both true (and ``settings.HISTORICAL_STORE_ENABLED`` is true — the
+      DB-layer master switch), checks ``data/historical_store.py``'s
+      ``finbert_score_cache`` (keyed by SHA-256 content hash — see
+      ``_content_hash``) first; only cache MISSES are scored, and every
+      freshly-scored headline is written back before returning. Any
+      cache read/write failure degrades to "score it fresh" — the
+      returned scores are unaffected by a broken cache (CONSTRAINT #6).
+    - Falls back cleanly to the keyword lexicon (``_lexicon_sentiment`` via
+      ``_lexicon_softmax``) per-headline when ``pipeline`` is ``None`` OR a
+      FinBERT batch call raises / returns a malformed result — never
+      raises itself.
+    - Empty input → ``[]`` (no pipeline/cache calls at all).
+    """
+    if not headlines:
+        return []
+
+    from settings import settings as _settings
+
+    effective_batch_size = max(1, int(batch_size or getattr(_settings, "FINBERT_BATCH_SIZE", 16) or 16))
+
+    n = len(headlines)
+    results: List[Optional[Dict[str, float]]] = [None] * n
+    hashes: List[str] = [_content_hash(h or "") for h in headlines]
+
+    # ---- 1. Cache lookup (content-hash, per headline) ----
+    cache_enabled = (
+        use_cache
+        and bool(getattr(_settings, "HISTORICAL_STORE_ENABLED", True))
+        and bool(getattr(_settings, "FINBERT_SCORE_CACHE_ENABLED", True))
+    )
+    store = None
+    if cache_enabled:
+        try:
+            from data.historical_store import HistoricalStore
+            store = HistoricalStore()
+        except Exception as exc:
+            logger.debug("score_headlines: cache store unavailable, scoring fresh: %s", exc)
+            store = None
+
+    if store is not None:
+        for i in range(n):
+            try:
+                cached = store.get_finbert_score(hashes[i])
+            except Exception as exc:
+                logger.debug("score_headlines: cache read failed for one headline: %s", exc)
+                cached = None
+            if cached is not None:
+                results[i] = cached
+
+    # ---- 2. Score cache misses ----
+    miss_indices = [i for i in range(n) if results[i] is None]
+    if miss_indices:
+        if pipeline is not None:
+            for batch_start in range(0, len(miss_indices), effective_batch_size):
+                batch_idx = miss_indices[batch_start: batch_start + effective_batch_size]
+                batch_texts = [(headlines[i] or "")[:512] for i in batch_idx]
+                try:
+                    raw_outputs = pipeline(
+                        batch_texts, batch_size=effective_batch_size, top_k=None
+                    )
+                except Exception as exc:
+                    logger.debug("score_headlines: FinBERT batch scoring error: %s", exc)
+                    raw_outputs = None
+                if not raw_outputs or len(raw_outputs) != len(batch_idx):
+                    for i in batch_idx:
+                        results[i] = _lexicon_softmax(headlines[i] or "")
+                    continue
+                for pos, i in enumerate(batch_idx):
+                    try:
+                        item = raw_outputs[pos]
+                        dist = {"positive": 0.0, "neutral": 0.0, "negative": 0.0}
+                        for entry in item:
+                            label = str(entry.get("label", "")).lower()
+                            if label in dist:
+                                dist[label] = float(entry.get("score", 0.0))
+                        results[i] = dist
+                    except Exception as exc:
+                        logger.debug("score_headlines: per-item FinBERT parse error: %s", exc)
+                        results[i] = _lexicon_softmax(headlines[i] or "")
+        else:
+            for i in miss_indices:
+                results[i] = _lexicon_softmax(headlines[i] or "")
+
+    # ---- 3. Write freshly-scored headlines back to the cache ----
+    if store is not None and miss_indices:
+        try:
+            to_save = {
+                hashes[i]: {**results[i], "headline_snippet": (headlines[i] or "")[:200]}
+                for i in miss_indices
+                if results[i] is not None
+            }
+            if to_save:
+                store.save_finbert_scores(to_save)
+        except Exception as exc:
+            logger.debug("score_headlines: cache write failed: %s", exc)
+
+    return [
+        r if r is not None else {"positive": 0.0, "neutral": 1.0, "negative": 0.0}
+        for r in results
+    ]
+
+
 def _score_headline(headline: str, pipeline: Optional[Any]) -> float:
-    """Score one headline in [-1, +1] using FinBERT or lexicon fallback."""
+    """Score one headline in [-1, +1] using FinBERT or lexicon fallback.
+
+    Thin, cache-bypassing wrapper around :func:`score_headlines` for a
+    single item — kept for exact backward compatibility with existing
+    callers (e.g. ``data/sentiment_sources.py``'s several ``_score()``
+    helpers) that expect this precise signature/return contract and no new
+    DB I/O. The batched, cached path is ``score_headlines()`` itself
+    (used directly by ``NewsCatalystSignal.pre_compute()``).
+    """
     if not headline:
         return 0.0
-    if pipeline is not None:
-        try:
-            result = pipeline(headline[:512])[0]  # type: ignore[index]
-            label = result["label"].lower()
-            prob = float(result["score"])
-            if label == "positive":
-                return prob
-            elif label == "negative":
-                return -prob
-            return 0.0  # neutral
-        except Exception as exc:
-            logger.debug("NewsCatalystSignal: FinBERT scoring error: %s", exc)
-    return _lexicon_sentiment(headline)
+    results = score_headlines([headline], pipeline=pipeline, use_cache=False)
+    if not results:
+        return 0.0
+    return max(-1.0, min(1.0, _distribution_to_signed(results[0])))
 
 
 # ---------------------------------------------------------------------------
@@ -440,18 +631,24 @@ class NewsCatalystSignal(SignalModule):
                 self._earnings_dt[symbol] = next_earnings
 
                 news_items = fetch_company_news(client, symbol, lookback)
-                scores = [
-                    _score_headline(item.get("headline", ""), pipeline)
-                    for item in news_items
-                    if item.get("headline")
+                headlines = [
+                    item.get("headline", "") for item in news_items if item.get("headline")
                 ]
+                # Batched (+ content-hash cached) FinBERT/lexicon scoring --
+                # replaces the old one-headline-at-a-time _score_headline loop.
+                # Scoring is local (no network call), so it is never subject
+                # to the Finnhub rate-limit courtesy delay below.
+                distributions = score_headlines(headlines, pipeline=pipeline)
+                scores = [_distribution_to_signed(d) for d in distributions]
                 raw = float(sum(scores) / len(scores)) if scores else 0.0
                 multiplier = _earnings_proximity_multiplier(
                     next_earnings, now, suppress_h, dampen_d
                 )
                 self._news_scores[symbol] = max(-1.0, min(1.0, raw * multiplier))
 
-                # Courtesy delay to respect Finnhub free-tier rate limit
+                # Courtesy delay to respect the Finnhub free-tier rate limit
+                # for the NEXT symbol's fetch_next_earnings/fetch_company_news
+                # calls -- unrelated to the (local, unthrottled) scoring above.
                 time.sleep(0.12)
             except Exception as exc:
                 logger.warning(

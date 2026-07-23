@@ -11,6 +11,10 @@ Coverage
 TestLexiconSentiment    — positive, negative, neutral, mixed headlines
 TestEarningsProximity   — suppress within 48h, dampen within 7 days, pass beyond
 TestScoreHeadline       — FinBERT path, fallback to lexicon, empty headline
+TestScoreHeadlinesBatched — batched score_headlines(): softmax shape, batching, fallback
+TestScoreHeadlineBackwardCompatibility — _score_headline's pre-batching float contract
+TestFinbertScoreCacheLookaheadSafety — content-hash keying carries no lookahead risk
+TestScoreHeadlinesCache — content-hash cache dedup + HistoricalStore round-trip
 TestSignalCompute       — compute() reads from pre-computed cache; absent → 0.0
 TestPreCompute          — batch-fetch populates context fields; no-key → 0.0
 TestRegistration        — 'news_catalyst' in global_registry
@@ -35,11 +39,15 @@ from signals.aggregator import SignalAggregator
 from signals.base import SignalContext
 from signals.news_catalyst import (
     NewsCatalystSignal,
+    _content_hash,
+    _distribution_to_signed,
     _earnings_proximity_multiplier,
     _lexicon_sentiment,
+    _lexicon_softmax,
     _score_headline,
     fetch_company_news,
     fetch_next_earnings,
+    score_headlines,
 )
 from signals.registry import SignalRegistry
 
@@ -182,6 +190,13 @@ class TestEarningsProximity:
 # ===========================================================================
 
 class TestScoreHeadline:
+    """_score_headline() is now a thin, cache-bypassing wrapper around the
+    batched score_headlines() -- the fake pipelines below return the full
+    3-class softmax (a list-of-lists, one list of label/score dicts per
+    input) that a real ``top_k=None`` FinBERT pipeline call would produce,
+    matching score_headlines()'s calling convention (see TestScoreHeadline
+    BackwardCompatibility for the float-contract-unchanged proof)."""
+
     def test_empty_headline_returns_zero(self):
         assert _score_headline("", None) == 0.0
         assert _score_headline("", MagicMock()) == 0.0
@@ -191,19 +206,32 @@ class TestScoreHeadline:
         assert score > 0
 
     def test_finbert_positive(self):
-        fake_pipeline = MagicMock(return_value=[{"label": "positive", "score": 0.95}])
+        fake_pipeline = MagicMock(return_value=[[
+            {"label": "positive", "score": 0.95},
+            {"label": "neutral", "score": 0.03},
+            {"label": "negative", "score": 0.02},
+        ]])
         score = _score_headline("Revenue surges 30%", fake_pipeline)
-        assert abs(score - 0.95) < 1e-6
+        # positive - negative net probability mass
+        assert abs(score - (0.95 - 0.02)) < 1e-6
 
     def test_finbert_negative(self):
-        fake_pipeline = MagicMock(return_value=[{"label": "negative", "score": 0.88}])
+        fake_pipeline = MagicMock(return_value=[[
+            {"label": "negative", "score": 0.88},
+            {"label": "neutral", "score": 0.09},
+            {"label": "positive", "score": 0.03},
+        ]])
         score = _score_headline("Company faces bankruptcy", fake_pipeline)
-        assert abs(score - (-0.88)) < 1e-6
+        assert abs(score - (0.03 - 0.88)) < 1e-6
 
     def test_finbert_neutral(self):
-        fake_pipeline = MagicMock(return_value=[{"label": "neutral", "score": 0.70}])
+        fake_pipeline = MagicMock(return_value=[[
+            {"label": "neutral", "score": 0.70},
+            {"label": "positive", "score": 0.16},
+            {"label": "negative", "score": 0.14},
+        ]])
         score = _score_headline("Company releases report", fake_pipeline)
-        assert score == 0.0
+        assert abs(score - (0.16 - 0.14)) < 1e-6
 
     def test_finbert_error_falls_back_to_lexicon(self):
         broken_pipeline = MagicMock(side_effect=RuntimeError("model error"))
@@ -211,12 +239,434 @@ class TestScoreHeadline:
         # Falls back to lexicon — should be positive
         assert score > 0
 
+    def test_finbert_malformed_result_falls_back_to_lexicon(self):
+        """A pipeline that doesn't return the expected shape (e.g. the old
+        single-label dict, not a list of per-class dicts) must degrade to
+        the lexicon rather than raise."""
+        odd_pipeline = MagicMock(return_value=[{"label": "positive", "score": 0.95}])
+        score = _score_headline("record profits and strong growth", odd_pipeline)
+        assert score > 0  # lexicon fallback, still positive
+
     def test_score_clamped_to_bounds(self):
         # The score should always be in [-1, +1]
         for pipeline in [None]:
             for h in ["beat gain profit", "miss loss fraud"]:
                 s = _score_headline(h, pipeline)
                 assert -1.0 <= s <= 1.0
+
+
+# ===========================================================================
+# TestScoreHeadlinesBatched
+# ===========================================================================
+
+class TestScoreHeadlinesBatched:
+    """score_headlines() -- the new batched scoring entry point."""
+
+    def test_empty_list_returns_empty(self):
+        assert score_headlines([]) == []
+
+    def test_returns_full_softmax_dicts(self):
+        result = score_headlines(
+            ["Company beats expectations"], pipeline=None, use_cache=False
+        )
+        assert len(result) == 1
+        dist = result[0]
+        assert set(dist.keys()) == {"positive", "neutral", "negative"}
+        assert all(isinstance(v, float) for v in dist.values())
+
+    def test_order_and_count_preserved_lexicon_path(self):
+        headlines = [
+            "Company beats and surges",
+            "Company misses and plunges",
+            "Company issues quarterly report",
+        ]
+        result = score_headlines(headlines, pipeline=None, use_cache=False)
+        assert len(result) == len(headlines)
+        for headline, dist in zip(headlines, result):
+            assert dist == pytest.approx(_lexicon_softmax(headline))
+
+    def test_pipeline_none_uses_lexicon_for_every_headline(self):
+        headlines = ["record profits", "steep losses", "no news"]
+        result = score_headlines(headlines, pipeline=None, use_cache=False)
+        for headline, dist in zip(headlines, result):
+            assert dist == pytest.approx(_lexicon_softmax(headline))
+
+    def test_batch_size_is_respected(self):
+        headlines = [f"headline number {i} beats" for i in range(10)]
+        observed_batch_sizes = []
+
+        def fake_pipeline(batch, **kwargs):
+            observed_batch_sizes.append(len(batch))
+            return [
+                [
+                    {"label": "positive", "score": 0.9},
+                    {"label": "neutral", "score": 0.05},
+                    {"label": "negative", "score": 0.05},
+                ]
+                for _ in batch
+            ]
+
+        score_headlines(headlines, pipeline=fake_pipeline, batch_size=4, use_cache=False)
+        assert observed_batch_sizes == [4, 4, 2]
+
+    def test_default_batch_size_from_settings(self):
+        headlines = [f"h{i}" for i in range(5)]
+        observed_batch_sizes = []
+
+        def fake_pipeline(batch, **kwargs):
+            observed_batch_sizes.append(len(batch))
+            return [
+                [
+                    {"label": "neutral", "score": 1.0},
+                    {"label": "positive", "score": 0.0},
+                    {"label": "negative", "score": 0.0},
+                ]
+                for _ in batch
+            ]
+
+        with patch("settings.settings.FINBERT_BATCH_SIZE", 2):
+            score_headlines(headlines, pipeline=fake_pipeline, use_cache=False)
+        assert observed_batch_sizes == [2, 2, 1]
+
+    def test_order_preserved_finbert_path(self):
+        headlines = ["Stock surges", "Company misses", "Neutral update"]
+
+        def fake_pipeline(batch, **kwargs):
+            out = []
+            for text in batch:
+                if "surges" in text:
+                    out.append([
+                        {"label": "positive", "score": 0.9},
+                        {"label": "neutral", "score": 0.05},
+                        {"label": "negative", "score": 0.05},
+                    ])
+                elif "misses" in text:
+                    out.append([
+                        {"label": "negative", "score": 0.8},
+                        {"label": "neutral", "score": 0.15},
+                        {"label": "positive", "score": 0.05},
+                    ])
+                else:
+                    out.append([
+                        {"label": "neutral", "score": 0.9},
+                        {"label": "positive", "score": 0.05},
+                        {"label": "negative", "score": 0.05},
+                    ])
+            return out
+
+        result = score_headlines(headlines, pipeline=fake_pipeline, use_cache=False)
+        assert result[0]["positive"] == pytest.approx(0.9)
+        assert result[1]["negative"] == pytest.approx(0.8)
+        assert result[2]["neutral"] == pytest.approx(0.9)
+
+    def test_pipeline_exception_falls_back_to_lexicon_for_whole_batch(self):
+        def broken_pipeline(batch, **kwargs):
+            raise RuntimeError("model crashed")
+
+        headlines = ["beat strong growth", "miss and fraud"]
+        result = score_headlines(headlines, pipeline=broken_pipeline, use_cache=False)
+        for headline, dist in zip(headlines, result):
+            assert dist == pytest.approx(_lexicon_softmax(headline))
+
+    def test_malformed_pipeline_output_length_falls_back_to_lexicon(self):
+        """A pipeline returning the wrong number of results (shape mismatch)
+        must degrade to the lexicon rather than mis-align results."""
+        def short_pipeline(batch, **kwargs):
+            return [[{"label": "positive", "score": 1.0}]]  # only 1 result for N inputs
+
+        headlines = ["beat strong growth", "miss and fraud", "steady quarter"]
+        result = score_headlines(headlines, pipeline=short_pipeline, use_cache=False)
+        for headline, dist in zip(headlines, result):
+            assert dist == pytest.approx(_lexicon_softmax(headline))
+
+
+# ===========================================================================
+# TestScoreHeadlineBackwardCompatibility
+# ===========================================================================
+
+class TestScoreHeadlineBackwardCompatibility:
+    """Proves _score_headline() keeps its pre-batching contract: same
+    signature, same float ∈ [-1, 1] return type — even though it is now a
+    thin wrapper around the batched score_headlines(). Existing callers
+    (data/sentiment_sources.py's several ``_score()`` helpers, which always
+    pass pipeline=None) are unaffected."""
+
+    def test_lexicon_path_matches_raw_lexicon_score_exactly(self):
+        headline = "Company beats earnings expectations and raises guidance"
+        expected = _lexicon_sentiment(headline)
+        actual = _score_headline(headline, None)
+        assert actual == pytest.approx(expected)
+
+    def test_returns_a_plain_float(self):
+        result = _score_headline("Stock crashes amid fraud probe", None)
+        assert isinstance(result, float)
+        assert -1.0 <= result <= 1.0
+
+    def test_round_trips_through_score_headlines_for_a_single_item(self):
+        """_score_headline(h, p) must equal
+        _distribution_to_signed(score_headlines([h], pipeline=p)[0]) —
+        i.e. it is genuinely just a thin wrapper, not a parallel
+        implementation that could silently drift from the batched path."""
+        headline = "Company beats and posts record profits"
+        direct = _score_headline(headline, None)
+        via_batch = _distribution_to_signed(
+            score_headlines([headline], pipeline=None, use_cache=False)[0]
+        )
+        assert direct == pytest.approx(via_batch)
+
+    def test_gdelt_style_caller_contract_unchanged(self):
+        """Mirrors data/sentiment_sources.py's GDELTSource._score() (and the
+        other _score() helpers), which all call
+        `_score_headline(text, None)` — always the lexicon path."""
+        text = "Company beats and posts record profits"
+        score = _score_headline(text, None)
+        assert isinstance(score, float)
+        assert -1.0 <= score <= 1.0
+
+
+# ===========================================================================
+# TestFinbertScoreCacheLookaheadSafety
+# ===========================================================================
+
+class TestFinbertScoreCacheLookaheadSafety:
+    """The finbert_score_cache is keyed on a SHA-256 hash of headline TEXT,
+    not a date/cycle — this is deliberate and carries no lookahead risk
+    (see the DDL comment in data/historical_store.py and the
+    score_headlines()/_content_hash() docstrings). These tests establish
+    the reasoning explicitly, in this codebase's house style for
+    caching + point-in-time-discipline proofs (mirroring
+    tests/test_sentiment_pit_lookahead.py)."""
+
+    def test_content_hash_is_pure_function_of_text(self):
+        """Same text -> same key, independent of when it is computed."""
+        h1 = _content_hash("Apple beats earnings")
+        h2 = _content_hash("Apple beats earnings")
+        assert h1 == h2
+
+    def test_different_text_gets_different_hash(self):
+        assert _content_hash("Apple beats earnings") != _content_hash("Apple misses earnings")
+
+    def test_lookup_cannot_surface_a_headline_this_cycle_never_fetched(self, tmp_path):
+        """A cache HIT can only occur for text a caller actually hashed and
+        looked up itself -- there is no mechanism for a lookup keyed by one
+        headline's hash to return a DIFFERENT (e.g. not-yet-seen /
+        future-cycle) headline's score. Even pre-seeding the cache with a
+        score for text a 'later cycle' will eventually see cannot leak into
+        an earlier cycle's read of unrelated text, because the lookup key is
+        a hash of the text ITSELF, not a date or sequence number."""
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "lookahead.db"))
+        future_headline = "Company announces blowout Q4 results"
+        future_hash = _content_hash(future_headline)
+        store.save_finbert_scores(
+            {future_hash: {"positive": 0.99, "neutral": 0.0, "negative": 0.01}}
+        )
+
+        this_cycle_headline = "Company reports a routine operational update"
+        result = store.get_finbert_score(_content_hash(this_cycle_headline))
+        assert result is None  # distinct content -> distinct key -> no accidental hit
+
+    def test_identical_text_reread_later_is_the_same_valid_score(self, tmp_path):
+        """The flip side: once THIS cycle has legitimately scored and cached
+        a headline, an IDENTICAL headline appearing in a later cycle's
+        lookback window is correctly served the same score -- this is the
+        intended cache hit, not a leak, since the text (and therefore the
+        deterministic score) has not changed."""
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "identical.db"))
+        headline = "Company beats and raises full-year guidance"
+        h = _content_hash(headline)
+        store.save_finbert_scores(
+            {h: {"positive": 0.8, "neutral": 0.15, "negative": 0.05}}
+        )
+        # A later cycle asking about the SAME text gets the SAME score.
+        result = store.get_finbert_score(_content_hash(headline))
+        assert result == pytest.approx({"positive": 0.8, "neutral": 0.15, "negative": 0.05})
+
+
+# ===========================================================================
+# TestScoreHeadlinesCache
+# ===========================================================================
+
+class TestScoreHeadlinesCache:
+    """score_headlines()'s content-hash cache: dedup across repeat calls and
+    HistoricalStore round-trip persistence."""
+
+    def _patched_store(self, tmp_path, monkeypatch, name="cache.db"):
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / name))
+        monkeypatch.setattr(
+            "data.historical_store.HistoricalStore", lambda *a, **kw: store
+        )
+        return store
+
+    def test_repeated_headline_scored_once_via_finbert(self, tmp_path, monkeypatch):
+        self._patched_store(tmp_path, monkeypatch)
+        call_count = {"n": 0}
+
+        def fake_pipeline(batch, **kwargs):
+            call_count["n"] += 1
+            return [
+                [
+                    {"label": "positive", "score": 0.9},
+                    {"label": "neutral", "score": 0.05},
+                    {"label": "negative", "score": 0.05},
+                ]
+                for _ in batch
+            ]
+
+        headline = "Company beats and raises full-year guidance"
+        first = score_headlines([headline], pipeline=fake_pipeline)
+        second = score_headlines([headline], pipeline=fake_pipeline)
+
+        assert call_count["n"] == 1  # second call was a cache hit
+        assert first[0] == pytest.approx(second[0])
+
+    def test_repeated_headline_scored_once_via_lexicon(self, tmp_path, monkeypatch):
+        self._patched_store(tmp_path, monkeypatch)
+        headline = "Company beats and raises full-year guidance"
+
+        with patch(
+            "signals.news_catalyst._lexicon_sentiment", wraps=_lexicon_sentiment
+        ) as spy:
+            first = score_headlines([headline], pipeline=None)
+            second = score_headlines([headline], pipeline=None)
+
+        assert spy.call_count == 1  # second call was a cache hit
+        assert first[0] == pytest.approx(second[0])
+
+    def test_two_distinct_headlines_both_scored(self, tmp_path, monkeypatch):
+        self._patched_store(tmp_path, monkeypatch)
+        call_count = {"n": 0}
+
+        def fake_pipeline(batch, **kwargs):
+            call_count["n"] += len(batch)
+            return [
+                [
+                    {"label": "positive", "score": 0.7},
+                    {"label": "neutral", "score": 0.2},
+                    {"label": "negative", "score": 0.1},
+                ]
+                for _ in batch
+            ]
+
+        score_headlines(["headline one beats"], pipeline=fake_pipeline)
+        score_headlines(["headline two beats"], pipeline=fake_pipeline)
+        assert call_count["n"] == 2  # two distinct headlines, both cache misses
+
+    def test_cache_disabled_setting_never_constructs_store(self):
+        headline = "Company beats and raises full-year guidance"
+        with patch("settings.settings.FINBERT_SCORE_CACHE_ENABLED", False):
+            with patch("data.historical_store.HistoricalStore") as mock_cls:
+                score_headlines([headline], pipeline=None)
+        mock_cls.assert_not_called()
+
+    def test_historical_store_disabled_never_constructs_store(self):
+        headline = "Company beats and raises full-year guidance"
+        with patch("settings.settings.HISTORICAL_STORE_ENABLED", False):
+            with patch("data.historical_store.HistoricalStore") as mock_cls:
+                score_headlines([headline], pipeline=None)
+        mock_cls.assert_not_called()
+
+    def test_use_cache_false_never_constructs_store(self):
+        headline = "Company beats and raises full-year guidance"
+        with patch("data.historical_store.HistoricalStore") as mock_cls:
+            score_headlines([headline], pipeline=None, use_cache=False)
+        mock_cls.assert_not_called()
+
+    def test_cache_store_unavailable_degrades_to_fresh_scoring(self):
+        """CONSTRAINT #6: a broken cache store must never raise out of
+        score_headlines(); it must simply score fresh instead."""
+        headline = "Company beats and raises full-year guidance"
+        with patch(
+            "data.historical_store.HistoricalStore",
+            side_effect=RuntimeError("db unavailable"),
+        ):
+            result = score_headlines([headline], pipeline=None)  # must not raise
+        assert result[0] == pytest.approx(_lexicon_softmax(headline))
+
+
+class TestHistoricalStoreFinbertScoreCache:
+    """data/historical_store.py's finbert_score_cache table -- DDL, round
+    trip, and dead-letter behavior (mirrors
+    tests/test_historical_store_news_history.py's style for the sibling
+    news_history table)."""
+
+    def test_table_created_on_init(self, tmp_path):
+        import sqlite3
+        from data.historical_store import HistoricalStore
+
+        db = str(tmp_path / "finbert.db")
+        HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='finbert_score_cache'"
+            ).fetchone()
+        assert row is not None
+
+    def test_round_trip(self, tmp_path):
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "finbert2.db"))
+        h = _content_hash("Some headline text")
+        store.save_finbert_scores(
+            {h: {"positive": 0.7, "neutral": 0.2, "negative": 0.1, "headline_snippet": "Some headline text"}}
+        )
+        result = store.get_finbert_score(h)
+        assert result == pytest.approx({"positive": 0.7, "neutral": 0.2, "negative": 0.1})
+
+    def test_cache_miss_returns_none(self, tmp_path):
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "finbert3.db"))
+        assert store.get_finbert_score(_content_hash("never scored")) is None
+
+    def test_upsert_overwrites_same_hash(self, tmp_path):
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "finbert4.db"))
+        h = _content_hash("Company beats expectations")
+        store.save_finbert_scores({h: {"positive": 0.1, "neutral": 0.8, "negative": 0.1}})
+        store.save_finbert_scores({h: {"positive": 0.9, "neutral": 0.05, "negative": 0.05}})
+        result = store.get_finbert_score(h)
+        assert result == pytest.approx({"positive": 0.9, "neutral": 0.05, "negative": 0.05})
+
+    def test_empty_scores_is_a_noop(self, tmp_path):
+        import sqlite3
+        from data.historical_store import HistoricalStore
+
+        db = str(tmp_path / "finbert5.db")
+        store = HistoricalStore(db_path=db)
+        store.save_finbert_scores({})  # must not raise
+        with sqlite3.connect(db) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM finbert_score_cache").fetchone()[0]
+        assert count == 0
+
+    def test_write_failure_is_swallowed(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a write failure must never raise out of this method."""
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "finbert6.db"))
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        monkeypatch.setattr(store, "_now_utc_iso", _boom)
+        store.save_finbert_scores({"deadbeef": {"positive": 0.5, "neutral": 0.3, "negative": 0.2}})  # must not raise
+
+    def test_read_failure_returns_none(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a read failure must never raise; degrades to None."""
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "finbert7.db"))
+        # Break the session factory (session_scope(self.Session) calls
+        # self.Session(), which raises TypeError against None) to simulate
+        # a genuine read failure without touching sqlite internals directly.
+        monkeypatch.setattr(store, "Session", None)
+        assert store.get_finbert_score("deadbeef") is None
 
 
 # ===========================================================================
@@ -388,6 +838,13 @@ class TestNewsHistoryArchive:
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
 
         mock_store_instance = MagicMock()
+        # A bare, unconfigured MagicMock().get_finbert_score(...) call would
+        # return a truthy, non-None MagicMock -- score_headlines() would
+        # read that as a real cache HIT for every headline (instead of the
+        # intended miss) and skip lexicon scoring entirely. Explicitly
+        # returning None here keeps this test exercising the real lexicon
+        # scoring path, matching its pre-batching intent.
+        mock_store_instance.get_finbert_score.return_value = None
         mock_store_cls = MagicMock(return_value=mock_store_instance)
 
         with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
@@ -397,10 +854,10 @@ class TestNewsHistoryArchive:
                         with patch("data.historical_store.HistoricalStore", mock_store_cls):
                             sig.pre_compute(universe, ctx)
 
-        # pre_compute() now also constructs HistoricalStore once for the Phase
-        # 4 credibility-aggregate read (_read_sentiment_credibility_aggregate),
-        # in addition to this archive write -- assert the write itself, not
-        # the raw constructor call count.
+        # pre_compute() now also constructs HistoricalStore for the Phase 4
+        # credibility-aggregate read AND score_headlines()'s content-hash
+        # cache check/write, in addition to this archive write -- assert
+        # the write itself, not the raw constructor call count.
         mock_store_instance.save_news_sentiment.assert_called_once()
         call_args = mock_store_instance.save_news_sentiment.call_args
         assert call_args[0][0] == sig._news_scores
@@ -762,6 +1219,15 @@ class TestSettings:
     def test_finbert_enabled_is_bool(self):
         from settings import settings
         assert isinstance(settings.FINBERT_ENABLED, bool)
+
+    def test_finbert_batch_size_positive(self):
+        from settings import settings
+        assert isinstance(settings.FINBERT_BATCH_SIZE, int)
+        assert settings.FINBERT_BATCH_SIZE > 0
+
+    def test_finbert_score_cache_enabled_is_bool(self):
+        from settings import settings
+        assert isinstance(settings.FINBERT_SCORE_CACHE_ENABLED, bool)
 
     def test_suppress_hours_positive(self):
         from settings import settings
