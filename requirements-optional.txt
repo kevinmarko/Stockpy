@@ -63,3 +63,22 @@ torch>=2.0
 # including engine/portfolio_context.py's always-present deterministic
 # sector-exposure summary, is unaffected either way.
 faiss-cpu>=1.8.0
+
+# pytrends activates the OPTIONAL, strictly-supplementary Google Trends
+# overlay in data/attention_sources.py (gated behind settings.PYTRENDS_ENABLED,
+# default False), used only as a fallback when the primary Wikipedia-
+# pageviews attention feature (settings.WIKIPEDIA_ATTENTION_ENABLED) yields
+# nothing for a symbol. This package is intentionally kept OUT of
+# requirements.txt: its upstream repo (GeneralMills/pytrends) was archived
+# read-only in April 2025 (no further maintenance, ever) and it scrapes an
+# undocumented, unstable Google endpoint that is well known to return
+# frequent HTTP 429s even under light, single-operator use -- matching this
+# file's own tensorflow/torch/faiss-cpu precedent of keeping a fragile or
+# heavy opt-in dependency out of the pinned, CI-installed requirements.
+# Without it, data/attention_sources.py's `_fetch_pytrends_attention_score()`
+# lazily imports pytrends inside the function body and degrades to a
+# graceful no-op (returns None, never raises) exactly like the CNN-LSTM/RAG
+# paths above without their optional dependency -- the primary Wikipedia
+# path is completely unaffected either way, and is never blocked on this
+# package being installed.
+pytrends>=4.9.2

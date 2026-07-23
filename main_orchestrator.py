@@ -672,6 +672,17 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     "lowvol_z": _safe_float_or_none(row.get("LowVol_Z")),
                     "size_z": _safe_float_or_none(row.get("Size_Z")),
                     "multifactor_composite": _safe_float_or_none(row.get("Multifactor_Composite")),
+                    # Wikipedia-pageviews investor-attention feature
+                    # (follow-on branch to PR #416/#417) --
+                    # pipeline/production_steps.py's StrategyEvalStep already
+                    # writes Attention_Score into dashboard_df every cycle
+                    # (data/attention_sources.py, gated behind
+                    # settings.WIKIPEDIA_ATTENTION_ENABLED); threaded here so
+                    # the GUI Observability dashboard can read it without a
+                    # separate DB query. NaN -> JSON null (never fabricated
+                    # -- CONSTRAINT #4) when the feature is disabled or a
+                    # symbol's fetch failed this cycle.
+                    "attention_score": _safe_float_or_none(row.get("Attention_Score")),
                     # Sector Heat Factor (GDELT article-volume attention proxy
                     # -- see pipeline/production_steps.py::_apply_sector_heat_factor
                     # and data/sentiment_sources.py::compute_sector_heat_factors).
