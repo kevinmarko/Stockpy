@@ -1868,21 +1868,36 @@ class HistoricalStore:
     def _upsert_bars(self, symbol: str, df: pd.DataFrame, source: str) -> None:
         """INSERT OR REPLACE rows from *df* into price_bars."""
         now_ts = self._now_utc_iso()
-        rows = []
-        for ts, row in df.iterrows():
-            date_str = pd.Timestamp(ts).strftime("%Y-%m-%d")
-            rows.append((
-                symbol,
-                date_str,
-                _float_or_none(row.get("Open")),
-                _float_or_none(row.get("High")),
-                _float_or_none(row.get("Low")),
-                _float_or_none(row.get("Close")),
-                _float_or_none(row.get("Adj Close")),
-                _int_or_none(row.get("Volume")),
-                source,
-                now_ts,
-            ))
+        n = len(df)
+        # Column-wise build instead of df.iterrows() (avoids constructing a
+        # Series per row). itertuples() isn't a fit here: "Adj Close" isn't a
+        # valid Python identifier and some providers (e.g. Alpaca) omit that
+        # column entirely, so per-column optional-missing handling below
+        # mirrors the old row.get(...) per-key default of None.
+        dates = pd.to_datetime(df.index).strftime("%Y-%m-%d")
+
+        def _num_col(col: str) -> list:
+            if col not in df.columns:
+                return [None] * n
+            return [_float_or_none(v) for v in df[col].to_numpy()]
+
+        def _int_col(col: str) -> list:
+            if col not in df.columns:
+                return [None] * n
+            return [_int_or_none(v) for v in df[col].to_numpy()]
+
+        rows = list(zip(
+            [symbol] * n,
+            dates,
+            _num_col("Open"),
+            _num_col("High"),
+            _num_col("Low"),
+            _num_col("Close"),
+            _num_col("Adj Close"),
+            _int_col("Volume"),
+            [source] * n,
+            [now_ts] * n,
+        ))
         from db_config import session_scope, get_dbapi_connection
         with self._lock:
             with session_scope(self.Session) as session:

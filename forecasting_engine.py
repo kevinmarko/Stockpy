@@ -520,6 +520,75 @@ class ForecastingEngine:
             return np.empty((0, lookback, scaled_X.shape[1])), np.empty((0, len(horizons)))
         return np.array(X_seq), np.array(Y_seq)
 
+    @staticmethod
+    def fit_scalers_walkforward_windows(
+        df_features: pd.DataFrame,
+        feature_cols: list,
+        lookback: int,
+        horizons: list,
+        n_reserve: int,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Opt-in, stricter alternative to ``fit_scalers_on_train`` +
+        ``make_direct_multistep_windows``, enabled by
+        ``settings.FORECAST_CNN_LSTM_WALKFORWARD_SCALING=True`` (Phase-1 audit
+        item B1).
+
+        ``fit_scalers_on_train`` fits ONE MinMaxScaler on the whole train span,
+        so an early training window's scale reflects statistics pooled from
+        LATER rows in train too. That is harmless for the live single-shot
+        forecast (the emitted forecast never depends on data after inference
+        time), but a stricter walk-forward backtest wants every window scaled
+        using only data at/before that window's own end.
+
+        For each supervised window ending at index ``end`` (rows
+        ``end-lookback .. end-1``), this scales that window — and its horizon
+        targets — using min/max computed EXCLUSIVELY from rows ``[0, end)``:
+        an expanding window, vectorized via ``numpy`` cumulative min/max (no
+        per-window ``sklearn`` refit, no per-row Python loop over the min/max
+        computation itself — only the window-assembly loop remains, same
+        shape as ``make_direct_multistep_windows``).
+
+        Returns X of shape (samples, lookback, n_features) and Y of shape
+        (samples, len(horizons)), values in the same (0, 1) MinMaxScaler
+        convention (a constant column within the expanding window degrades to
+        a 0.0-scaled value rather than dividing by zero, matching
+        ``MinMaxScaler``'s own zero-range handling).
+        """
+        max_h = max(horizons)
+        train_len = len(df_features) - n_reserve
+        feature_values = df_features[feature_cols].values.astype(float)
+        close_values = df_features['Close'].values.astype(float)
+
+        # cum_min/cum_max[i] = min/max over rows [0, i] inclusive. A window
+        # ending at `end` (last row index `end-1`) is scaled using
+        # cum_min/cum_max[end-1] -- causal by construction: perturbing any
+        # row at or after `end` cannot change an earlier window's scale.
+        cum_min_X = np.minimum.accumulate(feature_values, axis=0)
+        cum_max_X = np.maximum.accumulate(feature_values, axis=0)
+        cum_min_y = np.minimum.accumulate(close_values)
+        cum_max_y = np.maximum.accumulate(close_values)
+
+        X_seq, Y_seq = [], []
+        for end in range(lookback, train_len - max_h + 1):
+            last = end - 1
+            lo_X, hi_X = cum_min_X[last], cum_max_X[last]
+            range_X = hi_X - lo_X
+            denom_X = np.where(range_X == 0, 1.0, range_X)
+            window_X = (feature_values[end - lookback:end] - lo_X) / denom_X
+
+            lo_y, hi_y = cum_min_y[last], cum_max_y[last]
+            range_y = hi_y - lo_y
+            denom_y = 1.0 if range_y == 0 else range_y
+            target_idx = [last + h for h in horizons]
+            window_y = (close_values[target_idx] - lo_y) / denom_y
+
+            X_seq.append(window_X)
+            Y_seq.append(window_y)
+
+        if not X_seq:
+            return np.empty((0, lookback, len(feature_cols))), np.empty((0, len(horizons)))
+        return np.array(X_seq), np.array(Y_seq)
+
     def run_cnn_lstm_forecast(
         self,
         history_df: pd.DataFrame,
@@ -654,10 +723,32 @@ class ForecastingEngine:
             scaled_X_train = scaled_X_all[:-n_reserve]
             scaled_close_train = scaled_close_all[:-n_reserve]
 
-            # 2. Direct multi-step supervised windows built strictly from train data.
-            X_seq, Y_seq = self.make_direct_multistep_windows(
-                scaled_X_train, scaled_close_train, lookback, list(horizons)
-            )
+            # 2. Direct multi-step supervised windows built strictly from train
+            # data. Opt-in (Phase-1 audit item B1): when
+            # settings.FORECAST_CNN_LSTM_WALKFORWARD_SCALING is True, use the
+            # stricter per-window expanding-min/max scaling instead of the
+            # single train-span scaler above. Default False reproduces
+            # pre-existing behavior exactly -- the live inference window below
+            # (step 4) is unaffected either way, it always uses the train-span
+            # scaler since at inference time "now" is genuinely the most
+            # recent data available.
+            walkforward_scaling = False
+            try:
+                from settings import settings as _wf_settings
+                walkforward_scaling = bool(
+                    getattr(_wf_settings, "FORECAST_CNN_LSTM_WALKFORWARD_SCALING", False)
+                )
+            except Exception:  # noqa: BLE001 - never let a settings read block a forecast
+                walkforward_scaling = False
+
+            if walkforward_scaling:
+                X_seq, Y_seq = self.fit_scalers_walkforward_windows(
+                    df_features, feature_cols, lookback, list(horizons), n_reserve
+                )
+            else:
+                X_seq, Y_seq = self.make_direct_multistep_windows(
+                    scaled_X_train, scaled_close_train, lookback, list(horizons)
+                )
             if len(X_seq) == 0:
                 logger.warning(
                     "CNN-LSTM: pre-gate history check passed (%d rows) but "

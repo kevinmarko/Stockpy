@@ -235,6 +235,37 @@ class TestAlpacaProvider:
         assert df.index.tz is None, "Index must be timezone-naive to match existing pipeline"
         assert df.index.is_monotonic_increasing
 
+    def test_get_intraday_bars_hourly_interval_keeps_intraday_timestamp(self):
+        """Phase-1 audit item B2: interval='1h' must not normalize the index
+        to midnight (that would collapse same-day excursion resolution)."""
+        from data.market_data import AlpacaProvider
+        provider = AlpacaProvider.__new__(AlpacaProvider)
+        provider._api_key = "k"
+        provider._secret_key = "s"
+        provider._stale_threshold = 60
+
+        mock_resp = MagicMock()
+        mock_resp.df = self._make_bar_df("AAPL")
+        provider._client = MagicMock(get_stock_bars=MagicMock(return_value=mock_resp))
+
+        with patch("alpaca.data.requests.StockBarsRequest"), \
+             patch("alpaca.data.timeframe.TimeFrame"):
+            df = provider.get_intraday_bars("AAPL", lookback_days=5, interval="1h")
+
+        assert set(["Open", "High", "Low", "Close", "Volume"]).issubset(df.columns)
+        assert df.index.tz is None
+        assert df.index.is_monotonic_increasing
+
+    def test_get_intraday_bars_unsupported_interval_raises(self):
+        from data.market_data import AlpacaProvider, MarketDataError
+        provider = AlpacaProvider.__new__(AlpacaProvider)
+        provider._api_key = "k"
+        provider._secret_key = "s"
+        provider._stale_threshold = 60
+        provider._client = MagicMock()
+        with pytest.raises(MarketDataError):
+            provider.get_intraday_bars("AAPL", lookback_days=5, interval="5m")
+
     def test_get_fundamentals_returns_empty(self):
         from data.market_data import AlpacaProvider
         provider = AlpacaProvider.__new__(AlpacaProvider)
@@ -307,6 +338,36 @@ class TestYFinanceProvider:
         with patch("yfinance.Ticker", return_value=mock_ticker):
             with pytest.raises(MarketDataError):
                 provider.get_intraday_bars("AAPL", lookback_days=5)
+
+    def test_get_intraday_bars_hourly_interval_keeps_intraday_timestamp(self):
+        """Phase-1 audit item B2: interval='1h' must not normalize the index
+        to midnight, and must pass interval='1h' through to yfinance."""
+        from data.market_data import YFinanceProvider
+        provider = YFinanceProvider()
+        timestamps = pd.date_range("2025-01-02 09:30", periods=5, freq="h")
+        df = pd.DataFrame(
+            {"Open": [100.0] * 5, "High": [101.0] * 5, "Low": [99.0] * 5,
+             "Close": [100.5] * 5, "Volume": [1000] * 5},
+            index=timestamps,
+        )
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = df
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            result = provider.get_intraday_bars("AAPL", lookback_days=5, interval="1h")
+
+        assert list(result.columns) == ["Open", "High", "Low", "Close", "Volume"]
+        assert result.index.tz is None
+        # Real intraday timestamps preserved (not collapsed to one row/day).
+        assert result.index[0].hour == 9 and result.index[0].minute == 30
+        mock_ticker.history.assert_called_once()
+        _, call_kwargs = mock_ticker.history.call_args
+        assert call_kwargs.get("interval") == "1h"
+
+    def test_get_intraday_bars_unsupported_interval_raises(self):
+        from data.market_data import YFinanceProvider, MarketDataError
+        provider = YFinanceProvider()
+        with pytest.raises(MarketDataError):
+            provider.get_intraday_bars("AAPL", lookback_days=5, interval="5m")
 
     def test_get_fundamentals_returns_info_dict(self):
         from data.market_data import YFinanceProvider

@@ -339,6 +339,31 @@ class TestConfigCompleteness:
         for key in self.REQUIRED_KEYS:
             assert key in CONFIG, f"CONFIG missing required key: '{key}'"
 
+    def test_kelly_config_matches_settings_defaults(self):
+        """CONFIG['kelly_fraction']/['kelly_cap'] are a deliberate, documented
+        duplication of settings.KELLY_FRACTION/KELLY_CAP (see the comment
+        above CONFIG in engine/advisory.py) -- the advisory layer must not
+        silently inherit a live-execution setting change. That intentional
+        decoupling is still a drift risk if someone changes one without the
+        other, so this test turns "silent drift" into a loud, caught failure
+        instead of re-coupling the two (Phase-1 audit item A3).
+        """
+        from engine.advisory import CONFIG
+        from settings import settings
+
+        assert CONFIG["kelly_fraction"] == settings.KELLY_FRACTION, (
+            "engine.advisory.CONFIG['kelly_fraction'] has drifted from "
+            "settings.KELLY_FRACTION -- update the duplicated literal in "
+            "CONFIG (engine/advisory.py) to match, or this decision was "
+            "made deliberately and this test's expectation should change."
+        )
+        assert CONFIG["kelly_cap"] == settings.KELLY_CAP, (
+            "engine.advisory.CONFIG['kelly_cap'] has drifted from "
+            "settings.KELLY_CAP -- update the duplicated literal in CONFIG "
+            "(engine/advisory.py) to match, or this decision was made "
+            "deliberately and this test's expectation should change."
+        )
+
     def test_no_magic_numbers_in_logic(self):
         """Sanity: decision logic constants are never literals outside CONFIG."""
         import inspect

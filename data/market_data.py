@@ -116,13 +116,23 @@ class MarketDataProvider(ABC):
         """
 
     @abstractmethod
-    def get_intraday_bars(self, symbol: str, lookback_days: int = 252) -> pd.DataFrame:
-        """Return daily OHLCV bars for the last ``lookback_days`` trading days.
+    def get_intraday_bars(
+        self, symbol: str, lookback_days: int = 252, interval: str = "1d"
+    ) -> pd.DataFrame:
+        """Return OHLCV bars for the last ``lookback_days`` trading days.
+
+        ``interval`` selects bar resolution: ``"1d"`` (default, unchanged
+        behavior) or ``"1h"`` (opt-in hourly bars, gated behind
+        ``settings.EXCURSION_INTRADAY_ENABLED`` at the call sites that use
+        it — see ``evaluation_engine.calculate_edge_ratio``). Concrete
+        providers may raise ``MarketDataError`` for an unsupported interval;
+        callers must be prepared to degrade to ``"1d"``.
 
         The returned DataFrame must have columns
         ``['Open', 'High', 'Low', 'Close', 'Volume']`` and a timezone-naive
         ``DatetimeIndex`` sorted ascending — the same shape that
-        ``DataEngine.fetch_technical_raw()`` delivers to the processing engine.
+        ``DataEngine.fetch_technical_raw()`` delivers to the processing engine
+        (daily-resolution callers are unaffected by the new parameter).
 
         Raises
         ------
@@ -221,16 +231,34 @@ class AlpacaProvider(MarketDataProvider):
             logger.error("AlpacaProvider.get_latest_quote(%s) failed: %s", symbol, exc)
             raise MarketDataError(f"Alpaca quote fetch failed for {symbol}: {exc}") from exc
 
-    def get_intraday_bars(self, symbol: str, lookback_days: int = 252) -> pd.DataFrame:
-        """Fetch daily OHLCV bars via Alpaca IEX for the last ``lookback_days`` days."""
+    def get_intraday_bars(
+        self, symbol: str, lookback_days: int = 252, interval: str = "1d"
+    ) -> pd.DataFrame:
+        """Fetch OHLCV bars via Alpaca IEX for the last ``lookback_days`` days.
+
+        ``interval="1d"`` (default) is unchanged daily-bar behavior.
+        ``interval="1h"`` fetches hourly bars instead — the index stays a
+        full timestamp (not normalized to midnight) so intraday resolution
+        is preserved; any other value raises ``MarketDataError``.
+        """
         try:
             from alpaca.data.requests import StockBarsRequest  # type: ignore
             from alpaca.data.timeframe import TimeFrame  # type: ignore
 
+            if interval == "1d":
+                timeframe = TimeFrame.Day
+            elif interval == "1h":
+                timeframe = TimeFrame.Hour
+            else:
+                raise MarketDataError(
+                    f"AlpacaProvider.get_intraday_bars: unsupported interval {interval!r} "
+                    "(supported: '1d', '1h')"
+                )
+
             start = datetime.now(timezone.utc) - timedelta(days=lookback_days + 10)
             req = StockBarsRequest(
                 symbol_or_symbols=symbol,
-                timeframe=TimeFrame.Day,
+                timeframe=timeframe,
                 start=start,
                 feed="iex",
             )
@@ -252,13 +280,17 @@ class AlpacaProvider(MarketDataProvider):
             })
             bars_df = bars_df[["Open", "High", "Low", "Close", "Volume"]].copy()
 
-            # Strip tz → timezone-naive index to match existing pipeline
+            # Strip tz → timezone-naive index to match existing pipeline. Daily
+            # bars normalize to midnight (unchanged); hourly bars keep their
+            # real intraday timestamp so same-day excursion is resolvable.
             if bars_df.index.tz is not None:
                 bars_df.index = bars_df.index.tz_localize(None)
-            bars_df.index = pd.to_datetime(bars_df.index).normalize()
+            bars_df.index = pd.to_datetime(bars_df.index)
+            if interval == "1d":
+                bars_df.index = bars_df.index.normalize()
             bars_df.sort_index(inplace=True)
 
-            return bars_df.tail(lookback_days)
+            return bars_df.tail(lookback_days) if interval == "1d" else bars_df
 
         except MarketDataError:
             raise
@@ -315,13 +347,30 @@ class YFinanceProvider(MarketDataProvider):
             logger.error("YFinanceProvider.get_latest_quote(%s) failed: %s", symbol, exc)
             raise MarketDataError(f"yfinance quote fetch failed for {symbol}: {exc}") from exc
 
-    def get_intraday_bars(self, symbol: str, lookback_days: int = 252) -> pd.DataFrame:
-        """Fetch daily OHLCV bars from yfinance history."""
+    def get_intraday_bars(
+        self, symbol: str, lookback_days: int = 252, interval: str = "1d"
+    ) -> pd.DataFrame:
+        """Fetch OHLCV bars from yfinance history.
+
+        ``interval="1d"`` (default) is unchanged daily-bar behavior.
+        ``interval="1h"`` fetches hourly bars instead — yfinance caps hourly
+        history at 730 days, and the index keeps its real intraday
+        timestamp rather than being normalized to midnight.
+        """
         try:
             import yfinance as yf  # type: ignore
 
+            if interval not in ("1d", "1h"):
+                raise MarketDataError(
+                    f"YFinanceProvider.get_intraday_bars: unsupported interval "
+                    f"{interval!r} (supported: '1d', '1h')"
+                )
+
+            if interval == "1h":
+                # yfinance rejects hourly requests older than ~730 days.
+                period = f"{min(lookback_days, 729)}d"
             # Map lookback to yfinance period strings to avoid overfetching
-            if lookback_days <= 20:
+            elif lookback_days <= 20:
                 period = "1mo"
             elif lookback_days <= 60:
                 period = "3mo"
@@ -334,7 +383,7 @@ class YFinanceProvider(MarketDataProvider):
             else:
                 period = "5y"
 
-            df = yf.Ticker(symbol).history(period=period, auto_adjust=True)
+            df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True)
 
             if df is None or df.empty:
                 raise MarketDataError(f"yfinance returned empty bars for {symbol}")
@@ -346,13 +395,17 @@ class YFinanceProvider(MarketDataProvider):
             if "Volume" not in df.columns:
                 df["Volume"] = 0
 
-            # Strip timezone from index → naive, date-only → matches existing pipeline
+            # Strip timezone from index → naive. Daily bars normalize to
+            # midnight (unchanged); hourly bars keep their real intraday
+            # timestamp so same-day excursion is resolvable.
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
-            df.index = pd.to_datetime(df.index).normalize()
+            df.index = pd.to_datetime(df.index)
+            if interval == "1d":
+                df.index = df.index.normalize()
             df.sort_index(inplace=True)
 
-            return df.tail(lookback_days)
+            return df.tail(lookback_days) if interval == "1d" else df
 
         except MarketDataError:
             raise
@@ -1015,12 +1068,12 @@ class _BarsCache:
 
     def __init__(self, ttl_seconds: int = 300) -> None:
         self._ttl = max(1, int(ttl_seconds))
-        self._store: Dict[tuple[str, int], tuple[pd.DataFrame, float]] = {}
+        self._store: Dict[tuple[str, int, str], tuple[pd.DataFrame, float]] = {}
         self._lock = threading.Lock()
 
-    def get(self, symbol: str, lookback_days: int) -> Optional[pd.DataFrame]:
+    def get(self, symbol: str, lookback_days: int, interval: str = "1d") -> Optional[pd.DataFrame]:
         """Return a COPY of the cached bars, or None if absent / expired."""
-        key = (symbol, int(lookback_days))
+        key = (symbol, int(lookback_days), interval)
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
@@ -1031,9 +1084,9 @@ class _BarsCache:
                 return None
             return df.copy()
 
-    def put(self, symbol: str, lookback_days: int, df: pd.DataFrame) -> None:
+    def put(self, symbol: str, lookback_days: int, df: pd.DataFrame, interval: str = "1d") -> None:
         """Store a COPY of the bars with the current monotonic timestamp."""
-        key = (symbol, int(lookback_days))
+        key = (symbol, int(lookback_days), interval)
         with self._lock:
             self._store[key] = (df.copy(), time.monotonic())
 
@@ -1171,16 +1224,23 @@ class CompositeProvider(MarketDataProvider):
         self._cache.put(quote)
         return quote
 
-    def get_intraday_bars(self, symbol: str, lookback_days: int = 252) -> pd.DataFrame:
-        """Return OHLCV bars (daily resolution) for the last ``lookback_days`` days.
+    def get_intraday_bars(
+        self, symbol: str, lookback_days: int = 252, interval: str = "1d"
+    ) -> pd.DataFrame:
+        """Return OHLCV bars for the last ``lookback_days`` days.
 
-        The shape is identical to ``DataEngine.fetch_technical_raw()`` so all
+        ``interval="1d"`` (default) is unchanged daily-resolution behavior;
+        the shape is identical to ``DataEngine.fetch_technical_raw()`` so all
         downstream processing_engine / forecasting_engine code runs unchanged.
+        ``interval="1h"`` is an opt-in hourly-resolution fetch (see
+        ``settings.EXCURSION_INTRADAY_ENABLED``) — not consumed by the
+        standard technical/forecasting pipeline, only by callers that
+        explicitly request it (e.g. ``evaluation_engine.calculate_edge_ratio``).
 
         The result is cached in-process for ``MARKET_DATA_BARS_TTL_SECONDS``
-        (default 300 s) keyed by ``(symbol, lookback_days)`` so repeated
-        requests within a single refresh cycle don't re-hit the network; the
-        cache returns a defensive copy and never persists to disk.
+        (default 300 s) keyed by ``(symbol, lookback_days, interval)`` so
+        repeated requests within a single refresh cycle don't re-hit the
+        network; the cache returns a defensive copy and never persists to disk.
 
         Raises ``MarketDataError`` on provider failure.
         """
@@ -1192,14 +1252,14 @@ class CompositeProvider(MarketDataProvider):
                 ttl_seconds=int(os.environ.get("MARKET_DATA_BARS_TTL_SECONDS", "300"))
             )
 
-        cached = self._bars_cache.get(sym, lookback_days)
+        cached = self._bars_cache.get(sym, lookback_days, interval)
         if cached is not None:
             return cached
 
         bars = self._quote_provider.get_intraday_bars(
-            symbol=sym, lookback_days=lookback_days
+            symbol=sym, lookback_days=lookback_days, interval=interval
         )
-        self._bars_cache.put(sym, lookback_days, bars)
+        self._bars_cache.put(sym, lookback_days, bars, interval)
         return bars
 
     def get_fundamentals(self, symbol: str) -> Dict[str, Any]:

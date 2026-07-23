@@ -39,18 +39,80 @@ class EvaluationEngine:
         # 6% total institutional open risk threshold
         self.max_portfolio_heat = max_portfolio_heat
 
+    @staticmethod
+    def _maybe_fetch_intraday_hold_period(
+        symbol: Optional[str],
+        intraday_provider: Optional[Any],
+        entry_ts: pd.Timestamp,
+        exit_ts: pd.Timestamp,
+    ) -> Optional[pd.DataFrame]:
+        """Opt-in hourly-bar hold-period fetch for calculate_edge_ratio (B2).
+
+        Returns the hourly-bar slice over [entry_ts, exit_ts], or None when
+        the feature is off, inputs are missing, or the fetch/slice fails or
+        comes back empty -- callers must treat None as "fall back to the
+        existing daily history_df", never as an error.
+        """
+        if symbol is None or intraday_provider is None:
+            return None
+        try:
+            from settings import settings as _settings
+            if not bool(getattr(_settings, "EXCURSION_INTRADAY_ENABLED", False)):
+                return None
+        except Exception:  # noqa: BLE001 - never let a settings read block MFE/MAE
+            return None
+
+        try:
+            lookback_days = max(1, (pd.Timestamp.now().normalize() - entry_ts).days + 2)
+            hourly_df = intraday_provider.get_intraday_bars(
+                symbol, lookback_days=lookback_days, interval="1h"
+            )
+            if hourly_df is None or hourly_df.empty:
+                return None
+            if not isinstance(hourly_df.index, pd.DatetimeIndex):
+                hourly_df = hourly_df.copy()
+                hourly_df.index = pd.to_datetime(hourly_df.index)
+            if hourly_df.index.tz is not None:
+                hourly_df = hourly_df.copy()
+                hourly_df.index = hourly_df.index.tz_convert(None)
+
+            hourly_hold = hourly_df.loc[entry_ts:exit_ts]
+            if hourly_hold.empty:
+                return None
+            return hourly_hold
+        except Exception as exc:  # noqa: BLE001 - degrade to daily bars, never raise
+            telemetry.debug(json.dumps({
+                "event": "intraday_excursion_fetch_failed",
+                "symbol": symbol,
+                "error": str(exc),
+            }))
+            return None
+
     def calculate_edge_ratio(
-        self, 
-        history_df: pd.DataFrame, 
-        trade_entry_price: float, 
-        entry_date: Any, 
-        exit_date: Any
+        self,
+        history_df: pd.DataFrame,
+        trade_entry_price: float,
+        entry_date: Any,
+        exit_date: Any,
+        symbol: Optional[str] = None,
+        intraday_provider: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Calculates Maximum Favorable Excursion (MFE) and Maximum Adverse Excursion (MAE),
         normalizing MFE against MAE to output the Edge Ratio.
         Logs standard deviation of returns alongside the Edge Ratio as structured JSON.
         MAE is always reported as a POSITIVE number representing the magnitude of adverse move.
+
+        Opt-in intraday-hourly excursion (Phase-1 audit item B2,
+        ``settings.EXCURSION_INTRADAY_ENABLED``): when the setting is True AND
+        both ``symbol`` and ``intraday_provider`` (a ``MarketDataProvider``,
+        e.g. ``data.market_data.get_provider()``) are supplied, this attempts
+        to fetch hourly bars over the hold window and uses those instead of
+        ``history_df`` for finer MFE/MAE resolution on same-day/short holds.
+        Any failure (missing provider/symbol, fetch error, empty result)
+        degrades silently to the existing daily ``history_df`` path — never
+        raises, never blocks the excursion calculation. Callers that don't
+        pass ``symbol``/``intraday_provider`` are entirely unaffected.
         """
         if history_df is None or history_df.empty:
             telemetry.warning("Empty history DataFrame provided for Edge Ratio calculation.")
@@ -72,6 +134,15 @@ class EvaluationEngine:
 
             # Slice history during the hold period (inclusive)
             hold_period = history_df.loc[entry_ts:exit_ts]
+
+            intraday_hold_period = self._maybe_fetch_intraday_hold_period(
+                symbol=symbol,
+                intraday_provider=intraday_provider,
+                entry_ts=entry_ts,
+                exit_ts=exit_ts,
+            )
+            if intraday_hold_period is not None:
+                hold_period = intraday_hold_period
 
             if hold_period.empty:
                 telemetry.warning(f"No pricing data found between {entry_ts} and {exit_ts}.")

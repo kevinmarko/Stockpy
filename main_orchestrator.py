@@ -434,10 +434,21 @@ async def _execute_broker_orders(
         except Exception:
             account = None
 
-        prices: dict[str, float] = {
-            str(row.get("Symbol", "")).upper(): float(row.get("Price", 0.0) or 0.0)
-            for _, row in final_df.iterrows()
-        }
+        # Vectorized column build (no per-row Python loop — CLAUDE.md convention).
+        # Mirrors the old row.get(...) per-key defaults: a missing Symbol/Price
+        # column falls back to "" / 0.0 for every row. A present Price cell
+        # coerces via pd.to_numeric so NaN stays NaN (never fabricated to
+        # 0.0 — CONSTRAINT #4) and a genuinely non-numeric cell degrades to
+        # NaN instead of raising.
+        _symbols = (
+            final_df["Symbol"] if "Symbol" in final_df.columns
+            else pd.Series([""] * len(final_df), index=final_df.index)
+        ).astype(str).str.upper()
+        _prices = (
+            pd.to_numeric(final_df["Price"], errors="coerce") if "Price" in final_df.columns
+            else pd.Series([0.0] * len(final_df), index=final_df.index)
+        ).astype(float)
+        prices: dict[str, float] = dict(zip(_symbols, _prices))
 
         risk_ctx = RiskContext(
             macro=macro_dto,

@@ -5,11 +5,32 @@ This executable synthesizes Steps 1-7 of the Strategy Engine Modernization
 into a structured, machine-readable format for AI review.
 
 PURPOSE OF THIS FILE:
-This file acts as a "Testing Sandbox" for your Gravity AI Agent. Before the AI 
-deploys a new trading rule to your live Google Sheet, it must run this file. 
-If this file outputs a "PASSED" JSON report, the AI knows the strategy is safe, 
+This file acts as a "Testing Sandbox" for your Gravity AI Agent. Before the AI
+deploys a new trading rule to your live Google Sheet, it must run this file.
+If this file outputs a "PASSED" JSON report, the AI knows the strategy is safe,
 mathematically accurate, and profitable in a simulated environment.
 """
+
+# ---------------------------------------------------------------------------
+# Auto-route to the project's .venv interpreter (must be first executable
+# code, before any heavy import). Identical pattern to main.py /
+# main_orchestrator.py. Without this, running the suite under system Python
+# (or any interpreter other than .venv) silently degrades vectorbt/backtrader
+# to "not installed" (see VBT_AVAILABLE/BT_AVAILABLE below), which produces a
+# theoretical/degraded execution schema instead of the real, native
+# vectorbt/backtrader simulation the report claims to run. __main__ below
+# consumes no argparse/sys.argv, so re-exec with sys.argv is safe.
+# ---------------------------------------------------------------------------
+import sys
+import os
+import subprocess as _sp
+
+_venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "bin")
+_venv_python = os.path.join(_venv_dir, "python3")
+if not os.path.exists(_venv_python):
+    _venv_python = os.path.join(_venv_dir, "python")
+if os.path.exists(_venv_python) and os.path.realpath(sys.executable) != os.path.realpath(_venv_python):
+    sys.exit(_sp.call([_venv_python] + sys.argv))
 
 # --- CORE LIBRARIES ---
 import pandas as pd                  # Used for handling large datasets (DataFrames)
@@ -4417,6 +4438,38 @@ class GravityAIAuditor:
 
     def export_machine_readable_report(self) -> str:
         """Executes the full suite sequentially and returns a structured JSON string."""
+        # Native-execution environment audit: surfaces whether this run has
+        # vectorbt/backtrader available. Both are hard requirements.txt
+        # dependencies, so under a correctly-provisioned .venv both are
+        # always True -- a False here means this process is NOT actually
+        # running under the project .venv (e.g. it's missing/incomplete),
+        # and every VBT/backtrader-backed audit step below silently degraded
+        # to a theoretical execution schema instead of a real simulation.
+        # The module-top venv re-exec guard routes normal invocations to
+        # .venv automatically; this check is the belt-and-suspenders signal
+        # for whatever slips through (a broken/partial .venv, for example).
+        native_execution = bool(VBT_AVAILABLE and BT_AVAILABLE)
+        self.report["environment"] = {
+            "python_executable": sys.executable,
+            "vbt_available": VBT_AVAILABLE,
+            "bt_available": BT_AVAILABLE,
+            "native_execution": native_execution,
+        }
+        if not native_execution:
+            missing = [name for name, ok in (("vectorbt", VBT_AVAILABLE), ("backtrader", BT_AVAILABLE)) if not ok]
+            warning = (
+                f"WARNING: running without native {', '.join(missing)} -- vectorbt/backtrader "
+                "are hard requirements.txt dependencies; their absence means the interpreter "
+                "this process is running under is missing/incomplete (not a correctly-"
+                "provisioned .venv), and any VBT/backtrader-backed audit steps below are "
+                "degraded to a theoretical execution schema, not a real simulation. "
+                "Run `./setup.sh` to (re)install into .venv."
+            )
+            print(warning)
+            self.report["environment"]["warning"] = warning
+            if os.environ.get("GRAVITY_REQUIRE_NATIVE") == "1":
+                raise RuntimeError(warning)
+
         self.run_schema_audit()
         self.run_dto_audit()
         self.run_discrepancy_analysis()
