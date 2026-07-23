@@ -668,6 +668,28 @@ class TestHistoricalStoreFinbertScoreCache:
         monkeypatch.setattr(store, "Session", None)
         assert store.get_finbert_score("deadbeef") is None
 
+    def test_row_with_null_column_treated_as_cache_miss_not_fabricated(self, tmp_path):
+        """Honesty-audit regression: a row with any NULL positive/neutral/
+        negative column (partial write, manual DB edit, future write-path
+        regression -- the DDL declares these nullable) must be treated
+        identically to a cache miss (CONSTRAINT #4: never substitute a
+        fabricated 0.0 for a missing component), so the caller re-scores
+        the headline fresh instead of trusting a malformed cached value."""
+        import sqlite3
+        from data.historical_store import HistoricalStore
+
+        db = str(tmp_path / "finbert8.db")
+        store = HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "INSERT INTO finbert_score_cache "
+                "(content_hash, positive, neutral, negative, scored_at) "
+                "VALUES (?, ?, NULL, ?, ?)",
+                ("deadbeef", 0.5, 0.1, "2026-07-23T00:00:00Z"),
+            )
+            conn.commit()
+        assert store.get_finbert_score("deadbeef") is None
+
 
 # ===========================================================================
 # TestSignalCompute
