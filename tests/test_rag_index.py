@@ -20,17 +20,30 @@ Coverage
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 
 import pytest
 
 from data.rag_index import DocumentVectorStore, IndexedDocument, _doc_hash, _faiss_available
 
-try:
-    import faiss  # noqa: F401
-    _FAISS_INSTALLED = True
-except ImportError:
-    _FAISS_INSTALLED = False
+# Availability check via find_spec(), NOT `import faiss`, deliberately.
+# pytest imports every collected test module up front during collection
+# (before any test in the whole suite runs) -- an eager module-level
+# `import faiss` here would load faiss's bundled libomp.dylib into the
+# process at collection time, well before the per-test bodies below get a
+# chance to run. That collides with lightgbm's own (Homebrew-resolved)
+# libomp.dylib the first time a *real* lightgbm model is unpickled
+# elsewhere in the suite (ml.meta_bootstrap.bootstrap_meta_registry(),
+# exercised by tests/test_advisory_pause_gate.py's real, non-mocked
+# main.run_once()) and reliably segfaults the whole pytest process.
+# find_spec() locates the module without executing it, so it is safe to
+# call at collection time; the real `import faiss` still happens lazily,
+# at test-execution time, inside data.rag_index's own methods (its
+# established lazy-import convention) when TestRealFaissRoundTrip's tests
+# actually run. See
+# docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md.
+_FAISS_INSTALLED = importlib.util.find_spec("faiss") is not None
 
 
 # ---------------------------------------------------------------------------
