@@ -543,6 +543,28 @@ class TestComposeAndEmitDeadLetter:
         payload = json.loads(result.read_text(encoding="utf-8"))
         assert payload["intents"][0]["symbol"] == "NVDA"
 
+
+class TestFollowMinConvictionWiring:
+    """Decision D3 (pilots/mirror.py): compose_and_emit's follow-mode
+    min_conviction floor must come from the named FOLLOW_MIN_CONVICTION
+    constant, not a re-hardcoded literal -- a prior regression let these
+    drift apart silently (the constant became orphaned/unused after this
+    module's compose_and_emit refactor while a bare 0.0 kept the runtime
+    behavior accidentally correct)."""
+
+    def test_compose_and_emit_uses_the_named_constant_not_a_hardcoded_literal(self):
+        import inspect
+        from pilots.mirror import FOLLOW_MIN_CONVICTION
+
+        src = inspect.getsource(compose.compose_and_emit)
+        assert "FOLLOW_MIN_CONVICTION" in src, (
+            "compose_and_emit must reference pilots.mirror.FOLLOW_MIN_CONVICTION "
+            "by name, not re-hardcode its value -- otherwise the two can drift "
+            "apart silently if either is ever changed."
+        )
+        # And the constant it references must actually be the live value used.
+        assert FOLLOW_MIN_CONVICTION == 0.0
+
     def test_no_sources_at_all_writes_nothing(self, tmp_path, monkeypatch):
         from settings import settings
         monkeypatch.setattr(settings, "ROBINHOOD_EXECUTION_MODE", "review", raising=False)
