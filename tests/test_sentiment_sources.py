@@ -18,9 +18,12 @@ from data.sentiment_sources import (
     EdgarSource,
     FinnhubSentimentSource,
     GDELTSource,
+    GoogleNewsRSSSource,
     RedditSource,
     SentimentDocument,
     YahooRSSSource,
+    _SOURCE_PRIORITY,
+    _SOURCE_REGISTRY,
     _dedup_key,
     desentencize,
     get_sentiment_source,
@@ -244,6 +247,153 @@ class TestGDELTSource:
         with patch("data.sentiment_sources.requests.get", return_value=mock_resp) as mock_get:
             src.fetch("AAPL", since)
         assert mock_get.call_count == GDELTSource._MAX_WINDOWS
+
+
+class TestGoogleNewsRSSSource:
+    # item1/item2 are near-duplicates of the same story (different outlet,
+    # different casing/whitespace) -- must collapse to one document via
+    # fuzzy-title dedup. item3 is a genuinely distinct story.
+    _RSS_XML = b"""<?xml version="1.0"?>
+    <rss><channel>
+        <item>
+            <title>Apple Beats Q3 Earnings Expectations</title>
+            <pubDate>Tue, 21 Jul 2026 14:00:00 GMT</pubDate>
+            <link>https://news.google.com/rss/articles/opaque-token-1</link>
+        </item>
+        <item>
+            <title>apple   beats q3 earnings expectations</title>
+            <pubDate>Tue, 21 Jul 2026 15:00:00 GMT</pubDate>
+            <link>https://news.google.com/rss/articles/opaque-token-2</link>
+        </item>
+        <item>
+            <title>Apple Unveils New Product Lineup At Event</title>
+            <pubDate>Tue, 21 Jul 2026 16:00:00 GMT</pubDate>
+            <link>https://news.google.com/rss/articles/opaque-token-3</link>
+        </item>
+    </channel></rss>
+    """
+
+    def _mock_score_headlines(self, headlines):
+        # Deterministic, distinct-enough distributions per headline so
+        # tests can assert on score identity/range without hitting FinBERT.
+        return [{"positive": 0.7, "neutral": 0.1, "negative": 0.2} for _ in headlines]
+
+    def test_fetch_parses_dedups_and_scores(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                with patch(
+                    "signals.news_catalyst.score_headlines",
+                    side_effect=self._mock_score_headlines,
+                ):
+                    docs = src.fetch("AAPL", datetime(2026, 7, 20, tzinfo=timezone.utc))
+        # item1/item2 are near-duplicates -> collapse to one; item3 is distinct.
+        assert len(docs) == 2
+        assert all(d.source_name == "google_news" for d in docs)
+        assert all(d.symbol == "AAPL" for d in docs)
+        titles = {d.text_content for d in docs}
+        assert "Apple Beats Q3 Earnings Expectations" in titles
+        assert "Apple Unveils New Product Lineup At Event" in titles
+
+    def test_score_within_bounds(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                with patch(
+                    "signals.news_catalyst.score_headlines",
+                    side_effect=self._mock_score_headlines,
+                ):
+                    docs = src.fetch("AAPL", datetime(2026, 7, 20, tzinfo=timezone.utc))
+        assert docs
+        for doc in docs:
+            assert -1.0 <= doc.raw_sentiment_score <= 1.0
+
+    def test_stale_item_filtered_by_since(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                with patch(
+                    "signals.news_catalyst.score_headlines",
+                    side_effect=self._mock_score_headlines,
+                ):
+                    docs = src.fetch("AAPL", datetime(2026, 7, 22, tzinfo=timezone.utc))
+        assert docs == []
+
+    def test_network_error_returns_empty(self):
+        src = GoogleNewsRSSSource()
+        with patch("data.sentiment_sources.requests.get", side_effect=RuntimeError("timeout")):
+            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        assert docs == []
+
+    def test_http_error_returns_empty(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = RuntimeError("HTTP 429")
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        assert docs == []
+
+    def test_malformed_xml_returns_empty(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("bs4.BeautifulSoup", side_effect=RuntimeError("malformed xml")):
+                docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        assert docs == []
+
+    def test_query_includes_lookback_window(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = b"<rss><channel></channel></rss>"
+        mock_resp.raise_for_status = MagicMock()
+        with patch("settings.settings.GOOGLE_NEWS_LOOKBACK_WINDOW", "1d"):
+            with patch("data.sentiment_sources.requests.get", return_value=mock_resp) as mock_get:
+                src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        params = mock_get.call_args.kwargs["params"]
+        assert params["q"] == "AAPL stock when:1d"
+        assert params["hl"] == "en-US"
+        assert params["gl"] == "US"
+        assert params["ceid"] == "US:en"
+
+    def test_empty_feed_returns_empty(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = b"<rss><channel></channel></rss>"
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        assert docs == []
+
+    def test_fuzzy_dedup_helper_collapses_near_duplicates(self):
+        candidates = [
+            {"title": "Apple Beats Q3 Earnings Expectations", "as_of": datetime.now(timezone.utc)},
+            {"title": "apple   beats q3 earnings expectations", "as_of": datetime.now(timezone.utc)},
+            {"title": "Totally different unrelated headline text", "as_of": datetime.now(timezone.utc)},
+        ]
+        deduped = GoogleNewsRSSSource._fuzzy_dedup(candidates)
+        assert len(deduped) == 2
+
+    def test_registered_in_source_registry(self):
+        assert _SOURCE_REGISTRY.get("google_news") is GoogleNewsRSSSource
+
+    def test_registered_in_source_priority(self):
+        assert "google_news" in _SOURCE_PRIORITY
+
+    def test_not_in_default_sentiment_sources(self):
+        from settings import settings as _settings
+        default_sources = [n.strip() for n in _settings.SENTIMENT_SOURCES.split(",")]
+        assert "google_news" not in default_sources
 
 
 class TestRedditSource:

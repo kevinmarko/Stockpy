@@ -19,6 +19,13 @@ source (e.g. a licensed X/Twitter tier) can be added later as a new
 or the signal that consumes it -- the same seam ``MarketDataProvider`` leaves
 open for Alpaca vs. yfinance today.
 
+``GoogleNewsRSSSource`` (``"google_news"``) is registered but deliberately
+NOT in the ``SENTIMENT_SOURCES`` default -- it's free/no-auth like the
+others, but opt-in only (add ``"google_news"`` to ``SENTIMENT_SOURCES`` in
+``.env`` to enable it), consistent with ``SENTIMENT_INGESTION_ENABLED``
+also defaulting to ``False``. See its class docstring for the query
+simplification and opaque-redirect-link caveats.
+
 ``EdgarSource`` (already registered under ``"edgar"``, on by default) gained
 an opt-in EDGAR full-text-search (EFTS) extension -- ``settings.
 EDGAR_FULLTEXT_ENABLED`` (default ``False``) additionally ingests 10-K/10-Q
@@ -97,7 +104,10 @@ logger = logging.getLogger(__name__)
 
 # Sources polled first when the per-cycle document budget is under pressure --
 # established/regulatory feeds outrank noisier social feeds (never orders).
-_SOURCE_PRIORITY: List[str] = ["finnhub", "edgar", "yahoo_rss", "gdelt", "reddit"]
+# "google_news" sits alongside yahoo_rss/gdelt (a news-aggregator tier, noisier
+# than the regulatory/single-publisher feeds ahead of it but not the social
+# tier that follows) -- ahead of reddit.
+_SOURCE_PRIORITY: List[str] = ["finnhub", "edgar", "yahoo_rss", "gdelt", "google_news", "reddit"]
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +425,173 @@ class GDELTSource(SentimentSource):
     def _score(text: str) -> float:
         from signals.news_catalyst import _score_headline
         return _score_headline(text, None)
+
+
+# ---------------------------------------------------------------------------
+# Google News RSS — free, no auth, aggregator of many publishers' headlines.
+# ---------------------------------------------------------------------------
+
+class GoogleNewsRSSSource(SentimentSource):
+    """Google News RSS search feed -- free, no auth.
+
+    Query simplification (documented, not hidden): a bare ticker symbol
+    (e.g. ``"AAPL"``) makes for a poor Google News search query on its own
+    (ticker collisions, thin results). Rather than adding a symbol -> company
+    -name resolution dependency (a new API call or lookup table) just to
+    disambiguate, this source queries as ``f"{symbol} stock"`` -- a simple,
+    dependency-free disambiguator that is good enough for headline-level
+    sentiment, per the research that motivated this feature. This means
+    results skew toward whatever Google's own relevance ranking considers
+    "<TICKER> stock" news, not a precise company-name match.
+
+    Time window: ``settings.GOOGLE_NEWS_LOOKBACK_WINDOW`` (default ``"7d"``)
+    is appended to the query as Google News' own ``when:`` search operator
+    (e.g. ``"AAPL stock when:7d"``) -- narrows the feed server-side, on top
+    of (not instead of) this method's own client-side ``since`` filter.
+
+    Opaque redirect links: every ``<link>`` in a Google News RSS response is
+    an opaque ``news.google.com/rss/articles/...`` redirect token, NOT the
+    publisher's real URL -- this defeats URL-based dedup entirely (there is
+    no publisher URL to dedup on). The same story run by multiple outlets
+    would otherwise be double-counted, so this source performs its own
+    fuzzy-title dedup (``_normalize_title`` + Jaccard token-overlap
+    similarity, see ``_fuzzy_dedup``) on the titles it parses, BEFORE
+    documents are even returned from ``fetch()`` -- on top of (not instead
+    of) the composite's own exact-text dedup in ``CompositeSentimentSource``.
+
+    Capped at ``_MAX_ITEMS`` (~100) -- Google's own feed limit; there is no
+    pagination parameter to request more than one page.
+
+    No credibility metadata (Google News headlines carry no author/follower
+    data) -- ``author_followers``/``account_age_days`` stay ``None``.
+    """
+
+    name = "google_news"
+    _FEED_URL = "https://news.google.com/rss/search"
+    _MAX_ITEMS = 100  # Google's own feed cap; no pagination exists
+    _SIMILARITY_THRESHOLD = 0.8  # Jaccard token-overlap treated as "same story"
+
+    def fetch(self, symbol: str, since: datetime) -> List[SentimentDocument]:
+        try:
+            from bs4 import BeautifulSoup
+            from settings import settings as _settings
+
+            window = (_settings.GOOGLE_NEWS_LOOKBACK_WINDOW or "7d").strip()
+            query = f"{symbol} stock when:{window}" if window else f"{symbol} stock"
+            resp = requests.get(
+                self._FEED_URL,
+                params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.content, "xml")
+
+            candidates: List[Dict[str, Any]] = []
+            for item in soup.find_all("item")[: self._MAX_ITEMS]:
+                title = item.title.get_text(strip=True) if item.title else ""
+                if not title:
+                    continue
+                as_of = self._parse_pubdate(
+                    item.pubDate.get_text(strip=True) if item.pubDate else ""
+                )
+                if as_of is None or as_of < since:
+                    continue
+                candidates.append({"title": title, "as_of": as_of})
+
+            deduped = self._fuzzy_dedup(candidates)
+            if not deduped:
+                return []
+
+            scores = self._score_batch([c["title"] for c in deduped])
+            docs: List[SentimentDocument] = []
+            for candidate, score in zip(deduped, scores):
+                docs.append(SentimentDocument(
+                    as_of=candidate["as_of"], symbol=symbol.upper(), source_name=self.name,
+                    text_content=candidate["title"], raw_sentiment_score=score,
+                ))
+            return docs
+        except Exception as exc:
+            logger.warning("GoogleNewsRSSSource.fetch(%s) failed: %s", symbol, exc)
+            return []
+
+    @staticmethod
+    def _parse_pubdate(raw: str) -> Optional[datetime]:
+        if not raw:
+            return None
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(raw)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _normalize_title(title: str) -> str:
+        """Lowercase + collapse whitespace so trivial formatting differences
+        between outlets (extra spaces, casing) don't defeat the similarity
+        check below."""
+        return re.sub(r"\s+", " ", title.strip().lower())
+
+    @classmethod
+    def _fuzzy_dedup(cls, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Collapse near-duplicate titles (the same story syndicated/rewritten
+        by multiple outlets) using Jaccard token-overlap similarity on
+        normalized titles -- see the class docstring for why URL-based dedup
+        cannot work here (every ``<link>`` is an opaque redirect token).
+        Keeps the first occurrence of each cluster (candidates arrive in the
+        feed's own order); O(n^2) over at most ``_MAX_ITEMS`` items, so this
+        stays cheap.
+        """
+        kept: List[Dict[str, Any]] = []
+        kept_token_sets: List[set] = []
+        for candidate in candidates:
+            tokens = set(cls._normalize_title(candidate["title"]).split())
+            if not tokens:
+                continue
+            is_duplicate = False
+            for existing_tokens in kept_token_sets:
+                union = tokens | existing_tokens
+                if not union:
+                    continue
+                jaccard = len(tokens & existing_tokens) / len(union)
+                if jaccard >= cls._SIMILARITY_THRESHOLD:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                kept.append(candidate)
+                kept_token_sets.append(tokens)
+        return kept
+
+    @staticmethod
+    def _score_batch(titles: List[str]) -> List[float]:
+        """Batch-score every headline from one ``fetch()`` call through
+        ``signals.news_catalyst.score_headlines()`` -- PR417's batched entry
+        point -- in a single call, rather than looping single-headline
+        scoring, mirroring ``GDELTSource._score()``'s lazy import of
+        ``signals.news_catalyst`` but calling the batched function directly
+        since batching one fetch() call's headlines together is the whole
+        point of the newly available path. Falls back to an all-zero score
+        list (never raises -- CONSTRAINT #6) if scoring itself fails.
+        """
+        if not titles:
+            return []
+        try:
+            from signals.news_catalyst import (
+                _distribution_to_signed,
+                _get_finbert_pipeline,
+                score_headlines,
+            )
+            from settings import settings as _settings
+
+            pipeline = _get_finbert_pipeline() if _settings.FINBERT_ENABLED else None
+            distributions = score_headlines(titles, pipeline=pipeline)
+            return [
+                max(-1.0, min(1.0, _distribution_to_signed(dist)))
+                for dist in distributions
+            ]
+        except Exception as exc:
+            logger.warning("GoogleNewsRSSSource: batch scoring failed: %s", exc)
+            return [0.0] * len(titles)
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +1130,7 @@ _SOURCE_REGISTRY: Dict[str, Type[SentimentSource]] = {
     "finnhub": FinnhubSentimentSource,
     "yahoo_rss": YahooRSSSource,
     "gdelt": GDELTSource,
+    "google_news": GoogleNewsRSSSource,
     "reddit": RedditSource,
     "edgar": EdgarSource,
 }
