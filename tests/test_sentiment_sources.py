@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 
@@ -499,9 +500,18 @@ class TestEdgarFullTextSearch:
 
     def test_efts_path_uses_uppercase_latest(self):
         """SEC's full-text search index 404s on a lowercase path -- the
-        constant itself must carry the uppercase '/LATEST/' segment."""
-        assert "/LATEST/search-index" in EdgarSource._FULLTEXT_URL
-        assert "efts.sec.gov" in EdgarSource._FULLTEXT_URL
+        constant itself must carry the uppercase '/LATEST/' segment.
+
+        Asserts an exact match (not a substring ``in`` check) against the
+        expected URL: a substring check is CodeQL-flagged as "incomplete
+        URL substring sanitization" even against a hardcoded, non-attacker-
+        controlled class constant like this one -- exact-match/startswith
+        avoids the false positive while asserting something strictly
+        stronger.
+        """
+        parsed = urlparse(EdgarSource._FULLTEXT_URL)
+        assert parsed.hostname == "efts.sec.gov"
+        assert parsed.path == "/LATEST/search-index"
 
     def test_form_type_filter_passed_to_efts(self):
         src = EdgarSource()
