@@ -107,13 +107,15 @@ _SIZING_QUARTET = (
     "kelly_target_post_regime",
 )
 
-# The advisory writer (main.py path) has no Wikipedia-pageviews attention
-# source wired up -- Attention_Score is populated only by
+# The advisory writer (main.py path) has neither a Wikipedia-pageviews
+# attention source nor a GDELT sector-heat source wired up -- both
+# attention_score and sector_heat_factor are populated only by
 # pipeline/production_steps.py, which the orchestrator path runs and the
 # advisory path does not. Genuinely orchestrator-only, not an oversight;
-# revisit if/when the advisory path grows an attention source of its own.
+# revisit if/when the advisory path grows either source of its own.
 ORCHESTRATOR_ONLY_FIELDS: set[str] = {
     "attention_score",
+    "sector_heat_factor",
 }
 
 

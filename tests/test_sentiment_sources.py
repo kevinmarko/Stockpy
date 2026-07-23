@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 
@@ -17,10 +18,16 @@ from data.sentiment_sources import (
     EdgarSource,
     FinnhubSentimentSource,
     GDELTSource,
+    GDELTVolumeSource,
+    GoogleNewsRSSSource,
     RedditSource,
     SentimentDocument,
     YahooRSSSource,
+    _SOURCE_PRIORITY,
+    _SOURCE_REGISTRY,
     _dedup_key,
+    _sector_gdelt_query,
+    compute_sector_heat_factors,
     desentencize,
     get_sentiment_source,
     reset_sentiment_source,
@@ -245,6 +252,153 @@ class TestGDELTSource:
         assert mock_get.call_count == GDELTSource._MAX_WINDOWS
 
 
+class TestGoogleNewsRSSSource:
+    # item1/item2 are near-duplicates of the same story (different outlet,
+    # different casing/whitespace) -- must collapse to one document via
+    # fuzzy-title dedup. item3 is a genuinely distinct story.
+    _RSS_XML = b"""<?xml version="1.0"?>
+    <rss><channel>
+        <item>
+            <title>Apple Beats Q3 Earnings Expectations</title>
+            <pubDate>Tue, 21 Jul 2026 14:00:00 GMT</pubDate>
+            <link>https://news.google.com/rss/articles/opaque-token-1</link>
+        </item>
+        <item>
+            <title>apple   beats q3 earnings expectations</title>
+            <pubDate>Tue, 21 Jul 2026 15:00:00 GMT</pubDate>
+            <link>https://news.google.com/rss/articles/opaque-token-2</link>
+        </item>
+        <item>
+            <title>Apple Unveils New Product Lineup At Event</title>
+            <pubDate>Tue, 21 Jul 2026 16:00:00 GMT</pubDate>
+            <link>https://news.google.com/rss/articles/opaque-token-3</link>
+        </item>
+    </channel></rss>
+    """
+
+    def _mock_score_headlines(self, headlines):
+        # Deterministic, distinct-enough distributions per headline so
+        # tests can assert on score identity/range without hitting FinBERT.
+        return [{"positive": 0.7, "neutral": 0.1, "negative": 0.2} for _ in headlines]
+
+    def test_fetch_parses_dedups_and_scores(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                with patch(
+                    "signals.news_catalyst.score_headlines",
+                    side_effect=self._mock_score_headlines,
+                ):
+                    docs = src.fetch("AAPL", datetime(2026, 7, 20, tzinfo=timezone.utc))
+        # item1/item2 are near-duplicates -> collapse to one; item3 is distinct.
+        assert len(docs) == 2
+        assert all(d.source_name == "google_news" for d in docs)
+        assert all(d.symbol == "AAPL" for d in docs)
+        titles = {d.text_content for d in docs}
+        assert "Apple Beats Q3 Earnings Expectations" in titles
+        assert "Apple Unveils New Product Lineup At Event" in titles
+
+    def test_score_within_bounds(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                with patch(
+                    "signals.news_catalyst.score_headlines",
+                    side_effect=self._mock_score_headlines,
+                ):
+                    docs = src.fetch("AAPL", datetime(2026, 7, 20, tzinfo=timezone.utc))
+        assert docs
+        for doc in docs:
+            assert -1.0 <= doc.raw_sentiment_score <= 1.0
+
+    def test_stale_item_filtered_by_since(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                with patch(
+                    "signals.news_catalyst.score_headlines",
+                    side_effect=self._mock_score_headlines,
+                ):
+                    docs = src.fetch("AAPL", datetime(2026, 7, 22, tzinfo=timezone.utc))
+        assert docs == []
+
+    def test_network_error_returns_empty(self):
+        src = GoogleNewsRSSSource()
+        with patch("data.sentiment_sources.requests.get", side_effect=RuntimeError("timeout")):
+            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        assert docs == []
+
+    def test_http_error_returns_empty(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = RuntimeError("HTTP 429")
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        assert docs == []
+
+    def test_malformed_xml_returns_empty(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("bs4.BeautifulSoup", side_effect=RuntimeError("malformed xml")):
+                docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        assert docs == []
+
+    def test_query_includes_lookback_window(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = b"<rss><channel></channel></rss>"
+        mock_resp.raise_for_status = MagicMock()
+        with patch("settings.settings.GOOGLE_NEWS_LOOKBACK_WINDOW", "1d"):
+            with patch("data.sentiment_sources.requests.get", return_value=mock_resp) as mock_get:
+                src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        params = mock_get.call_args.kwargs["params"]
+        assert params["q"] == "AAPL stock when:1d"
+        assert params["hl"] == "en-US"
+        assert params["gl"] == "US"
+        assert params["ceid"] == "US:en"
+
+    def test_empty_feed_returns_empty(self):
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = b"<rss><channel></channel></rss>"
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
+        assert docs == []
+
+    def test_fuzzy_dedup_helper_collapses_near_duplicates(self):
+        candidates = [
+            {"title": "Apple Beats Q3 Earnings Expectations", "as_of": datetime.now(timezone.utc)},
+            {"title": "apple   beats q3 earnings expectations", "as_of": datetime.now(timezone.utc)},
+            {"title": "Totally different unrelated headline text", "as_of": datetime.now(timezone.utc)},
+        ]
+        deduped = GoogleNewsRSSSource._fuzzy_dedup(candidates)
+        assert len(deduped) == 2
+
+    def test_registered_in_source_registry(self):
+        assert _SOURCE_REGISTRY.get("google_news") is GoogleNewsRSSSource
+
+    def test_registered_in_source_priority(self):
+        assert "google_news" in _SOURCE_PRIORITY
+
+    def test_not_in_default_sentiment_sources(self):
+        from settings import settings as _settings
+        default_sources = [n.strip() for n in _settings.SENTIMENT_SOURCES.split(",")]
+        assert "google_news" not in default_sources
+
+
 class TestRedditSource:
     def test_no_credentials_returns_empty(self):
         src = RedditSource()
@@ -452,6 +606,280 @@ class TestEdgarSource:
             with patch("data.sentiment_sources.requests.get", side_effect=RuntimeError("boom")):
                 docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
         assert docs == []
+
+
+class TestEdgarFullTextSearch:
+    """EDGAR full-text search (EFTS) + 10-K/10-Q body-text ingestion --
+    opt-in additions to EdgarSource, gated by settings.EDGAR_FULLTEXT_ENABLED
+    (default False). All HTTP calls are monkeypatched; no real network."""
+
+    _TICKERS_RESP = {"0": {"ticker": "AAPL", "cik_str": 320193}}
+    _EMPTY_SUBMISSIONS = {"filings": {"recent": {"form": [], "filingDate": [], "primaryDocDescription": []}}}
+
+    def _mock_tickers_resp(self):
+        m = MagicMock()
+        m.raise_for_status = MagicMock()
+        m.json.return_value = self._TICKERS_RESP
+        return m
+
+    def _mock_submissions_resp(self, payload=None):
+        m = MagicMock()
+        m.raise_for_status = MagicMock()
+        m.json.return_value = payload if payload is not None else self._EMPTY_SUBMISSIONS
+        return m
+
+    def test_disabled_by_default_leaves_8k_only_behavior_unchanged(self):
+        """Regression: EDGAR_FULLTEXT_ENABLED=False (the default) must be a
+        complete no-op -- no EFTS call is ever issued, and the 8-K
+        submissions-feed docs are identical to pre-feature behavior."""
+        src = EdgarSource()
+        submissions_payload = {
+            "filings": {"recent": {
+                "form": ["8-K"],
+                "filingDate": ["2026-07-21"],
+                "primaryDocDescription": ["Material event"],
+            }}
+        }
+        with patch("settings.settings.EDGAR_USER_AGENT", "Test test@example.com"):
+            with patch("settings.settings.EDGAR_FULLTEXT_ENABLED", False):
+                with patch(
+                    "data.sentiment_sources.requests.get",
+                    side_effect=[self._mock_tickers_resp(), self._mock_submissions_resp(submissions_payload)],
+                ) as mock_get:
+                    docs = src.fetch("AAPL", datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert len(docs) == 1
+        assert docs[0].text_content == "Material event"
+        assert mock_get.call_count == 2  # tickers + submissions ONLY -- no EFTS call
+
+    def test_efts_path_uses_uppercase_latest(self):
+        """SEC's full-text search index 404s on a lowercase path -- the
+        constant itself must carry the uppercase '/LATEST/' segment.
+
+        Asserts an exact match (not a substring ``in`` check) against the
+        expected URL: a substring check is CodeQL-flagged as "incomplete
+        URL substring sanitization" even against a hardcoded, non-attacker-
+        controlled class constant like this one -- exact-match/startswith
+        avoids the false positive while asserting something strictly
+        stronger.
+        """
+        parsed = urlparse(EdgarSource._FULLTEXT_URL)
+        assert parsed.hostname == "efts.sec.gov"
+        assert parsed.path == "/LATEST/search-index"
+
+    def test_form_type_filter_passed_to_efts(self):
+        src = EdgarSource()
+        mock_efts_resp = MagicMock()
+        mock_efts_resp.raise_for_status = MagicMock()
+        mock_efts_resp.json.return_value = {"hits": {"hits": []}}
+
+        with patch("settings.settings.EDGAR_USER_AGENT", "Test test@example.com"):
+            with patch("settings.settings.EDGAR_FULLTEXT_ENABLED", True):
+                with patch("settings.settings.EDGAR_FULLTEXT_FORMS", "10-K,8-K"):
+                    with patch("data.edgar_fundamentals._throttle"):
+                        with patch(
+                            "data.sentiment_sources.requests.get",
+                            side_effect=[self._mock_tickers_resp(), self._mock_submissions_resp(), mock_efts_resp],
+                        ) as mock_get:
+                            src.fetch("AAPL", datetime(2026, 7, 1, tzinfo=timezone.utc))
+        efts_call = mock_get.call_args_list[2]
+        assert efts_call.args[0] == EdgarSource._FULLTEXT_URL
+        assert efts_call.kwargs["params"]["forms"] == "10-K,8-K"
+
+    def test_fulltext_search_ingests_10k_body_and_scores_in_batch(self):
+        """Full-text search parse success + 10-K body ingestion + chunk-
+        token-limit splitting + batched scoring (PR417's score_headlines),
+        all in one call rather than per-chunk."""
+        src = EdgarSource()
+        mock_efts_resp = MagicMock()
+        mock_efts_resp.raise_for_status = MagicMock()
+        mock_efts_resp.json.return_value = {
+            "hits": {"hits": [
+                {
+                    "_id": "0000320193-24-000123:aapl-20241101.htm",
+                    "_source": {
+                        "form": "10-K",
+                        "file_date": "2026-07-15",
+                        "display_names": ["Apple Inc. (AAPL)"],
+                    },
+                }
+            ]}
+        }
+        mock_filing_resp = MagicMock()
+        mock_filing_resp.raise_for_status = MagicMock()
+        mock_filing_resp.text = " ".join(f"word{i}" for i in range(10))  # 10 tokens
+
+        with patch("settings.settings.EDGAR_USER_AGENT", "Test test@example.com"):
+            with patch("settings.settings.EDGAR_FULLTEXT_ENABLED", True):
+                with patch("settings.settings.EDGAR_FULLTEXT_FORMS", "10-K,10-Q"):
+                    with patch("settings.settings.EDGAR_FULLTEXT_CHUNK_TOKENS", 4):
+                        with patch("data.edgar_fundamentals._throttle"):
+                            with patch(
+                                "data.sentiment_sources.requests.get",
+                                side_effect=[
+                                    self._mock_tickers_resp(), self._mock_submissions_resp(),
+                                    mock_efts_resp, mock_filing_resp,
+                                ],
+                            ) as mock_get:
+                                with patch(
+                                    "signals.news_catalyst.score_headlines",
+                                    return_value=[
+                                        {"positive": 0.7, "neutral": 0.2, "negative": 0.1},
+                                        {"positive": 0.7, "neutral": 0.2, "negative": 0.1},
+                                        {"positive": 0.7, "neutral": 0.2, "negative": 0.1},
+                                    ],
+                                ) as mock_score:
+                                    docs = src.fetch("AAPL", datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert mock_get.call_count == 4  # tickers + submissions + efts + filing doc
+        # 10 tokens chunked at 4/chunk -> 3 chunks -> 3 documents
+        assert len(docs) == 3
+        assert all(d.source_name == "edgar" for d in docs)
+        assert all(d.symbol == "AAPL" for d in docs)
+        assert all(d.raw_sentiment_score == pytest.approx(0.6) for d in docs)  # 0.7 - 0.1
+        mock_score.assert_called_once()
+        scored_texts = mock_score.call_args[0][0]
+        assert len(scored_texts) == 3
+        assert all(len(t.split()) <= 4 for t in scored_texts)
+
+    def test_chunk_text_splits_at_token_limit(self):
+        text = " ".join(f"word{i}" for i in range(25))
+        chunks = EdgarSource._chunk_text(text, 10)
+        assert len(chunks) == 3
+        assert len(chunks[0].split()) == 10
+        assert len(chunks[1].split()) == 10
+        assert len(chunks[2].split()) == 5
+        assert " ".join(chunks) == text  # no content lost/reordered
+
+    def test_chunk_text_empty_input_returns_empty_list(self):
+        assert EdgarSource._chunk_text("", 10) == []
+        assert EdgarSource._chunk_text("   ", 10) == []
+
+    def test_efts_http_error_degrades_to_empty_without_losing_8k_docs(self):
+        """CONSTRAINT #6: an EFTS failure must degrade to [] for that piece
+        of work, never raise, and never wipe out the always-on 8-K docs
+        the always-on submissions-feed path already collected."""
+        src = EdgarSource()
+        submissions_payload = {
+            "filings": {"recent": {
+                "form": ["8-K"],
+                "filingDate": ["2026-07-21"],
+                "primaryDocDescription": ["Material event"],
+            }}
+        }
+        with patch("settings.settings.EDGAR_USER_AGENT", "Test test@example.com"):
+            with patch("settings.settings.EDGAR_FULLTEXT_ENABLED", True):
+                with patch("data.edgar_fundamentals._throttle"):
+                    with patch(
+                        "data.sentiment_sources.requests.get",
+                        side_effect=[
+                            self._mock_tickers_resp(), self._mock_submissions_resp(submissions_payload),
+                            RuntimeError("EFTS unreachable"),
+                        ],
+                    ):
+                        docs = src.fetch("AAPL", datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert len(docs) == 1
+        assert docs[0].text_content == "Material event"
+
+    def test_malformed_efts_json_degrades_to_empty(self):
+        src = EdgarSource()
+        mock_efts_resp = MagicMock()
+        mock_efts_resp.raise_for_status = MagicMock()
+        mock_efts_resp.json.return_value = {"unexpected": "shape"}  # no "hits" key at all
+
+        with patch("settings.settings.EDGAR_USER_AGENT", "Test test@example.com"):
+            with patch("settings.settings.EDGAR_FULLTEXT_ENABLED", True):
+                with patch("data.edgar_fundamentals._throttle"):
+                    with patch(
+                        "data.sentiment_sources.requests.get",
+                        side_effect=[self._mock_tickers_resp(), self._mock_submissions_resp(), mock_efts_resp],
+                    ):
+                        docs = src.fetch("AAPL", datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert docs == []
+
+    def test_missing_filing_text_degrades_to_headline_stand_in(self):
+        """A filing whose body text can't be fetched (HTTP error) must not
+        drop the filing entirely -- it degrades to a short headline-style
+        stand-in string rather than raising or vanishing."""
+        src = EdgarSource()
+        mock_efts_resp = MagicMock()
+        mock_efts_resp.raise_for_status = MagicMock()
+        mock_efts_resp.json.return_value = {
+            "hits": {"hits": [
+                {
+                    "_id": "0000320193-24-000123:aapl-20241101.htm",
+                    "_source": {
+                        "form": "10-K",
+                        "file_date": "2026-07-15",
+                        "display_names": ["Apple Inc. (AAPL)"],
+                    },
+                }
+            ]}
+        }
+        with patch("settings.settings.EDGAR_USER_AGENT", "Test test@example.com"):
+            with patch("settings.settings.EDGAR_FULLTEXT_ENABLED", True):
+                with patch("data.edgar_fundamentals._throttle"):
+                    with patch(
+                        "data.sentiment_sources.requests.get",
+                        side_effect=[
+                            self._mock_tickers_resp(), self._mock_submissions_resp(),
+                            mock_efts_resp, RuntimeError("filing doc fetch failed"),
+                        ],
+                    ):
+                        with patch(
+                            "signals.news_catalyst.score_headlines",
+                            return_value=[{"positive": 0.1, "neutral": 0.8, "negative": 0.1}],
+                        ):
+                            docs = src.fetch("AAPL", datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert len(docs) == 1
+        assert "10-K filing" in docs[0].text_content
+
+    def test_fulltext_timestamp_derived_from_official_file_date_not_fetch_time(self):
+        """Leakage-safety proof (mirrors tests/test_sentiment_pit_lookahead.py's
+        style): a filing's as_of must come from EFTS's OFFICIAL file_date
+        field, never from wall-clock fetch time -- proved here by mocking
+        'now' to a date months after the filing and asserting the resulting
+        document is still stamped with the filing's own date, not 'now'."""
+        src = EdgarSource()
+        mock_efts_resp = MagicMock()
+        mock_efts_resp.raise_for_status = MagicMock()
+        filed_date = "2026-03-02"
+        mock_efts_resp.json.return_value = {
+            "hits": {"hits": [
+                {
+                    "_id": "0000320193-26-000009:aapl-20260302.htm",
+                    "_source": {
+                        "form": "10-Q",
+                        "file_date": filed_date,
+                        "display_names": ["Apple Inc. (AAPL)"],
+                    },
+                }
+            ]}
+        }
+        mock_filing_resp = MagicMock()
+        mock_filing_resp.raise_for_status = MagicMock()
+        mock_filing_resp.text = "quarterly results body text"
+        fixed_fetch_time = datetime(2026, 9, 1, tzinfo=timezone.utc)  # months AFTER the filing
+
+        with patch("settings.settings.EDGAR_USER_AGENT", "Test test@example.com"):
+            with patch("settings.settings.EDGAR_FULLTEXT_ENABLED", True):
+                with patch("data.edgar_fundamentals._throttle"):
+                    with patch(
+                        "data.sentiment_sources.requests.get",
+                        side_effect=[
+                            self._mock_tickers_resp(), self._mock_submissions_resp(),
+                            mock_efts_resp, mock_filing_resp,
+                        ],
+                    ):
+                        with patch(
+                            "signals.news_catalyst.score_headlines",
+                            return_value=[{"positive": 0.1, "neutral": 0.8, "negative": 0.1}],
+                        ):
+                            with patch("data.sentiment_sources.datetime") as mock_dt:
+                                mock_dt.now.return_value = fixed_fetch_time
+                                mock_dt.strptime = datetime.strptime
+                                docs = src.fetch("AAPL", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        assert len(docs) == 1
+        assert docs[0].as_of == datetime(2026, 3, 2, tzinfo=timezone.utc)
+        assert docs[0].as_of != fixed_fetch_time  # the actual leakage proof
 
 
 class TestCompositeSentimentSource:
@@ -707,3 +1135,182 @@ class TestSingleton:
             assert a is not b
         finally:
             reset_sentiment_source()
+
+
+# ---------------------------------------------------------------------------
+# Sector Heat Factor -- GDELTVolumeSource / compute_sector_heat_factors
+# ---------------------------------------------------------------------------
+
+class TestGDELTVolumeSource:
+    def test_fetch_daily_counts_parses_timeline(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "timeline": [{
+                "series": "timelinevol",
+                "data": [
+                    {"date": "20260719000000", "value": 3.0},
+                    {"date": "20260720000000", "value": 5.0},
+                ],
+            }]
+        }
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts(
+                query="Technology sector stocks",
+                since=datetime(2026, 7, 19, tzinfo=timezone.utc),
+                until=datetime(2026, 7, 20, 23, 0, tzinfo=timezone.utc),
+            )
+        assert counts == {"2026-07-19": 3.0, "2026-07-20": 5.0}
+
+    def test_sums_subdaily_points_into_same_calendar_day(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "timeline": [{
+                "data": [
+                    {"date": "20260720060000", "value": 2.0},
+                    {"date": "20260720180000", "value": 3.0},
+                ],
+            }]
+        }
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts(
+                query="q", since=datetime(2026, 7, 20, tzinfo=timezone.utc),
+                until=datetime(2026, 7, 21, tzinfo=timezone.utc),
+            )
+        assert counts == {"2026-07-20": 5.0}
+
+    def test_error_returns_empty(self):
+        src = GDELTVolumeSource()
+        with patch("data.sentiment_sources.requests.get", side_effect=RuntimeError("boom")):
+            counts = src.fetch_daily_counts("q", since=datetime.now(timezone.utc) - timedelta(days=1))
+        assert counts == {}
+
+    def test_malformed_timeline_returns_empty(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"timeline": "not-a-list-of-dicts"}
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts("q", since=datetime.now(timezone.utc) - timedelta(days=1))
+        assert counts == {}
+
+    def test_empty_timeline_returns_empty(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"timeline": []}
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts("q", since=datetime.now(timezone.utc) - timedelta(days=1))
+        assert counts == {}
+
+    def test_unparseable_point_is_skipped_not_fatal(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "timeline": [{
+                "data": [
+                    {"date": "not-a-date", "value": 1.0},
+                    {"date": "20260720000000", "value": 4.0},
+                ],
+            }]
+        }
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts(
+                query="q", since=datetime(2026, 7, 19, tzinfo=timezone.utc),
+                until=datetime(2026, 7, 21, tzinfo=timezone.utc),
+            )
+        assert counts == {"2026-07-20": 4.0}
+
+    def test_parse_timeline_date_accepts_documented_formats(self):
+        assert GDELTVolumeSource._parse_timeline_date("20260720140000") is not None
+        assert GDELTVolumeSource._parse_timeline_date("20260720T140000Z") is not None
+        assert GDELTVolumeSource._parse_timeline_date("2026-07-20") is not None
+        assert GDELTVolumeSource._parse_timeline_date("garbage") is None
+        assert GDELTVolumeSource._parse_timeline_date("") is None
+
+
+class TestSectorGdeltQuery:
+    def test_query_contains_quoted_sector_name(self):
+        assert '"Technology"' in _sector_gdelt_query("Technology")
+        assert "sector stocks" in _sector_gdelt_query("Technology")
+
+
+class TestComputeSectorHeatFactors:
+    def test_disabled_returns_empty_with_no_network_call(self):
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", False):
+            with patch("data.sentiment_sources.requests.get") as mock_get:
+                result = compute_sector_heat_factors(["Technology", "Energy"])
+        assert result == {}
+        mock_get.assert_not_called()
+
+    def test_empty_sectors_returns_empty(self):
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True):
+            with patch("data.sentiment_sources.requests.get") as mock_get:
+                result = compute_sector_heat_factors([])
+        assert result == {}
+        mock_get.assert_not_called()
+
+    def test_gaussian_smoothing_matches_known_output(self):
+        """Deterministic input series -> the smoothed 'today' value must
+        match scipy.ndimage.gaussian_filter1d computed independently in this
+        test (not merely 'is a float')."""
+        import numpy as np
+        from scipy.ndimage import gaussian_filter1d
+
+        raw_series = [1.0, 2.0, 3.0, 10.0, 4.0, 3.0, 2.0]  # a spike on day 4
+        expected = float(gaussian_filter1d(np.asarray(raw_series), sigma=1.5)[-1])
+
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.return_value = {
+            f"2026-07-{14 + i:02d}": v for i, v in enumerate(raw_series)
+        }
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("settings.settings.SECTOR_HEAT_SMOOTHING_SIGMA", 1.5), \
+             patch("settings.settings.SECTOR_HEAT_LOOKBACK_DAYS", 7), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            result = compute_sector_heat_factors(["Technology"])
+
+        assert result == {"Technology": pytest.approx(expected)}
+
+    def test_one_call_per_distinct_sector_bounded(self):
+        """Exactly one fetch_daily_counts() call per distinct sector -- never
+        one per ticker, and never a duplicate call for a repeated sector
+        name."""
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.return_value = {"2026-07-20": 5.0}
+        sectors = ["Technology", "Technology", "Energy", "Healthcare", "", None, "Unknown"]
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            compute_sector_heat_factors(sectors)
+        # 7 raw entries collapse to 3 distinct real sectors -> 3 calls.
+        assert fake_source.fetch_daily_counts.call_count == 3
+
+    def test_sector_failure_does_not_block_others(self):
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.side_effect = [
+            RuntimeError("boom"), {"2026-07-20": 5.0},
+        ]
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            result = compute_sector_heat_factors(["Energy", "Technology"])
+        assert set(result.keys()) == {"Technology"}
+
+    def test_sector_with_empty_series_excluded_not_fabricated(self):
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.return_value = {}
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            result = compute_sector_heat_factors(["Technology"])
+        assert result == {}
+
+    def test_unknown_sector_never_queried(self):
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.return_value = {"2026-07-20": 5.0}
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            compute_sector_heat_factors(["Unknown", "unknown", ""])
+        fake_source.fetch_daily_counts.assert_not_called()

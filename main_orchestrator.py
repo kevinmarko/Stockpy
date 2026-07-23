@@ -683,6 +683,15 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     # -- CONSTRAINT #4) when the feature is disabled or a
                     # symbol's fetch failed this cycle.
                     "attention_score": _safe_float_or_none(row.get("Attention_Score")),
+                    # Sector Heat Factor (GDELT article-volume attention proxy
+                    # -- see pipeline/production_steps.py::_apply_sector_heat_factor
+                    # and data/sentiment_sources.py::compute_sector_heat_factors).
+                    # Same NaN-never-fabricated convention as the multifactor
+                    # z-scores immediately above -- NaN when
+                    # settings.SECTOR_HEAT_ENABLED is False, the sector's
+                    # GDELT query failed, or this ticker's sector wasn't
+                    # covered this cycle.
+                    "sector_heat_factor": _safe_float_or_none(row.get("Sector_Heat_Factor")),
                     # Task C3 — post-trade evaluation metrics (evaluation_engine.py
                     # EvaluationEngine.evaluate_portfolio()/calculate_edge_ratio()
                     # already compute these into dashboard_df every cycle; they
