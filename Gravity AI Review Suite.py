@@ -8054,9 +8054,18 @@ class GravityAIAuditor:
         try:
             from pathlib import Path
 
-            # Check 1: settings default
-            from settings import settings as _s
-            c1 = bool(getattr(_s, "ADVISORY_ONLY", False)) is True
+            # Check 1: settings default — read the DECLARED Pydantic field
+            # default (Settings.model_fields[...].default), not the live
+            # `settings` singleton, which resolves through env vars / a real
+            # local `.env` (precedence: env > .env > field default per
+            # SettingsConfigDict above). An operator who has legitimately set
+            # ADVISORY_ONLY=false in their own `.env` for real paper/live
+            # operation would otherwise make this check spuriously FAIL even
+            # though the code-level default is correctly True — this check's
+            # job is to audit the CODE, not reflect the operator's current
+            # configuration choice.
+            from settings import Settings as _SettingsCls
+            c1 = _SettingsCls.model_fields["ADVISORY_ONLY"].default is True
             audit["checks"].append({
                 "check": "settings.ADVISORY_ONLY default == True",
                 "passed": c1,
@@ -13076,7 +13085,19 @@ class GravityAIAuditor:
             })
 
             # ── 3: review → built, all allow_place False ─────────────────
-            pr = mod.build_execution_queue(rr, mode="review", now=rth)
+            # Patch `_max_notional` (matching the pattern used for checks
+            # 4-6 below) so the $500 BUY notional this fixture expects
+            # (check 7) isn't silently clipped by whatever
+            # ROBINHOOD_MAX_NOTIONAL_PER_ORDER a real operator has actually
+            # configured in their own `.env` (e.g. a conservative live cap
+            # like $25) — that cap is a legitimate deployment choice, not
+            # something this synthetic-fixture check should be sensitive to.
+            _orig_max_c3 = mod._max_notional
+            mod._max_notional = lambda: 5000.0
+            try:
+                pr = mod.build_execution_queue(rr, mode="review", now=rth)
+            finally:
+                mod._max_notional = _orig_max_c3
             c3 = (pr["n_intents"] == 2 and all(not i["allow_place"] for i in pr["intents"]))
             all_pass = all_pass and c3
             audit["checks"].append({
@@ -13152,9 +13173,21 @@ class GravityAIAuditor:
             })
 
             # ── 8: settings default off + fail-safe coercion ─────────────
+            # c8a reads the DECLARED Pydantic field default rather than
+            # instantiating Settings() — a real local `.env` setting
+            # ROBINHOOD_EXECUTION_MODE=live (a legitimate operator config for
+            # actual execution) takes precedence over the field default under
+            # pydantic-settings' resolution order, so Settings() reflects the
+            # operator's live choice, not the code's compiled-in default; this
+            # check's job is to audit the CODE default, not the deployment's
+            # current mode. c8b below intentionally still constructs a fresh
+            # Settings() because it explicitly sets an in-process
+            # os.environ override first, which always outranks `.env` in
+            # pydantic-settings precedence — that part is already correctly
+            # isolated from any local `.env` content.
             from settings import Settings
             import os as _os
-            c8a = (Settings().ROBINHOOD_EXECUTION_MODE == "off")
+            c8a = (Settings.model_fields["ROBINHOOD_EXECUTION_MODE"].default == "off")
             _os.environ["ROBINHOOD_EXECUTION_MODE"] = "garbage"
             try:
                 c8b = (Settings().ROBINHOOD_EXECUTION_MODE == "off")
@@ -13319,13 +13352,22 @@ class GravityAIAuditor:
             all_pass = all_pass and c1
 
             # ── Check 2: settings.LLM_COMMENTARY_ENABLED default is False ────
+            # Read the DECLARED Pydantic field default rather than
+            # instantiating a fresh Settings() — pydantic-settings resolves
+            # env vars / a real local `.env` ahead of the field default
+            # (SettingsConfigDict(env_file=".env") above), so `Settings()`
+            # reflects whatever the CURRENT operator has configured, not the
+            # code's compiled-in default. An operator who has legitimately
+            # opted in via LLM_COMMENTARY_ENABLED=true in their own `.env`
+            # would otherwise make this check spuriously FAIL even though the
+            # code-level default is correctly False.
             from settings import Settings as _Settings
-            _fresh = _Settings()
-            c2 = getattr(_fresh, "LLM_COMMENTARY_ENABLED", True) is False
+            _field_default = _Settings.model_fields["LLM_COMMENTARY_ENABLED"].default
+            c2 = _field_default is False
             audit["checks"].append({
                 "check": "settings.LLM_COMMENTARY_ENABLED default is False (opt-in)",
                 "passed": bool(c2),
-                "detail": f"default={getattr(_fresh, 'LLM_COMMENTARY_ENABLED', '<missing>')}",
+                "detail": f"default={_field_default}",
             })
             all_pass = all_pass and c2
 
@@ -15434,7 +15476,20 @@ class GravityAIAuditor:
             ) and all_pass
 
             # ── 8: plan_follow end-to-end (off mode) shape + no write ─────
+            # plan_follow() takes no `mode` argument -- it relies on
+            # execution.queue_builder._resolve_mode()'s default, which reads
+            # the live `settings.ROBINHOOD_EXECUTION_MODE` singleton
+            # (pydantic-settings resolves a real local `.env` override ahead
+            # of the field default). Temporarily pin the singleton attribute
+            # to "off" for this call so the check validates the CODE's
+            # off-by-default behavior instead of whatever execution mode a
+            # real operator has actually configured in their own `.env`
+            # (e.g. ROBINHOOD_EXECUTION_MODE=live for genuine paper/live
+            # operation) -- restored in `finally` regardless of outcome.
             if ok1:
+                from settings import settings as _live_settings
+                _orig_exec_mode = _live_settings.ROBINHOOD_EXECUTION_MODE
+                _live_settings.ROBINHOOD_EXECUTION_MODE = "off"
                 try:
                     from pilots.catalog import get_pilot as _get_pilot
                     pilot = _get_pilot("trend-following")
@@ -15452,6 +15507,8 @@ class GravityAIAuditor:
                         detail8 = f"keys={sorted(res)[:6] if isinstance(res, dict) else res} mode={res.get('mode') if isinstance(res, dict) else '?'}"
                 except Exception as exc:
                     ok8, detail8 = False, str(exc)
+                finally:
+                    _live_settings.ROBINHOOD_EXECUTION_MODE = _orig_exec_mode
             else:
                 ok8, detail8 = False, "skipped — import failed"
             all_pass = _chk(
