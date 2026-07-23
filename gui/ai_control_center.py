@@ -177,6 +177,19 @@ CAPABILITIES: Tuple[AICapability, ...] = (
              "SENTIMENT_LLM_VERIFICATION_PROVIDER.",
         provider_selector_setting="SENTIMENT_LLM_VERIFICATION_PROVIDER",
     ),
+    AICapability(
+        key="rag_portfolio_context",
+        label="RAG portfolio contextualizer",
+        enable_settings=("RAG_PORTFOLIO_CONTEXT_ENABLED", "RAG_PORTFOLIO_CONTEXT_PROVIDER"),
+        provider_key_settings=("ANTHROPIC_API_KEY", "GEMINI_API_KEY"),
+        module="engine.portfolio_context",
+        trigger="on_demand",
+        toggle_key="RAG_PORTFOLIO_CONTEXT_ENABLED",
+        help="Sector-exposure summary (always on) plus an optional LLM note grounded "
+             "in the ingested sentiment corpus via an embedded FAISS index. Provider is "
+             "operator-chosen (Claude or Gemini) via RAG_PORTFOLIO_CONTEXT_PROVIDER.",
+        provider_selector_setting="RAG_PORTFOLIO_CONTEXT_PROVIDER",
+    ),
 )
 
 

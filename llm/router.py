@@ -196,3 +196,69 @@ def get_sentiment_verification_provider() -> Optional[LLMProvider]:
 
     logger.info("Unknown sentiment verification provider '%s' — skipping LLM.", choice)
     return None
+
+
+def get_portfolio_context_provider() -> Optional[LLMProvider]:
+    """Return the configured RAG portfolio-context provider, or ``None``.
+
+    Gated on ``settings.RAG_PORTFOLIO_CONTEXT_ENABLED`` (Phase 2 PR3) and
+    ``settings.RAG_PORTFOLIO_CONTEXT_PROVIDER`` — ``"claude"`` or
+    ``"gemini"``. Returns ``None`` when the switch is off, the provider
+    choice is ``"none"``/unrecognized, the relevant API key is unset, or
+    construction fails (CONSTRAINT #6). Reuses :func:`_construct_provider`
+    — the same dispatch as rationale/alert commentary.
+    """
+    if not getattr(settings, "RAG_PORTFOLIO_CONTEXT_ENABLED", False):
+        return None
+    choice = (getattr(settings, "RAG_PORTFOLIO_CONTEXT_PROVIDER", "") or "").lower()
+    if choice in ("", "none"):
+        return None
+    timeout = float(getattr(settings, "LLM_COMMENTARY_TIMEOUT_SECONDS", 8) or 8)
+    return _construct_provider(choice, timeout)
+
+
+def get_embedding_provider():
+    """Return a provider exposing ``embed_texts()``, or ``None`` to skip.
+
+    Gated on ``settings.RAG_PORTFOLIO_CONTEXT_ENABLED`` (Phase 2 PR3) — the
+    embedding path (indexing the sentiment corpus, embedding a retrieval
+    query) never reaches for an SDK while the master switch is off, even if
+    a downstream caller forgets to check the flag itself. Reads
+    ``settings.RAG_EMBEDDING_PROVIDER`` — ``"openai"`` (default) or
+    ``"gemini"``. ``embed_texts`` is an extra, duck-typed capability (not on
+    the :class:`LLMProvider` ABC — see ``OpenAIProvider.embed_texts`` /
+    ``GeminiProvider.embed_texts``), so the return type is intentionally
+    untyped here (``Optional[OpenAIProvider | GeminiProvider]`` in practice).
+    """
+    if not getattr(settings, "RAG_PORTFOLIO_CONTEXT_ENABLED", False):
+        return None
+    choice = (getattr(settings, "RAG_EMBEDDING_PROVIDER", "") or "").lower()
+    if choice in ("", "none"):
+        return None
+
+    timeout = float(getattr(settings, "LLM_COMMENTARY_TIMEOUT_SECONDS", 8) or 8)
+
+    if choice == "openai":
+        api_key = getattr(settings, "OPENAI_API_KEY", None)
+        if not api_key:
+            logger.info("Embedding provider 'openai' selected but OPENAI_API_KEY is unset.")
+            return None
+        try:
+            return OpenAIProvider(api_key=api_key, timeout_seconds=timeout)
+        except Exception as exc:
+            logger.warning("Failed to construct OpenAIProvider for embeddings: %s", exc)
+            return None
+
+    if choice == "gemini":
+        api_key = getattr(settings, "GEMINI_API_KEY", None)
+        if not api_key:
+            logger.info("Embedding provider 'gemini' selected but GEMINI_API_KEY is unset.")
+            return None
+        try:
+            return GeminiProvider(api_key=api_key, timeout_seconds=timeout)
+        except Exception as exc:
+            logger.warning("Failed to construct GeminiProvider for embeddings: %s", exc)
+            return None
+
+    logger.info("Unknown embedding provider '%s' — skipping embeddings.", choice)
+    return None

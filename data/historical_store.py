@@ -316,6 +316,35 @@ _SENTIMENT_AUDIT_ADD_VERIFICATION_METHOD_DDL = """
 ALTER TABLE sentiment_ingestion_audit ADD COLUMN verification_method TEXT DEFAULT 'placeholder'
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — rag_indexed_docs (Phase 2 PR3: RAG-Powered Portfolio Contextualizer)
+#
+# Tracks which sentiment_ingestion_audit rows have already been embedded into
+# the embedded FAISS index (data/rag_index.py). Deliberately additive-only —
+# it does NOT mutate the PIT-frozen sentiment_ingestion_audit rows themselves
+# (no new column on that table, no UPDATE ever issued against it). faiss_row
+# is the ID assigned inside the FAISS IndexIDMap (DocumentVectorStore uses
+# ingest_id itself as the FAISS id, so faiss_row == ingest_id in practice —
+# tracked as its own column so the on-disk FAISS index and this table can be
+# reconciled independently of that implementation detail). doc_hash is a
+# content hash of text_content, used as a defensive dedup/integrity check.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RAG_INDEXED_DOCS_DDL = """
+CREATE TABLE IF NOT EXISTS rag_indexed_docs (
+    ingest_id   INTEGER PRIMARY KEY,
+    doc_hash    TEXT    NOT NULL,
+    faiss_row   INTEGER NOT NULL,
+    indexed_at  TEXT    NOT NULL,
+    FOREIGN KEY (ingest_id) REFERENCES sentiment_ingestion_audit(ingest_id)
+)
+"""
+
+_RAG_INDEXED_DOCS_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_rag_indexed_docs_indexed_at
+    ON rag_indexed_docs (indexed_at)
+"""
+
 # Column order for the batch INSERT in save_sentiment_documents().
 _SENTIMENT_AUDIT_INSERT_COLS = (
     "as_of, trading_day, symbol, source_name, author_handle, text_content, "
@@ -469,6 +498,8 @@ class HistoricalStore:
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_INDEX_DDL)
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_ASOF_INDEX_DDL)
                 conn.execute(_SENTIMENT_LLM_VERIFICATION_CACHE_DDL)
+                conn.execute(_RAG_INDEXED_DOCS_DDL)
+                conn.execute(_RAG_INDEXED_DOCS_INDEX_DDL)
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
                 self._migrate_add_verification_method_column(conn)
@@ -1882,6 +1913,185 @@ class HistoricalStore:
                 "HistoricalStore.get_sentiment_archive_depth_by_source failed: %s", exc
             )
             return {}
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public API — rag_indexed_docs (Phase 2 PR3: RAG Portfolio Contextualizer)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_unindexed_sentiment_documents(
+        self, since: datetime, *, limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Return ``sentiment_ingestion_audit`` rows not yet in ``rag_indexed_docs``.
+
+        Scoped to ``as_of >= since`` (caller controls the recency window) and
+        excludes any ``ingest_id`` already present in ``rag_indexed_docs`` —
+        this is the source query for :func:`data.rag_index.DocumentVectorStore
+        .index_new_documents`. Ordered ascending by ``ingest_id`` so eviction
+        (FIFO) and indexing observe the same natural order.
+
+        Returns ``[]`` on any failure or when nothing is pending
+        (CONSTRAINT #6 — never raises). Never mutates
+        ``sentiment_ingestion_audit`` (read-only).
+        """
+        try:
+            since_str = pd.Timestamp(since).isoformat()
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(
+                    """
+                    SELECT ingest_id, as_of, trading_day, symbol, source_name, text_content
+                    FROM sentiment_ingestion_audit
+                    WHERE as_of >= ?
+                      AND ingest_id NOT IN (SELECT ingest_id FROM rag_indexed_docs)
+                    ORDER BY ingest_id ASC
+                    """
+                    + (" LIMIT ?" if limit is not None else ""),
+                    (since_str, limit) if limit is not None else (since_str,),
+                ).fetchall()
+            return [
+                {
+                    "ingest_id": r[0],
+                    "as_of": r[1],
+                    "trading_day": r[2],
+                    "symbol": r[3],
+                    "source_name": r[4],
+                    "text_content": r[5],
+                }
+                for r in rows
+            ]
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_unindexed_sentiment_documents failed: %s", exc)
+            return []
+
+    def get_sentiment_documents_by_ingest_ids(
+        self, ingest_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Return ``sentiment_ingestion_audit`` rows for the given ``ingest_ids``.
+
+        Used by :func:`data.rag_index.DocumentVectorStore.search` to hydrate
+        FAISS nearest-neighbor IDs back into full document metadata (symbol,
+        source, text, as_of). Returns ``[]`` on any failure or an empty input
+        list (CONSTRAINT #6).
+        """
+        if not ingest_ids:
+            return []
+        try:
+            placeholders = ",".join("?" for _ in ingest_ids)
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(
+                    f"""
+                    SELECT ingest_id, as_of, trading_day, symbol, source_name, text_content
+                    FROM sentiment_ingestion_audit
+                    WHERE ingest_id IN ({placeholders})
+                    """,
+                    tuple(int(i) for i in ingest_ids),
+                ).fetchall()
+            return [
+                {
+                    "ingest_id": r[0],
+                    "as_of": r[1],
+                    "trading_day": r[2],
+                    "symbol": r[3],
+                    "source_name": r[4],
+                    "text_content": r[5],
+                }
+                for r in rows
+            ]
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_sentiment_documents_by_ingest_ids failed: %s", exc)
+            return []
+
+    def record_rag_indexed_doc(
+        self, ingest_id: int, doc_hash: str, faiss_row: int, indexed_at: Optional[str] = None
+    ) -> bool:
+        """INSERT OR REPLACE one ``rag_indexed_docs`` row.
+
+        Returns ``True`` on success, ``False`` on any failure (never raises
+        — CONSTRAINT #6). Idempotent on ``ingest_id`` (the primary key) so a
+        re-index of the same document is a harmless no-op overwrite rather
+        than a duplicate-key error.
+        """
+        try:
+            ts = indexed_at or self._now_utc_iso()
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO rag_indexed_docs
+                            (ingest_id, doc_hash, faiss_row, indexed_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (int(ingest_id), doc_hash, int(faiss_row), ts),
+                    )
+            return True
+        except Exception as exc:
+            logger.warning("HistoricalStore.record_rag_indexed_doc(%s) failed: %s", ingest_id, exc)
+            return False
+
+    def get_rag_indexed_doc_count(self) -> int:
+        """Return the total row count of ``rag_indexed_docs``, or ``0`` on error."""
+        try:
+            with self._lock:
+                conn = self._get_conn()
+                row = conn.execute("SELECT COUNT(*) FROM rag_indexed_docs").fetchone()
+            return int(row[0]) if row else 0
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_rag_indexed_doc_count failed: %s", exc)
+            return 0
+
+    def get_oldest_rag_indexed_docs(self, n: int) -> List[tuple]:
+        """Return the ``n`` oldest ``(ingest_id, faiss_row)`` pairs by ``indexed_at``.
+
+        Used by :func:`data.rag_index.DocumentVectorStore._evict_if_needed`
+        to implement FIFO eviction against ``RAG_INDEX_MAX_DOCUMENTS``.
+        Returns ``[]`` on any failure or when ``n <= 0`` (CONSTRAINT #6).
+        """
+        if n <= 0:
+            return []
+        try:
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(
+                    """
+                    SELECT ingest_id, faiss_row FROM rag_indexed_docs
+                    ORDER BY indexed_at ASC, ingest_id ASC
+                    LIMIT ?
+                    """,
+                    (int(n),),
+                ).fetchall()
+            return [(int(r[0]), int(r[1])) for r in rows]
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_oldest_rag_indexed_docs failed: %s", exc)
+            return []
+
+    def delete_rag_indexed_docs(self, ingest_ids: List[int]) -> bool:
+        """Delete ``rag_indexed_docs`` rows for the given ``ingest_ids``.
+
+        Returns ``True`` on success (including a no-op empty list), ``False``
+        on any failure (never raises — CONSTRAINT #6). Does NOT touch
+        ``sentiment_ingestion_audit`` — only the tracking table.
+        """
+        if not ingest_ids:
+            return True
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            placeholders = ",".join("?" for _ in ingest_ids)
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.execute(
+                        f"DELETE FROM rag_indexed_docs WHERE ingest_id IN ({placeholders})",
+                        tuple(int(i) for i in ingest_ids),
+                    )
+            return True
+        except Exception as exc:
+            logger.warning("HistoricalStore.delete_rag_indexed_docs failed: %s", exc)
+            return False
 
     @staticmethod
     def _resolve_data_engine(data_engine):

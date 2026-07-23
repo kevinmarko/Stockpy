@@ -31,3 +31,18 @@
 # `tensorflow-metal` (GPU) is unnecessary for this tiny model and adds version
 # churn, so it is intentionally omitted.
 tensorflow>=2.19
+
+# faiss-cpu activates the embedded local vector store used by the RAG-Powered
+# Portfolio Contextualizer (data/rag_index.py, gated behind
+# settings.RAG_PORTFOLIO_CONTEXT_ENABLED, default False). It indexes the
+# already-ingested sentiment corpus (sentiment_ingestion_audit) into a local
+# faiss.IndexIDMap(IndexFlatIP) persisted to output/rag_index/index.faiss —
+# a single-operator desktop app has no need for a server-mode vector DB
+# (Qdrant/Docker); an embedded, in-process library is the right fit, matching
+# this file's own tensorflow opt-in-heavy-dependency precedent. Without it,
+# data/rag_index.py's DocumentVectorStore lazy-imports faiss inside every
+# method and degrades to a graceful no-op (0 indexed / [] retrieved) exactly
+# like the CNN-LSTM path above without tensorflow — the rest of the platform,
+# including engine/portfolio_context.py's always-present deterministic
+# sector-exposure summary, is unaffected either way.
+faiss-cpu>=1.8.0

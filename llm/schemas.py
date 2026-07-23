@@ -303,6 +303,65 @@ class SentimentDocumentVerification(BaseModel):
     )
 
 
+_AffectedSector = Annotated[str, StringConstraints(max_length=60)]
+
+
+class PortfolioContextNote(BaseModel):
+    """RAG-grounded portfolio context note (Phase 2 PR3, "RAG-Powered
+    Portfolio Contextualizer").
+
+    Synthesized from (1) the deterministic sector-exposure breakdown
+    (:mod:`engine.portfolio_exposure`) and (2) retrieved documents from the
+    already-ingested sentiment corpus (``sentiment_ingestion_audit`` via
+    :mod:`data.rag_index`) — never invented (CONSTRAINT #4). This is an
+    OPTIONAL enrichment layer: :func:`engine.portfolio_context.
+    generate_portfolio_context_note` always returns the deterministic
+    exposure summary; this schema populates only the LLM-enriched
+    ``context_note`` field, and is ``None`` on any retrieval/embedding/LLM
+    failure (CONSTRAINT #6 — template-survives contract, same shape as
+    :func:`engine.advisory.enrich_with_llm_rationale`).
+
+    Fields
+    ------
+    headline :
+        One-sentence summary of the dominant portfolio-level exposure theme
+        implied by the sector breakdown and retrieved documents.
+    tailwind_or_headwind :
+        Ordinal label — ``"tailwind" | "headwind" | "neutral"`` — reflecting
+        whether the retrieved context reads net-supportive or net-adverse
+        for the portfolio's current sector concentration.
+    rationale :
+        2-4 sentence synthesis citing ONLY the supplied exposure figures and
+        retrieved document snippets — never a fabricated statistic.
+    affected_sectors :
+        0-5 sector names (matching :class:`engine.portfolio_exposure.
+        SectorExposure.sector` values) the note is actually about. May be
+        empty when the note is portfolio-wide rather than sector-specific.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    headline: str = Field(
+        min_length=1,
+        max_length=160,
+        description="One-sentence summary of the dominant portfolio exposure theme.",
+    )
+    tailwind_or_headwind: Literal["tailwind", "headwind", "neutral"] = Field(
+        default="neutral",
+        description="Whether retrieved context reads net-supportive or net-adverse.",
+    )
+    rationale: str = Field(
+        min_length=1,
+        max_length=700,
+        description="2-4 sentence synthesis citing only supplied exposure figures and retrieved snippets.",
+    )
+    affected_sectors: List[_AffectedSector] = Field(
+        default_factory=list,
+        max_length=5,
+        description="0-5 sector names the note is about. May be empty for a portfolio-wide note.",
+    )
+
+
 class GravityAuditStepResult(BaseModel):
     """One AI-rendered Gravity audit step verdict.
 

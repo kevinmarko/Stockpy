@@ -501,3 +501,179 @@ class TestSentimentLLMVerificationCache:
 
         monkeypatch.setattr(store, "Session", _boom)
         assert store.get_cached_verification("hash5") is None
+class TestRagIndexedDocs:
+    """Phase 2 PR3 (RAG-Powered Portfolio Contextualizer) -- the additive
+    ``rag_indexed_docs`` tracking table and its read/write helpers. This
+    table deliberately never mutates ``sentiment_ingestion_audit`` itself
+    (no new column, no UPDATE issued against it)."""
+
+    def _doc(self, **overrides):
+        base = dict(
+            as_of=datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc),  # 10:00 ET
+            symbol="AAPL",
+            source_name="finnhub",
+            text_content="test document",
+            raw_sentiment_score=0.5,
+        )
+        base.update(overrides)
+        return base
+
+    def test_table_created_on_init(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='rag_indexed_docs'"
+            ).fetchone()
+        assert row is not None
+
+    def test_get_unindexed_sentiment_documents_returns_new_rows(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._doc(), self._doc(symbol="MSFT")])
+
+        pending = store.get_unindexed_sentiment_documents(
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        )
+        assert len(pending) == 2
+        assert {p["symbol"] for p in pending} == {"AAPL", "MSFT"}
+
+    def test_indexed_document_excluded_from_pending(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._doc()])
+
+        pending = store.get_unindexed_sentiment_documents(
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        )
+        ingest_id = pending[0]["ingest_id"]
+        assert store.record_rag_indexed_doc(
+            ingest_id=ingest_id, doc_hash="abc123", faiss_row=ingest_id
+        )
+
+        pending_after = store.get_unindexed_sentiment_documents(
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        )
+        assert pending_after == []
+
+    def test_since_filter_excludes_older_documents(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([
+            self._doc(as_of=datetime(2020, 1, 1, 14, 0, tzinfo=timezone.utc)),
+            self._doc(as_of=datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc)),
+        ])
+
+        pending = store.get_unindexed_sentiment_documents(
+            since=datetime(2025, 1, 1, tzinfo=timezone.utc)
+        )
+        assert len(pending) == 1
+
+    def test_get_sentiment_documents_by_ingest_ids(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._doc(symbol="AAPL"), self._doc(symbol="MSFT")])
+        pending = store.get_unindexed_sentiment_documents(
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        )
+        ids = [p["ingest_id"] for p in pending]
+
+        result = store.get_sentiment_documents_by_ingest_ids(ids)
+        assert len(result) == 2
+        assert {r["symbol"] for r in result} == {"AAPL", "MSFT"}
+
+    def test_get_sentiment_documents_by_ingest_ids_empty_list(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        assert store.get_sentiment_documents_by_ingest_ids([]) == []
+
+    def test_record_and_count_rag_indexed_docs(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._doc()])
+        pending = store.get_unindexed_sentiment_documents(
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        )
+        ingest_id = pending[0]["ingest_id"]
+
+        assert store.get_rag_indexed_doc_count() == 0
+        store.record_rag_indexed_doc(ingest_id=ingest_id, doc_hash="hash1", faiss_row=ingest_id)
+        assert store.get_rag_indexed_doc_count() == 1
+
+    def test_oldest_and_delete_rag_indexed_docs(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._doc(), self._doc(symbol="MSFT")])
+        pending = store.get_unindexed_sentiment_documents(
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        )
+        for i, p in enumerate(pending):
+            store.record_rag_indexed_doc(
+                ingest_id=p["ingest_id"],
+                doc_hash=f"hash{i}",
+                faiss_row=p["ingest_id"],
+                indexed_at=f"2026-07-{21 + i:02d}T00:00:00+00:00",
+            )
+
+        oldest = store.get_oldest_rag_indexed_docs(1)
+        assert len(oldest) == 1
+        assert oldest[0][0] == pending[0]["ingest_id"]
+
+        assert store.delete_rag_indexed_docs([oldest[0][0]]) is True
+        assert store.get_rag_indexed_doc_count() == 1
+
+    def test_delete_rag_indexed_docs_empty_list_is_noop(self, tmp_path):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        assert store.delete_rag_indexed_docs([]) is True
+
+    def test_record_rag_indexed_doc_write_failure_returns_false(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a write failure must never raise."""
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        monkeypatch.setattr(store, "_now_utc_iso", _boom)
+        assert store.record_rag_indexed_doc(ingest_id=1, doc_hash="h", faiss_row=1) is False
+
+    def test_get_unindexed_sentiment_documents_read_failure_returns_empty(
+        self, tmp_path, monkeypatch
+    ):
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        monkeypatch.setattr(store, "_get_conn", _boom)
+        result = store.get_unindexed_sentiment_documents(
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        )
+        assert result == []
+
+    def test_does_not_mutate_sentiment_ingestion_audit_row(self, tmp_path):
+        """Indexing must never write back onto the PIT-frozen audit row."""
+        db = str(tmp_path / "rag.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._doc()])
+        pending = store.get_unindexed_sentiment_documents(
+            since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        )
+        ingest_id = pending[0]["ingest_id"]
+
+        with sqlite3.connect(db) as conn:
+            before = conn.execute(
+                "SELECT * FROM sentiment_ingestion_audit WHERE ingest_id = ?", (ingest_id,)
+            ).fetchone()
+
+        store.record_rag_indexed_doc(ingest_id=ingest_id, doc_hash="h", faiss_row=ingest_id)
+
+        with sqlite3.connect(db) as conn:
+            after = conn.execute(
+                "SELECT * FROM sentiment_ingestion_audit WHERE ingest_id = ?", (ingest_id,)
+            ).fetchone()
+
+        assert before == after

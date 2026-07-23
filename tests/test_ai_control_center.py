@@ -57,6 +57,11 @@ class TestCapabilitiesRegistry:
         keys = {c.key for c in CAPABILITIES}
         assert "sentiment_credibility_verification" in keys
 
+    def test_covers_rag_portfolio_context(self) -> None:
+        # Phase 2 PR3 — RAG-Powered Portfolio Contextualizer.
+        keys = {c.key for c in CAPABILITIES}
+        assert "rag_portfolio_context" in keys
+
     def test_all_entries_are_capabilities(self) -> None:
         assert all(isinstance(c, AICapability) for c in CAPABILITIES)
 
@@ -89,6 +94,9 @@ class TestCapabilityStatus:
 
     def _opal(self) -> AICapability:
         return next(c for c in CAPABILITIES if c.key == "opal_research")
+
+    def _rag_portfolio_context(self) -> AICapability:
+        return next(c for c in CAPABILITIES if c.key == "rag_portfolio_context")
 
     def test_ready(self) -> None:
         st = capability_status(
@@ -243,6 +251,19 @@ class TestCapabilityStatus:
         assert st["built"] is True
         assert st["status"] == "disabled"
 
+    def test_rag_portfolio_context_built(self) -> None:
+        # engine/portfolio_context.py shipped as part of this capability —
+        # must resolve built=True, and with the default (disabled) settings
+        # land on "disabled", never "not_built".
+        st = capability_status(
+            SimpleNamespace(
+                RAG_PORTFOLIO_CONTEXT_ENABLED=False, RAG_PORTFOLIO_CONTEXT_PROVIDER="none"
+            ),
+            self._rag_portfolio_context(),
+        )
+        assert st["built"] is True
+        assert st["status"] == "disabled"
+
     def test_sentiment_verification_missing_key(self) -> None:
         st = capability_status(
             SimpleNamespace(
@@ -264,6 +285,40 @@ class TestCapabilityStatus:
             self._sentiment_verification(),
         )
         assert st["status"] == "ready"
+
+    def test_rag_portfolio_context_ready_when_enabled_and_keyed(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                RAG_PORTFOLIO_CONTEXT_ENABLED=True,
+                RAG_PORTFOLIO_CONTEXT_PROVIDER="claude",
+                ANTHROPIC_API_KEY="sk-ant-x",
+            ),
+            self._rag_portfolio_context(),
+        )
+        assert st["status"] == "ready"
+        assert st["active_provider"] == "claude"
+
+    def test_rag_portfolio_context_missing_key(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                RAG_PORTFOLIO_CONTEXT_ENABLED=True,
+                RAG_PORTFOLIO_CONTEXT_PROVIDER="gemini",
+                GEMINI_API_KEY="",
+            ),
+            self._rag_portfolio_context(),
+        )
+        assert st["status"] == "missing_key"
+
+    def test_rag_portfolio_context_provider_none_counts_as_disabled(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                RAG_PORTFOLIO_CONTEXT_ENABLED=True,
+                RAG_PORTFOLIO_CONTEXT_PROVIDER="none",
+                ANTHROPIC_API_KEY="sk-x",
+            ),
+            self._rag_portfolio_context(),
+        )
+        assert st["status"] == "disabled"
 
 
 class TestOverview:
@@ -314,6 +369,9 @@ class TestOverview:
             "LLM_COMMENTARY_ALERT_PROVIDER"
         )
         assert by_key["opal_research"]["provider_selector_setting"] == "OPAL_RESEARCH_PROVIDER"
+        assert by_key["rag_portfolio_context"]["provider_selector_setting"] == (
+            "RAG_PORTFOLIO_CONTEXT_PROVIDER"
+        )
         # Non-flexible capabilities carry no provider selector.
         assert by_key["gemini_vision"]["provider_selector_setting"] is None
         assert by_key["gravity_ai_runner"]["provider_selector_setting"] is None

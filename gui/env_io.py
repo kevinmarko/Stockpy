@@ -186,6 +186,14 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SENTIMENT_LLM_VERIFICATION_ENABLED",            # bool master switch (default False)
     "SENTIMENT_LLM_VERIFICATION_PROVIDER",           # "claude" | "gemini" | "openai" | "none"
     "SENTIMENT_LLM_VERIFICATION_MAX_CALLS_PER_CYCLE",  # int — per-batch LLM call budget
+    # RAG-Powered Portfolio Contextualizer (Phase 2 PR3; non-secret). Provider
+    # credentials (ANTHROPIC/GEMINI/OPENAI keys) stay in SECRET_KEYS below —
+    # CONSTRAINT #3, never GUI-writable.
+    "RAG_PORTFOLIO_CONTEXT_ENABLED",      # bool — master switch
+    "RAG_PORTFOLIO_CONTEXT_PROVIDER",     # "claude" | "gemini" | "none"
+    "RAG_EMBEDDING_PROVIDER",             # "openai" | "gemini"
+    "RAG_INDEX_MAX_DOCUMENTS",            # int — FAISS index FIFO eviction cap
+    "RAG_RETRIEVAL_TOP_K",                # int — nearest-neighbor count per query
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
