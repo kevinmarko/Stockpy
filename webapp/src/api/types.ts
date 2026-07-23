@@ -1457,6 +1457,87 @@ export interface ValidationTrendSnapshot {
 }
 
 // ---------------------------------------------------------------------------
+// GET /gravity/audit-status — read-only port of the retired Streamlit Command
+// Center's Safety tab AI Gravity audit runner (Claude auditor + Gemini
+// cross-checker) + legacy structural Gravity Review Suite. Deliberately NO
+// trigger endpoint for either side — both are real-cost / multi-minute
+// operations with no incremental-progress channel over request/response HTTP
+// (see the backend endpoint's own docstring for the full reasoning). Every
+// leaf degrades to `null`/an honest `reason` rather than a fabricated verdict
+// (CONSTRAINT #4); the composite 200s even when neither audit has ever run
+// (CONSTRAINT #6).
+// ---------------------------------------------------------------------------
+
+export type GravityAiRunnerStatus = "disabled" | "missing_key" | "partial_key" | "ready";
+export type GravityAiHealth = "clean" | "warn" | "fail" | "empty";
+
+/** One step's Claude-vs-Gemini verdict pair from the last AI Gravity audit run. */
+export interface GravityAiAuditStep {
+  step_number: number | null;
+  step_title: string;
+  /** Pre-formatted badge string, e.g. "✅ PASSED" / "❌ FAILED" / "—". */
+  claude: string;
+  gemini: string;
+  disagreement: boolean;
+  score_claude: number | null;
+  score_gemini: number | null;
+  /** " · "-joined operator-facing notes; "" when there are none. */
+  notes: string;
+}
+
+/**
+ * AI Gravity audit runner summary (`GET /gravity/audit-status`'s `ai_audit`).
+ * `status` mirrors the desktop panel's 4-state classifier: `"disabled"` (master
+ * switch off), `"missing_key"` (switch on, neither provider key set),
+ * `"partial_key"` (exactly one key set — the runner records the other side as
+ * skipped), `"ready"` (both keys + switch on). `steps` is `[]` when no audit
+ * has run yet, regardless of `status`.
+ */
+export interface GravityAiAuditSummary {
+  status: GravityAiRunnerStatus;
+  enabled: boolean;
+  generated_at: string | null;
+  health: GravityAiHealth;
+  health_caption: string;
+  total_steps: number;
+  claude_passed: number;
+  claude_failed: number;
+  claude_skipped: number;
+  gemini_passed: number;
+  gemini_failed: number;
+  gemini_skipped: number;
+  disagreements: number;
+  steps: GravityAiAuditStep[];
+}
+
+/** One step's pass/fail from the legacy structural Gravity Review Suite. */
+export interface GravityLegacyAuditStep {
+  step: string;
+  passed: boolean;
+  status: string;
+}
+
+/**
+ * Legacy structural Gravity Review Suite last-run status
+ * (`GET /gravity/audit-status`'s `legacy_audit`). `available` is `false` (with
+ * an honest `reason`) when no run has ever completed, the log is unreadable,
+ * or a run is currently in progress (its trailing verdict JSON isn't written
+ * until the process exits) — `all_passed`/`steps` are never guessed in that
+ * case.
+ */
+export interface GravityLegacyAuditStatus {
+  available: boolean;
+  all_passed: boolean | null;
+  steps: GravityLegacyAuditStep[];
+  reason: string | null;
+}
+
+export interface GravityAuditStatus {
+  ai_audit: GravityAiAuditSummary;
+  legacy_audit: GravityLegacyAuditStatus;
+}
+
+// ---------------------------------------------------------------------------
 // GET /observability/summary — Mission Control composite: portfolio risk
 // metrics, the account equity curve + drawdown, the current macro-regime
 // overlay, portfolio-wide forecast skill, and the risk-gate block log. Every

@@ -63,6 +63,7 @@ import type {
   RunRecord,
   StrategyMatrix,
   StrategyHealthRow,
+  GravityAuditStatus,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
   ValidationTrendSnapshot,
@@ -280,6 +281,9 @@ const liveApi = {
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
   getStrategyHealth: () => http<StrategyHealthRow[]>("/strategy/health"),
   getValidationTrend: () => http<ValidationTrendSnapshot>("/strategy/validation-trend"),
+  // Read-only -- deliberately no trigger endpoint (see GravityAuditStatus's
+  // doc comment in types.ts / the backend endpoint's own docstring for why).
+  getGravityAuditStatus: () => http<GravityAuditStatus>("/gravity/audit-status"),
   // ---- Recommendation Tracking & Calibration (default pilots base, :8602) ----
   getCalibrationSummary: (horizon = 30) =>
     http<CalibrationSummary>(`/calibration/summary?horizon=${horizon}`),

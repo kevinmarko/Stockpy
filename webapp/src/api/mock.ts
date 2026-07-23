@@ -94,6 +94,7 @@ import type {
   StrategyHealthGate,
   StrategyHealthRow,
   StrategyHealthTrendPoint,
+  GravityAuditStatus,
   StrategyMatrix,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
@@ -2114,6 +2115,52 @@ const VALIDATION_TREND_SNAPSHOT: ValidationTrendSnapshot = {
   regime_reason: null,
 };
 
+// ---- AI Gravity audit + legacy structural Gravity Review Suite fixture ----
+// Exercises the interesting honesty branches: a "ready" AI-runner status with
+// ONE real Claude/Gemini disagreement (so the disagreement badge + warn health
+// band both have something to render), and a legacy-suite log with one
+// genuinely failing step (so the screen's fail-closed styling is exercised
+// too, not just an all-green happy path).
+const GRAVITY_AUDIT_STATUS_MOCK: GravityAuditStatus = {
+  ai_audit: {
+    status: "ready",
+    enabled: true,
+    generated_at: "2026-07-20T14:32:07+00:00",
+    health: "warn",
+    health_caption: "⚠ 1 model disagreement(s); Claude skipped=0 / Gemini skipped=0.",
+    total_steps: 8,
+    claude_passed: 8,
+    claude_failed: 0,
+    claude_skipped: 0,
+    gemini_passed: 7,
+    gemini_failed: 1,
+    gemini_skipped: 0,
+    disagreements: 1,
+    steps: [
+      { step_number: 1, step_title: "Data & Schema Integrity", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 92, score_gemini: 90, notes: "" },
+      { step_number: 2, step_title: "Strategy & Signal Logic", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 88, score_gemini: 86, notes: "" },
+      { step_number: 3, step_title: "Options Pricing Engine", claude: "✅ PASSED", gemini: "❌ FAILED", disagreement: true, score_claude: 85, score_gemini: 61, notes: "gemini flagged a delta-tolerance edge case Claude did not" },
+      { step_number: 4, step_title: "Forecasting Engine", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 90, score_gemini: 91, notes: "" },
+      { step_number: 5, step_title: "Macro Regime Engine", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 87, score_gemini: 89, notes: "" },
+      { step_number: 6, step_title: "Sizing & Risk", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 93, score_gemini: 92, notes: "" },
+      { step_number: 7, step_title: "Execution & Kill-Switch", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 95, score_gemini: 94, notes: "" },
+      { step_number: 8, step_title: "LLM & Advisory Layer", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 84, score_gemini: 88, notes: "" },
+    ],
+  },
+  legacy_audit: {
+    available: true,
+    all_passed: false,
+    steps: [
+      { step: "step_1_pandera_schema", passed: true, status: "PASSED" },
+      { step: "step_2_lookahead_perturbation", passed: true, status: "PASSED" },
+      { step: "step_3_5_discrepancy_analysis", passed: true, status: "Perfect Alignment" },
+      { step: "step_4_signal_registry_health", passed: false, status: "FAILED" },
+      { step: "step_7_simulation_impact", passed: true, status: "OK / OK" },
+    ],
+    reason: null,
+  },
+};
+
 // ---- Options premium matrix fixture ----
 // Hand-written to exercise every honesty branch the screen must handle. The
 // previous seeded fixture emitted only clean Put Credit Spreads with
@@ -4127,6 +4174,10 @@ export const mockApi = {
 
   async getValidationTrend(): Promise<ValidationTrendSnapshot> {
     return delay(VALIDATION_TREND_SNAPSHOT);
+  },
+
+  async getGravityAuditStatus(): Promise<GravityAuditStatus> {
+    return delay(GRAVITY_AUDIT_STATUS_MOCK);
   },
 
   // ---- Recommendation Tracking & Calibration ----

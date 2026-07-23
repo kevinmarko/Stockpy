@@ -11,7 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrategyHealth } from "./StrategyHealth";
 import { api } from "../api/client";
-import type { StrategyHealthRow } from "../api/types";
+import type { GravityAuditStatus, StrategyHealthRow } from "../api/types";
 import { __resetThresholdsCache } from "../help/thresholds";
 
 function renderScreen() {
@@ -248,5 +248,117 @@ describe("StrategyHealth screen (real mock API)", () => {
     renderScreen();
     await screen.findByText("No pilots in the catalog yet.");
     expect(screen.queryByText("Cross-strategy validation")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Gravity Audit section — read-only port of gui/panels/gravity_audit.py's AI
+ * Gravity audit runner + legacy structural Gravity Review Suite. No trigger
+ * exists on this screen for either audit (a deliberate scope cut); these
+ * tests only cover the read/render paths.
+ */
+describe("StrategyHealth screen — Gravity Audit section (real mock API)", () => {
+  beforeEach(() => __resetThresholdsCache());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders the mock fixture's ready AI audit with a real Claude/Gemini disagreement", async () => {
+    renderScreen();
+    expect(await screen.findByText("AI Gravity Audit (Claude + Gemini)")).toBeInTheDocument();
+    expect(screen.getByText("ready")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 model disagreement\(s\); Claude skipped=0 \/ Gemini skipped=0/)
+    ).toBeInTheDocument();
+    expect(screen.getByText("8 steps")).toBeInTheDocument();
+    expect(screen.getByText("Claude 8✓ / 0✗")).toBeInTheDocument();
+    expect(screen.getByText("Gemini 7✓ / 1✗")).toBeInTheDocument();
+    expect(screen.getByText("1 disagreement(s)")).toBeInTheDocument();
+    expect(screen.getByText(/Options Pricing Engine/)).toBeInTheDocument();
+    expect(screen.getByText("⚠ disagree")).toBeInTheDocument();
+  });
+
+  it("renders the mock fixture's legacy audit with one genuinely failing step", async () => {
+    renderScreen();
+    expect(await screen.findByText("Legacy Structural Audit")).toBeInTheDocument();
+    expect(
+      screen.getByText("❌ At least one step failed on the last run — not cleared for live.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("step_4_signal_registry_health")).toBeInTheDocument();
+  });
+
+  it("disabled AI runner status renders the .env hint, not a fabricated audit", async () => {
+    const disabled: GravityAuditStatus = {
+      ai_audit: {
+        status: "disabled",
+        enabled: false,
+        generated_at: null,
+        health: "empty",
+        health_caption: "No AI Gravity audit run yet.",
+        total_steps: 0,
+        claude_passed: 0,
+        claude_failed: 0,
+        claude_skipped: 0,
+        gemini_passed: 0,
+        gemini_failed: 0,
+        gemini_skipped: 0,
+        disagreements: 0,
+        steps: [],
+      },
+      legacy_audit: {
+        available: false,
+        all_passed: null,
+        steps: [],
+        reason: "No Gravity Review Suite run recorded yet — launch it from the desktop Command Center's Safety tab.",
+      },
+    };
+    vi.spyOn(api, "getGravityAuditStatus").mockResolvedValueOnce(disabled);
+    renderScreen();
+    expect(
+      await screen.findByText(/AI Gravity runner is off\. Set GRAVITY_AI_RUNNER_ENABLED=true/)
+    ).toBeInTheDocument();
+    expect(screen.getByText("No AI Gravity audit run yet.")).toBeInTheDocument();
+    // No steps table, no fabricated KPI strip, when nothing has run yet.
+    expect(screen.queryByText(/steps$/)).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/No Gravity Review Suite run recorded yet/)
+    ).toBeInTheDocument();
+  });
+
+  it("a clean legacy audit (all steps passed) renders the green banner honestly", async () => {
+    const clean: GravityAuditStatus = {
+      ai_audit: {
+        status: "disabled",
+        enabled: false,
+        generated_at: null,
+        health: "empty",
+        health_caption: "No AI Gravity audit run yet.",
+        total_steps: 0,
+        claude_passed: 0,
+        claude_failed: 0,
+        claude_skipped: 0,
+        gemini_passed: 0,
+        gemini_failed: 0,
+        gemini_skipped: 0,
+        disagreements: 0,
+        steps: [],
+      },
+      legacy_audit: {
+        available: true,
+        all_passed: true,
+        steps: [{ step: "step_1_schema", passed: true, status: "PASSED" }],
+        reason: null,
+      },
+    };
+    vi.spyOn(api, "getGravityAuditStatus").mockResolvedValueOnce(clean);
+    renderScreen();
+    expect(
+      await screen.findByText("✅ All steps passed on the last run.")
+    ).toBeInTheDocument();
+  });
+
+  it("never 500s the screen when the endpoint errors -- shows ErrorState with retry", async () => {
+    vi.spyOn(api, "getGravityAuditStatus").mockRejectedValueOnce(new Error("offline"));
+    renderScreen();
+    await screen.findByText("Trend Follower"); // pilot cards still render independently
+    expect(await screen.findByText(/offline/)).toBeInTheDocument();
   });
 });
