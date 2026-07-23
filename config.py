@@ -178,6 +178,18 @@ COLUMN_SCHEMA = [
     {"header": "Aggregated Source Credibility", "key": "Aggregated_Source_Credibility", "format": "number"},
 
     # ==========================================================
+    # --- ATTENTION / SECTOR HEAT (Sentiment Pipeline Phase 4 scaffolding) ---
+    # Schema slots for two follow-on attention features not yet computed as
+    # of this commit: a GDELT article-volume "Sector Heat Factor" and a
+    # blended Wikipedia-pageviews (+ optional pytrends) "Attention Score".
+    # NaN-filled until settings.SECTOR_HEAT_ENABLED / settings.
+    # WIKIPEDIA_ATTENTION_ENABLED are True AND the consuming pipeline
+    # writeback code exists (see settings.py for the gating flags).
+    # ==========================================================
+    {"header": "Sector Heat Factor", "key": "Sector_Heat_Factor", "format": "number"},
+    {"header": "Attention Score", "key": "Attention_Score", "format": "number"},
+
+    # ==========================================================
     # --- CORRELATION CLUSTER (Tier 2.5, research_engine.py) ---
     # Populated on-demand by the GUI Reports tab; NaN in the main
     # orchestrator run (no historical batch fetch required).
