@@ -764,8 +764,13 @@ class GoogleNewsRSSSource(SentimentSource):
         scoring, mirroring ``GDELTSource._score()``'s lazy import of
         ``signals.news_catalyst`` but calling the batched function directly
         since batching one fetch() call's headlines together is the whole
-        point of the newly available path. Falls back to an all-zero score
-        list (never raises -- CONSTRAINT #6) if scoring itself fails.
+        point of the newly available path. Returns ``[]`` (never raises --
+        CONSTRAINT #6) if scoring itself fails -- NOT a fabricated all-zero
+        ("neutral") score list, which would be indistinguishable from a
+        genuine neutral read (CONSTRAINT #4). ``fetch()``'s
+        ``zip(deduped, scores)`` naturally drops the whole batch when this
+        returns ``[]``, matching ``EdgarSource._fetch_fulltext``'s identical
+        drop-the-batch-on-scoring-failure pattern.
         """
         if not titles:
             return []
@@ -785,7 +790,7 @@ class GoogleNewsRSSSource(SentimentSource):
             ]
         except Exception as exc:
             logger.warning("GoogleNewsRSSSource: batch scoring failed: %s", exc)
-            return [0.0] * len(titles)
+            return []
 
 
 # ---------------------------------------------------------------------------

@@ -276,9 +276,15 @@ class TestGoogleNewsRSSSource:
     </channel></rss>
     """
 
-    def _mock_score_headlines(self, headlines):
+    def _mock_score_headlines(self, headlines, pipeline=None, **kwargs):
         # Deterministic, distinct-enough distributions per headline so
         # tests can assert on score identity/range without hitting FinBERT.
+        # Accepts (and ignores) score_headlines()'s real pipeline/batch_size/
+        # use_cache kwargs -- a prior signature mismatch here (no `pipeline`
+        # param) was silently masked by the fabricated-0.0-on-error fallback
+        # this honesty-audit fix removed; without that mask, the mismatch
+        # now surfaces as a real, correctly-failing test instead of a
+        # fake pass.
         return [{"positive": 0.7, "neutral": 0.1, "negative": 0.2} for _ in headlines]
 
     def test_fetch_parses_dedups_and_scores(self):
@@ -336,6 +342,33 @@ class TestGoogleNewsRSSSource:
         with patch("data.sentiment_sources.requests.get", side_effect=RuntimeError("timeout")):
             docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
         assert docs == []
+
+    def test_scoring_failure_drops_batch_not_fabricated_zero(self):
+        """Honesty-audit regression: a score_headlines() failure must drop
+        the whole batch (CONSTRAINT #6), never fall back to a fabricated
+        all-zero ("neutral") score list (CONSTRAINT #4) -- a 0.0 score is
+        indistinguishable from a genuine neutral read."""
+        src = GoogleNewsRSSSource()
+        mock_resp = MagicMock()
+        mock_resp.content = self._RSS_XML
+        mock_resp.raise_for_status = MagicMock()
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                with patch(
+                    "signals.news_catalyst.score_headlines",
+                    side_effect=RuntimeError("scoring backend broke"),
+                ):
+                    docs = src.fetch("AAPL", datetime(2026, 7, 20, tzinfo=timezone.utc))
+        assert docs == []
+
+    def test_score_batch_scoring_failure_returns_empty_list(self):
+        with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+            with patch(
+                "signals.news_catalyst.score_headlines",
+                side_effect=RuntimeError("boom"),
+            ):
+                scores = GoogleNewsRSSSource._score_batch(["Some headline", "Another headline"])
+        assert scores == []
 
     def test_http_error_returns_empty(self):
         src = GoogleNewsRSSSource()

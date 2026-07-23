@@ -1709,12 +1709,18 @@ class HistoricalStore:
                         "WHERE content_hash = ?",
                         (content_hash,),
                     ).fetchone()
-            if row is None:
+            if row is None or row[0] is None or row[1] is None or row[2] is None:
+                # A row with any NULL column is malformed (partial write,
+                # manual edit, future write-path regression) -- treat it
+                # identically to a cache miss so the caller re-scores fresh,
+                # rather than fabricating a 0.0 for the missing component(s)
+                # (CONSTRAINT #4). The only writer, save_finbert_scores(),
+                # never writes a NULL, so this guards against future writers.
                 return None
             return {
-                "positive": float(row[0]) if row[0] is not None else 0.0,
-                "neutral": float(row[1]) if row[1] is not None else 0.0,
-                "negative": float(row[2]) if row[2] is not None else 0.0,
+                "positive": float(row[0]),
+                "neutral": float(row[1]),
+                "negative": float(row[2]),
             }
         except Exception as exc:
             logger.warning("HistoricalStore.get_finbert_score failed: %s", exc)
