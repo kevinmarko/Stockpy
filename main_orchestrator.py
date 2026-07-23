@@ -407,9 +407,10 @@ async def _execute_broker_orders(
         return
     try:
         from execution.alpaca_broker import AlpacaBroker
-        from execution.broker_base import OrderIntent, OrderSide, OrderType
+        from execution.broker_base import OrderIntent, OrderPriority, OrderSide, OrderType
         from execution.kill_switch import KillSwitchActiveError
         from execution.order_manager import OrderManager
+        from execution.priority_queue import LeakyBucketPriorityQueue
         from execution.risk_gate import PreTradeRiskGate, RiskContext
         from transactions_store import TransactionsStore
 
@@ -458,6 +459,32 @@ async def _execute_broker_orders(
             is_premium_sell_strategy=False,
         )
 
+        # Opt-in leaky-bucket priority queue (settings.EXECUTION_PRIORITY_QUEUE_
+        # ENABLED, default False). When disabled, the loop below submits each
+        # intent inline, in final_df row order -- byte-identical to the
+        # pre-existing single-pass behavior. When enabled, sizing/skip logic
+        # still runs inline per row (unchanged), but the actual submission is
+        # deferred into a priority queue drained AFTER the build pass, so
+        # URGENT (SELL/TRIM) intents submit before NORMAL (BUY) ones
+        # regardless of their order in final_df. This does not replace or
+        # bypass execution/risk_gate.py's rate cap or execution/kill_switch.py
+        # -- both still gate every submission exactly as before, just at
+        # drain time instead of build time.
+        priority_queue_enabled = bool(getattr(settings, "EXECUTION_PRIORITY_QUEUE_ENABLED", False))
+        leak_rate = float(getattr(settings, "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", 2.0))
+        pending_queue: Optional[LeakyBucketPriorityQueue] = (
+            LeakyBucketPriorityQueue(leak_rate_per_sec=leak_rate) if priority_queue_enabled else None
+        )
+
+        async def _submit_and_log(intent: "OrderIntent", log_fn) -> None:
+            """Shared submit+log+error-handling for both the inline (disabled)
+            and drained (enabled) paths -- keeps the KillSwitchActiveError /
+            generic-Exception handling identical either way."""
+            result = await om.submit_order_with_idempotency(
+                intent, timestamp=now, risk_context=risk_ctx
+            )
+            log_fn(result)
+
         now = datetime.now(timezone.utc)
         for _, row in final_df.iterrows():
             symbol = str(row.get("Symbol", "")).upper()
@@ -492,16 +519,22 @@ async def _execute_broker_orders(
                         side=OrderSide.BUY,
                         qty=buy_qty,
                         order_type=OrderType.MARKET,
+                        priority=OrderPriority.NORMAL,
                     )
-                    result = await om.submit_order_with_idempotency(
-                        intent, timestamp=now, risk_context=risk_ctx
-                    )
-                    telemetry.info(
-                        "Order submitted: BUY %s x %.6f (kelly=%.4f, equity=%.2f, "
-                        "price=%.2f) -> status=%s broker_id=%s",
-                        symbol, buy_qty, kelly, equity, price,
-                        result.status.value, result.broker_order_id,
-                    )
+
+                    def _log_buy(result, symbol=symbol, buy_qty=buy_qty, kelly=kelly,
+                                 equity=equity, price=price):
+                        telemetry.info(
+                            "Order submitted: BUY %s x %.6f (kelly=%.4f, equity=%.2f, "
+                            "price=%.2f) -> status=%s broker_id=%s",
+                            symbol, buy_qty, kelly, equity, price,
+                            result.status.value, result.broker_order_id,
+                        )
+
+                    if pending_queue is not None:
+                        pending_queue.push((intent, _log_buy), OrderPriority.NORMAL)
+                    else:
+                        await _submit_and_log(intent, _log_buy)
 
                 elif signal in ("SELL", "TRIM") and symbol in open_symbols:
                     sell_qty = abs(open_symbols[symbol])
@@ -511,14 +544,19 @@ async def _execute_broker_orders(
                         side=OrderSide.SELL,
                         qty=sell_qty,
                         order_type=OrderType.MARKET,
+                        priority=OrderPriority.URGENT,
                     )
-                    result = await om.submit_order_with_idempotency(
-                        intent, timestamp=now, risk_context=risk_ctx
-                    )
-                    telemetry.info(
-                        "Order submitted: SELL %s x %.4f -> status=%s broker_id=%s",
-                        symbol, sell_qty, result.status.value, result.broker_order_id,
-                    )
+
+                    def _log_sell(result, symbol=symbol, sell_qty=sell_qty):
+                        telemetry.info(
+                            "Order submitted: SELL %s x %.4f -> status=%s broker_id=%s",
+                            symbol, sell_qty, result.status.value, result.broker_order_id,
+                        )
+
+                    if pending_queue is not None:
+                        pending_queue.push((intent, _log_sell), OrderPriority.URGENT)
+                    else:
+                        await _submit_and_log(intent, _log_sell)
 
             except KillSwitchActiveError as ks_err:
                 telemetry.critical(
@@ -530,6 +568,24 @@ async def _execute_broker_orders(
                 telemetry.error(
                     "Order submission failed for %s: %s", symbol, order_err, exc_info=True
                 )
+
+        # Drain the priority queue (URGENT before NORMAL, paced by the leaky
+        # bucket) — a no-op loop when the queue is disabled (pending_queue is
+        # None) since nothing was ever pushed to it above.
+        if pending_queue is not None:
+            while len(pending_queue) > 0:
+                intent, log_fn = await pending_queue.drain_one()
+                try:
+                    await _submit_and_log(intent, log_fn)
+                except KillSwitchActiveError as ks_err:
+                    telemetry.critical(
+                        "Kill switch is ACTIVE — aborting all remaining order submission. %s", ks_err
+                    )
+                    return
+                except Exception as order_err:
+                    telemetry.error(
+                        "Order submission failed for %s: %s", intent.symbol, order_err, exc_info=True
+                    )
 
     except Exception as exc:
         telemetry.error(

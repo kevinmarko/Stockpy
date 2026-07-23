@@ -251,6 +251,41 @@ class Settings(BaseSettings):
             "opt-in convention."
         ),
     )
+    MARKET_DATA_WS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: subscribe to Alpaca's real-time StockDataStream WebSocket for "
+            "quotes, SUPPLEMENTING (never replacing) the REST-polling "
+            "CompositeProvider -- see data/market_data_ws.py. Only takes effect "
+            "when the active quote provider is AlpacaProvider; otherwise a no-op "
+            "with an INFO log. False (default) reproduces the exact current "
+            "REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in "
+            "convention. Any WS failure (connect, subscribe, disconnect, missing "
+            "credentials) degrades to the existing REST path -- never crashes "
+            "the pipeline."
+        ),
+    )
+    MARKET_DATA_WS_STALE_SECONDS: int = Field(
+        default=10,
+        description=(
+            "Max age (seconds) of a WebSocket-delivered quote before it is "
+            "treated as stale and the REST path is used instead."
+        ),
+    )
+    MARKET_DATA_WS_SYMBOLS: Optional[str] = Field(
+        default=None,
+        description=(
+            "Comma-separated symbol override for the WS subscription. None "
+            "(default) falls back to the WATCHLIST env var, then to no "
+            "subscription (WS ingestion becomes a no-op, logged)."
+        ),
+    )
+    MARKET_DATA_WS_RECONNECT_BASE_SECONDS: float = Field(
+        default=1.0, description="Initial WS reconnect backoff (seconds)."
+    )
+    MARKET_DATA_WS_RECONNECT_MAX_SECONDS: float = Field(
+        default=30.0, description="Max WS reconnect backoff (seconds)."
+    )
     # Cross-cycle data-freshness gate (persisted marker, see main_orchestrator.
     # _data_is_fresh / _mark_data_refreshed). When an INTERVAL-triggered daemon
     # cycle finds the last successful data pull was younger than this TTL, it
@@ -467,6 +502,29 @@ class Settings(BaseSettings):
     MAX_ORDER_RATE_PER_MIN: int = Field(
         default=10,
         description="Maximum order submissions in any 60-second rolling window.",
+    )
+    EXECUTION_PRIORITY_QUEUE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: route OrderIntents through execution/priority_queue.py's "
+            "leaky-bucket priority queue before submission, prioritizing "
+            "risk-reducing (SELL/TRIM) intents over new BUYs when nearing the "
+            "submission-rate budget. Does NOT replace or bypass "
+            "MAX_ORDER_RATE_PER_MIN's hard cap (execution/risk_gate.py) or "
+            "execution/kill_switch.py -- both remain the sole authorization "
+            "gate, checked at submission exactly as before. False (default) "
+            "preserves the exact current sequential per-row submission order "
+            "-- matches the FORECAST_USE_GARCH_SIGMA opt-in convention."
+        ),
+    )
+    EXECUTION_QUEUE_LEAK_RATE_PER_SEC: float = Field(
+        default=2.0,
+        description=(
+            "Leaky-bucket drain rate (order submissions/sec) when "
+            "EXECUTION_PRIORITY_QUEUE_ENABLED=true. Only paces submission "
+            "ordering within a single cycle's queue drain -- independent of "
+            "MAX_ORDER_RATE_PER_MIN's separate 60s rolling-window cap."
+        ),
     )
     HMM_RISK_OFF_BLOCK_THRESHOLD: float = Field(
         default=0.80,

@@ -405,3 +405,82 @@ def test_unsizable_buy_is_skipped(monkeypatch):
 
     assert broker.submitted == [], "an unsizable BUY must not be submitted"
     assert telemetry_mock.warning.called, "the skip must be logged as a WARNING"
+
+
+# ---------------------------------------------------------------------------
+# (f) Opt-in priority queue (settings.EXECUTION_PRIORITY_QUEUE_ENABLED) --
+#     Phase-2 WebSocket-ingestion-priority-queue item 1b
+# ---------------------------------------------------------------------------
+
+def test_priority_queue_disabled_by_default_preserves_row_order(monkeypatch):
+    """Flag unset (default False): submission order must be exactly final_df's
+    row order, byte-identical to the pre-priority-queue behavior -- BUY (row 0)
+    submitted before SELL (row 1) even though SELL is normally URGENT."""
+    broker = MockBroker(positions=[_pos("MSFT", 5.0)], equity=100_000.0)
+    ts_store = _make_ts_store({"MSFT": 5.0})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+    # EXECUTION_PRIORITY_QUEUE_ENABLED left at its real default (False) --
+    # deliberately NOT monkeypatched, to prove the default is itself correct.
+
+    df = _df([
+        {"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0},
+        {"Symbol": "MSFT", "Action Signal": "SELL", "Kelly Target": 0.0, "Price": 200.0},
+    ])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    submitted_symbols = [i.symbol for i in broker.submitted]
+    assert submitted_symbols == ["AAPL", "MSFT"], (
+        f"flag-off must preserve exact final_df row order, got {submitted_symbols}"
+    )
+
+
+def test_priority_queue_enabled_submits_sell_before_buy(monkeypatch):
+    """Flag True: even with BUY appearing first in final_df, SELL/TRIM (URGENT)
+    must reach the broker before BUY (NORMAL)."""
+    broker = MockBroker(positions=[_pos("MSFT", 5.0)], equity=100_000.0)
+    ts_store = _make_ts_store({"MSFT": 5.0})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+    monkeypatch.setattr(main_orchestrator.settings, "EXECUTION_PRIORITY_QUEUE_ENABLED", True, raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", -1, raising=False)
+
+    df = _df([
+        {"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0},
+        {"Symbol": "MSFT", "Action Signal": "SELL", "Kelly Target": 0.0, "Price": 200.0},
+    ])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    submitted_symbols = [i.symbol for i in broker.submitted]
+    assert submitted_symbols == ["MSFT", "AAPL"], (
+        f"flag-on must submit URGENT (SELL) before NORMAL (BUY), got {submitted_symbols}"
+    )
+    # Both still reached the broker -- the queue reorders, it never drops.
+    assert set(submitted_symbols) == {"AAPL", "MSFT"}
+
+
+def test_priority_queue_enabled_kill_switch_still_aborts_remaining_drain(monkeypatch):
+    """Flag True: an active kill switch must still abort submission -- checked
+    at DRAIN time now, but the guarantee (no order reaches the broker) holds."""
+    broker = MockBroker(positions=[], equity=100_000.0)
+    ts_store = _make_ts_store({})
+    kill_switch = _FakeKillSwitch(active=True, reason="operator halt")
+    telemetry_mock = _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+    monkeypatch.setattr(main_orchestrator.settings, "EXECUTION_PRIORITY_QUEUE_ENABLED", True, raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", -1, raising=False)
+
+    df = _df([{"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted == [], "no order may reach the broker when kill switch is active"
+    crit = " ".join(str(c.args[0]) for c in telemetry_mock.critical.call_args_list if c.args)
+    assert "Kill switch" in crit

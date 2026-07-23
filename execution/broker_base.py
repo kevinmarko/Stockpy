@@ -47,6 +47,17 @@ class OrderStatus(str, enum.Enum):
     ERROR = "error"               # local error before broker contact
 
 
+class OrderPriority(str, enum.Enum):
+    """Submission-ordering hint for ``execution/priority_queue.py``'s opt-in
+    leaky-bucket queue (``settings.EXECUTION_PRIORITY_QUEUE_ENABLED``). Purely
+    a preference for WHICH intent gets submitted next when the queue is
+    enabled — it carries no authorization weight and never bypasses
+    ``execution/risk_gate.py`` or ``execution/kill_switch.py``, which remain
+    the sole gating authority regardless of priority."""
+    URGENT = "urgent"   # risk-reducing: SELL / TRIM / stop-loss / exit
+    NORMAL = "normal"   # new BUY entries
+
+
 @dataclass
 class OrderIntent:
     """Caller-supplied order specification.
@@ -68,6 +79,10 @@ class OrderIntent:
     # Each dict: {"symbol": str, "ratio_qty": float, "side": OrderSide}
     legs: list[dict] = field(default_factory=list)
     dry_run: bool = False
+    # Only consulted when settings.EXECUTION_PRIORITY_QUEUE_ENABLED is True;
+    # ignored otherwise (default NORMAL preserves today's plain submission
+    # order for every existing caller that never sets this).
+    priority: OrderPriority = OrderPriority.NORMAL
 
 
 @dataclass

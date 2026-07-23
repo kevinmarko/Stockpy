@@ -1211,11 +1211,37 @@ class CompositeProvider(MarketDataProvider):
     def get_latest_quote(self, symbol: str) -> Quote:
         """Return a cached or freshly-fetched Quote for ``symbol``.
 
+        When ``settings.MARKET_DATA_WS_ENABLED`` and a fresh WebSocket-
+        delivered quote exists (see ``data/market_data_ws.py``), it is
+        returned directly, bypassing both the REST call and its own TTL
+        cache. Any lookup miss/stale-quote/import-failure falls straight
+        through to the pre-existing REST+TTL-cache path below, completely
+        unchanged -- this is a purely additive, best-effort supplement.
+
         The in-process TTL cache (default 30 s) prevents redundant network
         calls within a single refresh cycle.  Raises ``MarketDataError`` on
         provider failure.
         """
         sym = symbol.upper()
+
+        try:
+            from settings import settings as _settings
+            if bool(getattr(_settings, "MARKET_DATA_WS_ENABLED", False)):
+                from data.market_data_ws import get_ws_quote
+                ws_quote = get_ws_quote(sym)
+                if ws_quote is not None:
+                    return Quote(
+                        symbol=ws_quote.symbol,
+                        price=ws_quote.price,
+                        bid=ws_quote.bid,
+                        ask=ws_quote.ask,
+                        timestamp=ws_quote.timestamp,
+                        is_stale=False,
+                        source="alpaca_ws",
+                    )
+        except Exception as exc:  # noqa: BLE001 - WS lookup must never block a REST fallback
+            logger.debug("CompositeProvider: WS quote lookup failed for %s (%s) -- using REST.", sym, exc)
+
         cached = self._cache.get(sym)
         if cached is not None:
             return cached
