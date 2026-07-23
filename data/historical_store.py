@@ -1698,6 +1698,64 @@ class HistoricalStore:
             logger.warning("HistoricalStore.get_sentiment_aggregate_by_symbol failed: %s", exc)
             return {}
 
+    def get_sentiment_archive_depth_by_source(self) -> Dict[str, Dict[str, Any]]:
+        """Per-source archive depth for ``sentiment_ingestion_audit`` --
+        earliest/latest ``as_of``, row count, and derived ``depth_days``,
+        grouped by ``source_name``.
+
+        Lets a future validation gate check institutional-source depth
+        (GDELT/EDGAR/Finnhub -- policy-trusted, genuinely backfillable, zero
+        credibility bias) SEPARATELY from social-source depth (Reddit --
+        backfillable but with degraded historical credibility, since a
+        backfilled post's ``S_authority`` can only reflect the author's
+        CURRENT account state; Yahoo RSS -- not backfillable at all, live-
+        only) rather than one blended ``settings.SENTIMENT_PIT_MIN_MONTHS``
+        number that could overstate confidence in the weaker component.
+
+        Read-only, single grouped SQL aggregation (no per-row Python loop).
+        Returns ``{}`` on any failure or when the table is empty
+        (CONSTRAINT #6).
+        """
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    cursor = conn.execute(
+                        """
+                        SELECT source_name, MIN(as_of), MAX(as_of), COUNT(*)
+                        FROM sentiment_ingestion_audit
+                        GROUP BY source_name
+                        """
+                    )
+                    rows = cursor.fetchall()
+            if not rows:
+                return {}
+            now = datetime.now(timezone.utc)
+            result: Dict[str, Dict[str, Any]] = {}
+            for source_name, earliest_as_of, latest_as_of, count in rows:
+                depth_days: Optional[int] = None
+                try:
+                    earliest = pd.Timestamp(earliest_as_of)
+                    if earliest.tzinfo is None:
+                        earliest = earliest.tz_localize("UTC")
+                    depth_days = (now - earliest.to_pydatetime()).days
+                except Exception:
+                    depth_days = None
+                result[str(source_name)] = {
+                    "earliest_as_of": earliest_as_of,
+                    "latest_as_of": latest_as_of,
+                    "document_count": int(count),
+                    "depth_days": depth_days,
+                }
+            return result
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_sentiment_archive_depth_by_source failed: %s", exc
+            )
+            return {}
+
     @staticmethod
     def _resolve_data_engine(data_engine):
         """Resolve an injectable DataEngine or construct the real singleton."""

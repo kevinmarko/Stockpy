@@ -7,7 +7,7 @@ Mirrors tests/test_historical_store_news_history.py's coverage shape.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -279,4 +279,76 @@ class TestGetSentimentAggregateBySymbol:
 
         monkeypatch.setattr(store, "Session", _boom)
         result = store.get_sentiment_aggregate_by_symbol("2026-07-21")  # must not raise
+        assert result == {}
+
+
+class TestGetSentimentArchiveDepthBySource:
+    """Per-source depth tracking -- lets a future validation gate check
+    institutional (GDELT/EDGAR/Finnhub) depth separately from social
+    (Reddit/Yahoo RSS) depth instead of one blended number."""
+
+    def _doc(self, **overrides):
+        base = dict(
+            as_of=datetime(2026, 7, 1, 14, 0, tzinfo=timezone.utc),
+            symbol="AAPL",
+            source_name="gdelt",
+            text_content="test",
+            raw_sentiment_score=0.5,
+        )
+        base.update(overrides)
+        return base
+
+    def test_empty_table_returns_empty_dict(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        assert store.get_sentiment_archive_depth_by_source() == {}
+
+    def test_grouped_by_source_independently(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([
+            self._doc(source_name="gdelt", as_of=datetime(2026, 2, 1, tzinfo=timezone.utc)),
+            self._doc(source_name="gdelt", as_of=datetime(2026, 6, 1, tzinfo=timezone.utc)),
+            self._doc(source_name="reddit", as_of=datetime(2026, 7, 10, tzinfo=timezone.utc)),
+        ])
+        result = store.get_sentiment_archive_depth_by_source()
+        assert set(result.keys()) == {"gdelt", "reddit"}
+        assert result["gdelt"]["document_count"] == 2
+        assert result["reddit"]["document_count"] == 1
+
+    def test_depth_days_reflects_earliest_document(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        earliest = datetime.now(timezone.utc) - timedelta(days=150)
+        store.save_sentiment_documents([
+            self._doc(source_name="gdelt", as_of=earliest),
+            self._doc(source_name="gdelt", as_of=datetime.now(timezone.utc) - timedelta(days=1)),
+        ])
+        result = store.get_sentiment_archive_depth_by_source()
+        # ~150 days deep, not the more-recent document's age.
+        assert 148 <= result["gdelt"]["depth_days"] <= 151
+
+    def test_institutional_and_social_depth_tracked_independently(self, tmp_path):
+        """The whole point: a shallow social source must not be masked by a
+        deep institutional one, or vice versa."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([
+            self._doc(source_name="gdelt", as_of=datetime.now(timezone.utc) - timedelta(days=160)),
+            self._doc(source_name="reddit", as_of=datetime.now(timezone.utc) - timedelta(days=3)),
+        ])
+        result = store.get_sentiment_archive_depth_by_source()
+        assert result["gdelt"]["depth_days"] > 150
+        assert result["reddit"]["depth_days"] < 10
+
+    def test_read_failure_returns_empty_dict(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a read failure must never raise."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        monkeypatch.setattr(store, "Session", _boom)
+        result = store.get_sentiment_archive_depth_by_source()  # must not raise
         assert result == {}
