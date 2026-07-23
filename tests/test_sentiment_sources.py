@@ -366,6 +366,90 @@ class TestCompositeSentimentSource:
                 CompositeSentimentSource._archive([_doc()])  # must not raise
 
 
+class TestBackpressureHardening:
+    """Wall-clock ceiling + per-source circuit breaker -- closes the gap a
+    per-request timeout alone leaves open (one slow/unreachable source could
+    otherwise stack its timeout across every remaining symbol with no
+    overall bound on the cycle)."""
+
+    def test_circuit_breaker_trips_after_threshold_consecutive_failures(self):
+        flaky = MagicMock()
+        flaky.fetch.side_effect = RuntimeError("connection timed out")
+        composite = CompositeSentimentSource(sources={"flaky": flaky})
+        composite.reset_cycle()
+
+        with patch("settings.settings.SENTIMENT_CIRCUIT_BREAKER_THRESHOLD", 3):
+            for _ in range(3):
+                composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+            assert flaky.fetch.call_count == 3
+            # 4th call: breaker tripped, source skipped entirely (no new fetch call).
+            composite.fetch_all("MSFT", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+            assert flaky.fetch.call_count == 3
+
+    def test_circuit_breaker_resets_on_success(self):
+        """A success in between failures resets the CONSECUTIVE streak, so
+        two failures either side of a success never trips a threshold=3
+        breaker (only 3-in-a-row would)."""
+        source = MagicMock()
+        source.fetch.side_effect = [
+            RuntimeError("boom"),  # streak=1
+            RuntimeError("boom"),  # streak=2
+            [],                    # success -- streak resets to 0
+            RuntimeError("boom"),  # streak=1
+            RuntimeError("boom"),  # streak=2, still not tripped
+        ]
+        composite = CompositeSentimentSource(sources={"flaky": source})
+        composite.reset_cycle()
+
+        with patch("settings.settings.SENTIMENT_CIRCUIT_BREAKER_THRESHOLD", 3):
+            for symbol in ["A", "B", "C", "D", "E"]:
+                composite.fetch_all(symbol, since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert source.fetch.call_count == 5  # never tripped -- the success reset the streak
+        assert "flaky" not in composite._tripped_sources
+
+    def test_wall_clock_deadline_skips_remaining_fetches(self):
+        source = MagicMock()
+        source.fetch.return_value = []
+        composite = CompositeSentimentSource(sources={"slow": source})
+        with patch("settings.settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE", -1.0):
+            composite.reset_cycle()  # deadline already in the past
+            composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        source.fetch.assert_not_called()
+
+    def test_no_deadline_set_without_reset_cycle(self):
+        """A composite that never had reset_cycle() called (e.g. direct test
+        usage) must not silently apply a stale/zero deadline."""
+        source = MagicMock()
+        source.fetch.return_value = []
+        composite = CompositeSentimentSource(sources={"a": source})
+        composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        source.fetch.assert_called_once()
+
+    def test_reset_cycle_clears_circuit_breaker_and_deadline(self):
+        source = MagicMock()
+        source.fetch.side_effect = RuntimeError("boom")
+        composite = CompositeSentimentSource(sources={"flaky": source})
+
+        # First cycle: a healthy (non-expired) deadline so the circuit
+        # breaker actually gets a chance to trip, isolated from the
+        # wall-clock check.
+        with patch("settings.settings.SENTIMENT_CIRCUIT_BREAKER_THRESHOLD", 1):
+            with patch("settings.settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE", 60.0):
+                composite.reset_cycle()
+                composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert "flaky" in composite._tripped_sources
+
+        # Second cycle: reset_cycle() must clear the tripped-source set and
+        # the wall-clock deadline, so a now-healthy source is called again.
+        source.fetch.side_effect = None
+        source.fetch.return_value = []
+        with patch("settings.settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE", 60.0):
+            composite.reset_cycle()
+            composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+        assert "flaky" not in composite._tripped_sources
+        source.fetch.assert_called_with("AAPL", datetime(2026, 7, 1, tzinfo=timezone.utc))
+
+
 class TestSingleton:
     def test_get_sentiment_source_returns_same_instance(self):
         reset_sentiment_source()

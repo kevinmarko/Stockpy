@@ -1127,6 +1127,28 @@ class Settings(BaseSettings):
             "under any pressure condition."
         ),
     )
+    SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: float = Field(
+        default=60.0,
+        description=(
+            "Hard wall-clock ceiling (seconds) for CompositeSentimentSource's "
+            "entire per-cycle ingestion run (set via reset_cycle(), checked in "
+            "fetch_all()). A single unreachable/slow host can otherwise stack "
+            "up its per-request timeout across every remaining symbol with no "
+            "overall ceiling -- once this budget elapses, ingestion is skipped "
+            "for the rest of the cycle (fails fast and moves on) rather than "
+            "stalling the whole pipeline refresh."
+        ),
+    )
+    SENTIMENT_CIRCUIT_BREAKER_THRESHOLD: int = Field(
+        default=3,
+        description=(
+            "Consecutive failures (timeout/connection error) for a single "
+            "source within one cycle before CompositeSentimentSource trips a "
+            "circuit breaker and skips that source for the rest of the cycle "
+            "-- avoids re-attempting a source that's clearly down (e.g. an "
+            "unreachable host) for every remaining symbol in the universe."
+        ),
+    )
 
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
