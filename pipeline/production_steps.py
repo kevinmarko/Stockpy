@@ -384,6 +384,55 @@ class ForecastingStep(PipelineStep):
             ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: forecast_results.get(x, {}).get(col, 0.0))
 
 
+def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
+    """Compute the GDELT-based "Sector Heat Factor" once per distinct SECTOR
+    present in ``dashboard_df`` and map it onto every ticker row via its
+    ``sector`` column -- NOT one GDELT query per ticker (see
+    data/sentiment_sources.py::compute_sector_heat_factors's rate-limit
+    framing).
+
+    NaN-fills the column FIRST (same pattern as the Value_Z/Quality_Z/etc
+    multifactor writeback and Credibility_Weighted_Sentiment blocks above)
+    so every exit path -- disabled gate, empty universe, total failure, or a
+    ticker whose sector never got a heat value -- leaves genuinely-missing
+    cells NaN rather than a fabricated default (CONSTRAINT #4). Never raises
+    (CONSTRAINT #6): a computation failure degrades the whole column back to
+    NaN instead of aborting the pipeline.
+
+    Deliberately a module-level function (not inlined in StrategyEvalStep.run)
+    so it stays importable/testable without pulling in main_orchestrator's
+    heavy top-level import chain -- the only imports here are pd (already a
+    module-level import) and a single lazy import of
+    data.sentiment_sources.compute_sector_heat_factors. Logs via this
+    module's own plain `logger` rather than the `telemetry` proxy used
+    elsewhere in this file -- `telemetry.__getattr__` lazily imports
+    `main_orchestrator` (and therefore its whole heavy engine chain) on
+    first attribute access, which would defeat the point of keeping this
+    function's own import footprint light.
+    """
+    dashboard_df['Sector_Heat_Factor'] = float('nan')
+    if not settings.SECTOR_HEAT_ENABLED:
+        return
+    try:
+        from data.sentiment_sources import compute_sector_heat_factors
+
+        if 'sector' not in dashboard_df.columns:
+            return
+        sectors = sorted({
+            str(s).strip() for s in dashboard_df['sector'].dropna().unique()
+            if s and str(s).strip() and str(s).strip().lower() != "unknown"
+        })
+        if not sectors:
+            return
+        sector_heat_map = compute_sector_heat_factors(sectors)
+        if not sector_heat_map:
+            return
+        dashboard_df['Sector_Heat_Factor'] = dashboard_df['sector'].map(sector_heat_map)
+    except Exception as exc:
+        logger.warning("Sector Heat Factor computation failed (non-fatal): %s", exc)
+        dashboard_df['Sector_Heat_Factor'] = float('nan')
+
+
 class StrategyEvalStep(PipelineStep):
     """Evaluates strategy and overlaying advisory logic."""
     name = "strategy"
@@ -508,14 +557,22 @@ class StrategyEvalStep(PipelineStep):
 
         ctx.dashboard_df['Correlation_Cluster'] = float('nan')
 
-        # Sentiment/attention pipeline config scaffolding (PR #416) -- schema
-        # placeholders only, no producer wired up yet. Sector_Heat_Factor
-        # (GDELT article-volume) and Attention_Score (Wikipedia pageviews)
-        # are populated by follow-on branches; NaN-fill here keeps
-        # DashboardSchema.validate() passing in the interim (CONSTRAINT #4:
-        # NaN, never a fabricated value), same pattern as Correlation_Cluster
-        # above.
-        ctx.dashboard_df['Sector_Heat_Factor'] = float('nan')
+        # Sector Heat Factor (GDELT article-volume attention proxy, PR #416
+        # scaffolding + this follow-on branch) -- one GDELT query per
+        # distinct sector present this cycle, Gaussian-smoothed, mapped onto
+        # every ticker row via its `sector` column. NaN-filled (never
+        # fabricated -- CONSTRAINT #4) when settings.SECTOR_HEAT_ENABLED is
+        # False (byte-identical to the prior placeholder behavior), on any
+        # computation failure, or for a sector the GDELT query didn't cover.
+        # See data/sentiment_sources.py::compute_sector_heat_factors and
+        # docs/signals/sector_heat_factor.md.
+        _apply_sector_heat_factor(ctx.dashboard_df)
+
+        # Attention_Score (Wikipedia pageviews) -- schema placeholder only,
+        # no producer wired up yet; populated by a sibling follow-on branch.
+        # NaN-fill here keeps DashboardSchema.validate() passing in the
+        # interim (CONSTRAINT #4: NaN, never a fabricated value), same
+        # pattern as Correlation_Cluster above.
         ctx.dashboard_df['Attention_Score'] = float('nan')
 
         # docs/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns

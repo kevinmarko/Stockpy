@@ -85,6 +85,15 @@ codebase's existing convention for avoiding circular imports with
 ``data/historical_store.py``) -- the leakage-critical UTC->ET post-close
 roll, computed once, shared by every source, rather than each provider
 reimplementing it.
+
+Sector Heat Factor (attention, not sentiment)
+-----------------------------------------------
+This module also hosts ``GDELTVolumeSource``/``compute_sector_heat_factors()``
+-- a GDELT article-VOLUME (not tone) proxy aggregated per SECTOR, Gaussian-
+smoothed, and gated behind ``settings.SECTOR_HEAT_ENABLED``. It deliberately
+lives outside the ``SentimentSource`` ABC hierarchy above (it produces a
+count time series, not ``SentimentDocument``s) -- see that section's own
+docstring and ``docs/signals/sector_heat_factor.md`` for the full design.
 """
 
 from __future__ import annotations
@@ -428,6 +437,191 @@ class GDELTSource(SentimentSource):
 
 
 # ---------------------------------------------------------------------------
+# GDELT article-VOLUME (attention) proxy -- "Sector Heat Factor"
+# ---------------------------------------------------------------------------
+# Deliberately NOT a SentimentSource subclass: this produces a per-SECTOR
+# daily article-COUNT time series, not per-document SentimentDocuments, so it
+# sits outside the SentimentSource ABC hierarchy entirely -- a different KIND
+# of feature (an aggregate attention proxy) rather than another fan-out
+# document provider CompositeSentimentSource merges together.
+#
+# Rationale (Fu & Zhang 2024): abnormal news/comment VOLUME -- independent of
+# tone/sentiment -- is itself a leading attention signal; a sector attracting
+# unusually heavy coverage tends to see elevated retail/institutional
+# attention shortly after, regardless of whether that coverage is bullish or
+# bearish. Gaussian-smoothing the raw daily count series separates a genuine
+# attention-regime shift from single-day news noise before it's used as
+# "today's" heat value (see docs/signals/sector_heat_factor.md).
+#
+# Master gate: settings.SECTOR_HEAT_ENABLED (default False). The feature
+# entry point below (compute_sector_heat_factors) checks the flag FIRST,
+# before any network call is attempted -- False is a complete no-op.
+
+class GDELTVolumeSource:
+    """GDELT DOC 2.0 API `mode=timelinevol` -- article-volume time series for
+    a free-text query, aggregated to one point per calendar day (UTC).
+
+    One HTTP call per `fetch_daily_counts()` invocation (NOT one call per
+    day in the window) -- `mode=timelinevol` returns the whole requested
+    date range's series in a single response, unlike `GDELTSource`'s
+    `mode=artlist` (which needs the windowed-backfill pattern in this file
+    because `artlist` caps at 250 records/call). This keeps the per-cycle
+    call count at exactly one call per distinct SECTOR
+    (see `compute_sector_heat_factors()`), never per ticker -- an 11-GICS-
+    sector universe costs at most 11 GDELT calls/cycle regardless of how
+    many tickers are being tracked.
+
+    Never raises (CONSTRAINT #6) -- any network/parse failure degrades to an
+    empty series (``{}``), same dead-letter shape ``GDELTSource.fetch()``
+    already uses for its own failure paths.
+    """
+
+    name = "gdelt_timelinevol"
+    _API_URL = GDELTSource._API_URL  # same host, mode=timelinevol not artlist
+
+    def fetch_daily_counts(
+        self, query: str, since: datetime, until: Optional[datetime] = None,
+    ) -> Dict[str, float]:
+        """Return ``{"YYYY-MM-DD": volume}`` for ``[since, until]`` (UTC),
+        sorted ascending by date. ``until`` defaults to now.
+
+        Causal by construction: ``until`` is the query's ``enddatetime`` sent
+        to GDELT, so the API itself is never asked for anything past that
+        instant -- no client-side filtering is relied on as the primary
+        causality guarantee (see tests/test_sector_heat_lookahead.py). Any
+        timeline point GDELT might still return dated after ``until`` (a
+        malformed/buggy response) is defensively dropped -- belt-and-
+        suspenders, not the primary guarantee.
+        """
+        _until = until or datetime.now(timezone.utc)
+        try:
+            resp = requests.get(
+                self._API_URL,
+                params={
+                    "query": query,
+                    "mode": "timelinevol",
+                    "format": "json",
+                    "startdatetime": since.strftime("%Y%m%d%H%M%S"),
+                    "enddatetime": _until.strftime("%Y%m%d%H%M%S"),
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as exc:
+            logger.warning("GDELTVolumeSource.fetch_daily_counts(%r) failed: %s", query, exc)
+            return {}
+
+        try:
+            timeline = payload.get("timeline", [])
+            points = timeline[0].get("data", []) if timeline else []
+        except Exception as exc:
+            logger.warning(
+                "GDELTVolumeSource.fetch_daily_counts(%r) malformed response: %s", query, exc,
+            )
+            return {}
+
+        daily: Dict[str, float] = {}
+        for point in points:
+            try:
+                raw_date = str(point.get("date", ""))
+                value = float(point.get("value", 0.0))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            as_of = self._parse_timeline_date(raw_date)
+            if as_of is None or as_of > _until:
+                continue  # defensive: never let a future-dated point leak in
+            day_key = as_of.strftime("%Y-%m-%d")
+            # Sub-daily-resolution points (short spans return finer-grained
+            # buckets than one/day) are summed into their calendar day.
+            daily[day_key] = daily.get(day_key, 0.0) + value
+        return dict(sorted(daily.items()))
+
+    @staticmethod
+    def _parse_timeline_date(raw: str) -> Optional[datetime]:
+        # GDELT's timelinevol "date" field is undocumented-precise across
+        # API versions; accept the formats actually observed (GDELT's own
+        # dense YYYYMMDDHHMMSS, this module's YYYYMMDDTHHMMSSZ convention
+        # used elsewhere, and a bare calendar date) rather than assume one.
+        if not raw:
+            return None
+        for fmt in ("%Y%m%d%H%M%S", "%Y%m%dT%H%M%SZ", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+        return None
+
+
+def _sector_gdelt_query(sector: str) -> str:
+    """Free-text GDELT query representative of one GICS sector's financial
+    news coverage. The quoted sector name plus 'sector stocks' framing keeps
+    the match scoped to financial-news coverage of that sector rather than
+    matching the bare word across all of GDELT's global-news index (e.g.
+    "Energy" alone over-matches non-market world news)."""
+    return f'"{sector}" sector stocks'
+
+
+def compute_sector_heat_factors(
+    sectors: List[str], *, now: Optional[datetime] = None,
+) -> Dict[str, float]:
+    """Compute one Gaussian-smoothed "Sector Heat Factor" per distinct
+    sector in ``sectors`` -- a GDELT article-volume attention proxy (Fu &
+    Zhang 2024's news/comment-volume "heat" concept), aggregated per SECTOR
+    (never per ticker -- see the module-section docstring's rate-limit
+    framing above).
+
+    Exactly ONE GDELT ``timelinevol`` call per distinct, non-empty,
+    non-"Unknown" sector in ``sectors`` -- bounded by the small number of
+    GICS sectors (single digits to ~11) typically present in a universe,
+    never by ticker count.
+
+    Returns ``{}`` immediately, with NO network call, when
+    ``settings.SECTOR_HEAT_ENABLED`` is False (master gate) or ``sectors``
+    is empty -- this is the function every caller (pipeline/production_steps.py)
+    must gate through; nothing upstream of this call makes a network request.
+
+    A sector's absence from the returned dict (failed GDELT call, empty
+    series, or an unsmoothable series) means "unavailable this cycle" --
+    callers MUST map that to NaN, never a fabricated fallback value
+    (CONSTRAINT #4). Never raises (CONSTRAINT #6) -- one sector's failure
+    never blocks the others.
+    """
+    from settings import settings as _settings
+
+    if not _settings.SECTOR_HEAT_ENABLED or not sectors:
+        return {}
+
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d
+
+    _now = now or datetime.now(timezone.utc)
+    lookback_days = max(1, int(_settings.SECTOR_HEAT_LOOKBACK_DAYS))
+    sigma = float(_settings.SECTOR_HEAT_SMOOTHING_SIGMA)
+    since = _now - timedelta(days=lookback_days)
+
+    source = GDELTVolumeSource()
+    heat: Dict[str, float] = {}
+    distinct_sectors = sorted({
+        str(s).strip() for s in sectors
+        if s and str(s).strip() and str(s).strip().lower() != "unknown"
+    })
+    for sector in distinct_sectors:
+        try:
+            daily_counts = source.fetch_daily_counts(_sector_gdelt_query(sector), since, _now)
+            if not daily_counts:
+                continue
+            series = np.asarray(list(daily_counts.values()), dtype=float)
+            if series.size == 0 or not np.all(np.isfinite(series)):
+                continue
+            smoothed = gaussian_filter1d(series, sigma=sigma)
+            heat[sector] = float(smoothed[-1])
+        except Exception as exc:
+            logger.warning(
+                "compute_sector_heat_factors: sector %r failed: %s", sector, exc,
+            )
+            continue
+    return heat
 # Google News RSS — free, no auth, aggregator of many publishers' headlines.
 # ---------------------------------------------------------------------------
 
