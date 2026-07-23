@@ -1153,6 +1153,15 @@ class TestReadPlatformLogs:
 class TestGetUniverseStatus:
     def test_defaults_when_nothing_present(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        # `settings` is a process-wide singleton constructed once on first
+        # import, not re-read per call -- whichever test imports it first
+        # locks in whatever DEFAULT_TICKERS its real `.env` had at that
+        # moment, regardless of this test's own chdir. Patch it explicitly
+        # so the "nothing present" branch is deterministic instead of
+        # depending on test-collection/import order.
+        from settings import settings
+
+        monkeypatch.setattr(settings, "DEFAULT_TICKERS", [])
 
         result = srv.get_universe_status()
 
