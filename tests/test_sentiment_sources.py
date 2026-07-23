@@ -540,6 +540,69 @@ class TestCompositeSentimentSource:
             with patch("data.historical_store.HistoricalStore", mock_store_cls):
                 CompositeSentimentSource._archive([_doc()])  # must not raise
 
+    def test_archive_threads_remaining_seconds_into_score_documents(self):
+        """Sentiment Pipeline Phase 2 PR2: _archive() must forward
+        remaining_seconds to signals.credibility.score_documents() so its
+        optional LLM-verification step can bound itself by the same
+        per-cycle wall-clock budget."""
+        mock_store_instance = MagicMock()
+        mock_score_documents = MagicMock(return_value=[])
+        with patch("settings.settings.SENTIMENT_AUDIT_ENABLED", True), \
+             patch("data.historical_store.HistoricalStore", return_value=mock_store_instance), \
+             patch("signals.credibility.score_documents", mock_score_documents):
+            CompositeSentimentSource._archive([_doc()], remaining_seconds=12.5)
+        mock_score_documents.assert_called_once()
+        _, kwargs = mock_score_documents.call_args
+        assert kwargs.get("remaining_seconds") == 12.5
+
+    def test_archive_default_remaining_seconds_is_none(self):
+        mock_store_instance = MagicMock()
+        mock_score_documents = MagicMock(return_value=[])
+        with patch("settings.settings.SENTIMENT_AUDIT_ENABLED", True), \
+             patch("data.historical_store.HistoricalStore", return_value=mock_store_instance), \
+             patch("signals.credibility.score_documents", mock_score_documents):
+            CompositeSentimentSource._archive([_doc()])
+        _, kwargs = mock_score_documents.call_args
+        assert kwargs.get("remaining_seconds") is None
+
+    def test_fetch_and_archive_derives_remaining_seconds_from_cycle_deadline(self):
+        """fetch_and_archive() must compute remaining_seconds from the
+        instance's own _cycle_deadline (set by reset_cycle()) rather than
+        always passing None."""
+        finnhub_mock = MagicMock()
+        finnhub_mock.fetch.return_value = [_doc()]
+        composite = CompositeSentimentSource(sources={"finnhub": finnhub_mock})
+        composite.reset_cycle()  # sets _cycle_deadline in the future
+
+        captured = {}
+
+        def _fake_archive(docs, remaining_seconds=None):
+            captured["remaining_seconds"] = remaining_seconds
+
+        with patch.object(composite, "_archive", side_effect=_fake_archive):
+            composite.fetch_and_archive("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+
+        assert captured["remaining_seconds"] is not None
+        assert captured["remaining_seconds"] > 0
+
+    def test_fetch_and_archive_remaining_seconds_none_without_reset_cycle(self):
+        """No reset_cycle() call -> no _cycle_deadline -> remaining_seconds
+        stays None (the LLM-verification step then only bounds itself by
+        the max-calls budget)."""
+        finnhub_mock = MagicMock()
+        finnhub_mock.fetch.return_value = [_doc()]
+        composite = CompositeSentimentSource(sources={"finnhub": finnhub_mock})
+
+        captured = {}
+
+        def _fake_archive(docs, remaining_seconds=None):
+            captured["remaining_seconds"] = remaining_seconds
+
+        with patch.object(composite, "_archive", side_effect=_fake_archive):
+            composite.fetch_and_archive("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
+
+        assert captured["remaining_seconds"] is None
+
 
 class TestBackpressureHardening:
     """Wall-clock ceiling + per-source circuit breaker -- closes the gap a

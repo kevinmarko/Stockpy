@@ -173,6 +173,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "OPAL_RESEARCH_ENABLED",             # bool — Opal research agent (OpenAI or Gemini)
     "OPAL_RESEARCH_PROVIDER",            # "openai" | "gemini" | "none"
     "OPAL_RESEARCH_MODEL",               # e.g. "gpt-4o" or "gemini-2.5-flash"
+    # AI-Assisted Credibility Filtering (Sentiment Pipeline Phase 2 PR2,
+    # signals/credibility.py). Non-secret; provider credentials (ANTHROPIC/
+    # GEMINI/OPENAI keys) stay in SECRET_KEYS below — CONSTRAINT #3.
+    "SENTIMENT_LLM_VERIFICATION_ENABLED",            # bool master switch (default False)
+    "SENTIMENT_LLM_VERIFICATION_PROVIDER",           # "claude" | "gemini" | "openai" | "none"
+    "SENTIMENT_LLM_VERIFICATION_MAX_CALLS_PER_CYCLE",  # int — per-batch LLM call budget
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.

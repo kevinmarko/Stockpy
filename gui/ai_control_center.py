@@ -159,6 +159,24 @@ CAPABILITIES: Tuple[AICapability, ...] = (
              "operator-chosen (OpenAI or Gemini) via OPAL_RESEARCH_PROVIDER.",
         provider_selector_setting="OPAL_RESEARCH_PROVIDER",
     ),
+    AICapability(
+        key="sentiment_credibility_verification",
+        label="Sentiment credibility verification",
+        enable_settings=(
+            "SENTIMENT_LLM_VERIFICATION_ENABLED",
+            "SENTIMENT_LLM_VERIFICATION_PROVIDER",
+        ),
+        provider_key_settings=("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"),
+        module="signals.credibility",
+        trigger="scheduled",
+        toggle_key="SENTIMENT_LLM_VERIFICATION_ENABLED",
+        help="AI-assisted check of borderline-credibility sentiment documents "
+             "(Sentiment Pipeline Phase 2). Fires automatically during ingestion "
+             "when a document's heuristic score is inconclusive (Section D). "
+             "Provider is operator-chosen (Claude, Gemini, or OpenAI) via "
+             "SENTIMENT_LLM_VERIFICATION_PROVIDER.",
+        provider_selector_setting="SENTIMENT_LLM_VERIFICATION_PROVIDER",
+    ),
 )
 
 

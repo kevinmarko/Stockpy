@@ -67,7 +67,7 @@ import os
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -288,7 +288,8 @@ CREATE TABLE IF NOT EXISTS sentiment_ingestion_audit (
     credibility_weight    REAL,
     is_bot                INTEGER DEFAULT 0,
     final_weighted_score  REAL    NOT NULL,
-    fetched_at            TEXT    NOT NULL
+    fetched_at            TEXT    NOT NULL,
+    verification_method   TEXT    DEFAULT 'placeholder'
 )
 """
 
@@ -302,12 +303,49 @@ CREATE INDEX IF NOT EXISTS idx_sentiment_audit_asof
     ON sentiment_ingestion_audit (as_of)
 """
 
+# Additive migration for pre-existing databases created before the
+# ``verification_method`` column existed (Sentiment Pipeline Phase 2 PR2,
+# AI-Assisted Credibility Filtering). Records which method actually produced
+# a row's ``s_verification`` value: ``'placeholder'`` (hardcoded 1.0, the
+# pre-PR2 and still-default behavior), ``'heuristic'`` (reserved for a future
+# non-LLM heuristic), or ``'llm'`` (a real LLMProvider.call_structured
+# verdict). Same idempotent ``PRAGMA table_info`` probe as
+# ``_migrate_add_report_date_column`` -- a fresh DB's CREATE TABLE already
+# includes the column, so this only fires against a legacy DB.
+_SENTIMENT_AUDIT_ADD_VERIFICATION_METHOD_DDL = """
+ALTER TABLE sentiment_ingestion_audit ADD COLUMN verification_method TEXT DEFAULT 'placeholder'
+"""
+
 # Column order for the batch INSERT in save_sentiment_documents().
 _SENTIMENT_AUDIT_INSERT_COLS = (
     "as_of, trading_day, symbol, source_name, author_handle, text_content, "
     "raw_sentiment_score, s_authority, s_humanity, s_verification, "
-    "credibility_weight, is_bot, final_weighted_score, fetched_at"
+    "credibility_weight, is_bot, final_weighted_score, fetched_at, "
+    "verification_method"
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — sentiment_llm_verification_cache (Sentiment Pipeline Phase 2 PR2,
+# AI-Assisted Credibility Filtering)
+#
+# Caches an LLM verification verdict by content hash
+# (``signals.credibility._doc_content_hash`` -- sha256 of
+# ``source_name|symbol|text_content``) so a repeat document (e.g. one that
+# straddles a trading-day roll, or reappears in a later ingestion cycle)
+# never pays the LLM cost twice. Deliberately keyed on content alone, NOT
+# ``trading_day`` (unlike ``sentiment_ingestion_audit``'s own dedup key) --
+# the underlying claim in the text doesn't change when its trading-day
+# attribution rolls.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SENTIMENT_LLM_VERIFICATION_CACHE_DDL = """
+CREATE TABLE IF NOT EXISTS sentiment_llm_verification_cache (
+    doc_hash    TEXT PRIMARY KEY,
+    verifiable  INTEGER,
+    confidence  REAL,
+    cached_at   TEXT NOT NULL
+)
+"""
 
 # Column order returned by SELECT for price_bars reconstruction.
 _SELECT_COLS = "open, high, low, close, adj_close, volume"
@@ -430,8 +468,10 @@ class HistoricalStore:
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_DDL)
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_INDEX_DDL)
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_ASOF_INDEX_DDL)
+                conn.execute(_SENTIMENT_LLM_VERIFICATION_CACHE_DDL)
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
+                self._migrate_add_verification_method_column(conn)
             finally:
                 raw_conn.close()
         except Exception as exc:
@@ -458,6 +498,31 @@ class HistoricalStore:
         except Exception as exc:
             logger.warning(
                 "HistoricalStore._migrate_add_report_date_column failed (non-fatal): %s", exc
+            )
+
+    def _migrate_add_verification_method_column(self, conn: sqlite3.Connection) -> None:
+        """Additive migration: add ``sentiment_ingestion_audit.verification_method``
+        to a pre-existing DB that predates AI-Assisted Credibility Filtering
+        (Sentiment Pipeline Phase 2 PR2).
+
+        Idempotent — probes ``PRAGMA table_info`` first so a fresh DB (whose
+        ``CREATE TABLE`` already includes ``verification_method``) never
+        attempts a duplicate ``ALTER TABLE``. Never raises (CONSTRAINT #6): a
+        failed migration just means historical rows can't be distinguished
+        by verification method — they still read back with whatever
+        ``s_verification`` value they were written with.
+        """
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(sentiment_ingestion_audit)").fetchall()}
+            if "verification_method" not in cols:
+                conn.execute(_SENTIMENT_AUDIT_ADD_VERIFICATION_METHOD_DDL)
+                conn.commit()
+                logger.info(
+                    "HistoricalStore: migrated sentiment_ingestion_audit — added verification_method column."
+                )
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore._migrate_add_verification_method_column failed (non-fatal): %s", exc
             )
 
     @staticmethod
@@ -1583,8 +1648,11 @@ class HistoricalStore:
         ``None``/``0`` for sources with no credibility signal (e.g. Finnhub
         headlines) -- never fabricated (CONSTRAINT #4). ``final_weighted_score``
         defaults to ``raw_sentiment_score`` when no ``credibility_weight`` is
-        supplied. ``trading_day`` is derived here via ``resolve_trading_day()``
-        so callers never compute it ad-hoc.
+        supplied. ``verification_method`` (``'placeholder'`` | ``'heuristic'``
+        | ``'llm'`` -- see :class:`signals.credibility.CredibilityScore`)
+        defaults to ``'placeholder'``, honestly recording that no real check
+        ran unless the caller says otherwise. ``trading_day`` is derived here
+        via ``resolve_trading_day()`` so callers never compute it ad-hoc.
 
         Dead-letter resilient (CONSTRAINT #6): any failure is logged and
         swallowed so an ingestion-side write can never block the live pipeline.
@@ -1618,6 +1686,7 @@ class HistoricalStore:
                     int(doc.get("is_bot") or 0),
                     final_score,
                     now_ts,
+                    str(doc.get("verification_method") or "placeholder"),
                 ))
             from db_config import session_scope, get_dbapi_connection
             with self._lock:
@@ -1628,7 +1697,7 @@ class HistoricalStore:
                         f"""
                         INSERT INTO sentiment_ingestion_audit
                             ({_SENTIMENT_AUDIT_INSERT_COLS})
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         rows,
                     )
@@ -1638,6 +1707,64 @@ class HistoricalStore:
             )
         except Exception as exc:
             logger.warning("HistoricalStore.save_sentiment_documents failed: %s", exc)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public API — sentiment_llm_verification_cache (Sentiment Pipeline
+    # Phase 2 PR2, AI-Assisted Credibility Filtering)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_cached_verification(self, doc_hash: str) -> Optional[Tuple[bool, float]]:
+        """Return ``(verifiable, confidence)`` for a previously-verified
+        document, or ``None`` on a cache miss OR any read failure.
+
+        Dead-letter resilient (CONSTRAINT #6): a DB read failure degrades to
+        ``None`` (treated by the caller identically to "not cached yet"),
+        never raises. ``doc_hash`` is
+        ``signals.credibility._doc_content_hash(doc)`` -- a sha256 of
+        ``source_name|symbol|text_content``, stable across a trading-day
+        roll (deliberately not keyed on ``trading_day``).
+        """
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    row = conn.execute(
+                        "SELECT verifiable, confidence FROM sentiment_llm_verification_cache "
+                        "WHERE doc_hash = ?",
+                        (doc_hash,),
+                    ).fetchone()
+            if row is None:
+                return None
+            return bool(row[0]), float(row[1])
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_cached_verification failed: %s", exc)
+            return None
+
+    def save_verification(self, doc_hash: str, verifiable: bool, confidence: float) -> None:
+        """Persist an LLM verification verdict for ``doc_hash``.
+
+        Idempotent overwrite (``INSERT OR REPLACE``) — a repeat verification
+        of the same content hash (e.g. a race between two ingestion cycles)
+        simply refreshes ``cached_at`` rather than raising a PK conflict.
+        Dead-letter resilient (CONSTRAINT #6): any write failure is logged
+        and swallowed so a cache-write failure can never block ingestion.
+        """
+        try:
+            now_ts = self._now_utc_iso()
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO sentiment_llm_verification_cache "
+                        "(doc_hash, verifiable, confidence, cached_at) VALUES (?, ?, ?, ?)",
+                        (doc_hash, int(bool(verifiable)), float(confidence), now_ts),
+                    )
+        except Exception as exc:
+            logger.warning("HistoricalStore.save_verification failed: %s", exc)
 
     def get_sentiment_aggregate_by_symbol(self, trading_day: str) -> Dict[str, Dict[str, float]]:
         """Aggregate ``sentiment_ingestion_audit`` rows for one trading day,

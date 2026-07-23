@@ -352,3 +352,152 @@ class TestGetSentimentArchiveDepthBySource:
         monkeypatch.setattr(store, "Session", _boom)
         result = store.get_sentiment_archive_depth_by_source()  # must not raise
         assert result == {}
+
+
+class TestVerificationMethodColumn:
+    """Sentiment Pipeline Phase 2 PR2 -- AI-Assisted Credibility Filtering.
+    ``sentiment_ingestion_audit.verification_method`` records which method
+    actually produced a row's ``s_verification`` value."""
+
+    def _base_doc(self, **overrides):
+        doc = {
+            "as_of": datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc),
+            "symbol": "aapl",
+            "source_name": "reddit",
+            "text_content": "Apple beats earnings expectations",
+            "raw_sentiment_score": 0.6,
+        }
+        doc.update(overrides)
+        return doc
+
+    def test_column_created_on_fresh_db(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(sentiment_ingestion_audit)")}
+        assert "verification_method" in cols
+
+    def test_defaults_to_placeholder_when_not_supplied(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._base_doc()])
+        with sqlite3.connect(db) as conn:
+            row = conn.execute("SELECT verification_method FROM sentiment_ingestion_audit").fetchone()
+        assert row[0] == "placeholder"
+
+    def test_persists_llm_verification_method(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._base_doc(verification_method="llm")])
+        with sqlite3.connect(db) as conn:
+            row = conn.execute("SELECT verification_method FROM sentiment_ingestion_audit").fetchone()
+        assert row[0] == "llm"
+
+    def test_migration_runs_cleanly_against_pre_migration_db(self, tmp_path):
+        """A DB created before this column existed must not break on the
+        next HistoricalStore construction -- idempotent ALTER TABLE."""
+        db = str(tmp_path / "sentiment.db")
+        # Simulate a pre-PR2 DB: build the table WITHOUT verification_method.
+        with sqlite3.connect(db) as conn:
+            conn.execute("""
+                CREATE TABLE sentiment_ingestion_audit (
+                    ingest_id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    as_of                 TEXT    NOT NULL,
+                    trading_day           TEXT    NOT NULL,
+                    symbol                TEXT    NOT NULL,
+                    source_name           TEXT    NOT NULL,
+                    author_handle         TEXT,
+                    text_content          TEXT    NOT NULL,
+                    raw_sentiment_score   REAL    NOT NULL,
+                    s_authority           REAL,
+                    s_humanity            REAL,
+                    s_verification        REAL,
+                    credibility_weight    REAL,
+                    is_bot                INTEGER DEFAULT 0,
+                    final_weighted_score  REAL    NOT NULL,
+                    fetched_at            TEXT    NOT NULL
+                )
+            """)
+            conn.commit()
+
+        # Constructing a HistoricalStore against this pre-migration DB must
+        # not raise, and must add the missing column idempotently.
+        store = HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(sentiment_ingestion_audit)")}
+        assert "verification_method" in cols
+
+        # A second construction against the now-migrated DB must also not raise.
+        HistoricalStore(db_path=db)
+
+        # And the write path still works post-migration.
+        store.save_sentiment_documents([self._base_doc()])
+        with sqlite3.connect(db) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM sentiment_ingestion_audit").fetchone()[0]
+        assert count == 1
+
+
+class TestSentimentLLMVerificationCache:
+    """Sentiment Pipeline Phase 2 PR2 -- ``sentiment_llm_verification_cache``
+    round-trip and dead-letter resilience."""
+
+    def test_table_created_on_init(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='sentiment_llm_verification_cache'"
+            ).fetchone()
+        assert row is not None
+
+    def test_miss_returns_none(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        assert store.get_cached_verification("nonexistent_hash") is None
+
+    def test_round_trip_verifiable_true(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_verification("hash1", True, 0.87)
+        result = store.get_cached_verification("hash1")
+        assert result == (True, pytest.approx(0.87))
+
+    def test_round_trip_verifiable_false(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_verification("hash2", False, 0.65)
+        result = store.get_cached_verification("hash2")
+        verifiable, confidence = result
+        assert verifiable is False
+        assert confidence == pytest.approx(0.65)
+
+    def test_repeat_save_overwrites_not_conflicts(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_verification("hash3", True, 0.5)
+        store.save_verification("hash3", False, 0.9)  # must not raise (PK conflict)
+        result = store.get_cached_verification("hash3")
+        assert result == (False, pytest.approx(0.9))
+
+    def test_save_failure_is_swallowed(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a write failure must never raise out of this method."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        monkeypatch.setattr(store, "_now_utc_iso", _boom)
+        store.save_verification("hash4", True, 0.5)  # must not raise
+
+    def test_read_failure_returns_none(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a read failure must never raise."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        monkeypatch.setattr(store, "Session", _boom)
+        assert store.get_cached_verification("hash5") is None

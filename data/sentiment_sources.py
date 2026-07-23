@@ -798,18 +798,35 @@ class CompositeSentimentSource:
     ) -> List[SentimentDocument]:
         """``fetch_all()`` plus a best-effort archive write to
         ``sentiment_ingestion_audit`` (CONSTRAINT #6: archive failures never
-        propagate)."""
+        propagate).
+
+        Threads the remaining wall-clock budget in THIS cycle (derived from
+        ``self._cycle_deadline``, set by ``reset_cycle()``) into
+        ``_archive()`` so ``signals.credibility.score_documents()``'s
+        optional LLM-verification step can stop early rather than stack a
+        slow LLM call's latency on top of an already-budgeted ingestion
+        cycle. ``None`` when no cycle deadline is set (e.g. ``reset_cycle()``
+        was never called) -- the LLM step then only bounds itself by
+        ``SENTIMENT_LLM_VERIFICATION_MAX_CALLS_PER_CYCLE``.
+        """
         docs = self.fetch_all(symbol, since)
-        self._archive(docs)
+        remaining_seconds: Optional[float] = None
+        if self._cycle_deadline is not None:
+            remaining_seconds = self._cycle_deadline - time.monotonic()
+        self._archive(docs, remaining_seconds=remaining_seconds)
         return docs
 
     @staticmethod
-    def _archive(docs: List[SentimentDocument]) -> None:
+    def _archive(docs: List[SentimentDocument], remaining_seconds: Optional[float] = None) -> None:
         """Score (Phase 4 credibility) then persist a batch of documents.
 
         Credibility scoring runs once per batch here -- the only call site
         -- so ``signals/credibility.py``'s per-author cadence statistic sees
         the whole cycle's documents at once (see its module docstring).
+        ``remaining_seconds`` (default ``None``) is threaded into
+        ``score_documents()`` to bound its optional LLM-verification step
+        (Sentiment Pipeline Phase 2 PR2) by the same per-cycle wall-clock
+        budget this class already enforces for fetching.
         """
         if not docs:
             return
@@ -820,7 +837,7 @@ class CompositeSentimentSource:
             from data.historical_store import HistoricalStore
             from signals.credibility import score_documents
 
-            scores = score_documents(docs)
+            scores = score_documents(docs, remaining_seconds=remaining_seconds)
             rows = []
             for doc, score in zip(docs, scores):
                 row = doc.to_audit_row()
@@ -829,6 +846,7 @@ class CompositeSentimentSource:
                 row["s_verification"] = score.s_verification
                 row["credibility_weight"] = score.credibility_weight
                 row["is_bot"] = int(score.is_bot)
+                row["verification_method"] = score.verification_method
                 row["final_weighted_score"] = doc.raw_sentiment_score * score.credibility_weight
                 rows.append(row)
             HistoricalStore().save_sentiment_documents(rows)

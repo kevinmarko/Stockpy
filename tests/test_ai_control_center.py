@@ -52,6 +52,11 @@ class TestCapabilitiesRegistry:
             "opal_research",
         }.issubset(keys)
 
+    def test_covers_sentiment_credibility_verification(self) -> None:
+        """AI-Assisted Credibility Filtering (Sentiment Pipeline Phase 2 PR2)."""
+        keys = {c.key for c in CAPABILITIES}
+        assert "sentiment_credibility_verification" in keys
+
     def test_all_entries_are_capabilities(self) -> None:
         assert all(isinstance(c, AICapability) for c in CAPABILITIES)
 
@@ -217,6 +222,46 @@ class TestCapabilityStatus:
                 OPENAI_API_KEY="sk-x",
             ),
             self._opal(),
+        )
+        assert st["status"] == "ready"
+
+    @staticmethod
+    def _sentiment_verification() -> AICapability:
+        return next(c for c in CAPABILITIES if c.key == "sentiment_credibility_verification")
+
+    def test_sentiment_verification_disabled_by_default(self) -> None:
+        # Default settings shape: SENTIMENT_LLM_VERIFICATION_ENABLED=False,
+        # SENTIMENT_LLM_VERIFICATION_PROVIDER="none" -- must resolve
+        # "disabled", never "not_built" (signals.credibility always exists).
+        st = capability_status(
+            SimpleNamespace(
+                SENTIMENT_LLM_VERIFICATION_ENABLED=False,
+                SENTIMENT_LLM_VERIFICATION_PROVIDER="none",
+            ),
+            self._sentiment_verification(),
+        )
+        assert st["built"] is True
+        assert st["status"] == "disabled"
+
+    def test_sentiment_verification_missing_key(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                SENTIMENT_LLM_VERIFICATION_ENABLED=True,
+                SENTIMENT_LLM_VERIFICATION_PROVIDER="claude",
+                ANTHROPIC_API_KEY="",
+            ),
+            self._sentiment_verification(),
+        )
+        assert st["status"] == "missing_key"
+
+    def test_sentiment_verification_ready_when_enabled_and_keyed(self) -> None:
+        st = capability_status(
+            SimpleNamespace(
+                SENTIMENT_LLM_VERIFICATION_ENABLED=True,
+                SENTIMENT_LLM_VERIFICATION_PROVIDER="gemini",
+                GEMINI_API_KEY="sk-gem-x",
+            ),
+            self._sentiment_verification(),
         )
         assert st["status"] == "ready"
 

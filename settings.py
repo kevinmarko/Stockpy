@@ -1213,6 +1213,78 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- AI-Assisted Credibility Filtering (Sentiment Pipeline Phase 2 PR2,
+    # signals/credibility.py) ---
+    # Replaces the hardcoded S_verification=1.0 placeholder with a real,
+    # budget-bounded LLM check for documents whose HEURISTIC credibility
+    # composite (S_authority + S_humanity) falls in a borderline band --
+    # clearly-trusted or clearly-bot-flagged documents never pay the LLM
+    # cost, and institutional sources (finnhub/yahoo_rss/gdelt/edgar) are
+    # skipped entirely. Opt-in, default False -- preserves today's exact
+    # S_verification=1.0-for-everyone behavior, matching the
+    # FORECAST_USE_GARCH_SIGMA opt-in convention.
+    SENTIMENT_LLM_VERIFICATION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, signals/credibility.py's score_documents() calls an "
+            "LLM (via llm/providers.py's LLMProvider.call_structured -- the "
+            "same soft-fail contract as every other LLM integration in this "
+            "codebase, CONSTRAINT #6) to verify documents whose heuristic "
+            "credibility composite falls in "
+            "[SENTIMENT_LLM_VERIFICATION_BORDERLINE_LOW, "
+            "SENTIMENT_LLM_VERIFICATION_BORDERLINE_HIGH]. False (the "
+            "default) is a complete no-op: every document's S_verification "
+            "stays the hardcoded 1.0 placeholder, byte-identical to "
+            "pre-PR2 behavior. Requires "
+            "SENTIMENT_LLM_VERIFICATION_PROVIDER to also be set to a real "
+            "provider ('claude'/'gemini'/'openai') and that provider's API "
+            "key to be configured -- otherwise still a no-op."
+        ),
+    )
+    SENTIMENT_LLM_VERIFICATION_PROVIDER: str = Field(
+        default="none",
+        description=(
+            "Which LLMProvider backs sentiment-document verification -- "
+            "'claude' | 'gemini' | 'openai' | 'none'. 'none' (the default) "
+            "disables the LLM call even when "
+            "SENTIMENT_LLM_VERIFICATION_ENABLED is True. Resolved by "
+            "llm.router.get_sentiment_verification_provider(), mirroring "
+            "OPAL_RESEARCH_PROVIDER's flexible-routing shape."
+        ),
+    )
+    SENTIMENT_LLM_VERIFICATION_MAX_CALLS_PER_CYCLE: int = Field(
+        default=25,
+        description=(
+            "Per-batch cap on real LLM calls made by "
+            "signals.credibility.score_documents(). Once reached, remaining "
+            "borderline documents silently fall back to the S_verification="
+            "1.0 placeholder rather than blocking ingestion -- the same "
+            "'bounded queue with backpressure' philosophy as "
+            "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE. A doc_hash cache hit does "
+            "NOT count against this budget."
+        ),
+    )
+    SENTIMENT_LLM_VERIFICATION_BORDERLINE_LOW: float = Field(
+        default=0.3,
+        description=(
+            "Lower bound (inclusive) of the heuristic credibility-composite "
+            "band ((S_authority + S_humanity) / 2) that qualifies a document "
+            "for LLM verification. Documents scoring below this are already "
+            "clearly low-trust (bot-like/low-authority) -- an LLM call would "
+            "not change the outcome, so it is skipped to control cost."
+        ),
+    )
+    SENTIMENT_LLM_VERIFICATION_BORDERLINE_HIGH: float = Field(
+        default=0.7,
+        description=(
+            "Upper bound (inclusive) of the heuristic credibility-composite "
+            "band ((S_authority + S_humanity) / 2) that qualifies a document "
+            "for LLM verification. Documents scoring above this are already "
+            "clearly high-trust -- an LLM call would not change the "
+            "outcome, so it is skipped to control cost."
+        ),
+    )
+
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
     # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.
