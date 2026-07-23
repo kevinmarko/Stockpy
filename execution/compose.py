@@ -849,9 +849,15 @@ def compose_and_emit(
 
         run_result = _ComposedRunResult(recommendations=composed, snapshot=account_snapshot)
         from execution.queue_builder import emit_execution_queue
+        # Decision D3 (pilots/mirror.py): follows use a deliberately low
+        # min_conviction floor so a Pilot's own conviction-independent
+        # rebalance still queues. Lazy import (matches this module's own
+        # emit_execution_queue import above, and avoids a circular import
+        # since pilots/mirror.py imports THIS module's compose_and_emit).
+        from pilots.mirror import FOLLOW_MIN_CONVICTION
         return emit_execution_queue(
             run_result, mode=mode, output_dir=output_dir,
-            config={"strategy_id": "composed", "min_conviction": 0.0}, now=now,
+            config={"strategy_id": "composed", "min_conviction": FOLLOW_MIN_CONVICTION}, now=now,
         )
     except Exception as exc:  # pragma: no cover - belt-and-suspenders dead-letter
         logger.warning("compose: compose_and_emit failed (%s); execution_queue.json untouched", exc)
