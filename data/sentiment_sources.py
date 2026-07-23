@@ -26,14 +26,6 @@ others, but opt-in only (add ``"google_news"`` to ``SENTIMENT_SOURCES`` in
 also defaulting to ``False``. See its class docstring for the query
 simplification and opaque-redirect-link caveats.
 
-``EdgarSource`` (already registered under ``"edgar"``, on by default) gained
-an opt-in EDGAR full-text-search (EFTS) extension -- ``settings.
-EDGAR_FULLTEXT_ENABLED`` (default ``False``) additionally ingests 10-K/10-Q
-filing BODY text (chunked to ``EDGAR_FULLTEXT_CHUNK_TOKENS`` per FinBERT's
-context window), not just the always-on 8-K submissions-feed headlines.
-See its class docstring for the form-filtering, chunking, and shared-
-throttle details.
-
 No execution surface
 ---------------------
 This module does ONLY data ingestion. It has no import of, or reference to,
@@ -750,56 +742,16 @@ class RedditSource(SentimentSource):
 # ---------------------------------------------------------------------------
 
 class EdgarSource(SentimentSource):
-    """SEC EDGAR recent-filings feed (8-K current reports) for a ticker, plus
-    an opt-in full-text-search (EFTS) extension that also ingests 10-K/10-Q
-    filing BODY text, not just 8-K headline descriptions.
+    """SEC EDGAR recent-filings feed (8-K current reports) for a ticker.
 
     Requires ``EDGAR_USER_AGENT`` (SEC's fair-access policy); degrades to an
     empty result rather than send a non-compliant request. No credibility
     metadata -- filings have no author/follower concept.
-
-    Full-text search additions (``settings.EDGAR_FULLTEXT_ENABLED``, default
-    ``False``) -- completely inert until an operator opts in; the 8-K
-    submissions-feed path above is byte-identical either way:
-
-    * ``EDGAR_FULLTEXT_FORMS`` (default ``"8-K,10-K,10-Q"``) drives EFTS's
-      own ``forms=`` filter, mirroring the ``SENTIMENT_SOURCES`` comma-
-      separated fan-out convention.
-    * ``EDGAR_FULLTEXT_CHUNK_TOKENS`` (default 512) bounds how many
-      whitespace tokens land in one chunk of 10-K/10-Q body text before it
-      is handed to FinBERT (whose own context window is 512 tokens --
-      see ``signals/news_catalyst.py``'s pipeline construction).
-    * Every document is stamped off the filing's OFFICIAL ``file_date``
-      (EFTS response field) or ``filingDate`` (submissions feed) --
-      never off wall-clock fetch time -- so a filing can never be
-      attributed to the wrong trading day regardless of when this process
-      happened to run (see ``tests/test_sentiment_pit_lookahead.py``-style
-      coverage in ``tests/test_sentiment_sources.py``).
-    * Chunks (and 8-K/other-form headline-style entries) from one
-      ``fetch()`` call are scored together via
-      ``signals.news_catalyst.score_headlines()``'s batched entry point
-      (PR417) rather than one call per chunk.
-    * Rate limiting reuses ``data/edgar_fundamentals.py``'s exact
-      process-wide ``_throttle()`` (monotonic-clock sliding gap under a
-      lock, ~10 req/s) rather than a second, independent throttle --
-      SEC's fair-access limit is per-IP and aggregate across every EDGAR
-      endpoint this process calls, so sharing one throttle keeps both
-      modules' EDGAR traffic under the same budget instead of each
-      independently believing it has the full 10 req/s to itself.
-    * Every failure (EFTS network/HTTP error, malformed JSON, a filing
-      whose body text can't be fetched, a throttle/import error) degrades
-      to skipping just that piece of work -- never raises, never aborts
-      the always-on 8-K path above it (CONSTRAINT #6).
     """
 
     name = "edgar"
     _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
     _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:0>10}.json"
-    # Path casing matters: SEC's full-text search index is served ONLY at
-    # the uppercase "/LATEST/" path -- lowercase 404s.
-    _FULLTEXT_URL = "https://efts.sec.gov/LATEST/search-index"
-    _MAX_FULLTEXT_HITS = 20        # safety bound on EFTS hits processed per fetch()
-    _MAX_CHUNKS_PER_FILING = 20    # safety bound on chunks scored per filing
 
     def __init__(self) -> None:
         self._ticker_to_cik: Optional[Dict[str, str]] = None
@@ -837,19 +789,6 @@ class EdgarSource(SentimentSource):
                     as_of=as_of, symbol=symbol.upper(), source_name=self.name,
                     text_content=text, raw_sentiment_score=self._score(text),
                 ))
-            # Opt-in EFTS full-text-search additions -- byte-identical
-            # behavior above when EDGAR_FULLTEXT_ENABLED is False (the
-            # default). Wrapped in its own try/except so a broken full-text
-            # call degrades to "just the 8-K docs already collected", never
-            # discards work the always-on path already did.
-            if _settings.EDGAR_FULLTEXT_ENABLED:
-                try:
-                    docs.extend(self._fetch_fulltext(symbol, since, cik, headers, _settings))
-                except Exception as exc:
-                    logger.warning(
-                        "EdgarSource: full-text search additions failed for %s: %s",
-                        symbol, exc,
-                    )
             return docs
         except Exception as exc:
             logger.warning("EdgarSource.fetch(%s) failed: %s", symbol, exc)
@@ -870,255 +809,6 @@ class EdgarSource(SentimentSource):
     def _score(text: str) -> float:
         from signals.news_catalyst import _score_headline
         return _score_headline(text, None)
-
-    # -- Full-text search (EFTS) additions -----------------------------
-
-    def _fetch_fulltext(
-        self,
-        symbol: str,
-        since: datetime,
-        cik: str,
-        headers: Dict[str, str],
-        settings_obj: Any,
-    ) -> List[SentimentDocument]:
-        """EFTS keyword/form/date-filtered search, plus 10-K/10-Q body-text
-        ingestion for matched filings of those form types. Other matched
-        form types (e.g. 8-K, when included in ``EDGAR_FULLTEXT_FORMS``) are
-        represented by a short entity/form headline-style string rather than
-        a body fetch, since the always-on submissions-feed path above
-        already covers 8-K headline text.
-        """
-        forms = [f.strip().upper() for f in settings_obj.EDGAR_FULLTEXT_FORMS.split(",") if f.strip()]
-        if not forms:
-            return []
-        try:
-            hits = self._efts_search(symbol, cik, since, forms, headers)
-        except Exception as exc:
-            logger.warning("EdgarSource: EFTS search failed for %s: %s", symbol, exc)
-            return []
-        if not hits:
-            return []
-
-        chunk_tokens = max(1, int(settings_obj.EDGAR_FULLTEXT_CHUNK_TOKENS))
-        texts: List[str] = []
-        stamps: List[datetime] = []
-
-        for hit in hits[: self._MAX_FULLTEXT_HITS]:
-            form = (hit.get("form") or "").upper()
-            # Leakage-safe timestamping: derived from EFTS's own official
-            # `file_date` field -- never from wall-clock fetch time.
-            as_of = self._parse_filing_date(hit.get("file_date"))
-            if as_of is None or as_of < since:
-                continue
-            entity_name = hit.get("entity_name") or symbol
-            if form in ("10-K", "10-Q"):
-                body_text = ""
-                try:
-                    body_text = self._fetch_filing_text(cik, hit, headers)
-                except Exception as exc:
-                    logger.warning(
-                        "EdgarSource: filing text fetch failed for %s %s: %s",
-                        symbol, form, exc,
-                    )
-                if not body_text:
-                    # Degrade to a headline-style stand-in rather than drop
-                    # the filing entirely -- still a real, dated document.
-                    body_text = f"{entity_name} {form} filing"
-                for chunk in self._chunk_text(body_text, chunk_tokens)[: self._MAX_CHUNKS_PER_FILING]:
-                    texts.append(chunk)
-                    stamps.append(as_of)
-            else:
-                texts.append(f"{entity_name} {form} filing")
-                stamps.append(as_of)
-
-        if not texts:
-            return []
-
-        try:
-            from signals.news_catalyst import (
-                _distribution_to_signed,
-                _get_finbert_pipeline,
-                score_headlines,
-            )
-            pipeline = _get_finbert_pipeline() if settings_obj.FINBERT_ENABLED else None
-            scored = score_headlines(texts, pipeline=pipeline)
-        except Exception as exc:
-            logger.warning("EdgarSource: batch scoring failed for %s: %s", symbol, exc)
-            return []
-
-        docs: List[SentimentDocument] = []
-        for text, as_of, dist in zip(texts, stamps, scored):
-            signed = max(-1.0, min(1.0, _distribution_to_signed(dist)))
-            docs.append(SentimentDocument(
-                as_of=as_of, symbol=symbol.upper(), source_name=self.name,
-                text_content=text, raw_sentiment_score=signed,
-            ))
-        return docs
-
-    def _efts_search(
-        self,
-        symbol: str,
-        cik: str,
-        since: datetime,
-        forms: List[str],
-        headers: Dict[str, str],
-    ) -> List[Dict[str, Any]]:
-        """One EFTS full-text-search call, form/date/CIK-filtered.
-
-        Reuses ``data/edgar_fundamentals.py``'s exact ``_throttle()`` (see
-        that module -- monotonic sliding gap held across a lock, ~10 req/s)
-        so this endpoint shares the same process-wide SEC rate budget as
-        the fundamentals backfill, instead of each independently assuming
-        it owns the full 10 req/s.
-        """
-        from data.edgar_fundamentals import _throttle
-
-        now = datetime.now(timezone.utc)
-        params = {
-            "q": symbol,
-            "forms": ",".join(forms),
-            "ciks": cik,
-            "dateRange": "custom",
-            "startdt": since.strftime("%Y-%m-%d"),
-            "enddt": now.strftime("%Y-%m-%d"),
-        }
-        _throttle()
-        resp = requests.get(self._FULLTEXT_URL, headers=headers, params=params, timeout=10)
-        resp.raise_for_status()
-        payload = resp.json()
-        return self._parse_fulltext_hits(payload)
-
-    @staticmethod
-    def _parse_fulltext_hits(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Parse EFTS's ElasticSearch-shaped response into a flat list of
-        ``{form, file_date, entity_name, doc_id}`` dicts. Any single
-        malformed hit is skipped rather than aborting the whole batch."""
-        hits = (payload.get("hits") or {}).get("hits") or []
-        parsed: List[Dict[str, Any]] = []
-        for h in hits:
-            try:
-                src = h.get("_source", {}) or {}
-                form = src.get("form") or next(iter(src.get("root_forms") or []), None)
-                display_names = src.get("display_names") or []
-                parsed.append({
-                    "form": form,
-                    "file_date": src.get("file_date"),
-                    "entity_name": display_names[0] if display_names else "",
-                    "doc_id": h.get("_id", ""),
-                })
-            except Exception:
-                continue
-        return parsed
-
-    @staticmethod
-    def _parse_filing_date(date_str: Optional[str]) -> Optional[datetime]:
-        if not date_str:
-            return None
-        try:
-            return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            return None
-
-    @staticmethod
-    def _filing_document_url(cik: str, hit: Dict[str, Any]) -> Optional[str]:
-        """Build the filing document URL from an EFTS hit's ``_id``, which
-        is shaped ``"{accession-no-dashes-included}:{primary-doc-filename}"``.
-        """
-        doc_id = hit.get("doc_id", "") or ""
-        if ":" not in doc_id:
-            return None
-        adsh, filename = doc_id.split(":", 1)
-        if not adsh or not filename:
-            return None
-        accession_no_dashes = adsh.replace("-", "")
-        try:
-            cik_no_leading_zeros = str(int(cik))
-        except (TypeError, ValueError):
-            return None
-        return (
-            f"https://www.sec.gov/Archives/edgar/data/"
-            f"{cik_no_leading_zeros}/{accession_no_dashes}/{filename}"
-        )
-
-    def _fetch_filing_text(self, cik: str, hit: Dict[str, Any], headers: Dict[str, str]) -> str:
-        """Fetch one filing's primary document and return plain text.
-        Empty string (never raises) when the URL can't be built or the
-        request fails -- the caller degrades to a headline-style stand-in.
-        """
-        from data.edgar_fundamentals import _throttle
-
-        url = self._filing_document_url(cik, hit)
-        if not url:
-            return ""
-        _throttle()
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        return self._extract_filing_text(resp.text)
-
-    @staticmethod
-    def _extract_filing_text(html: str) -> str:
-        """Strip HTML to plain text for scoring.
-
-        Tradeoff (documented, not hidden): cheaply and robustly isolating
-        MD&A (Item 7) / Risk Factors (Item 1A) sections across the wide
-        variety of 10-K/10-Q HTML structures filers use is fragile --
-        section headers are inconsistently marked up (bold text, table
-        cells, plain paragraphs with no anchor), and a broken extraction
-        would silently DROP real content rather than fail loudly. This
-        method therefore falls back to the filing's FULL text as an
-        always-available baseline, and only opportunistically narrows to
-        Item 7/1A via a permissive regex (``_narrow_to_key_sections``) when
-        those markers ARE cleanly present -- narrowing is a bonus, never a
-        requirement for the pipeline to produce a result.
-        """
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html, "html.parser")
-            for tag in soup(["script", "style"]):
-                tag.decompose()
-            text = soup.get_text(separator=" ", strip=True)
-        except Exception:
-            text = html
-        narrowed = EdgarSource._narrow_to_key_sections(text)
-        return narrowed or text
-
-    @staticmethod
-    def _narrow_to_key_sections(text: str) -> str:
-        """Best-effort MD&A / Risk Factors isolation via a permissive regex
-        search for "Item 1A"/"Item 7" markers. Returns ``""`` (NOT the full
-        text) when neither marker is found cleanly, so the caller's
-        fallback-to-full-text path stays the honest default rather than a
-        silently truncated/wrong slice."""
-        starts = []
-        for pattern in (r"Item\s*1A[.\s]", r"Item\s*7[.\s]"):
-            m = re.search(pattern, text, flags=re.IGNORECASE)
-            if m:
-                starts.append(m.start())
-        if not starts:
-            return ""
-        start = min(starts)
-        # MD&A/Risk Factors sections run pages, not the whole filing;
-        # chunking happens downstream regardless of this cap.
-        return text[start:start + 50000]
-
-    @staticmethod
-    def _chunk_text(text: str, chunk_tokens: int) -> List[str]:
-        """Split ``text`` into whitespace-token chunks of at most
-        ``chunk_tokens`` tokens each -- a simple, dependency-free
-        approximation of FinBERT's wordpiece tokenizer, good enough to stay
-        comfortably under the model's 512-token context window. The
-        pipeline's own ``truncation=True, max_length=512`` (see
-        ``signals/news_catalyst.py``'s ``_get_finbert_pipeline``) is a
-        second line of defense against any undercount."""
-        if not text:
-            return []
-        words = text.split()
-        if not words:
-            return []
-        return [
-            " ".join(words[i:i + chunk_tokens])
-            for i in range(0, len(words), chunk_tokens)
-        ]
 
 
 # ---------------------------------------------------------------------------
