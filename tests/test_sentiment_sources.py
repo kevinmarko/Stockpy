@@ -17,10 +17,13 @@ from data.sentiment_sources import (
     EdgarSource,
     FinnhubSentimentSource,
     GDELTSource,
+    GDELTVolumeSource,
     RedditSource,
     SentimentDocument,
     YahooRSSSource,
     _dedup_key,
+    _sector_gdelt_query,
+    compute_sector_heat_factors,
     desentencize,
     get_sentiment_source,
     reset_sentiment_source,
@@ -707,3 +710,182 @@ class TestSingleton:
             assert a is not b
         finally:
             reset_sentiment_source()
+
+
+# ---------------------------------------------------------------------------
+# Sector Heat Factor -- GDELTVolumeSource / compute_sector_heat_factors
+# ---------------------------------------------------------------------------
+
+class TestGDELTVolumeSource:
+    def test_fetch_daily_counts_parses_timeline(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "timeline": [{
+                "series": "timelinevol",
+                "data": [
+                    {"date": "20260719000000", "value": 3.0},
+                    {"date": "20260720000000", "value": 5.0},
+                ],
+            }]
+        }
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts(
+                query="Technology sector stocks",
+                since=datetime(2026, 7, 19, tzinfo=timezone.utc),
+                until=datetime(2026, 7, 20, 23, 0, tzinfo=timezone.utc),
+            )
+        assert counts == {"2026-07-19": 3.0, "2026-07-20": 5.0}
+
+    def test_sums_subdaily_points_into_same_calendar_day(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "timeline": [{
+                "data": [
+                    {"date": "20260720060000", "value": 2.0},
+                    {"date": "20260720180000", "value": 3.0},
+                ],
+            }]
+        }
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts(
+                query="q", since=datetime(2026, 7, 20, tzinfo=timezone.utc),
+                until=datetime(2026, 7, 21, tzinfo=timezone.utc),
+            )
+        assert counts == {"2026-07-20": 5.0}
+
+    def test_error_returns_empty(self):
+        src = GDELTVolumeSource()
+        with patch("data.sentiment_sources.requests.get", side_effect=RuntimeError("boom")):
+            counts = src.fetch_daily_counts("q", since=datetime.now(timezone.utc) - timedelta(days=1))
+        assert counts == {}
+
+    def test_malformed_timeline_returns_empty(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"timeline": "not-a-list-of-dicts"}
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts("q", since=datetime.now(timezone.utc) - timedelta(days=1))
+        assert counts == {}
+
+    def test_empty_timeline_returns_empty(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"timeline": []}
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts("q", since=datetime.now(timezone.utc) - timedelta(days=1))
+        assert counts == {}
+
+    def test_unparseable_point_is_skipped_not_fatal(self):
+        src = GDELTVolumeSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "timeline": [{
+                "data": [
+                    {"date": "not-a-date", "value": 1.0},
+                    {"date": "20260720000000", "value": 4.0},
+                ],
+            }]
+        }
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
+            counts = src.fetch_daily_counts(
+                query="q", since=datetime(2026, 7, 19, tzinfo=timezone.utc),
+                until=datetime(2026, 7, 21, tzinfo=timezone.utc),
+            )
+        assert counts == {"2026-07-20": 4.0}
+
+    def test_parse_timeline_date_accepts_documented_formats(self):
+        assert GDELTVolumeSource._parse_timeline_date("20260720140000") is not None
+        assert GDELTVolumeSource._parse_timeline_date("20260720T140000Z") is not None
+        assert GDELTVolumeSource._parse_timeline_date("2026-07-20") is not None
+        assert GDELTVolumeSource._parse_timeline_date("garbage") is None
+        assert GDELTVolumeSource._parse_timeline_date("") is None
+
+
+class TestSectorGdeltQuery:
+    def test_query_contains_quoted_sector_name(self):
+        assert '"Technology"' in _sector_gdelt_query("Technology")
+        assert "sector stocks" in _sector_gdelt_query("Technology")
+
+
+class TestComputeSectorHeatFactors:
+    def test_disabled_returns_empty_with_no_network_call(self):
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", False):
+            with patch("data.sentiment_sources.requests.get") as mock_get:
+                result = compute_sector_heat_factors(["Technology", "Energy"])
+        assert result == {}
+        mock_get.assert_not_called()
+
+    def test_empty_sectors_returns_empty(self):
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True):
+            with patch("data.sentiment_sources.requests.get") as mock_get:
+                result = compute_sector_heat_factors([])
+        assert result == {}
+        mock_get.assert_not_called()
+
+    def test_gaussian_smoothing_matches_known_output(self):
+        """Deterministic input series -> the smoothed 'today' value must
+        match scipy.ndimage.gaussian_filter1d computed independently in this
+        test (not merely 'is a float')."""
+        import numpy as np
+        from scipy.ndimage import gaussian_filter1d
+
+        raw_series = [1.0, 2.0, 3.0, 10.0, 4.0, 3.0, 2.0]  # a spike on day 4
+        expected = float(gaussian_filter1d(np.asarray(raw_series), sigma=1.5)[-1])
+
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.return_value = {
+            f"2026-07-{14 + i:02d}": v for i, v in enumerate(raw_series)
+        }
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("settings.settings.SECTOR_HEAT_SMOOTHING_SIGMA", 1.5), \
+             patch("settings.settings.SECTOR_HEAT_LOOKBACK_DAYS", 7), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            result = compute_sector_heat_factors(["Technology"])
+
+        assert result == {"Technology": pytest.approx(expected)}
+
+    def test_one_call_per_distinct_sector_bounded(self):
+        """Exactly one fetch_daily_counts() call per distinct sector -- never
+        one per ticker, and never a duplicate call for a repeated sector
+        name."""
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.return_value = {"2026-07-20": 5.0}
+        sectors = ["Technology", "Technology", "Energy", "Healthcare", "", None, "Unknown"]
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            compute_sector_heat_factors(sectors)
+        # 7 raw entries collapse to 3 distinct real sectors -> 3 calls.
+        assert fake_source.fetch_daily_counts.call_count == 3
+
+    def test_sector_failure_does_not_block_others(self):
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.side_effect = [
+            RuntimeError("boom"), {"2026-07-20": 5.0},
+        ]
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            result = compute_sector_heat_factors(["Energy", "Technology"])
+        assert set(result.keys()) == {"Technology"}
+
+    def test_sector_with_empty_series_excluded_not_fabricated(self):
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.return_value = {}
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            result = compute_sector_heat_factors(["Technology"])
+        assert result == {}
+
+    def test_unknown_sector_never_queried(self):
+        fake_source = MagicMock()
+        fake_source.fetch_daily_counts.return_value = {"2026-07-20": 5.0}
+        with patch("settings.settings.SECTOR_HEAT_ENABLED", True), \
+             patch("data.sentiment_sources.GDELTVolumeSource", return_value=fake_source):
+            compute_sector_heat_factors(["Unknown", "unknown", ""])
+        fake_source.fetch_daily_counts.assert_not_called()
