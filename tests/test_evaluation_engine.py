@@ -170,6 +170,125 @@ class TestCalculateEdgeRatio:
 
 
 # ===========================================================================
+# TestCalculateEdgeRatioIntradayOptIn -- Phase-1 audit item B2
+# ===========================================================================
+
+class TestCalculateEdgeRatioIntradayOptIn:
+    """settings.EXCURSION_INTRADAY_ENABLED (default False) gates an optional
+    hourly-bar excursion fetch. Off by default and only engaged when BOTH the
+    setting is True AND the caller supplies symbol + intraday_provider; any
+    failure degrades to the existing daily history_df path."""
+
+    def _daily_history(self):
+        idx = pd.date_range("2026-06-20", periods=5, freq="D")
+        return _ohlc(
+            idx,
+            highs=[100.0, 105.0, 110.0, 108.0, 104.0],
+            lows=[100.0, 98.0, 95.0, 97.0, 101.0],
+            closes=[100.0, 103.0, 107.0, 105.0, 103.0],
+        )
+
+    def _hourly_history_with_wider_extremes(self):
+        # Same calendar window as _daily_history but with a same-day spike
+        # that daily bars would never resolve (intraday High 120 / Low 90).
+        idx = pd.date_range("2026-06-20 09:00", periods=10, freq="h")
+        return _ohlc(
+            idx,
+            highs=[100.0, 120.0, 115.0, 110.0, 108.0, 106.0, 105.0, 104.0, 103.0, 102.0],
+            lows=[100.0, 99.0, 98.0, 97.0, 96.0, 90.0, 95.0, 96.0, 97.0, 98.0],
+            closes=[100.0, 110.0, 105.0, 103.0, 102.0, 98.0, 100.0, 101.0, 100.5, 100.0],
+        )
+
+    def test_setting_disabled_ignores_symbol_and_provider(self, monkeypatch):
+        """Default False: even if a caller passes symbol/intraday_provider,
+        the daily history_df result must be unchanged and the provider must
+        never be called."""
+        from unittest.mock import MagicMock
+        from settings import settings as live_settings
+        monkeypatch.setattr(live_settings, "EXCURSION_INTRADAY_ENABLED", False, raising=False)
+
+        eng = _engine()
+        mock_provider = MagicMock()
+        out = eng.calculate_edge_ratio(
+            self._daily_history(), 100.0, "2026-06-20", "2026-06-24",
+            symbol="AAPL", intraday_provider=mock_provider,
+        )
+        assert out["MFE"] == pytest.approx(0.10, abs=1e-9)
+        assert out["MAE"] == pytest.approx(0.05, abs=1e-9)
+        mock_provider.get_intraday_bars.assert_not_called()
+
+    def test_missing_symbol_or_provider_never_calls_fetch(self, monkeypatch):
+        """Even with the setting True, omitting symbol or intraday_provider
+        must keep the pre-existing daily-only path (both are required)."""
+        from settings import settings as live_settings
+        monkeypatch.setattr(live_settings, "EXCURSION_INTRADAY_ENABLED", True, raising=False)
+
+        eng = _engine()
+        out = eng.calculate_edge_ratio(
+            self._daily_history(), 100.0, "2026-06-20", "2026-06-24",
+        )
+        assert out["MFE"] == pytest.approx(0.10, abs=1e-9)
+        assert out["MAE"] == pytest.approx(0.05, abs=1e-9)
+
+    def test_enabled_with_provider_uses_hourly_extremes(self, monkeypatch):
+        """When enabled and the provider returns real hourly bars, MFE/MAE
+        must reflect the finer intraday extremes, not the coarser daily
+        High/Low."""
+        from unittest.mock import MagicMock
+        from settings import settings as live_settings
+        monkeypatch.setattr(live_settings, "EXCURSION_INTRADAY_ENABLED", True, raising=False)
+
+        eng = _engine()
+        mock_provider = MagicMock()
+        mock_provider.get_intraday_bars.return_value = self._hourly_history_with_wider_extremes()
+
+        out = eng.calculate_edge_ratio(
+            self._daily_history(), 100.0, "2026-06-20", "2026-06-24",
+            symbol="AAPL", intraday_provider=mock_provider,
+        )
+        # Hourly fixture's High=120/Low=90 vs entry=100 -> MFE=0.20, MAE=0.10
+        # (daily fixture alone would give 0.10 / 0.05 -- proves hourly path engaged).
+        assert out["MFE"] == pytest.approx(0.20, abs=1e-9)
+        assert out["MAE"] == pytest.approx(0.10, abs=1e-9)
+        mock_provider.get_intraday_bars.assert_called_once()
+        _, call_kwargs = mock_provider.get_intraday_bars.call_args
+        assert call_kwargs.get("interval") == "1h"
+
+    def test_enabled_but_provider_raises_falls_back_to_daily(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from settings import settings as live_settings
+        monkeypatch.setattr(live_settings, "EXCURSION_INTRADAY_ENABLED", True, raising=False)
+
+        eng = _engine()
+        mock_provider = MagicMock()
+        mock_provider.get_intraday_bars.side_effect = RuntimeError("provider down")
+
+        out = eng.calculate_edge_ratio(
+            self._daily_history(), 100.0, "2026-06-20", "2026-06-24",
+            symbol="AAPL", intraday_provider=mock_provider,
+        )
+        # Never raises; degrades to the exact daily-bar result.
+        assert out["MFE"] == pytest.approx(0.10, abs=1e-9)
+        assert out["MAE"] == pytest.approx(0.05, abs=1e-9)
+
+    def test_enabled_but_provider_returns_empty_falls_back_to_daily(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from settings import settings as live_settings
+        monkeypatch.setattr(live_settings, "EXCURSION_INTRADAY_ENABLED", True, raising=False)
+
+        eng = _engine()
+        mock_provider = MagicMock()
+        mock_provider.get_intraday_bars.return_value = pd.DataFrame()
+
+        out = eng.calculate_edge_ratio(
+            self._daily_history(), 100.0, "2026-06-20", "2026-06-24",
+            symbol="AAPL", intraday_provider=mock_provider,
+        )
+        assert out["MFE"] == pytest.approx(0.10, abs=1e-9)
+        assert out["MAE"] == pytest.approx(0.05, abs=1e-9)
+
+
+# ===========================================================================
 # TestExcursionMetrics
 # ===========================================================================
 

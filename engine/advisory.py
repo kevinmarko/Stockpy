@@ -271,7 +271,9 @@ CONFIG: Dict[str, Any] = {
     # ── Kelly parameters ─────────────────────────────────────────────────────
     # Should stay in sync with settings.KELLY_FRACTION / KELLY_CAP; duplicated
     # here so CONFIG is self-contained and the advisory layer doesn't silently
-    # inherit a live-execution setting change.
+    # inherit a live-execution setting change. Drift between these literals
+    # and settings.KELLY_FRACTION/KELLY_CAP is caught (not silent) by
+    # tests/test_advisory.py::TestConfigCompleteness::test_kelly_config_matches_settings_defaults.
     "kelly_fraction": 0.5,   # half-Kelly
     "kelly_cap": 0.20,       # hard cap before the advisory max_single_position_pct clamp
 

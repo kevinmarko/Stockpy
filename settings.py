@@ -234,6 +234,23 @@ class Settings(BaseSettings):
             "single-cycle companion to that gate."
         ),
     )
+    EXCURSION_INTRADAY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in (Phase-1 audit item B2): evaluation_engine.calculate_edge_ratio "
+            "consumes hourly bars (MarketDataProvider.get_intraday_bars(..., "
+            "interval='1h')) over the trade hold window instead of daily bars, "
+            "for finer Maximum Favorable/Adverse Excursion (MFE/MAE) resolution "
+            "on same-day or short holds. Daily bars are already genuine (not "
+            "fabricated) and adequate for multi-day holds; this only adds "
+            "intraday precision. Any hourly-fetch failure (provider error, "
+            "unsupported interval, empty result) degrades to the existing "
+            "daily-bar path rather than raising -- never blocks the excursion "
+            "calculation. False (the default) reproduces pre-existing "
+            "daily-only behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA "
+            "opt-in convention."
+        ),
+    )
     # Cross-cycle data-freshness gate (persisted marker, see main_orchestrator.
     # _data_is_fresh / _mark_data_refreshed). When an INTERVAL-triggered daemon
     # cycle finds the last successful data pull was younger than this TTL, it
@@ -695,6 +712,27 @@ class Settings(BaseSettings):
             "the next generate_forecast() call for that ticker triggers a fresh fit "
             "(mirrors regime/hmm_regime.py's HMMRegimeDetector(retrain_freq_days=7) "
             "convention). Only consulted when FORECAST_MODEL_PERSISTENCE_ENABLED=True."
+        ),
+    )
+    FORECAST_CNN_LSTM_WALKFORWARD_SCALING: bool = Field(
+        default=False,
+        description=(
+            "Opt-in, stricter alternative to ForecastingEngine.fit_scalers_on_train's "
+            "single train/reserve MinMaxScaler split. That split is already leak-free "
+            "for the live single-shot forecast (the emitted forecast never depends on "
+            "future data relative to inference time), but an EARLY training window's "
+            "scale still reflects statistics pooled from LATER rows within the train "
+            "span via the one shared scaler. When True, ForecastingEngine.run_cnn_lstm_"
+            "forecast builds training windows via fit_scalers_walkforward_windows "
+            "instead: each supervised window is scaled using only an expanding "
+            "min/max computed from rows strictly at/before that window's own end "
+            "(vectorized via numpy cumulative min/max, not a per-window sklearn "
+            "refit). The final live inference window is unaffected either way -- it "
+            "still uses the train-span scaler, since at inference time 'now' truly is "
+            "the most recent data available. False (the default) reproduces "
+            "pre-existing behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA "
+            "opt-in convention. Intended for high-fidelity walk-forward backtesting, "
+            "not the live pipeline; costs more compute per fit."
         ),
     )
     ADVISORY_REUSE_PIPELINE_COMPUTE: bool = Field(

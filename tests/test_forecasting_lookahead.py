@@ -148,6 +148,139 @@ def test_forecasting_scaler_fit_on_train_only(sine_wave_data):
 
 
 # =============================================================================
+# fit_scalers_walkforward_windows() -- opt-in walk-forward scaler (B1)
+# =============================================================================
+# Phase-1 audit item B1: settings.FORECAST_CNN_LSTM_WALKFORWARD_SCALING (default
+# False) gates a stricter, per-window expanding-min/max scaler alternative to
+# fit_scalers_on_train's single train/reserve split. These tests prove (a) the
+# new function is itself causal via the same perturbation style as
+# TestMakeDirectMultistepWindowsIndexing, and (b) the flag actually routes
+# run_cnn_lstm_forecast to the new path when True and never when False/unset.
+
+class TestFitScalersWalkforwardWindowsIndexing:
+    def test_perturbing_rows_at_or_after_a_windows_end_never_changes_that_window(self):
+        """Causality proof: a naive re-implementation could easily let a
+        window's expanding min/max leak rows at or after its own end. Two
+        DataFrames sharing an identical prefix but diverging only in the last
+        few rows must produce byte-identical X/Y for every window whose own
+        reach (window rows + horizon targets) never touches the diverging
+        region."""
+        rng = np.random.default_rng(42)
+        lookback = 4
+        horizons = [2]
+        feature_cols = ["F0", "F1"]
+        n_rows = 40
+        n_reserve = 0  # exercise the full array as "train" for this unit test
+
+        base_values = rng.normal(loc=50, scale=10, size=(n_rows, 2))
+        close_values = rng.normal(loc=100, scale=5, size=n_rows)
+        df_base = pd.DataFrame(base_values, columns=feature_cols)
+        df_base["Close"] = close_values
+
+        df_perturbed = df_base.copy()
+        perturb_start = n_rows - 3
+        df_perturbed.iloc[perturb_start:, :] = df_perturbed.iloc[perturb_start:, :] + 1000.0
+
+        X_a, Y_a = ForecastingEngine.fit_scalers_walkforward_windows(
+            df_base, feature_cols, lookback, horizons, n_reserve
+        )
+        X_b, Y_b = ForecastingEngine.fit_scalers_walkforward_windows(
+            df_perturbed, feature_cols, lookback, horizons, n_reserve
+        )
+        assert X_a.shape == X_b.shape and X_a.shape[0] > 0
+
+        max_h = max(horizons)
+        safe_windows = 0
+        for k in range(X_a.shape[0]):
+            end = lookback + k
+            last = end - 1
+            target_idx = [last + h for h in horizons]
+            if end <= perturb_start and max(target_idx) < perturb_start:
+                safe_windows += 1
+                np.testing.assert_array_equal(X_a[k], X_b[k])
+                np.testing.assert_array_equal(Y_a[k], Y_b[k])
+        assert safe_windows > 0, "fixture produced no windows entirely before the perturbed region"
+
+    def test_window_scale_matches_hand_computed_expanding_minmax(self):
+        """Direct correctness check (not just causality): window k's scaled
+        values equal (x - running_min) / (running_max - running_min) computed
+        by hand over rows [0, window_end)."""
+        lookback = 3
+        horizons = [1]
+        feature_cols = ["F0"]
+        values = np.array([1.0, 5.0, 2.0, 8.0, 3.0, 9.0, 4.0, 10.0], dtype=float)
+        df = pd.DataFrame({"F0": values, "Close": values})
+
+        X_seq, Y_seq = ForecastingEngine.fit_scalers_walkforward_windows(
+            df, feature_cols, lookback, horizons, n_reserve=0
+        )
+        # First window: end=lookback=3, last=2 -> expanding stats over rows [0,2]
+        # inclusive = values[0:3] = [1,5,2] -> min=1, max=5.
+        lo, hi = values[0:3].min(), values[0:3].max()
+        expected_window0 = (values[0:3] - lo) / (hi - lo)
+        np.testing.assert_allclose(X_seq[0, :, 0], expected_window0)
+        expected_label0 = (values[3] - lo) / (hi - lo)  # last+h = 2+1 = 3
+        np.testing.assert_allclose(Y_seq[0], [expected_label0])
+
+
+class TestWalkforwardScalingOptIn:
+    def test_default_off_never_calls_walkforward_path(self, sine_wave_data):
+        """settings.FORECAST_CNN_LSTM_WALKFORWARD_SCALING is False unless
+        explicitly enabled, so run_cnn_lstm_forecast must keep using
+        make_direct_multistep_windows -- the pre-existing, unaffected path."""
+        engine = ForecastingEngine()
+        horizons = (10, 30, 60, 90)
+        calls = {"direct": 0, "walkforward": 0}
+        orig_direct = ForecastingEngine.make_direct_multistep_windows
+        orig_wf = ForecastingEngine.fit_scalers_walkforward_windows
+
+        def spy_direct(*a, **kw):
+            calls["direct"] += 1
+            return orig_direct(*a, **kw)
+
+        def spy_wf(*a, **kw):
+            calls["walkforward"] += 1
+            return orig_wf(*a, **kw)
+
+        with patch.object(ForecastingEngine, "make_direct_multistep_windows", staticmethod(spy_direct)), \
+             patch.object(ForecastingEngine, "fit_scalers_walkforward_windows", staticmethod(spy_wf)):
+            forecasts = engine.run_cnn_lstm_forecast(sine_wave_data, horizons=horizons)
+
+        assert calls == {"direct": 1, "walkforward": 0}
+        assert isinstance(forecasts, dict) and len(forecasts) == len(horizons)
+
+    def test_opt_in_flag_routes_to_walkforward_path(self, sine_wave_data, monkeypatch):
+        """settings.FORECAST_CNN_LSTM_WALKFORWARD_SCALING=True must route
+        run_cnn_lstm_forecast through fit_scalers_walkforward_windows instead
+        (Phase-1 audit item B1)."""
+        from settings import settings as live_settings
+        monkeypatch.setattr(
+            live_settings, "FORECAST_CNN_LSTM_WALKFORWARD_SCALING", True, raising=False
+        )
+
+        engine = ForecastingEngine()
+        horizons = (10, 30, 60, 90)
+        calls = {"direct": 0, "walkforward": 0}
+        orig_direct = ForecastingEngine.make_direct_multistep_windows
+        orig_wf = ForecastingEngine.fit_scalers_walkforward_windows
+
+        def spy_direct(*a, **kw):
+            calls["direct"] += 1
+            return orig_direct(*a, **kw)
+
+        def spy_wf(*a, **kw):
+            calls["walkforward"] += 1
+            return orig_wf(*a, **kw)
+
+        with patch.object(ForecastingEngine, "make_direct_multistep_windows", staticmethod(spy_direct)), \
+             patch.object(ForecastingEngine, "fit_scalers_walkforward_windows", staticmethod(spy_wf)):
+            forecasts = engine.run_cnn_lstm_forecast(sine_wave_data, horizons=horizons)
+
+        assert calls == {"direct": 0, "walkforward": 1}
+        assert isinstance(forecasts, dict) and len(forecasts) == len(horizons)
+
+
+# =============================================================================
 # build_lstm_features() -- direct perturbation coverage
 # =============================================================================
 # build_lstm_features()'s own docstring claims its causality "is verified by

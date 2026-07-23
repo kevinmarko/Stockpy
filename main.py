@@ -693,9 +693,20 @@ def _build_context_extras(
         try:
             from engine.advisory import _get_transactions_store
             from evaluation_engine import EvaluationEngine
+            from data.market_data import get_provider
 
             _store = _get_transactions_store()
             _ee = EvaluationEngine()
+            # Opt-in intraday-hourly excursion (Phase-1 audit item B2,
+            # settings.EXCURSION_INTRADAY_ENABLED): passed through on every
+            # call below regardless of the flag -- calculate_edge_ratio itself
+            # checks the setting and only uses these when it's True, so this
+            # is a no-op (identical to the pre-existing daily-only call) when
+            # the flag is off (the default).
+            try:
+                _intraday_provider = get_provider()
+            except Exception:
+                _intraday_provider = None
             _excursion: Dict[str, Dict[str, float]] = {}
             for _s, _d in bars_dict.items():
                 if _d is None or _d.empty:
@@ -715,7 +726,8 @@ def _build_context_extras(
                     continue  # only a CLOSED trade has a defined hold window
                 _entry_price = float(_latest["entry_price"])
                 _res = _ee.calculate_edge_ratio(
-                    _d, _entry_price, _latest["entry_ts"], _exit_ts
+                    _d, _entry_price, _latest["entry_ts"], _exit_ts,
+                    symbol=_s, intraday_provider=_intraday_provider,
                 )
                 _arrival_price = float(_d["Close"].iloc[-1])
                 _slippage = (
