@@ -91,6 +91,45 @@ def test_settings_defaults(monkeypatch, tmp_path):
 
 
 # =============================================================================
+# 2b. SENTIMENT/ATTENTION DATA SOURCE SCAFFOLDING DEFAULTS (Sentiment
+#     Pipeline Phase 4 groundwork) — Google News RSS, EDGAR full-text
+#     search, GDELT Sector Heat Factor, Wikipedia/pytrends attention.
+#     None of these are wired to any consuming code yet; every default must
+#     preserve today's exact behavior (nothing new enabled) so this branch
+#     is a pure no-op until a follow-on branch both wires the feature AND an
+#     operator opts in.
+# =============================================================================
+def test_sentiment_attention_scaffolding_defaults(monkeypatch, tmp_path):
+    for key in (
+        "GOOGLE_NEWS_LOOKBACK_WINDOW",
+        "EDGAR_FULLTEXT_ENABLED",
+        "EDGAR_FULLTEXT_FORMS",
+        "EDGAR_FULLTEXT_CHUNK_TOKENS",
+        "SECTOR_HEAT_ENABLED",
+        "SECTOR_HEAT_SMOOTHING_SIGMA",
+        "SECTOR_HEAT_LOOKBACK_DAYS",
+        "WIKIPEDIA_ATTENTION_ENABLED",
+        "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
+        "PYTRENDS_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+
+    s = Settings(_env_file=None)
+
+    assert s.GOOGLE_NEWS_LOOKBACK_WINDOW == "7d"
+    assert s.EDGAR_FULLTEXT_ENABLED is False
+    assert s.EDGAR_FULLTEXT_FORMS == "8-K,10-K,10-Q"
+    assert s.EDGAR_FULLTEXT_CHUNK_TOKENS == 512
+    assert s.SECTOR_HEAT_ENABLED is False
+    assert s.SECTOR_HEAT_SMOOTHING_SIGMA == pytest.approx(1.0)
+    assert s.SECTOR_HEAT_LOOKBACK_DAYS == 7
+    assert s.WIKIPEDIA_ATTENTION_ENABLED is False
+    assert s.WIKIPEDIA_ATTENTION_LOOKBACK_DAYS == 30
+    assert s.PYTRENDS_ENABLED is False
+
+
+# =============================================================================
 # 3. OUTPUT_DIR is created on load if missing
 # =============================================================================
 def test_output_dir_created(monkeypatch, tmp_path):

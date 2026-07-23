@@ -1381,6 +1381,121 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Sentiment/attention data source scaffolding (Sentiment Pipeline
+    # Phase 4 groundwork) ---
+    # Configuration surface for four follow-on sources/features that are not
+    # yet implemented as of this commit: a Google News RSS SentimentSource, an
+    # EDGAR full-text-search (EFTS) extension to the existing 8-K-only EdgarSource,
+    # a GDELT-based cross-sectional "Sector Heat Factor" attention signal, and a
+    # Wikipedia-pageviews (+ optional pytrends) attention signal. Every field
+    # below defaults to a value that preserves today's exact behavior -- nothing
+    # new is enabled, fetched, or computed until a follow-on branch both wires
+    # the consuming code AND an operator opts in via .env, matching this file's
+    # existing SENTIMENT_INGESTION_ENABLED/EDGAR_USER_AGENT opt-in conventions.
+    GOOGLE_NEWS_LOOKBACK_WINDOW: str = Field(
+        default="7d",
+        description=(
+            "Lookback window passed as Google News RSS's `when:` query "
+            "parameter (e.g. 'https://news.google.com/rss/search?q=...+when:7d'). "
+            "Accepts Google News' own shorthand ('1h', '1d', '7d', ...). "
+            "Has no effect until a Google News SentimentSource is added to "
+            "data/sentiment_sources.py and 'google_news' is added to "
+            "SENTIMENT_SOURCES."
+        ),
+    )
+    EDGAR_FULLTEXT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the SEC EDGAR full-text search (EFTS) "
+            "additions to EdgarSource -- fetching and chunking 10-K/10-Q "
+            "filing text (per EDGAR_FULLTEXT_FORMS), not just the existing "
+            "8-K RSS feed. False (the default) is a complete no-op: the "
+            "existing 8-K-only RSS path in EdgarSource is completely "
+            "unaffected by this flag either way and keeps running whenever "
+            "'edgar' is enabled in SENTIMENT_SOURCES. Set True only once the "
+            "EFTS ingestion code exists downstream."
+        ),
+    )
+    EDGAR_FULLTEXT_FORMS: str = Field(
+        default="8-K,10-K,10-Q",
+        description=(
+            "Comma-separated SEC form types the EDGAR full-text search "
+            "additions request from EFTS when EDGAR_FULLTEXT_ENABLED is "
+            "True. Mirrors the SENTIMENT_SOURCES fan-out-list convention."
+        ),
+    )
+    EDGAR_FULLTEXT_CHUNK_TOKENS: int = Field(
+        default=512,
+        description=(
+            "Maximum tokens per filing-text chunk when the EDGAR full-text "
+            "search additions split a long 10-K/10-Q into pieces for FinBERT "
+            "scoring (FinBERT's own input window is far smaller than a full "
+            "filing). Only consulted once EDGAR_FULLTEXT_ENABLED is True."
+        ),
+    )
+    SECTOR_HEAT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the GDELT article-volume-based 'Sector Heat "
+            "Factor' attention feature (cross-sectional news-volume z-score "
+            "per sector). False (the default) is a complete no-op: no GDELT "
+            "query is attempted and Sector_Heat_Factor stays NaN in "
+            "config.COLUMN_SCHEMA. Independent of SENTIMENT_SOURCES' "
+            "existing 'gdelt' entry, which feeds per-document sentiment "
+            "ingestion, not this aggregate attention signal."
+        ),
+    )
+    SECTOR_HEAT_SMOOTHING_SIGMA: float = Field(
+        default=1.0,
+        description=(
+            "Gaussian smoothing sigma applied to the raw daily GDELT "
+            "article-volume series before computing the Sector Heat Factor "
+            "-- higher values smooth out more day-to-day noise at the cost "
+            "of responsiveness. Only consulted once SECTOR_HEAT_ENABLED is "
+            "True."
+        ),
+    )
+    SECTOR_HEAT_LOOKBACK_DAYS: int = Field(
+        default=7,
+        description=(
+            "Calendar days of GDELT article-volume history used to compute "
+            "each cycle's Sector Heat Factor. Only consulted once "
+            "SECTOR_HEAT_ENABLED is True."
+        ),
+    )
+    WIKIPEDIA_ATTENTION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the Wikipedia-pageviews-based attention "
+            "feature (per-symbol article pageview volume as a retail-"
+            "attention proxy). False (the default) is a complete no-op: no "
+            "Wikimedia Pageviews API call is attempted and Attention_Score "
+            "stays NaN in config.COLUMN_SCHEMA."
+        ),
+    )
+    WIKIPEDIA_ATTENTION_LOOKBACK_DAYS: int = Field(
+        default=30,
+        description=(
+            "Calendar days of Wikipedia pageview history used to compute "
+            "each cycle's attention baseline/z-score. Only consulted once "
+            "WIKIPEDIA_ATTENTION_ENABLED is True."
+        ),
+    )
+    PYTRENDS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Best-effort optional Google Trends overlay (via the unofficial "
+            "'pytrends' library) on top of the Wikipedia-pageviews attention "
+            "feature. False (the default) -- pytrends is an unmaintained, "
+            "rate-limit-fragile scraper of an undocumented Google endpoint "
+            "per the source research for this feature, so it must NEVER be "
+            "load-bearing: any consumer of this flag must treat a pytrends "
+            "failure/timeout as a soft-fail (CONSTRAINT #6) and fall back to "
+            "Wikipedia-only attention scoring, never block or crash the "
+            "pipeline on it."
+        ),
+    )
+
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
     # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.

@@ -508,6 +508,16 @@ class StrategyEvalStep(PipelineStep):
 
         ctx.dashboard_df['Correlation_Cluster'] = float('nan')
 
+        # Sentiment/attention pipeline config scaffolding (PR #416) -- schema
+        # placeholders only, no producer wired up yet. Sector_Heat_Factor
+        # (GDELT article-volume) and Attention_Score (Wikipedia pageviews)
+        # are populated by follow-on branches; NaN-fill here keeps
+        # DashboardSchema.validate() passing in the interim (CONSTRAINT #4:
+        # NaN, never a fabricated value), same pattern as Correlation_Cluster
+        # above.
+        ctx.dashboard_df['Sector_Heat_Factor'] = float('nan')
+        ctx.dashboard_df['Attention_Score'] = float('nan')
+
         # docs/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
         # (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---" section) are
         # populated only by the advisory path (engine/advisory.py via
