@@ -32,6 +32,23 @@
 # churn, so it is intentionally omitted.
 tensorflow>=2.19
 
+# CPU-only PyTorch — activates real local ProsusAI/FinBERT inference in
+# signals/news_catalyst.py (see _get_finbert_pipeline / score_headlines)
+# instead of the built-in keyword-lexicon fallback. requirements.txt already
+# pins `transformers>=4.35.0`, but transformers needs a PyTorch OR
+# TensorFlow backend to actually run a model -- without one, FinBERT
+# silently falls back to the lexicon on every install, which is why this
+# lives here rather than in requirements.txt. `torch>=2.0` is a broad,
+# CPU-friendly floor (this repo has no CUDA/GPU requirement -- FinBERT is a
+# small BERT-base model, CPU inference is fast enough for a batched,
+# per-cycle headline-scoring workload); pip resolves the correct CPU wheel
+# for the host platform automatically for a plain `torch` install (no
+# `--index-url` / `+cpu` suffix needed on macOS or Linux x86_64/arm64).
+# Everything else in the platform runs identically whether or not this file
+# is installed -- see FINBERT_ENABLED / FINBERT_SCORE_CACHE_ENABLED in
+# settings.py for the graceful-degradation contract.
+torch>=2.0
+
 # faiss-cpu activates the embedded local vector store used by the RAG-Powered
 # Portfolio Contextualizer (data/rag_index.py, gated behind
 # settings.RAG_PORTFOLIO_CONTEXT_ENABLED, default False). It indexes the

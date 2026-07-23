@@ -53,8 +53,9 @@ pre_compute(universe_df, context):
     For each symbol:
         1. Fetch company_news (last NEWS_LOOKBACK_DAYS = 7 days) from Finnhub.
         2. Fetch next earnings date from earnings_calendar.
-        3. Score each headline via FinBERT (preferred) or lexicon fallback.
-        4. Average headline scores → raw_sentiment ∈ [-1, +1].
+        3. Score all of this symbol's headlines in one batched score_headlines() call
+           (FinBERT, preferred) or per-headline lexicon fallback.
+        4. Average the collapsed (positive − negative) headline scores → raw_sentiment ∈ [-1, +1].
         5. Apply earnings proximity multiplier (see below).
         6. Store in self._news_scores[symbol] AND context.news_sentiment_scores[symbol].
         7. Store next earnings date in self._earnings_dt[symbol].
@@ -65,7 +66,8 @@ compute(row, context):
 ```
 
 Rate courtesy sleep: 0.12 s per symbol ≈ 8 calls/s, safely under Finnhub's 60/min
-free-tier ceiling.
+free-tier ceiling. This paces the Finnhub *fetch* calls only — the FinBERT/lexicon
+*scoring* step (see below) is local and batched, so it is never subject to this delay.
 
 ---
 
@@ -109,18 +111,61 @@ Configurable via `NEWS_EARNINGS_SUPPRESS_HOURS` (default 48) and
 ```
 IF FINBERT_ENABLED=True AND transformers/PyTorch available:
     Load once at process start via _get_finbert_pipeline()
-    Score per headline: "positive" → +confidence, "negative" → −confidence, "neutral" → 0
+    Score in batches of FINBERT_BATCH_SIZE headlines per forward pass (score_headlines()),
+    returning the full 3-class softmax {"positive", "neutral", "negative"} per headline.
 ELSE (transformers ImportError OR FINBERT_ENABLED=False):
-    Lexicon fallback:
+    Lexicon fallback, per headline:
         score = (positive_word_count − negative_word_count)
                 / max(1, positive_word_count + negative_word_count)
+        represented as the same softmax-shaped dict for API uniformity
+        (see _lexicon_softmax — not a calibrated probability distribution).
 ```
 
 The lexicon uses ~80 domain-specific words: "bullish", "beat", "exceeded", "acquisition"
 (positive) vs. "miss", "downgrade", "investigation", "lawsuit" (negative).
 
-Both paths produce a score ∈ [−1, +1]. The FinBERT path is significantly more accurate
-but requires a ~400 MB model download on first use and a GPU or fast CPU for inference.
+Both paths ultimately collapse to a directional score ∈ [−1, +1] via
+`positive − negative` net probability mass (`_distribution_to_signed`) wherever a single
+scalar is needed (e.g. averaging a symbol's headlines, or the legacy `_score_headline()`
+contract). The FinBERT path is significantly more accurate but requires a ~400 MB model
+download on first use and a CPU/GPU fast enough for batched inference — see
+`requirements-optional.txt` for the CPU-only PyTorch pin that activates it (`torch>=2.0`;
+`transformers>=4.35.0` alone, already in `requirements.txt`, has no backend to run without
+it and silently falls back to the lexicon).
+
+### Batched scoring (`score_headlines()`)
+
+Headlines are no longer scored one at a time. `signals.news_catalyst.score_headlines(
+headlines, pipeline=...)` encodes `settings.FINBERT_BATCH_SIZE` (default 16) headlines per
+forward pass, truncating each to 512 characters (matching the pipeline's own
+`truncation=True, max_length=512`), and returns one full softmax dict per headline in
+input order. `_score_headline(headline, pipeline)` — the pre-batching single-headline
+function every existing caller (e.g. `data/sentiment_sources.py`) still depends on — is now
+a thin, cache-bypassing wrapper around `score_headlines()` for a single item; its
+signature and `float ∈ [-1, 1]` return contract are unchanged.
+
+### Content-hash score cache (`finbert_score_cache`)
+
+Without a cache, the same unchanged headline gets re-scored by FinBERT every cycle it
+remains inside the `NEWS_LOOKBACK_DAYS` window. `score_headlines()` now checks
+`data/historical_store.py`'s `finbert_score_cache` table first — keyed on a SHA-256 hash
+of the raw headline text, **not** a date — and only scores cache misses, writing fresh
+results back before returning. This is content-hash, not time-based, keying: a lookup for
+unchanged text is not a lookahead risk, since the score is a pure, deterministic function
+of the text alone and a cycle can only ever look up a hash for a headline it has *already*
+fetched from Finnhub this cycle (see the `finbert_score_cache` DDL comment and
+`tests/test_news_catalyst.py::TestFinbertScoreCacheLookaheadSafety` for the explicit proof).
+Gated by `settings.FINBERT_SCORE_CACHE_ENABLED` (default `True` — a pure performance
+optimization with identical outputs) and degrades gracefully to "score fresh, skip the
+cache" when `settings.HISTORICAL_STORE_ENABLED` is `False` or the DB is otherwise
+unavailable.
+
+**New settings:**
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `FINBERT_BATCH_SIZE` | `16` | Headlines per FinBERT forward pass in `score_headlines()`. Only consulted when a real pipeline is loaded. |
+| `FINBERT_SCORE_CACHE_ENABLED` | `True` | Cache FinBERT/lexicon scores by headline content hash so unchanged headlines aren't re-scored every cycle. |
 
 ---
 
@@ -131,7 +176,8 @@ but requires a ~400 MB model download on first use and a GPU or fast CPU for inf
 | `FINNHUB_API_KEY` absent | `pre_compute` skips all Finnhub calls; every symbol gets `sentiment = 0.0`. Module is informationless, not broken. |
 | Finnhub 429 rate limit | `FinnhubProvider` applies exponential backoff (2 s) + retry once; on persistent 429, returns empty news list. Score = 0.0 for that symbol. |
 | `transformers` ImportError (no PyTorch) | Automatic fallback to lexicon. Logged at INFO, not WARNING — this is a supported configuration. |
-| FinBERT inference OOM on CPU | An exception in `_score_headlines_finbert()` is caught; fallback to lexicon for that symbol. |
+| FinBERT batch inference error/OOM on CPU | An exception inside `score_headlines()`'s batch call is caught; that whole batch falls back to the lexicon per-headline. |
+| `finbert_score_cache` read/write failure | Logged at DEBUG and swallowed; `score_headlines()` scores fresh instead (CONSTRAINT #6) — never blocks scoring. |
 | No headlines in lookback window | score = 0.0 (no news ≠ neutral news, but we treat it as neutral to avoid punishing quiet periods). |
 | Symbol with no Finnhub coverage | empty news list → score = 0.0. |
 

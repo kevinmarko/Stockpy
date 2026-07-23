@@ -56,6 +56,13 @@ news_history        — forward-archived per-symbol news-sentiment score (write-
 sentiment_ingestion_audit — per-DOCUMENT sentiment ingestion audit trail
                        (Sentiment Pipeline Phase 2), keyed by ingest_id;
                        see save_sentiment_documents() / resolve_trading_day()
+finbert_score_cache — content-hash (SHA-256 of headline text) cache of a
+                       headline's FinBERT/lexicon 3-class softmax score, so
+                       an unchanged headline is not re-scored every cycle;
+                       see signals/news_catalyst.py's score_headlines() and
+                       the DDL comment above for why this is not a lookahead
+                       risk. Unrelated to sentiment_llm_verification_cache
+                       (that one caches an LLM credibility verdict).
 """
 
 from __future__ import annotations
@@ -376,6 +383,43 @@ CREATE TABLE IF NOT EXISTS sentiment_llm_verification_cache (
 )
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — finbert_score_cache (FinBERT local batch inference)
+#
+# Caches a headline's FinBERT (or lexicon-fallback) 3-class softmax score by
+# a SHA-256 content hash of the headline text
+# (signals.news_catalyst._content_hash), so a headline seen again in a later
+# cycle's Finnhub lookback window is not re-scored. Deliberately a SEPARATE
+# table from sentiment_llm_verification_cache above -- that table caches an
+# LLM's credibility VERIFICATION verdict for a social-sentiment document
+# (Sentiment Pipeline Phase 2 PR2); this table caches a FinBERT/lexicon
+# SENTIMENT score for a news headline (Finnhub-sourced). Same content-hash
+# pattern, unrelated purpose and unrelated callers.
+#
+# Content-hash, NOT date/cycle-keyed -- and this is NOT a lookahead risk.
+# The cached value is a pure, deterministic function of the headline TEXT
+# alone (FinBERT/the lexicon have no notion of "when" they were asked to
+# score a string): identical text always scores identically regardless of
+# which trading cycle reads the cache. A lookahead bug would require a
+# cache READ to surface information from a cycle that hasn't happened yet;
+# here a cycle can only ever look up a hash for a headline it has ALREADY
+# fetched (Finnhub-sourced) THIS cycle, so there is no channel through
+# which a future cycle's headline could leak into an earlier cycle's read.
+# See tests/test_news_catalyst.py::TestFinbertScoreCacheLookaheadSafety for
+# the explicit proof.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FINBERT_SCORE_CACHE_DDL = """
+CREATE TABLE IF NOT EXISTS finbert_score_cache (
+    content_hash      TEXT PRIMARY KEY,
+    headline_snippet  TEXT,
+    positive          REAL,
+    neutral           REAL,
+    negative          REAL,
+    scored_at         TEXT NOT NULL
+)
+"""
+
 # Column order returned by SELECT for price_bars reconstruction.
 _SELECT_COLS = "open, high, low, close, adj_close, volume"
 
@@ -498,6 +542,7 @@ class HistoricalStore:
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_INDEX_DDL)
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_ASOF_INDEX_DDL)
                 conn.execute(_SENTIMENT_LLM_VERIFICATION_CACHE_DDL)
+                conn.execute(_FINBERT_SCORE_CACHE_DDL)
                 conn.execute(_RAG_INDEXED_DOCS_DDL)
                 conn.execute(_RAG_INDEXED_DOCS_INDEX_DDL)
                 conn.commit()
@@ -1636,6 +1681,92 @@ class HistoricalStore:
             )
         except Exception as exc:
             logger.warning("HistoricalStore.save_news_sentiment failed: %s", exc)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public API — finbert_score_cache (FinBERT local batch inference)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_finbert_score(self, content_hash: str) -> Optional[Dict[str, float]]:
+        """Return ``{"positive": p, "neutral": n, "negative": g}`` for a
+        previously-scored headline, or ``None`` on a cache miss OR any read
+        failure.
+
+        Dead-letter resilient (CONSTRAINT #6): a DB read failure degrades to
+        ``None`` (treated by the caller identically to "not cached yet"),
+        never raises. ``content_hash`` is
+        ``signals.news_catalyst._content_hash(headline)`` -- a SHA-256 digest
+        of the raw headline text (see the ``finbert_score_cache`` DDL comment
+        for why a content-hash lookup carries no lookahead risk).
+        """
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    row = conn.execute(
+                        "SELECT positive, neutral, negative FROM finbert_score_cache "
+                        "WHERE content_hash = ?",
+                        (content_hash,),
+                    ).fetchone()
+            if row is None:
+                return None
+            return {
+                "positive": float(row[0]) if row[0] is not None else 0.0,
+                "neutral": float(row[1]) if row[1] is not None else 0.0,
+                "negative": float(row[2]) if row[2] is not None else 0.0,
+            }
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_finbert_score failed: %s", exc)
+            return None
+
+    def save_finbert_scores(self, scores: Dict[str, Dict[str, Any]]) -> None:
+        """Persist a batch of freshly-scored headlines, one row per
+        ``content_hash``.
+
+        ``scores`` maps ``content_hash -> {"positive": .., "neutral": ..,
+        "negative": .., "headline_snippet": ..}`` (``headline_snippet`` is
+        optional, purely for human debugging -- never read back
+        programmatically). Idempotent overwrite (``INSERT OR REPLACE``): a
+        repeat score for the same content hash (e.g. a race between two
+        concurrent cycles) simply refreshes ``scored_at``. Dead-letter
+        resilient (CONSTRAINT #6): any write failure is logged and swallowed
+        so a cache-write failure can never block the live scoring pipeline
+        that already computed these scores.
+        """
+        if not scores:
+            return
+        try:
+            now_ts = self._now_utc_iso()
+            rows = [
+                (
+                    content_hash,
+                    str(entry.get("headline_snippet", ""))[:200] or None,
+                    float(entry.get("positive", 0.0)),
+                    float(entry.get("neutral", 0.0)),
+                    float(entry.get("negative", 0.0)),
+                    now_ts,
+                )
+                for content_hash, entry in scores.items()
+            ]
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO finbert_score_cache
+                            (content_hash, headline_snippet, positive, neutral, negative, scored_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+            logger.debug(
+                "HistoricalStore: upserted %d finbert_score_cache rows.", len(rows)
+            )
+        except Exception as exc:
+            logger.warning("HistoricalStore.save_finbert_scores failed: %s", exc)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public API — sentiment_ingestion_audit (Sentiment Pipeline Phase 2)

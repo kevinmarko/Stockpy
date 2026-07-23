@@ -1850,6 +1850,31 @@ class Settings(BaseSettings):
             "the ~200 MB model download on first use."
         ),
     )
+    FINBERT_BATCH_SIZE: int = Field(
+        default=16,
+        description=(
+            "Headlines per forward pass in signals.news_catalyst.score_headlines() "
+            "when a real FinBERT pipeline is loaded. Replaces the old one-headline-"
+            "at-a-time scoring loop; 16-32 is a reasonable CPU batch size. Only "
+            "consulted when a pipeline is active -- the lexicon fallback path "
+            "scores every headline independently regardless of this value."
+        ),
+    )
+    FINBERT_SCORE_CACHE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Cache FinBERT/lexicon headline scores by a SHA-256 content hash "
+            "of the headline text (data/historical_store.py's "
+            "finbert_score_cache table), so an unchanged headline seen again "
+            "in a later cycle's lookback window is not re-scored. Pure "
+            "performance optimization with identical outputs (content-hash "
+            "keyed, not date-keyed -- see the finbert_score_cache DDL comment "
+            "for why this carries no lookahead risk), so it defaults on. "
+            "Still degrades gracefully to 'score fresh, skip the cache' when "
+            "settings.HISTORICAL_STORE_ENABLED is False or the DB is "
+            "otherwise unavailable (CONSTRAINT #6)."
+        ),
+    )
 
     # --- Tier 9: Claude + Gemini commentary integration (llm/) ---
     # Master switch.  When False (the default) the platform behaves byte-
