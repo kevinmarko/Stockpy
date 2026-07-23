@@ -1251,6 +1251,84 @@ def get_portfolio_summary() -> str:
     except Exception as e:
         return f"Failed to retrieve portfolio summary: {str(e)}"
 
+
+@mcp.tool()
+def get_portfolio_context_note() -> str:
+    """
+    RAG-Powered Portfolio Contextualizer: reports the current portfolio's
+    sector-exposure breakdown (always deterministic) plus an OPTIONAL
+    LLM-synthesized context note grounded in the already-ingested sentiment
+    corpus (sentiment_ingestion_audit, indexed into a local embedded FAISS
+    store — see data/rag_index.py). Reads the account snapshot DB-first
+    (data.historical_store.HistoricalStore.latest_account_snapshot()) and
+    never forces a live Robinhood login — degrades to "no snapshot" rather
+    than fabricating holdings.
+
+    The LLM note is gated on settings.RAG_PORTFOLIO_CONTEXT_ENABLED (default
+    False) AND a configured RAG_PORTFOLIO_CONTEXT_PROVIDER; when either is
+    off/unset, only the deterministic sector-exposure table is returned —
+    this tool NEVER raises regardless of feature-flag state or provider
+    availability.
+    """
+    try:
+        from data.historical_store import HistoricalStore
+        from engine.portfolio_context import generate_portfolio_context_note
+
+        snapshot = None
+        snapshot_note = "no account snapshot (holdings excluded)"
+        try:
+            snapshot = HistoricalStore().latest_account_snapshot()
+            if snapshot is not None:
+                snapshot_note = "account snapshot loaded (DB)"
+        except Exception as se:
+            snapshot = None
+            snapshot_note = f"account snapshot unavailable ({type(se).__name__})"
+
+        if snapshot is None or not getattr(snapshot, "positions", None):
+            return (
+                "# Portfolio Context Note\n\n"
+                f"_{snapshot_note}._\n\n"
+                "No positions to contextualize."
+            )
+
+        result = generate_portfolio_context_note(snapshot)
+
+        lines = ["# Portfolio Context Note\n"]
+        lines.append(f"_{snapshot_note}._\n")
+        lines.append("## Sector Exposure")
+        lines.append("| Sector | % of Equity | Net Market Value | Symbols |")
+        lines.append("|--------|-------------|-------------------|---------|")
+        for sector in sorted(
+            result.sector_exposure.values(), key=lambda s: abs(s.pct_of_equity), reverse=True
+        ):
+            lines.append(
+                f"| {sector.sector} | {sector.pct_of_equity * 100:.1f}% | "
+                f"${sector.net_market_value:,.2f} | {', '.join(sector.symbols)} |"
+            )
+
+        note = result.context_note
+        if note is not None:
+            lines.append("\n## AI Context Note")
+            lines.append(f"**{note.headline}** ({note.tailwind_or_headwind})")
+            lines.append(f"\n{note.rationale}")
+            if note.affected_sectors:
+                lines.append(f"\n_Affected sectors: {', '.join(note.affected_sectors)}_")
+            lines.append(
+                f"\n_Grounded in {result.retrieved_document_count} retrieved document(s)"
+                + (f" for {', '.join(result.retrieved_symbols)}" if result.retrieved_symbols else "")
+                + "._"
+            )
+        else:
+            lines.append(
+                "\n_No AI context note available (feature disabled, provider "
+                "unconfigured, or no grounding data retrieved)._"
+            )
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to retrieve portfolio context note: {str(e)}"
+
+
 @mcp.tool()
 def plot_portfolio_equity(period: str = "1y") -> str:
     """

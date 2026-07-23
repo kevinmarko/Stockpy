@@ -247,6 +247,52 @@ class GeminiProvider(LLMProvider):
             status_store.record_failure("gemini", exc, error_kind="schema")
             return None
 
+    def embed_texts(
+        self,
+        texts: list,
+        *,
+        model: str = "text-embedding-004",
+    ) -> Optional[list]:
+        """Return one embedding vector (``list[float]``) per input text.
+
+        Extra capability, not on the :class:`LLMProvider` ABC — mirrors
+        :meth:`call_structured_with_image`. Uses
+        ``client.models.embed_content``. Soft-fails to ``None`` on any error
+        (missing SDK, auth failure, network error, empty response) — same
+        contract as :meth:`call_structured`.
+
+        Parameters
+        ----------
+        texts:
+            Non-empty list of strings to embed. An empty list returns ``[]``
+            without a network call.
+        model:
+            Gemini embedding model name.
+
+        Returns
+        -------
+        Optional[list]
+            A list of embedding vectors (one ``list[float]`` per input text,
+            same order), or ``None`` on any failure.
+        """
+        if self._client is None:
+            return None
+        if not texts:
+            return []
+        try:
+            response = self._client.models.embed_content(
+                model=model,
+                contents=texts,
+            )
+            embeddings = getattr(response, "embeddings", None)
+            if not embeddings:
+                return None
+            return [list(e.values) for e in embeddings]
+        except Exception as exc:
+            logger.warning("GeminiProvider embed_texts failed: %s", exc)
+            status_store.record_failure("gemini", exc)
+            return None
+
     def call_structured_with_image(
         self,
         system: str,
@@ -384,4 +430,47 @@ class OpenAIProvider(LLMProvider):
         except Exception as exc:
             logger.warning("OpenAIProvider response parse failed: %s", exc)
             status_store.record_failure("openai", exc, error_kind="schema")
+            return None
+
+    def embed_texts(
+        self,
+        texts: list,
+        *,
+        model: str = "text-embedding-3-small",
+    ) -> Optional[list]:
+        """Return one embedding vector (``list[float]``) per input text.
+
+        Extra capability, not on the :class:`LLMProvider` ABC — this codebase's
+        established pattern for a provider-specific extra method (see
+        ``GeminiProvider.call_structured_with_image``). Uses
+        ``client.embeddings.create``. Soft-fails to ``None`` on any error —
+        same contract as :meth:`call_structured`.
+
+        Parameters
+        ----------
+        texts:
+            Non-empty list of strings to embed. An empty list returns ``[]``
+            without a network call.
+        model:
+            OpenAI embedding model name.
+
+        Returns
+        -------
+        Optional[list]
+            A list of embedding vectors (one ``list[float]`` per input text,
+            same order as ``texts``), or ``None`` on any failure.
+        """
+        if self._client is None:
+            return None
+        if not texts:
+            return []
+        try:
+            response = self._client.embeddings.create(model=model, input=texts)
+            data = getattr(response, "data", None)
+            if not data:
+                return None
+            return [list(item.embedding) for item in data]
+        except Exception as exc:
+            logger.warning("OpenAIProvider embed_texts failed: %s", exc)
+            status_store.record_failure("openai", exc)
             return None

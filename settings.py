@@ -2118,6 +2118,62 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Phase 2 PR3: RAG-Powered Portfolio Contextualizer -------------------
+    # Retrieves the already-ingested sentiment corpus (sentiment_ingestion_audit,
+    # see data/historical_store.py) via an embedded FAISS vector index
+    # (data/rag_index.py) and blends it with the deterministic sector-exposure
+    # summary (engine/portfolio_exposure.py) into an optional LLM-generated
+    # portfolio context note (engine/portfolio_context.py). Off by default —
+    # matches the FORECAST_USE_GARCH_SIGMA opt-in convention: zero embedding
+    # calls, zero LLM calls, zero vector-store I/O anywhere in the pipeline
+    # until explicitly enabled AND a provider key is configured.
+    RAG_PORTFOLIO_CONTEXT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the RAG-powered portfolio contextualizer. "
+            "When False (the default), generate_portfolio_context_note() returns "
+            "the deterministic sector-exposure summary only — no retrieval, no "
+            "embedding calls, no LLM call. When True AND "
+            "RAG_PORTFOLIO_CONTEXT_PROVIDER is not 'none', a best-effort retrieval "
+            "over the indexed sentiment corpus feeds a structured LLM note "
+            "(PortfolioContextNote) alongside the always-present exposure summary."
+        ),
+    )
+    RAG_PORTFOLIO_CONTEXT_PROVIDER: str = Field(
+        default="none",
+        description=(
+            "LLM provider used for the final portfolio-context call — 'claude', "
+            "'gemini', or 'none' (disable regardless of the master switch). "
+            "Requires the matching API key (ANTHROPIC_API_KEY or GEMINI_API_KEY, "
+            "both classified as SECRET_KEYS — never GUI-writable)."
+        ),
+    )
+    RAG_EMBEDDING_PROVIDER: str = Field(
+        default="openai",
+        description=(
+            "LLM provider used for embed_texts() calls when indexing the "
+            "sentiment corpus and embedding a retrieval query — 'openai' "
+            "(text-embedding-3-small) or 'gemini' (text-embedding-004). "
+            "Requires the matching API key (OPENAI_API_KEY or GEMINI_API_KEY)."
+        ),
+    )
+    RAG_INDEX_MAX_DOCUMENTS: int = Field(
+        default=5000,
+        description=(
+            "Maximum number of documents retained in the embedded FAISS index "
+            "(data/rag_index.py). When indexing would exceed this cap, the "
+            "oldest rows are evicted (FIFO by insertion order) so the index "
+            "stays bounded on a single-operator desktop machine."
+        ),
+    )
+    RAG_RETRIEVAL_TOP_K: int = Field(
+        default=5,
+        description=(
+            "Number of nearest documents returned by "
+            "DocumentVectorStore.search() for one portfolio-context query."
+        ),
+    )
+
     @field_validator("OUTPUT_DIR")
     @classmethod
     def _ensure_output_dir(cls, value: Path) -> Path:
