@@ -516,7 +516,35 @@ class StrategyEvalStep(PipelineStep):
         # NaN, never a fabricated value), same pattern as Correlation_Cluster
         # above.
         ctx.dashboard_df['Sector_Heat_Factor'] = float('nan')
+
+        # Wikipedia-pageviews investor-attention feature (follow-on branch
+        # to PR #416/#417) -- data/attention_sources.py
+        # ::compute_attention_scores_for_universe() returns {} (zero network
+        # calls) whenever settings.WIKIPEDIA_ATTENTION_ENABLED is False, so
+        # the NaN-fill immediately below reproduces today's exact disabled
+        # behavior byte-identically. Same dict-then-.map() write-back
+        # pattern as the Value_Z/etc multifactor columns and
+        # Credibility_Weighted_Sentiment block above. company_name (when
+        # available from this cycle's fundamentals) improves Wikipedia
+        # article-title resolution -- see that module's docstring for the
+        # documented ticker->title-resolution limitation.
         ctx.dashboard_df['Attention_Score'] = float('nan')
+        try:
+            from data.attention_sources import compute_attention_scores_for_universe
+            _attn_fund_dtos = ctx.context_extras.get("fund_dtos", {}) or {}
+            _attn_company_names = {
+                sym: dto.company_name for sym, dto in _attn_fund_dtos.items() if dto is not None
+            }
+            attention_scores = compute_attention_scores_for_universe(
+                ctx.dashboard_df['Symbol'].tolist(), _attn_company_names,
+            )
+        except Exception as attention_exc:
+            telemetry.warning("Attention score computation failed (non-fatal): %s", attention_exc)
+            attention_scores = {}
+        if attention_scores:
+            ctx.dashboard_df['Attention_Score'] = ctx.dashboard_df['Symbol'].map(
+                lambda x: attention_scores.get(x, float('nan'))
+            )
 
         # docs/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
         # (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---" section) are
