@@ -23,6 +23,25 @@ if __name__ == "__main__":
         sys.exit(subprocess.call([venv_python] + sys.argv))
 
 
+# ---------------------------------------------------------------------------
+# TensorFlow, if installed, MUST be imported before pandas/pyarrow -- defense
+# in depth for the CNN-LSTM/TensorFlow deadlock (issue #381, docs/known_issues/
+# cnn_lstm_tf_deadlock.md). forecasting_engine.py's own import reorder (PR
+# #387) only protects a process where IT is the first thing to touch pandas;
+# this module imports pandas below, well before forecasting_engine is ever
+# reached (and desktop/daemon_runtime.py's `import main_orchestrator` makes
+# this module's own import order the effective entry point for the daemon
+# too). A no-op when TensorFlow isn't installed. The primary fix is
+# CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED (settings.py), which isolates
+# CNN-LSTM fit/predict in a subprocess and doesn't depend on any entry
+# point's import order at all; this import is a cheap second layer for the
+# case isolation is left off.
+# ---------------------------------------------------------------------------
+try:
+    import tensorflow  # noqa: F401
+except ImportError:
+    pass
+
 import contextlib
 import os
 import sys

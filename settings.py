@@ -837,6 +837,65 @@ class Settings(BaseSettings):
             "not the live pipeline; costs more compute per fit."
         ),
     )
+    CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in fix for the CNN-LSTM/TensorFlow deadlock documented in "
+            "docs/known_issues/cnn_lstm_tf_deadlock.md (issue #381). Root cause: "
+            "TensorFlow and pyarrow each ship an independently-compiled copy of the "
+            "same Abseil sync primitive; whichever library's Python-level init runs "
+            "first in the PROCESS wins that symbol, and if pandas/pyarrow initialize "
+            "first, the first real multi-threaded TF eager op (a Conv1D/LSTM .fit()) "
+            "deadlocks forever. Reordering forecasting_engine.py's own imports "
+            "(always-on, unconditional) only helps when this module is the first "
+            "thing in the whole process to touch pandas -- true in an isolated test "
+            "script, false in main.py/main_orchestrator.py/pipeline/production_steps.py, "
+            "which all import pandas before forecasting_engine is ever reached. "
+            "When True, ForecastingEngine.run_cnn_lstm_forecast runs the actual "
+            "TF-touching work (model fit+predict, and cached-model load+predict) in "
+            "a persistent multiprocessing 'spawn' worker pool (forecasting/"
+            "cnn_lstm_process_pool.py) whose worker module (forecasting/"
+            "cnn_lstm_worker.py) imports tensorflow before anything else -- a fresh "
+            "interpreter per worker means the parent process's import order can no "
+            "longer matter, unlike the module-level reorder alone. All feature "
+            "engineering / windowing / scaling stays in the parent process unchanged "
+            "(pandas-only, never touches TF). Any subprocess failure (timeout, "
+            "BrokenProcessPool, real training exception) is caught by "
+            "run_cnn_lstm_forecast's existing outer try/except and degrades to the "
+            "zero-result sentinel -- never crashes the pipeline (CONSTRAINT #6). "
+            "False (the default) preserves today's exact in-process behavior "
+            "(byte-identical output, same as before this flag existed) -- this fix "
+            "was verified against the documented evidence and the mocked test suite "
+            "but NOT against the real native deadlock (this repo's CI/dev sandboxes "
+            "don't reproduce the macOS arm64 + Framework-Python environment the "
+            "deadlock was originally confirmed on); operators enabling this on a "
+            "machine that previously reproduced the hang should re-verify with a "
+            "real end-to-end CNN-LSTM forecast before relying on it in production."
+        ),
+    )
+    CNN_LSTM_PROCESS_POOL_WORKERS: int = Field(
+        default=1,
+        description=(
+            "Worker-process count for the CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED "
+            "pool (forecasting/cnn_lstm_process_pool.py). Workers are persistent "
+            "(survive across tickers/cycles, each pays the TensorFlow import cost "
+            "only once) so CNN-LSTM fits queued from pipeline/production_steps.py's "
+            "per-ticker ThreadPoolExecutor fan-out share this fixed-size pool rather "
+            "than spawning a fresh interpreter per ticker. Keep small -- each worker "
+            "holds a full TensorFlow process in memory."
+        ),
+    )
+    CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS: int = Field(
+        default=300,
+        description=(
+            "Max seconds to wait for a single CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED "
+            "fit-or-predict call before giving up and falling back to the zero-result "
+            "sentinel (never blocks the pipeline indefinitely -- the entire point of "
+            "this fix is to replace an unbounded hang with a bounded, recoverable "
+            "failure). 50 epochs with EarlyStopping(patience=5) on the modest window "
+            "sizes this codebase trains on should complete well within the default."
+        ),
+    )
     ADVISORY_REUSE_PIPELINE_COMPUTE: bool = Field(
         default=False,
         description=(

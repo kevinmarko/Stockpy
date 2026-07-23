@@ -589,6 +589,24 @@ class ForecastingEngine:
             return np.empty((0, lookback, len(feature_cols))), np.empty((0, len(horizons)))
         return np.array(X_seq), np.array(Y_seq)
 
+    @staticmethod
+    def _cnn_lstm_isolation_config() -> Tuple[bool, float, int]:
+        """(enabled, timeout_seconds, max_workers) for the CNN-LSTM subprocess
+        isolation fix (settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED --
+        see docs/known_issues/cnn_lstm_tf_deadlock.md, issue #381). Never lets
+        a settings read block a forecast -- degrades to the isolation-disabled
+        default on any error, matching the walkforward_scaling settings-read
+        convention below."""
+        try:
+            from settings import settings as _settings
+            return (
+                bool(getattr(_settings, "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", False)),
+                float(getattr(_settings, "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS", 300)),
+                int(getattr(_settings, "CNN_LSTM_PROCESS_POOL_WORKERS", 1)),
+            )
+        except Exception:  # noqa: BLE001
+            return False, 300.0, 1
+
     def run_cnn_lstm_forecast(
         self,
         history_df: pd.DataFrame,
@@ -658,7 +676,6 @@ class ForecastingEngine:
                     and is_fresh(scaler_y_path, retrain_days)):
                 try:
                     import pickle
-                    cached_model = tf.keras.models.load_model(keras_path)
                     with open(scaler_x_path, "rb") as f:
                         cached_scaler_X = pickle.load(f)
                     with open(scaler_y_path, "rb") as f:
@@ -669,12 +686,26 @@ class ForecastingEngine:
                     lookback = self.LSTM_LOOKBACK
                     if len(df_features) < lookback:
                         raise ValueError("insufficient rows for cached-model inference")
-                    if cached_model.output_shape[-1] != len(horizons):
-                        raise ValueError("cached model horizon count mismatch")
 
                     scaled_X_all = cached_scaler_X.transform(df_features[feature_cols].values)
                     last_window = scaled_X_all[-lookback:][np.newaxis, ...]
-                    pred_scaled = cached_model.predict(last_window, verbose=0)[0]
+
+                    isolation_enabled, timeout_seconds, pool_workers = self._cnn_lstm_isolation_config()
+                    if isolation_enabled:
+                        from cnn_lstm_process_pool import run_in_subprocess
+                        from cnn_lstm_worker import load_predict_cnn_lstm
+                        result = run_in_subprocess(
+                            load_predict_cnn_lstm,
+                            (keras_path, last_window, len(horizons)),
+                            timeout_seconds=timeout_seconds,
+                            max_workers=pool_workers,
+                        )
+                        pred_scaled = np.array(result["pred_scaled"])
+                    else:
+                        cached_model = tf.keras.models.load_model(keras_path)
+                        if cached_model.output_shape[-1] != len(horizons):
+                            raise ValueError("cached model horizon count mismatch")
+                        pred_scaled = cached_model.predict(last_window, verbose=0)[0]
 
                     out: Dict[int, float] = {}
                     for i, h in enumerate(horizons):
@@ -688,8 +719,6 @@ class ForecastingEngine:
                     )
 
         try:
-            from tensorflow.keras.callbacks import EarlyStopping
-
             df_features = self.build_lstm_features(history_df)
             feature_cols = self.LSTM_FEATURE_COLS
             lookback = self.LSTM_LOOKBACK
@@ -760,27 +789,47 @@ class ForecastingEngine:
 
             _, time_steps, num_features = X_seq.shape
 
-            # 3. Build & train ONCE with early stopping on a validation split.
-            model = Sequential([
-                Conv1D(filters=32, kernel_size=3, activation='relu',
-                       input_shape=(time_steps, num_features)),
-                MaxPooling1D(pool_size=2),
-                LSTM(units=30, activation='tanh', return_sequences=False),
-                Dense(units=len(horizons)),
-            ])
-            model.compile(optimizer='adam', loss='mse')
-            early_stop = EarlyStopping(
-                monitor='val_loss', patience=5, restore_best_weights=True
-            )
-            model.fit(
-                X_seq, Y_seq,
-                epochs=50, batch_size=16, verbose=0,
-                validation_split=0.2, callbacks=[early_stop],
-            )
-
-            # 4. Forecast from the most recent lookback window (all real data).
+            # 3-4. Build, train ONCE with early stopping on a validation split,
+            # and forecast from the most recent lookback window (all real
+            # data). When CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED, this runs in
+            # a fresh 'spawn' worker process (cnn_lstm_worker.py) instead of
+            # in-process -- see docs/known_issues/cnn_lstm_tf_deadlock.md
+            # (issue #381). Both paths use the identical model architecture
+            # and hyperparameters; only WHERE the fit/predict runs differs.
+            isolation_enabled, timeout_seconds, pool_workers = self._cnn_lstm_isolation_config()
             last_window = scaled_X_all[-lookback:][np.newaxis, ...]
-            pred_scaled = model.predict(last_window, verbose=0)[0]  # (n_horizons,)
+            model_saved_in_subprocess = False
+            if isolation_enabled:
+                from cnn_lstm_process_pool import run_in_subprocess
+                from cnn_lstm_worker import fit_predict_cnn_lstm
+                save_path = keras_path if persistence_enabled else None
+                result = run_in_subprocess(
+                    fit_predict_cnn_lstm,
+                    (X_seq, Y_seq, last_window, len(horizons), save_path),
+                    timeout_seconds=timeout_seconds,
+                    max_workers=pool_workers,
+                )
+                pred_scaled = np.array(result["pred_scaled"])
+                model_saved_in_subprocess = bool(result.get("saved"))
+            else:
+                from tensorflow.keras.callbacks import EarlyStopping
+                model = Sequential([
+                    Conv1D(filters=32, kernel_size=3, activation='relu',
+                           input_shape=(time_steps, num_features)),
+                    MaxPooling1D(pool_size=2),
+                    LSTM(units=30, activation='tanh', return_sequences=False),
+                    Dense(units=len(horizons)),
+                ])
+                model.compile(optimizer='adam', loss='mse')
+                early_stop = EarlyStopping(
+                    monitor='val_loss', patience=5, restore_best_weights=True
+                )
+                model.fit(
+                    X_seq, Y_seq,
+                    epochs=50, batch_size=16, verbose=0,
+                    validation_split=0.2, callbacks=[early_stop],
+                )
+                pred_scaled = model.predict(last_window, verbose=0)[0]  # (n_horizons,)
 
             out: Dict[int, float] = {}
             for i, h in enumerate(horizons):
@@ -791,7 +840,8 @@ class ForecastingEngine:
                 try:
                     import pickle
                     from forecasting.model_persistence import touch
-                    model.save(keras_path)
+                    if not model_saved_in_subprocess:
+                        model.save(keras_path)
                     with open(scaler_x_path, "wb") as f:
                         pickle.dump(scaler_X, f)
                     with open(scaler_y_path, "wb") as f:

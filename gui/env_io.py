@@ -142,6 +142,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FORECAST_SKILL_WINDOW_DAYS", # int — rolling RMSE window (days) for skill weighting
     "FORECAST_MODEL_PERSISTENCE_ENABLED",  # bool — opt-in CNN-LSTM/Prophet artifact persistence
     "FORECAST_MODEL_RETRAIN_DAYS",         # int — persisted-model staleness window (days)
+    # CNN-LSTM/TensorFlow deadlock fix (issue #381, docs/known_issues/
+    # cnn_lstm_tf_deadlock.md). Non-secret ops tunables, no credential material.
+    "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",  # bool — run CNN-LSTM fit/predict in an isolated subprocess
+    "CNN_LSTM_PROCESS_POOL_WORKERS",          # int — persistent isolation-pool worker count
+    "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",    # int — per-call isolation timeout (seconds)
     "ADVISORY_REUSE_PIPELINE_COMPUTE",     # bool — OUTPUT-CHANGING: reuse pipeline GARCH/forecast in advisory overlay
     "FUNDAMENTALS_SOURCE",        # "yahoo" | "yfinance_info"
     "BETA_LOOKBACK_DAYS",         # int — beta computation lookback (days)
