@@ -155,3 +155,44 @@ def get_research_provider() -> Optional[LLMProvider]:
 
     logger.info("Unknown Opal research provider '%s' — skipping LLM.", choice)
     return None
+
+
+def get_sentiment_verification_provider() -> Optional[LLMProvider]:
+    """Return the configured sentiment-credibility verification provider, or
+    ``None`` to skip LLM verification (Sentiment Pipeline Phase 2 PR2).
+
+    Gated on its OWN master switch (``SENTIMENT_LLM_VERIFICATION_ENABLED``,
+    independent of ``LLM_COMMENTARY_ENABLED``/``OPAL_RESEARCH_ENABLED``) and
+    ``SENTIMENT_LLM_VERIFICATION_PROVIDER`` -- ``"claude"``, ``"gemini"``, or
+    ``"openai"``. Returns ``None`` when the switch is off, the provider
+    choice is unrecognized/``"none"``, the relevant API key is unset, or
+    construction fails (CONSTRAINT #6) -- the caller (``signals.credibility``)
+    treats ``None`` identically to a soft-failed call: every borderline
+    document falls back to the ``S_verification=1.0`` placeholder.
+    """
+    if not getattr(settings, "SENTIMENT_LLM_VERIFICATION_ENABLED", False):
+        return None
+    choice = (getattr(settings, "SENTIMENT_LLM_VERIFICATION_PROVIDER", "") or "").lower()
+    if choice in ("", "none"):
+        return None
+
+    timeout = float(getattr(settings, "LLM_COMMENTARY_TIMEOUT_SECONDS", 8.0) or 8.0)
+
+    if choice in ("claude", "gemini"):
+        return _construct_provider(choice, timeout)
+
+    if choice == "openai":
+        api_key = getattr(settings, "OPENAI_API_KEY", None)
+        if not api_key:
+            logger.info(
+                "Sentiment verification provider 'openai' selected but OPENAI_API_KEY is unset."
+            )
+            return None
+        try:
+            return OpenAIProvider(api_key=api_key, timeout_seconds=timeout)
+        except Exception as exc:
+            logger.warning("Failed to construct OpenAIProvider: %s", exc)
+            return None
+
+    logger.info("Unknown sentiment verification provider '%s' — skipping LLM.", choice)
+    return None

@@ -251,6 +251,58 @@ class ResearchBrief(BaseModel):
     )
 
 
+class SentimentDocumentVerification(BaseModel):
+    """LLM verification verdict for a single borderline-credibility sentiment
+    document (Sentiment Pipeline Phase 2 PR2, AI-Assisted Credibility
+    Filtering -- :mod:`signals.credibility`).
+
+    Provider-agnostic by design (any of Claude/Gemini/OpenAI may serve this
+    job per ``settings.SENTIMENT_LLM_VERIFICATION_PROVIDER`` -- same
+    flexible-routing shape as :class:`GravityAuditStepResult`). The prompt
+    the caller builds includes ONLY the document's own ``source_name``,
+    ``symbol``, and ``text_content`` -- never anything computed from data
+    after the document's own ``as_of`` timestamp, preserving point-in-time
+    safety.
+
+    Fields
+    ------
+    verifiable :
+        Whether the document reads as genuine, plausible commentary rather
+        than spam, bot-generated filler, or obviously fabricated/manipulative
+        text. Advisory input to ``S_verification`` only -- never itself a
+        trading signal.
+    confidence :
+        [0, 1] confidence in the ``verifiable`` verdict. Mapped to
+        ``S_verification`` as ``confidence`` when ``verifiable`` is True, or
+        ``1 - confidence`` when False -- so a low-confidence call in either
+        direction lands near the neutral middle of the score range rather
+        than at an extreme.
+    rationale :
+        One-sentence justification, capped short so a runaway response is
+        rejected at schema validation (CONSTRAINT #4 + #6) rather than
+        reaching the cache or the audit table.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verifiable: bool = Field(
+        description=(
+            "True if the document reads as genuine, plausible commentary; "
+            "False if it reads as spam, bot-generated, or fabricated."
+        ),
+    )
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Confidence in the verifiable/not-verifiable verdict, 0=none, 1=full.",
+    )
+    rationale: str = Field(
+        min_length=1,
+        max_length=300,
+        description="One-sentence justification for the verdict.",
+    )
+
+
 class GravityAuditStepResult(BaseModel):
     """One AI-rendered Gravity audit step verdict.
 
