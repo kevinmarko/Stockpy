@@ -150,6 +150,17 @@ have no other way to stay quiet by default. **Turning this on is the one action 
 the point-in-time archive to start accumulating toward `SENTIMENT_PIT_MIN_MONTHS`; nothing else
 needs to be done afterward — it runs automatically every cycle from then on.
 
+**Backfill: waiting isn't the only way to reach archive depth.** GDELT, SEC EDGAR, and Finnhub
+all have genuine historical archives — `scripts/backfill_sentiment_history.py` can pull real,
+already-existing history (default: the last 5 months) into `sentiment_ingestion_audit` right now,
+with **zero credibility bias**, since all three are policy-trusted institutional sources
+(`credibility_weight=1.0` regardless of when they're scored). Reddit is also backfillable but
+carries a real caveat: a backfilled post's `S_authority` reflects the author's account state
+*today*, not at post time. Yahoo RSS cannot backfill at all (a live feed, no historical archive).
+`HistoricalStore.get_sentiment_archive_depth_by_source()` reports depth per source, so a future
+Phase 5 validation run should check institutional-source depth and Reddit's depth *separately*
+rather than one blended number that would overstate confidence in the weaker component.
+
 `pre_compute()` additionally reads the current trading day's aggregate from
 `HistoricalStore.get_sentiment_aggregate_by_symbol()` — populated at ingest time by
 `data/sentiment_sources.py`'s `CompositeSentimentSource` (Yahoo RSS/GDELT/Reddit/EDGAR/Finnhub

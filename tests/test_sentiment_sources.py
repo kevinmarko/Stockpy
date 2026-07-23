@@ -184,6 +184,66 @@ class TestGDELTSource:
             docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
         assert docs == []
 
+    def test_historical_backfill_chunks_into_multiple_windows(self):
+        """A `since` far in the past (e.g. a 5-month backfill) must issue
+        MULTIPLE date-bounded windowed calls, not one 'most recent' call --
+        the bug this fix addresses would have silently returned only today's
+        newest articles regardless of how far back `since` was."""
+        src = GDELTSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"articles": []}
+        fixed_now = datetime(2026, 8, 5, tzinfo=timezone.utc)
+        since = fixed_now - timedelta(days=35)  # exactly 5 weeks
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp) as mock_get:
+            with patch("data.sentiment_sources.datetime") as mock_dt:
+                mock_dt.now.return_value = fixed_now
+                mock_dt.strptime = datetime.strptime
+                src.fetch("AAPL", since)
+        # 35 days / 7-day chunks -> exactly 5 windowed calls.
+        assert mock_get.call_count == 5
+
+    def test_historical_backfill_windows_use_startdatetime_enddatetime(self):
+        src = GDELTSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"articles": []}
+        since = datetime.now(timezone.utc) - timedelta(days=10)
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp) as mock_get:
+            src.fetch("AAPL", since)
+        first_call_params = mock_get.call_args_list[0].kwargs["params"]
+        assert "startdatetime" in first_call_params
+        assert "enddatetime" in first_call_params
+        # GDELT's YYYYMMDDHHMMSS format, not an ISO string.
+        assert len(first_call_params["startdatetime"]) == 14
+        assert first_call_params["startdatetime"].isdigit()
+
+    def test_one_failed_window_does_not_block_others(self):
+        src = GDELTSource()
+        good_resp = MagicMock()
+        good_resp.raise_for_status = MagicMock()
+        good_resp.json.return_value = {
+            "articles": [{"title": "Real historical headline", "seendate": "20260601T140000Z", "tone": 1.0}]
+        }
+        since = datetime.now(timezone.utc) - timedelta(days=21)  # 3 windows
+        with patch(
+            "data.sentiment_sources.requests.get",
+            side_effect=[RuntimeError("window 1 network error"), good_resp, good_resp],
+        ):
+            docs = src.fetch("AAPL", since)
+        assert len(docs) == 2  # windows 2 and 3 both succeeded
+
+    def test_max_windows_safety_cap(self):
+        """An absurdly distant `since` must not loop unbounded."""
+        src = GDELTSource()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"articles": []}
+        since = datetime.now(timezone.utc) - timedelta(days=3650)  # 10 years
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp) as mock_get:
+            src.fetch("AAPL", since)
+        assert mock_get.call_count == GDELTSource._MAX_WINDOWS
+
 
 class TestRedditSource:
     def test_no_credentials_returns_empty(self):
@@ -227,6 +287,121 @@ class TestRedditSource:
                 with patch("data.sentiment_sources.requests.post", side_effect=RuntimeError("boom")):
                     docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
         assert docs == []
+
+    def test_time_bucket_selection(self):
+        now = datetime.now(timezone.utc)
+        assert RedditSource._time_bucket_for(now - timedelta(minutes=30)) == "hour"
+        assert RedditSource._time_bucket_for(now - timedelta(hours=12)) == "day"
+        assert RedditSource._time_bucket_for(now - timedelta(days=5)) == "week"
+        assert RedditSource._time_bucket_for(now - timedelta(days=20)) == "month"
+        assert RedditSource._time_bucket_for(now - timedelta(days=150)) == "year"  # ~5-month backfill
+        assert RedditSource._time_bucket_for(now - timedelta(days=1000)) == "all"
+
+    def test_pagination_follows_after_cursor_for_backfill(self):
+        """A 5-month-old `since` with more posts than fit on one page must
+        paginate via the `after` cursor, not silently stop at page 1."""
+        src = RedditSource()
+        now = datetime.now(timezone.utc)
+        mock_token_resp = MagicMock()
+        mock_token_resp.raise_for_status = MagicMock()
+        mock_token_resp.json.return_value = {"access_token": "tok123"}
+
+        page1 = MagicMock()
+        page1.raise_for_status = MagicMock()
+        page1.json.return_value = {
+            "data": {
+                "after": "t3_page2cursor",
+                "children": [
+                    {"data": {"title": "Recent post", "created_utc": (now - timedelta(days=10)).timestamp(), "author": "u1"}},
+                ],
+            }
+        }
+        page2 = MagicMock()
+        page2.raise_for_status = MagicMock()
+        page2.json.return_value = {
+            "data": {
+                "after": None,  # no more pages
+                "children": [
+                    {"data": {"title": "Older post", "created_utc": (now - timedelta(days=100)).timestamp(), "author": "u2"}},
+                ],
+            }
+        }
+
+        with patch("settings.settings.REDDIT_CLIENT_ID", "cid"):
+            with patch("settings.settings.REDDIT_CLIENT_SECRET", "csecret"):
+                with patch("data.sentiment_sources.requests.post", return_value=mock_token_resp):
+                    with patch(
+                        "data.sentiment_sources.requests.get", side_effect=[page1, page2],
+                    ) as mock_get:
+                        docs = src.fetch("AAPL", now - timedelta(days=150))
+        assert len(docs) == 2
+        # Second call must carry the `after` cursor from the first page.
+        assert mock_get.call_args_list[1].kwargs["params"]["after"] == "t3_page2cursor"
+
+    def test_pagination_stops_at_cutoff(self):
+        """Once a page contains a post older than `since`, pagination must
+        stop entirely (sort=new -> everything further is even older) rather
+        than keep requesting pages unnecessarily."""
+        src = RedditSource()
+        now = datetime.now(timezone.utc)
+        mock_token_resp = MagicMock()
+        mock_token_resp.raise_for_status = MagicMock()
+        mock_token_resp.json.return_value = {"access_token": "tok123"}
+
+        page1 = MagicMock()
+        page1.raise_for_status = MagicMock()
+        page1.json.return_value = {
+            "data": {
+                "after": "t3_would_be_page2",
+                "children": [
+                    {"data": {"title": "Within window", "created_utc": (now - timedelta(days=2)).timestamp(), "author": "u1"}},
+                    {"data": {"title": "Too old", "created_utc": (now - timedelta(days=20)).timestamp(), "author": "u2"}},
+                ],
+            }
+        }
+
+        with patch("settings.settings.REDDIT_CLIENT_ID", "cid"):
+            with patch("settings.settings.REDDIT_CLIENT_SECRET", "csecret"):
+                with patch("data.sentiment_sources.requests.post", return_value=mock_token_resp):
+                    with patch(
+                        "data.sentiment_sources.requests.get", return_value=page1,
+                    ) as mock_get:
+                        docs = src.fetch("AAPL", now - timedelta(days=10))
+        assert len(docs) == 1
+        assert docs[0].text_content == "Within window"
+        assert mock_get.call_count == 1  # never fetched a 2nd page
+
+    def test_pagination_bounded_by_max_pages(self):
+        src = RedditSource()
+        now = datetime.now(timezone.utc)
+        mock_token_resp = MagicMock()
+        mock_token_resp.raise_for_status = MagicMock()
+        mock_token_resp.json.return_value = {"access_token": "tok123"}
+
+        def _make_page(cursor):
+            page = MagicMock()
+            page.raise_for_status = MagicMock()
+            page.json.return_value = {
+                "data": {
+                    "after": cursor,
+                    "children": [
+                        {"data": {"title": "Post", "created_utc": (now - timedelta(days=1)).timestamp(), "author": "u"}},
+                    ],
+                }
+            }
+            return page
+
+        # Always returns a next cursor -- would paginate forever without the cap.
+        with patch("settings.settings.REDDIT_CLIENT_ID", "cid"):
+            with patch("settings.settings.REDDIT_CLIENT_SECRET", "csecret"):
+                with patch("settings.settings.REDDIT_BACKFILL_MAX_PAGES", 3):
+                    with patch("data.sentiment_sources.requests.post", return_value=mock_token_resp):
+                        with patch(
+                            "data.sentiment_sources.requests.get",
+                            side_effect=lambda *a, **kw: _make_page("t3_next"),
+                        ) as mock_get:
+                            src.fetch("AAPL", now - timedelta(days=200))
+        assert mock_get.call_count == 3
 
 
 class TestEdgarSource:

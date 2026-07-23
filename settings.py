@@ -1082,7 +1082,13 @@ class Settings(BaseSettings):
             "sentiment-derived signal -- matches the '~6-12 months' policy "
             "already documented in docs/signals/news_catalyst.md. Read by "
             "the validation gating check, never re-typed as a literal "
-            "elsewhere."
+            "elsewhere. A future gating check should apply this PER SOURCE "
+            "GROUP via HistoricalStore.get_sentiment_archive_depth_by_source() "
+            "-- institutional sources (gdelt/edgar/finnhub, backfillable via "
+            "scripts/backfill_sentiment_history.py with zero credibility bias) "
+            "can honestly satisfy this bar much sooner than Reddit/live-only "
+            "accumulation; one blended check across all sources would "
+            "overstate confidence in whichever source is actually shallowest."
         ),
     )
 
@@ -1148,6 +1154,19 @@ class Settings(BaseSettings):
             "Reddit's API rules (a generic/missing User-Agent is rate-limited "
             "more aggressively). Operators should set this to something "
             "identifying their own deployment."
+        ),
+    )
+    REDDIT_BACKFILL_MAX_PAGES: int = Field(
+        default=10,
+        description=(
+            "Max pages RedditSource.fetch() will paginate through (via the "
+            "'after' cursor, 100 posts/page) when `since` is far enough in "
+            "the past that a single day/week 't=' bucket wouldn't cover it. "
+            "Bounds a historical-backfill request from paginating unbounded; "
+            "a live per-cycle call with a recent `since` typically stops "
+            "after 1 page. Backfilled posts' credibility sub-scores still "
+            "reflect the author's CURRENT account state, not their state at "
+            "post time -- see RedditSource's docstring."
         ),
     )
     EDGAR_USER_AGENT: str = Field(

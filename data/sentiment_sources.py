@@ -311,12 +311,42 @@ class YahooRSSSource(SentimentSource):
 # ---------------------------------------------------------------------------
 
 class GDELTSource(SentimentSource):
-    """GDELT 2.0 DOC API -- free, no auth. Article-level tone as a proxy score."""
+    """GDELT 2.0 DOC API -- free, no auth. Article-level tone as a proxy score.
+
+    Historical backfill: GDELT's DOC API caps at ``_MAX_RECORDS_PER_CALL``
+    (250) results per call, so a ``since`` more than a few days in the past
+    is queried in ``_CHUNK_DAYS``-wide date-bounded windows
+    (``startdatetime``/``enddatetime``) rather than one "most recent" call
+    client-side-filtered by ``since`` -- that approach would silently return
+    only today's newest articles for any backfill request, never genuine
+    historical ones, since GDELT always sorts/caps before any date filtering
+    happens on our end. Each window is independently try/excepted
+    (CONSTRAINT #6): one failed window is skipped, not fatal to the rest of
+    the range. Capped at ``_MAX_WINDOWS`` chunks as a safety bound against an
+    unreasonably distant ``since``.
+    """
 
     name = "gdelt"
     _API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+    _MAX_RECORDS_PER_CALL = 250  # GDELT DOC API's own per-call ceiling
+    _CHUNK_DAYS = 7
+    _MAX_WINDOWS = 60  # safety bound (~14 months at 7-day chunks)
 
     def fetch(self, symbol: str, since: datetime) -> List[SentimentDocument]:
+        now = datetime.now(timezone.utc)
+        docs: List[SentimentDocument] = []
+        window_start = since
+        windows = 0
+        while window_start < now and windows < self._MAX_WINDOWS:
+            window_end = min(window_start + timedelta(days=self._CHUNK_DAYS), now)
+            docs.extend(self._fetch_window(symbol, window_start, window_end))
+            window_start = window_end
+            windows += 1
+        return docs
+
+    def _fetch_window(
+        self, symbol: str, window_start: datetime, window_end: datetime,
+    ) -> List[SentimentDocument]:
         try:
             resp = requests.get(
                 self._API_URL,
@@ -324,8 +354,10 @@ class GDELTSource(SentimentSource):
                     "query": symbol,
                     "mode": "artlist",
                     "format": "json",
-                    "maxrecords": 50,
+                    "maxrecords": self._MAX_RECORDS_PER_CALL,
                     "sort": "datedesc",
+                    "startdatetime": window_start.strftime("%Y%m%d%H%M%S"),
+                    "enddatetime": window_end.strftime("%Y%m%d%H%M%S"),
                 },
                 timeout=10,
             )
@@ -337,7 +369,7 @@ class GDELTSource(SentimentSource):
                 if not title:
                     continue
                 as_of = self._parse_seendate(article.get("seendate", ""))
-                if as_of is None or as_of < since:
+                if as_of is None:
                     continue
                 tone = article.get("tone")
                 score = self._tone_to_score(tone) if tone is not None else self._score(title)
@@ -347,7 +379,10 @@ class GDELTSource(SentimentSource):
                 ))
             return docs
         except Exception as exc:
-            logger.warning("GDELTSource.fetch(%s) failed: %s", symbol, exc)
+            logger.warning(
+                "GDELTSource.fetch(%s) window [%s, %s] failed: %s",
+                symbol, window_start.isoformat(), window_end.isoformat(), exc,
+            )
             return []
 
     @staticmethod
@@ -386,6 +421,22 @@ class RedditSource(SentimentSource):
     Only ``author_handle`` is populated -- ``author_followers``/
     ``account_age_days`` require a separate per-author lookup, deferred to
     Phase 4's credibility engine rather than fetched per-document here.
+
+    Historical backfill caveat (documented, not hidden): Reddit's search API
+    can reach posts well beyond ``t=day`` -- ``_time_bucket_for()`` picks the
+    narrowest ``t=`` bucket (hour/day/week/month/year/all) that still covers
+    ``since``, and pagination follows the ``after`` cursor up to
+    ``settings.REDDIT_BACKFILL_MAX_PAGES`` pages. But a backfilled post's
+    credibility sub-scores (``signals/credibility.py``'s ``S_authority``,
+    driven by ``author_followers``) can only ever reflect the author's
+    CURRENT account state -- Reddit's API has no way to ask "what was this
+    account's standing 5 months ago." A backfilled post is therefore scored
+    with today's credibility, not the account's credibility at post time --
+    a real degradation the sentiment-pipeline review flagged (M1), not
+    something this implementation can close. This is unlike GDELT/EDGAR/
+    Finnhub, which are institutional sources policy-trusted at 1.0
+    regardless of when they're scored (see ``signals/credibility.py``'s
+    ``_INSTITUTIONAL_SOURCES``), so backfilling them carries no such caveat.
     """
 
     name = "reddit"
@@ -403,39 +454,87 @@ class RedditSource(SentimentSource):
             token = self._get_token(_settings)
             if token is None:
                 return []
-            resp = requests.get(
-                self._SEARCH_URL,
-                headers={
-                    "Authorization": f"bearer {token}",
-                    "User-Agent": _settings.REDDIT_USER_AGENT,
-                },
-                params={"q": f"${symbol}", "sort": "new", "limit": 50, "t": "day"},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
+
             docs: List[SentimentDocument] = []
-            for child in payload.get("data", {}).get("children", []):
-                post = child.get("data", {})
-                title = post.get("title", "")
-                if not title:
-                    continue
-                created = post.get("created_utc")
-                as_of = (
-                    datetime.fromtimestamp(created, tz=timezone.utc)
-                    if created is not None else datetime.now(timezone.utc)
-                )
-                if as_of < since:
-                    continue
-                docs.append(SentimentDocument(
-                    as_of=as_of, symbol=symbol.upper(), source_name=self.name,
-                    text_content=title, raw_sentiment_score=self._score(title),
-                    author_handle=post.get("author"),
-                ))
+            after: Optional[str] = None
+            max_pages = int(_settings.REDDIT_BACKFILL_MAX_PAGES)
+            time_bucket = self._time_bucket_for(since)
+
+            for _page in range(max_pages):
+                params: Dict[str, Any] = {
+                    "q": f"${symbol}", "sort": "new", "limit": 100, "t": time_bucket,
+                }
+                if after:
+                    params["after"] = after
+                try:
+                    resp = requests.get(
+                        self._SEARCH_URL,
+                        headers={
+                            "Authorization": f"bearer {token}",
+                            "User-Agent": _settings.REDDIT_USER_AGENT,
+                        },
+                        params=params,
+                        timeout=10,
+                    )
+                    resp.raise_for_status()
+                    payload = resp.json()
+                except Exception as exc:
+                    logger.warning("RedditSource.fetch(%s) page failed: %s", symbol, exc)
+                    break
+
+                children = payload.get("data", {}).get("children", [])
+                if not children:
+                    break
+
+                hit_cutoff = False
+                for child in children:
+                    post = child.get("data", {})
+                    title = post.get("title", "")
+                    if not title:
+                        continue
+                    created = post.get("created_utc")
+                    as_of = (
+                        datetime.fromtimestamp(created, tz=timezone.utc)
+                        if created is not None else datetime.now(timezone.utc)
+                    )
+                    if as_of < since:
+                        # sort=new -> every subsequent post (this page and
+                        # later pages) is even older; stop entirely.
+                        hit_cutoff = True
+                        break
+                    docs.append(SentimentDocument(
+                        as_of=as_of, symbol=symbol.upper(), source_name=self.name,
+                        text_content=title, raw_sentiment_score=self._score(title),
+                        author_handle=post.get("author"),
+                    ))
+
+                if hit_cutoff:
+                    break
+                after = payload.get("data", {}).get("after")
+                if not after:
+                    break
+
             return docs
         except Exception as exc:
             logger.warning("RedditSource.fetch(%s) failed: %s", symbol, exc)
             return []
+
+    @staticmethod
+    def _time_bucket_for(since: datetime) -> str:
+        """Narrowest Reddit ``t=`` search bucket that still covers ``since``."""
+        now = datetime.now(timezone.utc)
+        delta = now - since
+        if delta <= timedelta(hours=1):
+            return "hour"
+        if delta <= timedelta(days=1):
+            return "day"
+        if delta <= timedelta(days=7):
+            return "week"
+        if delta <= timedelta(days=31):
+            return "month"
+        if delta <= timedelta(days=366):
+            return "year"
+        return "all"
 
     def _get_token(self, settings_obj: Any) -> Optional[str]:
         if self._token is not None:
