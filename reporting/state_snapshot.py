@@ -109,6 +109,17 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 "regime_multiplier": _safe_float_or_none(ki.get("regime_multiplier")),
                 "kelly_target_pre_regime": _safe_float_or_none(ki.get("kelly_target_pre_regime")),
                 "kelly_target_post_regime": _safe_float_or_none(ki.get("kelly_target_post_regime")),
+                # Guardrail telemetry (sizing/position_sizer.py) -- parity with
+                # main_orchestrator._write_state_snapshot's "sizing_was_capped"/
+                # "sizing_binding_constraint". Sourced from
+                # engine.advisory.Recommendation.sizing_was_capped/
+                # .sizing_binding_constraint -- advisory's OWN sizing decision,
+                # matching "kelly_target" above (which is likewise
+                # rec.suggested_position_pct here, not kelly_raw). getattr-guarded
+                # so an older Recommendation without the field degrades safely
+                # (never fabricated -- CONSTRAINT #4).
+                "sizing_was_capped": bool(getattr(rec, "sizing_was_capped", False)),
+                "sizing_binding_constraint": getattr(rec, "sizing_binding_constraint", None),
                 "score_components": rec.score_components or {},
                 # Tactical price bands (gui/panels/report_viewer.py's "Tactical
                 # Ranges" table already reads these keys) + suggested SELL exit

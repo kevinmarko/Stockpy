@@ -314,6 +314,9 @@ def render_observability() -> None:
     _render_observability_risk_gate_block_log()
 
     st.divider()
+    _render_observability_sizing_cap_audit()
+
+    st.divider()
     _render_observability_heartbeat_trend()
 
     st.divider()
@@ -1155,6 +1158,73 @@ def _render_observability_risk_gate_block_log() -> None:
         st.dataframe(pd.DataFrame(block_log), width="stretch")
     else:
         st.success("No blocked orders in the log.")
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section: Sizing Cap-Event Audit Trail (sizing/position_sizer.py,
+# sizing/cap_audit_store.py)
+# ---------------------------------------------------------------------------
+
+
+def _render_observability_sizing_cap_audit() -> None:
+    """Durable history of position-sizing guardrail events (last 100).
+
+    Distinct from the per-cycle ``Sizing_Was_Capped``/``Sizing_Binding_Constraint``
+    columns already surfaced elsewhere (dashboard_df, state_snapshot, Sheet) --
+    this section reads the DURABLE ``sizing_cap_events`` table
+    (``sizing/cap_audit_store.py``), so an operator can see "which names have
+    been hitting a ceiling, and how often" across cycles, not just the latest
+    one. Read-only (``CapAuditStore(readonly=True)``) -- this panel never
+    writes. Degrades to an info message on any DB error (dead-letter pattern
+    used throughout this codebase), never a traceback.
+    """
+    st.markdown("### 🧢 Sizing Cap-Event Audit Trail (last 100)")
+    st.caption(
+        help_widgets.metric_help("observability.sizing_cap_audit")
+        or "Durable log of every position-sizing capping event (KELLY_CAP, "
+        "MAX_POSITION_WEIGHT, the portfolio-wide gross-exposure cap, or "
+        "cap-aware escalation) -- not just this cycle's snapshot."
+    )
+
+    if not settings.SIZING_CAP_AUDIT_ENABLED:
+        st.info(
+            "⚪ `SIZING_CAP_AUDIT_ENABLED = False` — the durable cap-event log "
+            "is not being written this run. Enable it (Settings tab / `.env`) "
+            "to start accumulating history."
+        )
+        return
+
+    try:
+        from sizing.cap_audit_store import CapAuditStore
+
+        events = CapAuditStore(readonly=True).get_recent(limit=100)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("CapAuditStore read failed: %s", exc)
+        events = []
+
+    if not events:
+        st.info("No cap events recorded yet — they accumulate as cycles run.")
+        return
+
+    df = pd.DataFrame(events)
+    capped_only = df[df["was_capped"]] if "was_capped" in df.columns else df
+    if capped_only.empty:
+        st.success("No names have hit a sizing ceiling in the recorded history.")
+        return
+
+    st.dataframe(
+        capped_only[["timestamp", "symbol", "strategy_id", "final_weight", "binding_constraint", "cycle_id"]],
+        width="stretch", hide_index=True,
+    )
+
+    if settings.SIZING_CAP_ESCALATION_ENABLED:
+        st.caption(
+            f"🟢 Cap-aware escalation active: a name capped for "
+            f"**{settings.SIZING_CAP_ESCALATION_THRESHOLD_CYCLES}** consecutive "
+            f"cycles is down-weighted by **{settings.SIZING_CAP_ESCALATION_FACTOR:.2f}x**."
+        )
+    else:
+        st.caption("⚪ Cap-aware escalation disabled (`SIZING_CAP_ESCALATION_ENABLED = False`).")
 
 
 # ---------------------------------------------------------------------------

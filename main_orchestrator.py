@@ -526,6 +526,26 @@ async def _execute_broker_orders(
         )
 
 
+def _safe_bool_or_none(value: Any) -> Optional[bool]:
+    """Tri-state "Yes"/"No"/unknown -> True/False/None.
+
+    ``dashboard_df``'s ``Sizing_Was_Capped`` column (config.COLUMN_SCHEMA,
+    populated by pipeline/production_steps.py) is ``None`` for a ticker whose
+    strategy evaluation never reached the 'results' stage this cycle (dead-
+    lettered) -- NOT the same as a genuinely computed "No". A plain
+    ``str(value).strip().lower() == "yes"`` collapses that missing case into
+    a fabricated ``False`` ("no ceiling bound"), an ACTIVE FALSE CLAIM
+    (CONSTRAINT #4) rather than "not computed" -- this preserves the
+    distinction instead.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text.lower() == "yes"
+
+
 def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: list) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
@@ -634,6 +654,17 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     "regime_multiplier": _safe_float_or_none(row.get("Regime_Multiplier")),
                     "kelly_target_pre_regime": _safe_float_or_none(row.get("Kelly_Target_Pre_Regime")),
                     "kelly_target_post_regime": _safe_float_or_none(row.get("Kelly_Target_Post_Regime")),
+                    # Guardrail telemetry (sizing/position_sizer.py) -- did any
+                    # hard sizing ceiling bind this cycle (per-symbol KELLY_CAP/
+                    # MAX_POSITION_WEIGHT, cap-aware escalation, or the
+                    # portfolio-wide gross-exposure cap applied in
+                    # pipeline/production_steps.py::StrategyEvalStep), and
+                    # which one. dashboard_df stores these as schema-driven
+                    # "Yes"/"No"/None + constraint-name strings (config.COLUMN_SCHEMA);
+                    # _safe_bool_or_none preserves None (dead-lettered ticker,
+                    # never computed) rather than fabricating False -- CONSTRAINT #4.
+                    "sizing_was_capped": _safe_bool_or_none(row.get("Sizing_Was_Capped")),
+                    "sizing_binding_constraint": (str(row.get("Sizing_Binding_Constraint")).strip() or None) if pd.notna(row.get("Sizing_Binding_Constraint")) else None,
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

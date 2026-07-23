@@ -8,6 +8,12 @@ strategy_engine.py and main_orchestrator.py.
 Stage 1.7 additions: per-strategy bootstrap-conservative sizing via
 ``kelly_sizing_for_strategy()``, plus the helper
 ``_get_per_strategy_returns()``.
+
+Sizing decision pipeline additions (``sizing/position_sizer.py``): the
+ordered regime/meta-label/ceiling composition (``size_position()``), the
+portfolio-level gross-exposure cap (``apply_portfolio_gross_cap()``), and the
+``was_capped`` / ``binding_constraint`` guardrail telemetry that did not
+exist before -- see that module's docstring for the full design rationale.
 """
 
 from sizing.vol_target import volatility_target_weight, portfolio_vol_target
@@ -18,4 +24,13 @@ from sizing.kelly import (
     kelly_sizing_for_strategy,
     _get_per_strategy_returns,
     fractional_kelly,
+)
+from sizing.position_sizer import (
+    SizingDecision,
+    CapEventSummary,
+    PortfolioCapResult,
+    size_position,
+    apply_portfolio_gross_cap,
+    detect_raw_cap_binding,
+    clamp_with_binding,
 )

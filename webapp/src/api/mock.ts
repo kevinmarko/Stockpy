@@ -1233,16 +1233,20 @@ function mockStrategyMatrix(): StrategyMatrix {
 
 // ---- General runtime tunables editor fixture (GET/PUT /settings/tunables) ----
 // Mirrors api/pilots_api.py's REAL _TUNABLE_GROUPS exactly (same 7 group names,
-// same ~39-key field set, including the 7 "Advanced / Config" keys the backend
-// previously omitted) -- every field the mock's TUNABLE_DEFS below matches the
-// live backend field-for-field, no orphans either direction. Values/defaults/
-// descriptions are pulled from settings.py's real pydantic Field(description=)
-// (verified via `python3 -c "from settings import Settings; ..."`), not
-// invented placeholders -- 10 fields genuinely have no description in
-// settings.py (RISK_FREE_RATE, MARKET_RISK_PREMIUM, REQUIRED_RETURN_RATE,
-// MAX_PORTFOLIO_HEAT, KELLY_FRACTION, KELLY_CAP, VOL_TARGET, MAX_LEVERAGE,
-// MAX_POSITION_WEIGHT, LOG_LEVEL) and stay `null` here, never fabricated
-// (CONSTRAINT #4). MARKET_DATA_PROVIDER is honestly `value: null, default:
+// same ~46-key field set, including the 7 "Advanced / Config" keys the backend
+// previously omitted and the 7 portfolio-gross-cap/escalation/audit/alert keys
+// added alongside MAX_POSITION_WEIGHT in "Position Sizing") -- every field the
+// mock's TUNABLE_DEFS below matches the live backend field-for-field, no
+// orphans either direction. Values/defaults/descriptions are pulled from
+// settings.py's real pydantic Field(description=) (verified via
+// `python3 -c "from settings import Settings; ..."`), not invented placeholders
+// -- 17 fields genuinely have no description in settings.py (RISK_FREE_RATE,
+// MARKET_RISK_PREMIUM, REQUIRED_RETURN_RATE, MAX_PORTFOLIO_HEAT, KELLY_FRACTION,
+// KELLY_CAP, VOL_TARGET, MAX_LEVERAGE, MAX_POSITION_WEIGHT, MAX_PORTFOLIO_GROSS,
+// SIZING_CAP_ESCALATION_ENABLED, SIZING_CAP_ESCALATION_THRESHOLD_CYCLES,
+// SIZING_CAP_ESCALATION_FACTOR, SIZING_CAP_AUDIT_ENABLED, SIZING_CAP_ALERT_ENABLED,
+// SIZING_CAP_ALERT_THRESHOLD_PCT, LOG_LEVEL) and stay `null` here, never
+// fabricated (CONSTRAINT #4). MARKET_DATA_PROVIDER is honestly `value: null, default:
 // null` too -- its real settings.py default IS None (auto-select; unset until
 // an operator forces "alpaca"/"yfinance"). Accepted writes persist to
 // localStorage so a later GET reflects them AND marks those keys as env_drift
@@ -1314,6 +1318,45 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   {
     group: "Position Sizing", key: "MAX_POSITION_WEIGHT", type: "number",
     value: 1.0, default: 1.0, min: 0, max: 5, step: 0.05,
+    description: null,
+  },
+  // Portfolio-level gross exposure cap + cap-aware escalation + cap-event
+  // audit/alerting (sizing/position_sizer.py, sizing/cap_audit_store.py) --
+  // same "no description in settings.py" convention as the five sizing
+  // fields above.
+  {
+    group: "Position Sizing", key: "MAX_PORTFOLIO_GROSS", type: "number",
+    value: 3.0, default: 3.0, min: 0, max: 20, step: 0.1,
+    description: null,
+  },
+  {
+    group: "Position Sizing", key: "SIZING_CAP_ESCALATION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: null,
+  },
+  {
+    group: "Position Sizing", key: "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES", type: "number",
+    value: 5, default: 5, min: 1, max: 100, step: 1,
+    description: null,
+  },
+  {
+    group: "Position Sizing", key: "SIZING_CAP_ESCALATION_FACTOR", type: "number",
+    value: 0.5, default: 0.5, min: 0, max: 1, step: 0.05,
+    description: null,
+  },
+  {
+    group: "Position Sizing", key: "SIZING_CAP_AUDIT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: null,
+  },
+  {
+    group: "Position Sizing", key: "SIZING_CAP_ALERT_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: null,
+  },
+  {
+    group: "Position Sizing", key: "SIZING_CAP_ALERT_THRESHOLD_PCT", type: "number",
+    value: 0.30, default: 0.30, min: 0, max: 1, step: 0.05,
     description: null,
   },
   // ---- Risk Gate ----

@@ -92,6 +92,11 @@ SHARED_SIGNAL_FIELDS = {
     "regime_multiplier",
     "kelly_target_pre_regime",
     "kelly_target_post_regime",
+    # Guardrail telemetry (sizing/position_sizer.py) -- reached advisory parity
+    # via engine.advisory.Recommendation.sizing_was_capped/
+    # .sizing_binding_constraint, threaded through reporting/state_snapshot.py.
+    "sizing_was_capped",
+    "sizing_binding_constraint",
 }
 
 # The four sizing-decomposition fields, tested together below (mirrors _TRIPLET).
@@ -185,6 +190,8 @@ def orchestrator_signals(tmp_path, monkeypatch):
             "Regime_Multiplier": 0.75,
             "Kelly_Target_Pre_Regime": 0.04,
             "Kelly_Target_Post_Regime": 0.0,  # clamp(0.04 * 0.75 * 0.0, ...) == 0.0
+            "Sizing_Was_Capped": "Yes",
+            "Sizing_Binding_Constraint": "kelly_cap",
         },
         {
             "Symbol": "MSFT",
@@ -192,7 +199,11 @@ def orchestrator_signals(tmp_path, monkeypatch):
             "Price": 300.0,
             "Shares": 0.0,
             # News_Sentiment / Realized Slippage / CoVaR Proxy / the sizing
-            # quartet absent → null.
+            # quartet absent → null. Sizing_Was_Capped/Sizing_Binding_Constraint
+            # ALSO absent here -- mirrors a dead-lettered ticker in the real
+            # pipeline (pipeline/production_steps.py defaults these to None,
+            # never ""/fabricated False -- see TestSizingGuardrailNullSafety
+            # below, which locks in that this must round-trip as null, not false).
         },
     ]
     final_df = pd.DataFrame(rows)
@@ -367,6 +378,51 @@ class TestSizingQuartetNullHonesty:
             raw,
             parse_constant=lambda tok: (_ for _ in ()).throw(ValueError(f"invalid JSON constant: {tok}")),
         )
+
+
+class TestSizingGuardrailNullSafety:
+    """Regression coverage for the fixed dead-letter fabrication bug: a
+    ticker missing sizing telemetry entirely (dead-lettered this cycle, or
+    -- for the advisory fixture -- simply not a BUY) must round-trip as JSON
+    null, never the ACTIVE FALSE CLAIM ``sizing_was_capped: false``
+    (CONSTRAINT #4). A ticker that genuinely WAS capped must round-trip its
+    real True/constraint-name, not just be "present" in the key set."""
+
+    def test_orchestrator_sizing_was_capped_true_round_trips(self, orchestrator_signals):
+        sig = _by_symbol(orchestrator_signals, "AAPL")
+        assert sig["sizing_was_capped"] is True
+        assert sig["sizing_binding_constraint"] == "kelly_cap"
+
+    def test_orchestrator_sizing_was_capped_is_null_when_absent(self, orchestrator_signals):
+        """MSFT's Sizing_Was_Capped/Sizing_Binding_Constraint are absent from
+        the fixture row entirely -- mirrors a dead-lettered ticker. Must be
+        null, NOT false -- a plain str(x).lower()=="yes" coercion would
+        collapse this into a fabricated "no ceiling bound" claim."""
+        sig = _by_symbol(orchestrator_signals, "MSFT")
+        assert sig["sizing_was_capped"] is None
+        assert sig["sizing_binding_constraint"] is None
+
+    def test_advisory_sizing_was_capped_defaults_false_not_fabricated_true(self, advisory_signals):
+        """Unlike the orchestrator's dead-letter case above, a REAL
+        Recommendation always carries this field with a genuine default
+        (False -- nothing was capped because nothing was BUY-sized this
+        cycle); the getattr fallback below only matters for an old/stub
+        Recommendation shape, matching engine.advisory.Recommendation.sector's
+        own getattr-guard precedent. Still must never be fabricated True."""
+        sig = advisory_signals[0]
+        assert sig["sizing_was_capped"] is False
+        assert sig["sizing_binding_constraint"] is None
+
+    def test_advisory_sizing_was_capped_true_round_trips(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        rec = _recommendation("AAPL")
+        rec.sizing_was_capped = True
+        rec.sizing_binding_constraint = "advisory_max_position_pct"
+        result = SimpleNamespace(snapshot=SimpleNamespace(positions={}), recommendations=[rec])
+        ss.write_state_snapshot(result, _macro())
+        sig = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))["signals"][0]
+        assert sig["sizing_was_capped"] is True
+        assert sig["sizing_binding_constraint"] == "advisory_max_position_pct"
 
 
 class TestAdvisoryNewFieldsRoundTrip:

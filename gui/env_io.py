@@ -72,6 +72,15 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "VOL_TARGET",
     "MAX_LEVERAGE",
     "MAX_POSITION_WEIGHT",
+    # Portfolio-level gross exposure cap + cap-aware escalation + cap-event
+    # audit/alerting (sizing/position_sizer.py, sizing/cap_audit_store.py)
+    "MAX_PORTFOLIO_GROSS",
+    "SIZING_CAP_ESCALATION_ENABLED",
+    "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES",
+    "SIZING_CAP_ESCALATION_FACTOR",
+    "SIZING_CAP_AUDIT_ENABLED",
+    "SIZING_CAP_ALERT_ENABLED",
+    "SIZING_CAP_ALERT_THRESHOLD_PCT",
     # Risk gate
     "MAX_CORRELATION",
     "DAILY_LOSS_LIMIT_PCT",
