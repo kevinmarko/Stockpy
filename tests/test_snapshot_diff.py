@@ -100,7 +100,12 @@ class TestRotation:
     """``rotate_snapshot`` is the only writer; tests pin its contract."""
 
     def test_rotation_writes_history_file(self, tmp_path: Path):
-        out = rotate_snapshot(_snap(), tmp_path)
+        # Pin `now` to the snapshot's own default timestamp -- otherwise, once
+        # real wall-clock time drifts more than DEFAULT_HISTORY_DAYS past the
+        # hardcoded "2026-06-26" fixture, rotate_snapshot's own pruning step
+        # deletes the file it just wrote before this assertion ever runs.
+        now = datetime(2026, 6, 26, 12, 0, tzinfo=timezone.utc)
+        out = rotate_snapshot(_snap(), tmp_path, now=now)
         assert out is not None
         assert out.exists()
         assert out.parent.name == "history"
@@ -150,7 +155,10 @@ class TestRotation:
         (history / "state_snapshot.json").write_text(
             json.dumps(_snap()), encoding="utf-8"
         )  # current snapshot misplaced — ignored
-        rotate_snapshot(_snap(), tmp_path)
+        # Pin `now` to the snapshot's own default timestamp (see
+        # test_rotation_writes_history_file for why this matters).
+        now = datetime(2026, 6, 26, 12, 0, tzinfo=timezone.utc)
+        rotate_snapshot(_snap(), tmp_path, now=now)
         files = list_rotated_snapshots(tmp_path)
         assert len(files) == 1  # only the rotation file
 
@@ -279,7 +287,10 @@ class TestHistoryIntegration:
         assert any(d["symbol"] == "AAPL" for d in diff.conviction_deltas)
 
     def test_single_rotation_returns_first_run_shape(self, tmp_path: Path):
-        rotate_snapshot(_snap(signals=[_sig("AAPL", "BUY")]), tmp_path)
+        # Pin `now` to the snapshot's own default timestamp (see
+        # TestRotation.test_rotation_writes_history_file for why this matters).
+        now = datetime(2026, 6, 26, 12, 0, tzinfo=timezone.utc)
+        rotate_snapshot(_snap(signals=[_sig("AAPL", "BUY")]), tmp_path, now=now)
         diff = compute_diff_from_history(tmp_path)
         # Only one rotated snapshot exists → prev is None → first-run treatment.
         assert "AAPL" in diff.new_buys
