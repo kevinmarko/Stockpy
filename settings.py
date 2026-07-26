@@ -853,9 +853,11 @@ class Settings(BaseSettings):
             "which all import pandas before forecasting_engine is ever reached. "
             "When True, ForecastingEngine.run_cnn_lstm_forecast runs the actual "
             "TF-touching work (model fit+predict, and cached-model load+predict) in "
-            "a persistent multiprocessing 'spawn' worker pool (forecasting/"
-            "cnn_lstm_process_pool.py) whose worker module (forecasting/"
-            "cnn_lstm_worker.py) imports tensorflow before anything else -- a fresh "
+            "a persistent multiprocessing 'spawn' worker pool (repo-root "
+            "cnn_lstm_process_pool.py) whose worker module (repo-root "
+            "cnn_lstm_worker.py -- deliberately NOT inside forecasting/, since that "
+            "package's __init__ eagerly imports pandas) imports tensorflow before "
+            "anything else -- a fresh "
             "interpreter per worker means the parent process's import order can no "
             "longer matter, unlike the module-level reorder alone. All feature "
             "engineering / windowing / scaling stays in the parent process unchanged "
@@ -877,7 +879,7 @@ class Settings(BaseSettings):
         default=1,
         description=(
             "Worker-process count for the CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED "
-            "pool (forecasting/cnn_lstm_process_pool.py). Workers are persistent "
+            "pool (repo-root cnn_lstm_process_pool.py). Workers are persistent "
             "(survive across tickers/cycles, each pays the TensorFlow import cost "
             "only once) so CNN-LSTM fits queued from pipeline/production_steps.py's "
             "per-ticker ThreadPoolExecutor fan-out share this fixed-size pool rather "
