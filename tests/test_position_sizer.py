@@ -14,6 +14,8 @@ about the new orchestration layer in isolation.
 """
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 import pytest
 
@@ -220,6 +222,23 @@ class TestClampWithBindingDirect:
         assert clamped == pytest.approx(1.0)
         assert bound is None
 
+    def test_nan_value_is_never_fabricated_to_a_capped_zero(self):
+        """Audit regression (honesty-auditor pass): two Python comparison
+        quirks -- ``min(nan, ceiling)`` returns ``nan`` (since ``ceiling <
+        nan`` is False), then ``max(0.0, nan)`` returns ``0.0`` (since ``nan
+        > 0.0`` is also False) -- would otherwise silently collapse an
+        honestly-unavailable (NaN) upstream weight into a fabricated
+        "sized to zero, nothing bound" result (CONSTRAINT #4). A NaN input
+        must stay NaN, with no binding_constraint fabricated either."""
+        clamped, bound = clamp_with_binding(float("nan"), 1.0, "some_constraint")
+        assert math.isnan(clamped)
+        assert bound is None
+
+    def test_none_value_is_never_fabricated_to_a_capped_zero(self):
+        clamped, bound = clamp_with_binding(None, 1.0, "some_constraint")
+        assert math.isnan(clamped)
+        assert bound is None
+
 
 # ===========================================================================
 # 4. size_position -- cap-aware escalation
@@ -268,6 +287,36 @@ class TestSizePositionEscalation:
         )
         assert out.final_weight == 0.0
         assert out.final_weight >= 0.0
+
+
+# ===========================================================================
+# 4b. size_position -- NaN inputs must never fabricate a "capped-to-zero"
+# result (audit regression; no known live caller currently passes NaN here
+# -- every upstream weight computation degrades to an explicit 0.0 before
+# reaching this function -- but this is a shared, reusable helper and the
+# failure mode is silent, so it is hardened defensively).
+# ===========================================================================
+class TestSizePositionNaNSafety:
+    def test_nan_regime_multiplier_yields_nan_not_a_fabricated_zero(self):
+        out = size_position(
+            0.50, regime_multiplier=float("nan"), meta_label_composite=1.0,
+            max_position_weight=1.0,
+        )
+        assert math.isnan(out.final_weight)
+
+    def test_nan_meta_label_composite_yields_nan_not_a_fabricated_zero(self):
+        out = size_position(
+            0.50, regime_multiplier=1.0, meta_label_composite=float("nan"),
+            max_position_weight=1.0,
+        )
+        assert math.isnan(out.final_weight)
+
+    def test_nan_pre_regime_weight_yields_nan_not_a_fabricated_zero(self):
+        out = size_position(
+            float("nan"), regime_multiplier=1.0, meta_label_composite=1.0,
+            max_position_weight=1.0,
+        )
+        assert math.isnan(out.final_weight)
 
 
 # ===========================================================================
@@ -332,6 +381,45 @@ class TestPortfolioGrossCap:
         out = apply_portfolio_gross_cap(weights, max_gross=2.0)
         assert out.scaled_weights["ZERO"] == pytest.approx(0.0)
         assert out.scale_factor == pytest.approx(0.5, rel=1e-9)
+
+    def test_a_single_nan_weight_does_not_silently_disable_the_cap_for_others(self):
+        """Audit regression: sum(abs(w) for w in weights.values()) is
+        NaN-poisoned by a single non-finite entry, and
+        min(1.0, max_gross / nan) evaluates to exactly 1.0 (a Python
+        comparison quirk -- 'x < 1.0' is False whenever x is NaN, so min()
+        keeps its first argument) -- silently turning this always-on,
+        cycle-wide risk ceiling into a total no-op, with no exception raised
+        and was_capped=False indistinguishable from "genuinely under cap".
+        A symbol whose sizing legitimately could not be computed this cycle
+        (honest NaN, CONSTRAINT #4) must not defeat the cap for every OTHER
+        name in the same cycle."""
+        weights = {"DEADLETTERED": float("nan"), "AAPL": 1.0, "MSFT": 1.0, "GOOG": 1.0}
+        out = apply_portfolio_gross_cap(weights, max_gross=1.5)
+        assert out.was_capped is True
+        assert out.binding_constraint == PORTFOLIO_GROSS
+        assert out.scale_factor == pytest.approx(0.5, rel=1e-9)
+        assert out.scaled_weights["AAPL"] == pytest.approx(0.5, rel=1e-9)
+        assert out.scaled_weights["MSFT"] == pytest.approx(0.5, rel=1e-9)
+        assert out.scaled_weights["GOOG"] == pytest.approx(0.5, rel=1e-9)
+        # The non-finite symbol's own weight is preserved honestly, never
+        # coerced to 0.0 or a fabricated scaled number.
+        assert math.isnan(out.scaled_weights["DEADLETTERED"])
+
+    def test_all_nan_weights_degrade_to_a_no_op_not_a_crash(self):
+        weights = {"A": float("nan"), "B": float("nan")}
+        out = apply_portfolio_gross_cap(weights, max_gross=3.0)
+        assert out.was_capped is False
+        assert out.scale_factor == pytest.approx(1.0)
+        assert math.isnan(out.scaled_weights["A"])
+        assert math.isnan(out.scaled_weights["B"])
+
+    def test_inf_weight_is_excluded_like_nan(self):
+        weights = {"INF": float("inf"), "AAPL": 1.0, "MSFT": 1.0}
+        out = apply_portfolio_gross_cap(weights, max_gross=1.0)
+        assert out.was_capped is True
+        assert out.scale_factor == pytest.approx(0.5, rel=1e-9)
+        assert out.scaled_weights["AAPL"] == pytest.approx(0.5, rel=1e-9)
+        assert math.isinf(out.scaled_weights["INF"])
 
 
 # ===========================================================================

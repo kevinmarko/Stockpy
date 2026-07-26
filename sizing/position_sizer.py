@@ -46,6 +46,7 @@ Design notes
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
@@ -159,7 +160,26 @@ def clamp_with_binding(
     clamp -- shares this one comparison instead of each hand-rolling
     ``max(0.0, min(value, ceiling))`` plus its own binding check
     (CONSTRAINT #7).
+
+    A NaN ``value`` (an honestly-unavailable upstream weight, e.g.
+    CLAUDE.md's documented convention for "not computed" sizing inputs)
+    is passed straight through as NaN, with ``bound=None`` -- NEVER silently
+    clamped to a fabricated ``0.0`` "not capped" result (CONSTRAINT #4). Two
+    Python comparison quirks would otherwise produce exactly that fabricated
+    zero here: ``min(nan, ceiling)`` returns ``nan`` (since ``ceiling < nan``
+    is False), but ``max(0.0, nan)`` then returns ``0.0`` (since ``nan > 0.0``
+    is also False) -- collapsing an honest "unknown" into a plausible-looking
+    "sized to zero, nothing bound" telemetry claim that a reader would
+    mistake for a real sizing decision. No current caller is known to pass
+    NaN here (every upstream weight computation in ``sizing/kelly.py`` /
+    ``sizing/vol_target.py`` / ``signals/aggregator.py`` /
+    ``signals/regime_multiplier.py`` already degrades to an explicit,
+    honestly-tagged 0.0 rather than NaN before reaching this function) --
+    this guard is defense-in-depth for this shared, reusable helper, not a
+    fix for an observed live failure.
     """
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return float("nan"), None
     clamped = max(0.0, min(value, ceiling))
     bound = constraint_name if value > ceiling + epsilon else None
     return clamped, bound
@@ -364,24 +384,62 @@ def apply_portfolio_gross_cap(
     PortfolioCapResult
         ``was_capped=True`` / ``binding_constraint="portfolio_gross"`` iff the
         single scalar applied is strictly less than 1.0.
+
+    Non-finite (NaN/inf) weights
+    ----------------------------
+    A symbol whose sizing could not be computed this cycle is an honest NaN
+    (CONSTRAINT #4), never a fabricated number -- but the naive
+    ``sum(abs(w) for w in per_name_weights.values())`` gross computation is
+    NaN-poisoned by even ONE such entry: the resulting ``gross`` is NaN,
+    and ``min(1.0, max_gross / gross)`` then evaluates to exactly ``1.0``
+    (a Python comparison quirk -- ``x < 1.0`` is False whenever ``x`` is
+    NaN, so ``min`` keeps its first argument), silently turning this hard,
+    always-on portfolio-wide risk ceiling into a total no-op for the WHOLE
+    cycle -- indistinguishable from "genuinely under cap" in the returned
+    ``was_capped=False`` telemetry, with no exception raised and no warning
+    logged. A single dead-lettered or otherwise-unsizable name would
+    therefore silently suspend gross-exposure capping for every OTHER name
+    in the same cycle. Non-finite entries are excluded from the gross sum
+    (and, for the cov-matrix path, from the vol-target calculation) below;
+    each such symbol's own entry in ``scaled_weights`` is left untouched
+    (still NaN, never coerced to 0.0 or a fabricated scaled guess).
     """
     if not per_name_weights:
         return PortfolioCapResult(scaled_weights={}, scale_factor=1.0, was_capped=False, binding_constraint=None, method="empty")
 
+    finite_weights = {
+        symbol: w for symbol, w in per_name_weights.items()
+        if w is not None and math.isfinite(w)
+    }
+    nonfinite_symbols = set(per_name_weights) - set(finite_weights)
+    if nonfinite_symbols:
+        logger.warning(
+            "apply_portfolio_gross_cap: %d symbol(s) have a non-finite weight "
+            "this cycle (%s); excluded from the gross-exposure computation so "
+            "they cannot silently disable the cap for every other name -- "
+            "each keeps its own untouched (still non-finite) weight.",
+            len(nonfinite_symbols), sorted(nonfinite_symbols),
+        )
+
     if cov_matrix is not None and target_vol is not None:
-        scaled = portfolio_vol_target(per_name_weights, cov_matrix, target_vol=target_vol, max_leverage=max_gross)
+        scaled = portfolio_vol_target(finite_weights, cov_matrix, target_vol=target_vol, max_leverage=max_gross)
         method = "cov_matrix_vol_target"
     else:
-        gross = sum(abs(w) for w in per_name_weights.values())
+        gross = sum(abs(w) for w in finite_weights.values())
         scalar = 1.0 if gross <= 0 else min(1.0, max_gross / gross)
-        scaled = {symbol: weight * scalar for symbol, weight in per_name_weights.items()}
+        scaled = {symbol: weight * scalar for symbol, weight in finite_weights.items()}
         method = "sum_gross_fallback"
 
+    # Non-finite symbols are never in `finite_weights`/`scaled` above --
+    # carry each one through unscaled (still NaN/inf, never fabricated).
+    for symbol in nonfinite_symbols:
+        scaled[symbol] = per_name_weights[symbol]
+
     # Both paths apply one uniform scalar -- recover it from the first
-    # non-zero name for telemetry (rather than re-deriving it, to stay
-    # agnostic to which branch ran).
+    # finite non-zero name for telemetry (rather than re-deriving it, to
+    # stay agnostic to which branch ran).
     scale_factor = 1.0
-    for symbol, raw in per_name_weights.items():
+    for symbol, raw in finite_weights.items():
         if abs(raw) > epsilon:
             scale_factor = scaled.get(symbol, 0.0) / raw
             break
