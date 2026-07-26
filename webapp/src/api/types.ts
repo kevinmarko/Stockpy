@@ -1709,6 +1709,33 @@ export interface CircuitBreakerSummary {
   reason: string | null; // present when trips is empty
 }
 
+/**
+ * Host + current-process CPU/memory/disk snapshot (`gui/observability_telemetry
+ * .collect_system_telemetry`, ported from the legacy Streamlit Observability
+ * tab's "System Telemetry" section). Unlike every other `ObservabilitySummary`
+ * section, this is NOT a read of a persisted artifact -- host resource usage
+ * is inherently point-in-time, so `sampled_at` is "now", not a historical
+ * series. `psutil_available: false` (e.g. the dependency is missing in this
+ * environment) nulls every metric rather than fabricating a 0 (CONSTRAINT #4).
+ */
+export interface SystemTelemetry {
+  psutil_available: boolean;
+  cpu_percent: number | null; // 0-100
+  cpu_count_logical: number | null;
+  load_avg_1m: number | null; // POSIX only -- null on platforms without getloadavg
+  memory_percent: number | null; // 0-100
+  memory_used_bytes: number | null;
+  memory_total_bytes: number | null;
+  disk_percent: number | null; // 0-100, of the platform root volume
+  disk_used_bytes: number | null;
+  disk_total_bytes: number | null;
+  process_rss_bytes: number | null; // this API process's resident memory
+  process_cpu_percent: number | null;
+  process_threads: number | null;
+  sampled_at: string | null; // ISO timestamp of this sample
+  reason: string | null; // present when psutil_available is false
+}
+
 export interface ObservabilitySummary {
   portfolio_risk: PortfolioRiskMetrics;
   portfolio_heat: PortfolioHeatMetric;
@@ -1717,6 +1744,52 @@ export interface ObservabilitySummary {
   forecast_skill: PortfolioForecastSkill;
   risk_gate_blocks: RiskGateBlockLog;
   circuit_breakers: CircuitBreakerSummary;
+  system_telemetry: SystemTelemetry;
+}
+
+// ---------------------------------------------------------------------------
+// GET /observability/logs — bounded, parsed tail of logs/investyo.log. Kept
+// as its own endpoint (not a key on ObservabilitySummary above) since a log
+// tail is a meaningfully heavier payload than that composite's other
+// (scalar) sections and is naturally an on-demand view. See
+// pilots/observability.py::log_aggregation for the full backend contract.
+// ---------------------------------------------------------------------------
+
+export const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
+/** One parsed line from logs/investyo.log. `level`/`timestamp` are `null` for
+ * an unparseable continuation line (e.g. a traceback frame) -- `parsed` is
+ * `false` in that case and `raw` still carries the original text so the
+ * operator never loses context. */
+export interface LogAggregationEntry {
+  timestamp: string | null;
+  level: LogLevel | null;
+  logger_name: string | null;
+  message: string;
+  raw: string;
+  parsed: boolean;
+}
+
+export type LogLevelTally = Record<LogLevel | "UNPARSED", number>;
+
+/**
+ * `total_lines`/`tally`/`systemic_count`/`symbol_specific_count` reflect the
+ * FULL last-1000-line read tail regardless of the `limit` query param, which
+ * only trims `entries` (the most recent `limit`, oldest-first). Deliberately
+ * excludes the legacy Streamlit panel's per-symbol message drilldown --
+ * `symbol_specific_count` is a count only, not a breakdown by ticker (a
+ * scope-narrowing decision for this low-priority, mobile-facing view).
+ */
+export interface LogAggregation {
+  log_path: string | null;
+  total_lines: number;
+  tally: LogLevelTally;
+  systemic_count: number;
+  symbol_specific_count: number;
+  entries: LogAggregationEntry[];
+  returned_count: number;
+  reason: string | null; // present when entries is empty
 }
 
 // ---------------------------------------------------------------------------

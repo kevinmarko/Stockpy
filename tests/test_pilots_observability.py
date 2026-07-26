@@ -669,6 +669,190 @@ class TestCircuitBreakerSummary:
 
 
 # ---------------------------------------------------------------------------
+# system_telemetry_summary — host + current-process CPU/memory/disk snapshot
+# (calls gui.observability_telemetry.collect_system_telemetry directly; see
+# tests/test_observability_telemetry.py for the underlying psutil-sampling
+# logic itself).
+# ---------------------------------------------------------------------------
+
+
+class TestSystemTelemetrySummary:
+    def test_warm_path_maps_every_field(self):
+        from gui.observability_telemetry import SystemTelemetry
+
+        sampled_at = datetime(2026, 7, 26, 12, 0, 0, tzinfo=timezone.utc)
+        fake = SystemTelemetry(
+            cpu_percent=12.5, cpu_count_logical=8, load_avg_1m=1.75,
+            memory_percent=54.0, memory_used_bytes=1_000, memory_total_bytes=2_000,
+            disk_percent=30.0, disk_used_bytes=3_000, disk_total_bytes=10_000,
+            process_rss_bytes=500, process_cpu_percent=2.5, process_threads=4,
+            sampled_at=sampled_at, psutil_available=True,
+        )
+        with mock.patch(
+            "gui.observability_telemetry.collect_system_telemetry", return_value=fake
+        ):
+            out = obs.system_telemetry_summary()
+
+        assert out["psutil_available"] is True
+        assert out["cpu_percent"] == pytest.approx(12.5)
+        assert out["cpu_count_logical"] == 8
+        assert out["load_avg_1m"] == pytest.approx(1.75)
+        assert out["memory_percent"] == pytest.approx(54.0)
+        assert out["memory_used_bytes"] == 1_000
+        assert out["memory_total_bytes"] == 2_000
+        assert out["disk_percent"] == pytest.approx(30.0)
+        assert out["disk_used_bytes"] == 3_000
+        assert out["disk_total_bytes"] == 10_000
+        assert out["process_rss_bytes"] == 500
+        assert out["process_cpu_percent"] == pytest.approx(2.5)
+        assert out["process_threads"] == 4
+        assert out["sampled_at"] == sampled_at.isoformat()
+        assert out["reason"] is None
+
+    def test_psutil_unavailable_degrades_to_honest_none(self):
+        """Mirrors gui.observability_telemetry._nan_telemetry's own NaN/-1
+        shape -- must round-trip to None here, never a fabricated 0."""
+        from gui.observability_telemetry import SystemTelemetry
+
+        nan = float("nan")
+        fake = SystemTelemetry(
+            cpu_percent=nan, cpu_count_logical=-1, load_avg_1m=nan,
+            memory_percent=nan, memory_used_bytes=-1, memory_total_bytes=-1,
+            disk_percent=nan, disk_used_bytes=-1, disk_total_bytes=-1,
+            process_rss_bytes=-1, process_cpu_percent=nan, process_threads=-1,
+            sampled_at=datetime.now(timezone.utc), psutil_available=False,
+        )
+        with mock.patch(
+            "gui.observability_telemetry.collect_system_telemetry", return_value=fake
+        ):
+            out = obs.system_telemetry_summary()
+
+        assert out["psutil_available"] is False
+        assert out["cpu_percent"] is None
+        assert out["cpu_count_logical"] is None
+        assert out["memory_used_bytes"] is None
+        assert out["process_rss_bytes"] is None
+        assert out["sampled_at"] is None
+        assert out["reason"]
+
+    def test_sampling_exception_degrades_to_empty(self):
+        with mock.patch(
+            "gui.observability_telemetry.collect_system_telemetry",
+            side_effect=RuntimeError("boom"),
+        ):
+            out = obs.system_telemetry_summary()
+        assert out["psutil_available"] is False
+        assert out["cpu_percent"] is None
+        assert out["reason"]
+
+    def test_import_failure_degrades_to_empty(self):
+        with mock.patch.dict("sys.modules", {"gui.observability_telemetry": None}):
+            out = obs.system_telemetry_summary()
+        assert out["psutil_available"] is False
+        assert out["reason"]
+
+
+# ---------------------------------------------------------------------------
+# log_aggregation — bounded, parsed tail of logs/investyo.log
+# ---------------------------------------------------------------------------
+
+
+class TestLogAggregation:
+    def test_missing_file_is_honest_empty(self, tmp_path):
+        missing = tmp_path / "investyo.log"
+        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
+            out = obs.log_aggregation()
+        assert out["entries"] == []
+        assert out["total_lines"] == 0
+        assert out["returned_count"] == 0
+        assert out["tally"] == {
+            "CRITICAL": 0, "ERROR": 0, "WARNING": 0, "INFO": 0, "DEBUG": 0, "UNPARSED": 0,
+        }
+        assert out["systemic_count"] == 0
+        assert out["symbol_specific_count"] == 0
+        assert out["reason"]
+        assert str(missing) in out["reason"]
+
+    def test_warm_path_tallies_and_classifies(self, tmp_path):
+        log_path = tmp_path / "investyo.log"
+        lines = [
+            "2026-07-26 08:40:28,615  INFO      main_orchestrator — Cycle started",
+            "2026-07-26 08:40:29,001  WARNING   data_engine — Dead-lettered HKIT at stage=strategy",
+            "2026-07-26 08:40:29,500  CRITICAL  data_engine — FRED unavailable, macro fetch aborted",
+            "2026-07-26 08:40:30,000  ERROR     strategy_engine — for symbol AAPL: model missing",
+        ]
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+            out = obs.log_aggregation(limit=10)
+
+        assert out["reason"] is None
+        assert out["total_lines"] == 4
+        assert out["returned_count"] == 4
+        assert out["tally"]["INFO"] == 1
+        assert out["tally"]["WARNING"] == 1
+        assert out["tally"]["CRITICAL"] == 1
+        assert out["tally"]["ERROR"] == 1
+        # "Dead-lettered HKIT..." and "for symbol AAPL..." are symbol-specific;
+        # the FRED CRITICAL line is systemic.
+        assert out["symbol_specific_count"] == 2
+        assert out["systemic_count"] == 1
+        assert out["entries"][0]["level"] == "INFO"
+        assert out["entries"][0]["message"] == "Cycle started"
+        assert out["entries"][-1]["level"] == "ERROR"
+        assert out["log_path"] == str(log_path)
+
+    def test_limit_trims_returned_entries_but_not_the_tally(self, tmp_path):
+        log_path = tmp_path / "investyo.log"
+        lines = [
+            f"2026-07-26 08:40:{i:02d},000  INFO      main — line {i}" for i in range(10)
+        ]
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+            out = obs.log_aggregation(limit=3)
+
+        assert out["total_lines"] == 10
+        assert out["tally"]["INFO"] == 10
+        assert out["returned_count"] == 3
+        assert len(out["entries"]) == 3
+        # Most-recent-last ordering preserved (matches the legacy panel).
+        assert out["entries"][-1]["message"] == "line 9"
+
+    def test_unparseable_lines_are_kept_as_unparsed(self, tmp_path):
+        log_path = tmp_path / "investyo.log"
+        log_path.write_text(
+            "2026-07-26 08:40:28,615  INFO      main — Traceback follows\n"
+            "  File \"main.py\", line 12, in <module>\n",
+            encoding="utf-8",
+        )
+        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+            out = obs.log_aggregation()
+        assert out["total_lines"] == 2
+        assert out["tally"]["UNPARSED"] == 1
+        assert out["entries"][-1]["parsed"] is False
+        assert out["entries"][-1]["level"] is None
+
+    def test_import_failure_degrades_to_empty(self):
+        with mock.patch.dict("sys.modules", {"gui.observability_telemetry": None}):
+            out = obs.log_aggregation()
+        assert out["entries"] == []
+        assert out["reason"]
+
+    def test_read_log_tail_exception_degrades_to_empty(self, tmp_path):
+        log_path = tmp_path / "investyo.log"
+        log_path.write_text("irrelevant", encoding="utf-8")
+        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+            with mock.patch(
+                "gui.observability_telemetry.read_log_tail",
+                side_effect=OSError("disk error"),
+            ):
+                out = obs.log_aggregation()
+        assert out["entries"] == []
+        assert out["reason"]
+
+
+# ---------------------------------------------------------------------------
 # observability_summary — composite, independent-degradation contract
 # ---------------------------------------------------------------------------
 
@@ -690,6 +874,7 @@ class TestObservabilitySummary:
         assert set(out) == {
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
             "forecast_skill", "risk_gate_blocks", "circuit_breakers",
+            "system_telemetry",
         }
 
     def test_one_section_failure_never_blocks_the_others(self, tmp_path):

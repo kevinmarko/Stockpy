@@ -11,7 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Observability } from "./Observability";
 import { api } from "../api/client";
-import type { ObservabilitySummary } from "../api/types";
+import type { LogAggregation, ObservabilitySummary } from "../api/types";
 
 function renderScreen() {
   return render(
@@ -72,6 +72,34 @@ const COLD_START: ObservabilitySummary = {
     window_hours: 24,
     reason: "No active circuit-breaker trips in the last 24h.",
   },
+  system_telemetry: {
+    psutil_available: false,
+    cpu_percent: null,
+    cpu_count_logical: null,
+    load_avg_1m: null,
+    memory_percent: null,
+    memory_used_bytes: null,
+    memory_total_bytes: null,
+    disk_percent: null,
+    disk_used_bytes: null,
+    disk_total_bytes: null,
+    process_rss_bytes: null,
+    process_cpu_percent: null,
+    process_threads: null,
+    sampled_at: null,
+    reason: "psutil is not available in this environment.",
+  },
+};
+
+const EMPTY_LOGS: LogAggregation = {
+  log_path: "logs/investyo.log",
+  total_lines: 0,
+  tally: { CRITICAL: 0, ERROR: 0, WARNING: 0, INFO: 0, DEBUG: 0, UNPARSED: 0 },
+  systemic_count: 0,
+  symbol_specific_count: 0,
+  entries: [],
+  returned_count: 0,
+  reason: "No log file yet at logs/investyo.log.",
 };
 
 describe("Observability (Mission Control) screen (real mock API)", () => {
@@ -197,6 +225,108 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
       screen.getByText("No forecast history yet — run the pipeline to accumulate it.")
     ).toBeInTheDocument();
     expect(screen.getByText("No risk-gate blocks logged yet.")).toBeInTheDocument();
+
+    // System telemetry: psutil unavailable -> honest reason, no fabricated
+    // 0% CPU/memory tiles.
+    expect(
+      await screen.findByText("psutil is not available in this environment.")
+    ).toBeInTheDocument();
+  });
+
+  it("renders system telemetry tiles from the mock, with saturation cues suppressed at healthy levels", async () => {
+    renderScreen();
+    expect(await screen.findByText("System telemetry")).toBeInTheDocument();
+    expect(await screen.findByText("Host CPU")).toBeInTheDocument();
+    // mock.ts's mockSystemTelemetry: 18.4% CPU, 61.2% memory -- both well
+    // under the 75%/90% saturation thresholds, so no warning/error copy.
+    expect(await screen.findByText("18.4%")).toBeInTheDocument();
+    expect(await screen.findByText("61.2%")).toBeInTheDocument();
+    expect(screen.queryByText(/CPU saturated/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/watch for slowdowns/)).not.toBeInTheDocument();
+  });
+
+  it("flags CPU saturation and memory pressure at the same thresholds as the legacy panel", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce({
+      ...COLD_START,
+      system_telemetry: {
+        psutil_available: true,
+        cpu_percent: 94.2,
+        cpu_count_logical: 8,
+        load_avg_1m: 6.1,
+        memory_percent: 92.1,
+        memory_used_bytes: 15_000_000_000,
+        memory_total_bytes: 16_000_000_000,
+        disk_percent: 55.0,
+        disk_used_bytes: 100,
+        disk_total_bytes: 200,
+        process_rss_bytes: 900,
+        process_cpu_percent: 40.0,
+        process_threads: 12,
+        sampled_at: new Date().toISOString(),
+        reason: null,
+      },
+    });
+    renderScreen();
+    expect(await screen.findByText(/CPU saturated at 94%/)).toBeInTheDocument();
+    expect(await screen.findByText(/Memory at 92%/)).toBeInTheDocument();
+  });
+
+  it("renders the log aggregation KPI strip and entries from the mock", async () => {
+    renderScreen();
+    expect(await screen.findByText("Logs")).toBeInTheDocument();
+    // mock.ts's mockObservabilityLogs: 1 CRITICAL, 1 ERROR, 1 WARNING, 2 INFO,
+    // + 1 unparsed traceback continuation -- default min-level filter is INFO
+    // so all 6 entries show by default (unparsed lines are always kept,
+    // matching the legacy panel's "never lose traceback context" contract).
+    const rows = await screen.findAllByTestId("log-entry-row");
+    expect(rows.length).toBe(6);
+    expect(await screen.findByText(/Cycle started/)).toBeInTheDocument();
+  });
+
+  it("filters log entries by minimum level client-side, keeping unparsed lines regardless", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findAllByTestId("log-entry-row");
+
+    const select = screen.getByTestId("log-level-select");
+    await user.selectOptions(select, "CRITICAL");
+
+    // Only the CRITICAL entry survives the level threshold, PLUS the
+    // unparsed traceback line (unparsed entries are exempt from the level
+    // filter, matching gui.observability_telemetry.filter_log_entries).
+    const rows = await screen.findAllByTestId("log-entry-row");
+    expect(rows.length).toBe(2);
+    expect(screen.getByText(/FRED unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/Cycle started/)).not.toBeInTheDocument();
+  });
+
+  it("filters log entries by free-text substring client-side", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findAllByTestId("log-entry-row");
+
+    await user.type(screen.getByLabelText("Filter (substring)"), "NVDA");
+
+    const rows = await screen.findAllByTestId("log-entry-row");
+    expect(rows.length).toBe(1);
+    expect(within(rows[0]).getByText(/NVDA/)).toBeInTheDocument();
+  });
+
+  it("an empty log tail renders the honest reason, never a fabricated table", async () => {
+    vi.spyOn(api, "getObservabilityLogs").mockResolvedValueOnce(EMPTY_LOGS);
+    renderScreen();
+    expect(
+      await screen.findByText("No log file yet at logs/investyo.log.")
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("log-entry-row")).not.toBeInTheDocument();
+  });
+
+  it("a log endpoint error renders its own ErrorState with a retry action", async () => {
+    vi.spyOn(api, "getObservabilityLogs").mockRejectedValueOnce(
+      new Error("logs unreachable")
+    );
+    renderScreen();
+    expect(await screen.findByText(/logs unreachable/)).toBeInTheDocument();
   });
 
   it("a null reliability bin renders '—', never a fabricated percent", async () => {

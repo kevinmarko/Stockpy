@@ -64,6 +64,26 @@ Center's "Observability / Mission Control" tab
    AST-guarded API (see ``tests/test_pilots_api.py
    ::test_pilots_api_never_imports_heavy_engines``'s ``forbidden_modules``,
    which does not include ``gui``).
+6. **System telemetry** — host + current-process CPU/memory/disk, ported
+   from ``gui/panels/observability.py::_render_observability_system_telemetry``
+   via ``gui.observability_telemetry.collect_system_telemetry()`` (already
+   NaN/-1-shaped on missing ``psutil`` — CONSTRAINT #4). Unlike every other
+   section here, this is NOT a persisted-artifact read — host resource usage
+   is inherently point-in-time, so :func:`system_telemetry_summary` samples
+   live on every call and reports no history. Folded into
+   ``GET /observability/summary`` as a new ``system_telemetry`` key (cheap,
+   scalar-only — same "ride the existing composite" call as sections 1b/5).
+7. **Log aggregation** — a bounded tail of ``logs/investyo.log``, parsed and
+   tallied by level, ported from ``gui/panels/observability.py
+   ::_render_observability_error_log`` via ``gui.observability_telemetry``'s
+   pure parsing helpers (``read_log_tail``/``parse_log_lines``/
+   ``tally_levels``/``classify_log_entry``). Served by its OWN
+   ``GET /observability/logs`` endpoint rather than riding the summary
+   composite — a log tail is a meaningfully heavier payload than the other
+   (scalar) sections and is naturally an on-demand view, not something needed
+   on every Mission Control page load. See :func:`log_aggregation`'s
+   docstring for the deliberately-narrowed scope (counts, not the legacy
+   panel's full per-symbol message drilldown).
 
 Design invariants (identical to the rest of the Pilots read layer):
 
@@ -103,6 +123,8 @@ __all__ = [
     "portfolio_forecast_skill",
     "risk_gate_block_log",
     "circuit_breaker_summary",
+    "system_telemetry_summary",
+    "log_aggregation",
 ]
 
 # Approximate calendar-day windows for the equity-curve zoom, matching
@@ -760,6 +782,202 @@ def circuit_breaker_summary(window_hours: int = 24) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 6. System telemetry — host + current-process CPU/memory/disk. Point-in-time
+# only (no persisted history — see module docstring section 6). Calls
+# gui.observability_telemetry.collect_system_telemetry directly (lazy import,
+# same gui.* precedent as circuit_breaker_summary above) rather than
+# re-deriving psutil sampling here.
+# ---------------------------------------------------------------------------
+
+
+def _empty_system_telemetry(reason: str) -> Dict[str, Any]:
+    return {
+        "psutil_available": False,
+        "cpu_percent": None,
+        "cpu_count_logical": None,
+        "load_avg_1m": None,
+        "memory_percent": None,
+        "memory_used_bytes": None,
+        "memory_total_bytes": None,
+        "disk_percent": None,
+        "disk_used_bytes": None,
+        "disk_total_bytes": None,
+        "process_rss_bytes": None,
+        "process_cpu_percent": None,
+        "process_threads": None,
+        "sampled_at": None,
+        "reason": reason,
+    }
+
+
+def system_telemetry_summary() -> Dict[str, Any]:
+    """Host + current-process CPU/memory/disk snapshot — the PWA's port of
+    ``gui/panels/observability.py::_render_observability_system_telemetry``.
+
+    Unlike every other section in this module, this is NOT a read of a
+    persisted artifact — host resource usage is inherently point-in-time, so
+    there is no history to report and none is fabricated (CONSTRAINT #4).
+    Every call re-samples via ``gui.observability_telemetry
+    .collect_system_telemetry()`` (already backed by ``psutil``, a hard
+    ``requirements.txt`` dependency — NOT ``requirements-optional.txt``).
+
+    Reuses that function's existing NaN/-1-shaped fallback
+    (``psutil_available=False``) when ``psutil`` is unavailable or sampling
+    raises, converting it to this module's ``None``-for-missing convention.
+    Never raises (CONSTRAINT #6)."""
+    try:
+        from gui.observability_telemetry import collect_system_telemetry
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
+        logger.debug("system_telemetry_summary import failed: %s", exc)
+        return _empty_system_telemetry("Telemetry module unavailable.")
+
+    try:
+        t = collect_system_telemetry()
+    except Exception as exc:  # noqa: BLE001 — dead-letter: sampling failure
+        logger.warning("system_telemetry_summary: collect_system_telemetry failed: %s", exc)
+        return _empty_system_telemetry("Telemetry sampling failed.")
+
+    if not t.psutil_available:
+        return _empty_system_telemetry("psutil is not available in this environment.")
+
+    return {
+        "psutil_available": True,
+        "cpu_percent": _finite_or_none(t.cpu_percent),
+        "cpu_count_logical": t.cpu_count_logical if t.cpu_count_logical >= 0 else None,
+        "load_avg_1m": _finite_or_none(t.load_avg_1m),
+        "memory_percent": _finite_or_none(t.memory_percent),
+        "memory_used_bytes": t.memory_used_bytes if t.memory_used_bytes >= 0 else None,
+        "memory_total_bytes": t.memory_total_bytes if t.memory_total_bytes >= 0 else None,
+        "disk_percent": _finite_or_none(t.disk_percent),
+        "disk_used_bytes": t.disk_used_bytes if t.disk_used_bytes >= 0 else None,
+        "disk_total_bytes": t.disk_total_bytes if t.disk_total_bytes >= 0 else None,
+        "process_rss_bytes": t.process_rss_bytes if t.process_rss_bytes >= 0 else None,
+        "process_cpu_percent": _finite_or_none(t.process_cpu_percent),
+        "process_threads": t.process_threads if t.process_threads >= 0 else None,
+        "sampled_at": t.sampled_at.isoformat(),
+        "reason": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 7. Log aggregation — bounded tail of logs/investyo.log, parsed + tallied.
+# Deliberately its OWN endpoint (GET /observability/logs), not folded into the
+# summary composite: unlike the other (cheap, scalar) sections, a log tail is
+# a meaningfully heavier payload naturally viewed on-demand rather than on
+# every Mission Control page load. Calls gui.observability_telemetry's pure
+# parsing helpers directly (lazy import, same gui.* precedent as
+# circuit_breaker_summary/system_telemetry_summary above) rather than
+# re-deriving log parsing/classification here.
+# ---------------------------------------------------------------------------
+
+# Mirrors gui/panels/observability.py's own read_log_tail(..., max_lines=1000)
+# call — reads the same bounded tail the legacy panel does.
+_LOG_TAIL_READ_LINES = 1000
+
+
+def _empty_log_aggregation(reason: str, log_path: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "log_path": log_path,
+        "total_lines": 0,
+        "tally": {"CRITICAL": 0, "ERROR": 0, "WARNING": 0, "INFO": 0, "DEBUG": 0, "UNPARSED": 0},
+        "systemic_count": 0,
+        "symbol_specific_count": 0,
+        "entries": [],
+        "returned_count": 0,
+        "reason": reason,
+    }
+
+
+def log_aggregation(limit: int = 300) -> Dict[str, Any]:
+    """Tail + parse + classify ``logs/investyo.log`` (the rotating handler
+    ``alerting.setup_logging()`` configures) — the PWA's port of
+    ``gui/panels/observability.py::_render_observability_error_log``'s core
+    read path.
+
+    Reads the last 1000 raw lines (matching the legacy panel's own
+    ``read_log_tail(..., max_lines=1000)`` call), parses each into a typed
+    entry, tallies by level over the FULL read tail, and returns the most
+    recent ``limit`` entries (oldest-first, matching the legacy panel's
+    ``st.code`` rendering order) for the frontend to filter client-side by
+    level/substring — mirroring the legacy Streamlit panel's own UX, where a
+    ``st.selectbox``/``st.text_input`` re-filters an already-fetched,
+    already-parsed list on every rerun rather than re-querying the backend
+    per keystroke.
+
+    Deliberately excludes the legacy panel's per-symbol "Contextual Error
+    Summary" expander (grouped message lists keyed by ticker) — this reader
+    surfaces just the systemic/symbol-specific COUNTS (``systemic_count``/
+    ``symbol_specific_count``), which is what a quick mobile diagnostic glance
+    needs; the message-level per-ticker drilldown is a desktop-triage
+    workflow this endpoint doesn't attempt to reproduce (a scope-narrowing
+    call consistent with this item's own "low priority for a remote/mobile
+    PWA" framing).
+
+    Returns the honest empty shape (zeroed tally, empty ``entries``, a
+    ``reason``) when the log file doesn't exist yet or the module can't be
+    imported. Never raises (CONSTRAINT #6)."""
+    try:
+        from gui.observability_telemetry import (
+            classify_log_entry,
+            parse_log_lines,
+            read_log_tail,
+            tally_levels,
+        )
+        from gui.orchestrator_runner import TELEMETRY_LOG_PATH
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
+        logger.debug("log_aggregation import failed: %s", exc)
+        return _empty_log_aggregation("Log module unavailable.")
+
+    log_path_str = str(TELEMETRY_LOG_PATH)
+
+    try:
+        raw_lines = read_log_tail(TELEMETRY_LOG_PATH, max_lines=_LOG_TAIL_READ_LINES)
+    except Exception as exc:  # noqa: BLE001 — dead-letter: unreadable file
+        logger.warning("log_aggregation: read_log_tail failed: %s", exc)
+        return _empty_log_aggregation("Log file unreadable.", log_path_str)
+
+    if not raw_lines:
+        return _empty_log_aggregation(f"No log file yet at {log_path_str}.", log_path_str)
+
+    try:
+        entries = parse_log_lines(raw_lines)
+        tally = tally_levels(entries)
+        error_entries = [
+            e for e in entries if e.parsed and e.level in ("ERROR", "CRITICAL", "WARNING")
+        ]
+        systemic_count = sum(1 for e in error_entries if classify_log_entry(e) == "systemic")
+        symbol_specific_count = sum(
+            1 for e in error_entries if classify_log_entry(e) == "symbol_specific"
+        )
+        tail = entries[-max(1, int(limit)):]
+        rows = [
+            {
+                "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                "level": e.level or None,
+                "logger_name": e.logger_name or None,
+                "message": e.message,
+                "raw": e.raw,
+                "parsed": e.parsed,
+            }
+            for e in tail
+        ]
+    except Exception as exc:  # noqa: BLE001 — dead-letter: parse/classify failure
+        logger.warning("log_aggregation: parse/classify failed: %s", exc)
+        return _empty_log_aggregation("Log parsing failed.", log_path_str)
+
+    return {
+        "log_path": log_path_str,
+        "total_lines": len(entries),
+        "tally": tally,
+        "systemic_count": systemic_count,
+        "symbol_specific_count": symbol_specific_count,
+        "entries": rows,
+        "returned_count": len(rows),
+        "reason": None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Composite
 # ---------------------------------------------------------------------------
 
@@ -770,9 +988,12 @@ def observability_summary(
     horizon_days: int = 30,
     snapshot: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    """Bundle all SIX Mission-Control sections into one payload for
+    """Bundle all SEVEN Mission-Control sections into one payload for
     ``GET /observability/summary``. Each section degrades independently
-    (CONSTRAINT #6) — a failure in one never blocks the other five."""
+    (CONSTRAINT #6) — a failure in one never blocks the others. Log
+    aggregation (section 7) is deliberately NOT part of this composite — see
+    :func:`log_aggregation`'s docstring — and is served by its own
+    ``GET /observability/logs`` endpoint instead."""
     return {
         "portfolio_risk": portfolio_risk_metrics(),
         "portfolio_heat": portfolio_heat_metric(),
@@ -781,4 +1002,5 @@ def observability_summary(
         "forecast_skill": portfolio_forecast_skill(horizon_days),
         "risk_gate_blocks": risk_gate_block_log(),
         "circuit_breakers": circuit_breaker_summary(),
+        "system_telemetry": system_telemetry_summary(),
     }
