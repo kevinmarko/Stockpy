@@ -223,6 +223,20 @@ HTML_REPORT_TEMPLATE = """
         .fresh-ok    { background: var(--success-glow); color: var(--success); border: 1px solid var(--success); }
         .fresh-stale { background: var(--warning-glow); color: var(--warning); border: 1px solid var(--warning); }
 
+        /* ======== PROVENANCE BANNER ======== */
+        .provenance-banner {
+            display: flex; align-items: center; gap: 8px;
+            padding: 9px 16px; border-radius: 8px;
+            font-size: 12.5px; font-weight: 600;
+            margin-bottom: 18px;
+        }
+        .provenance-live {
+            background: var(--accent-glow); border: 1px solid var(--accent); color: var(--accent);
+        }
+        .provenance-sim {
+            background: var(--card-bg-soft); border: 1px solid var(--border); color: var(--text-muted);
+        }
+
         /* ======== PORTFOLIO SUMMARY BAND ======== */
         .summary-band {
             display: grid;
@@ -476,6 +490,15 @@ HTML_REPORT_TEMPLATE = """
                 {% endif %}
             </div>
         </header>
+
+        <!-- ======== PROVENANCE BANNER ======== -->
+        <div class="provenance-banner {{ 'provenance-live' if provenance.is_live else 'provenance-sim' }}">
+            {% if provenance.is_live %}
+                🔵 Live data — sourced from broker-connected execution (mode: {{ provenance.label }}).
+            {% else %}
+                ⚪ Backtested / simulated — DRY_RUN active, every value here is simulated (mode: {{ provenance.label }}).
+            {% endif %}
+        </div>
 
         {% if account_summary %}
         <!-- ======== PORTFOLIO SUMMARY BAND ======== -->
@@ -841,6 +864,26 @@ HTML_REPORT_TEMPLATE = """
 """
 
 
+def _resolve_report_provenance() -> Dict[str, Any]:
+    """Classify this HTML report as Live vs Backtested/simulated.
+
+    Static-report equivalent of ``gui.panels.launcher._render_report_provenance_banner``:
+    same source of truth (``gui.strategy_registry.read_active_mode``), same
+    PAPER/LIVE -> Live, SIMULATION (``DRY_RUN=true``) -> Backtested split.
+    Imported lazily so the core reporting path never pays for the ``gui``
+    package unless a report is actually being rendered.
+    """
+    try:
+        from gui.strategy_registry import ExecutionMode, read_active_mode
+
+        mode_state = read_active_mode()
+        is_live = mode_state.mode in (ExecutionMode.PAPER, ExecutionMode.LIVE)
+        return {"is_live": is_live, "label": mode_state.mode.label}
+    except Exception as exc:  # never let provenance resolution abort the report
+        telemetry.warning(f"Report provenance banner: mode resolution failed ({exc}); defaulting to Simulated.")
+        return {"is_live": False, "label": "🧪 Simulation (DRY_RUN)"}
+
+
 def generate_html_report(
     portfolio_data: List[Dict[str, Any]],
     regime: str,
@@ -1026,6 +1069,7 @@ def generate_html_report(
         avg_portfolio_heat=avg_heat,
         account_summary=account_summary,
         snapshot_diff=snapshot_diff,
+        provenance=_resolve_report_provenance(),
         n_buy=n_buy,
         n_hold=n_hold,
         n_sell=n_sell,
