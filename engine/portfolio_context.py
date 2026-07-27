@@ -14,12 +14,32 @@ Modeled directly on :func:`engine.advisory.enrich_with_llm_rationale`:
 1. The deterministic exposure summary (:func:`engine.portfolio_exposure.
    compute_sector_exposure`) is a PURE function with no failure mode and is
    ALWAYS returned.
-2. Retrieval (embedding the query, searching the FAISS index) is
-   best-effort — any failure (feature flag off, no provider configured,
-   ``faiss`` not installed, no index built yet, embedding call failed)
-   degrades to an empty document list and the function CONTINUES.
+2. Retrieval (indexing any not-yet-embedded corpus documents, embedding the
+   query, searching the FAISS index) is best-effort — any failure (feature
+   flag off, no provider configured, ``faiss`` not installed, no index
+   built yet, embedding call failed) degrades to an empty document list and
+   the function CONTINUES.
 3. The final LLM synthesis call is likewise best-effort — any failure
    degrades ``context_note`` to ``None``.
+
+Self-indexing (keeping the corpus current)
+--------------------------------------------
+Nothing else in the live pipeline ever calls
+:meth:`data.rag_index.DocumentVectorStore.index_new_documents` — there is no
+scheduled task or orchestrator step that embeds newly-archived
+``sentiment_ingestion_audit`` rows into the FAISS index on its own (unlike
+``sentiment_ingestion_audit`` itself, which IS written every cycle once
+``settings.SENTIMENT_INGESTION_ENABLED`` is set — see
+``signals/news_catalyst.py::_run_multi_source_ingestion``). Without a
+caller, the index would stay permanently empty and every retrieval would
+silently return zero documents forever, regardless of how much sentiment
+history accumulates — the exact bug SHAPE already caught and fixed once in
+this pipeline (PR #405, "nothing calls fetch_and_archive()"). So this
+function triggers a best-effort, budget-bounded indexing pass
+(:func:`_index_pending_documents`) immediately before searching, whenever it
+resolves the REAL vector store itself (i.e. ``vector_store`` was not
+injected by the caller — a caller-supplied store, as every existing test
+uses, represents an already-prepared corpus and is never mutated here).
 
 This function NEVER raises. When ``settings.RAG_PORTFOLIO_CONTEXT_ENABLED``
 is ``False`` (the default), NO retrieval, NO embedding call, and NO LLM
@@ -38,7 +58,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from engine.portfolio_exposure import SectorExposure, compute_sector_exposure
@@ -233,7 +253,16 @@ def generate_portfolio_context_note(
             query_text = _build_query_text(sector_exposure)
             embedding_batch = emb_provider.embed_texts([query_text])
             if embedding_batch:
-                store = vector_store if vector_store is not None else _resolve_vector_store()
+                if vector_store is not None:
+                    store = vector_store
+                else:
+                    store = _resolve_vector_store()
+                    # Keep the corpus current: embed any sentiment documents
+                    # archived since the last pass. Best-effort and
+                    # independently soft-failing (see
+                    # _index_pending_documents) — an indexing failure here
+                    # must never block the search that follows.
+                    _index_pending_documents(store, now_dt)
                 top_k = int(getattr(settings, "RAG_RETRIEVAL_TOP_K", 5) or 5)
                 raw_hits = store.search(embedding_batch[0], k=top_k)
                 retrieved = _filter_pit_safe(raw_hits, now_dt)
@@ -290,3 +319,34 @@ def _resolve_llm_provider() -> Optional[Any]:
 def _resolve_vector_store() -> Any:
     from data.rag_index import DocumentVectorStore  # noqa: PLC0415
     return DocumentVectorStore()
+
+
+def _index_pending_documents(store: Any, now_dt: datetime) -> None:
+    """Best-effort: embed and index any ``sentiment_ingestion_audit`` rows
+    not yet in the FAISS index, bounded to the trailing
+    ``settings.RAG_INDEX_LOOKBACK_DAYS`` (default 90) days.
+
+    This is the only production call site for
+    :meth:`data.rag_index.DocumentVectorStore.index_new_documents` — see the
+    module docstring's "Self-indexing" section for why one is required at
+    all. ``store.get_unindexed_sentiment_documents`` already excludes rows
+    previously indexed (keyed by ``ingest_id`` against ``rag_indexed_docs``),
+    so calling this on every retrieval is a cheap, idempotent no-op once the
+    corpus is caught up — it never re-embeds a document twice.
+
+    Never raises (CONSTRAINT #6): any failure (bad settings value, DB error,
+    embedding-provider error inside ``index_new_documents`` itself) is
+    logged and swallowed — the caller's search then simply runs against
+    whatever was indexed as of the last successful pass, rather than
+    blocking retrieval on an indexing hiccup.
+    """
+    try:
+        from settings import settings as _settings  # noqa: PLC0415
+
+        lookback_days = int(getattr(_settings, "RAG_INDEX_LOOKBACK_DAYS", 90) or 90)
+        since = now_dt - timedelta(days=max(1, lookback_days))
+        store.index_new_documents(since=since)
+    except Exception as exc:
+        logger.warning(
+            "generate_portfolio_context_note: indexing step soft-failed: %s", exc
+        )

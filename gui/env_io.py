@@ -199,6 +199,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RAG_EMBEDDING_PROVIDER",             # "openai" | "gemini"
     "RAG_INDEX_MAX_DOCUMENTS",            # int — FAISS index FIFO eviction cap
     "RAG_RETRIEVAL_TOP_K",                # int — nearest-neighbor count per query
+    "RAG_INDEX_LOOKBACK_DAYS",            # int — indexing scan window (days)
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.

@@ -2432,6 +2432,19 @@ class Settings(BaseSettings):
             "DocumentVectorStore.search() for one portfolio-context query."
         ),
     )
+    RAG_INDEX_LOOKBACK_DAYS: int = Field(
+        default=90,
+        description=(
+            "How many trailing days of sentiment_ingestion_audit are scanned "
+            "for not-yet-embedded documents each time "
+            "generate_portfolio_context_note() runs (engine/portfolio_context.py's "
+            "_index_pending_documents, the only production caller of "
+            "DocumentVectorStore.index_new_documents()). Already-indexed rows "
+            "(tracked in rag_indexed_docs) are always skipped regardless of this "
+            "window, so raising it only widens how far back a first-ever index "
+            "pass will look, not how much gets re-embedded on subsequent calls."
+        ),
+    )
 
     @field_validator("OUTPUT_DIR")
     @classmethod
