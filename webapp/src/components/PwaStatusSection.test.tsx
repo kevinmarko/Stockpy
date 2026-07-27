@@ -42,6 +42,7 @@ describe("PwaStatusSection", () => {
     needRefresh = false;
     offlineReady = false;
     delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
   });
 
@@ -52,11 +53,18 @@ describe("PwaStatusSection", () => {
   });
 
   it("renders directly (no trigger, no sheet) and reports Active/registered + not-yet-cached", () => {
+    vi.stubEnv("PROD", true);
     render(<PwaStatusSection />);
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByText("Not cached yet")).toBeInTheDocument();
     expect(screen.getByText("Up to date")).toBeInTheDocument();
     expect(screen.queryByTestId("pwa-update-btn")).not.toBeInTheDocument();
+  });
+
+  it("says so explicitly under the dev server instead of the ambiguous 'Not cached yet'", () => {
+    vi.stubEnv("PROD", false);
+    render(<PwaStatusSection />);
+    expect(screen.getByText("Not precached (dev server)")).toBeInTheDocument();
   });
 
   it("reports offline-ready once precaching finishes", () => {
