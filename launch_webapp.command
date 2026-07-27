@@ -105,6 +105,46 @@ _start_api() {  # $1 = module:app ; $2 = port ; $3 = friendly name
     fi
 }
 
+# Vite runs with --strictPort (a silent port bump would break CORS against the
+# backends, which are pinned to :5173 — see settings.CORS_ALLOWED_ORIGINS), so
+# unlike the APIs above we can't just "reuse" a live server without risking a
+# mock/live mode mismatch. Instead: detect a stale same-project instance and
+# offer to clear it; for anything else, fail with a clear, actionable message
+# instead of Vite's raw EADDRINUSE stack trace.
+_check_vite_port() {
+    local port=5173 pid cmd
+    pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1)"
+    [ -z "$pid" ] && return 0
+
+    cmd="$(ps -p "$pid" -ww -o command= 2>/dev/null)"
+    echo ""
+    echo "  ⚠  Port $port is already in use — Vite needs it (--strictPort) and"
+    echo "     won't silently pick another port."
+    echo "     PID $pid: ${cmd:-<unknown command>}"
+
+    # Only offer to auto-kill when it's plainly a leftover Vite dev server for
+    # THIS webapp (matched by process cwd) — never touch an unrelated process.
+    if [[ "$cmd" == *"vite"* ]] && lsof -p "$pid" -a -d cwd 2>/dev/null | grep -q "$SCRIPT_DIR/webapp"; then
+        local kill_choice
+        read -r -t 20 -p "  This looks like a leftover Vite server from this project. Kill it and continue? [y/N]: " kill_choice
+        echo ""
+        if [[ "$kill_choice" =~ ^[Yy]$ ]]; then
+            kill "$pid" 2>/dev/null
+            sleep 1
+            if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
+                echo "  ERROR: PID $pid did not release port $port. Free it manually and re-run."
+                exit 1
+            fi
+            echo "  ✓  Freed port $port."
+            return 0
+        fi
+    fi
+
+    echo "  ERROR: free port $port yourself, then re-run this script, e.g.:"
+    echo "         kill $pid"
+    exit 1
+}
+
 # ── Ask: mock or live? (defaults to mock after 20s / on empty Enter) ─────────
 echo ""
 echo "  How would you like to run the Pilots PWA?"
@@ -174,6 +214,8 @@ if [ ! -d "node_modules" ]; then
     echo "  ▶  First run — installing dependencies (npm install)…"
     npm install || { echo "  ERROR: npm install failed"; exit 1; }
 fi
+
+_check_vite_port
 
 echo ""
 if [ "$LIVE_MODE" = true ]; then
