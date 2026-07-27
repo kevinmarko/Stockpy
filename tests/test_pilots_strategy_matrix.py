@@ -390,7 +390,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -445,4 +445,11 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # regex logic a second time. datetime is used for a best-effort
         # chronological sort of the regime-transition points.
         allowed = allowed | {"scripts", "datetime"}
+    if module_name == "sector_selection":
+        # pilots.sector_selection reads data.sector_correlation_store
+        # (SQLAlchemy + db_config only -- confirmed dependency-light by
+        # inspection, imports none of the AST-forbidden heavy engines and
+        # not `signals`) inside its own lazy, function-local import. `data`
+        # is allowed here specifically for that one narrow store read.
+        allowed = allowed | {"data"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"

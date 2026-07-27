@@ -92,6 +92,8 @@ import type {
   MetaLabelDistribution,
   RollingBeta,
   RunRecord,
+  SectorSelectionRow,
+  SectorSelectionView,
   SectorSlice,
   StrategyHealthGate,
   StrategyHealthRow,
@@ -1781,6 +1783,104 @@ function mockForecast(ticker: string, horizon = 30): ForecastSkill {
     error_by_model,
     pending: Math.floor(rng() * 5),
     completed,
+    reason: null,
+  };
+}
+
+// ---- Semantic Related Sector Selection fixture ----
+// Deliberately an HONESTY fixture, not a happy path: one row fully
+// populated, one with cosine_similarity null (no sector description), one
+// with sector_heat_factor/correlation_coefficient null (no volume observed
+// at all -- excluded from ranking), and every fully-computed row carries
+// degraded_reason="review_unavailable" -- the REALISTIC default state for a
+// typical deployment (the investor-forum comment channel isn't active by
+// default), so the screen's persistent degradation banner has something
+// real to render even in the common case.
+const SECTOR_SELECTION_CANDIDATES = [
+  "New Energy",
+  "Automotive Parts",
+  "Autonomous Driving",
+  "Lithium Battery",
+  "Charging Post",
+  "Semiconductor",
+];
+
+function mockSectorSelection(target: string, n = 3): SectorSelectionView {
+  const sym = target.toUpperCase();
+  if (!SYMBOL_UNIVERSE.has(sym)) {
+    return {
+      target_symbol: sym,
+      as_of: null,
+      top_n: n,
+      rows: [],
+      embedder: null,
+      pooling: null,
+      reason: "No sector selection has been computed for this symbol yet.",
+    };
+  }
+
+  const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0));
+  type RawRow = Omit<SectorSelectionRow, "rank" | "selected">;
+  const raw: RawRow[] = SECTOR_SELECTION_CANDIDATES.map((sector, i) => {
+    if (i === 2) {
+      // Honesty branch: no sector description available -> similarity unavailable.
+      return {
+        sector,
+        cosine_similarity: null,
+        ingestion_volume: +(rng() * 40).toFixed(1),
+        sector_heat_factor: +(rng() * 0.8).toFixed(3),
+        correlation_coefficient: null,
+        degraded_reason: "no_sector_description",
+      };
+    }
+    if (i === 5) {
+      // Honesty branch: this sector's member tickers were never ingested at all.
+      return {
+        sector,
+        cosine_similarity: +(0.2 + rng() * 0.6).toFixed(3),
+        ingestion_volume: null,
+        sector_heat_factor: null,
+        correlation_coefficient: null,
+        degraded_reason: "no_volume_observed",
+      };
+    }
+    const cos = +(0.2 + rng() * 0.6).toFixed(3);
+    const shf = +(0.3 + rng() * 0.5).toFixed(3);
+    return {
+      sector,
+      cosine_similarity: cos,
+      ingestion_volume: +(rng() * 60).toFixed(1),
+      sector_heat_factor: shf,
+      correlation_coefficient: +(cos * shf).toFixed(4),
+      degraded_reason: "review_unavailable",
+    };
+  });
+
+  const ranked = [...raw].sort((a, b) => {
+    const av = a.correlation_coefficient;
+    const bv = b.correlation_coefficient;
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return bv - av;
+  });
+
+  let rankCounter = 0;
+  const rows: SectorSelectionRow[] = ranked.map((r) => {
+    if (r.correlation_coefficient == null) {
+      return { ...r, rank: null, selected: false };
+    }
+    rankCounter += 1;
+    return { ...r, rank: rankCounter, selected: rankCounter <= n };
+  });
+
+  return {
+    target_symbol: sym,
+    as_of: "2026-07-26",
+    top_n: n,
+    rows,
+    embedder: "sbert",
+    pooling: "max",
     reason: null,
   };
 }
@@ -3983,6 +4083,10 @@ export const mockApi = {
 
   async getForecast(ticker: string, horizon = 30): Promise<ForecastSkill> {
     return delay(mockForecast(ticker, horizon));
+  },
+
+  async getSectorSelection(target: string, n = 3): Promise<SectorSelectionView> {
+    return delay(mockSectorSelection(target, n));
   },
 
   async getRollingBeta(ticker: string, window = 60): Promise<RollingBeta> {

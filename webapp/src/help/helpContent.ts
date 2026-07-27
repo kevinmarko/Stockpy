@@ -134,6 +134,17 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "An on-demand Gemini Vision interpretation of a symbol's recent price chart — a pattern label (e.g. 'ascending triangle'), qualitative support/resistance levels, and a short narrative. Advisory only; it never feeds back into the deterministic pipeline, and the chart image itself can render even when the AI read fails.",
   "research brief":
     "An on-demand grounded research summary (Opal) synthesized from real retrieved news, earnings, and macro context for one symbol — thesis context, catalysts, risk factors, and recent developments. Qualitative only by construction: no price target or score is ever fabricated, and a list is left empty rather than filled with an invented item.",
+  "semantic similarity":
+    "How closely a target stock's business description matches a candidate sector's description, via a local sentence-embedding model (SBERT) and cosine similarity — a number from -1 (opposite) to 1 (identical meaning), NOT keyword overlap. Unavailable ('—') when either description is missing or no embedding backend is configured.",
+  "sector heat factor":
+    // A DIFFERENT construct from the platform's other "Sector Heat Factor"
+    // dashboard column (GDELT news-volume smoothing) -- see
+    // docs/signals/sector_heat_factor.md's "Two features, one name" section
+    // for the full disambiguation. This entry describes the Sector
+    // Selection screen's own SHF specifically.
+    "A Gaussian response to how much news + investor-forum volume a candidate sector is seeing, normalized against every OTHER candidate sector over a trailing 22-trading-day window — not a raw volume count. When investor-forum (Reddit/StockTwits) volume has never been observed, this degrades honestly to news-volume-only, flagged 'Investor-forum volume unavailable' rather than showing a fabricated number.",
+  "sector correlation coefficient":
+    "Semantic Related Sector Selection's ranking score: cosine similarity × Sector Heat Factor. Sectors are ranked by this number and the top N are selected as the most relevant related sectors for a target stock. '—' whenever either input side is unavailable — never computed from a partial or guessed value.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -191,6 +202,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "Multi-horizon, probabilistic price forecasts for one symbol, with the model's volatility (GJR-GARCH) and regime inputs. Forecasts are not guarantees — an input that can't be computed shows '—', never a fabricated number.",
     keyConcepts: ["forecast", "garch vol", "hmm regime"],
+  },
+  "sector-selection": {
+    title: "Sector Selection",
+    description:
+      "Ranks candidate upstream/downstream industry sectors by how relevant they are to a target stock — combining semantic similarity (SBERT, cosine similarity) with each sector's Sector Heat Factor (recent news + investor-forum volume). The top N ranked sectors are the ones this platform's research treats as most relevant for supplementing a thin single-stock signal. Every field is '—' when it honestly couldn't be computed, never a fabricated number — and a persistent banner explains when investor-forum volume specifically is unavailable.",
+    keyConcepts: ["semantic similarity", "sector heat factor", "sector correlation coefficient"],
   },
   options: {
     title: "Options Matrix",
