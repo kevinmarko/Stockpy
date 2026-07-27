@@ -86,7 +86,7 @@ rich==15.0.0
 schedule==1.2.2
 scikit-learn==1.9.0
 scipy==1.17.1
-setuptools==80.10.2
+setuptools==83.0.0
 six==1.17.0
 soupsieve==2.8.4
 stack-data==0.6.3
