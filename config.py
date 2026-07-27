@@ -190,6 +190,23 @@ COLUMN_SCHEMA = [
     {"header": "Attention Score", "key": "Attention_Score", "format": "number"},
 
     # ==========================================================
+    # --- ETF VOLATILITY TRANSMISSION (risk/etf_transmission.py) ---
+    # Ben-David, Franzoni & Moussawi (2018) "Do ETFs Increase Volatility?".
+    # DIAGNOSTIC ONLY as of this commit -- populated by
+    # pipeline/production_steps.py::_apply_etf_transmission and read by
+    # nothing in scoring, sizing, or execution. NaN (never fabricated --
+    # CONSTRAINT #4) whenever settings.ETF_TRANSMISSION_ENABLED is False, the
+    # ticker is in no covered basket, the holdings fetch failed, the ticker is
+    # itself an ETF, Market Cap/Price can't yield shares outstanding, or the
+    # aligned return overlap is shorter than the full R2 window.
+    # ETF_Ownership_Pct is a FRACTION of shares outstanding (0.07 = 7%),
+    # matching the dividendYield fraction convention in data/market_data.py.
+    # ==========================================================
+    {"header": "ETF Ownership Pct", "key": "ETF_Ownership_Pct", "format": "percent"},
+    {"header": "ETF Comovement R2", "key": "ETF_Comovement_R2", "format": "number"},
+    {"header": "ETF Primary Wrapper", "key": "ETF_Primary_Wrapper", "format": "string"},
+
+    # ==========================================================
     # --- CORRELATION CLUSTER (Tier 2.5, research_engine.py) ---
     # Populated on-demand by the GUI Reports tab; NaN in the main
     # orchestrator run (no historical batch fetch required).

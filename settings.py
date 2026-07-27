@@ -1584,6 +1584,86 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── ETF volatility transmission (risk/etf_transmission.py) ───────────────
+    # Ben-David, Franzoni & Moussawi (2018), "Do ETFs Increase Volatility?",
+    # Journal of Finance 73(6). DIAGNOSTIC-ONLY measurement columns
+    # (ETF_Ownership_Pct / ETF_Comovement_R2 / ETF_Primary_Wrapper) -- nothing
+    # in scoring, sizing, or execution reads them yet. Same opt-in house style
+    # as SECTOR_HEAT_* / WIKIPEDIA_ATTENTION_* above: the master switch
+    # defaults False and is a complete no-op (zero network calls, all three
+    # columns NaN).
+    ETF_TRANSMISSION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the ETF volatility-transmission measurement "
+            "columns (risk/etf_transmission.py, wired by "
+            "pipeline/production_steps.py::_apply_etf_transmission). False "
+            "(the default) is a complete no-op: no ETF-holdings or ETF-bars "
+            "fetch is attempted and ETF_Ownership_Pct / ETF_Comovement_R2 / "
+            "ETF_Primary_Wrapper stay NaN in config.COLUMN_SCHEMA."
+        ),
+    )
+    ETF_HOLDINGS_MARKET_PROXY: str = Field(
+        default="SPY",
+        description=(
+            "Broad-market ETF used as the MARKET leg when residualizing both "
+            "the stock and its ETF-composite returns. Deliberately EXCLUDED "
+            "from the ownership-weighted return composite itself -- a naive "
+            "(non-residualized) R2 is high for every large-cap regardless of "
+            "ETF wrapping, so it would ship a market-beta derate wearing an "
+            "ETF costume. Consequence, by design: a name whose only covered "
+            "wrapper IS this proxy has an identically-zero residual and "
+            "therefore a NaN ETF_Comovement_R2, never a fabricated number."
+        ),
+    )
+    ETF_TRANSMISSION_WRAPPERS: list[str] = Field(
+        default_factory=lambda: [
+            "SPY", "QQQ", "IWM", "DIA",
+            "XLB", "XLC", "XLE", "XLF", "XLI",
+            "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY",
+        ],
+        description=(
+            "Candidate wrapper ETFs whose baskets are fetched each cycle to "
+            "measure how heavily each universe name is ETF-wrapped (JSON "
+            "array in .env). Coverage is explicitly partial -- a name held "
+            "only by wrappers outside this list reads NaN rather than a "
+            "fabricated low ownership. Only consulted once "
+            "ETF_TRANSMISSION_ENABLED is True."
+        ),
+    )
+    ETF_TRANSMISSION_EXCLUDED_SYMBOLS: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Extra universe symbols that are THEMSELVES funds and must never "
+            "be measured against their own basket (ownership/co-movement "
+            "against itself is 1.0/1.0 -- a maximum derate for a trivially "
+            "wrong reason). Everything in ETF_TRANSMISSION_WRAPPERS plus "
+            "ETF_HOLDINGS_MARKET_PROXY is excluded automatically; this list "
+            "covers funds an operator holds that are not themselves wrappers "
+            "(e.g. VOO, VTI, ARKK). JSON array in .env."
+        ),
+    )
+    ETF_TRANSMISSION_WINDOW_DAYS: int = Field(
+        default=60,
+        description=(
+            "Rolling window (trading days) for the market-residualized "
+            "co-movement R2. Mirrors processing_engine.calculate_rolling_beta's "
+            "default 60-day beta window. Only consulted once "
+            "ETF_TRANSMISSION_ENABLED is True."
+        ),
+    )
+    ETF_TRANSMISSION_MIN_OBS: int = Field(
+        default=60,
+        description=(
+            "Minimum aligned overlapping return observations required before "
+            "an ETF_Comovement_R2 is reported at all. Defaults to the full "
+            "window (NaN-until-full-window-coverage): a name added to a "
+            "wrapper last week has no tethered history, so a partial-window "
+            "R2 would UNDERSTATE transmission with a confident-looking "
+            "number. Missing beats understated (CONSTRAINT #4)."
+        ),
+    )
+
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
     # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.
