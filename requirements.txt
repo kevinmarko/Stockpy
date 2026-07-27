@@ -58,7 +58,7 @@ parso==0.8.7
 patsy==1.0.2
 peewee==4.1.0
 pexpect==4.9.0
-pillow==12.2.0
+pillow==12.3.0
 platformdirs==4.10.0
 plotly==6.8.0
 pluggy==1.6.0
