@@ -25,7 +25,7 @@ def find_free_port() -> int:
     port, but this is the standard stdlib-only approach for port discovery.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("", 0))
+        sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
 
 
