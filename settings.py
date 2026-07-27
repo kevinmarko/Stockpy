@@ -1941,6 +1941,60 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── ETF Transmission: Portfolio-Level Covariance (sizing/position_sizer.py) ──
+    # The mechanism raises COVARIANCE between co-held names, not any single
+    # name's own variance -- so the portfolio-wide gross-exposure cap
+    # (apply_portfolio_gross_cap's existing cov_matrix path, see
+    # sizing/vol_target.py::portfolio_vol_target) is where it genuinely
+    # belongs, not a second per-name lever alongside ETF_TRANSMISSION_SIZING_ENABLED
+    # above. False (the default) is a complete no-op: cov_matrix=None is
+    # passed to apply_portfolio_gross_cap exactly as before this feature
+    # existed, reproducing today's sum-of-|weight| fallback byte-for-byte.
+    ETF_TRANSMISSION_PORTFOLIO_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for routing the portfolio-level gross-exposure cap "
+            "through apply_portfolio_gross_cap's risk-aware cov_matrix path, "
+            "using an ETF-co-ownership-inflated covariance matrix "
+            "(risk.etf_transmission.build_transmission_adjusted_cov) instead "
+            "of the sum-of-|weight| fallback. False (the default) is a "
+            "complete no-op: cov_matrix=None every cycle, byte-identical to "
+            "pre-feature behavior. Requires ETF_HOLDINGS_ENABLED (a holdings "
+            "source) to produce anything other than the same fallback -- "
+            "with no holdings data the covariance build degrades gracefully "
+            "back to cov_matrix=None rather than fabricating overlap."
+        ),
+    )
+    ETF_TRANSMISSION_COV_INFLATION: float = Field(
+        default=0.25,
+        description=(
+            "Fractional inflation applied to the OFF-DIAGONAL covariance "
+            "entry of each symbol pair, scaled by their pairwise ETF "
+            "co-ownership overlap (cosine similarity of ETF-basket weight "
+            "vectors, in [0, 1]): cov_adj[i,j] = cov[i,j] * (1 + "
+            "ETF_TRANSMISSION_COV_INFLATION * overlap[i,j]) for i != j. The "
+            "diagonal (each name's own variance) is never touched -- this "
+            "models the paper's actual claim (arbitrage raises CO-MOVEMENT "
+            "between co-held names), not a claim about any single name's "
+            "own volatility, which risk.etf_transmission.transmission_multiplier "
+            "already handles separately via ETF_TRANSMISSION_SIZING_ENABLED. "
+            "Only consulted once ETF_TRANSMISSION_PORTFOLIO_ENABLED is True."
+        ),
+    )
+    ETF_TRANSMISSION_COV_WINDOW_DAYS: int = Field(
+        default=60,
+        description=(
+            "Trailing trading-day window of aligned daily returns used to "
+            "estimate the base covariance matrix before ETF co-ownership "
+            "inflation. Mirrors ETF_TRANSMISSION_WINDOW_DAYS's default. If "
+            "fewer than this many fully-overlapping return observations "
+            "exist across the cycle's universe, the covariance build is "
+            "skipped for that cycle (falls back to cov_matrix=None) rather "
+            "than estimating a covariance matrix off a short, noisy sample. "
+            "Only consulted once ETF_TRANSMISSION_PORTFOLIO_ENABLED is True."
+        ),
+    )
+
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
     # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.

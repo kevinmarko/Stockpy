@@ -628,3 +628,196 @@ def transmission_multiplier(
 
     multiplier = 1.0 - derate * ownership_factor * comovement_factor
     return max(multiplier, lower_bound)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Portfolio-level covariance inflation (built on the measurements above)
+# ─────────────────────────────────────────────────────────────────────────
+# The transmission_multiplier lever above derates a NAME's own weight. But
+# the mechanism this whole module is named for raises COVARIANCE between
+# co-held names -- a portfolio-level effect a per-name derate cannot see no
+# matter how it is composed. This section feeds an ETF-co-ownership-inflated
+# covariance matrix into sizing.position_sizer.apply_portfolio_gross_cap's
+# EXISTING risk-aware path (sizing.vol_target.portfolio_vol_target), rather
+# than building a second portfolio-cap mechanism: apply_portfolio_gross_cap
+# already accepts cov_matrix/target_vol and only needs a caller to supply
+# them (see pipeline/production_steps.py::_build_etf_transmission_cov_matrix).
+
+
+def _pairwise_etf_overlap(
+    symbols: Sequence[str],
+    holdings_by_etf: Mapping[str, Sequence["ETFHolding"]],
+) -> pd.DataFrame:
+    """Cosine similarity of each symbol pair's ETF-ownership-weight vectors.
+
+    For each symbol, builds a vector over the covered ETF universe (one
+    coordinate per ETF, valued at that ETF's NAV ``weight`` for the symbol,
+    falling back to ``shares_held`` when ``weight`` is unusable -- same
+    fallback basis as :func:`build_etf_return_composite`). Two symbols held
+    by exactly the same wrappers in the same proportions score ``1.0``; two
+    symbols sharing no wrapper at all score ``0.0``. Never negative (weights
+    are non-negative NAV/share quantities), so this is a proper ``[0, 1]``
+    overlap measure, not a general-purpose cosine similarity.
+
+    A symbol absent from every covered basket gets the zero vector and
+    therefore scores ``0.0`` overlap against everything -- correct: no
+    measured tethering means no covariance inflation for that pair, exactly
+    mirroring ``transmission_multiplier``'s "no coverage -> no-op" contract.
+
+    Returns a symmetric ``len(symbols) x len(symbols)`` DataFrame indexed and
+    columned by ``symbols`` with a zero diagonal. Never raises -- an
+    unusable ``holdings_by_etf`` (empty, malformed rows) simply yields an
+    all-zero overlap matrix (CONSTRAINT #6).
+    """
+    try:
+        deduped = filter_holdings_as_of(holdings_by_etf, as_of=None)
+        etfs = sorted(deduped.keys())
+        symbol_list = list(symbols)
+        symbol_set = set(symbol_list)
+        vectors = {s: np.zeros(len(etfs)) for s in symbol_list}
+
+        for j, etf_symbol in enumerate(etfs):
+            for row in deduped.get(etf_symbol, []):
+                sym = str(getattr(row, "holding_symbol", "") or "").upper().strip()
+                if sym not in symbol_set:
+                    continue
+                w = _as_float(getattr(row, "weight", None))
+                if not _finite(w) or w < 0.0:
+                    w = _as_float(getattr(row, "shares_held", None))
+                if _finite(w) and w > 0.0:
+                    vectors[sym][j] = w
+
+        n = len(symbol_list)
+        overlap = np.zeros((n, n))
+        norms = {s: float(np.linalg.norm(vectors[s])) for s in symbol_list}
+        for i, si in enumerate(symbol_list):
+            if norms[si] <= 0.0:
+                continue
+            for k, sk in enumerate(symbol_list):
+                if i == k or norms[sk] <= 0.0:
+                    continue
+                overlap[i, k] = float(
+                    np.dot(vectors[si], vectors[sk]) / (norms[si] * norms[sk])
+                )
+        return pd.DataFrame(overlap, index=symbol_list, columns=symbol_list)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("_pairwise_etf_overlap failed (non-fatal): %s", exc)
+        n = len(symbols)
+        return pd.DataFrame(np.zeros((n, n)), index=list(symbols), columns=list(symbols))
+
+
+def _nearest_psd(matrix: np.ndarray, epsilon: float = 1e-10) -> np.ndarray:
+    """Eigenvalue-clip a symmetric matrix back to positive semi-definite.
+
+    Off-diagonal inflation in :func:`build_transmission_adjusted_cov` can
+    push an otherwise-valid covariance matrix outside the PSD cone (a
+    genuine risk this module's own design notes call out --
+    ``portfolio_vol_target`` has no PSD check of its own, and would compute
+    a nonsensical, even negative, ``w' Sigma w`` from an indefinite matrix
+    without one). This clips every eigenvalue below ``epsilon`` up to
+    ``epsilon`` and reconstructs -- the standard nearest-PSD-by-eigenvalue-
+    clipping repair. (Higham (2002)'s alternating-projections algorithm finds
+    the nearest correlation matrix more exactly; that precision is not needed
+    here because the input is already close to PSD by construction -- only
+    the off-diagonal was multiplicatively perturbed, nothing was
+    reconstructed from an arbitrary starting matrix.)
+
+    Symmetrizes the result once more before returning: ``eigh`` assumes (and
+    ``build_transmission_adjusted_cov`` guarantees) a symmetric input, but the
+    reconstruction ``V @ diag(clipped) @ V.T`` can pick up float roundoff
+    asymmetry that would otherwise propagate into a NON-symmetric "covariance
+    matrix" being handed to ``portfolio_vol_target``.
+    """
+    eigvals, eigvecs = np.linalg.eigh(matrix)
+    clipped = np.clip(eigvals, epsilon, None)
+    repaired = eigvecs @ np.diag(clipped) @ eigvecs.T
+    return (repaired + repaired.T) / 2.0
+
+
+def build_transmission_adjusted_cov(
+    returns_df: pd.DataFrame,
+    holdings_by_etf: Mapping[str, Sequence["ETFHolding"]],
+    *,
+    inflation: float,
+    window: int = 60,
+) -> Optional[pd.DataFrame]:
+    """Covariance matrix with off-diagonals inflated by pairwise ETF co-ownership.
+
+    ``cov_adj[i,j] = cov[i,j] * (1 + inflation * overlap[i,j])`` for ``i !=
+    j``; the diagonal (each name's OWN variance) is left untouched. This
+    models the paper's actual claim -- ETF arbitrage raises CO-MOVEMENT
+    between co-held names -- rather than inflating any single name's own
+    variance, which is a different, already-handled question
+    (:func:`transmission_multiplier`'s per-name sizing derate).
+
+    Args:
+        returns_df: daily simple-return DataFrame, one column per symbol,
+            ``DatetimeIndex``. Only the trailing ``window`` rows are used;
+            the caller is responsible for supplying data computed strictly
+            prior to the current bar (this function performs no causality
+            checks itself, matching ``sizing.vol_target.portfolio_vol_target``'s
+            own contract).
+        holdings_by_etf: ``{etf_symbol: [ETFHolding, ...]}`` (duck-typed, the
+            shape ``data.etf_holdings.get_etf_holdings`` returns).
+        inflation: ``settings.ETF_TRANSMISSION_COV_INFLATION`` -- the
+            fractional off-diagonal inflation at maximum (``overlap == 1.0``)
+            co-ownership.
+        window: trailing trading-day window (default 60, mirrors
+            ``ETF_TRANSMISSION_COV_WINDOW_DAYS``).
+
+    Returns:
+        A symmetric, positive-semi-definite ``pd.DataFrame`` indexed and
+        columned by ``returns_df``'s columns, or ``None`` when the input is
+        unusable: fewer than 2 symbols, fewer than ``window`` fully-aligned
+        return rows, or a base covariance that couldn't be computed cleanly.
+        ``None`` is this function's honest "cannot produce a usable
+        covariance matrix this cycle" signal -- the caller's documented
+        response is to fall back to ``apply_portfolio_gross_cap``'s
+        ``cov_matrix=None`` sum-of-|weight| path, never to a partially-
+        covered matrix (``portfolio_vol_target`` zeroes out any symbol
+        missing from ``cov_matrix``, which is a far harsher outcome for a
+        coverage gap than the existing fallback -- see the caller for why
+        that substitution is deliberately never made here).
+
+    Never raises (CONSTRAINT #6).
+    """
+    try:
+        if returns_df is None or getattr(returns_df, "empty", True):
+            return None
+        symbols = list(returns_df.columns)
+        if len(symbols) < 2:
+            return None
+
+        window = max(2, int(window))
+        aligned = returns_df.dropna(how="any")
+        if len(aligned) < window:
+            return None
+        trimmed = aligned.tail(window)
+
+        base_cov = trimmed.cov().reindex(index=symbols, columns=symbols)
+        if base_cov.isna().any().any():
+            return None
+
+        overlap = _pairwise_etf_overlap(symbols, holdings_by_etf)
+        overlap = overlap.reindex(index=symbols, columns=symbols).fillna(0.0)
+
+        # copy=True is load-bearing, not defensive style: pandas' internal
+        # reference-tracking can hand back a READ-ONLY view from to_numpy()
+        # depending on what else has touched this DataFrame's block manager
+        # (observed depending on test execution order/other pandera/pandas
+        # activity in-process), and np.fill_diagonal below mutates in place.
+        cov_arr = base_cov.to_numpy(dtype=float, copy=True)
+        overlap_arr = overlap.to_numpy(dtype=float, copy=True)
+        np.fill_diagonal(overlap_arr, 0.0)  # never inflate variance, only co-movement
+
+        adjusted = cov_arr * (1.0 + float(inflation) * overlap_arr)
+        # Symmetrize defensively: cov and overlap are each symmetric by
+        # construction, but float roundoff in the elementwise multiply could
+        # otherwise introduce a tiny asymmetry ahead of the eigendecomposition.
+        adjusted = (adjusted + adjusted.T) / 2.0
+
+        psd = _nearest_psd(adjusted)
+        return pd.DataFrame(psd, index=symbols, columns=symbols)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("build_transmission_adjusted_cov failed (non-fatal): %s", exc)
+        return None
