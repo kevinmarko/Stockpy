@@ -275,6 +275,52 @@ class TestSizingWiring:
         assert out["Kelly Target"] >= 0.0
         assert out["Kelly_Target_Post_Regime"] == pytest.approx(0.0)
 
+    # ── ETF volatility-transmission derate (risk/etf_transmission.py) ───────
+    # Threaded from the ETF_Transmission_Multiplier dashboard column through
+    # evaluate_security() into size_position()'s step-3 composition. The
+    # derate itself and its boundary behavior are owned by
+    # tests/test_position_sizer.py; these are pure WIRING assertions.
+
+    def _run_with_etf(self, multiplier, *, garch_vol=0.20, hmm=None):
+        return _engine_warm_vol_target().evaluate_security(
+            bar=_bar(), fundamentals=_fund(), macro=_macro_riskon(hmm=hmm),
+            forecast_price=168.00, trend_strength=72.0, atr=2.50,
+            garch_vol=garch_vol, etf_transmission_multiplier=multiplier,
+        )
+
+    def test_etf_multiplier_omitted_is_byte_identical_to_the_neutral_value(self):
+        """The default (kwarg absent) MUST reproduce the pre-feature result
+        exactly -- this is the flag-off no-op guarantee at the engine boundary."""
+        baseline = self._run(garch_vol=0.20, hmm=0.5)
+        explicit = self._run_with_etf(1.0, garch_vol=0.20, hmm=0.5)
+        assert explicit["Kelly Target"] == baseline["Kelly Target"]
+        assert explicit["Kelly_Target_Post_Regime"] == baseline["Kelly_Target_Post_Regime"]
+        assert explicit["Sizing_Was_Capped"] == baseline["Sizing_Was_Capped"]
+        assert explicit["Sizing_Binding_Constraint"] == baseline["Sizing_Binding_Constraint"]
+
+    @pytest.mark.parametrize("missing", [None, float("nan")])
+    def test_missing_multiplier_is_the_exact_no_op_never_nan(self, missing):
+        """A NaN Kelly Target would be EXCLUDED from apply_portfolio_gross_cap's
+        gross sum, silently loosening the portfolio cap for every other name."""
+        baseline = self._run(garch_vol=0.20, hmm=None)
+        out = self._run_with_etf(missing, garch_vol=0.20, hmm=None)
+        assert out["Kelly Target"] == pytest.approx(baseline["Kelly Target"])
+        assert not math.isnan(out["Kelly Target"])
+        assert out["ETF_Transmission_Multiplier_Applied"] == 1.0
+
+    def test_derate_scales_the_final_kelly_target(self):
+        out = self._run_with_etf(0.5, garch_vol=0.20, hmm=None)
+        assert out["Kelly_Target_Pre_Regime"] == pytest.approx(0.5, rel=1e-6)
+        assert out["Kelly Target"] == pytest.approx(0.25, rel=1e-6)
+        assert out["ETF_Transmission_Multiplier_Applied"] == pytest.approx(0.5)
+
+    def test_derate_alone_never_sets_the_guardrail_telemetry(self):
+        """The ETF derate follows the Regime_Multiplier precedent: it is
+        continuous signal-driven derating, NOT a hard ceiling event."""
+        out = self._run_with_etf(0.5, garch_vol=0.20, hmm=None)
+        assert out["Sizing_Was_Capped"] is False
+        assert out["Sizing_Binding_Constraint"] is None
+
 
 # ===========================================================================
 # 3. killSwitch hard overlay override

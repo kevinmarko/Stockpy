@@ -125,6 +125,14 @@ ORCHESTRATOR_ONLY_FIELDS: set[str] = {
     "etf_ownership_pct",
     "etf_comovement_r2",
     "etf_primary_wrapper",
+    # The ETF-volatility-transmission sizing derate (risk/etf_transmission.py)
+    # is composed inside sizing/position_sizer.py::size_position(), which ONLY
+    # the orchestrator path routes through. engine/advisory.py deliberately
+    # keeps its own tighter, decoupled CONFIG["max_single_position_pct"] cap
+    # and was left untouched by that change, so the advisory writer has no
+    # source for this field. Genuinely orchestrator-only by design, not an
+    # oversight.
+    "etf_transmission_multiplier",
 }
 
 
