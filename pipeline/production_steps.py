@@ -452,6 +452,78 @@ def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
         dashboard_df['Sector_Heat_Factor'] = float('nan')
 
 
+def _apply_etf_transmission_multiplier(dashboard_df: pd.DataFrame) -> None:
+    """Populate the ``ETF_Transmission_Multiplier`` column from the measured
+    ``ETF_Ownership_Pct`` / ``ETF_Comovement_R2`` columns.
+
+    NaN-fills the column FIRST (identical pattern to
+    ``_apply_sector_heat_factor`` above), so the DISABLED state is an honest
+    "never computed" rather than a fabricated 1.0 that a reader would
+    mistake for a measured "no transmission risk here" (CONSTRAINT #4).
+
+    Where the feature IS enabled, every row gets a real float and NEVER a
+    NaN -- a name with no ETF coverage this cycle gets exactly ``1.0``, the
+    no-op. That asymmetry is deliberate and load-bearing: a NaN multiplier
+    would make ``final_weight`` non-finite, and
+    ``sizing.position_sizer.apply_portfolio_gross_cap`` EXCLUDES non-finite
+    weights from its gross-exposure sum -- so a broad coverage gap would
+    shrink the gross denominator and silently LOOSEN the portfolio-wide cap
+    for every name that DID have coverage. A data outage must never relax a
+    risk limit. See ``risk/etf_transmission.py``.
+
+    Coverage-gap logging is once per cycle with a COUNT, never per name --
+    a 500-name universe with the feature newly enabled and no holdings data
+    yet would otherwise emit 500 identical log lines every refresh.
+
+    Never raises (CONSTRAINT #6): any failure degrades the whole column back
+    to NaN, which every consumer then reads as the 1.0 no-op.
+    """
+    dashboard_df['ETF_Transmission_Multiplier'] = float('nan')
+    if not settings.ETF_TRANSMISSION_SIZING_ENABLED:
+        return
+    try:
+        from risk.etf_transmission import transmission_multiplier
+
+        # Missing measurement columns (e.g. ETF holdings ingestion not
+        # configured) are treated exactly like present-but-NaN cells: every
+        # row resolves to the 1.0 no-op, never NaN.
+        ownership = (
+            dashboard_df['ETF_Ownership_Pct'] if 'ETF_Ownership_Pct' in dashboard_df.columns
+            else pd.Series(float('nan'), index=dashboard_df.index)
+        )
+        comovement = (
+            dashboard_df['ETF_Comovement_R2'] if 'ETF_Comovement_R2' in dashboard_df.columns
+            else pd.Series(float('nan'), index=dashboard_df.index)
+        )
+        multipliers = [
+            transmission_multiplier(
+                own, r2,
+                max_derate=settings.ETF_TRANSMISSION_MAX_DERATE,
+                ownership_reference=settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE,
+                floor=settings.ETF_TRANSMISSION_MIN_MULTIPLIER,
+            )
+            for own, r2 in zip(ownership, comovement)
+        ]
+        dashboard_df['ETF_Transmission_Multiplier'] = multipliers
+
+        uncovered = sum(
+            1 for own, r2 in zip(ownership, comovement)
+            if pd.isna(own) or pd.isna(r2)
+        )
+        if uncovered:
+            logger.info(
+                "ETF transmission derate: %d of %d symbol(s) had no ETF "
+                "ownership/co-movement coverage this cycle and fall back to "
+                "the 1.0 no-op multiplier (never NaN -- a NaN would exclude "
+                "them from the portfolio gross-exposure sum and loosen the "
+                "cap for every covered name).",
+                uncovered, len(dashboard_df),
+            )
+    except Exception as exc:
+        logger.warning("ETF transmission multiplier computation failed (non-fatal): %s", exc)
+        dashboard_df['ETF_Transmission_Multiplier'] = float('nan')
+
+
 class StrategyEvalStep(PipelineStep):
     """Evaluates strategy and overlaying advisory logic."""
     name = "strategy"
@@ -586,6 +658,15 @@ class StrategyEvalStep(PipelineStep):
         # See data/sentiment_sources.py::compute_sector_heat_factors and
         # docs/signals/sector_heat_factor.md.
         _apply_sector_heat_factor(ctx.dashboard_df)
+
+        # ETF-arbitrage volatility-transmission sizing derate
+        # (risk/etf_transmission.py) -- computed BEFORE the per-ticker
+        # evaluate_security loop below so each row can simply read its own
+        # already-resolved multiplier. NaN-filled (never fabricated --
+        # CONSTRAINT #4) when settings.ETF_TRANSMISSION_SIZING_ENABLED is
+        # False, which every consumer reads as the exact 1.0 no-op, making
+        # the disabled path byte-identical to the pre-feature behavior.
+        _apply_etf_transmission_multiplier(ctx.dashboard_df)
 
         # Wikipedia-pageviews investor-attention feature (follow-on branch
         # to PR #416/#417) -- data/attention_sources.py
@@ -794,6 +875,13 @@ class StrategyEvalStep(PipelineStep):
                     sma_200=float(row.get('SMA_200') if pd.notna(row.get('SMA_200')) else 0.0),
                     rsi_2=rsi_2_val,
                     sma_5=sma_5_val,
+                    # Per-name ETF volatility-transmission derate resolved by
+                    # _apply_etf_transmission_multiplier() before this loop.
+                    # Bare .get() -- a missing column / NaN cell is passed
+                    # through verbatim and sanitized to the exact 1.0 no-op
+                    # inside size_position(), the single place that decides
+                    # what "missing" means here (CONSTRAINT #7).
+                    etf_transmission_multiplier=row.get('ETF_Transmission_Multiplier'),
                     robinhood_position=rh_position,
                     precomputed_signal_tuple=vectorized_results.get(ticker)
                 )

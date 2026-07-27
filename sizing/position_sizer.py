@@ -30,12 +30,15 @@ Design notes
 * **``was_capped`` / ``binding_constraint`` are reserved for hard ceilings**
   (the raw formula's own cap, ``MAX_POSITION_WEIGHT``, the portfolio gross
   cap, and cap-aware escalation) -- NOT for the continuous HMM regime
-  derating. ``regime_multiplier`` is already surfaced as its own float
-  (unchanged from today's ``Regime_Multiplier`` column) so no information is
-  lost; folding a routine regime<1.0 cycle into "was_capped" would make the
-  guardrail fire on almost every risk-off day and drown out genuine ceiling
-  events in the audit log / alerting (see ``sizing/cap_audit_store.py`` and
-  the ``settings.SIZING_CAP_ALERT_THRESHOLD_PCT`` alert wired in
+  derating, and NOT for the continuous ETF-transmission derating either.
+  ``regime_multiplier`` is already surfaced as its own float (unchanged from
+  today's ``Regime_Multiplier`` column) so no information is lost, and
+  ``etf_transmission_multiplier`` follows that precedent exactly; folding a
+  routine regime<1.0 (or transmission<1.0) cycle into "was_capped" would make
+  the guardrail fire on almost every risk-off day / every ETF-heavy name and
+  drown out genuine ceiling events in the audit log / alerting (see
+  ``sizing/cap_audit_store.py`` and the
+  ``settings.SIZING_CAP_ALERT_THRESHOLD_PCT`` alert wired in
   ``pipeline/production_steps.py``, via ``observability.alerts.send_alert``).
 * **Pure / no IO.** Escalation is driven by an optional ``CapEventSummary``
   the caller supplies (typically read from ``sizing/cap_audit_store.py``);
@@ -108,6 +111,15 @@ class SizingDecision:
     was_capped: bool
     constraints_applied: Tuple[str, ...] = field(default_factory=tuple)
     escalation_applied: bool = False
+    # ETF-arbitrage volatility-transmission derate actually applied this
+    # cycle (risk/etf_transmission.py). 1.0 = no derating -- the value when
+    # settings.ETF_TRANSMISSION_SIZING_ENABLED is False, when ETF coverage
+    # for this name is missing, or when the measured transmission is nil.
+    # A separate surfaced field, NOT folded into was_capped/binding_constraint,
+    # for exactly the reason regime_multiplier isn't (see module docstring).
+    # Defaulted so every existing SizingDecision construction site and every
+    # existing test that pins the dataclass's other fields is unaffected.
+    etf_transmission_multiplier: float = 1.0
 
 
 def detect_raw_cap_binding(
@@ -185,11 +197,40 @@ def clamp_with_binding(
     return clamped, bound
 
 
+def _sanitize_transmission_multiplier(value: Optional[float]) -> float:
+    """Coerces the ETF-transmission derate to a usable float, defaulting to
+    the exact no-op ``1.0`` for anything missing or non-finite.
+
+    Deliberately asymmetric with this module's NaN handling for
+    ``regime_multiplier`` / ``meta_label_composite`` (which are passed
+    straight through so a NaN there stays an honest NaN -- see
+    ``clamp_with_binding`` and ``TestSizePositionNaNSafety``). The
+    asymmetry is the whole point: those two are SIGNALS whose absence is
+    information, while this one is a RISK OVERLAY whose absence must mean
+    "apply no derating", never "poison the weight". A NaN here would make
+    ``final_weight`` non-finite, and ``apply_portfolio_gross_cap`` excludes
+    non-finite weights from its gross sum -- so a broad ETF-coverage outage
+    would shrink the gross denominator and silently LOOSEN the portfolio-wide
+    cap for every name that DID have coverage. A data outage must never
+    relax a risk limit. See ``risk/etf_transmission.py``.
+    """
+    if value is None:
+        return 1.0
+    try:
+        as_float = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(as_float):
+        return 1.0
+    return as_float
+
+
 def size_position(
     pre_regime_weight: float,
     *,
     regime_multiplier: float = 1.0,
     meta_label_composite: float = 1.0,
+    etf_transmission_multiplier: Optional[float] = 1.0,
     max_position_weight: float,
     path_tag: str = "",
     raw_weight: Optional[float] = None,
@@ -211,10 +252,12 @@ def size_position(
     2. Did ``StrategyEngine._calculate_kelly_sizing``'s own
        ``MAX_POSITION_WEIGHT`` clamp already bind (``pre_regime_weight`` sits
        at the ceiling despite a larger ``raw_weight``)?
-    3. Compose: ``pre_regime_weight * regime_multiplier * meta_label_composite``,
-       then clamp to ``[0.0, max_position_weight]`` again (a no-op in the
-       common case where both multipliers are <= 1.0, since step 2 already
-       clamped ``pre_regime_weight``; guarded regardless for safety).
+    3. Compose:
+       ``pre_regime_weight * regime_multiplier * meta_label_composite
+       * etf_transmission_multiplier``, then clamp to
+       ``[0.0, max_position_weight]`` again (a no-op in the common case where
+       all three multipliers are <= 1.0, since step 2 already clamped
+       ``pre_regime_weight``; guarded regardless for safety).
     4. (Optional) Cap-aware escalation: if ``recent_cap_events`` shows this
        name has been capped for >= ``escalation_threshold`` consecutive
        cycles, down-weight by ``escalation_factor``.
@@ -235,6 +278,17 @@ def size_position(
         1.0 = neutral/no-op.
     meta_label_composite : float
         Stage 4 meta-label geometric mean; 1.0 = neutral placeholder today.
+    etf_transmission_multiplier : float
+        ETF-arbitrage volatility-transmission derate for this name
+        (``risk.etf_transmission.transmission_multiplier``); 1.0 = no-op,
+        which is also what a missing/NaN value is coerced to (NEVER passed
+        through as NaN -- see ``_sanitize_transmission_multiplier``).
+        Composed multiplicatively in step 3 alongside ``regime_multiplier``,
+        and like it deliberately EXCLUDED from ``was_capped`` /
+        ``binding_constraint``: it is continuous signal-driven derating, not
+        a hard ceiling event (module docstring). It is surfaced instead as
+        its own ``SizingDecision.etf_transmission_multiplier`` field, exactly
+        as ``regime_multiplier`` is.
     max_position_weight : float
         ``settings.MAX_POSITION_WEIGHT``.
     path_tag : str
@@ -281,8 +335,12 @@ def size_position(
             constraints.append(MAX_POSITION_WEIGHT_CONSTRAINT)
         binding = MAX_POSITION_WEIGHT_CONSTRAINT
 
-    # Step 3: compose regime x meta-label, re-clamp.
-    composed = pre_regime_weight * regime_multiplier * meta_label_composite
+    # Step 3: compose regime x meta-label x ETF-transmission derate, re-clamp.
+    # The transmission derate is sanitized to exactly 1.0 when absent/non-finite
+    # (a NaN would poison final_weight and then silently loosen the portfolio
+    # gross cap for every OTHER name -- see _sanitize_transmission_multiplier).
+    etf_multiplier = _sanitize_transmission_multiplier(etf_transmission_multiplier)
+    composed = pre_regime_weight * regime_multiplier * meta_label_composite * etf_multiplier
     final_weight, composed_bound = clamp_with_binding(
         composed, max_position_weight, MAX_POSITION_WEIGHT_CONSTRAINT, epsilon
     )
@@ -326,6 +384,7 @@ def size_position(
         was_capped=was_capped,
         constraints_applied=tuple(constraints),
         escalation_applied=escalation_applied,
+        etf_transmission_multiplier=etf_multiplier,
     )
 
 

@@ -220,6 +220,7 @@ class StrategyEngine:
                           rsi_2: float = 50.0,
                           sma_5: Optional[float] = None,
                           strategy_id: Optional[str] = None,
+                          etf_transmission_multiplier: Optional[float] = None,
                           robinhood_position: Optional[RobinhoodPositionDTO] = None,
                           context_extras: Optional[Dict[str, Any]] = None,
                           precomputed_signal_tuple: Optional[tuple] = None) -> Dict[str, Any]:
@@ -237,6 +238,15 @@ class StrategyEngine:
             used as the sizing weight instead of the global aggregate point
             estimate. Pass None (default) to use the existing global pool path
             (backward-compatible).
+        etf_transmission_multiplier : float or None
+            Per-name ETF-arbitrage volatility-transmission derate
+            (``risk/etf_transmission.py``), read by the orchestrator from the
+            ``ETF_Transmission_Multiplier`` dashboard column and composed in
+            ``size_position()``'s step 3 alongside the HMM regime multiplier.
+            None (the default) / NaN -- the state when
+            ``settings.ETF_TRANSMISSION_SIZING_ENABLED`` is False or this
+            name has no ETF coverage -- is the exact no-op 1.0, NEVER a NaN
+            that would poison the weight (see that module's docstring).
         """
         current_price = bar.close
         ticker = bar.ticker
@@ -436,10 +446,16 @@ class StrategyEngine:
         # before this. The portfolio-level gross cap is a separate, cycle-wide
         # post-pass applied by the orchestrator (pipeline/production_steps.py),
         # not here (this call only ever sees one symbol at a time).
+        # ETF volatility-transmission derate (risk/etf_transmission.py),
+        # supplied by the orchestrator from the ETF_Transmission_Multiplier
+        # dashboard column. size_position() sanitizes None/NaN to the exact
+        # no-op 1.0 itself -- passed through verbatim here so there is exactly
+        # ONE place that decides what "missing" means (CONSTRAINT #7).
         sizing_decision = size_position(
             kelly_fraction_pre_regime,
             regime_multiplier=regime_multiplier,
             meta_label_composite=meta_label_composite,
+            etf_transmission_multiplier=etf_transmission_multiplier,
             max_position_weight=settings.MAX_POSITION_WEIGHT,
             path_tag=sizing_path_tag,
             raw_weight=raw_weight,
@@ -495,6 +511,15 @@ class StrategyEngine:
             # sizing/position_sizer.py's module docstring for why.
             "Sizing_Was_Capped": bool(sizing_decision.was_capped),
             "Sizing_Binding_Constraint": sizing_decision.binding_constraint,
+            # The ETF-transmission derate ACTUALLY APPLIED to this weight
+            # (already sanitized to 1.0 for a missing/NaN input). Surfaced
+            # like Regime_Multiplier -- its own field, never folded into the
+            # was_capped guardrail telemetry above. Note this is the APPLIED
+            # value, so it reads 1.0 where the ETF_Transmission_Multiplier
+            # dashboard column honestly reads NaN ("never computed").
+            "ETF_Transmission_Multiplier_Applied": float(
+                sizing_decision.etf_transmission_multiplier
+            ),
             "GARCH_Vol": float(garch_vol) if garch_vol is not None else float("nan"),
             "Option Strategy": option_strategy,
             "buyRange": tactical_range,

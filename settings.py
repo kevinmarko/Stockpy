@@ -719,6 +719,60 @@ class Settings(BaseSettings):
     # fraction of names capped in one cycle meets or exceeds this threshold.
     SIZING_CAP_ALERT_THRESHOLD_PCT: float = 0.30
 
+    # --- ETF volatility-transmission sizing derate (risk/etf_transmission.py) ---
+    # Ben-David, Franzoni & Moussawi (2018, JF): ETF arbitrage transmits a
+    # shock in one constituent to its healthy peers, so a heavily ETF-wrapped
+    # name carries extra non-fundamental, non-diversifiable variance that the
+    # per-name Kelly / vol-target formulas structurally cannot see. Applied as
+    # a bounded post-multiplier in sizing/position_sizer.py::size_position
+    # step 3 (NOT as vol inflation into Kelly -- see risk/etf_transmission.py's
+    # module docstring for why that lever is broken).
+    ETF_TRANSMISSION_SIZING_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the per-name ETF-volatility-transmission "
+            "position-sizing derate. False (the default) is a complete no-op: "
+            "no multiplier is computed, ETF_Transmission_Multiplier stays NaN "
+            "in config.COLUMN_SCHEMA, and size_position() composes exactly "
+            "the pre-change weight (the derate it receives is the identity "
+            "1.0). Independent of any ETF holdings/co-movement MEASUREMENT "
+            "being available -- with coverage missing the derate is still 1.0, "
+            "never NaN, because a data outage must never relax a risk limit."
+        ),
+    )
+    ETF_TRANSMISSION_MAX_DERATE: float = Field(
+        default=0.30,
+        description=(
+            "Largest fraction of a name's composed sizing weight this overlay "
+            "may ever remove, reached only at (or past) "
+            "ETF_TRANSMISSION_OWNERSHIP_REFERENCE ETF ownership AND a "
+            "constituent-on-ETF return R-squared of 1.0. 0.30 = at most a 30% "
+            "haircut. Only consulted once ETF_TRANSMISSION_SIZING_ENABLED is "
+            "True."
+        ),
+    )
+    ETF_TRANSMISSION_OWNERSHIP_REFERENCE: float = Field(
+        default=0.20,
+        description=(
+            "ETF-ownership FRACTION of shares outstanding (0.20 = 20%) at "
+            "which the ownership factor of the derate saturates at 1.0; "
+            "ownership beyond this point does not escalate the haircut "
+            "further. Only consulted once ETF_TRANSMISSION_SIZING_ENABLED is "
+            "True."
+        ),
+    )
+    ETF_TRANSMISSION_MIN_MULTIPLIER: float = Field(
+        default=0.50,
+        description=(
+            "Hard lower bound on the transmission multiplier -- no combination "
+            "of ETF ownership, co-movement, or knob settings can shrink a "
+            "position below this fraction of its otherwise-composed weight "
+            "through this overlay (it is a risk derate, not a kill switch; "
+            "exiting a name is the signal layer's job, not this one's). Only "
+            "consulted once ETF_TRANSMISSION_SIZING_ENABLED is True."
+        ),
+    )
+
     # --- Runtime / IO ---
     OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])

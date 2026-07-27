@@ -758,6 +758,18 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     # never coerced into a fabricated no-op.
                     "meta_label_composite": _safe_float_or_none(row.get("Meta_Label_Composite")),
                     "regime_multiplier": _safe_float_or_none(row.get("Regime_Multiplier")),
+                    # ETF-arbitrage volatility-transmission derate applied to
+                    # this name's sizing weight (risk/etf_transmission.py,
+                    # composed in sizing/position_sizer.py::size_position step
+                    # 3 alongside regime_multiplier above). null -- never a
+                    # fabricated 1.0 -- when settings.ETF_TRANSMISSION_SIZING_ENABLED
+                    # is False, i.e. the multiplier was never computed at all
+                    # (CONSTRAINT #4). Orchestrator-only: the advisory path
+                    # keeps its own decoupled 5% cap and is not routed through
+                    # size_position(), so it has no source for this field --
+                    # pinned in tests/test_state_snapshot_parity.py's
+                    # ORCHESTRATOR_ONLY_FIELDS.
+                    "etf_transmission_multiplier": _safe_float_or_none(row.get("ETF_Transmission_Multiplier")),
                     "kelly_target_pre_regime": _safe_float_or_none(row.get("Kelly_Target_Pre_Regime")),
                     "kelly_target_post_regime": _safe_float_or_none(row.get("Kelly_Target_Post_Regime")),
                     # Guardrail telemetry (sizing/position_sizer.py) -- did any

@@ -108,6 +108,17 @@ COLUMN_SCHEMA = [
     # multiplier < 1.0; see sizing/position_sizer.py's module docstring.
     {"header": "Sizing Capped", "key": "Sizing_Was_Capped", "format": "string"},
     {"header": "Sizing Binding Constraint", "key": "Sizing_Binding_Constraint", "format": "string"},
+    # ETF-arbitrage volatility-transmission derate applied to this name's
+    # sizing weight this cycle (risk/etf_transmission.py, composed in
+    # sizing/position_sizer.py::size_position step 3 alongside the HMM
+    # Regime_Multiplier). 1.0 = no derating. NaN -- never a fabricated 1.0 --
+    # when settings.ETF_TRANSMISSION_SIZING_ENABLED is False, i.e. the
+    # multiplier was never computed at all (CONSTRAINT #4); consumers of the
+    # column degrade THAT to the 1.0 no-op themselves. Deliberately NOT
+    # reflected in Sizing_Was_Capped / Sizing_Binding_Constraint: a continuous
+    # risk derate is not a hard-ceiling event, exactly as for the regime
+    # multiplier -- see sizing/position_sizer.py's module docstring.
+    {"header": "ETF Transmission Multiplier", "key": "ETF_Transmission_Multiplier", "format": "number"},
     {"header": "Option Strategy", "key": "Option Strategy", "format": "string"},
     {"header": "Buy Range", "key": "buyRange", "format": "string"},
     # Dedicated sell-side range produced by strategy_engine.apply_sell_side_range.
