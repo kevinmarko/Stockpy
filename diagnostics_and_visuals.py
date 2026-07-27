@@ -173,14 +173,21 @@ HTML_REPORT_TEMPLATE = """
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --bg-dark: #0b0f19;
-            --card-bg: #111827;
-            --card-bg-soft: #161e2e;
-            --text-main: #f3f4f6;
-            --text-muted: #9ca3af;
-            --accent: #3b82f6;
-            --accent-glow: rgba(59, 130, 246, 0.15);
-            --border: #1f2937;
+            /* Aligned to webapp/src/theme.ts's validated dark-fintech palette
+               (base/surface/textPrimary/textMuted/accent/growth/decline/caution)
+               so the daily HTML report and the Pilots PWA read as one product.
+               --accent-light is this report's own decorative-only tint (used for
+               header/tile gradients) -- not independently CVD-validated, since
+               it never encodes data, only text-gradient flourish. */
+            --bg-dark: #0b0e11;
+            --card-bg: #12161c;
+            --card-bg-soft: #1a212b;
+            --text-main: #f2f5f8;
+            --text-muted: #9aa7b4;
+            --accent: #38bdf8;
+            --accent-light: #7dd3fc;
+            --accent-glow: rgba(56, 189, 248, 0.15);
+            --border: rgba(255, 255, 255, 0.08);
             --success: #10b981;
             --success-glow: rgba(16, 185, 129, 0.15);
             --danger: #ef4444;
@@ -211,7 +218,7 @@ HTML_REPORT_TEMPLATE = """
         }
         h1 {
             font-size: 24px; font-weight: 700; letter-spacing: -0.025em;
-            background: linear-gradient(to right, #60a5fa, #3b82f6);
+            background: linear-gradient(to right, var(--accent-light), var(--accent));
             -webkit-background-clip: text; background-clip: text;
             -webkit-text-fill-color: transparent;
         }
@@ -255,7 +262,7 @@ HTML_REPORT_TEMPLATE = """
         .summary-tile::before {
             content: ''; position: absolute; top: 0; left: 0;
             width: 100%; height: 2px;
-            background: linear-gradient(to right, #60a5fa, #3b82f6);
+            background: linear-gradient(to right, var(--accent-light), var(--accent));
         }
         .summary-tile .label {
             color: var(--text-muted); font-size: 11px; font-weight: 600;
@@ -329,7 +336,7 @@ HTML_REPORT_TEMPLATE = """
         .exec-card::before {
             content: ''; position: absolute; top: 0; left: 0;
             width: 100%; height: 3px;
-            background: linear-gradient(to right, #60a5fa, #3b82f6);
+            background: linear-gradient(to right, var(--accent-light), var(--accent));
         }
         .exec-card h3 {
             color: var(--text-muted); font-size: 13px; font-weight: 600;
@@ -853,7 +860,7 @@ HTML_REPORT_TEMPLATE = """
                     },
                     options: {
                         responsive: true, maintainAspectRatio: false,
-                        plugins: { legend: { position: 'bottom', labels: { color: '#9ca3af', font: { size: 10 } } } }
+                        plugins: { legend: { position: 'bottom', labels: { color: '#9aa7b4', font: { size: 10 } } } }
                     }
                 });
             }
