@@ -830,3 +830,8 @@ process, and today's protection is convention, not enforcement."
   status line asked for; confirms the live daemon's entry points are protected
   by Fix 2 today, and that protection is convention (an easy-to-omit import
   order), not something enforced by tests or tooling.
+- [PR #439](https://github.com/kevinmarko/Stockpy/pull/439) — closes that
+  enforcement gap: a static AST-based test
+  (`tests/test_cnn_lstm_import_order.py`) that fails the build if
+  `main.py`/`main_orchestrator.py`/`pipeline/production_steps.py` ever
+  reorder `pandas` before `tensorflow` again.
