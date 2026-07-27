@@ -1,0 +1,32 @@
+[Unit]
+Description=InvestYo Persistent Orchestrator Daemon
+Documentation=https://github.com/kevinmarko/Stockpy
+After=network.target
+Wants=investyo-mcp.service
+
+[Service]
+Type=simple
+User=investyo
+Group=investyo
+WorkingDirectory=/opt/investyo
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/investyo/.env
+ExecStart=/opt/investyo/.venv/bin/python -m desktop.orchestrator_daemon
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/investyo
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=investyo-daemon
+
+[Install]
+WantedBy=multi-user.target
