@@ -2473,6 +2473,105 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── ETF Holdings Ingestion (data/etf_holdings.py) ────────────────────────
+    # Feeds the planned "ETF volatility transmission" risk overlay grounded in
+    # Ben-David, Franzoni & Moussawi (2018), "Do ETFs Increase Volatility?",
+    # Journal of Finance 73(6):2471-2535.  Nothing in the platform consumes
+    # these holdings yet — this is a self-contained data-layer capability.
+    ETF_HOLDINGS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for live ETF constituent-holdings ingestion "
+            "(SEC N-PORT primary, optional iShares CSV secondary). False "
+            "(the default) is a complete no-op: data.etf_holdings."
+            "get_etf_holdings() returns {} immediately with ZERO network "
+            "calls and zero DB reads, so a fresh clone / CI run never "
+            "touches EDGAR. Nothing in the platform consumes ETF holdings "
+            "yet — enabling this only populates the etf_holdings cache "
+            "table; it changes no score, weight, or order."
+        ),
+    )
+    ETF_HOLDINGS_TICKERS: list[str] = Field(
+        default_factory=lambda: [
+            "SPY", "IVV", "VOO", "QQQ", "DIA", "IWM",
+            "XLK", "XLF", "XLV", "XLE", "XLI",
+            "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC",
+        ],
+        description=(
+            "ETF wrapper suite whose constituent holdings are ingested each "
+            "refresh — the broad-market and sector wrappers that account for "
+            "the bulk of US single-name ETF ownership. JSON-encoded list in "
+            ".env (e.g. ETF_HOLDINGS_TICKERS='[\"SPY\",\"QQQ\"]'). Only "
+            "consulted once ETF_HOLDINGS_ENABLED is True. A ticker whose "
+            "holdings cannot be resolved is simply ABSENT from the result "
+            "(never present with a fabricated empty or zero-weight holdings "
+            "list — CONSTRAINT #4)."
+        ),
+    )
+    ETF_HOLDINGS_MARKET_PROXY: str = Field(
+        default="SPY",
+        description=(
+            "Ticker treated as the broad-market ETF wrapper when a consumer "
+            "needs a single market-wide ownership baseline rather than the "
+            "full ETF_HOLDINGS_TICKERS suite. Only consulted once "
+            "ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+    ETF_HOLDINGS_REFRESH_DAYS: int = Field(
+        default=7,
+        description=(
+            "Age (days, measured on the cached row's fetched_at) beyond "
+            "which an ETF's cached etf_holdings rows are re-fetched from the "
+            "source. Deliberately coarse: SEC N-PORT reports three month-ends "
+            "per filing and publishes ~60 days after quarter end, so the "
+            "underlying data changes at most monthly and is 1-5 months stale "
+            "by construction — polling faster than this only burns SEC "
+            "requests for identical rows. Only consulted once "
+            "ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+    ETF_HOLDINGS_ISSUER_CSV_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in SECONDARY holdings source: the iShares issuer CSV "
+            "endpoint, consulted ONLY when SEC N-PORT produced nothing for a "
+            "symbol. False (the default) means the iShares endpoint is never "
+            "contacted — N-PORT is the sole source. Never the default "
+            "because issuer files are undocumented, unversioned, and can "
+            "change shape without notice; N-PORT is a regulatory filing with "
+            "a fixed schema. Enabling this also imports a family "
+            "constraint: iShares covers IVV plus the iShares sector suite, "
+            "and the two ETF families must never be mixed inside one "
+            "composite (see data/etf_holdings.py). Only consulted once "
+            "ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+    ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE: float = Field(
+        default=60.0,
+        description=(
+            "Hard wall-clock ceiling (seconds) for get_etf_holdings()'s "
+            "entire per-cycle loop over the ETF universe. Mirrors "
+            "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE for the identical "
+            "risk shape: a slow-but-responding EDGAR endpoint can otherwise "
+            "stack its per-request timeout across every remaining ETF with "
+            "no overall ceiling — once this budget elapses, remaining ETFs "
+            "are served from the cache only (no network) and any ETF with no "
+            "cached rows is simply absent from the result, never fabricated. "
+            "Only consulted once ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+    ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD: int = Field(
+        default=3,
+        description=(
+            "Consecutive no-holdings outcomes (exception or empty result) "
+            "within one get_etf_holdings() cycle before the live source is "
+            "skipped for the rest of that cycle's ETFs — avoids burning the "
+            "wall-clock budget on a source that is clearly failing for every "
+            "remaining symbol. Mirrors ATTENTION_CIRCUIT_BREAKER_THRESHOLD. "
+            "Only consulted once ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+
     @field_validator("OUTPUT_DIR")
     @classmethod
     def _ensure_output_dir(cls, value: Path) -> Path:
