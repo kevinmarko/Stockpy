@@ -1983,10 +1983,32 @@ export interface SignalImportance {
 }
 
 /**
+ * One day's attention weight from forecasting/bert_lla.py's LLAAttention
+ * layer, over the "bert_lla" ablation's lookback window.
+ */
+export interface ForecastAttentionWeight {
+  date: string; // ISO date (YYYY-MM-DD)
+  alpha: number; // in [0, 1]; every window's alphas sum to ~1.0
+}
+
+/**
+ * BERT-LLA attention-weight overlay for one forecast request — which days in
+ * the lookback window the "bert_lla" ablation weighted most heavily. `null`
+ * whenever `settings.BERT_LLA_ENABLED` is off, torch isn't installed, the
+ * sentiment-coverage gate blocked training, or the model otherwise didn't
+ * run this request — never a fabricated weight series (CONSTRAINT #4).
+ */
+export interface ForecastAttention {
+  model: string; // "bert_lla"
+  window_size: number;
+  weights: ForecastAttentionWeight[];
+}
+
+/**
  * GET /metrics/forecast/{symbol} — multi-horizon blended forecast + Monte
- * Carlo bands from `ForecastingEngine.generate_forecast`. Every field is a
- * price level and may be `null` (NaN→null); the backend 404s when there are
- * no bars at all, so a rendered response always has *some* horizon populated.
+ * Carlo bands from `ForecastingEngine.generate_forecast`. Every price field
+ * may be `null` (NaN→null); the backend 404s when there are no bars at all,
+ * so a rendered response always has *some* horizon populated.
  */
 export interface ForecastResult {
   Forecast_10: number | null;
@@ -2007,9 +2029,12 @@ export interface ForecastResult {
   Forecast_60_Upper: number | null;
   Forecast_90_Lower: number | null;
   Forecast_90_Upper: number | null;
+  attention: ForecastAttention | null;
   // Prophet overlay (present only when Prophet ran); index signature carries
-  // any additional model columns the engine emits without silently dropping them.
-  [key: string]: number | null;
+  // any additional model columns the engine emits without silently dropping
+  // them. Widened to include ForecastAttention so `attention` above (a
+  // named, non-numeric property) still satisfies the index signature.
+  [key: string]: number | null | ForecastAttention;
 }
 
 // ---------------------------------------------------------------------------

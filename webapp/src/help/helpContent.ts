@@ -78,6 +78,8 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A multi-horizon, probabilistic price projection — never a guarantee. An input that can't be computed shows '—', never a fabricated number.",
   "garch vol":
     "A GJR-GARCH volatility estimate that weights recent bad days more than good ones (the leverage effect) — more accurate than a plain moving standard deviation. It's the primary vol input for sizing and options.",
+  "attention weight":
+    "How much the BERT-LLA forecaster's self-attention layer weighted each day in its lookback window when forming a forecast — shaded on the price chart, darker means higher weight. This reflects which days the model itself found most informative, not a buy/sell signal or a claim about future importance. Only appears when BERT-LLA actually ran for that request; absent otherwise, never a fabricated overlay.",
   "put credit spread":
     "Sells a put and buys a lower-strike protective put, collecting premium if the stock stays above the short put; max loss is the spread width minus premium. Suggested only when IVR, VRP, and macro are all favorable. Advisory only.",
   "iron condor":
@@ -201,7 +203,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
     title: "Forecast Viewer",
     description:
       "Multi-horizon, probabilistic price forecasts for one symbol, with the model's volatility (GJR-GARCH) and regime inputs. Forecasts are not guarantees — an input that can't be computed shows '—', never a fabricated number.",
-    keyConcepts: ["forecast", "garch vol", "hmm regime"],
+    keyConcepts: ["forecast", "garch vol", "hmm regime", "attention weight"],
   },
   "sector-selection": {
     title: "Sector Selection",
