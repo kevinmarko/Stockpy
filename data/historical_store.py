@@ -2072,6 +2072,96 @@ class HistoricalStore:
             logger.warning("HistoricalStore.get_sentiment_aggregate_by_symbol failed: %s", exc)
             return {}
 
+    def get_sentiment_daily_by_source_class(
+        self, symbols: List[str], start_day: str, end_day: str
+    ) -> Dict[str, Dict[str, Dict[str, float]]]:
+        """Aggregate ``sentiment_ingestion_audit`` rows per ``(symbol,
+        trading_day)``, split into NEWS vs. COMMENT buckets via
+        ``data.sentiment_source_class.classify_source`` -- the shared read
+        this feeds Sector Selection's Sector Heat Factor (news+review volume)
+        and the composite sentiment index S_t (news_score/review_score).
+
+        Returns ``{symbol: {trading_day: {news_count, news_mean_score,
+        comment_count, comment_mean_score}}}``. Read-only, vectorized pandas
+        groupby (no per-row Python loop). ``{}`` on any failure, on an empty
+        ``symbols``/date range, or when no rows match (CONSTRAINT #6 --
+        never raises).
+
+        NaN vs. zero (CONSTRAINT #4): a ``(symbol, trading_day)`` with rows
+        in one class but none in the other gets a genuine ``0`` count and
+        ``NaN`` mean score for the empty class -- "we ingested that day and
+        saw nothing from that class" is a real zero. A ``(symbol,
+        trading_day)`` entirely absent from the returned dict was never
+        observed at all -- callers MUST treat a missing key as unknown
+        coverage, never coerce it to zero themselves, since ingestion being
+        off entirely (``SENTIMENT_INGESTION_ENABLED=False``, today's
+        default) looks identical to a real quiet day at this call's level;
+        distinguishing "off" from "quiet" is ``get_sentiment_archive_depth_
+        by_source``'s job, not this method's.
+        """
+        if not symbols or not start_day or not end_day:
+            return {}
+        try:
+            from data.sentiment_source_class import classify_source
+            from db_config import session_scope, get_dbapi_connection
+            placeholders = ",".join("?" for _ in symbols)
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    cursor = conn.execute(
+                        f"""
+                        SELECT symbol, trading_day, source_name, final_weighted_score
+                        FROM sentiment_ingestion_audit
+                        WHERE trading_day >= ? AND trading_day <= ?
+                          AND symbol IN ({placeholders})
+                        """,
+                        [start_day, end_day, *[str(s).upper() for s in symbols]],
+                    )
+                    rows = cursor.fetchall()
+            if not rows:
+                return {}
+            df = pd.DataFrame(
+                rows, columns=["symbol", "trading_day", "source_name", "final_weighted_score"]
+            )
+            df["source_class"] = df["source_name"].map(classify_source)
+            df = df[df["source_class"].isin(("news", "comment"))]
+            if df.empty:
+                return {}
+            grouped = df.groupby(["symbol", "trading_day", "source_class"]).agg(
+                count=("final_weighted_score", "size"),
+                mean_score=("final_weighted_score", "mean"),
+            )
+            result: Dict[str, Dict[str, Dict[str, float]]] = {}
+            for (symbol, trading_day, source_class), row in grouped.iterrows():
+                by_day = result.setdefault(str(symbol), {}).setdefault(
+                    str(trading_day),
+                    {
+                        "news_count": float("nan"),
+                        "news_mean_score": float("nan"),
+                        "comment_count": float("nan"),
+                        "comment_mean_score": float("nan"),
+                    },
+                )
+                by_day[f"{source_class}_count"] = float(row["count"])
+                by_day[f"{source_class}_mean_score"] = (
+                    float(row["mean_score"]) if pd.notna(row["mean_score"]) else float("nan")
+                )
+            # A class with zero ingested rows for a day that WAS observed
+            # (the other class has rows) is a genuine zero count, not an
+            # unknown -- fill count only, leave the mean score NaN (there is
+            # no score to average over zero rows).
+            for by_symbol in result.values():
+                for by_day in by_symbol.values():
+                    if pd.isna(by_day["news_count"]) and not pd.isna(by_day["comment_count"]):
+                        by_day["news_count"] = 0.0
+                    if pd.isna(by_day["comment_count"]) and not pd.isna(by_day["news_count"]):
+                        by_day["comment_count"] = 0.0
+            return result
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_sentiment_daily_by_source_class failed: %s", exc)
+            return {}
+
     def get_sentiment_archive_depth_by_source(self) -> Dict[str, Dict[str, Any]]:
         """Per-source archive depth for ``sentiment_ingestion_audit`` --
         earliest/latest ``as_of``, row count, and derived ``depth_days``,
