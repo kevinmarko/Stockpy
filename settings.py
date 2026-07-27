@@ -1587,6 +1587,69 @@ class Settings(BaseSettings):
         default=0.6,
         description="Gaussian width 'c' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
     )
+    SECTOR_SIMILARITY_EMBEDDER: str = Field(
+        default="sbert",
+        description=(
+            "Embedding backend for Related Sector Selection's semantic-"
+            "similarity term ('sbert' | 'openai' | 'none'). 'sbert' (the "
+            "default) uses a local sentence-transformers model -- see "
+            "SECTOR_SIMILARITY_MODEL -- with zero network calls and zero "
+            "marginal API cost, matching this codebase's free-first, local-"
+            "model posture (local FinBERT, embedded faiss). 'openai' routes "
+            "through llm.router.get_sector_embedding_provider() instead "
+            "(paid, network-dependent). 'none' disables the similarity term "
+            "entirely -- every cosine_similarity is NaN. Only consulted "
+            "once SECTOR_SELECTION_ENABLED is True."
+        ),
+    )
+    SECTOR_SIMILARITY_MODEL: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description=(
+            "Hugging Face model id loaded when SECTOR_SIMILARITY_EMBEDDER="
+            "'sbert'. Requires the optional sentence-transformers package "
+            "(requirements-optional.txt) -- absent, SBERT_AVAILABLE is "
+            "False and every cosine_similarity degrades to NaN, never a "
+            "fabricated value (CONSTRAINT #4)."
+        ),
+    )
+    SECTOR_SIMILARITY_POOLING: str = Field(
+        default="max",
+        description=(
+            "Pooling strategy applied to SBERT token embeddings ('max' | "
+            "'mean'). 'max' matches the source methodology's specified "
+            "max-pooling. NOTE: sentence-transformers/all-MiniLM-L6-v2 "
+            "ships configured for MEAN pooling and was trained that way -- "
+            "max-pooled output from this checkpoint is off-distribution. "
+            "Kept as a setting (default 'max', spec-faithful) rather than "
+            "silently substituting 'mean' so the difference is measurable, "
+            "not assumed; see docs/signals/sector_selection.md."
+        ),
+    )
+    SECTOR_SELECTION_TOP_N: int = Field(
+        default=3,
+        description=(
+            "Default number of top-ranked related sectors selected per "
+            "target symbol. The webapp Sector Selection panel's N slider "
+            "overrides this per-request; this is only the engine/API "
+            "default when no override is supplied."
+        ),
+    )
+    SECTOR_SELECTION_W1: float = Field(
+        default=0.4,
+        description=(
+            "Default news-volume weight, mirrored from the composite "
+            "sentiment index S_t = w1*news + w2*review "
+            "(signals/sentiment_index.py) for consistency, though Sector "
+            "Selection's own ranking formula (cosine_similarity * SHF) "
+            "does not currently consume w1/w2 directly -- reserved for the "
+            "webapp panel's weight sliders per the source methodology's "
+            "UI spec."
+        ),
+    )
+    SECTOR_SELECTION_W2: float = Field(
+        default=0.1,
+        description="Default review-volume weight -- see SECTOR_SELECTION_W1.",
+    )
 
     WIKIPEDIA_ATTENTION_ENABLED: bool = Field(
         default=False,
