@@ -1272,6 +1272,21 @@ class Settings(BaseSettings):
             "direct Finnhub path is ever retired in favor of this composite."
         ),
     )
+    SENTIMENT_COMMENT_SOURCES: str = Field(
+        default="reddit,stocktwits",
+        description=(
+            "Comma-separated subset of SENTIMENT_SOURCES provider names "
+            "classified as investor-forum COMMENT sources (subjective, "
+            "retail-authored) rather than NEWS sources (objective, "
+            "editorially-published) -- see data/sentiment_source_class.py's "
+            "classify_source(). Every source_name NOT listed here is treated "
+            "as news. 'stocktwits' is listed even though no StockTwitsSource "
+            "exists yet (Sentiment Source Class Phase 4) so the taxonomy is "
+            "already correct once it lands, with zero behavior change today "
+            "-- an unrecognized source_name simply never appears in "
+            "sentiment_ingestion_audit, so listing it early is a no-op."
+        ),
+    )
     SENTIMENT_INGESTION_LOOKBACK_DAYS: int = Field(
         default=1,
         description=(

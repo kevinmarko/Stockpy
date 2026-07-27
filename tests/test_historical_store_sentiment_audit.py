@@ -282,6 +282,136 @@ class TestGetSentimentAggregateBySymbol:
         assert result == {}
 
 
+class TestGetSentimentDailyBySourceClass:
+    """Sentiment Source Class Phase 0 (Sector Selection / BERT-LLA
+    integration) -- per-(symbol, trading_day) news vs. comment aggregation,
+    the shared substrate for Sector Heat Factor's news+review volume terms
+    and the composite sentiment index S_t."""
+
+    def _doc(self, **overrides):
+        base = dict(
+            as_of=datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc),  # 10:00 ET
+            symbol="AAPL",
+            source_name="finnhub",
+            text_content="test",
+            raw_sentiment_score=0.5,
+        )
+        base.update(overrides)
+        return base
+
+    def test_empty_symbols_returns_empty_dict(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        assert store.get_sentiment_daily_by_source_class([], "2026-07-21", "2026-07-21") == {}
+
+    def test_no_rows_returns_empty_dict(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        result = store.get_sentiment_daily_by_source_class(
+            ["AAPL"], "2026-07-21", "2026-07-21"
+        )
+        assert result == {}
+
+    def test_news_only_day_yields_zero_comment_count_not_nan_count(self, tmp_path):
+        """A day WITH ingestion but no comment-source rows gets a genuine
+        zero comment count (we looked and saw nothing), while the comment
+        MEAN SCORE stays NaN (there is no score to average over zero rows)."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([
+            self._doc(source_name="gdelt", final_weighted_score=0.4),
+            self._doc(source_name="yahoo_rss", final_weighted_score=0.8),
+        ])
+        result = store.get_sentiment_daily_by_source_class(
+            ["AAPL"], "2026-07-21", "2026-07-21"
+        )
+        day = result["AAPL"]["2026-07-21"]
+        assert day["news_count"] == pytest.approx(2.0)
+        assert day["news_mean_score"] == pytest.approx(0.6)
+        assert day["comment_count"] == pytest.approx(0.0)
+        import math
+        assert math.isnan(day["comment_mean_score"])
+
+    def test_comment_only_day_yields_zero_news_count(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([
+            self._doc(source_name="reddit", final_weighted_score=-0.2),
+        ])
+        result = store.get_sentiment_daily_by_source_class(
+            ["AAPL"], "2026-07-21", "2026-07-21"
+        )
+        day = result["AAPL"]["2026-07-21"]
+        assert day["comment_count"] == pytest.approx(1.0)
+        assert day["comment_mean_score"] == pytest.approx(-0.2)
+        assert day["news_count"] == pytest.approx(0.0)
+
+    def test_day_never_ingested_is_absent_not_zero(self, tmp_path):
+        """CONSTRAINT #4: a trading_day with NO rows at all (ingestion never
+        ran, or ran and found nothing off-window) must not appear in the
+        result at all -- callers must not coerce a missing key to zero."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([self._doc()])  # 2026-07-21 only
+        result = store.get_sentiment_daily_by_source_class(
+            ["AAPL"], "2026-07-01", "2026-07-31"
+        )
+        assert "2026-07-20" not in result["AAPL"]
+        assert "2026-07-22" not in result["AAPL"]
+        assert "2026-07-21" in result["AAPL"]
+
+    def test_unknown_source_excluded_from_both_buckets(self, tmp_path):
+        """A source_name recognized by neither list must not silently
+        inflate either the news or comment volume term."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([
+            self._doc(source_name="some_future_unclassified_source"),
+        ])
+        result = store.get_sentiment_daily_by_source_class(
+            ["AAPL"], "2026-07-21", "2026-07-21"
+        )
+        assert result == {}
+
+    def test_symbols_filtered_independently(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([
+            self._doc(symbol="AAPL", source_name="reddit", final_weighted_score=0.5),
+            self._doc(symbol="MSFT", source_name="reddit", final_weighted_score=-0.5),
+        ])
+        result = store.get_sentiment_daily_by_source_class(
+            ["AAPL"], "2026-07-21", "2026-07-21"
+        )
+        assert set(result.keys()) == {"AAPL"}
+
+    def test_date_range_scoped_correctly(self, tmp_path):
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+        store.save_sentiment_documents([
+            self._doc(as_of=datetime(2026, 6, 1, 14, 0, tzinfo=timezone.utc)),
+            self._doc(as_of=datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc)),
+        ])
+        result = store.get_sentiment_daily_by_source_class(
+            ["AAPL"], "2026-07-01", "2026-07-31"
+        )
+        assert list(result["AAPL"].keys()) == ["2026-07-21"]
+
+    def test_read_failure_returns_empty_dict(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a read failure must never raise."""
+        db = str(tmp_path / "sentiment.db")
+        store = HistoricalStore(db_path=db)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+        monkeypatch.setattr(store, "Session", _boom)
+        result = store.get_sentiment_daily_by_source_class(
+            ["AAPL"], "2026-07-21", "2026-07-21"
+        )
+        assert result == {}
+
+
 class TestGetSentimentArchiveDepthBySource:
     """Per-source depth tracking -- lets a future validation gate check
     institutional (GDELT/EDGAR/Finnhub) depth separately from social
