@@ -483,6 +483,16 @@ class NewsCatalystSignal(SignalModule):
     def __init__(self) -> None:
         # Per-cycle caches populated by pre_compute
         self._news_scores: Dict[str, float] = {}          # symbol → averaged score
+        # Archive-only counterpart of _news_scores, fed to _archive_news_history
+        # (never to compute()/the live trading signal): NaN when this cycle
+        # genuinely had no news data for the symbol (a fetch/scoring failure,
+        # or zero headlines), distinct from a real computed neutral score.
+        # _news_scores itself MUST stay a safe finite float always -- it feeds
+        # SignalAggregator.aggregate()'s weighted-sum loop, which has no
+        # NaN/None guard on SignalOutput.score (a NaN would either crash a
+        # None*float multiply or silently corrupt final_score for every other
+        # module that cycle). See pre_compute's inline comment for the split.
+        self._news_archive_scores: Dict[str, float] = {}
         self._earnings_dt: Dict[str, Optional[datetime]] = {}  # symbol → next earnings
         # Multi-source credibility-weighted aggregate (Sentiment Pipeline Phase 4),
         # keyed by symbol -- see _read_sentiment_credibility_aggregate().
@@ -576,11 +586,13 @@ class NewsCatalystSignal(SignalModule):
         writeback to ``dashboard_df``, AND in instance attributes for
         ``compute()`` to read.
 
-        If ``FINNHUB_API_KEY`` is unset, all scores are 0.0 (no crash).
+        If ``FINNHUB_API_KEY`` is unset, ``_news_scores``/``_news_archive_scores``
+        stay empty (no crash, no fabricated per-symbol 0.0 either).
         """
         from settings import settings as _settings
 
         self._news_scores = {}
+        self._news_archive_scores = {}
         self._earnings_dt = {}
 
         # Collect symbols from the universe DataFrame -- computed up front so
@@ -644,7 +656,15 @@ class NewsCatalystSignal(SignalModule):
                 multiplier = _earnings_proximity_multiplier(
                     next_earnings, now, suppress_h, dampen_d
                 )
-                self._news_scores[symbol] = max(-1.0, min(1.0, raw * multiplier))
+                live_score = max(-1.0, min(1.0, raw * multiplier))
+                self._news_scores[symbol] = live_score
+                # Archive honestly: NaN when there were genuinely zero
+                # headlines to score this cycle (real "no data", not a
+                # computed neutral) -- save_news_sentiment already NaN-shapes
+                # this to a NULL row rather than a fabricated 0.0. The live
+                # score above is unaffected either way (see __init__'s
+                # comment on why it must stay a safe finite float).
+                self._news_archive_scores[symbol] = live_score if scores else float("nan")
 
                 # Courtesy delay to respect the Finnhub free-tier rate limit
                 # for the NEXT symbol's fetch_next_earnings/fetch_company_news
@@ -654,7 +674,12 @@ class NewsCatalystSignal(SignalModule):
                 logger.warning(
                     "NewsCatalystSignal.pre_compute: error for %s: %s", symbol, exc
                 )
+                # Live score: safe finite neutral (see __init__'s comment —
+                # aggregate() cannot tolerate NaN/None here). Archive: honest
+                # NaN — a fetch/scoring failure is real "no data", never a
+                # fabricated neutral reading.
                 self._news_scores[symbol] = 0.0
+                self._news_archive_scores[symbol] = float("nan")
 
         # Populate context for orchestrator writeback to dashboard_df columns
         context.news_sentiment_scores = dict(self._news_scores)
@@ -663,7 +688,7 @@ class NewsCatalystSignal(SignalModule):
             for sym, dt in self._earnings_dt.items()
         }
 
-        self._archive_news_history(self._news_scores)
+        self._archive_news_history(self._news_archive_scores)
 
         logger.info(
             "NewsCatalystSignal.pre_compute: scored %d symbols "

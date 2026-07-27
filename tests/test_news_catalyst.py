@@ -24,6 +24,7 @@ TestContextPopulation   — pre_compute writes news_sentiment_scores + earnings_
 TestRegimeGate          — is_active_in_regime suppression + SignalAggregator wiring
 """
 
+import math
 import os
 import types
 from datetime import datetime, timedelta, timezone
@@ -75,6 +76,7 @@ def _make_signal() -> NewsCatalystSignal:
     """Return a fresh signal instance without auto-registration side-effects."""
     s = object.__new__(NewsCatalystSignal)
     s._news_scores = {}
+    s._news_archive_scores = {}
     s._earnings_dt = {}
     s._sentiment_credibility = {}
     return s
@@ -882,7 +884,14 @@ class TestNewsHistoryArchive:
         # the write itself, not the raw constructor call count.
         mock_store_instance.save_news_sentiment.assert_called_once()
         call_args = mock_store_instance.save_news_sentiment.call_args
-        assert call_args[0][0] == sig._news_scores
+        # Archives _news_archive_scores, NOT _news_scores (they're separate
+        # dicts — see TestArchiveVsLiveScoreHonesty for the case where they
+        # diverge). In THIS scenario every symbol scored real headlines, so
+        # the two dicts happen to hold equal content — that coincidence is
+        # exactly why this assertion alone can't tell the dicts apart; the
+        # explicit `is`/identity check below can.
+        assert call_args[0][0] == sig._news_archive_scores
+        assert call_args[0][0] is not sig._news_scores
 
     def test_archive_disabled_skips_write(self):
         """settings.NEWS_HISTORY_CAPTURE_ENABLED=False must skip the write entirely."""
@@ -904,6 +913,132 @@ class TestNewsHistoryArchive:
         with patch("data.historical_store.HistoricalStore", mock_store_cls):
             NewsCatalystSignal._archive_news_history({})
         mock_store_cls.assert_not_called()
+
+
+# ===========================================================================
+# TestArchiveVsLiveScoreHonesty -- the fabricated-0.0 fix
+#
+# Previously, both a fetch/scoring FAILURE (an exception during Finnhub or
+# FinBERT calls) and a genuinely EMPTY headline list persisted as a literal
+# 0.0 in news_history, indistinguishable from a real, computed neutral
+# score. HistoricalStore.save_news_sentiment already NaN-shapes a NaN to a
+# NULL row (never a fabricated 0.0) -- the bug was that pre_compute() never
+# actually produced a NaN in either case. It now does, via a SEPARATE
+# _news_archive_scores dict; _news_scores (fed to compute() -> the live
+# trading signal via SignalAggregator.aggregate()) is deliberately left
+# untouched, because aggregate()'s weighted-sum loop (`contrib = output.score
+# * weight`) has no NaN/None guard: a NaN score there would corrupt
+# final_score for every OTHER module that cycle (NaN propagates through
+# addition), and a None score would crash the multiply outright. This class
+# proves the live score never carries the fix and the archive score always
+# does.
+# ===========================================================================
+
+class TestArchiveVsLiveScoreHonesty:
+    def test_exception_path_archives_nan_but_live_score_stays_zero(self):
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_client = MagicMock()
+        mock_client.company_news.side_effect = RuntimeError("rate limit")
+        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    sig.pre_compute(universe, ctx)
+
+        # Live score: unaffected, still the safe finite sentinel.
+        assert sig._news_scores["AAPL"] == 0.0
+        # Archive score: honestly NaN, distinguishable from real neutral.
+        assert math.isnan(sig._news_archive_scores["AAPL"])
+
+    def test_empty_headlines_archives_nan_but_live_score_stays_zero(self):
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_client = MagicMock()
+        mock_client.company_news.return_value = []  # zero headlines this cycle
+        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.time.sleep"):
+                        sig.pre_compute(universe, ctx)
+
+        assert sig._news_scores["AAPL"] == 0.0
+        assert math.isnan(sig._news_archive_scores["AAPL"])
+
+    def test_successful_scoring_archives_the_same_real_value_as_live(self):
+        """When there genuinely IS a headline to score, both dicts hold the
+        SAME real (non-NaN) value -- the split only diverges on absence of
+        data, never on a real result."""
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_client = MagicMock()
+        mock_client.company_news.return_value = [{"headline": "Apple beats and surges"}]
+        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.time.sleep"):
+                        sig.pre_compute(universe, ctx)
+
+        assert not math.isnan(sig._news_scores["AAPL"])
+        assert sig._news_archive_scores["AAPL"] == pytest.approx(sig._news_scores["AAPL"])
+
+    def test_mixed_batch_only_the_failed_symbol_archives_nan(self):
+        """One symbol fails, one succeeds, in the SAME pre_compute() call --
+        proves the per-symbol distinction isn't accidentally batch-wide."""
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["BAD", "GOOD"])
+        mock_client = MagicMock()
+
+        def _company_news(client, symbol, lookback):
+            if symbol == "BAD":
+                raise RuntimeError("simulated failure")
+            return [{"headline": "Great quarter"}]
+
+        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                with patch("signals.news_catalyst.fetch_company_news", side_effect=_company_news):
+                    with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                        with patch("signals.news_catalyst.time.sleep"):
+                            sig.pre_compute(universe, ctx)
+
+        assert math.isnan(sig._news_archive_scores["BAD"])
+        assert not math.isnan(sig._news_archive_scores["GOOD"])
+        # Live scores are both safe finite floats regardless.
+        assert sig._news_scores["BAD"] == 0.0
+        assert not math.isnan(sig._news_scores["GOOD"])
+
+    def test_archived_nan_persists_as_null_not_a_fabricated_zero(self):
+        """End-to-end proof that the honest NaN this module now produces is
+        exactly what HistoricalStore.save_news_sentiment already NaN-shapes
+        to a NULL row -- the fix closes the gap between a producer that
+        never emitted NaN and a persistence layer that was always ready for
+        one."""
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_client = MagicMock()
+        mock_client.company_news.side_effect = RuntimeError("rate limit")
+        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+
+        mock_store_instance = MagicMock()
+        mock_store_instance.get_finbert_score.return_value = None
+        mock_store_cls = MagicMock(return_value=mock_store_instance)
+
+        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("data.historical_store.HistoricalStore", mock_store_cls):
+                        sig.pre_compute(universe, ctx)
+
+        archived = mock_store_instance.save_news_sentiment.call_args[0][0]
+        assert math.isnan(archived["AAPL"])
 
 
 # ===========================================================================
