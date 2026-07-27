@@ -917,7 +917,7 @@ function ExecutionModeSection({
 
   return (
     <SectionCard title="Execution Mode">
-      <div style={{ marginBottom: 12, color: "var(--text-dim)" }}>
+      <div style={{ marginBottom: 12, color: "var(--text-muted)" }}>
         Controls whether the orchestrator is permitted to place live trades or is quarantined.
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
@@ -944,7 +944,7 @@ function ExecutionModeSection({
         </Button>
         <Button
           variant={currentMode === "live" ? "primary" : "neutral"}
-          style={currentMode === "live" ? { backgroundColor: "var(--danger-color)" } : {}}
+          style={currentMode === "live" ? { backgroundColor: "var(--decline)" } : {}}
           onClick={() => setSelectedMode("live")}
           disabled={currentMode === "live"}
         >
@@ -958,7 +958,7 @@ function ExecutionModeSection({
             <h3 style={{ margin: "0 0 16px 0" }}>Confirm Mode Change</h3>
             You are changing the execution mode from <strong>{currentMode}</strong> to <strong>{selectedMode}</strong>.
             <br/><br/>
-            {selectedMode === "live" && <strong style={{ color: "var(--danger-color)" }}>WARNING: This will allow the engine to execute real trades with real money.</strong>}
+            {selectedMode === "live" && <strong style={{ color: "var(--decline)" }}>WARNING: This will allow the engine to execute real trades with real money.</strong>}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <Button variant="neutral" onClick={() => setSelectedMode(null)} style={{ flex: 1 }}>
@@ -966,7 +966,7 @@ function ExecutionModeSection({
             </Button>
             <Button
               variant="primary"
-              style={selectedMode === "live" ? { backgroundColor: "var(--danger-color)", flex: 2 } : { flex: 2 }}
+              style={selectedMode === "live" ? { backgroundColor: "var(--decline)", flex: 2 } : { flex: 2 }}
               onClick={confirmChange}
               pending={modeMutation.pending}
             >
