@@ -85,6 +85,7 @@ import type {
   MacroSnapshot,
   QuotesResponse,
   SignalBreakdown,
+  SignalImportance,
   ForecastResult,
   CommandManifest,
   ExecutionQueue,
@@ -343,6 +344,10 @@ const liveApi = {
   getSyncReport: () => http<SyncReportResponse>("/data/sync-report"),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
+  getSignalImportance: (symbols: string[]) =>
+    http<SignalImportance>(
+      `/metrics/signals/importance?symbols=${symbols.map(encodeURIComponent).join(",")}`
+    ),
   getSentimentDynamics: (symbol: string) =>
     http<SentimentDynamics>(`/metrics/sentiment/${encodeURIComponent(symbol)}`),
   // ---- On-demand AI generation (data base, :8603) — operator-triggered only,

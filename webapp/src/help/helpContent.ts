@@ -66,6 +66,8 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     `The largest peak-to-trough drop in the equity curve, as a fraction of peak equity. Must be < ${fmtPct(t?.max_drawdown_max, 0, { fromFraction: true })} for standard strategies; options-selling strategies must also stay < ${fmtPct(t?.stress_max_drawdown, 0, { fromFraction: true })} in every dated shock window (2008, 2018, 2020, 2024).`,
   "signal weight":
     "How much each signal module contributes to the final composite score: total = sum of (module_score × weight) across active modules. Weights are tunable in the Strategy Matrix.",
+  "signal driver weight":
+    "The mean absolute contribution (score × weight) a signal module carries, averaged across every currently-tracked symbol — a quick 'which signals matter most right now' view. This is a linear, configured-weight breakdown, not SHAP or a machine-learned feature-importance measure: it uses the exact same fixed weights as 'signal weight' above, and captures no interaction effects between modules. A module with no data for a symbol this cycle is left out of that symbol's average entirely, never counted as a zero.",
   multifactor:
     "A cross-sectional blend of Value, Quality, Low-Volatility, and Size z-scores into one composite, ranking each name against the rest of the universe.",
   "cross-sectional momentum":
@@ -175,9 +177,10 @@ export const TAB_HELP: Record<string, TabHelp> = {
   signals: {
     title: "Signal Breakdown",
     description:
-      "For one symbol, how each pluggable signal module scored it and how those weighted scores combined into the composite that drives the recommendation. Type or pick a ticker to load it.",
+      "For one symbol, how each pluggable signal module scored it and how those weighted scores combined into the composite that drives the recommendation. Type or pick a ticker to load it. Below that, a universe-wide 'signal driver weights' panel shows which modules carry the most weight on average across every tracked symbol.",
     keyConcepts: [
       "signal weight",
+      "signal driver weight",
       "multifactor",
       "cross-sectional momentum",
       "conviction",

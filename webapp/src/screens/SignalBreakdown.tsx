@@ -1,7 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { SignalBreakdown as SignalBreakdownData, SignalModuleScore } from "../api/types";
+import type {
+  SignalBreakdown as SignalBreakdownData,
+  SignalImportance,
+  SignalModuleScore,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
@@ -120,6 +124,101 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
   );
 }
 
+/**
+ * GlobalImportancePanel — "Signal driver weights (universe-wide)": mean
+ * |contribution| per module across the tracked universe.
+ *
+ * Deliberately NOT labeled SHAP or "feature importance" anywhere in this
+ * component. It's a linear, configured-weight decomposition (see the
+ * "signal driver weight" glossary entry) — the same honesty distinction
+ * api/metrics_api.py::_signal_importance's docstring makes server-side.
+ * A module with n_symbols_scored === 0 renders "—", never a 0 bar (a 0 bar
+ * would misread as "measured and found unimportant" rather than "no data
+ * this batch").
+ */
+function GlobalImportancePanel() {
+  const { data, loading, error, status, reload } = useApi<SignalImportance>(async () => {
+    const universe = await api.getUniverse();
+    const symbols = universe.symbols.map((s) => s.symbol);
+    if (symbols.length === 0) {
+      return { rows: [], n_symbols_requested: 0, n_symbols_scored: 0 };
+    }
+    return api.getSignalImportance(symbols);
+  }, []);
+
+  const maxAbs = Math.max(0, ...(data?.rows.map((r) => r.mean_abs_contribution ?? 0) ?? []));
+
+  return (
+    <section className="card card-pad" style={{ marginTop: 16 }} data-testid="global-importance-panel">
+      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Signal driver weights (universe-wide)</h2>
+      <p style={{ color: theme.textMuted, fontSize: 12, margin: "0 0 10px", lineHeight: 1.5 }}>
+        Mean absolute contribution per module, averaged across every symbol currently
+        tracked. This is a configured-weight breakdown (score × weight), not a
+        feature-importance or SHAP measure — it shows no interaction effects between
+        modules.
+      </p>
+      {loading && <Loading lines={3} />}
+      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+      {!loading && !error && data && data.rows.length === 0 && (
+        <div className="empty" style={{ padding: 20 }}>
+          No tracked symbols yet — run the pipeline, then reload.
+        </div>
+      )}
+      {!loading && !error && data && data.rows.length > 0 && (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {data.rows.map((r) => (
+              <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    width: 150,
+                    flex: "0 0 auto",
+                    fontFamily: "monospace",
+                    fontSize: 12,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {r.name}
+                </span>
+                <div
+                  style={{ flex: 1, position: "relative", height: 10, background: "var(--surface-2)", borderRadius: 5 }}
+                  aria-hidden
+                >
+                  {r.mean_abs_contribution != null && maxAbs > 0 && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 0,
+                        height: "100%",
+                        width: `${Math.min(100, (r.mean_abs_contribution / maxAbs) * 100)}%`,
+                        background: theme.accent,
+                        borderRadius: 5,
+                      }}
+                    />
+                  )}
+                </div>
+                <span
+                  className="num"
+                  style={{ width: 60, flex: "0 0 auto", textAlign: "right", fontSize: 12, fontWeight: 600 }}
+                >
+                  {r.mean_abs_contribution == null ? DASH : fmtNum(r.mean_abs_contribution, 2)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
+            Based on {data.n_symbols_scored} of {data.n_symbols_requested} tracked symbols with a
+            score this cycle. A module with no data this batch shows {DASH}, never a fabricated 0.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function SignalBreakdown() {
   const nav = useNavigate();
   const [symbol, setSymbol] = useState("AAPL");
@@ -151,6 +250,8 @@ export function SignalBreakdown() {
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && <Breakdown d={data} />}
+
+      <GlobalImportancePanel />
     </div>
   );
 }

@@ -125,6 +125,8 @@ import type {
   MacroSnapshot,
   QuotesResponse,
   SignalBreakdown,
+  SignalImportance,
+  SignalImportanceRow,
   SignalModuleScore,
   ForecastResult,
   SentimentDynamics,
@@ -4685,6 +4687,40 @@ export const mockApi = {
       conviction: 0.58,
       final_score: 20,
       modules,
+    });
+  },
+
+  async getSignalImportance(symbols: string[]): Promise<SignalImportance> {
+    // Deterministic per the request's symbol set so the fixture is stable
+    // across re-renders, but varies if the caller's universe changes.
+    const requested = symbols.map((s) => s.trim().toUpperCase()).filter(Boolean);
+    const rng = seeded(requested.reduce((a, s) => a + s.length, requested.length * 13));
+    const names = [
+      "timeseries_momentum",
+      "cross_sectional_momentum",
+      "multifactor",
+      "macd_momentum",
+      "rsi2_mean_reversion",
+      // Honest empty row: a module that scored 0 of the requested symbols
+      // this batch (e.g. news_catalyst with no FINNHUB_API_KEY configured) —
+      // never a fabricated 0, and never silently absent from the list.
+      "news_catalyst",
+    ];
+    const rows: SignalImportanceRow[] = names.map((name) => {
+      if (name === "news_catalyst") {
+        return { name, mean_abs_contribution: null, n_symbols_scored: 0 };
+      }
+      return {
+        name,
+        mean_abs_contribution: +(rng() * 8).toFixed(2),
+        n_symbols_scored: Math.max(1, requested.length - Math.floor(rng() * 2)),
+      };
+    });
+    rows.sort((a, b) => (b.mean_abs_contribution ?? -1) - (a.mean_abs_contribution ?? -1));
+    return delay<SignalImportance>({
+      rows,
+      n_symbols_requested: Math.min(requested.length, 25),
+      n_symbols_scored: requested.length > 0 ? Math.max(1, requested.length - 1) : 0,
     });
   },
 
