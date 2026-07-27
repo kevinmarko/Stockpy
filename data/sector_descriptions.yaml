@@ -1,0 +1,86 @@
+# Sector descriptions for the semantic Related Sector Selection feature
+# (data/sector_selection_heat.py, data/sector_embeddings.py,
+# sector_selection_engine.py). Keys MUST match the yfinance-style sector
+# strings used by forecasting/data/ticker_sectors.csv and
+# forecasting/sector_configs.json's `sector_configs` keys exactly --
+# tests/test_sector_descriptions.py pins this as a key-superset invariant.
+#
+# Each description is a short, hand-written paragraph summarizing the
+# sector's industry-chain composition, used as the SBERT embedding input
+# for cosine-similarity ranking against a target stock's own business
+# description. Deterministic and committed (not generated at runtime) so
+# embeddings are reproducible across cycles.
+#
+# `targets:` is an OPTIONAL per-symbol override block for target-stock
+# descriptions, used only when a symbol's cached fundamentals raw_json
+# lacks `longBusinessSummary` (see sector_selection_engine.py's resolution
+# order). Empty by default -- add entries here for specific tracked symbols
+# as needed, operator-authored.
+
+sectors:
+  Basic Materials: >
+    Companies that extract, process, or produce raw industrial inputs --
+    metals and mining, chemicals, paper and forest products, construction
+    materials, and specialty industrial gases. Revenue is typically
+    commodity-price-sensitive and cyclical with global industrial demand.
+
+  Communication Services: >
+    Telecommunications carriers, wireless and broadband network operators,
+    media and entertainment conglomerates, and internet content/social
+    platforms. Spans capital-intensive network infrastructure businesses
+    alongside advertising- and subscription-driven digital media.
+
+  Consumer Cyclical: >
+    Discretionary retail, automobiles and auto parts, apparel, homebuilding,
+    travel and leisure, and restaurants -- goods and services consumers
+    scale spending on with economic conditions and disposable income,
+    making this sector sensitive to macro/interest-rate cycles.
+
+  Consumer Defensive: >
+    Food and beverage producers, household and personal products, grocery
+    and discount retail, and tobacco -- staples consumers continue buying
+    regardless of economic conditions, generally lower-volatility and
+    less cyclical than Consumer Cyclical.
+
+  Energy: >
+    Oil and gas exploration and production, integrated majors, refining,
+    midstream pipelines and storage, and energy equipment and services.
+    Revenue and margins are highly sensitive to commodity price cycles and
+    global supply/demand balances.
+
+  Financial Services: >
+    Banks, insurance carriers, asset managers, capital markets firms,
+    payment processors, and diversified financial holding companies.
+    Earnings are sensitive to interest rates, credit cycles, and capital
+    markets activity.
+
+  Healthcare: >
+    Pharmaceuticals, biotechnology, medical device manufacturers, health
+    insurers, hospitals, and diagnostics/life-sciences tooling companies.
+    A mix of R&D-driven, patent-cycle-sensitive businesses and steadier
+    services/insurance revenue.
+
+  Industrials: >
+    Aerospace and defense, machinery, electrical equipment, transportation
+    and logistics, and diversified industrial conglomerates. Broadly
+    correlated with global capital-expenditure and manufacturing cycles.
+
+  Real Estate: >
+    Real estate investment trusts (REITs) and real estate management and
+    development companies spanning residential, commercial, industrial,
+    and specialty property types. Revenue is largely rental-income-driven
+    and sensitive to interest rates and property valuations.
+
+  Technology: >
+    Semiconductors, software, hardware and electronic equipment,
+    IT services, and internet infrastructure companies. Spans capital-
+    intensive chip fabrication and design alongside high-margin recurring-
+    revenue software and cloud-services businesses.
+
+  Utilities: >
+    Regulated and unregulated electric, gas, and water utilities, along
+    with independent power producers and renewable-energy generation
+    companies. Typically capital-intensive, rate-regulated, and lower-
+    volatility relative to the broader market.
+
+targets: {}

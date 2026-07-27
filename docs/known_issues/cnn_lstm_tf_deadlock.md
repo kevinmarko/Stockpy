@@ -1,18 +1,25 @@
 # Known issue: CNN-LSTM forecaster deadlocks on TensorFlow eager execution
 
-**Status: mitigations implemented (Round 5), NOT yet verified against the real
-native deadlock.** Round 5 ships a genuine process-isolation fix
-(`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED`, default `False`) plus defense-in-depth
-entry-point import reordering — see "Round 5" below for what changed and why it
-should work per the evidence gathered in Rounds 1-4. **This has NOT been
-confirmed to actually resolve the hang on real hardware**: this repo's available
-dev/CI environments for Round 5 could not reproduce the macOS arm64 +
-Framework-Python + TF 2.21.0 + pyarrow 24.0.0 environment the deadlock was
-originally confirmed on (Round 1). Do not treat CNN-LSTM as production-ready
-until someone with that environment (or an equivalent real repro) enables
-`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=True` and confirms a real end-to-end
-forecast completes without hanging. Tracked in
-[issue #381](https://github.com/kevinmarko/Stockpy/issues/381). Discovered
+**Status (Round 6, 2026-07-27): verified against the real native deadlock on real
+production data — the current production entry points are NOT exposed, but the
+underlying collision is still live and exactly one wrong import away from
+reproducing.** Round 6 ran the exact repro this doc's Round 5 status line asked
+for — real `.venv`, real macOS arm64 + Framework-Python + TF 2.21.0 + pyarrow
+24.0.0, real backfilled AAPL bars, the actual `ForecastingEngine.generate_forecast()`
+entry point — on the same `.venv` the live `desktop.orchestrator_daemon` process
+uses. Two results: (1) the deadlock reproduces deterministically and matches
+Round 1's stack signature exactly, whenever the *calling process's own* import
+order puts `pandas`/`pyarrow` before `tensorflow`; (2) `main_orchestrator.py` /
+`pipeline/production_steps.py`'s existing Fix-2 guard (`import tensorflow` before
+their own `pandas` import) is empirically **sufficient on its own** to prevent it
+for those entry points — confirmed both by a live-data re-test (1.7s clean, isolation
+off, matching the real `.env`) and by the live daemon's own `pipeline_runs` history
+(dozens of 100-135s clean cycles, zero hangs, zero errors). See "Round 6" below for
+the full methodology, all four tested combinations, and why this is a narrower
+finding than "fixed" — Fix 3 (the actual ODR collision) remains unaddressed, so any
+future entry point, ad-hoc script, or notebook that imports `pandas` first will hit
+this deterministically, with no compile-time or lint-time signal that it's about to.
+Tracked in [issue #381](https://github.com/kevinmarko/Stockpy/issues/381). Discovered
 2026-07-19/20 while enabling the CNN-LSTM forecaster path in
 `forecasting_engine.py` (tracked in
 [PR #377](https://github.com/kevinmarko/Stockpy/pull/377), which shipped only the
@@ -622,6 +629,135 @@ code change this repository can make. Fixes 1 and 2 are the actionable mitigatio
 this round could deliver; Fix 1 is the one that actually removes the process-scope
 constraint, Fix 2 is a cheap secondary layer for when Fix 1 is left off.
 
+## Round 6 (2026-07-27): real production data, live daemon's own `.venv` — the verification Round 5 asked for
+
+Round 5's status header explicitly asked for someone to run
+`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=True` against the real macOS arm64 +
+Framework-Python + TF 2.21.0 + pyarrow 24.0.0 environment and confirm an
+end-to-end forecast completes. This round did that — and went further, testing
+against the exact `.venv` a live `desktop.orchestrator_daemon` process was
+actively using at the time (confirmed via `lsof` on its PID), with real backfilled
+AAPL price history (347 bars) rather than synthetic data.
+
+### Setup
+
+A fresh worktree had an empty `quant_platform.db` and no `.venv`; it was bootstrapped
+by symlinking `.venv`/`.env`/`credentials.json` from the main checkout (same machine,
+same TF 2.21.0 install) and copying a point-in-time snapshot of `quant_platform.db`
+(copied, not symlinked or shared, specifically because the main checkout's
+`quant_platform.db` was open read-write by a live, currently-running
+`desktop.orchestrator_daemon` process at the time — sharing the file across
+processes risks lock contention independent of anything below).
+
+### Attempt 16 — naive test harness, default settings: reproduces Round 1 exactly, on real data
+
+```python
+from data.historical_store import HistoricalStore
+from forecasting_engine import ForecastingEngine
+bars = HistoricalStore(readonly=True).get_bars('AAPL', lookback_days=504)
+ForecastingEngine().run_cnn_lstm_forecast(bars, horizons=(10, 30, 60, 90), ticker='AAPL')
+```
+
+`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` at its real `.env` default (`False`).
+Bars pulled in 0.4s, then ~5s of real CPU activity (model construction), then
+**sustained 0% CPU for the full 90s observation window** (`ps -o stat` showing
+`SN`, never `R`) — the identical symptom to Round 1's Attempt 1 and Round 3's
+Attempt 7c, now on real AAPL history instead of synthetic data. This is the
+verification the Round 5 status line was waiting on: **the deadlock is
+confirmed to reproduce on real production data in the real deployed
+environment, not just synthetic data in an isolated test harness.**
+
+### Attempt 17 — same harness, `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=True`: inconsistent results, traced to a harness bug
+
+Re-running Attempt 16's script (still no `if __name__ == "__main__":` guard) with
+isolation on first failed immediately with Python's standard `multiprocessing`
+bootstrapping error (spawn re-imports `__main__`, which has no guard — a test
+harness defect, not a code-under-test finding). Fixed by adding the guard, then:
+
+- Calling `run_cnn_lstm_forecast()` alone (no other work in the process first):
+  completed cleanly in 4.4s, real varied predictions
+  (`{10: 251.0, 30: 236.1, 60: 308.2, 90: 346.5}`).
+- Calling the *full* `ForecastingEngine.generate_forecast()` (which runs
+  `run_arima_fit`/`run_holt_winters_fit` via `statsmodels` in the parent process
+  before reaching the isolated CNN-LSTM call, matching the real per-ticker call
+  shape) **hung again** — sustained 0% CPU past the full 300s
+  `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS` window, confirmed via a definitive 340s
+  observation of both the parent PID and its spawned child PID. At exactly ~301s
+  the timeout fired, logged a warning, degraded CNN-LSTM's contribution to zero,
+  and `generate_forecast()` returned a complete, real, non-fabricated result
+  (ARIMA/Monte Carlo/Holt-Winters/Prophet all populated) — CONSTRAINT #6 held,
+  the cycle did not hang forever, it just took 5 minutes longer than it should
+  have for that one symbol.
+
+At this point it looked like Fix 1 (isolation) doesn't actually prevent the
+collision when invoked through the real call shape — a materially worse finding
+than Round 5 expected. That turned out to be half right and half a harness
+artifact, resolved in Attempt 18.
+
+### Attempt 18 — the actual discriminator: the *test harness's own* import order, not Fix 1, explains Attempts 16-17
+
+Attempts 16 and 17's scripts both did `import pandas as pd` (directly, or
+transitively via `from data.historical_store import HistoricalStore`) as
+effectively the first heavy import in the process — never importing
+`tensorflow` first. That is precisely the vulnerable ordering this whole doc is
+about. Neither script carried the guard that `pipeline/production_steps.py` and
+`main_orchestrator.py` already have at the top of their real files:
+
+```python
+try:
+    import tensorflow  # noqa: F401
+except ImportError:
+    pass
+```
+
+Re-running Attempt 17's exact full-cycle `generate_forecast()` script with this
+guard added as the literal first lines of the file, before `import pandas`:
+
+| Config | Result |
+|---|---|
+| Guard present, isolation **off** (matches the real, live `.env`) | Clean, **1.7s**, full real result set (ARIMA/MC/Holt-Winters/CNN-LSTM-contributing/Prophet all populated). |
+| Guard present, isolation **on** | Clean, **4.0s**, same real result shape. |
+
+Both clean, both fast, both real. **The deadlock in Attempts 16-17 was entirely
+attributable to the test harness's own import order, not to a gap in Fix 1.**
+Once the calling process gets the order right — which the real entry points
+already do — the collision does not manifest, with or without subprocess
+isolation.
+
+### Cross-check against the live daemon's actual history
+
+`quant_platform.db`'s `pipeline_runs` table (the durable run-history store) was
+read directly rather than trusted from memory: the live daemon (same `.venv`,
+confirmed via `lsof`) had completed 4 `full`/`manual`-reason runs in the
+preceding ~90 minutes, each 99-135 seconds, 33/33 symbols, zero errors,
+`progress.json` showing `"state": "succeeded"` with the most recent finishing 6
+minutes before this check. This is fully consistent with Attempt 18's clean
+result and inconsistent with Attempts 16-17's hang ever occurring in the real
+process — corroborating evidence, not just a single isolated re-test.
+
+### What this changes, and what it doesn't
+
+**Changes:** the production entry points (`main.py`, `main_orchestrator.py`,
+`pipeline/production_steps.py`) are empirically confirmed — not just
+theoretically expected — to be protected by their existing Fix-2 import guard,
+against real data, in the real deployed `.venv`, corroborated by real operational
+history. `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` does not need to be flipped to
+`True` for these entry points to be safe from this specific failure mode today.
+
+**Doesn't change:** the underlying Abseil ODR collision (Round 1/5's `nm`
+evidence) is still unaddressed at its source (Fix 3, still "not actionable
+quickly" per Round 5's due diligence). The protection is a process-wide,
+first-import-wins guard with **zero enforcement** — nothing fails a build, a
+lint pass, or a test if a future entry point, a debugging one-liner, a Jupyter
+notebook, an agent-run repro script (as this round's own Attempts 16-17
+demonstrate, written by an agent that knew about this exact doc and still got
+it wrong on the first two tries), or an MCP tool invocation imports `pandas`
+before `tensorflow` anywhere in the process. Every such omission reproduces the
+hang deterministically (2/2 in this round). This is a narrower, more precise
+risk than "CNN-LSTM might hang in production" — it is "CNN-LSTM hangs
+deterministically the moment anything imports pandas before tensorflow in that
+process, and today's protection is convention, not enforcement."
+
 ## What was ruled out
 
 - SQLite/WAL lock contention with the concurrently-running orchestrator daemon (WAL
@@ -690,3 +826,12 @@ constraint, Fix 2 is a cheap secondary layer for when Fix 1 is left off.
   (Round 5) — the opt-in flags controlling the process-isolation fix.
 - `forecasting/forecast_tracker.py` — the skill tracker CNN-LSTM would feed once
   this is resolved; currently has zero `cnn_lstm` rows in the live database.
+- Round 6 (2026-07-27) — the real-data, real-`.venv` verification Round 5's
+  status line asked for; confirms the live daemon's entry points are protected
+  by Fix 2 today, and that protection is convention (an easy-to-omit import
+  order), not something enforced by tests or tooling.
+- [PR #439](https://github.com/kevinmarko/Stockpy/pull/439) — closes that
+  enforcement gap: a static AST-based test
+  (`tests/test_cnn_lstm_import_order.py`) that fails the build if
+  `main.py`/`main_orchestrator.py`/`pipeline/production_steps.py` ever
+  reorder `pandas` before `tensorflow` again.

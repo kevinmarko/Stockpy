@@ -837,6 +837,72 @@ class Settings(BaseSettings):
             "not the live pipeline; costs more compute per fit."
         ),
     )
+    BERT_LLA_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the BERT-LLA multi-horizon forecaster "
+            "(forecasting/bert_lla.py -- PyTorch dual-LSTM + self-attention, "
+            "three registered ablations: lstm_baseline, lstm_attention, "
+            "bert_lla). False (the default) is a complete no-op: "
+            "ForecastingEngine.run_bert_lla_forecast() returns the zero "
+            "sentinel without ever touching torch. Requires the optional "
+            "torch package (already in requirements-optional.txt for local "
+            "FinBERT inference) -- absent, the same zero-sentinel behavior "
+            "applies regardless of this flag."
+        ),
+    )
+    BERT_LLA_BLEND_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Whether the 'bert_lla' ablation's price (not lstm_baseline/"
+            "lstm_attention -- those are comparison-only and NEVER blend-"
+            "eligible regardless of this flag) is added to "
+            "ForecastingEngine's model_forecasts dict and therefore "
+            "influences the live skill-weighted blended forecast. False "
+            "(the default): bert_lla still RECORDS to forecast_errors for "
+            "the webapp's model-comparison chart, but its error history "
+            "accrues honestly before it can ever move a recommendation -- "
+            "mirrors FORECAST_SKILL_WEIGHTING_ENABLED's 'measure first, act "
+            "later' posture. Only consulted once BERT_LLA_ENABLED is True."
+        ),
+    )
+    BERT_LLA_ABLATION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, generate_forecast() runs all three BERT-LLA "
+            "ablations (lstm_baseline, lstm_attention, bert_lla) instead of "
+            "just 'bert_lla' alone -- three PyTorch trainings per ticker per "
+            "cycle instead of one. False (the default) keeps the marginal "
+            "compute cost to a single model. Only consulted once "
+            "BERT_LLA_ENABLED is True."
+        ),
+    )
+    BERT_LLA_WINDOW_SIZE: int = Field(
+        default=22,
+        description=(
+            "Lookback window (trading days) BERT-LLA's LSTM layers consume, "
+            "replacing the CNN-LSTM path's hardcoded LSTM_LOOKBACK=60 -- "
+            "matches the source methodology's 22-trading-day window. Only "
+            "consulted once BERT_LLA_ENABLED is True."
+        ),
+    )
+    BERT_LLA_MIN_SENTIMENT_COVERAGE: float = Field(
+        default=0.5,
+        description=(
+            "Hard gate for the 'bert_lla' ablation specifically (not "
+            "lstm_baseline/lstm_attention, which consume no sentiment): the "
+            "minimum fraction of rows in the feature window that must have "
+            "an OBSERVED composite-sentiment-index reading "
+            "(signals.sentiment_index) before training proceeds. Below this "
+            "threshold, run_bert_lla_forecast returns the zero sentinel "
+            "rather than training on a mostly mask-zeroed sentiment channel "
+            "(CONSTRAINT #4) -- SENTIMENT_INGESTION_ENABLED defaults False "
+            "and SENTIMENT_PIT_MIN_MONTHS=6 is this platform's own bar for "
+            "trusting sentiment history, so this gate will bind for months "
+            "after an operator first enables sentiment ingestion, by "
+            "design. Only consulted once BERT_LLA_ENABLED is True."
+        ),
+    )
     CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED: bool = Field(
         default=False,
         description=(
@@ -1272,6 +1338,33 @@ class Settings(BaseSettings):
             "direct Finnhub path is ever retired in favor of this composite."
         ),
     )
+    SENTIMENT_COMMENT_SOURCES: str = Field(
+        default="reddit,stocktwits",
+        description=(
+            "Comma-separated subset of SENTIMENT_SOURCES provider names "
+            "classified as investor-forum COMMENT sources (subjective, "
+            "retail-authored) rather than NEWS sources (objective, "
+            "editorially-published) -- see data/sentiment_source_class.py's "
+            "classify_source(). Every source_name NOT listed here is treated "
+            "as news. 'stocktwits' is a real source (data.sentiment_sources."
+            "StockTwitsSource) but is not itself in SENTIMENT_SOURCES' "
+            "default fan-out and requires STOCKTWITS_ENABLED to actually "
+            "fetch anything -- listing it here only pre-classifies it, it "
+            "does not enable it."
+        ),
+    )
+    SENTIMENT_INDEX_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the composite sentiment index S_t = "
+            "w1*news_score + w2*review_score (signals/sentiment_index.py). "
+            "False (the default) is a complete no-op: no "
+            "sentiment_ingestion_audit read is attempted. Reuses "
+            "SECTOR_SELECTION_W1/SECTOR_SELECTION_W2 for w1/w2 rather than "
+            "a second, redundant weight pair -- see that pair's own "
+            "description and signals/sentiment_index.py's module docstring."
+        ),
+    )
     SENTIMENT_INGESTION_LOOKBACK_DAYS: int = Field(
         default=1,
         description=(
@@ -1324,6 +1417,24 @@ class Settings(BaseSettings):
             "after 1 page. Backfilled posts' credibility sub-scores still "
             "reflect the author's CURRENT account state, not their state at "
             "post time -- see RedditSource's docstring."
+        ),
+    )
+    STOCKTWITS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for data/sentiment_sources.py's StockTwitsSource "
+            "(free, uncredentialed -- unlike RedditSource, no OAuth "
+            "registration needed). False (the default) is a complete "
+            "no-op: no StockTwits request is attempted. Also requires "
+            "'stocktwits' to be added to SENTIMENT_SOURCES -- this flag "
+            "alone does not add it to the fan-out list, matching "
+            "EDGAR_FULLTEXT_ENABLED's own two-gate pattern (a feature "
+            "flag plus a source/form membership check). StockTwits' "
+            "public endpoint has tightened over time and may rate-limit "
+            "or require auth in some deployments; a failed request "
+            "degrades to no documents this cycle, exactly like a missing "
+            "Reddit credential -- Reddit remains the primary comment "
+            "source (see docs/RUNBOOK.md)."
         ),
     )
     EDGAR_USER_AGENT: str = Field(
@@ -1524,6 +1635,118 @@ class Settings(BaseSettings):
             "SECTOR_HEAT_ENABLED is True."
         ),
     )
+
+    # --- Sector Selection Heat (data/sector_selection_heat.py) ---
+    # A DIFFERENT feature from SECTOR_HEAT_* above despite the name overlap
+    # -- see docs/signals/sector_heat_factor.md's "Two features, one name"
+    # section and docs/signals/sector_selection.md. This one drives
+    # semantic Related Sector Selection's ranking coefficient (cosine
+    # similarity x this Gaussian-response heat term), not the
+    # Sector_Heat_Factor dashboard column.
+    SECTOR_SELECTION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the semantic Related Sector Selection "
+            "feature's Gaussian-response Sector Heat term "
+            "(data.sector_selection_heat.compute_spec_sector_heat). False "
+            "(the default) is a complete no-op: no sentiment_ingestion_audit "
+            "read is attempted. Independent of SECTOR_HEAT_ENABLED."
+        ),
+    )
+    SECTOR_SELECTION_HEAT_LOOKBACK_DAYS: int = Field(
+        default=22,
+        description=(
+            "Trailing TRADING days (weekdays only -- no holiday calendar, "
+            "same documented limitation as "
+            "HistoricalStore.resolve_trading_day) of sentiment_ingestion_"
+            "audit news+comment volume summed per candidate sector before "
+            "min-max normalization. 22 trading days matches the "
+            "MDPI-methodology lookback this feature is modeled on. Only "
+            "consulted once SECTOR_SELECTION_ENABLED is True."
+        ),
+    )
+    SECTOR_SELECTION_HEAT_A: float = Field(
+        default=0.8,
+        description=(
+            "Gaussian amplitude 'a' in SHF = a * exp(-(x-b)^2 / (2c^2)), "
+            "where x is the min-max-normalized combined news+review volume "
+            "across candidate sectors. Empirically calibrated in the "
+            "source methodology; kept as a setting rather than a literal "
+            "so a future recalibration doesn't require a code change."
+        ),
+    )
+    SECTOR_SELECTION_HEAT_B: float = Field(
+        default=1.0,
+        description="Gaussian center 'b' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
+    )
+    SECTOR_SELECTION_HEAT_C: float = Field(
+        default=0.6,
+        description="Gaussian width 'c' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
+    )
+    SECTOR_SIMILARITY_EMBEDDER: str = Field(
+        default="sbert",
+        description=(
+            "Embedding backend for Related Sector Selection's semantic-"
+            "similarity term ('sbert' | 'openai' | 'none'). 'sbert' (the "
+            "default) uses a local sentence-transformers model -- see "
+            "SECTOR_SIMILARITY_MODEL -- with zero network calls and zero "
+            "marginal API cost, matching this codebase's free-first, local-"
+            "model posture (local FinBERT, embedded faiss). 'openai' routes "
+            "through llm.router.get_sector_embedding_provider() instead "
+            "(paid, network-dependent). 'none' disables the similarity term "
+            "entirely -- every cosine_similarity is NaN. Only consulted "
+            "once SECTOR_SELECTION_ENABLED is True."
+        ),
+    )
+    SECTOR_SIMILARITY_MODEL: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description=(
+            "Hugging Face model id loaded when SECTOR_SIMILARITY_EMBEDDER="
+            "'sbert'. Requires the optional sentence-transformers package "
+            "(requirements-optional.txt) -- absent, SBERT_AVAILABLE is "
+            "False and every cosine_similarity degrades to NaN, never a "
+            "fabricated value (CONSTRAINT #4)."
+        ),
+    )
+    SECTOR_SIMILARITY_POOLING: str = Field(
+        default="max",
+        description=(
+            "Pooling strategy applied to SBERT token embeddings ('max' | "
+            "'mean'). 'max' matches the source methodology's specified "
+            "max-pooling. NOTE: sentence-transformers/all-MiniLM-L6-v2 "
+            "ships configured for MEAN pooling and was trained that way -- "
+            "max-pooled output from this checkpoint is off-distribution. "
+            "Kept as a setting (default 'max', spec-faithful) rather than "
+            "silently substituting 'mean' so the difference is measurable, "
+            "not assumed; see docs/signals/sector_selection.md."
+        ),
+    )
+    SECTOR_SELECTION_TOP_N: int = Field(
+        default=3,
+        description=(
+            "Default number of top-ranked related sectors selected per "
+            "target symbol. The webapp Sector Selection panel's N slider "
+            "overrides this per-request; this is only the engine/API "
+            "default when no override is supplied."
+        ),
+    )
+    SECTOR_SELECTION_W1: float = Field(
+        default=0.4,
+        description=(
+            "Default news-volume weight, mirrored from the composite "
+            "sentiment index S_t = w1*news + w2*review "
+            "(signals/sentiment_index.py) for consistency, though Sector "
+            "Selection's own ranking formula (cosine_similarity * SHF) "
+            "does not currently consume w1/w2 directly -- reserved for the "
+            "webapp panel's weight sliders per the source methodology's "
+            "UI spec."
+        ),
+    )
+    SECTOR_SELECTION_W2: float = Field(
+        default=0.1,
+        description="Default review-volume weight -- see SECTOR_SELECTION_W1.",
+    )
+
     WIKIPEDIA_ATTENTION_ENABLED: bool = Field(
         default=False,
         description=(
@@ -2550,6 +2773,105 @@ class Settings(BaseSettings):
             "(tracked in rag_indexed_docs) are always skipped regardless of this "
             "window, so raising it only widens how far back a first-ever index "
             "pass will look, not how much gets re-embedded on subsequent calls."
+        ),
+    )
+
+    # ── ETF Holdings Ingestion (data/etf_holdings.py) ────────────────────────
+    # Feeds the planned "ETF volatility transmission" risk overlay grounded in
+    # Ben-David, Franzoni & Moussawi (2018), "Do ETFs Increase Volatility?",
+    # Journal of Finance 73(6):2471-2535.  Nothing in the platform consumes
+    # these holdings yet — this is a self-contained data-layer capability.
+    ETF_HOLDINGS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for live ETF constituent-holdings ingestion "
+            "(SEC N-PORT primary, optional iShares CSV secondary). False "
+            "(the default) is a complete no-op: data.etf_holdings."
+            "get_etf_holdings() returns {} immediately with ZERO network "
+            "calls and zero DB reads, so a fresh clone / CI run never "
+            "touches EDGAR. Nothing in the platform consumes ETF holdings "
+            "yet — enabling this only populates the etf_holdings cache "
+            "table; it changes no score, weight, or order."
+        ),
+    )
+    ETF_HOLDINGS_TICKERS: list[str] = Field(
+        default_factory=lambda: [
+            "SPY", "IVV", "VOO", "QQQ", "DIA", "IWM",
+            "XLK", "XLF", "XLV", "XLE", "XLI",
+            "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC",
+        ],
+        description=(
+            "ETF wrapper suite whose constituent holdings are ingested each "
+            "refresh — the broad-market and sector wrappers that account for "
+            "the bulk of US single-name ETF ownership. JSON-encoded list in "
+            ".env (e.g. ETF_HOLDINGS_TICKERS='[\"SPY\",\"QQQ\"]'). Only "
+            "consulted once ETF_HOLDINGS_ENABLED is True. A ticker whose "
+            "holdings cannot be resolved is simply ABSENT from the result "
+            "(never present with a fabricated empty or zero-weight holdings "
+            "list — CONSTRAINT #4)."
+        ),
+    )
+    ETF_HOLDINGS_MARKET_PROXY: str = Field(
+        default="SPY",
+        description=(
+            "Ticker treated as the broad-market ETF wrapper when a consumer "
+            "needs a single market-wide ownership baseline rather than the "
+            "full ETF_HOLDINGS_TICKERS suite. Only consulted once "
+            "ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+    ETF_HOLDINGS_REFRESH_DAYS: int = Field(
+        default=7,
+        description=(
+            "Age (days, measured on the cached row's fetched_at) beyond "
+            "which an ETF's cached etf_holdings rows are re-fetched from the "
+            "source. Deliberately coarse: SEC N-PORT reports three month-ends "
+            "per filing and publishes ~60 days after quarter end, so the "
+            "underlying data changes at most monthly and is 1-5 months stale "
+            "by construction — polling faster than this only burns SEC "
+            "requests for identical rows. Only consulted once "
+            "ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+    ETF_HOLDINGS_ISSUER_CSV_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in SECONDARY holdings source: the iShares issuer CSV "
+            "endpoint, consulted ONLY when SEC N-PORT produced nothing for a "
+            "symbol. False (the default) means the iShares endpoint is never "
+            "contacted — N-PORT is the sole source. Never the default "
+            "because issuer files are undocumented, unversioned, and can "
+            "change shape without notice; N-PORT is a regulatory filing with "
+            "a fixed schema. Enabling this also imports a family "
+            "constraint: iShares covers IVV plus the iShares sector suite, "
+            "and the two ETF families must never be mixed inside one "
+            "composite (see data/etf_holdings.py). Only consulted once "
+            "ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+    ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE: float = Field(
+        default=60.0,
+        description=(
+            "Hard wall-clock ceiling (seconds) for get_etf_holdings()'s "
+            "entire per-cycle loop over the ETF universe. Mirrors "
+            "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE for the identical "
+            "risk shape: a slow-but-responding EDGAR endpoint can otherwise "
+            "stack its per-request timeout across every remaining ETF with "
+            "no overall ceiling — once this budget elapses, remaining ETFs "
+            "are served from the cache only (no network) and any ETF with no "
+            "cached rows is simply absent from the result, never fabricated. "
+            "Only consulted once ETF_HOLDINGS_ENABLED is True."
+        ),
+    )
+    ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD: int = Field(
+        default=3,
+        description=(
+            "Consecutive no-holdings outcomes (exception or empty result) "
+            "within one get_etf_holdings() cycle before the live source is "
+            "skipped for the rest of that cycle's ETFs — avoids burning the "
+            "wall-clock budget on a source that is clearly failing for every "
+            "remaining symbol. Mirrors ATTENTION_CIRCUIT_BREAKER_THRESHOLD. "
+            "Only consulted once ETF_HOLDINGS_ENABLED is True."
         ),
     )
 

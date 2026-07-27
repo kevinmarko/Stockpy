@@ -47,6 +47,14 @@ tensorflow>=2.19
 # Everything else in the platform runs identically whether or not this file
 # is installed -- see FINBERT_ENABLED / FINBERT_SCORE_CACHE_ENABLED in
 # settings.py for the graceful-degradation contract.
+#
+# This same torch install ALSO now backs the BERT-LLA multi-horizon
+# forecaster (forecasting/bert_lla.py, gated behind settings.
+# BERT_LLA_ENABLED, default False) -- a second, independent consumer of
+# this one dependency, not a reason to bump the floor; see
+# forecasting/bert_lla.py's own TORCH_AVAILABLE guard for its graceful-
+# degradation contract (falls back to the zero sentinel, same shape as
+# the CNN-LSTM path without TensorFlow).
 torch>=2.0
 
 # faiss-cpu activates the embedded local vector store used by the RAG-Powered
@@ -82,3 +90,18 @@ faiss-cpu>=1.8.0
 # path is completely unaffected either way, and is never blocked on this
 # package being installed.
 pytrends>=4.9.2
+
+# sentence-transformers activates the local SBERT embedder for the semantic
+# Related Sector Selection feature (data/sector_embeddings.py, gated behind
+# settings.SECTOR_SELECTION_ENABLED, default False, plus
+# settings.SECTOR_SIMILARITY_EMBEDDER="sbert", the default embedder choice).
+# It sits on top of `torch>=2.0` (already above, for FinBERT) and
+# `transformers>=4.35.0` (already in requirements.txt) -- the marginal
+# dependency cost of adding this package is small, not a new heavy runtime.
+# Kept out of requirements.txt for the same reason as the other entries in
+# this file: it is a local, opt-in model, and CI should stay lean. Without
+# it, data/sector_embeddings.py's SBERT_AVAILABLE guard is False and every
+# cosine_similarity computed by sector_selection_engine.py degrades to NaN,
+# never a fabricated value (CONSTRAINT #4) -- exactly like the CNN-LSTM/
+# FinBERT/RAG paths above without their own optional dependency.
+sentence-transformers>=2.2

@@ -262,3 +262,35 @@ def get_embedding_provider():
 
     logger.info("Unknown embedding provider '%s' — skipping embeddings.", choice)
     return None
+
+
+def get_sector_embedding_provider():
+    """Return a provider exposing ``embed_texts()`` for Related Sector
+    Selection's OpenAI embedding fallback, or ``None`` to skip.
+
+    Gated on ``settings.SECTOR_SELECTION_ENABLED`` AND
+    ``settings.SECTOR_SIMILARITY_EMBEDDER == "openai"`` — deliberately NOT
+    ``settings.RAG_PORTFOLIO_CONTEXT_ENABLED`` (``get_embedding_provider``'s
+    own gate). Coupling Sector Selection to the RAG Portfolio
+    Contextualizer's master switch would mean toggling one feature
+    silently toggles the other's embedding behavior — a flag-semantics bug.
+    SBERT (``data.sector_embeddings``) is the primary, local, free-first
+    embedder for this feature; this OpenAI path is the sole non-local
+    fallback, so there is no separate provider-choice setting to read
+    (unlike ``RAG_EMBEDDING_PROVIDER``'s openai/gemini choice) —
+    ``SECTOR_SIMILARITY_EMBEDDER`` itself is the choice.
+    """
+    if not getattr(settings, "SECTOR_SELECTION_ENABLED", False):
+        return None
+    if (getattr(settings, "SECTOR_SIMILARITY_EMBEDDER", "") or "").lower() != "openai":
+        return None
+    api_key = getattr(settings, "OPENAI_API_KEY", None)
+    if not api_key:
+        logger.info("Sector Selection embedder 'openai' selected but OPENAI_API_KEY is unset.")
+        return None
+    timeout = float(getattr(settings, "LLM_COMMENTARY_TIMEOUT_SECONDS", 8) or 8)
+    try:
+        return OpenAIProvider(api_key=api_key, timeout_seconds=timeout)
+    except Exception as exc:
+        logger.warning("Failed to construct OpenAIProvider for sector embeddings: %s", exc)
+        return None

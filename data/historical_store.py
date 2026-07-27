@@ -65,6 +65,14 @@ finbert_score_cache — content-hash (SHA-256 of headline text) cache of a
                        the DDL comment above for why this is not a lookahead
                        risk. Unrelated to sentiment_llm_verification_cache
                        (that one caches an LLM credibility verdict).
+etf_holdings        — ETF constituent basket keyed by (etf_symbol,
+                       holding_symbol, as_of_date), where as_of_date is the
+                       SOURCE's own report date (the PIT anchor), separate
+                       from the fetched_at cache-freshness stamp. Written by
+                       data/etf_holdings.py (SEC N-PORT primary); read back
+                       through get_etf_holdings(), whose as_of_date filter is
+                       the storage-layer no-lookahead guarantee. Nothing in
+                       the platform consumes it yet.
 """
 
 from __future__ import annotations
@@ -83,6 +91,9 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from data.robinhood_portfolio import AccountSnapshot
+    # Type-only: data/etf_holdings.py lazily imports THIS module, so a runtime
+    # import here would be circular. save_etf_holdings duck-types its rows.
+    from data.etf_holdings import ETFHolding
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +433,51 @@ CREATE TABLE IF NOT EXISTS finbert_score_cache (
 )
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — etf_holdings (ETF constituent-holdings cache)
+#
+# One row per (ETF, underlying, report date). Written by
+# ``data/etf_holdings.py``'s SEC N-PORT (and opt-in iShares CSV) ingestion;
+# nothing in the platform consumes it yet.
+#
+# ``as_of_date`` is the SOURCE's own report/holdings date -- the point-in-time
+# anchor -- and is part of the primary key, so successive quarterly baskets
+# accumulate side by side rather than overwriting each other. ``fetched_at`` is
+# the separate, non-key wall-clock stamp used only for cache-freshness
+# decisions; the two must never be conflated (a row fetched today can easily
+# carry an as_of_date five months old -- N-PORT publishes ~60 days after
+# quarter end).
+#
+# ``get_etf_holdings(..., as_of_date=X)`` filters ``as_of_date <= X`` in SQL,
+# which is the module's no-lookahead guarantee at the storage layer: a row
+# written by a later cycle can never surface in an earlier-dated read. The
+# secondary index exists for the reverse join a consumer needs -- "which ETFs
+# held THIS symbol, as of when" -- which is the actual shape of an
+# ETF-ownership exposure measure (Ben-David, Franzoni & Moussawi 2018).
+#
+# NaN handling: SQLite has no NaN, so an unreported weight/shares_held is
+# stored as NULL and read back as NaN -- never as 0.0 (CONSTRAINT #4). A
+# genuinely zero weight and an unreported weight stay distinguishable.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ETF_HOLDINGS_DDL = """
+CREATE TABLE IF NOT EXISTS etf_holdings (
+    etf_symbol      TEXT NOT NULL,
+    holding_symbol  TEXT NOT NULL,
+    as_of_date      TEXT NOT NULL,
+    weight          REAL,
+    shares_held     REAL,
+    source          TEXT,
+    fetched_at      TEXT NOT NULL,
+    PRIMARY KEY (etf_symbol, holding_symbol, as_of_date)
+)
+"""
+
+_ETF_HOLDINGS_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_etf_holdings_holding
+    ON etf_holdings (holding_symbol, as_of_date)
+"""
+
 # Column order returned by SELECT for price_bars reconstruction.
 _SELECT_COLS = "open, high, low, close, adj_close, volume"
 
@@ -547,6 +603,8 @@ class HistoricalStore:
                 conn.execute(_FINBERT_SCORE_CACHE_DDL)
                 conn.execute(_RAG_INDEXED_DOCS_DDL)
                 conn.execute(_RAG_INDEXED_DOCS_INDEX_DDL)
+                conn.execute(_ETF_HOLDINGS_DDL)
+                conn.execute(_ETF_HOLDINGS_INDEX_DDL)
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
                 self._migrate_add_verification_method_column(conn)
@@ -1854,6 +1912,204 @@ class HistoricalStore:
             logger.warning("HistoricalStore.save_finbert_scores failed: %s", exc)
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Public API — etf_holdings (ETF constituent-holdings cache)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _nan_to_null(value: Any) -> Optional[float]:
+        """Coerce a float to ``None`` when it is NaN/inf, else to ``float``.
+
+        SQLite has no NaN literal, so an unreported field is stored as NULL and
+        read back as NaN. Writing 0.0 instead would fabricate a measurement
+        (CONSTRAINT #4) — a zero weight and an unreported weight are different
+        facts.
+        """
+        if value is None:
+            return None
+        try:
+            as_float = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(as_float) or math.isinf(as_float):
+            return None
+        return as_float
+
+    def save_etf_holdings(self, holdings: List["ETFHolding"]) -> int:
+        """Persist a batch of ``data.etf_holdings.ETFHolding`` rows.
+
+        Returns the number of rows written, or ``0`` on ANY failure
+        (CONSTRAINT #6 — never raises; a cache-write failure must not block
+        the live ingestion that already parsed these rows).
+
+        Idempotent overwrite (``INSERT OR REPLACE``) on the
+        ``(etf_symbol, holding_symbol, as_of_date)`` primary key: re-ingesting
+        the same filing refreshes ``fetched_at`` and leaves the basket
+        unchanged. Successive report dates accumulate as separate rows — this
+        method never deletes prior baskets, which is what makes the
+        point-in-time read in ``get_etf_holdings`` possible.
+
+        ``weight``/``shares_held`` that are NaN are stored as NULL, never 0.0
+        (see ``_nan_to_null``). Rows are duck-typed rather than isinstance-
+        checked so this module never has to import ``data.etf_holdings``
+        (which imports this module).
+        """
+        if not holdings:
+            return 0
+        try:
+            now_ts = self._now_utc_iso()
+            rows = []
+            for holding in holdings:
+                as_of = getattr(holding, "as_of_date", None)
+                if as_of is None:
+                    # No point-in-time anchor => uncacheable (it could never be
+                    # causality-filtered on read). Skip rather than default.
+                    continue
+                rows.append(
+                    (
+                        str(getattr(holding, "etf_symbol", "")).strip().upper(),
+                        str(getattr(holding, "holding_symbol", "")).strip().upper(),
+                        as_of.isoformat() if hasattr(as_of, "isoformat") else str(as_of),
+                        self._nan_to_null(getattr(holding, "weight", None)),
+                        self._nan_to_null(getattr(holding, "shares_held", None)),
+                        str(getattr(holding, "source", "")) or None,
+                        now_ts,
+                    )
+                )
+            rows = [row for row in rows if row[0] and row[1]]
+            if not rows:
+                return 0
+
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO etf_holdings
+                            (etf_symbol, holding_symbol, as_of_date,
+                             weight, shares_held, source, fetched_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+            logger.debug("HistoricalStore: upserted %d etf_holdings rows.", len(rows))
+            return len(rows)
+        except Exception as exc:
+            logger.warning("HistoricalStore.save_etf_holdings failed: %s", exc)
+            self._safe_rollback()
+            return 0
+
+    def get_etf_holdings(
+        self, etf_symbol: str, *, as_of_date: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Return one ETF's basket as of *as_of_date*, as a list of dicts.
+
+        **Causality guarantee (has a dedicated test):** rows whose
+        ``as_of_date`` is AFTER the supplied cutoff are never returned. This
+        is the storage-layer half of ``data/etf_holdings.py``'s no-lookahead
+        contract — a basket written by a later cycle cannot surface in an
+        earlier-dated read.
+
+        Returns the SINGLE most recent report date at or before the cutoff,
+        not a union across quarters: "holdings as of X" is one basket, and
+        mixing two quarters' rows would produce weights that sum past 1.0 and
+        double-count names that appear in both. Use
+        ``latest_etf_holdings_date()`` plus repeated calls to walk history.
+
+        With ``as_of_date=None`` the newest stored basket is returned (the
+        live-use case).
+
+        Each dict carries ``etf_symbol``, ``holding_symbol``, ``as_of_date``,
+        ``weight``, ``shares_held``, ``source``, ``fetched_at``. ``weight``
+        and ``shares_held`` are ``None`` when the source did not report them —
+        the caller rehydrates ``None`` to NaN, never to 0.0 (CONSTRAINT #4).
+
+        ``[]`` on an empty cache OR any read failure (CONSTRAINT #6).
+        """
+        sym = (etf_symbol or "").strip().upper()
+        if not sym:
+            return []
+        try:
+            from db_config import session_scope, get_dbapi_connection
+
+            params: List[Any] = [sym]
+            date_clause = ""
+            if as_of_date:
+                date_clause = " AND as_of_date <= ?"
+                params.append(str(as_of_date))
+
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    target = conn.execute(
+                        "SELECT MAX(as_of_date) FROM etf_holdings "
+                        f"WHERE etf_symbol = ?{date_clause}",
+                        tuple(params),
+                    ).fetchone()
+                    if not target or target[0] is None:
+                        return []
+                    target_date = str(target[0])
+                    rows = conn.execute(
+                        """
+                        SELECT etf_symbol, holding_symbol, as_of_date,
+                               weight, shares_held, source, fetched_at
+                        FROM etf_holdings
+                        WHERE etf_symbol = ? AND as_of_date = ?
+                        ORDER BY holding_symbol
+                        """,
+                        (sym, target_date),
+                    ).fetchall()
+
+            return [
+                {
+                    "etf_symbol": row[0],
+                    "holding_symbol": row[1],
+                    "as_of_date": row[2],
+                    "weight": row[3],
+                    "shares_held": row[4],
+                    "source": row[5],
+                    "fetched_at": row[6],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_etf_holdings(%s) failed: %s", sym, exc)
+            return []
+
+    def latest_etf_holdings_date(self, etf_symbol: str) -> Optional[str]:
+        """Return the most recent stored ``as_of_date`` for *etf_symbol*.
+
+        ISO ``YYYY-MM-DD`` string, or ``None`` when nothing is stored OR on any
+        read failure (CONSTRAINT #6). Deliberately unfiltered by any cutoff —
+        this answers "how current is the cache", which callers use to decide
+        whether to re-fetch; the causality filtering happens in
+        ``get_etf_holdings``.
+        """
+        sym = (etf_symbol or "").strip().upper()
+        if not sym:
+            return None
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    row = conn.execute(
+                        "SELECT MAX(as_of_date) FROM etf_holdings WHERE etf_symbol = ?",
+                        (sym,),
+                    ).fetchone()
+            if not row or row[0] is None:
+                return None
+            return str(row[0])
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.latest_etf_holdings_date(%s) failed: %s", sym, exc
+            )
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Public API — sentiment_ingestion_audit (Sentiment Pipeline Phase 2)
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -2070,6 +2326,96 @@ class HistoricalStore:
             }
         except Exception as exc:
             logger.warning("HistoricalStore.get_sentiment_aggregate_by_symbol failed: %s", exc)
+            return {}
+
+    def get_sentiment_daily_by_source_class(
+        self, symbols: List[str], start_day: str, end_day: str
+    ) -> Dict[str, Dict[str, Dict[str, float]]]:
+        """Aggregate ``sentiment_ingestion_audit`` rows per ``(symbol,
+        trading_day)``, split into NEWS vs. COMMENT buckets via
+        ``data.sentiment_source_class.classify_source`` -- the shared read
+        this feeds Sector Selection's Sector Heat Factor (news+review volume)
+        and the composite sentiment index S_t (news_score/review_score).
+
+        Returns ``{symbol: {trading_day: {news_count, news_mean_score,
+        comment_count, comment_mean_score}}}``. Read-only, vectorized pandas
+        groupby (no per-row Python loop). ``{}`` on any failure, on an empty
+        ``symbols``/date range, or when no rows match (CONSTRAINT #6 --
+        never raises).
+
+        NaN vs. zero (CONSTRAINT #4): a ``(symbol, trading_day)`` with rows
+        in one class but none in the other gets a genuine ``0`` count and
+        ``NaN`` mean score for the empty class -- "we ingested that day and
+        saw nothing from that class" is a real zero. A ``(symbol,
+        trading_day)`` entirely absent from the returned dict was never
+        observed at all -- callers MUST treat a missing key as unknown
+        coverage, never coerce it to zero themselves, since ingestion being
+        off entirely (``SENTIMENT_INGESTION_ENABLED=False``, today's
+        default) looks identical to a real quiet day at this call's level;
+        distinguishing "off" from "quiet" is ``get_sentiment_archive_depth_
+        by_source``'s job, not this method's.
+        """
+        if not symbols or not start_day or not end_day:
+            return {}
+        try:
+            from data.sentiment_source_class import classify_source
+            from db_config import session_scope, get_dbapi_connection
+            placeholders = ",".join("?" for _ in symbols)
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    cursor = conn.execute(
+                        f"""
+                        SELECT symbol, trading_day, source_name, final_weighted_score
+                        FROM sentiment_ingestion_audit
+                        WHERE trading_day >= ? AND trading_day <= ?
+                          AND symbol IN ({placeholders})
+                        """,
+                        [start_day, end_day, *[str(s).upper() for s in symbols]],
+                    )
+                    rows = cursor.fetchall()
+            if not rows:
+                return {}
+            df = pd.DataFrame(
+                rows, columns=["symbol", "trading_day", "source_name", "final_weighted_score"]
+            )
+            df["source_class"] = df["source_name"].map(classify_source)
+            df = df[df["source_class"].isin(("news", "comment"))]
+            if df.empty:
+                return {}
+            grouped = df.groupby(["symbol", "trading_day", "source_class"]).agg(
+                count=("final_weighted_score", "size"),
+                mean_score=("final_weighted_score", "mean"),
+            )
+            result: Dict[str, Dict[str, Dict[str, float]]] = {}
+            for (symbol, trading_day, source_class), row in grouped.iterrows():
+                by_day = result.setdefault(str(symbol), {}).setdefault(
+                    str(trading_day),
+                    {
+                        "news_count": float("nan"),
+                        "news_mean_score": float("nan"),
+                        "comment_count": float("nan"),
+                        "comment_mean_score": float("nan"),
+                    },
+                )
+                by_day[f"{source_class}_count"] = float(row["count"])
+                by_day[f"{source_class}_mean_score"] = (
+                    float(row["mean_score"]) if pd.notna(row["mean_score"]) else float("nan")
+                )
+            # A class with zero ingested rows for a day that WAS observed
+            # (the other class has rows) is a genuine zero count, not an
+            # unknown -- fill count only, leave the mean score NaN (there is
+            # no score to average over zero rows).
+            for by_symbol in result.values():
+                for by_day in by_symbol.values():
+                    if pd.isna(by_day["news_count"]) and not pd.isna(by_day["comment_count"]):
+                        by_day["news_count"] = 0.0
+                    if pd.isna(by_day["comment_count"]) and not pd.isna(by_day["news_count"]):
+                        by_day["comment_count"] = 0.0
+            return result
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_sentiment_daily_by_source_class failed: %s", exc)
             return {}
 
     def get_sentiment_archive_depth_by_source(self) -> Dict[str, Dict[str, Any]]:

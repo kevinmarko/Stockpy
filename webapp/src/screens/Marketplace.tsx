@@ -214,6 +214,13 @@ export function Marketplace() {
                 CLI autocomplete &amp; validation
               </div>
             </Link>
+            <Link to="/sector-selection" className="card card-pad" style={{ textDecoration: "none" }}>
+              <div style={{ fontSize: 22 }} aria-hidden>🧩</div>
+              <div style={{ fontWeight: 700, marginTop: 6 }}>Sector selection</div>
+              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+                Semantic related-sector ranking
+              </div>
+            </Link>
           </div>
 
           <p
