@@ -18,6 +18,13 @@ Coverage
 * PIT-safety: a retrieved document whose ``as_of`` is in the future relative
   to ``now`` is excluded from both the result AND the LLM prompt — no
   lookahead leakage into "today's" note.
+* Self-indexing: when the REAL vector store is resolved (no ``vector_store``
+  DI override), ``generate_portfolio_context_note`` triggers a best-effort
+  ``index_new_documents`` pass before searching — the missing call site that
+  otherwise left the FAISS index permanently empty (mirrors the "nothing
+  calls fetch_and_archive()" bug class already fixed once in this pipeline,
+  PR #405). A caller-injected ``vector_store`` (every other test in this
+  file) is never indexed — it represents an already-prepared corpus.
 """
 
 from __future__ import annotations
@@ -352,3 +359,111 @@ class TestPitSafety:
             ),
         ]
         assert len(_filter_pit_safe(docs, now)) == 1
+
+
+class FakeRealVectorStore:
+    """Stand-in for the REAL ``DocumentVectorStore`` -- unlike ``FakeVectorStore``
+    (the test file's existing DI seam), this one also exposes
+    ``index_new_documents`` so tests can assert the self-indexing call
+    actually happens against the resolved-not-injected store."""
+
+    def __init__(self, docs=None, index_error: Exception | None = None):
+        self._docs = docs or []
+        self.search_calls: list = []
+        self.index_calls: list = []
+        self._index_error = index_error
+
+    def index_new_documents(self, since):
+        self.index_calls.append(since)
+        if self._index_error is not None:
+            raise self._index_error
+        return 0
+
+    def search(self, query_embedding, k=5):
+        self.search_calls.append((query_embedding, k))
+        return self._docs
+
+
+class TestSelfIndexing:
+    """generate_portfolio_context_note() is the only production caller of
+    DocumentVectorStore.index_new_documents() -- see engine/portfolio_context.py's
+    module docstring "Self-indexing" section. These tests pin that contract."""
+
+    def test_real_store_resolution_triggers_indexing_before_search(self, monkeypatch):
+        monkeypatch.setattr(settings, "RAG_PORTFOLIO_CONTEXT_ENABLED", True)
+        positions = {"AAPL": _position("AAPL", 1000.0)}
+        snapshot = _snapshot(positions, 1000.0)
+
+        real_store = FakeRealVectorStore()
+        import engine.portfolio_context as pc_mod
+
+        monkeypatch.setattr(pc_mod, "_resolve_vector_store", lambda: real_store)
+
+        now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+        generate_portfolio_context_note(
+            snapshot,
+            now=now,
+            embedding_provider=FakeEmbeddingProvider(),
+            llm_provider=FakeLLMProvider(note=None),
+            # No vector_store= override -> forces real resolution.
+        )
+
+        assert len(real_store.index_calls) == 1
+        # Indexing must happen BEFORE the search it's meant to keep current.
+        assert len(real_store.search_calls) == 1
+        since = real_store.index_calls[0]
+        expected_since = now - timedelta(days=settings.RAG_INDEX_LOOKBACK_DAYS)
+        assert since == expected_since
+
+    def test_injected_vector_store_is_never_indexed(self, monkeypatch):
+        # Every other test in this file injects vector_store= directly (a
+        # FakeVectorStore with NO index_new_documents method at all) -- this
+        # pins that the self-indexing step is skipped for an injected store,
+        # so those tests keep passing precisely because indexing is never
+        # even attempted against them (would AttributeError otherwise).
+        monkeypatch.setattr(settings, "RAG_PORTFOLIO_CONTEXT_ENABLED", True)
+        positions = {"AAPL": _position("AAPL", 1000.0)}
+        snapshot = _snapshot(positions, 1000.0)
+
+        vector_store = FakeVectorStore([])
+        result = generate_portfolio_context_note(
+            snapshot,
+            embedding_provider=FakeEmbeddingProvider(),
+            vector_store=vector_store,
+            llm_provider=FakeLLMProvider(note=None),
+        )
+
+        assert result.sector_exposure
+        assert vector_store.search_calls  # search still ran normally
+
+    def test_indexing_failure_does_not_block_search_or_llm(self, monkeypatch):
+        monkeypatch.setattr(settings, "RAG_PORTFOLIO_CONTEXT_ENABLED", True)
+        positions = {"AAPL": _position("AAPL", 1000.0)}
+        snapshot = _snapshot(positions, 1000.0)
+
+        real_store = FakeRealVectorStore(index_error=RuntimeError("index boom"))
+        import engine.portfolio_context as pc_mod
+
+        monkeypatch.setattr(pc_mod, "_resolve_vector_store", lambda: real_store)
+
+        note = SimpleNamespace(
+            headline="h", tailwind_or_headwind="neutral", rationale="r", affected_sectors=[]
+        )
+        llm_provider = FakeLLMProvider(note=note)
+
+        result = generate_portfolio_context_note(
+            snapshot,
+            embedding_provider=FakeEmbeddingProvider(),
+            llm_provider=llm_provider,
+        )
+
+        # Indexing blew up, but search + the LLM step still ran (best-effort,
+        # never raises -- CONSTRAINT #6).
+        assert len(real_store.index_calls) == 1
+        assert len(real_store.search_calls) == 1
+        assert result.context_note is note
+
+    def test_rag_index_lookback_days_default(self):
+        # Pin the real pydantic default so the lookback window isn't a
+        # test-only fiction.
+        assert settings.RAG_INDEX_LOOKBACK_DAYS == 90
