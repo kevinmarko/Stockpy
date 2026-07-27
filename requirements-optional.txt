@@ -47,6 +47,14 @@ tensorflow>=2.19
 # Everything else in the platform runs identically whether or not this file
 # is installed -- see FINBERT_ENABLED / FINBERT_SCORE_CACHE_ENABLED in
 # settings.py for the graceful-degradation contract.
+#
+# This same torch install ALSO now backs the BERT-LLA multi-horizon
+# forecaster (forecasting/bert_lla.py, gated behind settings.
+# BERT_LLA_ENABLED, default False) -- a second, independent consumer of
+# this one dependency, not a reason to bump the floor; see
+# forecasting/bert_lla.py's own TORCH_AVAILABLE guard for its graceful-
+# degradation contract (falls back to the zero sentinel, same shape as
+# the CNN-LSTM path without TensorFlow).
 torch>=2.0
 
 # faiss-cpu activates the embedded local vector store used by the RAG-Powered

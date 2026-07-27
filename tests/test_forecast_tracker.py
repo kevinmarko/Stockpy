@@ -496,8 +496,10 @@ class TestBlendWithSkill:
 # ---------------------------------------------------------------------------
 
 class TestModuleSurface:
-    def test_all_model_names_contains_four_entries(self):
-        assert len(ALL_MODEL_NAMES) == 4
+    def test_all_model_names_contains_seven_entries(self):
+        """Extended for the BERT-LLA ablations (lstm_baseline,
+        lstm_attention, bert_lla) alongside the original four."""
+        assert len(ALL_MODEL_NAMES) == 7
 
     def test_model_name_constants_are_strings(self):
         for name in ALL_MODEL_NAMES:

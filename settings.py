@@ -837,6 +837,72 @@ class Settings(BaseSettings):
             "not the live pipeline; costs more compute per fit."
         ),
     )
+    BERT_LLA_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the BERT-LLA multi-horizon forecaster "
+            "(forecasting/bert_lla.py -- PyTorch dual-LSTM + self-attention, "
+            "three registered ablations: lstm_baseline, lstm_attention, "
+            "bert_lla). False (the default) is a complete no-op: "
+            "ForecastingEngine.run_bert_lla_forecast() returns the zero "
+            "sentinel without ever touching torch. Requires the optional "
+            "torch package (already in requirements-optional.txt for local "
+            "FinBERT inference) -- absent, the same zero-sentinel behavior "
+            "applies regardless of this flag."
+        ),
+    )
+    BERT_LLA_BLEND_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Whether the 'bert_lla' ablation's price (not lstm_baseline/"
+            "lstm_attention -- those are comparison-only and NEVER blend-"
+            "eligible regardless of this flag) is added to "
+            "ForecastingEngine's model_forecasts dict and therefore "
+            "influences the live skill-weighted blended forecast. False "
+            "(the default): bert_lla still RECORDS to forecast_errors for "
+            "the webapp's model-comparison chart, but its error history "
+            "accrues honestly before it can ever move a recommendation -- "
+            "mirrors FORECAST_SKILL_WEIGHTING_ENABLED's 'measure first, act "
+            "later' posture. Only consulted once BERT_LLA_ENABLED is True."
+        ),
+    )
+    BERT_LLA_ABLATION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, generate_forecast() runs all three BERT-LLA "
+            "ablations (lstm_baseline, lstm_attention, bert_lla) instead of "
+            "just 'bert_lla' alone -- three PyTorch trainings per ticker per "
+            "cycle instead of one. False (the default) keeps the marginal "
+            "compute cost to a single model. Only consulted once "
+            "BERT_LLA_ENABLED is True."
+        ),
+    )
+    BERT_LLA_WINDOW_SIZE: int = Field(
+        default=22,
+        description=(
+            "Lookback window (trading days) BERT-LLA's LSTM layers consume, "
+            "replacing the CNN-LSTM path's hardcoded LSTM_LOOKBACK=60 -- "
+            "matches the source methodology's 22-trading-day window. Only "
+            "consulted once BERT_LLA_ENABLED is True."
+        ),
+    )
+    BERT_LLA_MIN_SENTIMENT_COVERAGE: float = Field(
+        default=0.5,
+        description=(
+            "Hard gate for the 'bert_lla' ablation specifically (not "
+            "lstm_baseline/lstm_attention, which consume no sentiment): the "
+            "minimum fraction of rows in the feature window that must have "
+            "an OBSERVED composite-sentiment-index reading "
+            "(signals.sentiment_index) before training proceeds. Below this "
+            "threshold, run_bert_lla_forecast returns the zero sentinel "
+            "rather than training on a mostly mask-zeroed sentiment channel "
+            "(CONSTRAINT #4) -- SENTIMENT_INGESTION_ENABLED defaults False "
+            "and SENTIMENT_PIT_MIN_MONTHS=6 is this platform's own bar for "
+            "trusting sentiment history, so this gate will bind for months "
+            "after an operator first enables sentiment ingestion, by "
+            "design. Only consulted once BERT_LLA_ENABLED is True."
+        ),
+    )
     CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED: bool = Field(
         default=False,
         description=(
