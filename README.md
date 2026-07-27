@@ -80,6 +80,8 @@ exits cleanly without evaluating anything.
 ## Launching
 
 ```bash
+./launch_app.command                      # recommended: unified Command Center in a native
+                                           # desktop window, always-on background refresh
 ./launch.command                          # double-click from Finder — runs main.py
 ./launch_gui.command                      # InvestYo Command Center (Streamlit GUI)
 
@@ -89,11 +91,13 @@ exits cleanly without evaluating anything.
 .venv/bin/python3 main_orchestrator.py    # async orchestrator (HTML report)
 ```
 
-The **Command Center GUI** (`./launch_gui.command` or `streamlit run gui/app.py`) is the
-recommended day-to-day surface. It bundles the Launcher, Reports, Settings, Strategy
-Matrix, Paper-Trading Monitor, Gravity Audit, Technical Options Matrix, Market Data,
-Live Inventory, and Observability tabs over the file-backed state the pipeline writes
-(no async broker calls from the GUI).
+**`./launch_app.command`** is the recommended everyday launcher — it opens the unified
+Command Center in a native desktop window (pywebview) with an always-on background
+refresh loop tied to the window's lifecycle. `./launch.command` (headless interval loop)
+and `./launch_gui.command` / `streamlit run gui/app.py` (the Streamlit Command Center GUI,
+Launcher/Reports/Settings/Strategy Matrix/Paper-Trading Monitor/Gravity Audit/Technical
+Options Matrix/Market Data/Live Inventory/Observability tabs) remain valid standalone
+entry points for headless/dev use — no async broker calls from the GUI either way.
 
 ---
 

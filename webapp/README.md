@@ -43,52 +43,40 @@ webapp/
 ├── public/                   # icon.svg, favicon.svg (PWA icons)
 └── src/
     ├── main.tsx              # entry (BrowserRouter)
-    ├── App.tsx               # router + bottom nav (mobile) + sidebar (desktop) + onboarding gate
-    ├── theme.ts              # dark fintech tokens + validated donut palette
+    ├── App.tsx               # router + bottom nav (mobile) + sidebar (desktop) + onboarding
+    │                         # gate + NAV_ITEMS, the authoritative live screen/section list
+    ├── theme.ts              # dark fintech tokens + validated sector/category/series palettes
     ├── index.css             # design-token CSS variables, mobile-first styles
     ├── format.ts             # $/%/date formatters
     ├── onboarding.ts         # localStorage completion marker
-    ├── api/
-    │   ├── types.ts          # TS mirror of api/pilots_api.py response shapes
-    │   ├── client.ts         # typed client + USE_MOCK switch (api: typeof liveApi)
-    │   ├── mock.ts           # realistic offline fixtures for every endpoint
-    │   └── offlineCache.ts   # localStorage GET cache (offline fallback)
-    ├── hooks/
-    │   ├── useApi.ts         # async loader (distinguishes honest 404 from error)
-    │   └── usePwaStatus.ts   # service-worker registration/update state
-    ├── components/
-    │   ├── ui.tsx            # badges, honesty row, tiles, loading/error/empty states
-    │   ├── charts.tsx        # PerfLine, SectorDonut, Sparkline (Recharts)
-    │   ├── PilotCard.tsx     # marketplace rail cards
-    │   ├── RangeToggle.tsx   # 1W/1M/3M/6M/1Y/2Y segmented control
-    │   ├── ActivityFeed.tsx  # polling ENTER/EXIT/REWEIGHT feed
-    │   ├── NotebookMLExport.tsx  # copy/download portfolio as JSON
-    │   └── PwaStatusDrawer.tsx   # ⚙ service-worker status sheet (every screen)
-    └── screens/
-        ├── Onboarding.tsx    # 3 steps: Pilot → brokerage (paper-first) → amount
-        ├── Dashboard.tsx     # `/` — draggable widget grid
-        ├── Marketplace.tsx   # `/marketplace` — Top Performers / Most Popular / category rails
-        ├── PilotDetail.tsx   # `/pilots/:id` — perf chart, holdings, donut, trades
-        ├── Portfolio.tsx     # `/portfolio` — equity tiles, curve, active follows
-        ├── Comparison.tsx    # `/compare` — multi-Pilot comparison
-        ├── SymbolDetail.tsx  # `/symbol/:ticker` — per-symbol context/forecast/options
-        ├── Activity.tsx      # `/activity` — full activity feed
-        ├── Models.tsx        # `/models` — ML model registry + honest CPCV metrics
-        ├── PairsRadar.tsx    # `/pairs` — cointegrated pairs radar
-        └── FollowModal.tsx   # amount → planned_intents preview + gating notice
+    ├── api/                  # types.ts, client.ts (mock/live switch), mock.ts, offlineCache.ts
+    ├── hooks/                # useApi.ts, usePwaStatus.ts, useMutation.ts, ...
+    ├── help/                 # helpContent.ts — TAB_HELP + GLOSSARY, rendered by TabGuide.tsx
+    ├── components/           # ~22 shared UI/chart components — ui.tsx (badges, tiles, honesty
+    │                         # row), charts.tsx (PerfLine/SectorDonut/Sparkline/chart chrome),
+    │                         # PilotCard.tsx, Modal.tsx, Toggle.tsx, and per-feature panels
+    └── screens/               # ~31 screens, one per NAV_ITEMS entry — see App.tsx for the
+                                # current authoritative list rather than this (previously
+                                # stale, hand-maintained) tree; group sections are primary
+                                # (Dashboard/Portfolio/Activity/Agentic), research, trading,
+                                # operations, and settings
 ```
 
 ## Design & honesty
 
-- Dark fintech palette reused from Stockpy's operator console: green `#10b981`
-  growth / red `#ef4444` decline / amber `#f59e0b` caution, on `#0b0e11` base /
-  `#12161c` surfaces.
+- Dark fintech palette on `#0b0e11` base / `#12161c` surfaces (Pilots-PWA-only —
+  the Streamlit operator console renders on its own light chrome, not shared).
+  Its status colors — green `#10b981` growth / red `#ef4444` decline / amber
+  `#f59e0b` caution — DO reuse `gui/styling.py`'s `BRAND_ACCENTS` trio exactly.
 - The sector-donut categorical palette was validated with the dataviz skill's
-  `validate_palette.js` against the dark surface (all six checks pass; worst
-  adjacent CVD ΔE 23.7). See `src/theme.ts`.
+  `validate_palette.js` against the dark surface: lightness band, chroma floor,
+  and ≥3:1 contrast all pass for all 8 slots; CVD separation is a WARN (worst
+  adjacent ΔE 7.5, deutan) and the normal-vision floor FAILS at one adjacent
+  pair (ΔE 7.8, below the 15 floor) — legal only because `SectorDonut` always
+  pairs every slice with a direct text label, so identity is never color-alone.
+  See `src/theme.ts`'s module docstring for the full validation record.
 - **Honesty (CONSTRAINT #4):** a Pilot that fails a validation gate renders
   `Not deployable` plainly; a `curve: null` performance response renders
   "No backtest series yet" — never a fabricated line or metric. The mock catalog
   ships two such examples (`momentum-burst` non-deployable, `value-quality`
   null curve) so the honest paths are always exercised.
-```
