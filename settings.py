@@ -1539,6 +1539,55 @@ class Settings(BaseSettings):
             "SECTOR_HEAT_ENABLED is True."
         ),
     )
+
+    # --- Sector Selection Heat (data/sector_selection_heat.py) ---
+    # A DIFFERENT feature from SECTOR_HEAT_* above despite the name overlap
+    # -- see docs/signals/sector_heat_factor.md's "Two features, one name"
+    # section and docs/signals/sector_selection.md. This one drives
+    # semantic Related Sector Selection's ranking coefficient (cosine
+    # similarity x this Gaussian-response heat term), not the
+    # Sector_Heat_Factor dashboard column.
+    SECTOR_SELECTION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the semantic Related Sector Selection "
+            "feature's Gaussian-response Sector Heat term "
+            "(data.sector_selection_heat.compute_spec_sector_heat). False "
+            "(the default) is a complete no-op: no sentiment_ingestion_audit "
+            "read is attempted. Independent of SECTOR_HEAT_ENABLED."
+        ),
+    )
+    SECTOR_SELECTION_HEAT_LOOKBACK_DAYS: int = Field(
+        default=22,
+        description=(
+            "Trailing TRADING days (weekdays only -- no holiday calendar, "
+            "same documented limitation as "
+            "HistoricalStore.resolve_trading_day) of sentiment_ingestion_"
+            "audit news+comment volume summed per candidate sector before "
+            "min-max normalization. 22 trading days matches the "
+            "MDPI-methodology lookback this feature is modeled on. Only "
+            "consulted once SECTOR_SELECTION_ENABLED is True."
+        ),
+    )
+    SECTOR_SELECTION_HEAT_A: float = Field(
+        default=0.8,
+        description=(
+            "Gaussian amplitude 'a' in SHF = a * exp(-(x-b)^2 / (2c^2)), "
+            "where x is the min-max-normalized combined news+review volume "
+            "across candidate sectors. Empirically calibrated in the "
+            "source methodology; kept as a setting rather than a literal "
+            "so a future recalibration doesn't require a code change."
+        ),
+    )
+    SECTOR_SELECTION_HEAT_B: float = Field(
+        default=1.0,
+        description="Gaussian center 'b' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
+    )
+    SECTOR_SELECTION_HEAT_C: float = Field(
+        default=0.6,
+        description="Gaussian width 'c' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
+    )
+
     WIKIPEDIA_ATTENTION_ENABLED: bool = Field(
         default=False,
         description=(
