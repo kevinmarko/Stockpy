@@ -136,6 +136,7 @@ from pilots import (
     rolling_beta,
     run_status,
     scoring,
+    sector_selection,
     strategy_health,
     strategy_matrix as strategy_matrix_reader,
     symbols,
@@ -1023,6 +1024,27 @@ def get_symbol_forecast(
     a 404 (the symbol is valid; there's simply nothing tracked). A bin with too
     few samples has ``mean_pct_error=null``; never fabricated (CONSTRAINT #4)."""
     return forecast_skill.forecast_skill_view(ticker, horizon_days=horizon)
+
+
+@app.get("/sector/selection", dependencies=[Depends(require_read_token)])
+def get_sector_selection(
+    target: str,
+    n: int = Query(3, ge=1, le=5),
+) -> Dict[str, Any]:
+    """Semantic Related Sector Selection ranking for one target symbol:
+    cosine similarity, ingestion volume, Sector Heat Factor, and the final
+    ``correlation_coefficient`` per candidate sector.
+
+    Reads persisted DB state only (``sector_correlations``, written by
+    ``sector_selection_engine.py`` — no live engine call, no network).
+    ``n`` (1-5) re-derives ``selected`` from the already-persisted rank
+    ordering — it does NOT re-run similarity or heat computation, so
+    dragging the UI's N slider is a cheap read, not a recompute. Returns
+    empty ``rows`` + an honest ``reason`` when nothing has been computed
+    for this symbol yet — NOT a 404 (the symbol may simply not have run
+    through the engine yet). Every numeric field is ``null`` wherever the
+    engine recorded it as degraded/unavailable (CONSTRAINT #4)."""
+    return sector_selection.sector_selection_view(target, n=n)
 
 
 @app.get("/symbols/{ticker}/rolling-beta", dependencies=[Depends(require_read_token)])

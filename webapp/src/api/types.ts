@@ -771,6 +771,46 @@ export interface ForecastSkill {
 }
 
 /**
+ * GET /sector/selection — semantic Related Sector Selection ranking for one
+ * target symbol: cosine similarity (SBERT) x Sector Heat Factor (SHF) per
+ * candidate sector, ranked descending by `correlation_coefficient`.
+ *
+ * Every numeric field is `null`, never a fabricated value, whenever the
+ * backend couldn't honestly compute it (CONSTRAINT #4) — `degraded_reason`
+ * explains why: `"no_embedder"` (no similarity backend configured/available),
+ * `"no_target_description"` / `"no_sector_description"` (nothing to embed),
+ * `"embedding_failed"`, or the Sector Heat Factor side's
+ * `"review_unavailable"` (investor-forum comment volume has never been
+ * observed — SHF degrades to news-only volume) / `"no_volume_observed"`
+ * (this sector's member tickers were never ingested at all — excluded from
+ * ranking entirely). `rank`/`selected` are `null`/`false` for an unranked
+ * row (its `correlation_coefficient` is `null`).
+ */
+export interface SectorSelectionRow {
+  sector: string;
+  cosine_similarity: number | null;
+  ingestion_volume: number | null; // numNews + Review (pre-SHF), whatever volume WAS observed
+  sector_heat_factor: number | null;
+  correlation_coefficient: number | null;
+  rank: number | null;
+  selected: boolean;
+  degraded_reason: string | null;
+}
+
+export interface SectorSelectionView {
+  target_symbol: string;
+  as_of: string | null; // trading-day label (YYYY-MM-DD) the ranking was computed for
+  top_n: number; // echoes the request's `n` -- NOT necessarily how many rows are `selected`
+  rows: SectorSelectionRow[];
+  embedder: string | null; // "sbert" | "openai" | "none" -- provenance of the similarity term
+  pooling: string | null; // "max" | "mean" -- only meaningful when embedder === "sbert"
+  // Honest explanation when `rows` is empty (nothing computed for this
+  // symbol yet); null on a normal hit. NOT a 404 -- the symbol may simply
+  // not have run through sector_selection_engine.py yet.
+  reason: string | null;
+}
+
+/**
  * GET /symbols/{ticker}/rolling-beta — time-varying beta vs SPY
  * (Cov(returns, spy_returns) / Var(spy_returns) over a rolling window),
  * distinct from the single point-in-time static `Beta` figure elsewhere in the

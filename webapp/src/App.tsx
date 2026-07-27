@@ -29,6 +29,7 @@ import { DataExplorer } from "./screens/DataExplorer";
 import { SignalBreakdown } from "./screens/SignalBreakdown";
 import { SentimentDynamics } from "./screens/SentimentDynamics";
 import { ForecastViewer } from "./screens/ForecastViewer";
+import { SectorSelection } from "./screens/SectorSelection";
 import { Commands } from "./screens/Commands";
 import { AgenticTrading } from "./screens/AgenticTrading";
 import { ResearchHub } from "./screens/ResearchHub";
@@ -110,6 +111,7 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   { to: "/options", label: "Options", ico: "🎯", match: (p) => p.startsWith("/options"), section: "research" },
   { to: "/signals", label: "Signal Breakdown", ico: "🧬", match: (p) => p.startsWith("/signals"), section: "research" },
   { to: "/sentiment", label: "Sentiment Dynamics", ico: "🎭", match: (p) => p.startsWith("/sentiment"), section: "research" },
+  { to: "/sector-selection", label: "Sector Selection", ico: "🧩", match: (p) => p.startsWith("/sector-selection"), section: "research" },
   { to: "/forecast", label: "Forecast Viewer", ico: "📈", match: (p) => p.startsWith("/forecast"), section: "research" },
   { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", match: (p) => p.startsWith("/data-explorer"), section: "research" },
   // Trading Tools — grading and acting on your own portfolio.
@@ -464,6 +466,7 @@ export default function App() {
           <Route path="/signals" element={<SignalBreakdown />} />
           <Route path="/sentiment" element={<SentimentDynamics />} />
           <Route path="/forecast" element={<ForecastViewer />} />
+          <Route path="/sector-selection" element={<SectorSelection />} />
           <Route path="/commands" element={<Commands />} />
           <Route path="/agentic" element={<AgenticTrading />} />
           <Route path="/research" element={<ResearchHub />} />

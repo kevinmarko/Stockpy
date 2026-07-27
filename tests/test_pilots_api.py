@@ -1140,6 +1140,43 @@ class TestForecastSkill:
         assert isinstance(body["error_by_model"], list)
 
 
+class TestSectorSelection:
+    def test_shape_stable(self):
+        resp = client.get("/sector/selection?target=NIO&n=3")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {
+            "target_symbol", "as_of", "top_n", "rows", "embedder", "pooling", "reason",
+        }
+        assert body["target_symbol"] == "NIO"
+        assert body["top_n"] == 3
+        assert isinstance(body["rows"], list)
+
+    def test_no_history_returns_honest_reason_not_404(self):
+        resp = client.get("/sector/selection?target=ZZZZ_NOT_TRACKED&n=3")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rows"] == []
+        assert body["reason"]
+
+    def test_n_defaults_to_three(self):
+        resp = client.get("/sector/selection?target=NIO")
+        assert resp.status_code == 200
+        assert resp.json()["top_n"] == 3
+
+    def test_n_below_range_rejected(self):
+        resp = client.get("/sector/selection?target=NIO&n=0")
+        assert resp.status_code == 422
+
+    def test_n_above_range_rejected(self):
+        resp = client.get("/sector/selection?target=NIO&n=6")
+        assert resp.status_code == 422
+
+    def test_missing_target_rejected(self):
+        resp = client.get("/sector/selection?n=3")
+        assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # GET /symbols/{ticker}/rolling-beta
 # ---------------------------------------------------------------------------
