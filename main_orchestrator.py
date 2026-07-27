@@ -711,6 +711,23 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
                     # GDELT query failed, or this ticker's sector wasn't
                     # covered this cycle.
                     "sector_heat_factor": _safe_float_or_none(row.get("Sector_Heat_Factor")),
+                    # ETF volatility transmission (Ben-David, Franzoni &
+                    # Moussawi 2018) -- see risk/etf_transmission.py and
+                    # pipeline/production_steps.py::_apply_etf_transmission.
+                    # DIAGNOSTIC ONLY: nothing in scoring/sizing/execution
+                    # reads these. Same NaN-never-fabricated convention as the
+                    # multifactor z-scores above -- NaN -> JSON null when
+                    # settings.ETF_TRANSMISSION_ENABLED is False, the ticker is
+                    # in no covered basket, the holdings fetch failed, the
+                    # ticker is itself an ETF, or the aligned return overlap is
+                    # shorter than the full R2 window.
+                    "etf_ownership_pct": _safe_float_or_none(row.get("ETF_Ownership_Pct")),
+                    "etf_comovement_r2": _safe_float_or_none(row.get("ETF_Comovement_R2")),
+                    # String column: NaN -> None (never the literal text "nan").
+                    "etf_primary_wrapper": (
+                        None if pd.isna(row.get("ETF_Primary_Wrapper"))
+                        else str(row.get("ETF_Primary_Wrapper"))
+                    ),
                     # Task C3 — post-trade evaluation metrics (evaluation_engine.py
                     # EvaluationEngine.evaluate_portfolio()/calculate_edge_ratio()
                     # already compute these into dashboard_df every cycle; they

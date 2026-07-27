@@ -65,6 +65,11 @@ except ImportError:
     PROPHET_AVAILABLE = False
     logger.debug("prophet library not available. Prophet forecasting will fall back.")
 
+# TORCH_AVAILABLE re-exported from forecasting/bert_lla.py (its own module
+# owns the try/except torch import) rather than a second, independent guard
+# here -- single source of truth for whether the BERT-LLA path can run.
+from forecasting.bert_lla import TORCH_AVAILABLE  # noqa: E402
+
 
 # Hardcoded fallback used when no valid empirical artifact/override is
 # available (see validation/sector_forecast_backtest.py + sector_config_io.py
@@ -115,6 +120,14 @@ class ForecastingEngine:
 
         # Configuration: Target Days by Sector
         self.sector_configs = self._load_sector_configs()
+
+        # Most recent BERT-LLA attention-weight payload from generate_forecast()
+        # (None until a call actually runs the "bert_lla" ablation) -- read by
+        # api/metrics_api.py's forecast endpoint to surface the attention
+        # heatmap overlay. Not part of the `results` dict returned by
+        # generate_forecast() itself, to keep that dict's shape strictly
+        # config.COLUMN_SCHEMA-driven.
+        self.last_bert_lla_attention: Optional[Dict[str, Any]] = None
 
     def _load_sector_configs(self) -> Dict[str, Dict[str, Any]]:
         """Load per-sector forecast config: hardcoded default <- committed
@@ -859,6 +872,168 @@ class ForecastingEngine:
             return zero_result
 
     # =========================================================================
+    # BERT-LLA (PyTorch dual-LSTM + self-attention, 3 registered ablations)
+    # =========================================================================
+
+    @staticmethod
+    def _sentiment_daily_for_symbol(
+        symbol: str, start_day: str, end_day: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Flattened ``{trading_day: {...}}`` composite-sentiment-index read
+        for one symbol (``signals.sentiment_index.compute_sentiment_index``).
+        ``{}`` on any failure or when ``settings.SENTIMENT_INDEX_ENABLED`` is
+        False (CONSTRAINT #6) -- the BERT-LLA coverage gate then correctly
+        sees 0% coverage and skips training rather than fabricating input."""
+        try:
+            from signals.sentiment_index import compute_sentiment_index
+            result = compute_sentiment_index([symbol], start_day, end_day)
+            return result.get(symbol, {})
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("BERT-LLA: sentiment read failed for %s: %s", symbol, exc)
+            return {}
+
+    def run_bert_lla_forecast(
+        self,
+        history_df: pd.DataFrame,
+        ablation: str,
+        horizons: Tuple[int, ...] = (10, 30, 60, 90),
+        ticker: Optional[str] = None,
+        symbol: Optional[str] = None,
+    ) -> Tuple[Dict[int, float], Optional[Dict[str, Any]]]:
+        """One of three registered ablations (``forecasting.bert_lla.
+        ABLATIONS``): ``lstm_baseline``, ``lstm_attention``, ``bert_lla``.
+
+        Direct multi-step (single Dense head of width ``len(horizons)``),
+        same architecture rationale as ``run_cnn_lstm_forecast``. Reuses
+        ``build_lstm_features``/``fit_scalers_on_train``/
+        ``make_direct_multistep_windows`` UNCHANGED — this already IS the
+        source methodology's ``LocalizedWindowPreprocessor`` anti-leakage
+        property (fit on train span only), just under this codebase's
+        existing name; ``window_size`` (``settings.BERT_LLA_WINDOW_SIZE``,
+        default 22) replaces the CNN-LSTM path's hardcoded 60.
+
+        ``ablation == "bert_lla"`` additionally requires ``symbol`` (to
+        align the composite sentiment index) and is gated by
+        ``settings.BERT_LLA_MIN_SENTIMENT_COVERAGE`` (default 0.5) — below
+        that fraction of observed sentiment rows across the full feature
+        window, this returns the zero sentinel rather than training on a
+        mostly-fabricated (mask-zeroed) sentiment channel.
+
+        Returns ``(forecasts, attention)`` — ``forecasts`` is
+        ``{horizon: predicted_price}`` (zeros when unavailable, matching
+        ``run_cnn_lstm_forecast``'s CONSTRAINT #4 contract); ``attention``
+        is ``{model, window_size, weights: [{date, alpha}, ...]}`` or
+        ``None`` (no attention layer for ``lstm_baseline``, or the whole
+        call degraded). Never raises (CONSTRAINT #6).
+        """
+        from forecasting.bert_lla import (
+            ABLATIONS, build_masked_sentiment_channel, fit_predict_bert_lla, sentiment_coverage,
+        )
+
+        horizons = tuple(int(h) for h in horizons)
+        zero_result: Dict[int, float] = {h: 0.0 for h in horizons}
+
+        if ablation not in ABLATIONS:
+            logger.warning("run_bert_lla_forecast: unknown ablation %r", ablation)
+            return zero_result, None
+        if not TORCH_AVAILABLE:
+            return zero_result, None
+        if history_df is None:
+            return zero_result, None
+
+        try:
+            from settings import settings as _settings
+            if not bool(getattr(_settings, "BERT_LLA_ENABLED", False)):
+                return zero_result, None
+
+            df_features = self.build_lstm_features(history_df)
+            lookback = max(1, int(getattr(_settings, "BERT_LLA_WINDOW_SIZE", 22)))
+            max_h = max(horizons)
+            n_reserve = lookback + max_h
+            min_required = 2 * n_reserve + 10
+            if len(df_features) < min_required:
+                logger.debug(
+                    "BERT-LLA (%s): insufficient history (%d rows, need >= %d) for "
+                    "window_size=%d, max_horizon=%d. Skipping.",
+                    ablation, len(df_features), min_required, lookback, max_h,
+                )
+                return zero_result, None
+
+            feature_cols = list(self.LSTM_FEATURE_COLS)
+            use_attention = ablation in ("lstm_attention", "bert_lla")
+
+            if ablation == "bert_lla":
+                if not symbol:
+                    logger.debug("BERT-LLA: no symbol supplied, cannot align sentiment. Skipping.")
+                    return zero_result, None
+                dates = [d.strftime("%Y-%m-%d") for d in df_features.index]
+                sentiment_by_day = self._sentiment_daily_for_symbol(symbol, dates[0], dates[-1])
+                s_filled, s_mask = build_masked_sentiment_channel(dates, sentiment_by_day)
+                coverage = sentiment_coverage(s_mask)
+                min_coverage = float(getattr(_settings, "BERT_LLA_MIN_SENTIMENT_COVERAGE", 0.5))
+                if coverage < min_coverage:
+                    logger.info(
+                        "BERT-LLA: sentiment coverage %.1f%% below the %.1f%% gate for "
+                        "%s. Skipping rather than training on a mostly-fabricated "
+                        "sentiment channel.", coverage * 100, min_coverage * 100, symbol,
+                    )
+                    return zero_result, None
+                df_features = df_features.copy()
+                df_features["S_t_filled"] = s_filled
+                df_features["S_t_observed"] = s_mask
+                feature_cols = feature_cols + ["S_t_filled", "S_t_observed"]
+
+            # 1. Train-only scaler fit (no leakage) -- identical machinery to
+            # run_cnn_lstm_forecast, just a different window_size/feature set.
+            scaler_X, scaler_y, _train_df = self.fit_scalers_on_train(
+                df_features, feature_cols, n_reserve
+            )
+            scaled_X_all = scaler_X.transform(df_features[feature_cols].values)
+            scaled_close_all = scaler_y.transform(df_features[['Close']].values)
+            scaled_X_train = scaled_X_all[:-n_reserve]
+            scaled_close_train = scaled_close_all[:-n_reserve]
+
+            # 2. Direct multi-step supervised windows, built strictly from train data.
+            X_seq, Y_seq = self.make_direct_multistep_windows(
+                scaled_X_train, scaled_close_train, lookback, list(horizons)
+            )
+            if len(X_seq) == 0:
+                logger.warning(
+                    "BERT-LLA (%s): pre-gate history check passed (%d rows) but "
+                    "make_direct_multistep_windows() built zero supervised windows "
+                    "for window_size=%d, max_horizon=%d. Returning zeros.",
+                    ablation, len(df_features), lookback, max_h,
+                )
+                return zero_result, None
+
+            # 3-4. Train once, forecast from the most recent window (all real data).
+            last_window = scaled_X_all[-lookback:][np.newaxis, ...]
+            pred_scaled, alpha = fit_predict_bert_lla(
+                X_seq, Y_seq, last_window, use_attention=use_attention,
+            )
+
+            out: Dict[int, float] = {}
+            for i, h in enumerate(horizons):
+                inv = scaler_y.inverse_transform([[float(pred_scaled[i])]])[0][0]
+                out[h] = float(inv)
+
+            attention_payload: Optional[Dict[str, Any]] = None
+            if alpha is not None:
+                window_dates = [d.strftime("%Y-%m-%d") for d in df_features.index[-lookback:]]
+                attention_payload = {
+                    "model": ablation,
+                    "window_size": lookback,
+                    "weights": [
+                        {"date": d, "alpha": float(a)} for d, a in zip(window_dates, alpha)
+                    ],
+                }
+            return out, attention_payload
+
+        except Exception as exc:
+            logger.warning("BERT-LLA (%s) forecast execution failed: %s", ablation, exc)
+            return zero_result, None
+
+    # =========================================================================
     # SKILL-WEIGHTED BLENDING HELPER (Tier 2.2)
     # =========================================================================
 
@@ -1092,6 +1267,33 @@ class ForecastingEngine:
                     history_df, horizons=tuple(horizons), ticker=persist_ticker
                 )
 
+            # Train BERT-LLA ONCE per enabled ablation (opt-in, PyTorch) and reuse
+            # its per-horizon outputs below, same shape as lstm_multi above. Off by
+            # default (BERT_LLA_ENABLED=False) -- byte-identical to today's exact
+            # behavior until explicitly enabled; the settings read itself is
+            # defensively wrapped so a settings/import hiccup can never abort the
+            # rest of a forecast.
+            bert_lla_multi: Dict[str, Dict[int, float]] = {}
+            bert_lla_blend_enabled = False
+            self.last_bert_lla_attention: Optional[Dict[str, Any]] = None
+            try:
+                from settings import settings as _bl_settings
+                if bool(getattr(_bl_settings, "BERT_LLA_ENABLED", False)) and history_df is not None:
+                    bert_lla_blend_enabled = bool(getattr(_bl_settings, "BERT_LLA_BLEND_ENABLED", False))
+                    ablation_names = ["bert_lla"]
+                    if bool(getattr(_bl_settings, "BERT_LLA_ABLATION_ENABLED", False)):
+                        ablation_names = ["lstm_baseline", "lstm_attention", "bert_lla"]
+                    for ablation_name in ablation_names:
+                        forecasts, attention = self.run_bert_lla_forecast(
+                            history_df, ablation_name, horizons=tuple(horizons),
+                            ticker=persist_ticker, symbol=persist_ticker,
+                        )
+                        bert_lla_multi[ablation_name] = forecasts
+                        if ablation_name == "bert_lla" and attention is not None:
+                            self.last_bert_lla_attention = attention
+            except Exception as _exc:
+                logger.debug("BERT-LLA block skipped for %s: %s", symbol, _exc)
+
             # Run Facebook Prophet ONCE (30-day only; it is expensive) and stash its
             # forecast so it can both feed the h=30 blend below AND populate the
             # Forecast_30_Prophet result columns after the loop without a second run.
@@ -1139,6 +1341,14 @@ class ForecastingEngine:
                 # once for 30 days only above).
                 if h == 30 and prophet_yhat_30 > 0:
                     model_forecasts["prophet"] = prophet_yhat_30
+                # BERT-LLA: only "bert_lla" itself is EVER blend-eligible, and only
+                # when BERT_LLA_BLEND_ENABLED is also True -- lstm_baseline/
+                # lstm_attention are comparison-only ablations, never meant to size
+                # a live recommendation, so they never enter model_forecasts
+                # regardless of this flag (see run_bert_lla_forecast's docstring).
+                bert_lla_res = bert_lla_multi.get("bert_lla", {}).get(h, 0.0)
+                if bert_lla_res > 0 and bert_lla_blend_enabled:
+                    model_forecasts["bert_lla"] = bert_lla_res
 
                 # Step 2b: retrieve skill weights for this horizon (empty dict = cold start).
                 skill_weights: Dict[str, float] = {}
@@ -1162,6 +1372,26 @@ class ForecastingEngine:
                         self._tracker.record_forecasts(symbol, h, model_forecasts, now_utc)
                     except Exception as _exc:
                         logger.debug("ForecastTracker.record_forecasts skipped for %s h=%d: %s", symbol, h, _exc)
+
+                # Every BERT-LLA ablation's price is recorded for the forecast-
+                # error comparison chart, whether or not it's blend-eligible --
+                # `name not in model_forecasts` skips "bert_lla" here ONLY when
+                # it was already recorded above via model_forecasts (blend
+                # enabled), avoiding a duplicate insert of the identical price.
+                if self._tracker is not None:
+                    ablation_recordable = {
+                        name: per_h.get(h, 0.0)
+                        for name, per_h in bert_lla_multi.items()
+                        if per_h.get(h, 0.0) > 0 and name not in model_forecasts
+                    }
+                    if ablation_recordable:
+                        try:
+                            self._tracker.record_forecasts(symbol, h, ablation_recordable, now_utc)
+                        except Exception as _exc:
+                            logger.debug(
+                                "ForecastTracker.record_forecasts (bert_lla ablations) "
+                                "skipped for %s h=%d: %s", symbol, h, _exc,
+                            )
 
                 results[f'Forecast_{h}'] = blended
 

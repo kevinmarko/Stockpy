@@ -771,6 +771,46 @@ export interface ForecastSkill {
 }
 
 /**
+ * GET /sector/selection — semantic Related Sector Selection ranking for one
+ * target symbol: cosine similarity (SBERT) x Sector Heat Factor (SHF) per
+ * candidate sector, ranked descending by `correlation_coefficient`.
+ *
+ * Every numeric field is `null`, never a fabricated value, whenever the
+ * backend couldn't honestly compute it (CONSTRAINT #4) — `degraded_reason`
+ * explains why: `"no_embedder"` (no similarity backend configured/available),
+ * `"no_target_description"` / `"no_sector_description"` (nothing to embed),
+ * `"embedding_failed"`, or the Sector Heat Factor side's
+ * `"review_unavailable"` (investor-forum comment volume has never been
+ * observed — SHF degrades to news-only volume) / `"no_volume_observed"`
+ * (this sector's member tickers were never ingested at all — excluded from
+ * ranking entirely). `rank`/`selected` are `null`/`false` for an unranked
+ * row (its `correlation_coefficient` is `null`).
+ */
+export interface SectorSelectionRow {
+  sector: string;
+  cosine_similarity: number | null;
+  ingestion_volume: number | null; // numNews + Review (pre-SHF), whatever volume WAS observed
+  sector_heat_factor: number | null;
+  correlation_coefficient: number | null;
+  rank: number | null;
+  selected: boolean;
+  degraded_reason: string | null;
+}
+
+export interface SectorSelectionView {
+  target_symbol: string;
+  as_of: string | null; // trading-day label (YYYY-MM-DD) the ranking was computed for
+  top_n: number; // echoes the request's `n` -- NOT necessarily how many rows are `selected`
+  rows: SectorSelectionRow[];
+  embedder: string | null; // "sbert" | "openai" | "none" -- provenance of the similarity term
+  pooling: string | null; // "max" | "mean" -- only meaningful when embedder === "sbert"
+  // Honest explanation when `rows` is empty (nothing computed for this
+  // symbol yet); null on a normal hit. NOT a 404 -- the symbol may simply
+  // not have run through sector_selection_engine.py yet.
+  reason: string | null;
+}
+
+/**
  * GET /symbols/{ticker}/rolling-beta — time-varying beta vs SPY
  * (Cov(returns, spy_returns) / Var(spy_returns) over a rolling window),
  * distinct from the single point-in-time static `Beta` figure elsewhere in the
@@ -1943,10 +1983,32 @@ export interface SignalImportance {
 }
 
 /**
+ * One day's attention weight from forecasting/bert_lla.py's LLAAttention
+ * layer, over the "bert_lla" ablation's lookback window.
+ */
+export interface ForecastAttentionWeight {
+  date: string; // ISO date (YYYY-MM-DD)
+  alpha: number; // in [0, 1]; every window's alphas sum to ~1.0
+}
+
+/**
+ * BERT-LLA attention-weight overlay for one forecast request — which days in
+ * the lookback window the "bert_lla" ablation weighted most heavily. `null`
+ * whenever `settings.BERT_LLA_ENABLED` is off, torch isn't installed, the
+ * sentiment-coverage gate blocked training, or the model otherwise didn't
+ * run this request — never a fabricated weight series (CONSTRAINT #4).
+ */
+export interface ForecastAttention {
+  model: string; // "bert_lla"
+  window_size: number;
+  weights: ForecastAttentionWeight[];
+}
+
+/**
  * GET /metrics/forecast/{symbol} — multi-horizon blended forecast + Monte
- * Carlo bands from `ForecastingEngine.generate_forecast`. Every field is a
- * price level and may be `null` (NaN→null); the backend 404s when there are
- * no bars at all, so a rendered response always has *some* horizon populated.
+ * Carlo bands from `ForecastingEngine.generate_forecast`. Every price field
+ * may be `null` (NaN→null); the backend 404s when there are no bars at all,
+ * so a rendered response always has *some* horizon populated.
  */
 export interface ForecastResult {
   Forecast_10: number | null;
@@ -1967,9 +2029,12 @@ export interface ForecastResult {
   Forecast_60_Upper: number | null;
   Forecast_90_Lower: number | null;
   Forecast_90_Upper: number | null;
+  attention: ForecastAttention | null;
   // Prophet overlay (present only when Prophet ran); index signature carries
-  // any additional model columns the engine emits without silently dropping them.
-  [key: string]: number | null;
+  // any additional model columns the engine emits without silently dropping
+  // them. Widened to include ForecastAttention so `attention` above (a
+  // named, non-numeric property) still satisfies the index signature.
+  [key: string]: number | null | ForecastAttention;
 }
 
 // ---------------------------------------------------------------------------

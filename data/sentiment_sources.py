@@ -945,6 +945,93 @@ class RedditSource(SentimentSource):
 
 
 # ---------------------------------------------------------------------------
+# StockTwits — free, UNCREDENTIALED (unlike RedditSource, no OAuth
+# registration required). Second comment-class source, lighting up the
+# Review term's coverage alongside Reddit.
+# ---------------------------------------------------------------------------
+
+class StockTwitsSource(SentimentSource):
+    """StockTwits public per-symbol message-stream endpoint -- free, no
+    credentials.
+
+    Requires ``settings.STOCKTWITS_ENABLED`` (default ``False``) -- unlike
+    Reddit/EDGAR/Finnhub, there's no credential absence to gate on, so this
+    is the source's own explicit opt-in. NOT in ``SENTIMENT_SOURCES``'s
+    default fan-out list even when this flag is on -- an operator must add
+    ``"stocktwits"`` to ``SENTIMENT_SOURCES`` themselves. Deliberately
+    absent from ``_SOURCE_PRIORITY``: ``CompositeSentimentSource`` appends
+    any unlisted source after the prioritized ones, correctly placing this
+    noisier, least-established source last under budget pressure.
+
+    Endpoint stability caveat (documented, not hidden): StockTwits has
+    progressively tightened its public JSON endpoint over the past several
+    years and may rate-limit or require authentication in some
+    deployments. A 401/403/429/timeout/malformed-response degrades to
+    ``[]`` exactly like a missing Reddit credential -- this source is never
+    load-bearing for the comment channel on its own; Reddit remains the
+    primary comment source (see ``docs/RUNBOOK.md``). Verified against a
+    captured fixture in tests, never a live call.
+
+    Only ``author_handle``/``author_followers`` are populated when the
+    response carries them; ``account_age_days`` stays ``None`` (StockTwits'
+    stream response carries no account-age field) -- never fabricated
+    (CONSTRAINT #4).
+    """
+
+    name = "stocktwits"
+    _STREAM_URL = "https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
+
+    def fetch(self, symbol: str, since: datetime) -> List[SentimentDocument]:
+        try:
+            from settings import settings as _settings
+            if not _settings.STOCKTWITS_ENABLED:
+                return []
+            resp = requests.get(
+                self._STREAM_URL.format(symbol=symbol.upper()),
+                headers={"Accept": "application/json"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            messages = payload.get("messages") or []
+            docs: List[SentimentDocument] = []
+            for msg in messages:
+                body = msg.get("body", "")
+                if not body:
+                    continue
+                as_of = self._parse_created_at(msg.get("created_at"))
+                if as_of is None or as_of < since:
+                    continue
+                user = msg.get("user") or {}
+                docs.append(SentimentDocument(
+                    as_of=as_of, symbol=symbol.upper(), source_name=self.name,
+                    text_content=body, raw_sentiment_score=self._score(body),
+                    author_handle=user.get("username"),
+                    author_followers=user.get("followers"),
+                ))
+            return docs
+        except Exception as exc:
+            logger.warning("StockTwitsSource.fetch(%s) failed: %s", symbol, exc)
+            return []
+
+    @staticmethod
+    def _parse_created_at(raw: Optional[str]) -> Optional[datetime]:
+        if not raw:
+            return None
+        try:
+            # StockTwits timestamps, e.g. "2026-07-21T14:00:00Z".
+            dt = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ")
+            return dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _score(text: str) -> float:
+        from signals.news_catalyst import _score_headline
+        return _score_headline(text, None)
+
+
+# ---------------------------------------------------------------------------
 # SEC EDGAR — free, no auth, requires a compliant User-Agent.
 # ---------------------------------------------------------------------------
 
@@ -1332,6 +1419,7 @@ _SOURCE_REGISTRY: Dict[str, Type[SentimentSource]] = {
     "google_news": GoogleNewsRSSSource,
     "reddit": RedditSource,
     "edgar": EdgarSource,
+    "stocktwits": StockTwitsSource,
 }
 
 

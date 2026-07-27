@@ -25,7 +25,8 @@ Database table: ``forecast_errors``
 | id             | INTEGER PK | Auto-increment.                                  |
 | symbol         | TEXT       | Ticker (e.g. "AAPL").                           |
 | model_name     | TEXT       | One of: arima, monte_carlo, holt_winters,        |
-|                |            | cnn_lstm.                                        |
+|                |            | cnn_lstm, prophet, lstm_baseline,                |
+|                |            | lstm_attention, bert_lla.                        |
 | horizon_days   | INTEGER    | Forecast horizon (e.g. 10, 30, 60, 90).          |
 | forecast_ts    | TEXT       | UTC ISO-8601 when the forecast was made.         |
 | forecast_price | REAL       | Predicted terminal price.                        |
@@ -52,7 +53,19 @@ MODEL_ARIMA = "arima"
 MODEL_MONTE_CARLO = "monte_carlo"
 MODEL_HOLT_WINTERS = "holt_winters"
 MODEL_CNN_LSTM = "cnn_lstm"
-ALL_MODEL_NAMES = (MODEL_ARIMA, MODEL_MONTE_CARLO, MODEL_HOLT_WINTERS, MODEL_CNN_LSTM)
+# BERT-LLA ablations (forecasting/bert_lla.py) -- three genuine ablations of
+# ONE PyTorch architecture, not three unrelated models: lstm_baseline (no
+# attention, no sentiment), lstm_attention (+ LLA attention, no sentiment),
+# bert_lla (+ LLA attention + the composite sentiment index). All gated
+# behind settings.BERT_LLA_ENABLED (default False) -- these names appear in
+# forecast_errors only once an operator opts in.
+MODEL_LSTM_BASELINE = "lstm_baseline"
+MODEL_LSTM_ATTENTION = "lstm_attention"
+MODEL_BERT_LLA = "bert_lla"
+ALL_MODEL_NAMES = (
+    MODEL_ARIMA, MODEL_MONTE_CARLO, MODEL_HOLT_WINTERS, MODEL_CNN_LSTM,
+    MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION, MODEL_BERT_LLA,
+)
 
 # Minimum positive RMSE to prevent division-by-zero when a model is extremely
 # accurate over a stretch (a $0.01 RMSE cap avoids assigning infinite weight).

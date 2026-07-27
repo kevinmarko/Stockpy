@@ -113,9 +113,18 @@ _SIZING_QUARTET = (
 # pipeline/production_steps.py, which the orchestrator path runs and the
 # advisory path does not. Genuinely orchestrator-only, not an oversight;
 # revisit if/when the advisory path grows either source of its own.
+#
+# The three etf_* fields are orchestrator-only for the same structural
+# reason: pipeline/production_steps.py::_apply_etf_transmission is the sole
+# producer, and the advisory path has no ETF-holdings source at all --
+# main.py::_build_context_extras builds a minimal universe_df with no
+# holdings input. Revisit if/when the advisory path grows one.
 ORCHESTRATOR_ONLY_FIELDS: set[str] = {
     "attention_score",
     "sector_heat_factor",
+    "etf_ownership_pct",
+    "etf_comovement_r2",
+    "etf_primary_wrapper",
     # The ETF-volatility-transmission sizing derate (risk/etf_transmission.py)
     # is composed inside sizing/position_sizer.py::size_position(), which ONLY
     # the orchestrator path routes through. engine/advisory.py deliberately

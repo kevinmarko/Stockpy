@@ -14,6 +14,28 @@ under `docs/signals/` because it is a per-sector, GDELT-sourced attention
 feature that reads naturally alongside the sentiment-pipeline docs, not
 because it is one of the 17 scored modules.
 
+## Two features, one name
+
+**This "Sector Heat Factor" is NOT the same feature as the "Sector Heat
+Factor" (SHF) inside the semantic Related Sector Selection feature** — see
+[`docs/signals/sector_selection.md`](sector_selection.md). They share a name
+because the source research literature uses the same term for two distinct
+constructs. Side by side:
+
+| | this feature (`Sector_Heat_Factor` column) | Sector Selection's SHF |
+|---|---|---|
+| File | `data/sentiment_sources.py` | `data/sector_selection_heat.py` |
+| Input | GDELT `timelinevol` HTTP, per sector | local `sentiment_ingestion_audit` |
+| Math | `scipy.ndimage.gaussian_filter1d` — a smoothing **kernel** over a time series | `a·exp(-(x-b)²/2c²)` — a Gaussian **response function** of one scalar |
+| Normalization | none (raw smoothed count, unbounded) | min-max **across candidate sectors**, then Gaussian → bounded `(0, a]` |
+| Lookback | `SECTOR_HEAT_LOOKBACK_DAYS` (default 7 calendar days) | `SECTOR_SELECTION_HEAT_LOOKBACK_DAYS` (default 22 **trading** days) |
+| Consumer | `Sector_Heat_Factor` dashboard column | `sector_selection_engine.py`'s ranking coefficient |
+| Master switch | `settings.SECTOR_HEAT_ENABLED` | `settings.SECTOR_SELECTION_ENABLED` |
+
+Do not reshape one to match the other — they answer different questions and
+have independent test suites (`tests/test_sector_heat_lookahead.py` vs.
+`tests/test_sector_selection_heat_lookahead.py`).
+
 ---
 
 ## Rationale

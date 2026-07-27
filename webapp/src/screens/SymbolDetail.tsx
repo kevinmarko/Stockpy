@@ -242,7 +242,11 @@ export function SymbolDetail() {
     () => api.getSymbol(ticker),
     [ticker]
   );
-  const forecast = useApi<ForecastSkill>(() => api.getForecast(ticker, 30), [ticker]);
+  const [forecastHorizon, setForecastHorizon] = useState(30);
+  const forecast = useApi<ForecastSkill>(
+    () => api.getForecast(ticker, forecastHorizon),
+    [ticker, forecastHorizon]
+  );
   const options = useApi<SymbolOptions>(() => api.getSymbolOptions(ticker), [ticker]);
   const rollingBeta = useApi<RollingBeta>(() => api.getRollingBeta(ticker, 60), [ticker]);
   const decisions = useApi<DecisionEntry[]>(
@@ -494,7 +498,31 @@ export function SymbolDetail() {
 
       {/* Forecast reliability + model skill weights */}
       <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Forecast skill</h2>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            flexWrap: "wrap",
+            gap: 8,
+            marginBottom: 4,
+          }}
+        >
+          <h2 style={{ fontSize: 16, margin: 0 }}>Forecast skill</h2>
+          <div className="segmented" role="tablist" aria-label="Forecast horizon">
+            {[10, 30, 60, 90].map((h) => (
+              <button
+                key={h}
+                role="tab"
+                aria-selected={h === forecastHorizon}
+                className={h === forecastHorizon ? "on" : ""}
+                onClick={() => setForecastHorizon(h)}
+              >
+                {h}d
+              </button>
+            ))}
+          </div>
+        </div>
         {forecast.loading ? (
           <Loading lines={1} />
         ) : !forecast.data || forecast.data.reason ? (
@@ -524,6 +552,14 @@ export function SymbolDetail() {
               </>
             )}
             <ForecastErrorChart rows={forecast.data.error_by_model} />
+            {forecast.data.error_by_model.some((r) => r.model_name.startsWith("lstm_") || r.model_name === "bert_lla") && (
+              <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 6, lineHeight: 1.5 }}>
+                lstm_baseline / lstm_attention / bert_lla are three ablations
+                of one architecture (dual-layer LSTM, with and without
+                self-attention and sentiment) — a direct comparison, not
+                three unrelated models.
+              </p>
+            )}
           </>
         )}
       </section>

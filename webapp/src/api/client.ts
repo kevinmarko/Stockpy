@@ -62,6 +62,7 @@ import type {
   RealizedPerformance,
   RollingBeta,
   RunRecord,
+  SectorSelectionView,
   StrategyMatrix,
   StrategyHealthRow,
   GravityAuditStatus,
@@ -245,6 +246,13 @@ const liveApi = {
   getRollingBeta: (ticker: string, window = 60) =>
     http<RollingBeta>(
       `/symbols/${encodeURIComponent(ticker)}/rolling-beta?window=${window}`
+    ),
+  // `n` re-derives `selected` server-side from the already-persisted rank
+  // ordering (no recompute) -- cheap enough to refetch on every N-slider
+  // change rather than re-ranking client-side.
+  getSectorSelection: (target: string, n = 3) =>
+    http<SectorSelectionView>(
+      `/sector/selection?target=${encodeURIComponent(target)}&n=${n}`
     ),
   getModels: () => http<ModelRow[]>("/models"),
   getOptions: () => http<OptionsMatrix>("/options"),

@@ -61,7 +61,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 99
+    EXPECTED_COLUMN_COUNT = 102
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -277,6 +277,7 @@ class TestAdvisoryColumnCoverage:
         "Credibility_Weighted_Sentiment", "Bot_Activity_Ratio",
         "Aggregated_Source_Credibility",
         "Sector_Heat_Factor", "Attention_Score",
+        "ETF_Ownership_Pct", "ETF_Comovement_R2", "ETF_Primary_Wrapper",
         # Orchestrator-only: composed in sizing/position_sizer.py::size_position(),
         # which engine/advisory.py deliberately does not route through (it keeps
         # its own tighter, decoupled CONFIG["max_single_position_pct"] cap).
@@ -299,8 +300,8 @@ class TestAdvisoryColumnCoverage:
             f"keys in one of the sets but no longer in COLUMN_SCHEMA: {(mapped | unmapped) - all_keys}"
         )
         assert len(mapped) == 35
-        assert len(unmapped) == 64
-        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 99
+        assert len(unmapped) == 67
+        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 102
 
     def test_rec_to_sheet_row_emits_exactly_the_known_mapped_keys(self) -> None:
         """AST/behavioral cross-check: call rec_to_sheet_row() for real and
