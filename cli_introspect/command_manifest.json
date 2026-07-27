@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-18T01:51:17.681714+00:00",
+  "generated_at": "2026-07-27T12:54:24.922892+00:00",
   "command_count": 11,
   "dead_letters": [],
   "commands": [
@@ -657,7 +657,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/Desktop/Stockpy/.claude/worktrees/command-line-autocomplete-68cea1/output",
+          "default": "/Users/kevinlee/Desktop/Stockpy/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -693,7 +693,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/Desktop/Stockpy/.claude/worktrees/command-line-autocomplete-68cea1/output",
+          "default": "/Users/kevinlee/Desktop/Stockpy/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",

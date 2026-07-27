@@ -1,0 +1,965 @@
+{
+  "backtest": {
+    "embargo_days": 5,
+    "horizons": [
+      30,
+      60,
+      90
+    ],
+    "lookback_days": 750,
+    "method": "expanding_window_walk_forward",
+    "min_train_bars": 120,
+    "models": [
+      "MC",
+      "ARIMA",
+      "HW"
+    ],
+    "n_sectors": 11,
+    "n_symbols": 49,
+    "population_source": "network",
+    "seed": 42,
+    "step_days": 21,
+    "ticker_sectors_path": "/Users/kevinlee/Desktop/Stockpy/forecasting/data/ticker_sectors.csv"
+  },
+  "generated_at": "2026-07-27T12:55:58.067474+00:00",
+  "grid": [
+    {
+      "horizon": 30,
+      "mase": 9.201746883299478,
+      "model": "MC",
+      "n_forecasts": 140,
+      "n_symbols": 8,
+      "rmse": 31.858582977900124,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 60,
+      "mase": 14.674653462576364,
+      "model": "MC",
+      "n_forecasts": 128,
+      "n_symbols": 8,
+      "rmse": 48.41977787416368,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 90,
+      "mase": 18.579247868433033,
+      "model": "MC",
+      "n_forecasts": 116,
+      "n_symbols": 8,
+      "rmse": 65.01353497631361,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 30,
+      "mase": 9.515328347020656,
+      "model": "ARIMA",
+      "n_forecasts": 140,
+      "n_symbols": 8,
+      "rmse": 32.21827911650125,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 60,
+      "mase": 14.902690672318741,
+      "model": "ARIMA",
+      "n_forecasts": 128,
+      "n_symbols": 8,
+      "rmse": 47.24905852659287,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 90,
+      "mase": 18.461472089441454,
+      "model": "ARIMA",
+      "n_forecasts": 116,
+      "n_symbols": 8,
+      "rmse": 61.392775763608135,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 30,
+      "mase": 10.311945167051014,
+      "model": "HW",
+      "n_forecasts": 140,
+      "n_symbols": 8,
+      "rmse": 33.279261980792185,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 60,
+      "mase": 15.073246838922302,
+      "model": "HW",
+      "n_forecasts": 128,
+      "n_symbols": 8,
+      "rmse": 47.985354657755195,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 90,
+      "mase": 18.69543579911797,
+      "model": "HW",
+      "n_forecasts": 116,
+      "n_symbols": 8,
+      "rmse": 62.844395198283934,
+      "sector": "Technology"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.252451346798469,
+      "model": "MC",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 32.65304990778815,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 60,
+      "mase": 11.755430189245299,
+      "model": "MC",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 50.90257362430089,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 90,
+      "mase": 15.625731688257064,
+      "model": "MC",
+      "n_forecasts": 73,
+      "n_symbols": 5,
+      "rmse": 67.15741182589367,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.216557363711086,
+      "model": "ARIMA",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 34.43907847860863,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 60,
+      "mase": 11.842695476943826,
+      "model": "ARIMA",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 53.06395510512495,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 90,
+      "mase": 15.865626769055824,
+      "model": "ARIMA",
+      "n_forecasts": 73,
+      "n_symbols": 5,
+      "rmse": 71.56935582320179,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.630950111356369,
+      "model": "HW",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 34.65535012069366,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 60,
+      "mase": 12.530365876427727,
+      "model": "HW",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 53.54800226731656,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 90,
+      "mase": 17.014784194041724,
+      "model": "HW",
+      "n_forecasts": 73,
+      "n_symbols": 5,
+      "rmse": 72.06368259947092,
+      "sector": "Healthcare"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.106472923880253,
+      "model": "MC",
+      "n_forecasts": 54,
+      "n_symbols": 3,
+      "rmse": 11.282302190799577,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 60,
+      "mase": 6.706257331251554,
+      "model": "MC",
+      "n_forecasts": 48,
+      "n_symbols": 3,
+      "rmse": 16.21047066118457,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 90,
+      "mase": 9.656858614757518,
+      "model": "MC",
+      "n_forecasts": 45,
+      "n_symbols": 3,
+      "rmse": 20.39920261535876,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.211032235342015,
+      "model": "ARIMA",
+      "n_forecasts": 54,
+      "n_symbols": 3,
+      "rmse": 11.736675847014382,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 60,
+      "mase": 6.816810436999994,
+      "model": "ARIMA",
+      "n_forecasts": 48,
+      "n_symbols": 3,
+      "rmse": 16.382860253739,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 90,
+      "mase": 9.64810196672634,
+      "model": "ARIMA",
+      "n_forecasts": 45,
+      "n_symbols": 3,
+      "rmse": 20.27517248206848,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.230248939221138,
+      "model": "HW",
+      "n_forecasts": 54,
+      "n_symbols": 3,
+      "rmse": 11.718833953927927,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 60,
+      "mase": 6.812300790638644,
+      "model": "HW",
+      "n_forecasts": 48,
+      "n_symbols": 3,
+      "rmse": 16.266531130147175,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 90,
+      "mase": 9.644284374974585,
+      "model": "HW",
+      "n_forecasts": 45,
+      "n_symbols": 3,
+      "rmse": 20.235626496597348,
+      "sector": "Real Estate"
+    },
+    {
+      "horizon": 30,
+      "mase": 6.682128523904965,
+      "model": "MC",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 38.78161592073721,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 60,
+      "mase": 8.99823814563138,
+      "model": "MC",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 53.306340339104054,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 90,
+      "mase": 10.507984735934254,
+      "model": "MC",
+      "n_forecasts": 73,
+      "n_symbols": 5,
+      "rmse": 60.49079931108728,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 30,
+      "mase": 6.586419999475174,
+      "model": "ARIMA",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 37.25814235789566,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 60,
+      "mase": 8.64623070648886,
+      "model": "ARIMA",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 50.82726367254412,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 90,
+      "mase": 9.75309456594929,
+      "model": "ARIMA",
+      "n_forecasts": 73,
+      "n_symbols": 5,
+      "rmse": 53.525822033664,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 30,
+      "mase": 6.586931486074042,
+      "model": "HW",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 37.3133673154158,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 60,
+      "mase": 8.699139432798873,
+      "model": "HW",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 50.95583242236517,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 90,
+      "mase": 9.786983521962616,
+      "model": "HW",
+      "n_forecasts": 73,
+      "n_symbols": 5,
+      "rmse": 53.62267716533553,
+      "sector": "Consumer Cyclical"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.29629317995086,
+      "model": "MC",
+      "n_forecasts": 71,
+      "n_symbols": 4,
+      "rmse": 43.36233570741879,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 60,
+      "mase": 10.22910837522896,
+      "model": "MC",
+      "n_forecasts": 64,
+      "n_symbols": 4,
+      "rmse": 61.961336851569925,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 90,
+      "mase": 11.74306474929029,
+      "model": "MC",
+      "n_forecasts": 59,
+      "n_symbols": 4,
+      "rmse": 68.80730050732285,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.578726481453951,
+      "model": "ARIMA",
+      "n_forecasts": 71,
+      "n_symbols": 4,
+      "rmse": 45.16467864015442,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 60,
+      "mase": 9.97012443505524,
+      "model": "ARIMA",
+      "n_forecasts": 64,
+      "n_symbols": 4,
+      "rmse": 60.031721300192125,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 90,
+      "mase": 11.009782610026448,
+      "model": "ARIMA",
+      "n_forecasts": 59,
+      "n_symbols": 4,
+      "rmse": 65.50701955319364,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.369609392586628,
+      "model": "HW",
+      "n_forecasts": 71,
+      "n_symbols": 4,
+      "rmse": 45.01137359742595,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 60,
+      "mase": 9.807772014344572,
+      "model": "HW",
+      "n_forecasts": 64,
+      "n_symbols": 4,
+      "rmse": 59.302946770864565,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 90,
+      "mase": 10.749197842845419,
+      "model": "HW",
+      "n_forecasts": 59,
+      "n_symbols": 4,
+      "rmse": 63.69920030381284,
+      "sector": "Financial Services"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.808819713813092,
+      "model": "MC",
+      "n_forecasts": 106,
+      "n_symbols": 6,
+      "rmse": 34.053972507327614,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 60,
+      "mase": 10.992359493710582,
+      "model": "MC",
+      "n_forecasts": 96,
+      "n_symbols": 6,
+      "rmse": 46.56293874736782,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 90,
+      "mase": 14.126994970783842,
+      "model": "MC",
+      "n_forecasts": 88,
+      "n_symbols": 6,
+      "rmse": 62.622344398086206,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.553477870370243,
+      "model": "ARIMA",
+      "n_forecasts": 106,
+      "n_symbols": 6,
+      "rmse": 35.099453491517494,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 60,
+      "mase": 10.70642857098578,
+      "model": "ARIMA",
+      "n_forecasts": 96,
+      "n_symbols": 6,
+      "rmse": 50.42503724983049,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 90,
+      "mase": 13.78799082153473,
+      "model": "ARIMA",
+      "n_forecasts": 88,
+      "n_symbols": 6,
+      "rmse": 66.3174419381553,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.688523868653988,
+      "model": "HW",
+      "n_forecasts": 106,
+      "n_symbols": 6,
+      "rmse": 35.494268277227754,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 60,
+      "mase": 10.641668498754662,
+      "model": "HW",
+      "n_forecasts": 96,
+      "n_symbols": 6,
+      "rmse": 49.863827018520546,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 90,
+      "mase": 13.735160774935043,
+      "model": "HW",
+      "n_forecasts": 88,
+      "n_symbols": 6,
+      "rmse": 65.78096596450389,
+      "sector": "Industrials"
+    },
+    {
+      "horizon": 30,
+      "mase": 6.3034891365474826,
+      "model": "MC",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 32.76781297835022,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 60,
+      "mase": 8.710655413560465,
+      "model": "MC",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 34.04423310362526,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 90,
+      "mase": 10.592833692584813,
+      "model": "MC",
+      "n_forecasts": 73,
+      "n_symbols": 5,
+      "rmse": 47.015216600116545,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 30,
+      "mase": 6.349097288026467,
+      "model": "ARIMA",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 35.189577758471614,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 60,
+      "mase": 8.586187883461818,
+      "model": "ARIMA",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 38.22635213151717,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 90,
+      "mase": 10.659644946207257,
+      "model": "ARIMA",
+      "n_forecasts": 73,
+      "n_symbols": 5,
+      "rmse": 47.08418531032461,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 30,
+      "mase": 6.932103067088403,
+      "model": "HW",
+      "n_forecasts": 88,
+      "n_symbols": 5,
+      "rmse": 59.67981564762042,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 60,
+      "mase": 10.037433693460931,
+      "model": "HW",
+      "n_forecasts": 80,
+      "n_symbols": 5,
+      "rmse": 105.44203599611869,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 90,
+      "mase": 11.135681892119818,
+      "model": "HW",
+      "n_forecasts": 72,
+      "n_symbols": 5,
+      "rmse": 45.20876475610405,
+      "sector": "Consumer Defensive"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.561562414322749,
+      "model": "MC",
+      "n_forecasts": 36,
+      "n_symbols": 2,
+      "rmse": 12.764623117043666,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 60,
+      "mase": 12.853470888969742,
+      "model": "MC",
+      "n_forecasts": 32,
+      "n_symbols": 2,
+      "rmse": 22.16522049305072,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 90,
+      "mase": 11.73756986143542,
+      "model": "MC",
+      "n_forecasts": 30,
+      "n_symbols": 2,
+      "rmse": 19.903976781816333,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 30,
+      "mase": 7.876361599548378,
+      "model": "ARIMA",
+      "n_forecasts": 36,
+      "n_symbols": 2,
+      "rmse": 13.678987091671459,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 60,
+      "mase": 13.26677194569104,
+      "model": "ARIMA",
+      "n_forecasts": 32,
+      "n_symbols": 2,
+      "rmse": 23.207881621230317,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 90,
+      "mase": 12.06006874306382,
+      "model": "ARIMA",
+      "n_forecasts": 30,
+      "n_symbols": 2,
+      "rmse": 20.3166320517718,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 30,
+      "mase": 8.087923970842342,
+      "model": "HW",
+      "n_forecasts": 36,
+      "n_symbols": 2,
+      "rmse": 14.177028575237458,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 60,
+      "mase": 13.75353622868942,
+      "model": "HW",
+      "n_forecasts": 32,
+      "n_symbols": 2,
+      "rmse": 24.485701576938073,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 90,
+      "mase": 12.036668293896982,
+      "model": "HW",
+      "n_forecasts": 30,
+      "n_symbols": 2,
+      "rmse": 20.290443728904833,
+      "sector": "Energy"
+    },
+    {
+      "horizon": 30,
+      "mase": 8.160906913677788,
+      "model": "MC",
+      "n_forecasts": 106,
+      "n_symbols": 6,
+      "rmse": 38.8285839282547,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 60,
+      "mase": 13.460452291425133,
+      "model": "MC",
+      "n_forecasts": 96,
+      "n_symbols": 6,
+      "rmse": 54.15906078028466,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 90,
+      "mase": 16.804433158269315,
+      "model": "MC",
+      "n_forecasts": 88,
+      "n_symbols": 6,
+      "rmse": 68.6229464115742,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 30,
+      "mase": 8.000117854060047,
+      "model": "ARIMA",
+      "n_forecasts": 106,
+      "n_symbols": 6,
+      "rmse": 37.96143789682202,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 60,
+      "mase": 12.63916779755011,
+      "model": "ARIMA",
+      "n_forecasts": 96,
+      "n_symbols": 6,
+      "rmse": 48.521859286602925,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 90,
+      "mase": 15.244416830484537,
+      "model": "ARIMA",
+      "n_forecasts": 88,
+      "n_symbols": 6,
+      "rmse": 61.91175451658375,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 30,
+      "mase": 8.321606811173888,
+      "model": "HW",
+      "n_forecasts": 106,
+      "n_symbols": 6,
+      "rmse": 38.53569550240714,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 60,
+      "mase": 12.771721488928046,
+      "model": "HW",
+      "n_forecasts": 96,
+      "n_symbols": 6,
+      "rmse": 49.06511042450174,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 90,
+      "mase": 15.828717686998813,
+      "model": "HW",
+      "n_forecasts": 88,
+      "n_symbols": 6,
+      "rmse": 62.788961939780144,
+      "sector": "Communication Services"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.134435248781808,
+      "model": "MC",
+      "n_forecasts": 54,
+      "n_symbols": 3,
+      "rmse": 5.287578932844061,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 60,
+      "mase": 7.282917566938004,
+      "model": "MC",
+      "n_forecasts": 48,
+      "n_symbols": 3,
+      "rmse": 7.408570980334823,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 90,
+      "mase": 7.155695596921888,
+      "model": "MC",
+      "n_forecasts": 45,
+      "n_symbols": 3,
+      "rmse": 7.574950127372529,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.147021612126741,
+      "model": "ARIMA",
+      "n_forecasts": 54,
+      "n_symbols": 3,
+      "rmse": 5.331604202429691,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 60,
+      "mase": 7.05527531030252,
+      "model": "ARIMA",
+      "n_forecasts": 48,
+      "n_symbols": 3,
+      "rmse": 7.172480412213153,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 90,
+      "mase": 6.9423670335895284,
+      "model": "ARIMA",
+      "n_forecasts": 45,
+      "n_symbols": 3,
+      "rmse": 7.40428953021274,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.105153287060691,
+      "model": "HW",
+      "n_forecasts": 54,
+      "n_symbols": 3,
+      "rmse": 5.3167790753009765,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 60,
+      "mase": 6.957081805649782,
+      "model": "HW",
+      "n_forecasts": 48,
+      "n_symbols": 3,
+      "rmse": 7.177669289804814,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 90,
+      "mase": 6.949871178131403,
+      "model": "HW",
+      "n_forecasts": 45,
+      "n_symbols": 3,
+      "rmse": 7.367777305705846,
+      "sector": "Utilities"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.702048329558202,
+      "model": "MC",
+      "n_forecasts": 36,
+      "n_symbols": 2,
+      "rmse": 26.2976331262426,
+      "sector": "Basic Materials"
+    },
+    {
+      "horizon": 60,
+      "mase": 8.175060620456094,
+      "model": "MC",
+      "n_forecasts": 32,
+      "n_symbols": 2,
+      "rmse": 36.973635268128874,
+      "sector": "Basic Materials"
+    },
+    {
+      "horizon": 90,
+      "mase": 9.900434758870437,
+      "model": "MC",
+      "n_forecasts": 30,
+      "n_symbols": 2,
+      "rmse": 43.183063848048185,
+      "sector": "Basic Materials"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.462625735534456,
+      "model": "ARIMA",
+      "n_forecasts": 36,
+      "n_symbols": 2,
+      "rmse": 25.838760083035258,
+      "sector": "Basic Materials"
+    },
+    {
+      "horizon": 60,
+      "mase": 7.844856767867764,
+      "model": "ARIMA",
+      "n_forecasts": 32,
+      "n_symbols": 2,
+      "rmse": 36.739766462111916,
+      "sector": "Basic Materials"
+    },
+    {
+      "horizon": 90,
+      "mase": 9.21222305907437,
+      "model": "ARIMA",
+      "n_forecasts": 30,
+      "n_symbols": 2,
+      "rmse": 41.410262901316074,
+      "sector": "Basic Materials"
+    },
+    {
+      "horizon": 30,
+      "mase": 5.825788806755256,
+      "model": "HW",
+      "n_forecasts": 36,
+      "n_symbols": 2,
+      "rmse": 27.456312472545175,
+      "sector": "Basic Materials"
+    },
+    {
+      "horizon": 60,
+      "mase": 8.58554644258977,
+      "model": "HW",
+      "n_forecasts": 32,
+      "n_symbols": 2,
+      "rmse": 39.92018022573219,
+      "sector": "Basic Materials"
+    },
+    {
+      "horizon": 90,
+      "mase": 10.417191382940278,
+      "model": "HW",
+      "n_forecasts": 30,
+      "n_symbols": 2,
+      "rmse": 45.99718174919867,
+      "sector": "Basic Materials"
+    }
+  ],
+  "schema_version": 1,
+  "sector_configs": {
+    "Basic Materials": {
+      "days": 30,
+      "model": "ARIMA"
+    },
+    "Communication Services": {
+      "days": 30,
+      "model": "ARIMA"
+    },
+    "Consumer Cyclical": {
+      "days": 30,
+      "model": "ARIMA"
+    },
+    "Consumer Defensive": {
+      "days": 30,
+      "model": "MC"
+    },
+    "Energy": {
+      "days": 30,
+      "model": "MC"
+    },
+    "Financial Services": {
+      "days": 30,
+      "model": "MC"
+    },
+    "Healthcare": {
+      "days": 30,
+      "model": "ARIMA"
+    },
+    "Industrials": {
+      "days": 30,
+      "model": "ARIMA"
+    },
+    "Real Estate": {
+      "days": 30,
+      "model": "MC"
+    },
+    "Technology": {
+      "days": 30,
+      "model": "MC"
+    },
+    "Utilities": {
+      "days": 30,
+      "model": "HW"
+    }
+  }
+}
