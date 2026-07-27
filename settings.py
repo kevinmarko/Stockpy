@@ -1280,11 +1280,23 @@ class Settings(BaseSettings):
             "retail-authored) rather than NEWS sources (objective, "
             "editorially-published) -- see data/sentiment_source_class.py's "
             "classify_source(). Every source_name NOT listed here is treated "
-            "as news. 'stocktwits' is listed even though no StockTwitsSource "
-            "exists yet (Sentiment Source Class Phase 4) so the taxonomy is "
-            "already correct once it lands, with zero behavior change today "
-            "-- an unrecognized source_name simply never appears in "
-            "sentiment_ingestion_audit, so listing it early is a no-op."
+            "as news. 'stocktwits' is a real source (data.sentiment_sources."
+            "StockTwitsSource) but is not itself in SENTIMENT_SOURCES' "
+            "default fan-out and requires STOCKTWITS_ENABLED to actually "
+            "fetch anything -- listing it here only pre-classifies it, it "
+            "does not enable it."
+        ),
+    )
+    SENTIMENT_INDEX_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the composite sentiment index S_t = "
+            "w1*news_score + w2*review_score (signals/sentiment_index.py). "
+            "False (the default) is a complete no-op: no "
+            "sentiment_ingestion_audit read is attempted. Reuses "
+            "SECTOR_SELECTION_W1/SECTOR_SELECTION_W2 for w1/w2 rather than "
+            "a second, redundant weight pair -- see that pair's own "
+            "description and signals/sentiment_index.py's module docstring."
         ),
     )
     SENTIMENT_INGESTION_LOOKBACK_DAYS: int = Field(
