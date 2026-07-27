@@ -14,7 +14,7 @@ import {
   YAxis,
   Line,
 } from "recharts";
-import type { Bar, CurvePoint, EquityDrawdownPoint, SectorSlice } from "../api/types";
+import type { Bar, CurvePoint, EquityDrawdownPoint, ForecastAttention, SectorSlice } from "../api/types";
 import { sectorColor, theme } from "../theme";
 import { fmtDate, fmtPct } from "../format";
 
@@ -593,6 +593,49 @@ export function ForecastCandleChart({
           <ReferenceLine x={lastDate} stroke={theme.textMuted} strokeDasharray="3 3" />
         </ComposedChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * BERT-LLA attention-weight overlay (forecasting/bert_lla.py's
+ * LLAAttention) -- one shaded cell per day in the "bert_lla" ablation's
+ * lookback window, opacity scaled to that day's alpha relative to the
+ * window's max (so the heaviest-weighted day is always clearly visible
+ * regardless of how peaked or flat the distribution is this run).
+ *
+ * A plain flex strip, not a Recharts overlay on the price chart itself:
+ * Recharts' <ReferenceArea> on a category axis needs a real x1≠x2 span to
+ * render at all, and this component's lookback window (BERT_LLA_WINDOW_
+ * SIZE, typically 22 days) rarely aligns 1:1 with the price chart's own
+ * (independently-sized, range-toggle-driven) date axis -- a standalone
+ * strip sidesteps that whole alignment problem while staying exactly as
+ * legible. Renders nothing when `attention` is null/has no weights
+ * (CONSTRAINT #4 -- no overlay when the model didn't run).
+ */
+export function AttentionHeatmapStrip({ attention }: { attention: ForecastAttention | null }) {
+  if (!attention || attention.weights.length === 0) return null;
+  const maxAlpha = Math.max(...attention.weights.map((w) => w.alpha), 1e-9);
+  return (
+    <div style={{ marginTop: 10 }} data-testid="attention-heatmap-strip">
+      <div style={{ color: theme.textMuted, fontSize: 11, marginBottom: 4 }}>
+        {attention.model} attention ({attention.window_size}-day lookback)
+      </div>
+      <div style={{ display: "flex", gap: 2 }}>
+        {attention.weights.map((w) => (
+          <div
+            key={w.date}
+            title={`${w.date}: alpha ${w.alpha.toFixed(3)}`}
+            style={{
+              flex: 1,
+              height: 16,
+              borderRadius: 2,
+              background: theme.accent,
+              opacity: 0.15 + (w.alpha / maxAlpha) * 0.85,
+            }}
+          />
+        ))}
+      </div>
     </div>
   );
 }

@@ -142,6 +142,18 @@ def get_forecast(symbol: str) -> Dict[str, Any]:
     ``ForecastingEngine.generate_forecast`` takes a ``row: pd.Series`` (for the
     sector/symbol lookup) plus ``current_price`` and the OHLCV ``history_df``;
     it internally derives the Close series, so a minimal ``row`` suffices.
+
+    ``attention``: the BERT-LLA "bert_lla" ablation's per-day attention
+    weights over its lookback window (``forecasting/bert_lla.py``'s
+    ``LLAAttention``), read from ``engine.last_bert_lla_attention`` after
+    the call -- a live inference artifact of THIS request's most recent
+    window, not persisted state, so it belongs here rather than behind a
+    ``pilots/*.py`` reader (this endpoint already imports the heavy engine
+    directly; see the module docstring). ``null`` (with no ``attention``
+    key omitted) whenever ``BERT_LLA_ENABLED`` is off, torch isn't
+    installed, the sentiment-coverage gate blocked training, or the model
+    otherwise didn't run this request -- never a fabricated weight series
+    (CONSTRAINT #4).
     """
     symbol = symbol.upper()
     bars = _fetch_bars(symbol, 504)
@@ -149,8 +161,9 @@ def get_forecast(symbol: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"No bar data available for {symbol}")
     current_price = _current_price(symbol, bars)
     row = pd.Series({"sector": "Unknown", "Symbol": symbol})
+    engine = ForecastingEngine()
     try:
-        result = ForecastingEngine().generate_forecast(
+        result = engine.generate_forecast(
             row=row,
             current_price=current_price,
             history_series=bars["Close"],
@@ -159,7 +172,9 @@ def get_forecast(symbol: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("metrics_api: forecast failed for %s: %s", symbol, exc)
         raise HTTPException(status_code=404, detail="Forecast calculation failed")
-    return _clean_nan(dict(result))
+    payload = dict(result)
+    payload["attention"] = engine.last_bert_lla_attention
+    return _clean_nan(payload)
 
 
 @app.get("/metrics/options/{symbol}", dependencies=[Depends(require_token)])

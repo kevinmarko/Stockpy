@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { Bar, ForecastResult } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
-import { ForecastCandleChart } from "../components/charts";
+import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum } from "../format";
@@ -71,8 +71,10 @@ function ForecastView({
   const forecast = HORIZONS.filter((h) => d[h.key] != null).map((h) => ({
     day: h.days,
     mid: d[h.key] as number,
-    lower: d[`Forecast_${h.days}_Lower`],
-    upper: d[`Forecast_${h.days}_Upper`],
+    // Always a numeric field (never `attention`) despite ForecastResult's
+    // index signature being widened to admit ForecastAttention too.
+    lower: d[`Forecast_${h.days}_Lower`] as number | null,
+    upper: d[`Forecast_${h.days}_Upper`] as number | null,
   }));
 
   const hasBand = d.MC_Lower != null && d.MC_Upper != null;
@@ -120,6 +122,14 @@ function ForecastView({
               </div>
             )}
             <ForecastCandleChart bars={bars} forecast={forecast} />
+            <AttentionHeatmapStrip attention={d.attention} />
+            {d.attention && (
+              <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 8, lineHeight: 1.5 }}>
+                Darker cells show which days the BERT-LLA model weighted most
+                heavily when forming this forecast — not a stronger buy/sell
+                signal.
+              </p>
+            )}
           </>
         )}
       </section>

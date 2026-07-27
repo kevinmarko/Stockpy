@@ -70,4 +70,38 @@ describe("ForecastViewer screen (real mock API)", () => {
       await screen.findByText(/No price history in the store for this symbol/)
     ).toBeInTheDocument();
   });
+
+  it("the default symbol's populated BERT-LLA attention overlay renders its caption", async () => {
+    // AAPL is the default symbol AND the mock's one deliberately-populated
+    // attention fixture (mock.ts's getForecastResult) -- see that file's
+    // own honesty-fixture comment for why every other symbol is null.
+    renderScreen();
+    expect(
+      await screen.findByText(/days the BERT-LLA model/)
+    ).toBeInTheDocument();
+  });
+
+  it("a null attention response renders no caption -- never a fabricated overlay", async () => {
+    vi.spyOn(api, "getForecastResult").mockResolvedValueOnce({
+      Forecast_10: 101,
+      Forecast_30: 103,
+      Forecast_60: 105,
+      Forecast_90: null,
+      ARIMA: 102,
+      MC_Lower: 95,
+      MC_Upper: 112,
+      Forecast_10_Lower: 99,
+      Forecast_10_Upper: 103,
+      Forecast_30_Lower: 98,
+      Forecast_30_Upper: 108,
+      Forecast_60_Lower: 96,
+      Forecast_60_Upper: 110,
+      Forecast_90_Lower: null,
+      Forecast_90_Upper: null,
+      attention: null,
+    });
+    renderScreen();
+    await screen.findByText("Model detail");
+    expect(screen.queryByText(/days the BERT-LLA model/)).not.toBeInTheDocument();
+  });
 });
