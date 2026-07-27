@@ -20,6 +20,7 @@ import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
+import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -169,9 +170,9 @@ function PairAnalyzeSection() {
             <div style={{ marginTop: 16, height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={result.z_score_series}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                  <CartesianGrid {...chartGridProps} />
                   <XAxis dataKey="date" hide />
-                  <YAxis stroke="rgba(255,255,255,0.4)" style={{ fontSize: 10 }} />
+                  <YAxis tick={chartAxisTick} {...chartAxisLine} />
                   <ChartTooltip
                     formatter={(value: number) => [fmtNum(value, 2), "z-score"]}
                     labelFormatter={(label: string) => label}

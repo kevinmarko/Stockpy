@@ -23,7 +23,7 @@ import type {
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Loading, MetricBadge } from "../components/ui";
-import { PerfLine } from "../components/charts";
+import { PerfLine, chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
@@ -149,11 +149,11 @@ function RegimeSizingCard({
       <div style={{ height: 160, marginTop: 12 }} data-testid="regime-sizing-chart">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
-            <XAxis dataKey="label" stroke={theme.textMuted} fontSize={11} tickLine={false} />
-            <YAxis stroke={theme.textMuted} fontSize={10} tickLine={false} unit="%" />
+            <CartesianGrid {...chartGridProps} />
+            <XAxis dataKey="label" tick={{ ...chartAxisTick, fontSize: 11 }} {...chartAxisLine} />
+            <YAxis tick={chartAxisTick} {...chartAxisLine} unit="%" />
             <Tooltip
-              contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
+              contentStyle={chartTooltipStyle}
               labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
               itemStyle={{ fontSize: 11 }}
               formatter={(v: number) => `${v.toFixed(2)}%`}

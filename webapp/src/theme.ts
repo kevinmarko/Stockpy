@@ -9,9 +9,26 @@
  *  - Semantic status colors (green/red/amber) are Stockpy's existing gui palette,
  *    kept consistent with the operator console.
  *  - The categorical `sector` ramp was validated with the dataviz skill's
- *    validate_palette.js against the dark surface #12161c:
- *    all 8 slots pass lightness band, chroma floor, CVD separation (worst
- *    adjacent ΔE 23.7), and >=3:1 contrast. Do not reorder without re-validating.
+ *    validate_palette.js against the dark surface #12161c: lightness band,
+ *    chroma floor, and >=3:1 contrast all PASS for all 8 slots. CVD
+ *    separation is a WARN (worst adjacent ΔE 7.5, deutan) and the
+ *    normal-vision floor check FAILS at the #d55181<->#e66767 adjacent pair
+ *    (ΔE 7.8, below the 15 floor) — legal only because SectorDonut always
+ *    pairs every slice with a direct text label in its legend (the required
+ *    secondary-encoding mitigation), never color-alone. [Corrected 2026-07 —
+ *    a prior version of this comment claimed "worst adjacent ΔE 23.7, all
+ *    pass," which does not reproduce; re-run validate_palette.js yourself
+ *    before trusting either version.] Do not reorder without re-validating.
+ *  - The categorical `series` ramp (SERIES_PALETTE, for arbitrary N-way
+ *    comparisons — symbols, strategies, models — where entries are NOT
+ *    sectors or Pilot categories) is capped at 3 hues, not 8: validated at
+ *    all-pairs (the stricter check, since a series legend has no fixed
+ *    adjacency the way a donut's slice order does) and ALL FIVE checks pass
+ *    cleanly. Five candidate 4th hues were tried and none cleared all-pairs
+ *    CVD or the normal-vision floor in this lightness band — so a 4th+
+ *    series folds to theme.textMuted (mirroring sectorColor's 9th+
+ *    fallback) rather than shipping an unvalidated color. Re-validate before
+ *    changing either the hues or the 3-slot cap.
  *  - The categorical `Pilot category` ramp (below) is a SEPARATE 8-hue set —
  *    deliberately distinct from SECTOR_PALETTE so a category chip is never
  *    mistaken for a sector-donut slice on the same Pilot Detail page — also
@@ -43,6 +60,12 @@ export const theme = {
   border: "rgba(255,255,255,0.08)",
   borderStrong: "rgba(255,255,255,0.14)",
 
+  // Chart gridlines — its own token because chart grid strokes need to be
+  // recessive against --border (0.08): two competing untokenized literals
+  // (rgba(...,0.05) and rgba(...,0.06)) were in use across chart files
+  // before this was declared. 0.06 was the majority value; kept as-is.
+  chartGrid: "rgba(255,255,255,0.06)",
+
   // Semantic (status) — reserved meaning, never used as a categorical series slot
   growth: "#10b981", // green — gains / positive / deployable
   decline: "#ef4444", // red — losses / negative / not deployable
@@ -72,6 +95,32 @@ export const SECTOR_PALETTE: string[] = [
 export function sectorColor(index: number): string {
   if (index < SECTOR_PALETTE.length) return SECTOR_PALETTE[index];
   // 9th+ category folds into a neutral "Other" tone rather than a generated hue.
+  return theme.textMuted;
+}
+
+/**
+ * Categorical palette for arbitrary N-way chart series (comparing symbols,
+ * strategies, or models — NOT sectors or Pilot categories, which have their
+ * own dedicated ramps above/below). Deliberately does NOT include any of
+ * theme.accent/growth/decline/caution — those carry reserved status meaning
+ * (see the `theme` object above) and must never double as "series 2." Only 3
+ * hues: see the module docstring for why a 4th could not be validated.
+ */
+export const SERIES_PALETTE: string[] = [
+  "#3987e5", // blue
+  "#c98500", // mustard
+  "#199e70", // teal
+];
+
+/**
+ * Deterministic slot for a chart series (fixed order, never cycled
+ * arbitrarily — same contract as sectorColor). A 4th+ series folds to a
+ * neutral "Other" tone rather than an unvalidated color; the caller should
+ * pair that fold with a direct label (never rely on the muted tone alone to
+ * carry identity for more than a couple of folded series).
+ */
+export function seriesColor(index: number): string {
+  if (index < SERIES_PALETTE.length) return SERIES_PALETTE[index];
   return theme.textMuted;
 }
 

@@ -13,7 +13,8 @@ import { api } from "../api/client";
 import type { ValidationTrendSnapshot } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { DeployableBadge, ErrorState, Loading } from "./ui";
-import { theme } from "../theme";
+import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "./charts";
+import { seriesColor, theme } from "../theme";
 import { fmtDate, fmtNum, fmtPct } from "../format";
 
 /**
@@ -49,8 +50,6 @@ const METRIC_LABELS: Record<MetricKey, string> = {
   sharpe: "Sharpe",
   max_drawdown: "Max Drawdown",
 };
-
-const CHART_COLORS = ["#38bdf8", "#10b981", "#f59e0b", "#a855f7", "#ec4899", "#14b8a6"];
 
 function fmtGateNum(key: MetricKey, value: number | null): string {
   if (value == null) return "—";
@@ -217,17 +216,11 @@ export function ValidationTrend() {
           <div style={{ height: 240 }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
-                <XAxis
-                  dataKey="date"
-                  tickFormatter={fmtDate}
-                  stroke={theme.textMuted}
-                  fontSize={10}
-                  tickLine={false}
-                />
-                <YAxis stroke={theme.textMuted} fontSize={10} tickLine={false} />
+                <CartesianGrid {...chartGridProps} />
+                <XAxis dataKey="date" tickFormatter={fmtDate} tick={chartAxisTick} {...chartAxisLine} />
+                <YAxis tick={chartAxisTick} {...chartAxisLine} />
                 <Tooltip
-                  contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
+                  contentStyle={chartTooltipStyle}
                   labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
                   itemStyle={{ fontSize: 11 }}
                   labelFormatter={(d) => fmtDate(String(d))}
@@ -238,7 +231,12 @@ export function ValidationTrend() {
                     key={sid}
                     type="monotone"
                     dataKey={sid}
-                    stroke={CHART_COLORS[index % CHART_COLORS.length]}
+                    // Beyond SERIES_PALETTE's 3 validated hues, a strategy folds
+                    // to theme.textMuted rather than cycling colors (CVD-unsafe
+                    // repeats would make two DIFFERENT strategies look like the
+                    // same line) — the Legend above and per-point Tooltip still
+                    // name every strategy, so identity is never lost, just color.
+                    stroke={seriesColor(index)}
                     strokeWidth={2}
                     dot={false}
                     connectNulls

@@ -8,8 +8,9 @@ import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
 import { SymbolComparison } from "../components/SymbolComparison";
 import { TabGuide } from "../components/TabGuide";
+import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { FollowModal } from "./FollowModal";
-import { theme } from "../theme";
+import { seriesColor, theme } from "../theme";
 import { fmtNum, fmtPct, fmtUsd } from "../format";
 
 export function Comparison() {
@@ -170,8 +171,6 @@ export function Comparison() {
     });
   }, [curves]);
 
-  const colors = ["#38bdf8", "#10b981", "#f59e0b", "#a855f7", "#ec4899"];
-
   return (
     <div className="screen" data-testid="comparison-screen">
       <h1 className="screen-title" data-testid="comparison-title">Pilot Strategy Comparison</h1>
@@ -265,11 +264,11 @@ export function Comparison() {
               <div style={{ height: 200 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
-                    <XAxis dataKey="date" stroke={theme.textMuted} fontSize={10} tickLine={false} />
-                    <YAxis stroke={theme.textMuted} fontSize={10} tickLine={false} domain={["auto", "auto"]} />
+                    <CartesianGrid {...chartGridProps} />
+                    <XAxis dataKey="date" tick={chartAxisTick} {...chartAxisLine} />
+                    <YAxis tick={chartAxisTick} {...chartAxisLine} domain={["auto", "auto"]} />
                     <Tooltip
-                      contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
+                      contentStyle={chartTooltipStyle}
                       labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
                       itemStyle={{ fontSize: 11 }}
                     />
@@ -280,7 +279,11 @@ export function Comparison() {
                         type="monotone"
                         dataKey={p.id}
                         name={p.name}
-                        stroke={colors[index % colors.length]}
+                        // Up to 5 Pilots can be selected but only 3 hues are
+                        // CVD-validated (see theme.ts) — a 4th/5th folds to
+                        // theme.textMuted rather than an unvalidated color;
+                        // the Legend's `name` above still identifies every line.
+                        stroke={seriesColor(index)}
                         dot={false}
                         strokeWidth={2}
                         isAnimationActive={false}
