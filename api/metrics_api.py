@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -370,6 +370,118 @@ def _module_breakdown(symbol: str, provider: Any) -> Dict[str, Any]:
         )
     modules.sort(key=lambda m: m["name"])
     return {"final_score": round(float(final_score_raw)), "modules": modules}
+
+
+# Each symbol in the request is a real per-symbol compute (a HistoricalStore
+# bars read plus a live quote call via _current_price) -- this bounds one
+# request's cost against an unbounded universe rather than a persisted read.
+_MAX_IMPORTANCE_SYMBOLS = 25
+
+
+def _signal_importance(symbols: List[str]) -> Dict[str, Any]:
+    """Universe-wide signal-module driver weights.
+
+    NOT SHAP / feature importance. This is mean(|score * weight|) across the
+    requested symbols, using the same settings.SIGNAL_WEIGHTS-based
+    contribution ``_module_breakdown`` already computes per-symbol -- a
+    linear, configured-weight decomposition, not a Shapley value (no
+    interaction effects, no marginal contribution measured). See the
+    webapp's "signal driver weight" glossary entry for the reader-facing
+    version of this same disclaimer.
+
+    A module whose score is None for a given symbol (didn't run this cycle,
+    or the symbol lacks the inputs it needs) is EXCLUDED from that module's
+    mean entirely -- never counted as a 0 contribution. Otherwise a module
+    that's simply unavailable for most of the universe would read as
+    "unimportant" rather than "usually doesn't run" (CONSTRAINT #4).
+
+    Symbols are deduplicated (case-insensitive) and capped at
+    ``_MAX_IMPORTANCE_SYMBOLS``; a single symbol's compute failure is
+    logged and skipped rather than aborting the whole request (CONSTRAINT
+    #6, matches the per-ticker try/except convention used throughout the
+    engines).
+
+    Returns ``{"rows": [{"name", "mean_abs_contribution", "n_symbols_scored"}],
+    "n_symbols_requested": int, "n_symbols_scored": int}``. Every registered
+    module appears in ``rows`` even if it scored zero symbols in this batch
+    (``mean_abs_contribution: None``, ``n_symbols_scored: 0``) -- an honest
+    "no data" row, not a silently missing one. Rows are sorted by
+    ``mean_abs_contribution`` descending (null last).
+    """
+    seen: List[str] = []
+    for s in symbols:
+        su = s.strip().upper()
+        if su and su not in seen:
+            seen.append(su)
+    capped = seen[:_MAX_IMPORTANCE_SYMBOLS]
+
+    provider = get_provider()
+    sums: Dict[str, float] = {}
+    counts: Dict[str, int] = {}
+    n_symbols_scored = 0
+    for sym in capped:
+        try:
+            breakdown = _module_breakdown(sym, provider)
+        except Exception as exc:  # noqa: BLE001 — one bad symbol never aborts the batch
+            logger.warning("metrics_api: signal importance failed for %s: %s", sym, exc)
+            continue
+        modules = breakdown.get("modules") or []
+        if any(m.get("contribution") is not None for m in modules):
+            n_symbols_scored += 1
+        for m in modules:
+            contrib = m.get("contribution")
+            if contrib is None:
+                continue
+            name = m["name"]
+            sums[name] = sums.get(name, 0.0) + abs(float(contrib))
+            counts[name] = counts.get(name, 0) + 1
+
+    # Union with the full registry so a module that scored zero symbols this
+    # batch still appears — an honest empty row, not a missing one.
+    all_names = set(sums) | {
+        getattr(mod, "name", name) for name, mod in global_registry.get_all().items()
+    }
+    rows: List[Dict[str, Any]] = []
+    for name in sorted(all_names):
+        n = counts.get(name, 0)
+        rows.append(
+            {
+                "name": name,
+                "mean_abs_contribution": (sums[name] / n) if n > 0 else None,
+                "n_symbols_scored": n,
+            }
+        )
+    rows.sort(
+        key=lambda r: r["mean_abs_contribution"]
+        if r["mean_abs_contribution"] is not None
+        else float("-inf"),
+        reverse=True,
+    )
+
+    return {
+        "rows": rows,
+        "n_symbols_requested": len(capped),
+        "n_symbols_scored": n_symbols_scored,
+    }
+
+
+# NOTE: this static-path route MUST be registered BEFORE the parameterized
+# `/metrics/signals/{symbol}` route below it — FastAPI/Starlette matches
+# routes in REGISTRATION ORDER, and a `{symbol}` path parameter greedily
+# matches any single path segment, including the literal string
+# "importance". Registered after `{symbol}`, a request to this exact path
+# would 200 against get_symbol_signals with symbol="IMPORTANCE" instead of
+# ever reaching this handler — caught by test_signal_importance_shape_and_
+# sort_order actually exercising the route, not just unit-testing the
+# aggregation function in isolation.
+@app.get("/metrics/signals/importance", dependencies=[Depends(require_token)])
+def get_signal_importance(symbols: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """Universe-wide signal-module driver weights across a caller-supplied,
+    comma-separated symbol list (e.g. from ``GET /universe``) -- see
+    ``_signal_importance``'s docstring for the full honesty contract and why
+    this is NOT SHAP / feature importance."""
+    symbol_list = [s for s in symbols.split(",") if s.strip()]
+    return _clean_nan(_signal_importance(symbol_list))
 
 
 @app.get("/metrics/signals/{symbol}", dependencies=[Depends(require_token)])

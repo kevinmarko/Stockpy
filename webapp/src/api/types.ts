@@ -1848,6 +1848,42 @@ export interface SignalBreakdown {
 }
 
 /**
+ * One signal module's universe-wide driver weight — see
+ * `SignalImportance` below for the full honesty contract. NOT a SHAP value.
+ */
+export interface SignalImportanceRow {
+  name: string;
+  // mean(|score * weight|) across symbols where this module scored — `null`
+  // when n_symbols_scored is 0 (never a fabricated 0, which would read as
+  // "definitely unimportant" rather than "no data this batch").
+  mean_abs_contribution: number | null;
+  n_symbols_scored: number;
+}
+
+/**
+ * GET /metrics/signals/importance?symbols=A,B,C — universe-wide signal-
+ * module driver weights (`api/metrics_api.py::_signal_importance`).
+ *
+ * Deliberately NOT SHAP / feature importance: `mean_abs_contribution` is a
+ * linear, configured-weight decomposition (mean(|score * weight|) using the
+ * same `settings.SIGNAL_WEIGHTS` every per-symbol breakdown uses) — it
+ * captures no feature interactions and no marginal contribution. See the
+ * "signal driver weight" glossary entry for the reader-facing version of
+ * this same disclaimer; never relabel this UI as SHAP.
+ *
+ * Every registered module appears in `rows`, even one that scored zero
+ * symbols in this batch (`mean_abs_contribution: null`) — an honest empty
+ * row, not a silently missing one. `n_symbols_requested` may be less than
+ * the caller's symbol list length if the server capped it (each symbol is
+ * a real per-symbol compute, not a persisted read).
+ */
+export interface SignalImportance {
+  rows: SignalImportanceRow[];
+  n_symbols_requested: number;
+  n_symbols_scored: number;
+}
+
+/**
  * GET /metrics/forecast/{symbol} — multi-horizon blended forecast + Monte
  * Carlo bands from `ForecastingEngine.generate_forecast`. Every field is a
  * price level and may be `null` (NaN→null); the backend 404s when there are

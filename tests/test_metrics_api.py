@@ -268,6 +268,143 @@ def test_symbol_signals_no_bars_empty_modules(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# GET /metrics/signals/importance  (universe-wide driver weights — NOT SHAP)
+# ---------------------------------------------------------------------------
+
+
+def test_signal_importance_shape_and_sort_order(monkeypatch):
+    """Real SignalAggregator run (via _module_breakdown, same fakes as the
+    per-symbol endpoint) across 2 symbols — proves the aggregation wraps the
+    real per-symbol machinery rather than a hand-rolled duplicate."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/signals/importance?symbols=AAPL,MSFT")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["n_symbols_requested"] == 2
+    assert isinstance(body["rows"], list) and len(body["rows"]) > 0
+    row0 = body["rows"][0]
+    assert set(row0.keys()) == {"name", "mean_abs_contribution", "n_symbols_scored"}
+    scored = [r for r in body["rows"] if r["mean_abs_contribution"] is not None]
+    assert scored == sorted(scored, key=lambda r: -r["mean_abs_contribution"])
+
+
+def test_signal_importance_docstring_disclaims_shap_never_claims_it():
+    """Machine-checkable guard for the honesty rule in AGENTS.md §2: the
+    function's own docstring must disclaim SHAP/feature-importance rather
+    than silently drifting toward claiming it — catches a future edit that
+    relabels this metric without re-reading why it was deliberately not
+    called SHAP in the first place."""
+    import inspect
+
+    doc = inspect.getdoc(metrics_api._signal_importance) or ""
+    assert "NOT SHAP" in doc or "not SHAP" in doc.lower()
+    assert "Shapley" in doc
+
+
+def test_signal_importance_excludes_none_scores_from_mean_not_counted_as_zero(monkeypatch):
+    """A module that scored on only 1 of 2 requested symbols must average
+    over that 1 real score, never treat the missing symbol as a 0
+    contribution (which would silently pull the mean toward zero)."""
+    def _fake_breakdown(symbol, provider):
+        if symbol == "AAPL":
+            return {
+                "final_score": 10,
+                "modules": [{"name": "mod_a", "score": 0.5, "weight": 10.0, "contribution": 5.0}],
+            }
+        # MSFT: mod_a did not run this cycle.
+        return {
+            "final_score": 10,
+            "modules": [{"name": "mod_a", "score": None, "weight": 10.0, "contribution": None}],
+        }
+
+    monkeypatch.setattr(metrics_api, "_module_breakdown", _fake_breakdown)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider())
+
+    result = metrics_api._signal_importance(["AAPL", "MSFT"])
+    row = next(r for r in result["rows"] if r["name"] == "mod_a")
+    assert row["n_symbols_scored"] == 1
+    assert row["mean_abs_contribution"] == pytest.approx(5.0)  # NOT (5.0 + 0.0) / 2 = 2.5
+
+
+def test_signal_importance_module_with_zero_scored_symbols_is_null_not_zero(monkeypatch):
+    """A registered module that scores NOTHING in this batch still appears
+    in rows (union with the real registry), with mean_abs_contribution: None
+    and n_symbols_scored: 0 — never a fabricated 0.0 (CONSTRAINT #4)."""
+    monkeypatch.setattr(
+        metrics_api, "_module_breakdown", lambda symbol, provider: {"final_score": 10, "modules": []}
+    )
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider())
+
+    result = metrics_api._signal_importance(["AAPL"])
+    assert len(result["rows"]) > 0  # union with the real registry, not empty
+    for row in result["rows"]:
+        assert row["mean_abs_contribution"] is None
+        assert row["n_symbols_scored"] == 0
+    assert result["n_symbols_scored"] == 0
+
+
+def test_signal_importance_caps_symbol_count(monkeypatch):
+    seen_symbols = []
+
+    def _fake_breakdown(symbol, provider):
+        seen_symbols.append(symbol)
+        return {"final_score": 10, "modules": []}
+
+    monkeypatch.setattr(metrics_api, "_module_breakdown", _fake_breakdown)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider())
+
+    many = [f"SYM{i}" for i in range(metrics_api._MAX_IMPORTANCE_SYMBOLS + 10)]
+    result = metrics_api._signal_importance(many)
+    assert result["n_symbols_requested"] == metrics_api._MAX_IMPORTANCE_SYMBOLS
+    assert len(seen_symbols) == metrics_api._MAX_IMPORTANCE_SYMBOLS
+
+
+def test_signal_importance_dedupes_case_insensitively(monkeypatch):
+    seen_symbols = []
+
+    def _fake_breakdown(symbol, provider):
+        seen_symbols.append(symbol)
+        return {"final_score": 10, "modules": []}
+
+    monkeypatch.setattr(metrics_api, "_module_breakdown", _fake_breakdown)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider())
+
+    result = metrics_api._signal_importance(["aapl", "AAPL", " Aapl "])
+    assert result["n_symbols_requested"] == 1
+    assert seen_symbols == ["AAPL"]
+
+
+def test_signal_importance_one_symbol_failure_does_not_abort_batch(monkeypatch):
+    """A single symbol's compute failure (CONSTRAINT #6) is logged and
+    skipped — the batch still aggregates the symbols that succeeded."""
+    def _fake_breakdown(symbol, provider):
+        if symbol == "BAD":
+            raise RuntimeError("simulated failure")
+        return {
+            "final_score": 10,
+            "modules": [{"name": "mod_a", "score": 0.5, "weight": 10.0, "contribution": 5.0}],
+        }
+
+    monkeypatch.setattr(metrics_api, "_module_breakdown", _fake_breakdown)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider())
+
+    result = metrics_api._signal_importance(["BAD", "AAPL"])
+    row = next(r for r in result["rows"] if r["name"] == "mod_a")
+    assert row["n_symbols_scored"] == 1
+    assert row["mean_abs_contribution"] == pytest.approx(5.0)
+
+
+def test_signal_importance_endpoint_requires_symbols_param():
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/signals/importance")
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # GET /metrics/sentiment/{symbol}  (SentimentRiskEngine mocked for determinism)
 # ---------------------------------------------------------------------------
 
