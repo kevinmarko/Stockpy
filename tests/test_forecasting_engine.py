@@ -343,11 +343,15 @@ class TestGenerateForecast:
         result = engine.generate_forecast(row, current_price=50.0)
         assert result["Target_Days"] == 60
 
-    def test_real_estate_sector_uses_90_day_target(self, engine):
+    def test_real_estate_sector_uses_30_day_target(self, engine):
+        # forecasting/sector_configs.json (empirically-derived per-sector
+        # backtest overlay) supersedes the hardcoded _DEFAULT_SECTOR_CONFIGS
+        # 90-day/HW pick for Real Estate with 30-day/MC -- lowest measured
+        # MASE across the 30/60/90-day grid (see scripts/backtest_sector_configs.py).
         row = pd.Series({"sector": "Real Estate", "Symbol": "O"})
         history = _price_series(90, seed=7)
         result = engine.generate_forecast(row, current_price=float(history.iloc[-1]), history_series=history)
-        assert result["Target_Days"] == 90
+        assert result["Target_Days"] == 30
 
     def test_tracker_lifecycle_is_called_for_each_horizon(self, engine):
         tracker = mock.MagicMock()
