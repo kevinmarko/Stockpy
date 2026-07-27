@@ -159,6 +159,12 @@ class TestYahooRSSSource:
 
 class TestGDELTSource:
     def test_fetch_parses_articles(self):
+        # `since` and the mocked "now" must stay within one _CHUNK_DAYS window
+        # of each other -- a `since` that drifts more than 7 days behind real
+        # wall-clock time would make fetch() issue multiple windowed calls,
+        # and this test's mock returns the same fixture article for every
+        # call, producing spurious duplicates. Pin "now" instead of using the
+        # real clock so this stays deterministic regardless of test-run date.
         src = GDELTSource()
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
@@ -167,8 +173,14 @@ class TestGDELTSource:
                 {"title": "Apple rallies on new product", "seendate": "20260721T140000Z", "tone": 5.0},
             ]
         }
-        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
-            docs = src.fetch("AAPL", datetime(2026, 7, 20, tzinfo=timezone.utc))
+        fixed_now = datetime(2026, 7, 21, tzinfo=timezone.utc)
+        since = datetime(2026, 7, 20, tzinfo=timezone.utc)
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp) as mock_get:
+            with patch("data.sentiment_sources.datetime") as mock_dt:
+                mock_dt.now.return_value = fixed_now
+                mock_dt.strptime = datetime.strptime
+                docs = src.fetch("AAPL", since)
+        assert mock_get.call_count == 1  # regression guard: single-window call
         assert len(docs) == 1
         assert docs[0].raw_sentiment_score == pytest.approx(0.5)
 
@@ -181,8 +193,14 @@ class TestGDELTSource:
                 {"title": "Extreme headline", "seendate": "20260721T140000Z", "tone": 500.0},
             ]
         }
-        with patch("data.sentiment_sources.requests.get", return_value=mock_resp):
-            docs = src.fetch("AAPL", datetime(2026, 7, 20, tzinfo=timezone.utc))
+        fixed_now = datetime(2026, 7, 21, tzinfo=timezone.utc)
+        since = datetime(2026, 7, 20, tzinfo=timezone.utc)
+        with patch("data.sentiment_sources.requests.get", return_value=mock_resp) as mock_get:
+            with patch("data.sentiment_sources.datetime") as mock_dt:
+                mock_dt.now.return_value = fixed_now
+                mock_dt.strptime = datetime.strptime
+                docs = src.fetch("AAPL", since)
+        assert mock_get.call_count == 1  # regression guard: single-window call
         assert docs[0].raw_sentiment_score == 1.0
 
     def test_error_returns_empty(self):
