@@ -59,6 +59,8 @@ import type {
   LlmProviderTelemetry,
   LlmSettingUpdateResult,
   LlmStatus,
+  LogAggregation,
+  LogAggregationEntry,
   MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
@@ -98,6 +100,7 @@ import type {
   StrategyMatrix,
   StrategyModulesUpdate,
   StrategyModulesUpdateResult,
+  SystemTelemetry,
   ValidationTrendSnapshot,
   TunableField,
   TunableFieldType,
@@ -2835,6 +2838,31 @@ function mockCircuitBreakers(): CircuitBreakerSummary {
   };
 }
 
+// A healthy-but-not-idle host: comfortably below the 75%/90% CPU and 90%
+// memory warning thresholds Observability.tsx's legacy-panel-derived
+// annotations key off of, but not an all-zero fixture either -- exercises
+// the normal rendering path, not just the "psutil unavailable" honesty
+// branch (which has its own dedicated unit tests server-side).
+function mockSystemTelemetry(): SystemTelemetry {
+  return {
+    psutil_available: true,
+    cpu_percent: 18.4,
+    cpu_count_logical: 10,
+    load_avg_1m: 2.3,
+    memory_percent: 61.2,
+    memory_used_bytes: 10_500_000_000,
+    memory_total_bytes: 17_179_869_184,
+    disk_percent: 42.7,
+    disk_used_bytes: 211_000_000_000,
+    disk_total_bytes: 494_353_338_368,
+    process_rss_bytes: 182_000_000,
+    process_cpu_percent: 3.1,
+    process_threads: 6,
+    sampled_at: new Date().toISOString(),
+    reason: null,
+  };
+}
+
 function mockObservabilitySummary(range: PerfRange, horizon: number): ObservabilitySummary {
   return {
     portfolio_risk: mockPortfolioRisk(),
@@ -2844,6 +2872,77 @@ function mockObservabilitySummary(range: PerfRange, horizon: number): Observabil
     forecast_skill: mockPortfolioForecastSkill(horizon),
     risk_gate_blocks: mockRiskGateBlocks(),
     circuit_breakers: mockCircuitBreakers(),
+    system_telemetry: mockSystemTelemetry(),
+  };
+}
+
+// GET /observability/logs fixture -- deliberately mixes levels (INFO through
+// CRITICAL) plus one unparseable traceback-continuation line, so mock mode
+// exercises the tally KPI strip, the systemic/symbol-specific counts, AND
+// the "kept but unparsed" rendering path, not just an all-INFO happy path.
+function mockObservabilityLogs(limit: number): LogAggregation {
+  const now = Date.now();
+  const iso = (minsAgo: number) => new Date(now - minsAgo * 60_000).toISOString();
+  const all: LogAggregationEntry[] = [
+    {
+      timestamp: iso(58),
+      level: "INFO",
+      logger_name: "main_orchestrator",
+      message: "Cycle started (universe=42 symbols)",
+      raw: `${iso(58)}  INFO      main_orchestrator — Cycle started (universe=42 symbols)`,
+      parsed: true,
+    },
+    {
+      timestamp: iso(52),
+      level: "WARNING",
+      logger_name: "data_engine",
+      message: "Dead-lettered HKIT at stage=strategy: insufficient bars",
+      raw: `${iso(52)}  WARNING   data_engine — Dead-lettered HKIT at stage=strategy: insufficient bars`,
+      parsed: true,
+    },
+    {
+      timestamp: iso(41),
+      level: "ERROR",
+      logger_name: "strategy_engine",
+      message: "for symbol NVDA: model missing, skipping",
+      raw: `${iso(41)}  ERROR     strategy_engine — for symbol NVDA: model missing, skipping`,
+      parsed: true,
+    },
+    {
+      timestamp: iso(40),
+      level: null,
+      logger_name: null,
+      message: '  File "strategy_engine.py", line 214, in evaluate_security',
+      raw: '  File "strategy_engine.py", line 214, in evaluate_security',
+      parsed: false,
+    },
+    {
+      timestamp: iso(12),
+      level: "CRITICAL",
+      logger_name: "macro_engine",
+      message: "FRED unavailable, macro fetch aborted",
+      raw: `${iso(12)}  CRITICAL  macro_engine — FRED unavailable, macro fetch aborted`,
+      parsed: true,
+    },
+    {
+      timestamp: iso(2),
+      level: "INFO",
+      logger_name: "main_orchestrator",
+      message: "Cycle finished in 38.2s",
+      raw: `${iso(2)}  INFO      main_orchestrator — Cycle finished in 38.2s`,
+      parsed: true,
+    },
+  ];
+  const entries = all.slice(-limit);
+  return {
+    log_path: "logs/investyo.log",
+    total_lines: all.length,
+    tally: { CRITICAL: 1, ERROR: 1, WARNING: 1, INFO: 2, DEBUG: 0, UNPARSED: 1 },
+    systemic_count: 1,
+    symbol_specific_count: 2,
+    entries,
+    returned_count: entries.length,
+    reason: null,
   };
 }
 
@@ -4189,6 +4288,10 @@ export const mockApi = {
     horizon = 30
   ): Promise<ObservabilitySummary> {
     return delay(mockObservabilitySummary(range, horizon));
+  },
+
+  async getObservabilityLogs(limit = 300): Promise<LogAggregation> {
+    return delay(mockObservabilityLogs(limit));
   },
 
   async putMacroGate(enabled: boolean, _reason: string): Promise<MacroGateUpdateResult> {

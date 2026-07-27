@@ -1313,21 +1313,28 @@ def get_observability_summary(
     horizon: int = Query(30, ge=1, le=365),
 ) -> Dict[str, Any]:
     """Composite Mission-Control summary — the PWA's port of the retired
-    Streamlit Command Center's Observability tab (bounded to six sections):
+    Streamlit Command Center's Observability tab (bounded to seven sections):
     portfolio risk metrics (Sharpe/Calmar/MaxDD/MaxDD-duration/CAGR), the
     live portfolio heat (aggregate adverse open P&L vs. total equity, against
     ``MAX_PORTFOLIO_HEAT``), the account equity curve + drawdown, the current
     macro-regime overlay, the portfolio-wide forecast-skill reliability curve
-    + weights, the last ~100 risk-gate block-log entries, and (NEW) the
-    merged kill-switch + risk-gate-block circuit-breaker dashboard —
+    + weights, the last ~100 risk-gate block-log entries, the merged
+    kill-switch + risk-gate-block circuit-breaker dashboard —
     severity-classified, 24h-deduped trips with threshold/observed values
     and a counts-by-severity KPI strip, ported from ``gui/panels
     /gravity_audit.py::_render_circuit_breaker_dashboard`` via
     ``gui.circuit_breakers`` (see ``pilots/observability.py
     ::circuit_breaker_summary`` — no new endpoint, this rides the existing
-    composite).
+    composite), and (NEW) host/process **system telemetry** (CPU/memory/disk
+    %, load average, process RSS/CPU%/threads) via ``gui.observability_telemetry
+    .collect_system_telemetry`` (see ``pilots/observability.py
+    ::system_telemetry_summary`` — also rides the existing composite, since
+    it's a cheap, scalar-only, point-in-time sample). The sibling **log
+    aggregation** section of that same legacy tab is served by a separate
+    ``GET /observability/logs`` endpoint below (see that endpoint's docstring
+    for why it's not folded in here).
 
-    Composes SIX independently-degrading sections (``pilots.observability
+    Composes SEVEN independently-degrading sections (``pilots.observability
     .observability_summary`` — see that module's docstring for the full
     per-section contract); one section's cold-start/failure never blocks the
     others, and every section carries its own honest ``reason`` when
@@ -1393,6 +1400,38 @@ def put_macro_gate(body: MacroGateUpdateRequest) -> Dict[str, Any]:
             "until restarted."
         ),
     }
+
+
+@app.get("/observability/logs", dependencies=[Depends(require_read_token)])
+def get_observability_logs(limit: int = Query(300, ge=1, le=1000)) -> Dict[str, Any]:
+    """Bounded, parsed tail of ``logs/investyo.log`` — the PWA's port of the
+    retired Streamlit Command Center's Observability tab log-aggregation
+    section (``gui/panels/observability.py::_render_observability_error_log``).
+
+    Kept as its OWN endpoint rather than a new key on ``GET
+    /observability/summary``: unlike that composite's other (cheap,
+    scalar-only) sections, a log tail is a meaningfully heavier payload and is
+    naturally an on-demand view (e.g. an expandable "Logs" section), not
+    something needed on every Mission Control page load.
+
+    ``limit`` bounds how many of the most recent PARSED entries are returned
+    (1-1000, default 300) — the backend always reads the same last-1000-line
+    tail of the log file first (matching the legacy panel's own
+    ``read_log_tail(..., max_lines=1000)``), so ``tally``/``total_lines``/
+    ``systemic_count``/``symbol_specific_count`` reflect that full read
+    regardless of ``limit``, which only trims the ``entries`` list actually
+    shipped. There is deliberately no server-side level/substring filter
+    query param — the frontend filters the returned ``entries`` client-side,
+    mirroring the legacy Streamlit panel's own UX (a ``st.selectbox``/
+    ``st.text_input`` re-filters an already-fetched list on every rerun
+    rather than re-querying per keystroke).
+
+    See ``pilots/observability.py::log_aggregation`` for the full contract,
+    including the deliberate scope-narrowing vs. the legacy panel (counts,
+    not a per-symbol message drilldown). Returns the honest empty shape
+    (zeroed tally, empty ``entries``, a ``reason``) when the log file doesn't
+    exist yet. Never raises (CONSTRAINT #6)."""
+    return observability.log_aggregation(limit=limit)
 
 
 @app.get("/alerts", dependencies=[Depends(require_read_token)])

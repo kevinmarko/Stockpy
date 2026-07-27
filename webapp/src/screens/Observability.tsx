@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type {
   CircuitBreakerTrip,
+  LogAggregation,
+  LogAggregationEntry,
+  LogLevel,
   ObservabilitySummary,
   PerfRange,
   RiskGateBlockEntry,
 } from "../api/types";
+import { LOG_LEVELS } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Tile } from "../components/ui";
@@ -412,6 +416,225 @@ function CircuitBreakerSection({
   );
 }
 
+/** Mirrors gui/observability_telemetry.py::format_bytes exactly (B/KiB/MiB/
+ * GiB/TiB, one decimal). `null`/negative (the honest "couldn't sample"
+ * sentinel — CONSTRAINT #4) renders "—", never "0 B". */
+function fmtBytes(n: number | null): string {
+  if (n == null || n < 0) return "—";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let v = n;
+  for (const u of units) {
+    if (v < 1024) return `${v.toFixed(1)} ${u}`;
+    v /= 1024;
+  }
+  return `${v.toFixed(1)} PiB`;
+}
+
+/**
+ * SystemTelemetrySection — host + current-process CPU/memory/disk, the
+ * webapp port of gui/panels/observability.py
+ * ::_render_observability_system_telemetry. Point-in-time only (re-sampled
+ * on every screen load, no history — see SystemTelemetry's doc comment in
+ * types.ts). Reproduces the legacy panel's saturation cues (CPU >= 90% error,
+ * >= 75% warning; memory >= 90% error) at the same thresholds.
+ */
+function SystemTelemetrySection({ telemetry }: { telemetry: ObservabilitySummary["system_telemetry"] }) {
+  if (!telemetry.psutil_available) {
+    return (
+      <div className="empty" style={{ padding: 16 }}>
+        {telemetry.reason ?? "psutil is not available — telemetry cannot be sampled."}
+      </div>
+    );
+  }
+
+  const cpuHot = telemetry.cpu_percent != null && telemetry.cpu_percent >= 90;
+  const cpuWarm = !cpuHot && telemetry.cpu_percent != null && telemetry.cpu_percent >= 75;
+  const memHot = telemetry.memory_percent != null && telemetry.memory_percent >= 90;
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
+        <Tile label="Host CPU" value={fmtPct(telemetry.cpu_percent, 1)} tone={cpuHot ? "neg" : undefined} />
+        <Tile label="Host memory" value={fmtPct(telemetry.memory_percent, 1)} tone={memHot ? "neg" : undefined} />
+        <Tile label="Host disk" value={fmtPct(telemetry.disk_percent, 1)} />
+        <Tile label="Process RSS" value={fmtBytes(telemetry.process_rss_bytes)} />
+        <Tile label="Process CPU" value={fmtPct(telemetry.process_cpu_percent, 1)} />
+        <Tile label="Threads" value={telemetry.process_threads ?? "—"} />
+      </div>
+      <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 4 }}>
+        Memory: {fmtBytes(telemetry.memory_used_bytes)} / {fmtBytes(telemetry.memory_total_bytes)}
+        {" · "}Disk: {fmtBytes(telemetry.disk_used_bytes)} / {fmtBytes(telemetry.disk_total_bytes)}
+        {telemetry.cpu_count_logical != null && ` · ${telemetry.cpu_count_logical} logical cores`}
+        {telemetry.load_avg_1m != null && ` · Load avg (1m): ${fmtNum(telemetry.load_avg_1m, 2)}`}
+      </p>
+      {cpuHot && (
+        <p style={{ color: theme.decline, fontSize: 12.5, marginTop: 4 }}>
+          CPU saturated at {fmtPct(telemetry.cpu_percent, 0)} — strategy backtests may be queuing.
+        </p>
+      )}
+      {cpuWarm && (
+        <p style={{ color: theme.caution, fontSize: 12.5, marginTop: 4 }}>
+          CPU at {fmtPct(telemetry.cpu_percent, 0)} — watch for slowdowns.
+        </p>
+      )}
+      {memHot && (
+        <p style={{ color: theme.decline, fontSize: 12.5, marginTop: 4 }}>
+          Memory at {fmtPct(telemetry.memory_percent, 0)} — consider releasing caches.
+        </p>
+      )}
+      <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>
+        Sampled {telemetry.sampled_at ? timeAgo(telemetry.sampled_at) : "—"} — reload the screen to re-sample.
+      </p>
+    </div>
+  );
+}
+
+const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
+  DEBUG: 0,
+  INFO: 1,
+  WARNING: 2,
+  ERROR: 3,
+  CRITICAL: 4,
+};
+
+function LogLevelBadge({ level }: { level: LogLevel | null }) {
+  if (!level) return <span className="badge badge-neutral">—</span>;
+  const cls =
+    level === "CRITICAL" || level === "ERROR"
+      ? "badge-bad"
+      : level === "WARNING"
+      ? "badge-warn"
+      : "badge-neutral";
+  return <span className={`badge ${cls}`}>{level}</span>;
+}
+
+function LogEntryRow({ entry }: { entry: LogAggregationEntry }) {
+  return (
+    <div
+      data-testid="log-entry-row"
+      style={{
+        display: "flex",
+        gap: 8,
+        alignItems: "baseline",
+        padding: "3px 0",
+        fontFamily: "var(--font-mono, ui-monospace, monospace)",
+        fontSize: 11.5,
+      }}
+    >
+      <span style={{ color: theme.textMuted, whiteSpace: "nowrap" }}>
+        {entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "—"}
+      </span>
+      <LogLevelBadge level={entry.level} />
+      <span style={{ color: theme.textSecondary, wordBreak: "break-word" }}>
+        {entry.parsed ? entry.message : entry.raw}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * LogAggregationSection — the webapp port of gui/panels/observability.py
+ * ::_render_observability_error_log's core read path. The backend returns an
+ * already-bounded, already-parsed batch (GET /observability/logs); level and
+ * substring filtering happen entirely client-side over that fixed batch,
+ * mirroring the legacy Streamlit panel's own UX (a selectbox/text_input
+ * re-filters an already-fetched list on every rerun, not a fresh query per
+ * keystroke).
+ *
+ * Deliberately omits the legacy panel's per-symbol "Contextual Error
+ * Summary" message drilldown (grouped by ticker) — only the systemic/
+ * symbol-specific COUNTS are shown, matching the backend's own
+ * scope-narrowing decision (see pilots/observability.py::log_aggregation).
+ */
+function LogAggregationSection({ logs }: { logs: LogAggregation }) {
+  const [minLevel, setMinLevel] = useState<LogLevel>("INFO");
+  const [needle, setNeedle] = useState("");
+
+  const filtered = useMemo(() => {
+    const threshold = LOG_LEVEL_ORDER[minLevel];
+    const q = needle.trim().toLowerCase();
+    return logs.entries.filter((e) => {
+      if (e.parsed && e.level && LOG_LEVEL_ORDER[e.level] < threshold) return false;
+      if (q && !e.raw.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [logs.entries, minLevel, needle]);
+
+  if (logs.entries.length === 0) {
+    return (
+      <div className="empty" style={{ padding: 20 }}>
+        {logs.reason ?? "No log entries yet."}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
+        <Tile label="Critical" value={logs.tally.CRITICAL} tone={logs.tally.CRITICAL > 0 ? "neg" : undefined} />
+        <Tile label="Error" value={logs.tally.ERROR} tone={logs.tally.ERROR > 0 ? "neg" : undefined} />
+        <Tile label="Warning" value={logs.tally.WARNING} tone={logs.tally.WARNING > 0 ? "neg" : undefined} />
+        <Tile label="Info" value={logs.tally.INFO} />
+        <Tile label="Systemic" value={logs.systemic_count} tone={logs.systemic_count > 0 ? "neg" : undefined} />
+        <Tile label="Symbol-specific" value={logs.symbol_specific_count} />
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 10 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: theme.textMuted }}>
+          Minimum level
+          <select
+            value={minLevel}
+            onChange={(e) => setMinLevel(e.target.value as LogLevel)}
+            data-testid="log-level-select"
+            style={{
+              background: theme.surface2,
+              color: theme.textSecondary,
+              border: `1px solid ${theme.border}`,
+              borderRadius: 6,
+              padding: "4px 8px",
+              fontSize: 12,
+            }}
+          >
+            {LOG_LEVELS.map((lvl) => (
+              <option key={lvl} value={lvl}>
+                {lvl}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <Input label="Filter (substring)" value={needle} onChange={(e) => setNeedle(e.target.value)} />
+        </div>
+      </div>
+
+      <p style={{ color: theme.textMuted, fontSize: 11.5, marginBottom: 6 }}>
+        Showing {filtered.length} of {logs.returned_count} returned lines ({logs.total_lines} in the full tail).
+      </p>
+
+      {filtered.length === 0 ? (
+        <div className="empty" style={{ padding: 16 }}>
+          No log lines match the current filter.
+        </div>
+      ) : (
+        <div
+          style={{
+            background: theme.surface,
+            border: `1px solid ${theme.border}`,
+            borderRadius: 6,
+            padding: "6px 10px",
+            maxHeight: 320,
+            overflowY: "auto",
+          }}
+        >
+          {filtered.map((e, i) => (
+            <LogEntryRow key={`${e.timestamp ?? i}-${i}`} entry={e} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Observability() {
   const nav = useNavigate();
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
@@ -423,6 +646,17 @@ export function Observability() {
     () => api.getObservabilitySummary(range, horizon),
     [range, horizon]
   );
+
+  // Kept as a SEPARATE fetch (not folded into `data` above) — mirrors the
+  // backend's own GET /observability/logs split: a log tail is a heavier,
+  // independently-loading payload, not one of the cheap composite sections.
+  const {
+    data: logsData,
+    loading: logsLoading,
+    error: logsError,
+    status: logsStatus,
+    reload: logsReload,
+  } = useApi<LogAggregation>(() => api.getObservabilityLogs(300), []);
 
   return (
     <div className="screen">
@@ -443,8 +677,8 @@ export function Observability() {
       <h1 className="screen-title">Mission Control</h1>
       <p className="screen-sub">
         Account risk stats, the equity curve, the macro regime, forecast
-        skill, circuit breakers, and blocked orders — one read-only view over
-        what the engine already computed.
+        skill, circuit breakers, blocked orders, host telemetry, and the log
+        tail — one read-only view over what the engine already computed.
       </p>
 
       <TabGuide tabKey="observability" />
@@ -556,6 +790,27 @@ export function Observability() {
               ))}
             </div>
           )}
+
+          {/* 6. System telemetry — host + current-process CPU/memory/disk.
+              Point-in-time only, re-sampled on every load (no history). */}
+          <SectionHeading
+            title="System telemetry"
+            sub="Host and process resource usage — reload the screen to re-sample"
+          />
+          <SystemTelemetrySection telemetry={data.system_telemetry} />
+
+          {/* 7. Log aggregation — bounded, parsed tail of logs/investyo.log.
+              Its own fetch (GET /observability/logs), independent of the
+              composite above — see LogAggregationSection's doc comment. */}
+          <SectionHeading
+            title="Logs"
+            sub="Tail of logs/investyo.log — filter by level and free text below"
+          />
+          {logsLoading && <Loading lines={2} />}
+          {!logsLoading && logsError && (
+            <ErrorState message={logsError} status={logsStatus} onRetry={logsReload} />
+          )}
+          {!logsLoading && !logsError && logsData && <LogAggregationSection logs={logsData} />}
         </>
       )}
     </div>

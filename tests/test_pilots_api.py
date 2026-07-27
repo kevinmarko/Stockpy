@@ -1389,7 +1389,13 @@ class TestObservabilitySummary:
         assert set(body) == {
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
             "forecast_skill", "risk_gate_blocks", "circuit_breakers",
+            "system_telemetry",
         }
+        # system_telemetry is a LIVE psutil sample (point-in-time, not read
+        # from a cold-start fixture) -- psutil is a hard requirements.txt
+        # dependency, so it should always be available in the test env.
+        assert body["system_telemetry"]["psutil_available"] is True
+        assert isinstance(body["system_telemetry"]["cpu_percent"], (int, float))
         assert body["portfolio_risk"]["sharpe_ratio"] is None
         assert body["portfolio_risk"]["n_snapshots"] == 0
         assert body["portfolio_risk"]["reason"]
@@ -1619,6 +1625,80 @@ class TestMacroGateWrite:
                             headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
                         )
         assert _CMD_TOKEN not in caplog.text
+
+
+# ===========================================================================
+# GET /observability/logs — bounded, parsed tail of logs/investyo.log
+# ===========================================================================
+
+
+class TestObservabilityLogs:
+    """Endpoint-level wiring/shape tests. Substantive parsing/classification
+    logic is unit-tested directly against pilots/observability.py in
+    tests/test_pilots_observability.py; these only confirm the FastAPI
+    wiring (auth, query params, honest empty shape) end-to-end."""
+
+    def test_missing_log_file_is_honest_empty(self, tmp_path):
+        missing = tmp_path / "investyo.log"
+        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
+            resp = client.get("/observability/logs")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["entries"] == []
+        assert body["total_lines"] == 0
+        assert body["returned_count"] == 0
+        assert body["reason"]
+
+    def test_warm_path_returns_parsed_entries_and_tally(self, tmp_path):
+        log_path = tmp_path / "investyo.log"
+        log_path.write_text(
+            "2026-07-26 08:40:28,615  INFO      main_orchestrator — Cycle started\n"
+            "2026-07-26 08:40:29,500  ERROR     data_engine — FRED unavailable\n",
+            encoding="utf-8",
+        )
+        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+            resp = client.get("/observability/logs")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_lines"] == 2
+        assert body["tally"]["INFO"] == 1
+        assert body["tally"]["ERROR"] == 1
+        assert body["systemic_count"] == 1
+        assert body["reason"] is None
+        assert body["log_path"] == str(log_path)
+
+    def test_limit_param_bounds_returned_entries(self, tmp_path):
+        log_path = tmp_path / "investyo.log"
+        lines = [
+            f"2026-07-26 08:40:{i:02d},000  INFO      main — line {i}" for i in range(10)
+        ]
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", log_path):
+            resp = client.get("/observability/logs?limit=2")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_lines"] == 10
+        assert body["returned_count"] == 2
+        assert len(body["entries"]) == 2
+
+    def test_limit_out_of_bounds_422(self):
+        assert client.get("/observability/logs?limit=0").status_code == 422
+        assert client.get("/observability/logs?limit=1001").status_code == 422
+
+    def test_read_token_gates_endpoint(self, tmp_path):
+        missing = tmp_path / "investyo.log"
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            with mock.patch("gui.orchestrator_runner.TELEMETRY_LOG_PATH", missing):
+                no_auth = client.get("/observability/logs")
+                wrong = client.get(
+                    "/observability/logs", headers={"Authorization": "Bearer WRONG"}
+                )
+                ok = client.get(
+                    "/observability/logs", headers={"Authorization": "Bearer read-tok"}
+                )
+        assert no_auth.status_code == 401
+        assert wrong.status_code == 401
+        assert ok.status_code == 200
 
 
 class TestMacroGateWritesInvariants:

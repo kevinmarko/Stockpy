@@ -40,6 +40,7 @@ import type {
   KillSwitchActionResult,
   LlmSettingUpdateResult,
   LlmStatus,
+  LogAggregation,
   MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
@@ -278,6 +279,8 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ enabled, reason }),
     }),
+  getObservabilityLogs: (limit = 300) =>
+    http<LogAggregation>(`/observability/logs?limit=${limit}`),
   getStrategyMatrix: () => http<StrategyMatrix>("/strategy/matrix"),
   getStrategyHealth: () => http<StrategyHealthRow[]>("/strategy/health"),
   getValidationTrend: () => http<ValidationTrendSnapshot>("/strategy/validation-trend"),
