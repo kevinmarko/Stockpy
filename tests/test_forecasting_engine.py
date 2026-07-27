@@ -388,6 +388,64 @@ class TestGenerateForecast:
         for h in (10, 30, 60, 90):
             assert result[f"Forecast_{h}"] > 0.0
 
+    def test_bert_lla_disabled_by_default_produces_byte_identical_output(self, engine):
+        """BERT_LLA_ENABLED defaults False -- generate_forecast's output
+        must be untouched by the feature existing in the codebase at all.
+        Compares against a second engine instance with the exact same
+        inputs, both under the (default, unpatched) flag. numpy's RNG is
+        reseeded identically before each call -- Monte Carlo simulation is
+        itself unseeded (pre-existing, unrelated to this change), so an
+        exact-equality comparison across two calls needs this to hold
+        everything else constant."""
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        history = _price_series(90, seed=11)
+        price = float(history.iloc[-1])
+
+        engine_a = ForecastingEngine()
+        engine_b = ForecastingEngine()
+        np.random.seed(42)
+        result_a = engine_a.generate_forecast(row, current_price=price, history_series=history)
+        np.random.seed(42)
+        result_b = engine_b.generate_forecast(row, current_price=price, history_series=history)
+
+        for h in (10, 30, 60, 90):
+            assert result_a[f"Forecast_{h}"] == result_b[f"Forecast_{h}"]
+        assert engine_a.last_bert_lla_attention is None
+
+    def test_bert_lla_disabled_never_calls_tracker_for_ablation_names(self, engine):
+        tracker = mock.MagicMock()
+        tracker.get_skill_weights.return_value = {}
+        engine._tracker = tracker
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        history = _price_series(90, seed=12)
+        engine.generate_forecast(row, current_price=float(history.iloc[-1]), history_series=history)
+
+        recorded_model_names = set()
+        for call in tracker.record_forecasts.call_args_list:
+            recorded_model_names.update(call.args[2].keys())
+        assert "lstm_baseline" not in recorded_model_names
+        assert "lstm_attention" not in recorded_model_names
+        assert "bert_lla" not in recorded_model_names
+
+    def test_bert_lla_enabled_but_torch_absent_still_byte_identical(self, engine):
+        """Even with the flag explicitly on, an environment without torch
+        installed must degrade to the exact same output as the flag being
+        off -- CONSTRAINT #6, never a partial/broken forecast. numpy's RNG
+        is reseeded identically before each call (see the sibling test
+        above for why)."""
+        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+        history = _price_series(90, seed=13)
+        price = float(history.iloc[-1])
+
+        np.random.seed(42)
+        baseline = engine.generate_forecast(row, current_price=price, history_series=history)
+        np.random.seed(42)
+        with mock.patch("settings.settings.BERT_LLA_ENABLED", True):
+            with_flag_on = engine.generate_forecast(row, current_price=price, history_series=history)
+
+        for h in (10, 30, 60, 90):
+            assert baseline[f"Forecast_{h}"] == with_flag_on[f"Forecast_{h}"]
+
     def test_no_tracker_reproduces_static_blend_behavior(self):
         """ForecastingEngine() with no args must behave identically to the
         pre-Tier-2.2 engine -- no tracker attribute side effects."""
