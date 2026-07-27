@@ -45,7 +45,9 @@ apt-get install -y -qq \
     ufw \
     sqlite3 \
     caddy \
-    jq
+    jq \
+    nodejs \
+    npm
 
 # ─── 2. Create Service User ──────────────────────────────────────────────────
 echo "[2/8] Creating service user '${SERVICE_USER}'..."
@@ -61,7 +63,7 @@ fi
 tar -xzf /tmp/investyo.tar.gz -C "${INSTALL_DIR}"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
-# ─── 4. Python Virtual Environment ───────────────────────────────────────────
+# ─── 4. Python Virtual Environment & Webapp Build ────────────────────────────
 echo "[4/8] Setting up Python virtual environment..."
 cd "${INSTALL_DIR}"
 sudo -u "${SERVICE_USER}" python${PYTHON_VERSION} -m venv .venv
@@ -69,6 +71,11 @@ sudo -u "${SERVICE_USER}" .venv/bin/pip install --upgrade pip -q
 sudo -u "${SERVICE_USER}" .venv/bin/pip install -r requirements.txt -q
 # Ensure MCP SDK with SSE support is installed
 sudo -u "${SERVICE_USER}" .venv/bin/pip install "mcp[sse]" -q
+
+echo "Building React Webapp..."
+cd "${INSTALL_DIR}/webapp"
+sudo -u "${SERVICE_USER}" npm install
+sudo -u "${SERVICE_USER}" npm run build
 
 # ─── 5. Firewall Configuration ───────────────────────────────────────────────
 echo "[5/8] Configuring firewall (UFW)..."
@@ -83,6 +90,7 @@ ufw --force enable
 # Also create the GCP firewall rule (idempotent)
 echo "  → NOTE: Run this from your LOCAL machine to open GCP firewall:"
 echo "    gcloud compute firewall-rules create allow-investyo \\"
+# Allow port 8602 for custom direct API client calls if needed, though Caddy proxying handles HTTPS on 443
 echo "      --allow tcp:443,tcp:8080 \\"
 echo "      --target-tags=investyo-server \\"
 echo "      --description='InvestYo HTTPS + MCP SSE'"
@@ -94,40 +102,44 @@ if [ -n "$DOMAIN_NAME" ]; then
     echo "Configuring Caddy for domain: ${DOMAIN_NAME}"
     cat > /etc/caddy/Caddyfile << CADDY_EOF
 ${DOMAIN_NAME} {
+    # Serve compiled React PWA frontend
+    root * ${INSTALL_DIR}/webapp/dist
+    file_server
+
+    # Pilots API Proxy
+    handle /api/* {
+        reverse_proxy localhost:8602
+    }
+
     # Streamlit dashboard
     handle /streamlit/* {
         reverse_proxy localhost:8501
     }
 
-    # MCP SSE endpoint
-    handle /mcp/* {
-        reverse_proxy localhost:8080
-    }
-
-    # Default: Streamlit
-    handle {
-        reverse_proxy localhost:8501
-    }
+    # Default fallback to index.html (client-side routing)
+    try_files {path} /index.html
 }
 CADDY_EOF
 else
     echo "No DOMAIN_NAME set. Configuring Caddy with self-signed certificate (internal TLS)."
-    cat > /etc/caddy/Caddyfile << 'CADDY_EOF'
+    cat > /etc/caddy/Caddyfile << CADDY_EOF
 :443 {
+    # Serve compiled React PWA frontend
+    root * ${INSTALL_DIR}/webapp/dist
+    file_server
+
+    # Pilots API Proxy
+    handle /api/* {
+        reverse_proxy localhost:8602
+    }
+
     # Streamlit dashboard
     handle /streamlit/* {
         reverse_proxy localhost:8501
     }
 
-    # MCP SSE endpoint
-    handle /mcp/* {
-        reverse_proxy localhost:8080
-    }
-
-    # Default: Streamlit
-    handle {
-        reverse_proxy localhost:8501
-    }
+    # Default fallback to index.html (client-side routing)
+    try_files {path} /index.html
 
     tls internal
 }
@@ -141,10 +153,11 @@ systemctl enable caddy
 echo "[7/8] Installing systemd services..."
 cp "${INSTALL_DIR}/deploy/investyo-mcp.service" /etc/systemd/system/
 cp "${INSTALL_DIR}/deploy/investyo-streamlit.service" /etc/systemd/system/
+cp "${INSTALL_DIR}/deploy/investyo-daemon.service" /etc/systemd/system/
 
 systemctl daemon-reload
-systemctl enable investyo-mcp investyo-streamlit
-systemctl start investyo-mcp investyo-streamlit
+systemctl enable investyo-mcp investyo-streamlit investyo-daemon
+systemctl start investyo-mcp investyo-streamlit investyo-daemon
 
 # ─── 8. Install Cron Jobs ────────────────────────────────────────────────────
 echo "[8/8] Installing cron jobs..."
@@ -156,8 +169,10 @@ echo " ✅ InvestYo Cloud VPS Bootstrap Complete"
 echo "=========================================="
 echo ""
 echo " Services:"
-echo "   MCP Server:  systemctl status investyo-mcp"
-echo "   Streamlit:   systemctl status investyo-streamlit"
+echo "   MCP Server:          systemctl status investyo-mcp"
+# Added reference for daemon service
+echo "   Orchestrator Daemon: systemctl status investyo-daemon"
+echo "   Streamlit:           systemctl status investyo-streamlit"
 echo ""
 echo " IMPORTANT: Copy your .env file to the VM:"
 echo "   gcloud compute scp .env investyo-vm:${INSTALL_DIR}/.env --zone=us-east4-c"
@@ -165,5 +180,6 @@ echo "   ssh investyo-vm 'chmod 600 ${INSTALL_DIR}/.env && chown ${SERVICE_USER}
 echo ""
 echo " To check logs:"
 echo "   journalctl -u investyo-mcp -f"
+echo "   journalctl -u investyo-daemon -f"
 echo "   journalctl -u investyo-streamlit -f"
 echo ""
