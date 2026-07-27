@@ -187,6 +187,7 @@ class ValidationReport:
         distribution: np.ndarray,
         paths: List[Dict[str, Any]],
         n_trials: int,
+        mean_oos_sharpe: float = 0.0,
         is_options_selling: bool = False,
         stress_test_results: Optional[Dict[str, "StressResult"]] = None,
         family_multiple_testing: Optional[Dict[str, Any]] = None,
@@ -213,6 +214,12 @@ class ValidationReport:
         self.distribution = distribution
         self.paths = paths
         self.n_trials = n_trials
+        # Mean out-of-sample annualized Sharpe across all CPCV combinatorial
+        # paths (validation/metrics.py::run_cpcv_evaluation's "mean_oos_sharpe"),
+        # distinct from self.sharpe (the full-sample net-of-cost Sharpe used by
+        # the deployable gate). Surfaced only by the dedicated CPCV HTML report
+        # (see _render_cpcv_report) — not part of the deployability decision.
+        self.mean_oos_sharpe = mean_oos_sharpe
         # Tail-scenario stress testing (validation/stress_scenarios.py). Only
         # populated/enforced for options-selling strategies, whose negatively
         # skewed payoff is not protected by the full-sample MaxDD gate below.
@@ -796,6 +803,7 @@ class StrategyValidationHarness:
             distribution=cpcv_results["distribution"],
             paths=cpcv_results["paths"],
             n_trials=n_trials,
+            mean_oos_sharpe=cpcv_results["mean_oos_sharpe"],
             is_options_selling=self.is_options_selling,
             stress_test_results=stress_test_results,
             equity_curve=equity_curve,
@@ -846,6 +854,12 @@ class StrategyValidationHarness:
         # 7. Render HTML report (after family_multiple_testing is populated so
         # the template can surface it if desired).
         self._render_html_report(report)
+
+        # 8. Render the dedicated CPCV/overfitting-audit report — the per-path
+        # Sharpe table and OOS Sharpe distribution histogram that
+        # validation_report_template.html.j2 does not surface even though it
+        # already receives report.paths/.distribution/.n_trials.
+        self._render_cpcv_report(report)
 
         return report
 
@@ -987,6 +1001,39 @@ class StrategyValidationHarness:
         with open(report_filename, "w") as f:
             f.write(html_out)
         logger.info(f"Validation HTML report successfully written to {report_filename}")
+
+    def _render_cpcv_report(self, report: ValidationReport) -> None:
+        """Renders the dedicated Combinatorial Purged CV / overfitting-audit
+        report (reports/cpcv_report.html.j2) — the per-path OOS Sharpe table
+        and Sharpe-distribution histogram that validation_report_template.html.j2
+        does not surface.
+
+        Same checked-in-template / possibly-isolated-output-dir split as
+        _render_html_report.
+        """
+        template_dir = "reports"
+        template_file = "cpcv_report.html.j2"
+
+        loader = jinja2.FileSystemLoader(searchpath=template_dir)
+        env = jinja2.Environment(loader=loader)
+        template = env.get_template(template_file)
+
+        html_out = template.render(
+            dsr=report.dsr,
+            pbo=report.pbo,
+            mean_oos_sharpe=report.mean_oos_sharpe,
+            n_trials=report.n_trials,
+            paths=report.paths,
+            distribution=report.distribution.tolist(),
+        )
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_filename = f"{self.reports_dir}/cpcv_{report.name.lower()}_{timestamp}.html"
+
+        os.makedirs(self.reports_dir, exist_ok=True)
+        with open(report_filename, "w") as f:
+            f.write(html_out)
+        logger.info(f"CPCV overfitting-audit HTML report successfully written to {report_filename}")
 
 def main() -> None:
     """CLI endpoint for strategy validation harness."""

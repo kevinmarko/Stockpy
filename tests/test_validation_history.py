@@ -283,9 +283,10 @@ class TestRunAppendsHistoryOnce:
 
         calls = []
         monkeypatch.setattr(harness, "_append_validation_history", lambda report: calls.append(report))
-        # HTML rendering loads a Jinja template from the real repo's reports/
-        # dir, not tmp_path — irrelevant to this test, so stub it out.
+        # HTML rendering loads Jinja templates from the real repo's reports/
+        # dir, not tmp_path — irrelevant to this test, so stub both out.
         monkeypatch.setattr(harness, "_render_html_report", lambda report: None)
+        monkeypatch.setattr(harness, "_render_cpcv_report", lambda report: None)
 
         report = harness.run(
             start_date="2020-01-01", end_date="2020-12-31",
