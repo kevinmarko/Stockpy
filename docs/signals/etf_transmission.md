@@ -1,17 +1,31 @@
 # Feature: ETF Volatility Transmission
 
 **File:** `risk/etf_transmission.py` (pure math, zero I/O)
-**Wiring:** `pipeline/production_steps.py::_apply_etf_transmission` (called from `StrategyEvalStep.run`, immediately after `_apply_sector_heat_factor`)
-**Holdings source:** `data/etf_holdings.py::get_etf_holdings` (separate PR — consumed by SHAPE only, never by provider behavior)
-**Columns:** `ETF_Ownership_Pct` (`percent`), `ETF_Comovement_R2` (`number`), `ETF_Primary_Wrapper` (`string`) — all in `config.COLUMN_SCHEMA`
-**Master switch:** `settings.ETF_TRANSMISSION_ENABLED` (default `False`)
+**Wiring:** `pipeline/production_steps.py::_apply_etf_transmission` (measurement columns) + `_apply_etf_transmission_multiplier` (per-name sizing derate) + `_build_etf_transmission_cov_matrix` (portfolio-level covariance) — all called from `StrategyEvalStep.run`
+**Holdings source:** `data/etf_holdings.py::get_etf_holdings` (consumed by SHAPE only, never by provider behavior)
+**Columns:** `ETF_Ownership_Pct` (`percent`), `ETF_Comovement_R2` (`number`), `ETF_Primary_Wrapper` (`string`), `ETF_Transmission_Multiplier` (`number`) — all in `config.COLUMN_SCHEMA`
+**Master switches:** `settings.ETF_TRANSMISSION_ENABLED` (measurement), `settings.ETF_TRANSMISSION_SIZING_ENABLED` (per-name derate), `settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED` (portfolio covariance) — each independently `False` by default
 
-**This is NOT a registered `SignalModule`, and it is DIAGNOSTIC ONLY.** As of
-this commit these three columns are measured and surfaced, and read by
-*nothing* — not scoring, not sizing, not execution. A sibling PR wires them
-into position sizing. This file lives under `docs/signals/` because it reads
-naturally alongside the other per-feature docs, not because it is one of the
-17 scored modules.
+**This is NOT a registered `SignalModule`.** It contributes nothing to
+`final_score` / `SIGNAL_WEIGHTS` / `meta_label_composite` — it is a risk
+overlay on the SIZING path, not a scoring input. Three layers, each behind
+its own flag:
+
+1. **Measurement** (`ETF_Ownership_Pct` / `ETF_Comovement_R2` /
+   `ETF_Primary_Wrapper`) — diagnostic columns, read by nothing else directly.
+2. **Per-name sizing derate** (`ETF_Transmission_Multiplier`,
+   `risk.etf_transmission.transmission_multiplier`) — a bounded post-multiplier
+   composed into `sizing.position_sizer.size_position()`, derating a heavily
+   ETF-wrapped name's own weight.
+3. **Portfolio-level covariance** (`risk.etf_transmission.build_transmission_adjusted_cov`,
+   documented in its own section below) — the mechanism's actual claim is
+   about CO-MOVEMENT between co-held names, which a per-name derate cannot
+   see no matter how it's composed; this layer feeds an ETF-co-ownership-
+   inflated covariance matrix into `sizing.position_sizer.apply_portfolio_gross_cap`'s
+   existing risk-aware `cov_matrix` path.
+
+This file lives under `docs/signals/` because it reads naturally alongside
+the other per-feature docs, not because it is one of the 17 scored modules.
 
 ---
 
@@ -254,31 +268,161 @@ not before `global_registry.run_pre_compute()`: nothing in `pre_compute`
 consumes these columns, so moving a networked call earlier in the critical path
 buys nothing.
 
+## Per-name sizing derate (`risk.etf_transmission.transmission_multiplier`)
+
+Behind `settings.ETF_TRANSMISSION_SIZING_ENABLED` (default `False`), a
+bounded, monotone post-multiplier derates a heavily ETF-wrapped name's own
+sizing weight:
+
+```
+m = 1 − max_derate · clip(ownership_pct / ownership_reference, 0, 1)
+                   · clip(comovement_r2, 0, 1)
+m = max(m, floor)
+```
+
+Two knobs (`ETF_TRANSMISSION_MAX_DERATE` default `0.30`,
+`ETF_TRANSMISSION_OWNERSHIP_REFERENCE` default `0.20`), a hard lower bound
+(`ETF_TRANSMISSION_MIN_MULTIPLIER` default `0.50`), no fitted parameters.
+Composed in `sizing.position_sizer.size_position()` step 3, alongside
+`regime_multiplier`, and — following that field's precedent exactly —
+**excluded from `SizingDecision.was_capped` / `.binding_constraint`**: a
+continuous, signal-driven derate is not a hard-ceiling event, and folding it
+in would fire the guardrail on every ETF-heavy name and drown out genuine
+ceiling events in `sizing/cap_audit_store.py`'s audit log.
+
+**Why a post-multiplier, not vol-inflation into Kelly.** Inflating the
+`realized_vol` input to `_calculate_kelly_sizing` looks like the natural
+lever and is a broken one: `sizing.kelly.kelly_sizing_for_strategy` reads
+`realized_vol` ONLY in its `< MIN_TRADES_REQUIRED` (30) cold-start branch —
+at ≥30 closed trades the weight comes from a 1,000-resample bootstrap of
+realized trade returns and the vol input is never read. A risk control that
+fires on a cold-start book and silently vanishes once the book matures is
+the worst possible failure profile.
+
+**Exactly `1.0` on any missing input — never `NaN`.** This is a risk-limit
+invariant, not a style choice: `clamp_with_binding` passes NaN straight
+through, so a NaN multiplier would make `final_weight` non-finite, and
+`apply_portfolio_gross_cap` **excludes non-finite weights from the gross
+sum** — a coverage gap on 30 of 40 names would shrink the gross denominator
+and silently *loosen* the portfolio cap for the remaining 10. A data outage
+must never relax a risk limit. This does not conflict with CONSTRAINT #4:
+the measured columns above stay honestly `NaN`; the applied *multiplier* is
+an amount of derating, and "derate nothing" is `1.0`.
+
+Wired by `pipeline/production_steps.py::_apply_etf_transmission_multiplier`,
+called immediately after `_apply_etf_transmission` (must run after — it
+reads `ETF_Ownership_Pct` / `ETF_Comovement_R2`) and before the per-ticker
+`evaluate_security` loop. The advisory path (`engine/advisory.py`) is
+untouched — it keeps its own tighter, decoupled `CONFIG["max_single_position_pct"]`
+cap and is not routed through `size_position()`.
+
+## Portfolio-level covariance (`risk.etf_transmission.build_transmission_adjusted_cov`)
+
+The mechanism this whole feature is named for raises **covariance between
+co-held names** — a portfolio-level effect the per-name derate above cannot
+see no matter how it's composed. Behind `settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED`
+(default `False`), this layer feeds an ETF-co-ownership-inflated covariance
+matrix into `sizing.position_sizer.apply_portfolio_gross_cap`'s **existing**
+risk-aware `cov_matrix`/`target_vol` path (`sizing.vol_target.portfolio_vol_target`)
+— reusing that path rather than building a second portfolio-cap mechanism.
+That path was previously unreachable from production; a sibling PR fixed a
+latent uplift bug in it first (see `sizing/position_sizer.py`'s "Reduction-only
+guarantee" section), which this feature depends on.
+
+```
+cov_adj[i,j] = cov[i,j] · (1 + ETF_TRANSMISSION_COV_INFLATION · overlap[i,j])   for i != j
+cov_adj[i,i] = cov[i,i]                                                          (untouched)
+```
+
+`overlap[i,j]` is the cosine similarity, in `[0, 1]`, of symbols *i* and
+*j*'s ETF-basket weight vectors (`risk.etf_transmission._pairwise_etf_overlap`)
+— `1.0` for two names held by exactly the same wrappers in the same
+proportions, `0.0` for names sharing no wrapper at all. **Only the
+off-diagonal is inflated.** Each name's own variance is a different question
+that `transmission_multiplier` above already answers; conflating the two
+would double-count the same measurement at two layers for no added
+information.
+
+**PSD repair is mandatory, not defensive.** Multiplicatively inflating
+off-diagonal entries is not guaranteed to preserve positive
+semi-definiteness (Schur's product theorem needs the *inflation matrix*
+itself to be PSD, which a matrix of raw cosine-similarity values is not
+guaranteed to be). `sizing.vol_target.portfolio_vol_target` has no PSD
+check of its own — handed a non-PSD matrix, it would compute a nonsensical
+(possibly negative) `w' Σ w`, and its own degenerate-`portfolio_vol` branch
+would *saturate the leverage scalar at `max_leverage`*, levering the whole
+book up on a broken risk estimate. `risk.etf_transmission._nearest_psd`
+eigenvalue-clips every eigenvalue below `1e-10` and reconstructs — the
+standard nearest-PSD-by-clipping repair (Higham (2002)'s
+alternating-projections algorithm finds the nearest correlation matrix more
+exactly; that precision buys nothing here since the input is already close
+to PSD by construction — only the off-diagonal was perturbed).
+
+**Never a partially-covered matrix.** `portfolio_vol_target` explicitly
+**zeroes out** any symbol missing from `cov_matrix` — its own documented,
+correct behavior for an unknowable-risk name, but a far harsher outcome for
+a coverage gap than the sum-of-|weight| fallback this feature is opt-in to
+replace. `pipeline/production_steps.py::_build_etf_transmission_cov_matrix`
+therefore insists on **full coverage** across the cycle's universe (every
+requested symbol has ≥ `ETF_TRANSMISSION_COV_WINDOW_DAYS` aligned return
+observations) before returning anything other than `None`; any coverage gap
+degrades the whole cycle back to `cov_matrix=None` — today's exact
+sum-of-|weight| fallback — rather than a partial matrix that would silently
+zero out the gapped names' entire positions.
+
+`target_vol` reuses the existing `settings.VOL_TARGET` (the same setting the
+per-name vol-target sizing fallback already uses) rather than introducing a
+second, redundant target-vol setting.
+
+### Settings (portfolio covariance)
+
+| Setting | Default | Effect |
+|---|---|---|
+| `ETF_TRANSMISSION_PORTFOLIO_ENABLED` | `False` | Master gate. `False` is a complete no-op: `cov_matrix=None` every cycle, byte-identical to the pre-feature `apply_portfolio_gross_cap` call. |
+| `ETF_TRANSMISSION_COV_INFLATION` | `0.25` | Fractional off-diagonal inflation at maximum (`overlap == 1.0`) co-ownership. |
+| `ETF_TRANSMISSION_COV_WINDOW_DAYS` | `60` | Trailing trading-day window for the base covariance estimate. Fewer aligned observations than this across the universe → falls back to `None` rather than a short, noisy estimate. |
+
+### Failure modes (portfolio covariance) — degrades to `cov_matrix=None`, never a partial matrix
+
+| Condition | Result |
+|---|---|
+| `ETF_TRANSMISSION_PORTFOLIO_ENABLED=False` | `None`. Zero network calls — the gate returns before any import. |
+| No configured wrapper ETFs | `None`. |
+| Holdings fetch raised / returned no covered basket rows | `None`, one INFO line. |
+| Any requested symbol lacks price bars in `tech_raw` | `None` — the whole cycle falls back rather than zeroing just the gapped symbol via a partial matrix. |
+| Fewer than `ETF_TRANSMISSION_COV_WINDOW_DAYS` fully-aligned return observations | `None`. |
+| Fewer than 2 requested symbols | `None`. |
+| Adjusted covariance is indefinite (non-PSD) after inflation | Repaired via eigenvalue clipping, never returned as-is and never `None` solely for this reason. |
+| Any other exception anywhere in the build | Caught, `logger.warning`, `None`. Never partially populated, never propagated. |
+
 ## Where it's surfaced
 
-- `config.COLUMN_SCHEMA` — the three columns (Google Sheets + Pandera-validated
+- `config.COLUMN_SCHEMA` — all four columns (Google Sheets + Pandera-validated
   `dashboard_df`).
 - `main_orchestrator.py::_write_state_snapshot()` — per-signal
-  `etf_ownership_pct` / `etf_comovement_r2` / `etf_primary_wrapper` keys in
-  `output/state_snapshot.json`. The two floats use the existing
-  `_safe_float_or_none` helper (NaN → JSON `null`, never a fabricated `0.0`);
-  the string uses an explicit `pd.isna` → `None` so a missing wrapper never
-  serializes as the literal text `"nan"`.
-- `tests/test_state_snapshot_parity.py::ORCHESTRATOR_ONLY_FIELDS` — all three
-  are documented orchestrator-only. The advisory path (`main.py`) has no
-  ETF-holdings source at all: `_build_context_extras` builds a minimal
-  `universe_df` with no holdings input.
+  `etf_ownership_pct` / `etf_comovement_r2` / `etf_primary_wrapper` /
+  `etf_transmission_multiplier` keys in `output/state_snapshot.json`, via the
+  existing `_safe_float_or_none` helper (NaN → JSON `null`, never a
+  fabricated `0.0`); the wrapper string uses an explicit `pd.isna` → `None`
+  so a missing wrapper never serializes as the literal text `"nan"`. The
+  portfolio-covariance layer surfaces nothing of its own here — it produces
+  no new column, only an input to an existing sizing computation.
+- `tests/test_state_snapshot_parity.py::ORCHESTRATOR_ONLY_FIELDS` — all four
+  columns are documented orchestrator-only. The advisory path (`main.py`) has
+  no ETF-holdings source at all: `_build_context_extras` builds a minimal
+  `universe_df` with no holdings input, and `engine/advisory.py` is not
+  routed through `size_position()` or `apply_portfolio_gross_cap()`.
 
 ## Not wired into
 
 - `signals/` package — **not** a `SignalModule`, no `pre_compute`/`compute`.
 - `settings.SIGNAL_WEIGHTS` — **no entry**. It contributes nothing to
   `final_score` / `score_log` / `meta_label_composite`.
-- `StrategyEngine.evaluate_security()` — no scoring effect whatsoever.
-- `sizing/position_sizer.py` — a **sibling PR** consumes these columns for
-  position sizing. This PR is measurement only.
-- `validation/harness.py` / `STRATEGY_REGISTRY` — no entry applies. This is a
-  risk overlay, not a strategy: it produces no trade signal, so PBO/DSR/
-  Sharpe/MaxDD have nothing to gate.
+- `StrategyEngine.evaluate_security()` — no scoring effect whatsoever (the
+  per-name derate is a sizing input, applied after scoring is complete).
+- `validation/harness.py` / `STRATEGY_REGISTRY` — no entry applies (verified
+  by grep: no adapter calls `size_position()` or `apply_portfolio_gross_cap()`).
+  This is a risk overlay, not a strategy: it produces no trade signal, so
+  PBO/DSR/Sharpe/MaxDD have nothing to gate.
 - `gui/` panels, `gui/env_io.py` `ALLOWED_KEYS`, and the Pilots PWA — all
   explicitly out of scope for this first cut.

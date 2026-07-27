@@ -735,6 +735,117 @@ def _apply_etf_transmission_multiplier(dashboard_df: pd.DataFrame) -> None:
         dashboard_df['ETF_Transmission_Multiplier'] = float('nan')
 
 
+def _build_etf_transmission_cov_matrix(
+    symbols: list, tech_raw: dict,
+) -> Optional[pd.DataFrame]:
+    """ETF-co-ownership-inflated covariance matrix for the portfolio gross cap.
+
+    Feeds ``sizing.position_sizer.apply_portfolio_gross_cap``'s EXISTING
+    ``cov_matrix``/``target_vol`` risk-aware path (built for exactly this
+    purpose, previously unreachable from production -- see
+    ``sizing/position_sizer.py``'s "Reduction-only guarantee" section)
+    rather than building a second portfolio-cap mechanism.
+
+    Gated on ``settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED`` (default
+    ``False``): returns ``None`` immediately when off, which the caller reads
+    as "use the existing sum-of-|weight| fallback", byte-identical to
+    pre-feature behavior. Never raises (CONSTRAINT #6) -- any failure
+    degrades to ``None``, the same fallback signal as the gate being off.
+
+    Deliberately does NOT return a partially-covered matrix. A symbol
+    missing from ``cov_matrix`` is not merely excluded from
+    ``portfolio_vol_target``'s risk estimate -- it is explicitly zeroed out
+    of the returned weights (that function's own documented, correct
+    behavior for an unknowable-risk name). Silently zeroing a coverage-gapped
+    name's ENTIRE position because it lacked 60 days of overlapping bars
+    would be a far harsher, more surprising outcome than the existing
+    sum-of-|weight| fallback this feature is opt-in to replace, so this
+    function insists on FULL coverage across ``symbols`` before returning
+    anything other than ``None``.
+    """
+    if not getattr(settings, "ETF_TRANSMISSION_PORTFOLIO_ENABLED", False):
+        return None
+    try:
+        from data.etf_holdings import get_etf_holdings
+        from risk.etf_transmission import build_transmission_adjusted_cov, filter_holdings_as_of
+
+        market_proxy = str(getattr(settings, "ETF_HOLDINGS_MARKET_PROXY", "SPY")).upper().strip()
+        wrappers = [
+            str(s).upper().strip()
+            for s in (getattr(settings, "ETF_TRANSMISSION_WRAPPERS", None) or [])
+            if str(s).strip()
+        ]
+        if market_proxy and market_proxy not in wrappers:
+            wrappers.append(market_proxy)
+        if not wrappers:
+            return None
+
+        universe = [str(s).upper().strip() for s in symbols if str(s).strip()]
+        if len(universe) < 2:
+            return None
+
+        as_of = pd.Timestamp(datetime.now(timezone.utc)).date()
+        raw_holdings = get_etf_holdings(wrappers, as_of=as_of) or {}
+        holdings = filter_holdings_as_of(raw_holdings, as_of=as_of)
+        if not any(rows for rows in holdings.values()):
+            logger.info(
+                "ETF transmission portfolio cov: no covered basket rows for "
+                "any of %d symbols; falling back to the sum-of-|weight| "
+                "gross cap this cycle.", len(universe),
+            )
+            return None
+
+        # Every symbol in `universe` needs an aligned Close series -- a
+        # partial matrix would let portfolio_vol_target zero out whichever
+        # names lack one, which is worse than just not using the cov path
+        # this cycle. Inner-join across the whole requested universe, not
+        # per-pair, so coverage is all-or-nothing and easy to reason about.
+        closes = {}
+        for sym in universe:
+            df = (tech_raw or {}).get(sym)
+            if df is None or getattr(df, "empty", True) or "Close" not in df.columns:
+                continue
+            closes[sym] = df["Close"]
+        missing = sorted(set(universe) - set(closes))
+        if missing:
+            logger.info(
+                "ETF transmission portfolio cov: %d of %d symbols lack price "
+                "bars in tech_raw (%s); falling back to the sum-of-|weight| "
+                "gross cap this cycle rather than zeroing their exposure via "
+                "a partially-covered covariance matrix.",
+                len(missing), len(universe), missing,
+            )
+            return None
+
+        window = int(getattr(settings, "ETF_TRANSMISSION_COV_WINDOW_DAYS", 60))
+        price_df = pd.concat(closes, axis=1, join="inner").sort_index()
+        returns_df = price_df.pct_change().dropna(how="any")
+        if len(returns_df) < window:
+            logger.info(
+                "ETF transmission portfolio cov: only %d overlapping return "
+                "observations across %d symbols (need >= %d); falling back "
+                "to the sum-of-|weight| gross cap this cycle rather than "
+                "estimating a covariance matrix off a short, noisy sample.",
+                len(returns_df), len(closes), window,
+            )
+            return None
+
+        inflation = float(getattr(settings, "ETF_TRANSMISSION_COV_INFLATION", 0.25))
+        cov_matrix = build_transmission_adjusted_cov(
+            returns_df, holdings, inflation=inflation, window=window,
+        )
+        if cov_matrix is None:
+            logger.info(
+                "ETF transmission portfolio cov: covariance build declined "
+                "(see risk.etf_transmission.build_transmission_adjusted_cov); "
+                "falling back to the sum-of-|weight| gross cap this cycle."
+            )
+        return cov_matrix
+    except Exception as exc:
+        logger.warning("ETF transmission portfolio covariance build failed (non-fatal): %s", exc)
+        return None
+
+
 class StrategyEvalStep(PipelineStep):
     """Evaluates strategy and overlaying advisory logic."""
     name = "strategy"
@@ -1357,11 +1468,33 @@ class StrategyEvalStep(PipelineStep):
         # to "portfolio_gross": applied chronologically last, it is the most
         # authoritative reason a position ended up smaller than its raw
         # Kelly/vol-target recommendation for this cycle.
+        #
+        # ETF-transmission-adjusted covariance (settings.ETF_TRANSMISSION_
+        # PORTFOLIO_ENABLED, default False): when enabled and full-coverage
+        # data is available, routes through apply_portfolio_gross_cap's
+        # EXISTING risk-aware cov_matrix/target_vol path instead of the
+        # sum-of-|weight| fallback -- reuses settings.VOL_TARGET as
+        # target_vol (the same setting the per-name vol-target sizing
+        # fallback already uses) rather than introducing a second,
+        # redundant target-vol setting. _build_etf_transmission_cov_matrix
+        # returns None (byte-identical fallback) whenever the gate is off,
+        # holdings/bars are unavailable, or coverage across this cycle's
+        # universe is incomplete -- see that function's docstring for why a
+        # partially-covered matrix is never substituted in its place.
         try:
             from sizing.position_sizer import apply_portfolio_gross_cap
 
             per_name = dict(zip(ctx.dashboard_df["Symbol"], ctx.dashboard_df["Kelly Target"]))
-            cap_result = apply_portfolio_gross_cap(per_name, max_gross=settings.MAX_PORTFOLIO_GROSS)
+            cov_matrix = _build_etf_transmission_cov_matrix(
+                list(per_name.keys()), ctx.tech_raw,
+            )
+            if cov_matrix is not None:
+                cap_result = apply_portfolio_gross_cap(
+                    per_name, max_gross=settings.MAX_PORTFOLIO_GROSS,
+                    cov_matrix=cov_matrix, target_vol=settings.VOL_TARGET,
+                )
+            else:
+                cap_result = apply_portfolio_gross_cap(per_name, max_gross=settings.MAX_PORTFOLIO_GROSS)
             if cap_result.was_capped:
                 telemetry.info(
                     "Portfolio gross cap bound this cycle: scale_factor=%.4f "
