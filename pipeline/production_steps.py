@@ -452,6 +452,218 @@ def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
         dashboard_df['Sector_Heat_Factor'] = float('nan')
 
 
+_ETF_TRANSMISSION_COLUMNS = (
+    'ETF_Ownership_Pct',
+    'ETF_Comovement_R2',
+    'ETF_Primary_Wrapper',
+)
+
+
+def _apply_etf_transmission(
+    dashboard_df: pd.DataFrame, tech_raw: dict[str, pd.DataFrame],
+) -> None:
+    """Populate the three ETF volatility-transmission MEASUREMENT columns.
+
+    Ben-David, Franzoni & Moussawi (2018), "Do ETFs Increase Volatility?",
+    *Journal of Finance* 73(6). ETF arbitrage transmits a shock in one
+    constituent to its healthy basket peers, so a heavily ETF-wrapped name
+    carries extra non-fundamental, non-diversifiable variance. The math lives
+    in ``risk/etf_transmission.py`` (pure, zero-I/O); this function owns every
+    network call and every settings gate.
+
+    **Diagnostic only.** Nothing in scoring, sizing, or execution reads these
+    columns as of this commit -- a sibling PR wires them into position sizing.
+
+    Deliberately a module-level function (not inlined in ``StrategyEvalStep.run``)
+    following the ``_apply_sector_heat_factor`` template directly above, for the
+    same two reasons: it stays importable/testable without ``main_orchestrator``'s
+    heavy top-level import chain, and it logs via this module's own plain
+    ``logger`` rather than the ``telemetry`` proxy (whose ``__getattr__`` lazily
+    imports ``main_orchestrator`` and therefore its whole engine chain on first
+    attribute access, defeating the light import footprint).
+
+    NaN-fills all three columns FIRST, before any branch, so every early-return
+    path -- disabled gate, missing market proxy, holdings-provider absent,
+    total failure -- leaves genuinely-missing cells NaN rather than a fabricated
+    default (CONSTRAINT #4). Never raises (CONSTRAINT #6).
+
+    Honesty contract -- every one of these is NaN, never 0.0: ticker in no
+    covered ETF; holdings fetch failed; gate off; ``Market Cap`` is the
+    fabricated ``0.0`` that ``FundamentalDataDTO`` defaults to; fewer than
+    ``ETF_TRANSMISSION_MIN_OBS`` overlapping bars; the composite is market-proxy-
+    only (residual identically zero); the ticker is ITSELF an ETF. The
+    fallback count is logged ONCE per cycle at INFO -- never once per name,
+    because 40 warnings a cycle is how a real signal gets ignored.
+    """
+    for col in _ETF_TRANSMISSION_COLUMNS:
+        dashboard_df[col] = float('nan')
+
+    if not getattr(settings, "ETF_TRANSMISSION_ENABLED", False):
+        return
+    if dashboard_df.empty or 'Symbol' not in dashboard_df.columns:
+        return
+
+    try:
+        from data.etf_holdings import get_etf_holdings
+        from risk.etf_transmission import (
+            build_etf_return_composite,
+            compute_etf_ownership,
+            compute_market_residual_r2,
+            filter_holdings_as_of,
+            primary_wrapper,
+        )
+
+        market_proxy = str(getattr(settings, "ETF_HOLDINGS_MARKET_PROXY", "SPY")).upper().strip()
+        wrappers = [
+            str(s).upper().strip()
+            for s in (getattr(settings, "ETF_TRANSMISSION_WRAPPERS", None) or [])
+            if str(s).strip()
+        ]
+        if market_proxy and market_proxy not in wrappers:
+            wrappers.append(market_proxy)
+        if not wrappers:
+            return
+
+        universe = [
+            str(s).upper().strip() for s in dashboard_df['Symbol'].dropna().tolist()
+            if str(s).strip()
+        ]
+        # A ticker that is ITSELF an ETF scores 1.0/1.0 against its own basket
+        # -- maximum derate for a trivially wrong reason. Explicit exclusion.
+        excluded = set(wrappers) | {
+            str(s).upper().strip()
+            for s in (getattr(settings, "ETF_TRANSMISSION_EXCLUDED_SYMBOLS", None) or [])
+            if str(s).strip()
+        }
+        measurable = [s for s in universe if s not in excluded]
+        if not measurable:
+            return
+
+        market_df = (tech_raw or {}).get(market_proxy)
+        if market_df is None or getattr(market_df, "empty", True):
+            logger.info(
+                "ETF transmission: market proxy %s absent from tech_raw; "
+                "all %d measurable symbols degrade to NaN this cycle.",
+                market_proxy, len(measurable),
+            )
+            return
+
+        as_of = pd.Timestamp(datetime.now(timezone.utc)).date()
+        raw_holdings = get_etf_holdings(wrappers, as_of=as_of) or {}
+        # Belt-and-suspenders causality: a basket row stamped after this
+        # cycle's as-of date must never enter the measurement regardless of
+        # what the provider returned. Also collapses duplicate/multi-snapshot
+        # rows so ownership can't be double-counted.
+        holdings = filter_holdings_as_of(raw_holdings, as_of=as_of)
+        # Only the operator universe matters -- SPY alone carries ~500 rows.
+        measurable_set = set(measurable)
+        holdings = {
+            etf: [
+                row for row in rows
+                if str(getattr(row, "holding_symbol", "") or "").upper().strip() in measurable_set
+            ]
+            for etf, rows in holdings.items()
+        }
+        covered_etfs = sorted({etf for etf, rows in holdings.items() if rows})
+        if not covered_etfs:
+            logger.info(
+                "ETF transmission: no covered basket rows for any of %d measurable "
+                "symbols; all three columns stay NaN this cycle.", len(measurable),
+            )
+            return
+
+        # ── ETF_Ownership_Pct ────────────────────────────────────────────────
+        # shares_out ~= Market Cap / Price. GUARDED on both being > 0:
+        # FundamentalDataDTO.market_cap defaults to a fabricated 0.0, so a
+        # naive divide yields inf on exactly the names whose fundamentals
+        # failed. Follow-up (deliberately NOT built here):
+        # dei:EntityCommonStockSharesOutstanding is already parsed by
+        # data/edgar_fundamentals.py::extract_shares and is PIT-dated.
+        shares_out: dict = {}
+        _mcap_col = 'Market Cap' if 'Market Cap' in dashboard_df.columns else None
+        _price_col = 'Price' if 'Price' in dashboard_df.columns else None
+        if _mcap_col and _price_col:
+            for _, row in dashboard_df.iterrows():
+                sym = str(row.get('Symbol', '') or '').upper().strip()
+                if not sym:
+                    continue
+                try:
+                    mcap = float(row.get(_mcap_col))
+                    price = float(row.get(_price_col))
+                except (TypeError, ValueError):
+                    continue
+                if mcap > 0.0 and price > 0.0:
+                    shares_out[sym] = mcap / price
+
+        ownership = compute_etf_ownership(
+            holdings, shares_out, exclude_symbols=frozenset(excluded),
+        )
+
+        # ── ETF_Comovement_R2 ────────────────────────────────────────────────
+        # ETF price bars go through the existing fetch_technical_raw_cached
+        # path (HistoricalStore-backed, incremental) -- deliberately NOT a
+        # second batched yf.download; research_engine.fetch_returns_for_clustering
+        # is the only one of those in the repo, on purpose.
+        etf_bars = {e: (tech_raw or {}).get(e) for e in covered_etfs if (tech_raw or {}).get(e) is not None}
+        missing_bars = [e for e in covered_etfs if e not in etf_bars and e != market_proxy]
+        if missing_bars:
+            from data_engine import DataEngine
+
+            fetched = DataEngine(getattr(settings, "FRED_API_KEY", "")).fetch_technical_raw_cached(
+                missing_bars
+            ) or {}
+            etf_bars.update({str(k).upper().strip(): v for k, v in fetched.items() if v is not None})
+
+        composites = build_etf_return_composite(
+            holdings, etf_bars, market_proxy=market_proxy,
+        )
+
+        window = int(getattr(settings, "ETF_TRANSMISSION_WINDOW_DAYS", 60))
+        min_obs = int(getattr(settings, "ETF_TRANSMISSION_MIN_OBS", 60))
+        r2_map: dict = {}
+        no_composite = 0
+        insufficient = 0
+        for sym in measurable:
+            composite = composites.get(sym)
+            if composite is None or len(composite) == 0:
+                no_composite += 1
+                continue
+            stock_df = (tech_raw or {}).get(sym)
+            if stock_df is None or getattr(stock_df, "empty", True):
+                insufficient += 1
+                continue
+            value = compute_market_residual_r2(
+                stock_df, composite, market_df, window=window, min_obs=min_obs,
+            )
+            if value != value:  # NaN
+                insufficient += 1
+                continue
+            r2_map[sym] = value
+
+        wrappers_map = primary_wrapper(holdings)
+
+        _upper = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
+        dashboard_df['ETF_Ownership_Pct'] = _upper.map(ownership)
+        dashboard_df['ETF_Comovement_R2'] = _upper.map(r2_map)
+        dashboard_df['ETF_Primary_Wrapper'] = _upper.map(wrappers_map)
+
+        # ONE INFO line per cycle with counts -- never one warning per name.
+        logger.info(
+            "ETF transmission: %d/%d symbols measured (R2); %d with no covered "
+            "non-market wrapper, %d with insufficient/degenerate overlap; "
+            "%d ownership values, %d primary-wrapper labels; %d symbols excluded "
+            "as funds.",
+            len(r2_map), len(measurable), no_composite, insufficient,
+            sum(1 for v in ownership.values() if v == v), len(wrappers_map),
+            len(universe) - len(measurable),
+        )
+
+    except Exception as exc:
+        logger.warning("ETF transmission computation failed (non-fatal): %s", exc)
+        for col in _ETF_TRANSMISSION_COLUMNS:
+            dashboard_df[col] = float('nan')
+
+
 class StrategyEvalStep(PipelineStep):
     """Evaluates strategy and overlaying advisory logic."""
     name = "strategy"
@@ -586,6 +798,17 @@ class StrategyEvalStep(PipelineStep):
         # See data/sentiment_sources.py::compute_sector_heat_factors and
         # docs/signals/sector_heat_factor.md.
         _apply_sector_heat_factor(ctx.dashboard_df)
+
+        # ETF volatility transmission (Ben-David, Franzoni & Moussawi 2018) --
+        # three DIAGNOSTIC-ONLY measurement columns (ETF_Ownership_Pct /
+        # ETF_Comovement_R2 / ETF_Primary_Wrapper). Placed here rather than
+        # before run_pre_compute() above deliberately: nothing in pre_compute
+        # consumes these columns, so moving a networked call earlier in the
+        # critical path buys nothing. A complete no-op (zero network calls,
+        # all three columns NaN) while settings.ETF_TRANSMISSION_ENABLED is
+        # False. See risk/etf_transmission.py and
+        # docs/signals/etf_transmission.md.
+        _apply_etf_transmission(ctx.dashboard_df, ctx.tech_raw)
 
         # Wikipedia-pageviews investor-attention feature (follow-on branch
         # to PR #416/#417) -- data/attention_sources.py
