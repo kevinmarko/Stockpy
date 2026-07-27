@@ -5,15 +5,19 @@
  * because Recharts needs JS color values, not CSS vars). Its docstring says
  * "Change a value here AND in index.css together" — this test turns that
  * hand-sync comment into a CI gate: it reads the `:root` block out of index.css
- * and asserts each of the 13 scalar tokens matches its theme.ts counterpart.
+ * and asserts each of the 14 scalar tokens matches its theme.ts counterpart.
  *
  * Values are compared WHITESPACE-NORMALIZED on purpose — index.css writes
  * `rgba(255, 255, 255, 0.08)` while theme.ts writes `rgba(255,255,255,0.08)`;
  * those are the same color and must not fail the test over a space.
  *
- * Only the 13 scalars are checked. SECTOR_PALETTE / CATEGORY_PALETTE have no
- * CSS-var counterpart by design (they're chart-only ramps), and the spacing /
- * typography / radius tokens live only in CSS (never mirrored into theme.ts).
+ * Only these scalars are checked. SECTOR_PALETTE / CATEGORY_PALETTE /
+ * SERIES_PALETTE have no CSS-var counterpart by design (they're chart-only
+ * ramps, arrays not scalars), and the spacing / typography / radius tokens
+ * live only in CSS (never mirrored into theme.ts). Because KEY_TO_CSS_VAR is
+ * typed `Record<keyof typeof theme, string>`, adding a new scalar to `theme`
+ * without adding its CSS-var mapping here is already a `tsc` compile error —
+ * this map can't silently fall behind theme.ts.
  */
 // This is the only file that touches the Node fs/path/process APIs (to read
 // index.css off disk). The app's tsconfig uses an explicit `types` allowlist
@@ -52,6 +56,7 @@ const KEY_TO_CSS_VAR: Record<keyof typeof theme, string> = {
   textMuted: "--text-muted",
   border: "--border",
   borderStrong: "--border-strong",
+  chartGrid: "--chart-grid",
   growth: "--growth",
   decline: "--decline",
   caution: "--caution",

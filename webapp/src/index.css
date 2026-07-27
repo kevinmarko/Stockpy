@@ -17,6 +17,10 @@
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.14);
 
+  /* Chart gridlines — recessive against --border; see theme.ts's chartGrid
+     for why this is its own token rather than reusing --border. */
+  --chart-grid: rgba(255, 255, 255, 0.06);
+
   /* Semantic status */
   --growth: #10b981;
   --decline: #ef4444;

@@ -19,6 +19,37 @@ import { sectorColor, theme } from "../theme";
 import { fmtDate, fmtPct } from "../format";
 
 /**
+ * Shared chart chrome — the grid/axis/tooltip config every Recharts chart in
+ * this app should use, so a new chart never re-derives its own gridline
+ * stroke or a subtly-different tooltip surface. Before these existed, 6
+ * screens/components each hand-declared their own version of these four
+ * things; 5 of them ended up disagreeing with what THIS file (and
+ * index.css's own `.recharts-default-tooltip` override) already used.
+ * Spread these directly onto the corresponding Recharts prop — they're
+ * plain prop-shaped objects, not components.
+ */
+export const chartAxisTick = { fill: theme.textMuted, fontSize: 10 } as const;
+
+/** Spread onto <XAxis>/<YAxis> — the axisLine/tickLine pair every axis in this file turns off. */
+export const chartAxisLine = { axisLine: false, tickLine: false } as const;
+
+/** Spread onto <CartesianGrid>. */
+export const chartGridProps = {
+  vertical: false,
+  stroke: theme.chartGrid,
+  strokeDasharray: "0",
+} as const;
+
+/** Pass as <Tooltip contentStyle={chartTooltipStyle}>. */
+export const chartTooltipStyle = {
+  background: theme.surface3,
+  border: `1px solid ${theme.borderStrong}`,
+  borderRadius: 10,
+  color: theme.textPrimary,
+  fontSize: 12,
+} as const;
+
+/**
  * PerfLine — indexed equity curve. Single series colored by overall direction
  * (green up / red down), with an optional recessive benchmark line. 2px marks,
  * hairline grid, crosshair tooltip — per the dataviz skill.
@@ -85,35 +116,23 @@ export function PerfLine({
               <stop offset="100%" stopColor={theme.decline} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid
-            vertical={false}
-            stroke="rgba(255,255,255,0.06)"
-            strokeDasharray="0"
-          />
+          <CartesianGrid {...chartGridProps} />
           <XAxis
             dataKey="date"
             tickFormatter={fmtDate}
-            tick={{ fill: theme.textMuted, fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
+            tick={chartAxisTick}
+            {...chartAxisLine}
             minTickGap={44}
           />
           <YAxis
             domain={[min - pad, max + pad]}
-            tick={{ fill: theme.textMuted, fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
+            tick={chartAxisTick}
+            {...chartAxisLine}
             width={34}
             tickFormatter={(v: number) => v.toFixed(yTickDecimals)}
           />
           <Tooltip
-            contentStyle={{
-              background: theme.surface3,
-              border: `1px solid ${theme.borderStrong}`,
-              borderRadius: 10,
-              color: theme.textPrimary,
-              fontSize: 12,
-            }}
+            contentStyle={chartTooltipStyle}
             labelFormatter={(l) => fmtDate(String(l))}
             formatter={(val: number, name: string) => [
               val.toFixed(2),
@@ -193,13 +212,7 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
               ))}
             </Pie>
             <Tooltip
-              contentStyle={{
-                background: theme.surface3,
-                border: `1px solid ${theme.borderStrong}`,
-                borderRadius: 10,
-                color: theme.textPrimary,
-                fontSize: 12,
-              }}
+              contentStyle={chartTooltipStyle}
               formatter={(val: number, name: string) => [
                 fmtPct(val, 1, { fromFraction: true }),
                 name,
@@ -284,35 +297,23 @@ export function DrawdownArea({ data }: { data: EquityDrawdownPoint[] }) {
               <stop offset="100%" stopColor={theme.decline} stopOpacity={0.32} />
             </linearGradient>
           </defs>
-          <CartesianGrid
-            vertical={false}
-            stroke="rgba(255,255,255,0.06)"
-            strokeDasharray="0"
-          />
+          <CartesianGrid {...chartGridProps} />
           <XAxis
             dataKey="date"
             tickFormatter={fmtDate}
-            tick={{ fill: theme.textMuted, fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
+            tick={chartAxisTick}
+            {...chartAxisLine}
             minTickGap={44}
           />
           <YAxis
             domain={[min || -0.01, 0]}
-            tick={{ fill: theme.textMuted, fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
+            tick={chartAxisTick}
+            {...chartAxisLine}
             width={38}
             tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
           />
           <Tooltip
-            contentStyle={{
-              background: theme.surface3,
-              border: `1px solid ${theme.borderStrong}`,
-              borderRadius: 10,
-              color: theme.textPrimary,
-              fontSize: 12,
-            }}
+            contentStyle={chartTooltipStyle}
             labelFormatter={(l) => fmtDate(String(l))}
             formatter={(val: number) => [fmtPct(val, 1, { fromFraction: true }), "Drawdown"]}
           />
@@ -506,13 +507,12 @@ export function ForecastCandleChart({
     <div style={{ width: "100%", height }}>
       <ResponsiveContainer>
         <ComposedChart data={rows} margin={{ top: 8, right: 6, left: 6, bottom: 0 }}>
-          <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.06)" strokeDasharray="0" />
+          <CartesianGrid {...chartGridProps} />
           <XAxis
             dataKey="date"
             tickFormatter={fmtDate}
-            tick={{ fill: theme.textMuted, fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
+            tick={chartAxisTick}
+            {...chartAxisLine}
             minTickGap={44}
           />
           <YAxis
@@ -522,20 +522,13 @@ export function ForecastCandleChart({
             // explicit domain above, squashing the real price range into a
             // thin band at the top of the chart.
             allowDataOverflow
-            tick={{ fill: theme.textMuted, fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
+            tick={chartAxisTick}
+            {...chartAxisLine}
             width={44}
             tickFormatter={(v: number) => v.toFixed(0)}
           />
           <Tooltip
-            contentStyle={{
-              background: theme.surface3,
-              border: `1px solid ${theme.borderStrong}`,
-              borderRadius: 10,
-              color: theme.textPrimary,
-              fontSize: 12,
-            }}
+            contentStyle={chartTooltipStyle}
             labelFormatter={(l) => fmtDate(String(l))}
             formatter={(val: number, name: string, entry: { payload?: Row }) => {
               const p: Row = entry?.payload ?? { date: "" };

@@ -67,7 +67,7 @@ function ReliabilityDiagram({ bins }: { bins: CalibrationBin[] }) {
       {/* horizontal gridlines + y ticks (win rate %) */}
       {[0, 0.25, 0.5, 0.75, 1].map((t) => (
         <g key={`y${t}`}>
-          <line x1={padL} y1={y(t)} x2={W - padR} y2={y(t)} stroke="rgba(255,255,255,0.06)" />
+          <line x1={padL} y1={y(t)} x2={W - padR} y2={y(t)} stroke={theme.chartGrid} />
           <text x={padL - 5} y={y(t) + 3} textAnchor="end" fontSize="9" fill={theme.textMuted}>
             {(t * 100).toFixed(0)}
           </text>
@@ -325,7 +325,7 @@ function MfeMaeScatter({ points }: { points: MfeMaePoint[] }) {
         const v = maxV * f;
         return (
           <g key={f}>
-            <line x1={padL} y1={y(v)} x2={W - padR} y2={y(v)} stroke="rgba(255,255,255,0.06)" />
+            <line x1={padL} y1={y(v)} x2={W - padR} y2={y(v)} stroke={theme.chartGrid} />
             <text x={padL - 5} y={y(v) + 3} textAnchor="end" fontSize="9" fill={theme.textMuted}>
               {(v * 100).toFixed(0)}%
             </text>

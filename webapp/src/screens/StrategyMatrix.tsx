@@ -20,6 +20,7 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
+import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { fmtNum, timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -141,20 +142,19 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
           <div style={{ height: 220 }} data-testid="meta-label-chart">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                <CartesianGrid {...chartGridProps} />
                 <XAxis
                   dataKey="label"
-                  stroke={theme.textMuted}
-                  fontSize={9}
-                  tickLine={false}
+                  tick={{ ...chartAxisTick, fontSize: 9 }}
+                  {...chartAxisLine}
                   interval={1}
                   angle={-45}
                   textAnchor="end"
                   height={50}
                 />
-                <YAxis stroke={theme.textMuted} fontSize={10} tickLine={false} allowDecimals={false} />
+                <YAxis tick={chartAxisTick} {...chartAxisLine} allowDecimals={false} />
                 <Tooltip
-                  contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
+                  contentStyle={chartTooltipStyle}
                   labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
                   itemStyle={{ fontSize: 11 }}
                 />

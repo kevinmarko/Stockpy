@@ -13,7 +13,8 @@ import { api } from "../api/client";
 import type { SymbolCompareResponse, UniverseResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading } from "./ui";
-import { theme } from "../theme";
+import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "./charts";
+import { seriesColor, theme } from "../theme";
 import { fmtNum, fmtPct } from "../format";
 
 // Mirrors the legacy Streamlit Strategy Matrix's hard cap
@@ -21,11 +22,12 @@ import { fmtNum, fmtPct } from "../format";
 // `st.multiselect(..., max_selections=3)`) — the endpoint itself accepts up
 // to 5 (matching this same screen's Pilot-vs-Pilot selector), but the UI
 // keeps the legacy "2-3 recommended" feel rather than inviting a busy,
-// hard-to-read 5-column table for a per-symbol comparison.
+// hard-to-read 5-column table for a per-symbol comparison. This also happens
+// to match SERIES_PALETTE's validated 3-hue cap exactly, so every symbol
+// here always gets a distinguishable series color, never a muted fold.
 const MAX_SELECTED = 3;
 const MIN_SELECTED = 2;
 const STORAGE_KEY = "symbol_comparison_selected_symbols";
-const CHART_COLORS = ["#38bdf8", "#10b981", "#f59e0b", "#a855f7", "#ec4899"];
 
 /**
  * Symbol-vs-symbol comparison — the PWA port of the legacy Strategy Matrix's
@@ -269,25 +271,24 @@ export function SymbolComparison() {
             <div style={{ height: 260 }} data-testid="symbol-comparison-chart">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                  <CartesianGrid {...chartGridProps} />
                   <XAxis
                     dataKey="module"
-                    stroke={theme.textMuted}
-                    fontSize={10}
-                    tickLine={false}
+                    tick={chartAxisTick}
+                    {...chartAxisLine}
                     angle={-30}
                     textAnchor="end"
                     height={60}
                   />
-                  <YAxis stroke={theme.textMuted} fontSize={10} tickLine={false} />
+                  <YAxis tick={chartAxisTick} {...chartAxisLine} />
                   <Tooltip
-                    contentStyle={{ background: theme.surface2, border: `1px solid ${theme.border}`, borderRadius: 4 }}
+                    contentStyle={chartTooltipStyle}
                     labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
                     itemStyle={{ fontSize: 11 }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {chartSymbols.map((s, index) => (
-                    <Bar key={s.symbol} dataKey={s.symbol} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                    <Bar key={s.symbol} dataKey={s.symbol} fill={seriesColor(index)} />
                   ))}
                 </BarChart>
               </ResponsiveContainer>

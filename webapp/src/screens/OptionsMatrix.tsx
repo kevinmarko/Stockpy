@@ -12,6 +12,7 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
+import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { realizableTheta } from "../optionsHonesty";
@@ -257,20 +258,16 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
           <div style={{ width: "100%", height: 180, background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 10px 0 0" }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                <CartesianGrid {...chartGridProps} />
                 <XAxis
                   dataKey="price"
                   tickFormatter={(val) => fmtUsd(val)}
-                  stroke="rgba(255,255,255,0.4)"
-                  style={{ fontSize: 10 }}
+                  tick={chartAxisTick}
+                  {...chartAxisLine}
                   type="number"
                   domain={["dataMin", "dataMax"]}
                 />
-                <YAxis
-                  stroke="rgba(255,255,255,0.4)"
-                  style={{ fontSize: 10 }}
-                  tickFormatter={(val) => fmtUsd(val)}
-                />
+                <YAxis tick={chartAxisTick} {...chartAxisLine} tickFormatter={(val) => fmtUsd(val)} />
                 <ChartTooltip
                   formatter={(value: any) => [fmtUsd(value), "P/L"]}
                   labelFormatter={(label: any) => `Underlying: ${fmtUsd(label)}`}
