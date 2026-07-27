@@ -1,20 +1,31 @@
 # Known issue: CNN-LSTM forecaster deadlocks on TensorFlow eager execution
 
-**Status: open, blocking. The Round 3 "fix" (PR #387, merged) is confirmed
-INSUFFICIENT for real production use — see Round 4 below.** Do not enable
-CNN-LSTM. Round 3's mitigation (reordering imports inside `forecasting_engine.py`)
-only prevents the deadlock when that module happens to be the first thing in the
-whole process to trigger a `pandas`/`pyarrow` import — which is true in an isolated
-test script, but **not true in `main.py`, `main_orchestrator.py`, or
-`pipeline/production_steps.py`**, all of which import `pandas` before
-`forecasting_engine` is ever reached. The real production pipeline would still
-deadlock on its first CNN-LSTM fit. Tracked in
+**Status: mitigations implemented (Round 5), NOT yet verified against the real
+native deadlock.** Round 5 ships a genuine process-isolation fix
+(`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED`, default `False`) plus defense-in-depth
+entry-point import reordering — see "Round 5" below for what changed and why it
+should work per the evidence gathered in Rounds 1-4. **This has NOT been
+confirmed to actually resolve the hang on real hardware**: this repo's available
+dev/CI environments for Round 5 could not reproduce the macOS arm64 +
+Framework-Python + TF 2.21.0 + pyarrow 24.0.0 environment the deadlock was
+originally confirmed on (Round 1). Do not treat CNN-LSTM as production-ready
+until someone with that environment (or an equivalent real repro) enables
+`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=True` and confirms a real end-to-end
+forecast completes without hanging. Tracked in
 [issue #381](https://github.com/kevinmarko/Stockpy/issues/381). Discovered
 2026-07-19/20 while enabling the CNN-LSTM forecaster path in
 `forecasting_engine.py` (tracked in
 [PR #377](https://github.com/kevinmarko/Stockpy/pull/377), which shipped only the
 safe half — the idempotent `setup.sh` and the numpy-safe `requirements-optional.txt`
 — and explicitly deferred this deadlock as follow-up work).
+
+Round 3's mitigation (reordering imports inside `forecasting_engine.py`, PR #387)
+only prevents the deadlock when that module happens to be the first thing in the
+whole process to trigger a `pandas`/`pyarrow` import — which is true in an isolated
+test script, but **not true in `main.py`, `main_orchestrator.py`, or
+`pipeline/production_steps.py`** (Round 4's finding). PR #387 remains merged (real,
+harmless, a genuine partial improvement) and Round 5 keeps it — it's the
+`else` branch used whenever `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=False`.
 
 **Round 3 result, in one line:** the deadlock is triggered by *import order*, not
 merely by which libraries are present. `pandas` (imported directly by
@@ -485,6 +496,132 @@ until one of the above (or another approach) is implemented and verified against
 the actual entry point(s) that reach `run_cnn_lstm_forecast` in production, not
 just an isolated test script.
 
+## Round 5 (2026-07-23): all three candidate fixes from Round 4, addressed
+
+Round 4 listed three candidate approaches. All three were pursued in this round —
+one shipped as a real, load-bearing fix; one shipped as cheap defense-in-depth;
+one turned out to not be actionable as code, confirmed by direct investigation
+rather than assumed.
+
+### Fix 1 — process isolation (the actual fix; option 2 from Round 4)
+
+`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` (`settings.py`, default `False`). When
+`True`, `ForecastingEngine.run_cnn_lstm_forecast` runs the TF-touching work — the
+Conv1D/LSTM/Dense `.fit()` + `.predict()` call, and the cached-model
+`load_model()` + `.predict()` call — inside a persistent `multiprocessing`
+**`spawn`** worker pool (`cnn_lstm_process_pool.py`) instead of in-process. All
+pandas-dependent work (feature engineering, windowing, scaler fit/transform)
+stays in the parent process unchanged — only plain numpy arrays and JSON-safe
+primitives cross the process boundary, matching the confirmed evidence that the
+hang is specifically inside TF's eager execution, not feature engineering.
+
+**Why `spawn`, not the platform default (`fork` on Linux):** `fork()` clones the
+parent's already-initialized memory, including whichever library already "won"
+the process-wide symbol race — reproducing the exact bug inside the "fix." `spawn`
+starts a genuinely fresh interpreter, so import order is scoped per-process and
+therefore fully controllable regardless of what the parent already imported.
+
+**The worker module (`cnn_lstm_worker.py`) lives at the repo root, not inside
+`forecasting/`.** This was caught during implementation, not assumed correct up
+front: `forecasting/__init__.py` eagerly imports `forecasting.forecast_tracker`,
+which imports pandas. Had the worker module been placed inside that package,
+`import forecasting.cnn_lstm_worker` in the fresh spawn process would have run
+`forecasting/__init__.py` first — pulling in pandas before the worker module's own
+`import tensorflow` line ever executed — silently reproducing the exact ordering
+bug this fix exists to eliminate, in a way that would not have been obvious from
+reading `cnn_lstm_worker.py` in isolation. The worker module's own docstring
+documents this trap explicitly so it can't be reintroduced by a future refactor
+that "tidies up" the module layout.
+
+**Persistent pool, not spawn-per-call:** `pipeline/production_steps.py` fans
+CNN-LSTM calls out across the whole symbol universe via a `ThreadPoolExecutor`
+(see "Why this matters" above); spawning a fresh interpreter and re-importing
+TensorFlow (multi-second cost) for every ticker would be prohibitively slow. The
+pool (`CNN_LSTM_PROCESS_POOL_WORKERS`, default 1) is created once and reused
+across tickers and cycles, with an explicit `initializer` that imports
+`cnn_lstm_worker` (and, transitively, TensorFlow) the moment each worker process
+starts — before any task is ever unpickled — rather than relying on pickle's
+internal resolution order to happen to get this right.
+
+**Failure handling:** any subprocess failure (timeout —
+`CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS`, default 300s; a crashed/broken pool; a real
+exception raised inside the worker) propagates as a normal Python exception,
+which `run_cnn_lstm_forecast`'s existing outer `try/except` already catches and
+degrades to the zero-result sentinel — no new dead-letter-resilience code needed,
+the existing CONSTRAINT #6 guarantee already covers it. This is also the point of
+the fix at a systems level: today, a hang is unbounded and unrecoverable (the
+whole forecasting cycle stalls forever, silently); after this fix, a hang becomes
+a bounded timeout that degrades to an honest zero result, matching every other
+forecaster's existing failure mode.
+
+**Default is `False`, deliberately.** This preserves today's exact in-process
+behavior byte-for-byte — every existing test (including
+`tests/test_forecasting_lookahead.py`'s `sys.modules['tensorflow']` mock, which
+only works for in-process calls) continues to exercise the unchanged legacy path.
+Flipping this on is an explicit operator decision, consistent with this
+codebase's established opt-in-flag convention for anything that changes runtime
+behavior (`ORCHESTRATOR_DAEMON_ENABLED`, `SIZING_CAP_ESCALATION_ENABLED`, etc.) —
+and doubly appropriate here given Round 5 could not verify the fix against the
+real native deadlock (see the status header above).
+
+### Fix 2 — entry-point import reordering (defense in depth; option 1 from Round 4)
+
+`main.py`, `main_orchestrator.py`, and `pipeline/production_steps.py` each gained
+a guarded `import tensorflow` (no-op `ImportError` when TF isn't installed) placed
+before their own `pandas` import — restoring, at the real entry-point level, the
+protection PR #387's module-internal reorder always intended but Round 4 showed
+doesn't reach production. `desktop/orchestrator_daemon.py` /
+`desktop/daemon_runtime.py` needed no separate edit: neither imports `pandas`
+directly, and `daemon_runtime.py`'s `import main_orchestrator` is the first thing
+in that process to reach pandas transitively, so `main_orchestrator.py`'s own
+reorder already covers the daemon path.
+
+This remains exactly what Round 4 flagged it as: **fragile, whack-a-mole defense
+in depth**, not the real fix — it silently stops protecting the process the
+moment any new entry point is added or an existing one's import order shifts
+again. It's included because it's cheap and harmless, and because it's the only
+protection active for anyone who leaves `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED`
+at its default `False`.
+
+### Fix 3 — the ODR collision at its source (option 3 from Round 4): investigated, not actionable as a code change
+
+Round 4 flagged this as "correct long-term fix, not actionable quickly" without
+elaborating. Round 5 did the actual due diligence rather than leaving that
+assertion untested:
+
+- **Is `pyarrow` even load-bearing, or could it just be dropped from
+  `requirements.txt` (eliminating the collision from pandas's side entirely)?**
+  No — confirmed via `grep`: `universe_engine.py` (`pd.read_parquet`/
+  `to_parquet`) and `ml/data/store.py` (`to_parquet(..., engine="pyarrow")`,
+  `read_parquet(..., engine="pyarrow")`) both do real Parquet I/O through pyarrow.
+  It is a genuine first-class dependency (`requirements.txt: pyarrow>=15.0.0`),
+  not incidental baggage that happened to be present in the original
+  investigation's environment. Removing it would break real functionality.
+- **Is there a version combination confirmed NOT to collide?** No such
+  combination is known. Both `requirements.txt` (`pyarrow>=15.0.0`) and
+  `requirements-optional.txt` (`tensorflow>=2.19`) are open-ended minimum-version
+  pins, not exact pins — there is no currently-recorded "known-good" exact pair.
+  Finding one would require re-running the Round 1-3 binary-inspection (`nm`) and
+  reproduction methodology against several concrete version combinations on the
+  real macOS arm64 + Framework-Python environment, which Round 5's environment
+  cannot do (see the status header). Not attempted rather than attempted-and-failed
+  — recorded honestly as such rather than fabricating a version pin this round
+  couldn't verify.
+- **Could the collision be suppressed via a linker/loader trick (symbol hiding,
+  `RTLD_DEEPBIND`, etc.)?** Not pursued: the confirmed collision is a macOS `dyld`
+  two-level-namespace issue (see Round 1's `nm`/stack-trace evidence), and the
+  standard ELF/glibc mitigations for this bug class (e.g. `RTLD_DEEPBIND`) are
+  Linux-specific and don't apply to `dyld`'s resolution model. A macOS-appropriate
+  equivalent (e.g. re-linking or re-exporting symbols in a locally patched
+  TensorFlow or pyarrow wheel) is real engineering work against upstream binaries
+  this repo doesn't build, squarely matching Round 4's original "not actionable
+  quickly" assessment — now confirmed by looking, not just asserted.
+
+**Bottom line:** Fix 3 is not implemented, and per this investigation, isn't a
+code change this repository can make. Fixes 1 and 2 are the actionable mitigations
+this round could deliver; Fix 1 is the one that actually removes the process-scope
+constraint, Fix 2 is a cheap secondary layer for when Fix 1 is left off.
+
 ## What was ruled out
 
 - SQLite/WAL lock contention with the concurrently-running orchestrator daemon (WAL
@@ -539,9 +676,17 @@ just an isolated test script.
   (superseded in part by Round 4's correction above).
 - `forecasting_engine.py`'s `TENSORFLOW_AVAILABLE` guard (now the very first
   executable import block in the file, before `pandas`/`prophet`/`statsmodels`) and
-  `run_cnn_lstm_forecast` (~line 500) — the code path this blocks/blocked.
-- `pipeline/production_steps.py` (line 8), `main_orchestrator.py` (line 34),
-  `main.py` — the real entry points that import `pandas` before
-  `forecasting_engine`, and so remain exposed to the deadlock despite PR #387.
+  `run_cnn_lstm_forecast` (~line 610) — the code path this blocks/blocked.
+- `pipeline/production_steps.py`, `main_orchestrator.py`, `main.py` — the real
+  entry points that import `pandas` before `forecasting_engine`; Round 5 added a
+  guarded `import tensorflow` before each one's own `pandas` import (Fix 2, defense
+  in depth) on top of the process-isolation fix (Fix 1).
+- `cnn_lstm_worker.py`, `cnn_lstm_process_pool.py` (Round 5) — the isolated
+  fit/predict worker and its persistent `multiprocessing` "spawn" pool manager.
+  Deliberately repo-root modules, not inside `forecasting/` (see Round 5, Fix 1,
+  for why `forecasting/__init__.py` makes that package unsafe for this).
+- `settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` /
+  `CNN_LSTM_PROCESS_POOL_WORKERS` / `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS`
+  (Round 5) — the opt-in flags controlling the process-isolation fix.
 - `forecasting/forecast_tracker.py` — the skill tracker CNN-LSTM would feed once
   this is resolved; currently has zero `cnn_lstm` rows in the live database.
