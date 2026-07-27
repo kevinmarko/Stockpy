@@ -53,4 +53,82 @@ describe("SentimentDynamics screen (real mock API)", () => {
     // Vol Persistence still renders its real, independently-computed value.
     expect(screen.getByText("0.93")).toBeInTheDocument();
   });
+
+  describe("Sentiment vs. VIX chart", () => {
+    it("renders both stacked panels for the default (mock-universe) symbol", async () => {
+      renderScreen();
+      const section = await screen.findByTestId("sentiment-vix-chart");
+      expect(section).toHaveTextContent("Sentiment vs. VIX");
+      expect(await screen.findByTestId("sentiment-vix-vix-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("sentiment-vix-sentiment-panel")).toBeInTheDocument();
+    });
+
+    it("shows the coverage notice, with the real aligned-day count, when history is too sparse for a trend read", async () => {
+      vi.spyOn(api, "getMacroHistory").mockResolvedValueOnce({
+        series_id: "VIXCLS",
+        points: [
+          { date: "2026-07-20", value: 16.0 },
+          { date: "2026-07-21", value: 16.5 },
+          { date: "2026-07-22", value: 17.0 },
+        ],
+        reason: null,
+      });
+      vi.spyOn(api, "getSentimentHistory").mockResolvedValueOnce({
+        symbol: "AAPL",
+        points: [
+          { date: "2026-07-20", score: 0.1 },
+          { date: "2026-07-21", score: 0.2 },
+          { date: "2026-07-22", score: -0.1 },
+        ],
+        reason: null,
+      });
+      renderScreen();
+      const notice = await screen.findByTestId("sentiment-vix-coverage-notice");
+      expect(notice).toHaveTextContent("Only 3 aligned days");
+      expect(notice).toHaveTextContent("minimum 14");
+    });
+
+    it("does not show the coverage notice once aligned history meets the minimum", async () => {
+      const points20 = Array.from({ length: 20 }, (_, i) => ({
+        date: `2026-07-${String(i + 1).padStart(2, "0")}`,
+      }));
+      vi.spyOn(api, "getMacroHistory").mockResolvedValueOnce({
+        series_id: "VIXCLS",
+        points: points20.map((p) => ({ ...p, value: 17.0 })),
+        reason: null,
+      });
+      vi.spyOn(api, "getSentimentHistory").mockResolvedValueOnce({
+        symbol: "AAPL",
+        points: points20.map((p) => ({ ...p, score: 0.1 })),
+        reason: null,
+      });
+      renderScreen();
+      await screen.findByTestId("sentiment-vix-vix-panel");
+      expect(screen.queryByTestId("sentiment-vix-coverage-notice")).not.toBeInTheDocument();
+    });
+
+    it("renders the honest empty state, not a fabricated chart, when neither series has any history", async () => {
+      vi.spyOn(api, "getMacroHistory").mockResolvedValueOnce({
+        series_id: "VIXCLS",
+        points: [],
+        reason: "No cached history for VIXCLS yet.",
+      });
+      vi.spyOn(api, "getSentimentHistory").mockResolvedValueOnce({
+        symbol: "ZZZZ",
+        points: [],
+        reason: "No archived sentiment history for ZZZZ yet.",
+      });
+      renderScreen();
+      expect(await screen.findByTestId("sentiment-vix-empty")).toBeInTheDocument();
+      expect(screen.queryByTestId("sentiment-vix-vix-panel")).not.toBeInTheDocument();
+    });
+
+    it("never computes or displays a correlation/lead-lag number anywhere in the section", async () => {
+      renderScreen();
+      const section = await screen.findByTestId("sentiment-vix-chart");
+      expect(section.textContent).not.toMatch(/correlation/i);
+      expect(section.textContent).not.toMatch(/lead-lag (is|:|of) [-\d]/i);
+      expect(section.textContent).toMatch(/no lead-lag relationship is (computed|implied)/i);
+    });
+  });
 });

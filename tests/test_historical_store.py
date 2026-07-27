@@ -1000,6 +1000,119 @@ class TestMacroHistory:
         """settings.MACRO_REFRESH_HOURS == 12."""
         from settings import settings as _s
         assert _s.MACRO_REFRESH_HOURS == 12
+
+
+class TestNewsSentimentHistory:
+    """Tests for save_news_sentiment / get_news_sentiment_history — the
+    news_history read/write round trip, against a real temp SQLite DB
+    (mirrors TestMacroHistory's convention for its sibling table)."""
+
+    def test_round_trip_preserves_real_values(self, tmp_path):
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+        store.save_news_sentiment(
+            {"AAPL": 0.42, "MSFT": -0.15}, datetime(2026, 7, 1, tzinfo=timezone.utc)
+        )
+
+        series = store.get_news_sentiment_history("AAPL")
+        assert isinstance(series, pd.Series)
+        assert len(series) == 1
+        assert series.iloc[0] == pytest.approx(0.42)
+        assert series.index.tz is None, "Index must be tz-naive"
+
+    def test_nan_score_persists_as_null_and_reads_back_as_nan(self, tmp_path):
+        """The exact honesty contract this table exists for: a NaN score
+        (news_catalyst.py's fetch-failure/no-headlines sentinel) is stored
+        as SQL NULL and reconstituted as NaN, never silently becoming 0.0
+        at either the write or the read boundary."""
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+        store.save_news_sentiment(
+            {"AAPL": float("nan")}, datetime(2026, 7, 1, tzinfo=timezone.utc)
+        )
+
+        with sqlite3.connect(db) as conn:
+            raw = conn.execute(
+                "SELECT score FROM news_history WHERE symbol='AAPL'"
+            ).fetchone()[0]
+        assert raw is None  # genuine SQL NULL, not a stored 0.0
+
+        series = store.get_news_sentiment_history("AAPL")
+        assert len(series) == 1
+        assert math.isnan(series.iloc[0])
+
+    def test_multi_day_history_sorted_ascending(self, tmp_path):
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+        store.save_news_sentiment({"AAPL": 0.1}, datetime(2026, 7, 3, tzinfo=timezone.utc))
+        store.save_news_sentiment({"AAPL": 0.2}, datetime(2026, 7, 1, tzinfo=timezone.utc))
+        store.save_news_sentiment({"AAPL": 0.3}, datetime(2026, 7, 2, tzinfo=timezone.utc))
+
+        series = store.get_news_sentiment_history("AAPL")
+        assert len(series) == 3
+        assert list(series.index) == sorted(series.index)
+        assert series.iloc[0] == pytest.approx(0.2)  # July 1st, earliest
+
+    def test_lookback_days_filters_tail(self, tmp_path):
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+        old_date = datetime.now(timezone.utc) - timedelta(days=90)
+        recent_date = datetime.now(timezone.utc) - timedelta(days=2)
+        store.save_news_sentiment({"AAPL": 0.5}, old_date)
+        store.save_news_sentiment({"AAPL": 0.6}, recent_date)
+
+        series = store.get_news_sentiment_history("AAPL", lookback_days=30)
+        assert len(series) == 1
+        assert series.iloc[0] == pytest.approx(0.6)
+
+    def test_symbol_scoping_does_not_leak(self, tmp_path):
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+        store.save_news_sentiment(
+            {"AAPL": 0.4, "MSFT": -0.4}, datetime(2026, 7, 1, tzinfo=timezone.utc)
+        )
+        series = store.get_news_sentiment_history("AAPL")
+        assert len(series) == 1
+        assert series.iloc[0] == pytest.approx(0.4)
+
+    def test_symbol_is_case_insensitive(self, tmp_path):
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+        store.save_news_sentiment({"AAPL": 0.4}, datetime(2026, 7, 1, tzinfo=timezone.utc))
+        series = store.get_news_sentiment_history("aapl")
+        assert len(series) == 1
+
+    def test_no_history_returns_empty_series_not_none(self, tmp_path):
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+        series = store.get_news_sentiment_history("ZZZZ")
+        assert isinstance(series, pd.Series)
+        assert series.empty
+
+    def test_blank_symbol_returns_empty_series(self, tmp_path):
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+        series = store.get_news_sentiment_history("   ")
+        assert series.empty
+
+    def test_db_error_returns_empty_series_never_raises(self, tmp_path):
+        """self.Session is bound to self.engine at construction time, so
+        mutating self._db_path afterward wouldn't actually redirect it (and
+        would trivially pass either way, since a fresh store has no rows
+        yet regardless). Patch self.Session itself to force session_scope's
+        session_factory() call to raise, exercising the real dead-letter
+        path (CONSTRAINT #6)."""
+        db = str(tmp_path / "news.db")
+        store = HistoricalStore(db_path=db)
+
+        def _boom():
+            raise RuntimeError("db unavailable")
+
+        store.Session = _boom
+        series = store.get_news_sentiment_history("AAPL")  # must not raise
+        assert series.empty
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase D1 — TestPITFundamentals
 # ─────────────────────────────────────────────────────────────────────────────

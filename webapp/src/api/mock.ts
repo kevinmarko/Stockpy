@@ -122,12 +122,14 @@ import type {
   TriggerRunResult,
   Bar,
   Fundamentals,
+  MacroHistorySeries,
   MacroSnapshot,
   QuotesResponse,
   SignalBreakdown,
   SignalModuleScore,
   ForecastResult,
   SentimentDynamics,
+  SentimentHistory,
 } from "./types";
 
 const SECTORS = [
@@ -4569,6 +4571,29 @@ export const mockApi = {
     });
   },
 
+  async getMacroHistory(series = "VIXCLS", lookbackDays = 180): Promise<MacroHistorySeries> {
+    const seriesId = series.trim().toUpperCase();
+    // macro_history has been backfilled for much longer than news_history
+    // (the sentiment archive only started 2026-07 -- see getSentimentHistory
+    // below), so a full 180-day VIX series is an honest fixture, not an
+    // overstatement of real coverage.
+    const rng = seeded(seriesId.length * 11 + lookbackDays);
+    const days = Math.min(lookbackDays, 180);
+    const points: MacroHistorySeries["points"] = [];
+    let vix = 16.5;
+    const now = Date.now();
+    for (let i = days; i >= 0; i--) {
+      vix += (rng() - 0.5) * 1.4 + (16.5 - vix) * 0.06; // mean-reverting walk
+      vix = Math.max(9, vix);
+      const date = new Date(now - i * 86_400_000).toISOString().slice(0, 10);
+      // One honest gap day (FRED hadn't published yet / market holiday) —
+      // never a carried-forward or fabricated value.
+      const gap = i === 3;
+      points.push({ date, value: gap ? null : +vix.toFixed(2) });
+    }
+    return delay<MacroHistorySeries>({ series_id: seriesId, points, reason: null });
+  },
+
   // Mirrors api/data_api.py::get_quotes's real per-symbol dead-letter
   // contract exactly: a symbol the provider can't resolve is simply OMITTED
   // from the response dict, never a fabricated placeholder row (CONSTRAINT
@@ -4687,6 +4712,37 @@ export const mockApi = {
       volatility_persistence: 0.94,
       source: "antigravity_agent",
     });
+  },
+
+  async getSentimentHistory(symbol: string, _lookbackDays = 180): Promise<SentimentHistory> {
+    const sym = symbol.toUpperCase();
+    if (!SYMBOL_UNIVERSE.has(sym)) {
+      return delay<SentimentHistory>({
+        symbol: sym,
+        points: [],
+        reason: `No archived sentiment history for ${sym} yet.`,
+      });
+    }
+    // HONEST fixture depth: news_history is a forward-archive that only
+    // started 2026-07 (see HistoricalStore's DDL comment and
+    // pilots/catalog.py) -- real coverage today is a few weeks at most, not
+    // the full lookback window a caller might request. Mocking a full
+    // 180-day series here would misrepresent production reality and hide
+    // the honest "not enough data for a lead-lag claim yet" UI path this
+    // chart exists to exercise.
+    const rng = seeded(sym.length * 7 + 3);
+    const daysArchived = 18 + Math.floor(rng() * 8); // ~18-25 archived days
+    const points: SentimentHistory["points"] = [];
+    const now = Date.now();
+    for (let i = daysArchived; i >= 0; i--) {
+      const date = new Date(now - i * 86_400_000).toISOString().slice(0, 10);
+      // A handful of honest gap days (a real fetch failure or zero
+      // headlines that day) -- never a fabricated neutral 0.
+      const gap = i === 5 || i === 11;
+      const score = gap ? null : +((rng() - 0.45) * 0.9).toFixed(3);
+      points.push({ date, score });
+    }
+    return delay<SentimentHistory>({ symbol: sym, points, reason: null });
   },
 
   async getForecastResult(symbol: string): Promise<ForecastResult> {

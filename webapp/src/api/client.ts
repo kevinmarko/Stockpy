@@ -69,6 +69,7 @@ import type {
   StrategyModulesUpdateResult,
   ValidationTrendSnapshot,
   SentimentDynamics,
+  SentimentHistory,
   TunablesResponse,
   TunablesUpdateResult,
   SymbolDetail,
@@ -82,6 +83,7 @@ import type {
   TriggerRunResult,
   Bar,
   Fundamentals,
+  MacroHistorySeries,
   MacroSnapshot,
   QuotesResponse,
   SignalBreakdown,
@@ -318,6 +320,10 @@ const liveApi = {
   getDataFundamentals: (symbol: string) =>
     http<Fundamentals>(`/data/fundamentals/${encodeURIComponent(symbol)}`),
   getMacro: () => http<MacroSnapshot>("/data/macro"),
+  getMacroHistory: (series = "VIXCLS", lookbackDays = 180) =>
+    http<MacroHistorySeries>(
+      `/data/macro/history?series=${encodeURIComponent(series)}&lookback_days=${lookbackDays}`
+    ),
   // The operator's configured universe (settings.DEFAULT_TICKERS) — read + PUT
   // (full-list replace). The Data Explorer's add/remove control does a
   // read-modify-write against these two (data base, :8603).
@@ -345,6 +351,10 @@ const liveApi = {
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
   getSentimentDynamics: (symbol: string) =>
     http<SentimentDynamics>(`/metrics/sentiment/${encodeURIComponent(symbol)}`),
+  getSentimentHistory: (symbol: string, lookbackDays = 180) =>
+    http<SentimentHistory>(
+      `/data/sentiment/${encodeURIComponent(symbol)}/history?lookback_days=${lookbackDays}`
+    ),
   // ---- On-demand AI generation (data base, :8603) — operator-triggered only,
   // never auto-run. Each POST returns an honest available/reason/payload
   // envelope (llm/schemas.py-backed); a non-2xx still throws ApiError the

@@ -1644,6 +1644,33 @@ export interface SentimentDynamics {
   source: "antigravity_agent" | "unavailable";
 }
 
+/**
+ * GET /data/sentiment/{symbol}/history — archived daily news-sentiment score
+ * history from `HistoricalStore`'s `news_history` table
+ * (`data/historical_store.py::get_news_sentiment_history`). A DIFFERENT
+ * number from `SentimentDynamics.sentiment_score` above: that one is a
+ * live, point-in-time Antigravity-agent read with no history; this is the
+ * FinBERT/lexicon score `signals/news_catalyst.py` archives every pipeline
+ * cycle, going back only as far as the archive itself (see `reason` /
+ * `points.length` — the archive started 2026-07, so most symbols will have
+ * only a few weeks of points, not enough for a lead-lag claim).
+ *
+ * `score: null` on a point means a genuine fetch/scoring failure or zero
+ * headlines that day — never a fabricated neutral 0 (CONSTRAINT #4). A
+ * chart built from this series must render that as a real gap, not a
+ * plotted zero.
+ */
+export interface SentimentHistoryPoint {
+  date: string; // ISO date (YYYY-MM-DD)
+  score: number | null;
+}
+
+export interface SentimentHistory {
+  symbol: string;
+  points: SentimentHistoryPoint[];
+  reason: string | null; // non-null only when points is empty
+}
+
 /** Portfolio-wide (all-symbol) forecast reliability + skill weights for one horizon. */
 export interface PortfolioForecastSkill {
   horizon_days: number;
@@ -1821,6 +1848,25 @@ export type Fundamentals = Record<string, number | string | null>;
  * value may be `null`; the screen labels the ones it knows and lists the rest.
  */
 export type MacroSnapshot = Record<string, number | string | null>;
+
+/**
+ * GET /data/macro/history?series=VIXCLS — daily historical values for one
+ * FRED macro series from `HistoricalStore`'s `macro_history` cache
+ * (`data/historical_store.py::get_macro`). Distinct from `MacroSnapshot`
+ * above, which is a current-snapshot scalar only. A gap day (FRED didn't
+ * publish, e.g. a market holiday) is a real `null`, never a carried-forward
+ * value.
+ */
+export interface MacroHistoryPoint {
+  date: string; // ISO date (YYYY-MM-DD)
+  value: number | null;
+}
+
+export interface MacroHistorySeries {
+  series_id: string;
+  points: MacroHistoryPoint[];
+  reason: string | null; // non-null only when points is empty
+}
 
 /** One signal module's contribution within a symbol's blended score. */
 export interface SignalModuleScore {

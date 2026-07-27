@@ -50,9 +50,11 @@ account_snapshots   — account-level snapshot (equity, buying power, dividends)
 account_positions   — per-symbol positions linked to a snapshot_id FK
 fundamentals_history — daily fundamentals snapshot per symbol + raw_json
 macro_history       — FRED series values keyed by (series_id, date)
-news_history        — forward-archived per-symbol news-sentiment score (write-only
-                       today; no backtest reader exists yet — see
-                       signals/news_catalyst.py and pilots/catalog.py)
+news_history        — forward-archived per-symbol news-sentiment score. Read via
+                       get_news_sentiment_history() (a display-only chart series,
+                       e.g. sentiment-vs-VIX) — still no BACKTEST reader; the
+                       archive is too young for a point-in-time backtest claim.
+                       See signals/news_catalyst.py and pilots/catalog.py.
 sentiment_ingestion_audit — per-DOCUMENT sentiment ingestion audit trail
                        (Sentiment Pipeline Phase 2), keyed by ingest_id;
                        see save_sentiment_documents() / resolve_trading_day()
@@ -1681,6 +1683,83 @@ class HistoricalStore:
             )
         except Exception as exc:
             logger.warning("HistoricalStore.save_news_sentiment failed: %s", exc)
+
+    def get_news_sentiment_history(
+        self,
+        symbol: str,
+        lookback_days: Optional[int] = None,
+    ) -> pd.Series:
+        """Return a tz-naive date-indexed Series of archived ``news_history``
+        scores for *symbol* — the read-only counterpart of
+        ``save_news_sentiment``.
+
+        Unlike ``get_macro``, there is no live top-up here: ``news_history``
+        is forward-archive only (see its DDL comment) — there is nothing to
+        "fetch" for a past date that wasn't captured when it happened, so
+        this is a plain read.
+
+        A row's ``score`` is ``NULL`` (→ ``NaN`` here) exactly when
+        ``signals/news_catalyst.py``'s ``NewsCatalystSignal.pre_compute()``
+        had a genuine fetch/scoring failure or zero headlines that day (its
+        ``_news_archive_scores`` split) — preserved as ``NaN``, never
+        coerced to ``0.0`` (CONSTRAINT #4). A caller building a chart from
+        this series must treat a ``NaN`` point as a real gap (skip it),
+        never plot it as zero sentiment.
+
+        Parameters
+        ----------
+        symbol:
+            Ticker symbol (case-insensitive).
+        lookback_days:
+            If provided, only rows from the last *lookback_days* days are
+            returned.
+
+        Returns
+        -------
+        pd.Series
+            tz-naive DatetimeIndex, float values (``NaN`` for archived
+            "no data" rows). Empty Series when the symbol has no archived
+            history at all, or on any DB error (CONSTRAINT #6 — never
+            raises).
+        """
+        sym = str(symbol or "").upper().strip()
+        if not sym:
+            return pd.Series(dtype=float, name=symbol)
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    rows = conn.execute(
+                        """
+                        SELECT as_of, score
+                        FROM news_history
+                        WHERE symbol = ?
+                        ORDER BY as_of ASC
+                        """,
+                        (sym,),
+                    ).fetchall()
+
+            if not rows:
+                return pd.Series(dtype=float, name=sym)
+
+            dates = [r[0] for r in rows]
+            values = [float("nan") if r[1] is None else float(r[1]) for r in rows]
+            series = pd.Series(values, index=pd.DatetimeIndex(dates), name=sym)
+            series.index = series.index.tz_localize(None)
+            series = series.sort_index()
+
+            if lookback_days is not None and lookback_days > 0:
+                cutoff = pd.Timestamp.now(tz=None) - pd.Timedelta(days=lookback_days)
+                series = series[series.index >= cutoff]
+
+            return series
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.get_news_sentiment_history(%s) failed: %s", sym, exc
+            )
+            return pd.Series(dtype=float, name=sym)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public API — finbert_score_cache (FinBERT local batch inference)

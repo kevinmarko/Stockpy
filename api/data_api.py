@@ -31,7 +31,7 @@ import logging
 import math
 from typing import Any, Dict, List, Optional
 
-from fastapi import Body, Depends, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -248,6 +248,86 @@ def get_macro_raw() -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("data_api: macro fetch failed: %s", exc)
         raise HTTPException(status_code=503, detail="Macro data unavailable")
+
+
+@app.get("/data/macro/history", dependencies=[Depends(require_token)])
+def get_macro_history(
+    series: str = Query("VIXCLS"),
+    lookback_days: int = Query(180, ge=1, le=3650),
+) -> Dict[str, Any]:
+    """Daily historical values for one FRED macro series (default VIXCLS)
+    from ``HistoricalStore``'s ``macro_history`` cache — distinct from
+    ``GET /data/macro`` above, which is a current-snapshot SCALAR dict only.
+
+    Reads the local cache; ``get_macro()``'s own top-up logic still applies
+    (refreshes from FRED if stale and a key is configured) but never raises
+    on a missing key or an unwritable read-only connection — both degrade to
+    whatever's already cached (CONSTRAINT #6). A gap day (FRED didn't
+    publish, e.g. a market holiday) is a real ``null``, never a fabricated
+    carry-forward value.
+    """
+    series_id = series.upper().strip()
+    store = HistoricalStore(readonly=True)
+    try:
+        series_data = store.get_macro(series_id, lookback_days=lookback_days)
+    except Exception as exc:
+        logger.warning("data_api: macro history failed for %s: %s", series_id, exc)
+        series_data = None
+
+    if series_data is None or series_data.empty:
+        return _clean_nan(
+            {
+                "series_id": series_id,
+                "points": [],
+                "reason": f"No cached history for {series_id} yet.",
+            }
+        )
+
+    points = [
+        {"date": idx.strftime("%Y-%m-%d"), "value": float(v)} for idx, v in series_data.items()
+    ]
+    return _clean_nan({"series_id": series_id, "points": points, "reason": None})
+
+
+@app.get("/data/sentiment/{symbol}/history", dependencies=[Depends(require_token)])
+def get_sentiment_history(
+    symbol: str,
+    lookback_days: int = Query(180, ge=1, le=3650),
+) -> Dict[str, Any]:
+    """Daily archived news-sentiment score history for ``symbol``, from
+    ``HistoricalStore``'s ``news_history`` table (forward-archive only — see
+    ``HistoricalStore.get_news_sentiment_history``'s docstring). Distinct
+    from ``GET /metrics/sentiment/{symbol}`` (``metrics_api.py``), which is
+    a live, point-in-time agent-derived read with no history.
+
+    A point's ``score`` is ``null`` exactly when the pipeline had a genuine
+    fetch/scoring failure or zero headlines that day — never a fabricated
+    neutral ``0.0`` (CONSTRAINT #4). The archive only started 2026-07 (see
+    ``pilots/catalog.py``), so most symbols will have only a few weeks of
+    points today; callers should not assume enough depth for a lead-lag
+    claim.
+    """
+    symbol = symbol.upper()
+    store = HistoricalStore(readonly=True)
+    try:
+        series_data = store.get_news_sentiment_history(symbol, lookback_days=lookback_days)
+    except Exception as exc:
+        logger.warning("data_api: sentiment history failed for %s: %s", symbol, exc)
+        series_data = None
+
+    if series_data is None or series_data.empty:
+        return _clean_nan(
+            {
+                "symbol": symbol,
+                "points": [],
+                "reason": f"No archived sentiment history for {symbol} yet.",
+            }
+        )
+
+    points = [
+        {"date": idx.strftime("%Y-%m-%d"), "score": float(v)} for idx, v in series_data.items()
+    ]
+    return _clean_nan({"symbol": symbol, "points": points, "reason": None})
 
 
 @app.get("/data/universe", dependencies=[Depends(require_token)])

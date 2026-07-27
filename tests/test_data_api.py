@@ -47,9 +47,14 @@ def _make_bars(n: int = 5) -> pd.DataFrame:
 
 
 class _FakeStore:
-    def __init__(self, bars=None, fund_history=None):
+    def __init__(self, bars=None, fund_history=None, macro_series=None, sentiment_series=None):
         self._bars = bars
         self._fund_history = fund_history
+        # {series_id: pd.Series} / {symbol: pd.Series} -- None means "raise",
+        # matching the real HistoricalStore methods' own dead-letter contract
+        # (an empty Series, not an exception, is the honest "no history" case).
+        self._macro_series = macro_series or {}
+        self._sentiment_series = sentiment_series or {}
 
     def get_bars(self, symbol, lookback_days=252, provider=None):
         if self._bars is None:
@@ -60,6 +65,12 @@ class _FakeStore:
         if self._fund_history is None:
             return pd.DataFrame()
         return self._fund_history
+
+    def get_macro(self, series_id, lookback_days=None, data_engine=None):
+        return self._macro_series.get(series_id, pd.Series(dtype=float, name=series_id))
+
+    def get_news_sentiment_history(self, symbol, lookback_days=None):
+        return self._sentiment_series.get(symbol.upper(), pd.Series(dtype=float, name=symbol))
 
 
 class _FakeProvider:
@@ -233,6 +244,114 @@ def test_macro_raw(monkeypatch):
     body = resp.json()
     assert body["vix"] == 18.0
     assert body["sahm"] is None  # NaN → null
+
+
+# ---------------------------------------------------------------------------
+# GET /data/macro/history
+# ---------------------------------------------------------------------------
+
+
+def test_macro_history_shape_and_default_series(monkeypatch):
+    idx = pd.DatetimeIndex(["2026-06-01", "2026-06-02", "2026-06-03"])
+    series = pd.Series([16.5, 17.2, float("nan")], index=idx, name="VIXCLS")
+    monkeypatch.setattr(
+        data_api, "HistoricalStore",
+        lambda **k: _FakeStore(macro_series={"VIXCLS": series}),
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/macro/history")  # no ?series= -> defaults to VIXCLS
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["series_id"] == "VIXCLS"
+    assert body["reason"] is None
+    assert len(body["points"]) == 3
+    assert body["points"][0] == {"date": "2026-06-01", "value": 16.5}
+    # A real gap day (FRED didn't publish) is null, never a carried-forward value.
+    assert body["points"][2]["value"] is None
+
+
+def test_macro_history_series_param_selects_series(monkeypatch):
+    idx = pd.DatetimeIndex(["2026-06-01"])
+    monkeypatch.setattr(
+        data_api, "HistoricalStore",
+        lambda **k: _FakeStore(macro_series={
+            "VIXCLS": pd.Series([16.0], index=idx, name="VIXCLS"),
+            "T10Y2Y": pd.Series([0.4], index=idx, name="T10Y2Y"),
+        }),
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/macro/history?series=t10y2y")  # lowercase input
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["series_id"] == "T10Y2Y"  # normalized uppercase
+    assert body["points"][0]["value"] == 0.4
+
+
+def test_macro_history_empty_returns_honest_reason(monkeypatch):
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/macro/history?series=VIXCLS")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["points"] == []
+    assert body["reason"] is not None
+
+
+def test_macro_history_store_error_degrades_to_empty_not_500(monkeypatch):
+    class _BoomStore:
+        def get_macro(self, *a, **k):
+            raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomStore())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/macro/history")
+    assert resp.status_code == 200  # dead-letter, never a 500
+    assert resp.json()["points"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /data/sentiment/{symbol}/history
+# ---------------------------------------------------------------------------
+
+
+def test_sentiment_history_shape(monkeypatch):
+    idx = pd.DatetimeIndex(["2026-07-01", "2026-07-02"])
+    series = pd.Series([0.3, float("nan")], index=idx, name="AAPL")
+    monkeypatch.setattr(
+        data_api, "HistoricalStore",
+        lambda **k: _FakeStore(sentiment_series={"AAPL": series}),
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/sentiment/aapl/history")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symbol"] == "AAPL"
+    assert body["reason"] is None
+    assert body["points"][0] == {"date": "2026-07-01", "score": 0.3}
+    # A fetch-failure/no-headlines day is null, never a fabricated 0.0.
+    assert body["points"][1]["score"] is None
+
+
+def test_sentiment_history_empty_returns_honest_reason(monkeypatch):
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStore())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/sentiment/ZZZZ/history")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["points"] == []
+    assert "ZZZZ" in body["reason"]
+
+
+def test_sentiment_history_store_error_degrades_to_empty_not_500(monkeypatch):
+    class _BoomStore:
+        def get_news_sentiment_history(self, *a, **k):
+            raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomStore())
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/sentiment/AAPL/history")
+    assert resp.status_code == 200
+    assert resp.json()["points"] == []
 
 
 # ---------------------------------------------------------------------------
