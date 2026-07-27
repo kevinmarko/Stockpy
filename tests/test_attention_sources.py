@@ -22,6 +22,7 @@ from data.attention_sources import (
     compute_attention_scores_for_universe,
     resolve_article_title,
 )
+from settings import settings
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +330,106 @@ class TestComputeAttentionScoresForUniverse:
                     result = compute_attention_scores_for_universe(["BAD", "GOOD"])
         assert math.isnan(result["BAD"])
         assert result["GOOD"] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Wall-clock ceiling + circuit breaker (honesty-audit fix) — mirrors
+# data/sentiment_sources.py::CompositeSentimentSource's identical protection
+# for the identical risk shape: a slow/unreachable host stacking its
+# per-request timeout across every remaining symbol with no overall bound.
+# ---------------------------------------------------------------------------
+
+class TestWallClockCeilingAndCircuitBreaker:
+    def test_settings_defaults(self):
+        # Pin the real pydantic defaults so the bounds aren't a test-only
+        # fiction.
+        assert settings.ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE == 60.0
+        assert settings.ATTENTION_CIRCUIT_BREAKER_THRESHOLD == 3
+
+    def test_wall_clock_ceiling_degrades_remaining_symbols_to_nan(self):
+        # deadline = t0 + max_seconds = 0.0 + 10.0 = 10.0.
+        # Loop check #1 (AAPL): 1.0 < 10.0 -> proceed, fetch attempted.
+        # Loop check #2 (MSFT): 11.0 >= 10.0 -> ceiling hit, break, degrade
+        # every not-yet-processed symbol (MSFT, GOOG) to NaN.
+        call_times = iter([0.0, 1.0, 11.0])
+        with patch("settings.settings.WIKIPEDIA_ATTENTION_ENABLED", True):
+            with patch("settings.settings.ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE", 10.0):
+                with patch("data.attention_sources.time.monotonic", side_effect=call_times):
+                    with patch(
+                        "data.attention_sources.compute_attention_score", return_value=0.5,
+                    ) as mock_compute:
+                        result = compute_attention_scores_for_universe(
+                            ["AAPL", "MSFT", "GOOG"]
+                        )
+        assert result["AAPL"] == pytest.approx(0.5)
+        assert math.isnan(result["MSFT"])
+        assert math.isnan(result["GOOG"])
+        mock_compute.assert_called_once()  # MSFT/GOOG never even attempted
+
+    def test_circuit_breaker_trips_after_consecutive_no_score_outcomes(self):
+        with patch("settings.settings.WIKIPEDIA_ATTENTION_ENABLED", True):
+            with patch("settings.settings.ATTENTION_CIRCUIT_BREAKER_THRESHOLD", 2):
+                # Effectively unlimited wall-clock budget so only the breaker
+                # is under test here.
+                with patch(
+                    "settings.settings.ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE", 999.0,
+                ):
+                    with patch(
+                        "data.attention_sources.compute_attention_score",
+                        side_effect=[float("nan"), float("nan"), 0.5],
+                    ) as mock_compute:
+                        result = compute_attention_scores_for_universe(["A", "B", "C"])
+        assert math.isnan(result["A"])
+        assert math.isnan(result["B"])
+        assert math.isnan(result["C"])
+        # C degrades to NaN WITHOUT ever calling compute_attention_score --
+        # the breaker tripped on B's consecutive failure.
+        assert mock_compute.call_count == 2
+
+    def test_success_resets_the_consecutive_failure_counter(self):
+        # An intermittently-flaky source (fail, succeed, fail, succeed) must
+        # never trip the breaker -- only a genuinely CONSECUTIVE run of
+        # failures should.
+        with patch("settings.settings.WIKIPEDIA_ATTENTION_ENABLED", True):
+            with patch("settings.settings.ATTENTION_CIRCUIT_BREAKER_THRESHOLD", 2):
+                with patch(
+                    "settings.settings.ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE", 999.0,
+                ):
+                    with patch(
+                        "data.attention_sources.compute_attention_score",
+                        side_effect=[float("nan"), 0.5, float("nan"), 0.7],
+                    ) as mock_compute:
+                        result = compute_attention_scores_for_universe(
+                            ["A", "B", "C", "D"]
+                        )
+        assert mock_compute.call_count == 4
+        assert result["D"] == pytest.approx(0.7)
+
+    def test_exception_counts_toward_breaker_same_as_nan(self):
+        with patch("settings.settings.WIKIPEDIA_ATTENTION_ENABLED", True):
+            with patch("settings.settings.ATTENTION_CIRCUIT_BREAKER_THRESHOLD", 2):
+                with patch(
+                    "settings.settings.ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE", 999.0,
+                ):
+                    with patch(
+                        "data.attention_sources.compute_attention_score",
+                        side_effect=[RuntimeError("boom"), float("nan"), 0.5],
+                    ) as mock_compute:
+                        result = compute_attention_scores_for_universe(["A", "B", "C"])
+        assert math.isnan(result["A"])
+        assert math.isnan(result["B"])
+        assert math.isnan(result["C"])
+        assert mock_compute.call_count == 2  # breaker tripped before C
+
+    def test_disabled_by_default_wall_clock_and_breaker_never_consulted(self):
+        # Regression: with the master gate off, the function returns before
+        # even reading the new settings -- confirms no behavior change for
+        # operators who haven't opted into either feature.
+        with patch("settings.settings.WIKIPEDIA_ATTENTION_ENABLED", False):
+            with patch("data.attention_sources.time.monotonic") as mock_monotonic:
+                result = compute_attention_scores_for_universe(["AAPL"])
+        assert result == {}
+        mock_monotonic.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

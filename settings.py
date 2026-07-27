@@ -1556,6 +1556,33 @@ class Settings(BaseSettings):
             "pipeline on it."
         ),
     )
+    ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE: float = Field(
+        default=60.0,
+        description=(
+            "Hard wall-clock ceiling (seconds) for "
+            "compute_attention_scores_for_universe()'s entire per-cycle loop "
+            "over the symbol universe. Mirrors "
+            "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE for the identical risk "
+            "shape: a slow/unreachable Wikipedia Pageviews endpoint can "
+            "otherwise stack its per-request timeout across every remaining "
+            "symbol with no overall ceiling -- once this budget elapses, "
+            "every remaining symbol degrades to NaN (never fabricated) for "
+            "the rest of the cycle instead of continuing to attempt fetches. "
+            "Only consulted once WIKIPEDIA_ATTENTION_ENABLED is True."
+        ),
+    )
+    ATTENTION_CIRCUIT_BREAKER_THRESHOLD: int = Field(
+        default=3,
+        description=(
+            "Consecutive no-score outcomes (exception or NaN) within one "
+            "compute_attention_scores_for_universe() cycle before Wikipedia "
+            "(and the optional pytrends overlay) is skipped for the rest of "
+            "that cycle's symbols -- avoids burning the wall-clock budget on "
+            "a source that's clearly failing for every remaining symbol. "
+            "Mirrors SENTIMENT_CIRCUIT_BREAKER_THRESHOLD. Only consulted once "
+            "WIKIPEDIA_ATTENTION_ENABLED is True."
+        ),
+    )
 
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /

@@ -85,6 +85,24 @@ row dated strictly after `as_of` before computing recent/baseline splits --
 defense-in-depth against a malformed or (in tests) deliberately
 future-dated response ever leaking into "today's" score. See
 `tests/test_attention_pit_lookahead.py`.
+
+Wall-clock ceiling + circuit breaker
+--------------------------------------
+`compute_attention_scores_for_universe()` loops this module's per-symbol
+Wikipedia fetch (each with its own `timeout=10` HTTP call) over the WHOLE
+tracked universe with no other bound of its own. This is the identical risk
+shape `data.sentiment_sources.CompositeSentimentSource` already had fixed
+for it (`SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE` /
+`SENTIMENT_CIRCUIT_BREAKER_THRESHOLD`, added in the sentiment-ingestion
+pipeline's own wall-clock-ceiling PR): a single slow/unreachable host can
+otherwise stack its per-request timeout across every remaining symbol with
+no overall ceiling. `settings.ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE`
+(default 60s) bounds the whole loop's wall-clock time, and
+`settings.ATTENTION_CIRCUIT_BREAKER_THRESHOLD` (default 3 consecutive
+no-score outcomes) skips Wikipedia for the remainder of the cycle once it
+looks clearly non-responsive, rather than waiting out the full timeout on
+every remaining symbol. Both are dormant no-ops while
+`WIKIPEDIA_ATTENTION_ENABLED` is `False` (the default).
 """
 
 from __future__ import annotations
@@ -92,6 +110,7 @@ from __future__ import annotations
 import logging
 import math
 import statistics
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Sequence
@@ -401,6 +420,17 @@ def compute_attention_scores_for_universe(
     abort the batch (CONSTRAINT #6, matching this codebase's per-ticker
     try/except convention in ``data_engine.py``/orchestrator loops); a
     failed symbol's score is NaN, never fabricated.
+
+    Bounded by two independent per-cycle guards -- see the module
+    docstring's "Wall-clock ceiling + circuit breaker" section:
+
+    * ``settings.ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE`` (default 60s)
+      -- once elapsed, every symbol not yet processed degrades to NaN
+      immediately instead of attempting a fetch.
+    * ``settings.ATTENTION_CIRCUIT_BREAKER_THRESHOLD`` (default 3
+      consecutive no-score outcomes) -- once tripped, Wikipedia (and the
+      optional pytrends overlay) is skipped for the rest of this cycle's
+      symbols, each degrading straight to NaN.
     """
     from settings import settings as _settings
 
@@ -411,15 +441,54 @@ def compute_attention_scores_for_universe(
     source = get_attention_source()
     lookback_days = int(_settings.WIKIPEDIA_ATTENTION_LOOKBACK_DAYS)
 
+    max_seconds = float(
+        getattr(_settings, "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE", 60.0) or 60.0
+    )
+    breaker_threshold = int(
+        getattr(_settings, "ATTENTION_CIRCUIT_BREAKER_THRESHOLD", 3) or 3
+    )
+    deadline = time.monotonic() + max_seconds
+    consecutive_failures = 0
+    breaker_tripped = False
+
     scores: Dict[str, float] = {}
     for sym in symbols:
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "compute_attention_scores_for_universe: wall-clock ceiling "
+                "(%.0fs) reached; degrading remaining symbols to NaN this cycle.",
+                max_seconds,
+            )
+            for remaining in symbols:
+                if remaining not in scores:
+                    scores[remaining] = float("nan")
+            break
+
+        if breaker_tripped:
+            scores[sym] = float("nan")
+            continue
+
         try:
-            scores[sym] = compute_attention_score(
+            score = compute_attention_score(
                 sym, company_names.get(sym), source=source, lookback_days=lookback_days,
             )
         except Exception as exc:
             logger.warning(
                 "compute_attention_scores_for_universe: %s failed: %s", sym, exc,
             )
-            scores[sym] = float("nan")
+            score = float("nan")
+
+        scores[sym] = score
+        if math.isnan(score):
+            consecutive_failures += 1
+            if consecutive_failures >= breaker_threshold:
+                breaker_tripped = True
+                logger.warning(
+                    "compute_attention_scores_for_universe: circuit breaker "
+                    "tripped after %d consecutive no-score outcomes; skipping "
+                    "Wikipedia/pytrends for the remainder of this cycle.",
+                    consecutive_failures,
+                )
+        else:
+            consecutive_failures = 0
     return scores
