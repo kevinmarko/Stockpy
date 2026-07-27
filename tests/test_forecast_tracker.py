@@ -271,6 +271,116 @@ class TestGetSkillWeights:
 
 
 # ---------------------------------------------------------------------------
+# get_error_by_model
+# ---------------------------------------------------------------------------
+
+class TestGetErrorByModel:
+    def test_empty_when_no_history(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        rows = tracker.get_error_by_model("AAPL", 30, window_days=60)
+        assert rows == []
+
+    def test_rmse_and_mae_computed_correctly(self, tmp_path):
+        """Known, hand-computable errors: 3 rows off by exactly +10, +10, -10
+        (actual=110/110/90 vs forecast=100 each time) -> squared_error =
+        100/100/100 -> RMSE = 10; abs_error = 10/10/10 -> MAE = 10. RMSE and
+        MAE agree here only because every error has the same magnitude —
+        proves both are computed from the persisted price columns (no
+        migration), not just RMSE."""
+        tracker = _make_tracker(tmp_path)
+        for actual in (110.0, 110.0, 90.0):
+            ts = datetime.now(timezone.utc) - timedelta(days=35)
+            tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 100.0}, ts)
+            tracker.update_actuals("AAPL", 30, actual, datetime.now(timezone.utc))
+
+        rows = tracker.get_error_by_model("AAPL", 30, window_days=180)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["model_name"] == MODEL_ARIMA
+        assert row["n"] == 3
+        assert row["rmse"] == pytest.approx(10.0, abs=1e-6)
+        assert row["mae"] == pytest.approx(10.0, abs=1e-6)
+
+    def test_mae_diverges_from_rmse_with_mixed_error_magnitudes(self, tmp_path):
+        """RMSE penalizes large errors more than MAE — errors of 0, 0, 30
+        give MAE=10 (simple average) but RMSE=sqrt(900/3)=~17.3 (quadratic
+        average). If MAE were accidentally computed as sqrt(mse) instead of
+        its own AVG(ABS(...)), this would fail."""
+        tracker = _make_tracker(tmp_path)
+        for actual in (100.0, 100.0, 130.0):
+            ts = datetime.now(timezone.utc) - timedelta(days=35)
+            tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 100.0}, ts)
+            tracker.update_actuals("AAPL", 30, actual, datetime.now(timezone.utc))
+
+        rows = tracker.get_error_by_model("AAPL", 30, window_days=180)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["mae"] == pytest.approx(10.0, abs=1e-6)
+        assert row["rmse"] == pytest.approx(17.32, abs=0.01)
+        assert row["rmse"] != pytest.approx(row["mae"], abs=1e-6)
+
+    def test_sorted_ascending_by_rmse_best_first(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        _fill_window(tracker, "AAPL", 30, n=35, actual=100.0, arima_delta=0.0, mc_delta=5.0)
+        rows = tracker.get_error_by_model("AAPL", 30, window_days=180)
+        assert [r["model_name"] for r in rows] == [MODEL_ARIMA, MODEL_MONTE_CARLO]
+        assert rows[0]["rmse"] <= rows[1]["rmse"]
+
+    def test_pending_only_rows_excluded(self, tmp_path):
+        """A forecast recorded but never actualized must not contribute --
+        matches get_skill_weights' and get_forecast_reliability_curve's own
+        actual_price IS NOT NULL filter."""
+        tracker = _make_tracker(tmp_path)
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 100.0}, datetime.now(timezone.utc))
+        rows = tracker.get_error_by_model("AAPL", 30)
+        assert rows == []
+
+    def test_window_excludes_old_rows(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        import sqlite3
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(tracker._db_path) as conn:
+            conn.execute(
+                "INSERT INTO forecast_errors (symbol, model_name, horizon_days, forecast_ts, "
+                "forecast_price, actual_price, squared_error, recorded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("AAPL", MODEL_ARIMA, 30, old_ts, 100.0, 110.0, 100.0, now_iso),
+            )
+            conn.commit()
+        rows = tracker.get_error_by_model("AAPL", 30, window_days=60)
+        assert rows == []
+
+    def test_does_not_raise_on_db_error(self, tmp_path):
+        tracker = _make_tracker(tmp_path)
+        tracker._db_path = "/nonexistent/path/db.sqlite"
+        rows = tracker.get_error_by_model("AAPL", 30)
+        assert rows == []
+
+    def test_no_migration_needed_uses_existing_columns_only(self, tmp_path):
+        """Regression guard for the specific claim in the method's docstring:
+        forecast_price/actual_price were already persisted columns before
+        this method existed, so MAE must be derivable without any DDL change.
+        Asserts the schema is untouched (still exactly the documented 9
+        columns) while get_error_by_model still returns a real MAE."""
+        import sqlite3
+        tracker = _make_tracker(tmp_path)
+        ts = datetime.now(timezone.utc) - timedelta(days=35)
+        tracker.record_forecasts("AAPL", 30, {MODEL_ARIMA: 100.0}, ts)
+        tracker.update_actuals("AAPL", 30, 108.0, datetime.now(timezone.utc))
+
+        with sqlite3.connect(tracker._db_path) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(forecast_errors)").fetchall()}
+        assert cols == {
+            "id", "symbol", "model_name", "horizon_days", "forecast_ts",
+            "forecast_price", "actual_price", "squared_error", "recorded_at",
+        }
+
+        rows = tracker.get_error_by_model("AAPL", 30, window_days=180)
+        assert rows[0]["mae"] == pytest.approx(8.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # pending_count and completed_count
 # ---------------------------------------------------------------------------
 

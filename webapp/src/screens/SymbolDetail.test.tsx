@@ -54,6 +54,26 @@ describe("SymbolDetail screen (real mock API)", () => {
     expect(screen.getByRole("heading", { name: "Options premium" })).toBeInTheDocument();
   });
 
+  it("renders the per-model forecast error chart with spelled-out labels, never the bare 'MAE' acronym", async () => {
+    // AAPL is in the mock universe, so mockForecast() populates error_by_model
+    // (never fabricated-empty for a tracked symbol with forecast history).
+    renderSymbol("AAPL");
+    await screen.findByRole("heading", { name: "AAPL" });
+    const chart = await screen.findByTestId("forecast-error-chart");
+    expect(chart).toBeInTheDocument();
+    // "MAE" already means something else on this exact screen (the options
+    // Realizable-theta / trade-quality "MAE" StatRow) -- this chart must
+    // never emit the bare acronym anywhere in its own subtree.
+    expect(within(chart).queryByText(/^MAE$/)).not.toBeInTheDocument();
+    expect(within(chart).queryByText(/\bMAE\b/)).not.toBeInTheDocument();
+  });
+
+  it("an unknown ticker never renders the forecast error chart (no fabricated series for a symbol with no history)", async () => {
+    renderSymbol("ZZZZ");
+    await screen.findByText("Nothing here yet");
+    expect(screen.queryByTestId("forecast-error-chart")).not.toBeInTheDocument();
+  });
+
   it("a debit-spread symbol's options directive shows '—' for Realizable Daily Theta, never a fabricated $0.00", async () => {
     // NVDA's mock directive is a Call Debit Spread carrying a raw
     // Realizable_Daily_Theta of 0.0 (the pre-fix engine default) specifically

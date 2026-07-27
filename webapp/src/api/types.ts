@@ -747,11 +747,24 @@ export interface ReliabilityBin {
   count: number;
 }
 
+// Note: NOT the codebase's other "MAE" (Maximum Adverse Excursion, a trade
+// -quality metric in Calibration.tsx/SymbolDetail.tsx's own StatRow) — this
+// is the forecast error metric. Never render the bare acronym "MAE" for this
+// field in the UI; spell out "mean absolute error" to avoid colliding with
+// that other meaning on the same screen.
+export interface ForecastModelError {
+  model_name: string;
+  n: number; // completed observations this figure is computed over
+  rmse: number | null; // null only if the underlying aggregate wasn't finite
+  mae: number | null;
+}
+
 export interface ForecastSkill {
   symbol: string;
   horizon_days: number;
   reliability_curve: ReliabilityBin[];
   skill_weights: Record<string, number>; // {model: normalized inverse-RMSE weight}
+  error_by_model: ForecastModelError[]; // sorted by rmse ascending (best first)
   pending: number;
   completed: number;
   reason: string | null;

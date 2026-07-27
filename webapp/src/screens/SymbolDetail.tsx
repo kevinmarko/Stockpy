@@ -8,12 +8,14 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
 } from "recharts";
 import { api } from "../api/client";
 import type {
   AiChartResponse,
   AiCommentaryResponse,
   AiResearchResponse,
+  ForecastModelError,
   ForecastSkill,
   OptionsDirective,
   RollingBeta,
@@ -27,7 +29,7 @@ import { PerfLine, chartAxisLine, chartAxisTick, chartGridProps, chartTooltipSty
 import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
-import { theme } from "../theme";
+import { seriesColor, theme } from "../theme";
 import { realizableTheta } from "../optionsHonesty";
 import { useState } from "react";
 import type { DecisionEntry } from "../api/types";
@@ -171,6 +173,64 @@ function RegimeSizingCard({
         position weight).
       </p>
     </section>
+  );
+}
+
+/**
+ * ForecastErrorChart — per-model RMSE + mean absolute error, grouped bars.
+ *
+ * Deliberately never renders the bare acronym "MAE" — this codebase already
+ * uses "MAE" for a DIFFERENT metric (Maximum Adverse Excursion, a trade-
+ * quality figure — see Calibration.tsx and the "MAE" StatRow elsewhere on
+ * this same screen). "Mean absolute error" is always spelled out here to
+ * avoid colliding with that meaning on the same page.
+ *
+ * Two series (RMSE, mean absolute error) get distinct SERIES_PALETTE hues —
+ * this is categorical identity (which metric is which bar), not a good/bad
+ * judgment, so it correctly uses seriesColor rather than growth/decline.
+ * Models are pre-sorted ascending by RMSE by the API (best forecaster
+ * first); rendered in that order rather than re-sorted here.
+ */
+function ForecastErrorChart({ rows }: { rows: ForecastModelError[] }) {
+  if (rows.length === 0) return null;
+  const chartData = rows.map((r) => ({
+    label: r.model_name,
+    rmse: r.rmse,
+    mae: r.mae,
+    n: r.n,
+  }));
+  return (
+    <div style={{ marginTop: 16 }} data-testid="forecast-error-chart">
+      <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 6 }}>
+        Forecast error by model (lower is better)
+      </div>
+      <div style={{ height: 200 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+            <CartesianGrid {...chartGridProps} />
+            <XAxis dataKey="label" tick={{ ...chartAxisTick, fontSize: 11 }} {...chartAxisLine} />
+            <YAxis tick={chartAxisTick} {...chartAxisLine} tickFormatter={(v: number) => fmtUsd(v)} />
+            <Tooltip
+              contentStyle={chartTooltipStyle}
+              labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
+              itemStyle={{ fontSize: 11 }}
+              formatter={(value: any, name: string, entry: { payload?: { n: number } }) => {
+                const label = name === "rmse" ? "RMSE" : "Mean absolute error";
+                if (typeof value !== "number") return ["—", label];
+                const n = entry?.payload?.n;
+                return [`${fmtUsd(value)}${n != null ? ` (n=${n})` : ""}`, label];
+              }}
+            />
+            <Legend
+              wrapperStyle={{ fontSize: 11 }}
+              formatter={(value: string) => (value === "rmse" ? "RMSE" : "Mean absolute error")}
+            />
+            <Bar dataKey="rmse" name="rmse" fill={seriesColor(0)} />
+            <Bar dataKey="mae" name="mae" fill={seriesColor(1)} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
   );
 }
 
@@ -463,6 +523,7 @@ export function SymbolDetail() {
                 </div>
               </>
             )}
+            <ForecastErrorChart rows={forecast.data.error_by_model} />
           </>
         )}
       </section>

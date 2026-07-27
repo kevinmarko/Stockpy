@@ -48,6 +48,7 @@ def _empty_view(symbol: str, horizon_days: int) -> Dict[str, Any]:
         "horizon_days": int(horizon_days),
         "reliability_curve": [],
         "skill_weights": {},
+        "error_by_model": [],
         "pending": 0,
         "completed": 0,
         "reason": "No forecast history yet — run the pipeline to accumulate it.",
@@ -61,7 +62,8 @@ def forecast_skill_view(symbol: str, horizon_days: int = _DEFAULT_HORIZON) -> Di
 
         {symbol, horizon_days, reliability_curve: [{model_name, horizon_days,
          bin_center, mean_pct_error, count}], skill_weights: {model: weight},
-         pending, completed, reason}
+         error_by_model: [{model_name, n, rmse, mae}], pending, completed,
+         reason}
 
     ``reason`` is ``None`` on a normal hit, else an honest "no history" string.
     Never raises (CONSTRAINT #6).
@@ -113,6 +115,21 @@ def forecast_skill_view(symbol: str, horizon_days: int = _DEFAULT_HORIZON) -> Di
         skill_weights = {}
 
     try:
+        raw_errors = tracker.get_error_by_model(sym, horizon) or []
+        error_by_model: List[Dict[str, Any]] = [
+            {
+                "model_name": str(row.get("model_name") or ""),
+                "n": int(row.get("n") or 0),
+                "rmse": _finite_or_none(row.get("rmse")),
+                "mae": _finite_or_none(row.get("mae")),
+            }
+            for row in raw_errors
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("error_by_model failed for %s: %s", sym, exc)
+        error_by_model = []
+
+    try:
         pending = int(tracker.pending_count(sym, horizon))
     except Exception:  # noqa: BLE001
         pending = 0
@@ -121,12 +138,13 @@ def forecast_skill_view(symbol: str, horizon_days: int = _DEFAULT_HORIZON) -> Di
     except Exception:  # noqa: BLE001
         completed = 0
 
-    has_data = bool(reliability or skill_weights or pending or completed)
+    has_data = bool(reliability or skill_weights or error_by_model or pending or completed)
     return {
         "symbol": sym,
         "horizon_days": horizon,
         "reliability_curve": reliability,
         "skill_weights": skill_weights,
+        "error_by_model": error_by_model,
         "pending": pending,
         "completed": completed,
         "reason": None if has_data else _empty_view(sym, horizon)["reason"],

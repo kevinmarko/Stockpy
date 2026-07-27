@@ -1735,6 +1735,7 @@ function mockForecast(ticker: string, horizon = 30): ForecastSkill {
       horizon_days: horizon,
       reliability_curve: [],
       skill_weights: {},
+      error_by_model: [],
       pending: 0,
       completed: 0,
       reason: "No forecast history yet — run the pipeline to accumulate it.",
@@ -1756,13 +1757,26 @@ function mockForecast(ticker: string, horizon = 30): ForecastSkill {
   const tot = raw.reduce((a, b) => a + b, 0);
   const skill_weights: Record<string, number> = {};
   models.forEach((m, i) => (skill_weights[m] = +(raw[i] / tot).toFixed(3)));
+  const completed = Math.floor(rng() * 60) + 20;
+  // Per-model RMSE/MAE, sorted ascending (best model first) -- matches the
+  // real endpoint's contract (forecasting/forecast_tracker.py::get_error_by_model).
+  // MAE is always <= RMSE here (mirrors the real relationship: RMSE penalizes
+  // large errors more, so RMSE >= MAE for any non-uniform error distribution).
+  const error_by_model = models
+    .map((m) => {
+      const rmse = +(1 + rng() * 8).toFixed(2);
+      const mae = +(rmse * (0.7 + rng() * 0.25)).toFixed(2);
+      return { model_name: m, n: Math.floor(rng() * completed * 0.6) + 5, rmse, mae };
+    })
+    .sort((a, b) => a.rmse - b.rmse);
   return {
     symbol: sym,
     horizon_days: horizon,
     reliability_curve: curve,
     skill_weights,
+    error_by_model,
     pending: Math.floor(rng() * 5),
-    completed: Math.floor(rng() * 60) + 20,
+    completed,
     reason: null,
   };
 }

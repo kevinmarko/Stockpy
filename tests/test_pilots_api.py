@@ -1131,12 +1131,13 @@ class TestForecastSkill:
         body = resp.json()
         assert set(body) == {
             "symbol", "horizon_days", "reliability_curve",
-            "skill_weights", "pending", "completed", "reason",
+            "skill_weights", "error_by_model", "pending", "completed", "reason",
         }
         assert body["symbol"] == "AAPL"
         assert body["horizon_days"] == 30
         assert isinstance(body["reliability_curve"], list)
         assert isinstance(body["skill_weights"], dict)
+        assert isinstance(body["error_by_model"], list)
 
 
 # ---------------------------------------------------------------------------
