@@ -423,6 +423,209 @@ class TestPortfolioGrossCap:
 
 
 # ===========================================================================
+# 5b. apply_portfolio_gross_cap -- the covariance path is REDUCTION-ONLY.
+#
+# Audit regression: apply_portfolio_gross_cap() promises a *cap*, but its
+# cov-matrix branch delegated to sizing.vol_target.portfolio_vol_target()
+# passing `max_gross` straight through as that function's `max_leverage`.
+# portfolio_vol_target's scalar is target_vol / sqrt(w' Sigma w) -- which is
+# > 1.0 for any book quieter than target_vol -- and it saturates at
+# `max_leverage` OUTRIGHT when portfolio_vol <= 0 or NaN (a degenerate or
+# non-PSD covariance estimate). With settings.MAX_PORTFOLIO_GROSS = 3.0 the
+# "cap" could therefore lever the entire book up 3x while reporting
+# was_capped=False / binding_constraint=None, since that telemetry only fires
+# on a scalar strictly BELOW 1.0.
+#
+# The guard is at THIS layer, not in portfolio_vol_target: scaling up toward
+# a vol target is legitimate, documented behavior there (that is what a vol
+# *targeting* primitive does, and what its max_leverage bound is for) and it
+# has other callers -- tests/test_vol_target.py::
+# test_portfolio_vol_target_caps_at_max_leverage still asserts that
+# scale-up. Only apply_portfolio_gross_cap promises a cap.
+#
+# Unreachable from production today (pipeline/production_steps.py, the only
+# caller, passes neither cov_matrix nor target_vol) -- this locks the
+# invariant down before that path is wired.
+# ===========================================================================
+class TestPortfolioGrossCapCovPathIsReductionOnly:
+    # A near-silent book (2% vol per name, uncorrelated) against a 10%
+    # target_vol -- target_vol / portfolio_vol is ~35x, so the pre-fix code
+    # levered every name up to the max_gross ceiling.
+    QUIET_COV = pd.DataFrame(
+        [[0.0004, 0.0], [0.0, 0.0004]], index=["AAPL", "MSFT"], columns=["AAPL", "MSFT"]
+    )
+
+    def test_scalar_above_one_is_clamped_and_weights_are_unchanged(self):
+        positions = {"AAPL": 0.10, "MSFT": 0.10}
+        out = apply_portfolio_gross_cap(
+            positions, max_gross=3.0, cov_matrix=self.QUIET_COV, target_vol=0.10
+        )
+        assert out.method == "cov_matrix_vol_target"
+        assert out.scale_factor == pytest.approx(1.0, rel=1e-12)
+        assert out.was_capped is False
+        assert out.binding_constraint is None
+        for symbol, w in positions.items():
+            assert out.scaled_weights[symbol] == pytest.approx(w, rel=1e-12)
+
+    def test_the_pre_fix_uplift_would_have_been_levered_up(self):
+        """Pins the magnitude of what the guard prevents: the raw primitive
+        still levers this same book to the max_gross ceiling (3x) -- proving
+        the clamp above is doing real work, not asserting a no-op."""
+        positions = {"AAPL": 0.10, "MSFT": 0.10}
+        unguarded = portfolio_vol_target(
+            positions, self.QUIET_COV, target_vol=0.10, max_leverage=3.0
+        )
+        assert unguarded["AAPL"] == pytest.approx(0.30, rel=1e-9)
+
+        out = apply_portfolio_gross_cap(
+            positions, max_gross=3.0, cov_matrix=self.QUIET_COV, target_vol=0.10
+        )
+        assert out.scaled_weights["AAPL"] == pytest.approx(0.10, rel=1e-12)
+
+    def test_degenerate_zero_covariance_does_not_lever_the_book_up(self):
+        """A zero covariance matrix drives portfolio_vol == 0, which makes
+        portfolio_vol_target saturate its scalar at max_leverage outright.
+        The book must NOT be levered up on an absent risk estimate."""
+        positions = {"AAPL": 0.40, "MSFT": 0.40}
+        zero_cov = pd.DataFrame(
+            [[0.0, 0.0], [0.0, 0.0]], index=["AAPL", "MSFT"], columns=["AAPL", "MSFT"]
+        )
+        out = apply_portfolio_gross_cap(
+            positions, max_gross=3.0, cov_matrix=zero_cov, target_vol=0.10
+        )
+        assert out.method == "cov_matrix_vol_target"
+        assert out.was_capped is False
+        assert out.scale_factor == pytest.approx(1.0, rel=1e-12)
+        for symbol, w in positions.items():
+            assert out.scaled_weights[symbol] == pytest.approx(w, rel=1e-12)
+            assert out.scaled_weights[symbol] <= w + 1e-12
+
+    def test_non_psd_covariance_does_not_lever_the_book_up(self):
+        """A non-PSD estimate yields a negative w' Sigma w, which
+        portfolio_vol_target floors at 0.0 -- the same max_leverage
+        saturation path as the zero-covariance case above."""
+        positions = {"AAPL": 1.0, "MSFT": -1.0}
+        non_psd = pd.DataFrame(
+            [[0.04, 0.10], [0.10, 0.04]], index=["AAPL", "MSFT"], columns=["AAPL", "MSFT"]
+        )
+        out = apply_portfolio_gross_cap(
+            positions, max_gross=3.0, cov_matrix=non_psd, target_vol=0.10
+        )
+        assert out.scaled_weights["AAPL"] == pytest.approx(1.0, rel=1e-12)
+        assert out.scaled_weights["MSFT"] == pytest.approx(-1.0, rel=1e-12)
+        assert out.was_capped is False
+
+    def test_genuine_capping_still_works_on_the_cov_path(self):
+        """The guard must only bound the UPSIDE -- a book noisier than
+        target_vol still gets scaled down, with full telemetry."""
+        positions = {"AAPL": 0.6, "MSFT": 0.6}
+        cov = pd.DataFrame(
+            [[0.04, 0.01], [0.01, 0.04]], index=["AAPL", "MSFT"], columns=["AAPL", "MSFT"]
+        )
+        # portfolio_vol = sqrt(0.36 * 0.10) = 0.1897367; 0.10 / that = 0.5270463
+        expected_scalar = 0.10 / math.sqrt(0.036)
+        out = apply_portfolio_gross_cap(
+            positions, max_gross=3.0, cov_matrix=cov, target_vol=0.10
+        )
+        assert out.method == "cov_matrix_vol_target"
+        assert out.was_capped is True
+        assert out.binding_constraint == PORTFOLIO_GROSS
+        assert out.scale_factor == pytest.approx(expected_scalar, rel=1e-9)
+        for symbol, w in positions.items():
+            assert out.scaled_weights[symbol] == pytest.approx(w * expected_scalar, rel=1e-9)
+
+    def test_max_gross_below_one_remains_the_binding_ceiling(self):
+        """The guard is min(max_gross, 1.0), not an unconditional 1.0 -- a
+        caller asking for a ceiling TIGHTER than 1.0 still gets it."""
+        positions = {"AAPL": 0.10, "MSFT": 0.10}
+        out = apply_portfolio_gross_cap(
+            positions, max_gross=0.5, cov_matrix=self.QUIET_COV, target_vol=0.10
+        )
+        assert out.was_capped is True
+        assert out.binding_constraint == PORTFOLIO_GROSS
+        assert out.scale_factor == pytest.approx(0.5, rel=1e-12)
+        assert out.scaled_weights["AAPL"] == pytest.approx(0.05, rel=1e-12)
+
+    def test_non_finite_weight_alongside_a_cov_matrix_is_carried_through(self):
+        """The non-finite exclusion contract is unchanged by the guard: a
+        dead-lettered name is kept out of the vol computation entirely (it is
+        never handed to portfolio_vol_target, so it is never coerced to that
+        function's missing-symbol 0.0) and carried through untouched."""
+        positions = {"DEADLETTERED": float("nan"), "AAPL": 0.6, "MSFT": 0.6}
+        cov = pd.DataFrame(
+            [[0.04, 0.01], [0.01, 0.04]], index=["AAPL", "MSFT"], columns=["AAPL", "MSFT"]
+        )
+        expected_scalar = 0.10 / math.sqrt(0.036)
+        out = apply_portfolio_gross_cap(
+            positions, max_gross=3.0, cov_matrix=cov, target_vol=0.10
+        )
+        assert out.method == "cov_matrix_vol_target"
+        assert out.was_capped is True
+        assert math.isnan(out.scaled_weights["DEADLETTERED"])
+        assert out.scaled_weights["AAPL"] == pytest.approx(0.6 * expected_scalar, rel=1e-9)
+        assert out.scaled_weights["MSFT"] == pytest.approx(0.6 * expected_scalar, rel=1e-9)
+
+    def test_non_finite_weight_with_a_quiet_cov_matrix_is_still_untouched(self):
+        """Same contract on the clamped (scalar == 1.0) branch."""
+        positions = {"DEADLETTERED": float("nan"), "AAPL": 0.10, "MSFT": 0.10}
+        out = apply_portfolio_gross_cap(
+            positions, max_gross=3.0, cov_matrix=self.QUIET_COV, target_vol=0.10
+        )
+        assert math.isnan(out.scaled_weights["DEADLETTERED"])
+        assert out.scaled_weights["AAPL"] == pytest.approx(0.10, rel=1e-12)
+        assert out.was_capped is False
+
+
+# ===========================================================================
+# 5c. apply_portfolio_gross_cap -- the sum-of-|weight| fallback branch is
+# UNCHANGED by the cov-path guard above. This is the branch every production
+# caller actually takes today (pipeline/production_steps.py passes neither
+# cov_matrix nor target_vol), so it must not shift by so much as a ULP.
+# ===========================================================================
+class TestPortfolioGrossCapFallbackUnchanged:
+    @pytest.mark.parametrize(
+        "weights, max_gross",
+        [
+            ({"AAPL": 0.3, "MSFT": 0.3, "GOOG": 0.2}, 3.0),   # under ceiling
+            ({"AAPL": 1.0, "MSFT": 1.0, "GOOG": 1.0}, 1.5),   # over ceiling
+            ({"AAPL": 1.0, "MSFT": 1.0, "GOOG": 1.0}, 3.0),   # exactly at ceiling
+            ({"AAPL": 2.0, "MSFT": -2.0}, 1.0),               # short leg, |w| gross
+            ({"AAPL": 0.0, "MSFT": 0.0}, 3.0),                # zero gross
+        ],
+    )
+    def test_fallback_matches_the_original_formula_exactly(self, weights, max_gross):
+        gross = sum(abs(w) for w in weights.values())
+        expected_scalar = 1.0 if gross <= 0 else min(1.0, max_gross / gross)
+
+        out = apply_portfolio_gross_cap(weights, max_gross=max_gross)
+
+        assert out.method == "sum_gross_fallback"
+        for symbol, w in weights.items():
+            # Exact equality, not approx: the fallback arithmetic must be
+            # byte-identical to the pre-guard implementation.
+            assert out.scaled_weights[symbol] == w * expected_scalar
+        assert out.was_capped is (expected_scalar < 1.0 - 1e-9)
+        assert out.binding_constraint == (PORTFOLIO_GROSS if out.was_capped else None)
+
+    def test_target_vol_without_cov_matrix_still_takes_the_fallback(self):
+        """Both arguments are required to select the risk-aware path -- one
+        alone must not silently change branches."""
+        weights = {"AAPL": 1.0, "MSFT": 1.0, "GOOG": 1.0}
+        out = apply_portfolio_gross_cap(weights, max_gross=1.5, target_vol=0.10)
+        assert out.method == "sum_gross_fallback"
+        assert out.scaled_weights["AAPL"] == 0.5
+
+    def test_cov_matrix_without_target_vol_still_takes_the_fallback(self):
+        weights = {"AAPL": 1.0, "MSFT": 1.0, "GOOG": 1.0}
+        cov = pd.DataFrame(
+            [[0.04, 0.01], [0.01, 0.04]], index=["AAPL", "MSFT"], columns=["AAPL", "MSFT"]
+        )
+        out = apply_portfolio_gross_cap(weights, max_gross=1.5, cov_matrix=cov)
+        assert out.method == "sum_gross_fallback"
+        assert out.scaled_weights["AAPL"] == 0.5
+
+
+# ===========================================================================
 # 6. CapEventSummary -- plain data container
 # ===========================================================================
 class TestCapEventSummary:

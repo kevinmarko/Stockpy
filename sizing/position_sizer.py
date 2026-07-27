@@ -355,7 +355,8 @@ def apply_portfolio_gross_cap(
 
     Reuses (does not reimplement) ``sizing.vol_target.portfolio_vol_target``
     when a covariance matrix is available -- the risk-aware path, scaling by
-    ``target_vol / sqrt(w^T Sigma w)`` capped at ``max_gross``. Falls back to
+    ``target_vol / sqrt(w^T Sigma w)`` capped at ``min(max_gross, 1.0)`` (see
+    "Reduction-only guarantee" below for why the extra 1.0). Falls back to
     a simple sum-of-|weight| gross-exposure scalar when no covariance matrix
     is supplied (the common case -- most callers won't have a full
     cross-sectional covariance estimate on hand every cycle). Both paths
@@ -369,7 +370,8 @@ def apply_portfolio_gross_cap(
         This cycle's final (post ``size_position``) weight per symbol.
     max_gross : float
         ``settings.MAX_PORTFOLIO_GROSS`` -- either the volatility-target
-        ``max_leverage`` ceiling (cov-matrix path) or the raw gross-exposure
+        ``max_leverage`` ceiling (cov-matrix path, itself further bounded by
+        1.0 -- see "Reduction-only guarantee") or the raw gross-exposure
         ceiling (sum-of-|weight| fallback path).
     cov_matrix : pd.DataFrame or None
         Covariance matrix of asset returns, computed strictly from data prior
@@ -384,6 +386,32 @@ def apply_portfolio_gross_cap(
     PortfolioCapResult
         ``was_capped=True`` / ``binding_constraint="portfolio_gross"`` iff the
         single scalar applied is strictly less than 1.0.
+
+    Reduction-only guarantee
+    ------------------------
+    This function is a **cap**: both paths may only ever REDUCE the cycle's
+    exposure, never increase it. The sum-of-|weight| fallback has always
+    enforced that itself (``min(1.0, max_gross / gross)``); the cov-matrix
+    path did not. ``portfolio_vol_target``'s scalar is
+    ``target_vol / sqrt(w' Sigma w)`` bounded only by its ``max_leverage``
+    argument -- which this function passes ``max_gross``
+    (``settings.MAX_PORTFOLIO_GROSS``, default ``3.0``) -- so a low-volatility
+    book would have been levered UP by as much as ``max_gross``, and a
+    degenerate or non-PSD covariance matrix (``portfolio_vol <= 0`` or NaN)
+    saturates that scalar at ``max_leverage`` outright, levering the whole
+    book up on a bad risk estimate. Either case would have been reported as
+    ``was_capped=False`` / ``binding_constraint=None``, since that telemetry
+    only fires on a scalar strictly BELOW 1.0 -- a "cap" silently doing the
+    opposite of capping. The cov path therefore bounds the ceiling it hands
+    to ``portfolio_vol_target`` at ``min(max_gross, 1.0)``.
+
+    The guard lives HERE rather than in ``sizing.vol_target.portfolio_vol_target``
+    deliberately. That function is a volatility *targeting* primitive: scaling
+    a book UP toward a target vol is legitimate, documented behavior for its
+    own callers (and its ``max_leverage`` parameter exists precisely to bound
+    that upside), so hard-clamping it at 1.0 would break its contract and its
+    other callers. Only ``apply_portfolio_gross_cap`` promises a *cap*, so
+    only ``apply_portfolio_gross_cap`` enforces one.
 
     Non-finite (NaN/inf) weights
     ----------------------------
@@ -422,7 +450,18 @@ def apply_portfolio_gross_cap(
         )
 
     if cov_matrix is not None and target_vol is not None:
-        scaled = portfolio_vol_target(finite_weights, cov_matrix, target_vol=target_vol, max_leverage=max_gross)
+        # Reduction-only guard (see the "Reduction-only guarantee" section of
+        # this function's docstring): bound the leverage ceiling handed to
+        # ``portfolio_vol_target`` by 1.0 so the single uniform scalar it
+        # computes -- ``target_vol / sqrt(w' Sigma w)``, or ``max_leverage``
+        # outright on a degenerate/non-PSD matrix -- can never exceed 1.0 and
+        # lever this cycle's book UP. Clamping the ceiling (rather than
+        # post-scaling the returned weights) keeps the one-uniform-scalar
+        # invariant exact and keeps this function a thin dispatcher.
+        cov_max_leverage = min(float(max_gross), 1.0)
+        scaled = portfolio_vol_target(
+            finite_weights, cov_matrix, target_vol=target_vol, max_leverage=cov_max_leverage
+        )
         method = "cov_matrix_vol_target"
     else:
         gross = sum(abs(w) for w in finite_weights.values())
