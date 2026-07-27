@@ -1341,6 +1341,24 @@ class Settings(BaseSettings):
             "post time -- see RedditSource's docstring."
         ),
     )
+    STOCKTWITS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for data/sentiment_sources.py's StockTwitsSource "
+            "(free, uncredentialed -- unlike RedditSource, no OAuth "
+            "registration needed). False (the default) is a complete "
+            "no-op: no StockTwits request is attempted. Also requires "
+            "'stocktwits' to be added to SENTIMENT_SOURCES -- this flag "
+            "alone does not add it to the fan-out list, matching "
+            "EDGAR_FULLTEXT_ENABLED's own two-gate pattern (a feature "
+            "flag plus a source/form membership check). StockTwits' "
+            "public endpoint has tightened over time and may rate-limit "
+            "or require auth in some deployments; a failed request "
+            "degrades to no documents this cycle, exactly like a missing "
+            "Reddit credential -- Reddit remains the primary comment "
+            "source (see docs/RUNBOOK.md)."
+        ),
+    )
     EDGAR_USER_AGENT: str = Field(
         default="",
         description=(

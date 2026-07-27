@@ -635,6 +635,47 @@ python scripts/track_record_status.py          # human-readable
 python scripts/track_record_status.py --json   # machine-readable
 ```
 
+### 5.3 Enabling Sentiment Comment-Channel Ingestion (Reddit / StockTwits)
+
+The "Review" (investor-forum comment volume) term feeding Sector
+Selection's Sector Heat Factor (`docs/signals/sector_selection.md`) and
+the composite sentiment index is honestly `NaN`/degraded until the
+comment channel has genuinely produced at least one document — see
+`data.sentiment_source_class.classify_source` and
+`data.sector_selection_heat._review_channel_ever_observed`. Two sources
+classify as "comment" (`settings.SENTIMENT_COMMENT_SOURCES`, default
+`"reddit,stocktwits"`):
+
+1. **Reddit** (`data.sentiment_sources.RedditSource`) — already wired
+   into the default `SENTIMENT_SOURCES` fan-out; it silently contributes
+   zero documents until credentials are set. To activate:
+   * Set `SENTIMENT_INGESTION_ENABLED=true` (master ingestion switch).
+   * Register a Reddit "script" app at
+     <https://www.reddit.com/prefs/apps> and set `REDDIT_CLIENT_ID` /
+     `REDDIT_CLIENT_SECRET` in `.env`.
+   * Optionally set `REDDIT_USER_AGENT` to identify your deployment
+     (Reddit rate-limits a generic/missing User-Agent more aggressively).
+   * No code change and no `SENTIMENT_SOURCES` edit needed — Reddit is
+     already in the default list.
+
+2. **StockTwits** (`data.sentiment_sources.StockTwitsSource`) — free,
+   uncredentialed, off by default. To activate:
+   * Set `STOCKTWITS_ENABLED=true`.
+   * Add `stocktwits` to `SENTIMENT_SOURCES` (e.g.
+     `SENTIMENT_SOURCES=yahoo_rss,gdelt,reddit,edgar,stocktwits`) — the
+     flag alone does not add it to the fan-out list.
+   * StockTwits' public endpoint has tightened over the years and may
+     rate-limit or require auth in some deployments; a failed request
+     degrades to no documents that cycle (never a crash) — treat it as
+     supplementary coverage, not the primary comment source.
+
+**Verifying it worked**: after a few days of running with either source
+active, `HistoricalStore.get_sentiment_archive_depth_by_source()` will
+list `reddit`/`stocktwits` with a non-zero `document_count`, and Sector
+Selection's `degraded_reason` will read `None` instead of
+`"review_unavailable"` for sectors with real comment coverage. No GUI
+widget exists for either flag — both are hand-set in `.env` only.
+
 ---
 
 ## 6. Advisory Pause and Restart Procedure
