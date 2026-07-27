@@ -62,7 +62,13 @@ export function PwaStatusSection() {
         )}
         <StatusRow
           label="Offline cache"
-          value={pwa.offlineReady ? "Ready for offline use" : "Not cached yet"}
+          value={
+            pwa.offlineReady
+              ? "Ready for offline use"
+              : pwa.isDev
+                ? "Not precached (dev server)"
+                : "Not cached yet"
+          }
           tone={pwa.offlineReady ? "good" : "neutral"}
         />
         <StatusRow
