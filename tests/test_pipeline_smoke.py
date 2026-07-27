@@ -600,10 +600,19 @@ class TestNoOrderFunctions:
     # is unscanned by EITHER check until it is added here. Add every new
     # execution/ module that builds or emits order-adjacent data (queues,
     # intents, netted composites) to this tuple when it lands.
+    #
+    # execution/priority_queue.py (opt-in leaky-bucket order-priority queue,
+    # settings.EXECUTION_PRIORITY_QUEUE_ENABLED) was added by this maintenance
+    # contract's own definition -- it holds OrderIntent objects in a queue --
+    # but was never added here, leaving it covered by NEITHER the repo-wide
+    # scan (excluded: it lives under execution/) NOR this per-file check.
+    # Audit finding: a real coverage gap (no live violation -- the file
+    # currently defines no forbidden name), closed here.
     _EXECUTION_ZONE_GUARDED_FILES = (
         "execution/queue_builder.py",
         "execution/options_queue_builder.py",
         "execution/compose.py",
+        "execution/priority_queue.py",
     )
 
     _STRICT_FORBIDDEN_EXACT = frozenset({
