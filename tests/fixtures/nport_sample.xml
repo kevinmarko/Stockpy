@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Trimmed excerpt of an SEC Form N-PORT (NPORT-P) primary_doc.xml.
+
+  SEC filings are works of the United States government and are in the public
+  domain, so committing a real excerpt is fine. This one is cut down to the
+  elements data/etf_holdings.py actually parses:
+
+    headerData/filerInfo/seriesClassInfo/seriesId  -> series disambiguation
+    formData/genInfo/repPdEnd, repPdDate           -> the PIT anchor
+    formData/invstOrSecs/invstOrSec/*              -> the basket
+
+  The positions are deliberately heterogeneous so the parser's honesty
+  contracts are exercised by the fixture itself:
+
+    AAPL  — complete row (pctVal + units=NS + balance)
+    MSFT  — complete row
+    NVDA  — no pctVal            => weight NaN, never 0.0 (CONSTRAINT #4)
+    AMZN  — units=PA (principal) => shares_held NaN, not a mis-scaled count
+    (last) — no <ticker> at all  => skipped entirely, never keyed by CUSIP
+-->
+<edgarSubmission xmlns="http://www.sec.gov/edgar/nport">
+  <headerData>
+    <submissionType>NPORT-P</submissionType>
+    <isConfidential>false</isConfidential>
+    <filerInfo>
+      <seriesClassInfo>
+        <seriesId>S000004310</seriesId>
+        <classId>C000012345</classId>
+      </seriesClassInfo>
+    </filerInfo>
+  </headerData>
+  <formData>
+    <genInfo>
+      <regName>SAMPLE TRUST</regName>
+      <seriesName>Sample Core Equity ETF</seriesName>
+      <repPdEnd>2024-03-31</repPdEnd>
+      <repPdDate>2024-03-31</repPdDate>
+    </genInfo>
+    <fundInfo>
+      <totAssets>1000000000.00</totAssets>
+      <netAssets>995000000.00</netAssets>
+    </fundInfo>
+    <invstOrSecs>
+      <invstOrSec>
+        <name>Apple Inc</name>
+        <title>Apple Inc</title>
+        <cusip>037833100</cusip>
+        <identifiers>
+          <isin value="US0378331005"/>
+          <ticker value="AAPL"/>
+        </identifiers>
+        <balance>1250000.00000000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>214375000.00</valUSD>
+        <pctVal>6.510000000</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Microsoft Corp</name>
+        <title>Microsoft Corp</title>
+        <cusip>594918104</cusip>
+        <identifiers>
+          <isin value="US5949181045"/>
+          <ticker value="MSFT"/>
+        </identifiers>
+        <balance>640000.00000000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>269000000.00</valUSD>
+        <pctVal>7.250000000</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NVIDIA Corp</name>
+        <title>NVIDIA Corp</title>
+        <cusip>67066G104</cusip>
+        <identifiers>
+          <isin value="US67066G1040"/>
+          <ticker value="NVDA"/>
+        </identifiers>
+        <balance>310000.00000000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>280000000.00</valUSD>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Amazon.com Inc Note</name>
+        <title>Amazon.com Inc 3.150% 2027</title>
+        <cusip>023135BW5</cusip>
+        <identifiers>
+          <isin value="US023135BW56"/>
+          <ticker value="AMZN"/>
+        </identifiers>
+        <balance>5000000.00000000</balance>
+        <units>PA</units>
+        <curCd>USD</curCd>
+        <valUSD>4850000.00</valUSD>
+        <pctVal>0.490000000</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>DBT</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>US TREASURY BILL</name>
+        <title>UNITED STATES TREASURY BILL 0.000% 2024-06-27</title>
+        <cusip>912797KM3</cusip>
+        <identifiers>
+          <isin value="US912797KM31"/>
+        </identifiers>
+        <balance>2000000.00000000</balance>
+        <units>PA</units>
+        <curCd>USD</curCd>
+        <valUSD>1985000.00</valUSD>
+        <pctVal>0.200000000</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>DBT</assetCat>
+        <issuerCat>UST</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+    </invstOrSecs>
+  </formData>
+</edgarSubmission>
