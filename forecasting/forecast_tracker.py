@@ -405,6 +405,87 @@ class ForecastTracker:
             )
             return {}
 
+    def get_error_by_model(
+        self,
+        symbol: str,
+        horizon_days: int,
+        window_days: int = 60,
+    ) -> "list[Dict[str, object]]":
+        """Per-model RMSE and mean absolute error over completed forecasts.
+
+        Unlike ``get_skill_weights`` (which returns a normalized ensemble
+        weight), this returns the raw error magnitudes themselves — for
+        displaying "how far off was each model, in price terms" rather than
+        "how much should each model count." No schema change was needed:
+        ``forecast_price``/``actual_price`` are both already stored per row,
+        so MAE is computed the same way RMSE always has been (from
+        ``squared_error``), just with ``AVG(ABS(...))`` alongside it.
+
+        Same completed-rows-in-``window_days`` query shape as
+        ``get_skill_weights``, but with no cold-start/min_obs behavior — a
+        raw error figure is meaningful even from a single observation
+        (unlike an ensemble weight, which cold-starts to avoid overfitting a
+        blend to noise).
+
+        Parameters
+        ----------
+        symbol : str
+            Ticker symbol.
+        horizon_days : int
+            Forecast horizon to query.
+        window_days : int
+            Rolling window size in calendar days (default 60).
+
+        Returns
+        -------
+        list[dict]
+            ``[{"model_name": str, "n": int, "rmse": float | None,
+            "mae": float | None}, ...]``, sorted by ``rmse`` ascending (most
+            accurate model first; a model with no finite rmse sorts last).
+            Empty list when no completed rows exist in the window, or on any
+            DB error (dead-letter resilient — CONSTRAINT #6, never raises).
+        """
+        try:
+            since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+            with self._lock:
+                conn = self._get_conn()
+                cursor = conn.execute(
+                    """SELECT model_name,
+                              COUNT(*)                                    AS n,
+                              AVG(squared_error)                          AS mse,
+                              AVG(ABS(actual_price - forecast_price))     AS mae
+                       FROM forecast_errors
+                       WHERE symbol        = ?
+                         AND horizon_days  = ?
+                         AND actual_price  IS NOT NULL
+                         AND forecast_ts   >= ?
+                       GROUP BY model_name""",
+                    (symbol.upper(), horizon_days, since_iso),
+                )
+                rows = cursor.fetchall()
+
+            results = []
+            for model_name, n, mse, mae in rows:
+                rmse = math.sqrt(mse) if mse is not None and mse >= 0 else None
+                results.append(
+                    {
+                        "model_name": model_name,
+                        "n": int(n),
+                        "rmse": rmse,
+                        "mae": float(mae) if mae is not None else None,
+                    }
+                )
+            # float("inf") sort key (not a (None, real) tuple) so two None-rmse
+            # rows never compare None < None, which raises TypeError in Python 3.
+            results.sort(key=lambda r: r["rmse"] if r["rmse"] is not None else float("inf"))
+            return results
+
+        except Exception as exc:
+            logger.warning(
+                "ForecastTracker.get_error_by_model(%s, h=%d) failed: %s", symbol, horizon_days, exc
+            )
+            return []
+
     def pending_count(self, symbol: str, horizon_days: int) -> int:
         """Return the number of un-actualized forecast rows for a symbol+horizon.
 
