@@ -225,3 +225,59 @@ class TestNoSecrets:
         lowered = html.lower()
         for token in ("password", "rh_password", "secret", "mfa", "api_key", "apikey"):
             assert token not in lowered, f"credential-shaped token '{token}' leaked into report"
+
+
+# ---------------------------------------------------------------------------
+# Theme parity with webapp/src/theme.ts
+# ---------------------------------------------------------------------------
+
+class TestReportTheme:
+    """Pins HTML_REPORT_TEMPLATE's palette to webapp/src/theme.ts's validated
+    dark-fintech tokens, and guards against the old drifted values (a
+    different, uncoordinated blue/gray theme) ever reappearing -- e.g. via a
+    copy-paste from an older branch. Mirrors the spirit of the webapp's own
+    theme.test.ts parity guard, at the scope this presentation-only fix
+    actually needs (no full palette object here, just the values that must
+    never regress)."""
+
+    _OLD_DRIFTED_HEXES = ("#0b0f19", "#111827", "#161e2e", "#f3f4f6", "#9ca3af", "#3b82f6", "#1f2937", "#60a5fa")
+
+    def test_rendered_report_uses_theme_ts_accent_and_base(self, tmp_path, advisory_rows):
+        html = _render(tmp_path, advisory_rows)
+        # theme.ts: base #0b0e11, accent #38bdf8
+        assert "#0b0e11" in html
+        assert "#38bdf8" in html
+
+    def test_rendered_report_never_contains_old_drifted_palette(self, tmp_path, advisory_rows):
+        html = _render(tmp_path, advisory_rows)
+        for old_hex in self._OLD_DRIFTED_HEXES:
+            assert old_hex not in html, f"old drifted color {old_hex} leaked back into the report"
+
+    def test_status_colors_match_theme_ts_exactly(self, tmp_path, advisory_rows):
+        """growth/decline/caution were already correct pre-fix -- pins that
+        they stay that way rather than drifting apart from theme.ts later."""
+        html = _render(tmp_path, advisory_rows)
+        assert "#10b981" in html  # theme.growth
+        assert "#ef4444" in html  # theme.decline
+        assert "#f59e0b" in html  # theme.caution
+
+
+def test_j2_templates_never_contain_the_old_neon_theme():
+    """reports/validation_report_template.html.j2 and reports/cpcv_report.html.j2
+    are unrelated to HTML_REPORT_TEMPLATE's own render path (a separate Jinja2
+    render inside validation/harness.py), so they get their own static source
+    check rather than a render fixture. Both previously carried a byte-
+    identical, unrelated neon palette (#0d0f12 bg, #00f2fe/#4facfe cyan,
+    #f093fb/#f5576c pink, #00ff87/#ff007f neon green/pink) that had drifted
+    from both the webapp and HTML_REPORT_TEMPLATE."""
+    from pathlib import Path
+
+    old_neon_hexes = ("#0d0f12", "#00f2fe", "#4facfe", "#f093fb", "#f5576c", "#00ff87", "#ff007f", "#f5f6f8", "#8a99ad")
+    reports_dir = Path(__file__).resolve().parent.parent / "reports"
+    for name in ("validation_report_template.html.j2", "cpcv_report.html.j2"):
+        text = (reports_dir / name).read_text(encoding="utf-8")
+        for old_hex in old_neon_hexes:
+            assert old_hex not in text, f"{name} still contains old neon color {old_hex}"
+        # And confirm it now carries the canonical accent/base instead.
+        assert "#38bdf8" in text
+        assert "#0b0e11" in text
