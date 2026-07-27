@@ -145,11 +145,22 @@ function SettingsButton() {
   // real problem is the network (the Settings screen shows the honest error).
   const { data: llm } = useApi<LlmStatus>(() => api.getLlmStatus(), []);
   const llmAttention = llm?.attention === true;
+  // Both status dots below are aria-hidden (decorative — small color-only
+  // marks), so the condition they signal is named HERE instead, on the
+  // interactive element itself. Previously the llm dot's `title` carried the
+  // only text description of that state, but a `title` on an aria-hidden
+  // element is never exposed to assistive tech — announced to nobody, and
+  // never available on touch either. This label is the fix, not the dot.
+  const stateNotes = [
+    pwa.needRefresh ? "update available" : null,
+    llmAttention ? "AI capability needs attention" : null,
+  ].filter((n): n is string => n != null);
+  const settingsLabel = stateNotes.length > 0 ? `Settings (${stateNotes.join(", ")})` : "Settings";
   return (
     <button
       className="btn"
       onClick={() => nav("/settings")}
-      aria-label="Settings"
+      aria-label={settingsLabel}
       data-testid="settings-button"
       style={{
         position: "fixed",
@@ -187,10 +198,14 @@ function SettingsButton() {
         />
       )}
       {llmAttention && (
+        // Deliberately a RING, not a filled dot like pwa-update-dot above --
+        // same color/size/corner-adjacent position previously made these two
+        // marks indistinguishable at a glance even for a sighted user; shape
+        // is now a second, position-independent cue. The condition itself is
+        // named on the button's aria-label above, not here (aria-hidden).
         <span
           aria-hidden
           data-testid="llm-config-dot"
-          title="An enabled AI capability is missing or was rejected a key"
           style={{
             position: "absolute",
             top: 2,
@@ -198,8 +213,9 @@ function SettingsButton() {
             width: 9,
             height: 9,
             borderRadius: "50%",
-            background: theme.caution,
-            border: `2px solid ${theme.base}`,
+            background: "transparent",
+            border: `2px solid ${theme.caution}`,
+            boxShadow: `0 0 0 1px ${theme.base}`,
           }}
         />
       )}

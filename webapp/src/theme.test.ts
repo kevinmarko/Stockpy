@@ -21,8 +21,8 @@
 // code, so pull the node types in for THIS FILE ONLY via a reference directive
 // rather than adding "node" to the global allowlist.
 /// <reference types="node" />
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { extname, join, resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { theme } from "./theme";
 
@@ -60,14 +60,23 @@ const KEY_TO_CSS_VAR: Record<keyof typeof theme, string> = {
 
 const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
 
-/** Parse `--name: value;` declarations out of the first `:root { ... }` block. */
+/**
+ * Parse `--name: value;` declarations out of EVERY `:root { ... }` block —
+ * index.css has more than one (the base token block, plus a small later one
+ * for `--safe-bottom`/`--safe-top`). Merging all of them, not just the first,
+ * is what makes this a correct "is --x declared anywhere" source of truth for
+ * the undeclared-var guard below; it's a superset for the 13-scalar parity
+ * check above too (those 13 all live in the first block, so no change there).
+ */
 function readRootVars(): Record<string, string> {
-  const root = indexCss.match(/:root\s*\{([\s\S]*?)\}/);
-  if (!root) throw new Error("no :root block found in index.css");
+  const blocks = [...indexCss.matchAll(/:root\s*\{([\s\S]*?)\}/g)];
+  if (blocks.length === 0) throw new Error("no :root block found in index.css");
   const vars: Record<string, string> = {};
-  for (const decl of root[1].split(";")) {
-    const m = decl.match(/(--[\w-]+)\s*:\s*([\s\S]+)/);
-    if (m) vars[m[1].trim()] = m[2].trim();
+  for (const block of blocks) {
+    for (const decl of block[1].split(";")) {
+      const m = decl.match(/(--[\w-]+)\s*:\s*([\s\S]+)/);
+      if (m) vars[m[1].trim()] = m[2].trim();
+    }
   }
   return vars;
 }
@@ -88,5 +97,66 @@ describe("theme.ts ↔ index.css token parity", () => {
     for (const cssVar of Object.values(KEY_TO_CSS_VAR)) {
       expect(cssVars[cssVar], `${cssVar} missing`).toBeDefined();
     }
+  });
+});
+
+/**
+ * Undeclared-CSS-var guard.
+ *
+ * A `var(--x)` reference with NO fallback (e.g. `var(--danger-color)`, as
+ * opposed to `var(--font-mono, ui-monospace, monospace)`) resolves to nothing
+ * if `--x` was never declared in index.css's `:root` — silently, with no
+ * build error, no lint warning, and no visual difference from "intentionally
+ * unstyled." That exact bug shipped on the live-trading mode switch in
+ * Settings.tsx (`var(--danger-color)`, `var(--text-dim)` — neither ever
+ * declared, neither had a fallback): the paper->live warning text and the
+ * live-mode confirm button silently lost their color. This test would have
+ * caught it — it scans every .ts/.tsx/.css file under src/ for a fallback-less
+ * `var(--x)` whose `--x` isn't in index.css's `:root` block.
+ *
+ * A reference WITH a fallback (`var(--font-mono, ui-monospace, monospace)`)
+ * is intentionally allowed even when `--font-mono` is undeclared — the
+ * fallback is a deliberate, working default, not a bug.
+ */
+describe("no undeclared CSS custom properties without a fallback", () => {
+  const SRC_DIR = resolve(process.cwd(), existsSync(resolve(process.cwd(), "src")) ? "src" : "webapp/src");
+  const SCAN_EXTENSIONS = new Set([".ts", ".tsx", ".css"]);
+  const VAR_REF = /var\(\s*(--[a-zA-Z0-9-]+)\s*(,)?/g;
+
+  function walk(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      const stat = statSync(full);
+      if (stat.isDirectory()) {
+        walk(full, out);
+      } else if (SCAN_EXTENSIONS.has(extname(entry)) && !/\.test\.tsx?$/.test(entry)) {
+        // Skip *.test.ts(x) — this file's own docstring above deliberately
+        // names var(--danger-color)/var(--x) as prose examples of the bug
+        // being guarded against, which isn't real usage. Test files aren't
+        // where a real undeclared-var bug would ship anyway.
+        out.push(full);
+      }
+    }
+    return out;
+  }
+
+  it("every fallback-less var(--x) reference in src/ has a matching :root declaration", () => {
+    const declared = new Set(Object.keys(readRootVars()));
+    const violations: string[] = [];
+
+    for (const file of walk(SRC_DIR)) {
+      const contents = readFileSync(file, "utf-8");
+      for (const match of contents.matchAll(VAR_REF)) {
+        const [, varName, hasFallback] = match;
+        if (!hasFallback && !declared.has(varName)) {
+          violations.push(`${file.replace(SRC_DIR, "src")}: var(${varName})`);
+        }
+      }
+    }
+
+    expect(
+      violations,
+      `Undeclared CSS var(s) with no fallback (add to index.css :root, or add ", <fallback>" if the fallback is intentional):\n${violations.join("\n")}`
+    ).toEqual([]);
   });
 });

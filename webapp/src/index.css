@@ -54,11 +54,11 @@
   --t-caption: 12px;
   --t-body: 13px;
   --t-input: 16px;
-  --t-subhead: 15px;
   --t-title: 20px;
-  --t-display: 22px;
-  --lh-tight: 1.25;
-  --lh-body: 1.45;
+  /* --t-subhead / --t-display / --lh-tight / --lh-body removed 2026-07 — 0
+     uses anywhere in src/ (verified via grep before deletion). If a future
+     screen needs a 15px subhead or 22px display size, re-add deliberately
+     rather than resurrecting an unused declaration. */
 
   --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
     0 8px 24px rgba(0, 0, 0, 0.35);
@@ -395,6 +395,19 @@ button {
 }
 .btn:active {
   transform: scale(0.98);
+}
+
+/* Keyboard-focus fallback for every interactive element that has no dedicated
+   focus rule of its own (.btn/raw <button>, links, and anything given an
+   explicit tabIndex — nav rows, cards acting as buttons, chips). Covers .btn
+   too, since every .btn is a <button>. :focus-visible only paints for
+   keyboard/AT navigation, never a mouse click or tap, so this never adds a
+   ring to a clicked control. */
+a[href]:focus-visible,
+[tabindex]:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .btn-primary {
   background: var(--growth);
@@ -733,7 +746,7 @@ button {
   padding: 8px 14px;
   font-variant-numeric: tabular-nums;
 }
-.field:focus {
+.field:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -754,7 +767,7 @@ button {
   font-weight: 500;
   padding: var(--s-2) var(--s-3);
 }
-.input:focus {
+.input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -1032,5 +1045,22 @@ button {
 
 .options-vol-item {
   flex: 1;
+}
+
+/* ---- Reduced motion ----
+   Kills every animation/transition in the file, including the two `infinite`
+   loops (.skeleton shimmer, .spinner spin) that are exactly the class of
+   motion this media query exists for — .spinner renders inside every
+   <Button pending> (any in-flight write action), .skeleton on every loading
+   screen. Placed last so it wins the cascade over every rule above. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 

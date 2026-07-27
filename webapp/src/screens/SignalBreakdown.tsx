@@ -7,7 +7,7 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum } from "../format";
-import { theme } from "../theme";
+import { pnlColor, theme } from "../theme";
 
 const DASH = "—";
 
@@ -30,7 +30,7 @@ function ContributionBar({ contribution, max }: { contribution: number | null; m
           transform: pos ? "none" : "translateX(-100%)",
           width: `${pct / 2}%`,
           height: "100%",
-          background: pos ? theme.growth : theme.decline,
+          background: pnlColor(contribution),
           borderRadius: 5,
         }}
       />
@@ -39,8 +39,7 @@ function ContributionBar({ contribution, max }: { contribution: number | null; m
 }
 
 function ModuleRow({ m, max }: { m: SignalModuleScore; max: number }) {
-  const contribTone =
-    m.contribution == null ? undefined : m.contribution >= 0 ? theme.growth : theme.decline;
+  const contribTone = m.contribution == null ? undefined : pnlColor(m.contribution);
   return (
     <tr style={{ borderTop: "1px solid var(--border)" }}>
       <td style={{ padding: "8px 6px", fontFamily: "monospace", fontSize: 13 }}>{m.name}</td>
