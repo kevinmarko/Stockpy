@@ -207,6 +207,56 @@ naturally sparse strategy. Per the rules of this effort (never edit
 documented rather than "fixed" — flagging here for anyone who later revisits the cost
 model's exposure-weighting design.
 
+---
+
+## 2026-07-29 addendum: `signal_replay_balanced_blend` (Category A)
+
+`signal_replay_balanced_blend` — the real `SignalAggregator`/`SignalRegistry` replay
+backing the `balanced-blend` Pilot (`pilots/catalog.py`) — was added to
+`STRATEGY_REGISTRY` after the 2026-07-17 wave above and was never covered by it. Its
+first real (non-fabricated) validation run, 2026-07-29, surfaced the exact Category A
+failure pattern documented throughout this log: a daily-rebalanced, equal-weight,
+top-half-by-rank, **always-fully-invested** long-only book with no de-risking
+mechanism — none of `sizing/position_sizer.py`, Kelly, vol-targeting, or a trend/regime
+gate were wired into the replay's score-to-return step
+(`scripts/refresh_validations.py::_build_signal_replay_adapter`).
+
+| Metric | Before | After |
+|---|---|---|
+| Sharpe | 0.731 | **0.820** |
+| PBO | 0.000 | 0.000 |
+| DSR | 1.000 | 1.000 |
+| MaxDD | 41.8% | **19.9%** |
+| `deployable` | ❌ False (MaxDD 42%>30%) | ✅ **True** |
+
+**Fix (same lever as every other Category A strategy above):** a Faber (2007) SMA-200
+trend gate — de-risk the book to cash on any day following a SPY close below its own
+200-day SMA, lagged one day (`uptrend.shift(1)`), same lag already applied to
+`weights.shift(1)`. SPY was already present in the adapter's universe as a benchmark
+input for `relative_strength`/`cross_sectional_momentum`, so no registry/universe
+change was needed — the gate is inserted immediately after `portfolio_returns` is
+computed and before it's packed into `precomputed["SignalReplay_TopHalf"]`. Mirrors
+`_build_lowvol_size_adapter`'s existing overlay almost verbatim (that adapter has a
+structurally identical `composite.rank(...).ge(0.5)` equal-weight construction).
+
+Unlike every other Category A fix in this log, Sharpe *improved* alongside MaxDD
+(0.731→0.820) rather than trading one off against the other — consistent with Faber's
+original finding that a trend overlay improves risk-adjusted return, not just drawdown,
+on a fully-invested long-only book. No variant-count or turnover changes were needed;
+PBO/DSR were already passing and are unaffected by an exposure-only gate applied
+identically to the strategy's sole variant.
+
+Verified via the real walk-forward harness (`python -m scripts.refresh_validations
+--strategies signal_replay_balanced_blend --json`, live yfinance + FRED-backed
+`HistoricalStore` data) both before and after the fix, from the main checkout (worktree
+sessions don't inherit the untracked `.env` `FRED_API_KEY`). Existing offline test
+suite (`tests/test_validation_signal_replay.py` and 4 other files referencing this
+strategy) re-run green after the change — the trend gate is inserted downstream of
+every existing test's assertions (variant key set, warm-up trim length, score bounds,
+no-lookahead) and doesn't alter any of them.
+
+---
+
 ## Verification methodology
 
 Every fix in this log was independently re-run through the real walk-forward harness
