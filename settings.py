@@ -1431,6 +1431,73 @@ class Settings(BaseSettings):
             "than relying on a wide backward window."
         ),
     )
+    # ── GDELT shared rate limiter ────────────────────────────────────────
+    # GDELT publishes no hard rate-limit number, so these are a conservative
+    # choice tunable against observed behaviour, NOT a documented contract.
+    # One budget is shared by both GDELT consumers (GDELTSource's per-symbol
+    # artlist calls and GDELTVolumeSource's per-sector timelinevol calls) --
+    # see data/sentiment_sources.py's "GDELT shared rate limiter" section.
+    # GDELT_MIN_REQUEST_INTERVAL_SECONDS=0 with GDELT_MAX_RETRIES=0 and
+    # GDELT_COOLDOWN_THRESHOLD=0 reproduces the pre-limiter behaviour exactly.
+    GDELT_MIN_REQUEST_INTERVAL_SECONDS: float = Field(
+        default=5.0,
+        description=(
+            "Minimum seconds between GDELT DOC API request ISSUANCE, shared "
+            "process-wide across GDELTSource and GDELTVolumeSource. Sized for "
+            "the case that actually breaks without it: a multi-month "
+            "backfill (scripts/backfill_sentiment_history.py) fires ~26 "
+            "windowed requests PER SYMBOL, which unthrottled draws HTTP 429 "
+            "for substantially all of them. Note the interaction with "
+            "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: these sleeps count "
+            "against that budget, so a live cycle covers fewer symbols' GDELT "
+            "documents per pass than an (unthrottled, largely 429-ing) one "
+            "attempted to. 0 disables spacing entirely."
+        ),
+    )
+    GDELT_MAX_RETRIES: int = Field(
+        default=2,
+        description=(
+            "Retries after a GDELT HTTP 429/5xx before the request is given "
+            "up on, with exponential backoff from "
+            "GDELT_RETRY_BACKOFF_SECONDS (a Retry-After response header, when "
+            "present and parseable, takes precedence over the computed wait). "
+            "0 disables retrying."
+        ),
+    )
+    GDELT_RETRY_BACKOFF_SECONDS: float = Field(
+        default=5.0,
+        description=(
+            "Base seconds for the GDELT retry backoff; attempt N waits "
+            "GDELT_RETRY_BACKOFF_SECONDS * 2**N unless the server sent a "
+            "Retry-After header."
+        ),
+    )
+    GDELT_COOLDOWN_THRESHOLD: int = Field(
+        default=3,
+        description=(
+            "Consecutive FAILED GDELT requests -- 429, 5xx, or transport error "
+            "alike -- after which GDELT calls "
+            "are SKIPPED outright (no sleep, no request) for "
+            "GDELT_COOLDOWN_SECONDS. This is what stops an "
+            "already-throttled IP from turning a long backfill into hours of "
+            "certain-to-fail requests while the other sentiment sources "
+            "starve for wall-clock budget. Counting transport errors too is "
+            "deliberate: measured 2026-07-29, GDELT stopped 429-ing and started "
+            "read-timing-out instead, and a 429-only breaker left a 26-window "
+            "backfill grinding at 10s per window for the same zero result. A "
+            "single served response "
+            "clears the count and any open cooldown. 0 disables the cooldown."
+        ),
+    )
+    GDELT_COOLDOWN_SECONDS: float = Field(
+        default=300.0,
+        description=(
+            "How long the GDELT cooldown stays open once "
+            "GDELT_COOLDOWN_THRESHOLD consecutive failed "
+            "requests have been seen. Affects GDELT only -- every other "
+            "sentiment source keeps running normally throughout."
+        ),
+    )
     SENTIMENT_DESENTENCIZE_ENABLED: bool = Field(
         default=False,
         description=(

@@ -101,6 +101,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -219,6 +220,26 @@ class SentimentSource(ABC):
 
     name: str = ""
 
+    # Monotonic timestamp (``time.monotonic()`` scale) after which this source
+    # should stop issuing work and return what it already has, or ``None`` for
+    # "unbounded". Set by ``CompositeSentimentSource`` before each ``fetch``
+    # from its own per-cycle deadline.
+    #
+    # Why this seam exists: the composite checks its wall-clock budget BETWEEN
+    # sources, which is sufficient only while every source is one request. It
+    # is not sufficient for a source that internally loops (``GDELTSource``
+    # issues one request per 7-day window, so a 6-month backfill is ~26 of
+    # them, and with request throttling those add up to minutes inside a
+    # single ``fetch`` call the composite cannot interrupt). Sources that
+    # loop are expected to consult ``deadline_exceeded()``; single-request
+    # sources correctly ignore it.
+    deadline: Optional[float] = None
+
+    def deadline_exceeded(self) -> bool:
+        """True when ``deadline`` is set and has passed. Always False when no
+        deadline was assigned, so an unbounded caller behaves as before."""
+        return self.deadline is not None and time.monotonic() >= self.deadline
+
     @abstractmethod
     def fetch(self, symbol: str, since: datetime) -> List[SentimentDocument]:
         """Return documents for ``symbol`` published at/after ``since``.
@@ -334,6 +355,246 @@ class YahooRSSSource(SentimentSource):
 
 
 # ---------------------------------------------------------------------------
+# GDELT shared rate limiter — ONE budget for BOTH GDELT consumers
+# ---------------------------------------------------------------------------
+# ``GDELTSource`` (mode=artlist, per-symbol tone documents) and
+# ``GDELTVolumeSource`` (mode=timelinevol, per-sector article counts) hit the
+# SAME host with the SAME undocumented courtesy budget. Two independently
+# unthrottled clients in one process is exactly how a 429 storm starts, so
+# both go through this single module-level limiter — mirroring the reason
+# ``data/etf_holdings.py`` is required to reuse
+# ``data/edgar_fundamentals.py``'s ``_throttle`` rather than open a second SEC
+# client.
+#
+# Why this exists at all (the failure it fixes)
+# ----------------------------------------------
+# ``GDELTSource.fetch`` chunks a historical ``since`` into ``_CHUNK_DAYS``
+# windows, so a LIVE per-cycle fetch (``since`` = yesterday) is one request
+# and never revealed a problem — but a real multi-month backfill
+# (``scripts/backfill_sentiment_history.py --months 6``) is ~26 windows per
+# symbol fired back-to-back with no spacing. Across an operator universe that
+# is hundreds of requests in a few minutes. Measured 2026-07-29 against a
+# 33-symbol universe: GDELT answered HTTP 429 to substantially all of them, so
+# the backfill burned wall-clock and archived essentially nothing while
+# logging one warning per window.
+#
+# Measured again minutes later, after the throttle was added: GDELT had
+# stopped 429-ing this host and started READ-TIMING-OUT instead, and a single
+# 6-month symbol still took 262 s to archive zero documents — 26 windows x a
+# 10 s timeout each. That is why bound 3 below counts consecutive FAILURES of
+# any kind rather than 429s alone: from the caller's side "the host is
+# refusing us" and "the host is not answering us" have identical cost and
+# identical remedy, and a breaker that only recognised one of them fixed only
+# half the outage.
+#
+# Three bounds, not one:
+#   1. **Minimum spacing** (``GDELT_MIN_REQUEST_INTERVAL_SECONDS``) between
+#      request ISSUANCE, lock held across the sleep — the same serialization
+#      argument documented on ``edgar_fundamentals._throttle``: releasing
+#      before sleeping lets every waiting thread compute the same gap and wake
+#      together, which breaks the limit precisely when concurrency is added.
+#   2. **Retry with exponential backoff** on a 429/5xx ONLY, honouring a
+#      ``Retry-After`` header when the server sends one. A transport error is
+#      deliberately not retried (an immediate retry of a read timeout just
+#      times out again at full cost) and a 404 is a bad query, not an
+#      overloaded host.
+#   3. **Cooldown circuit breaker** — after ``GDELT_COOLDOWN_THRESHOLD``
+#      CONSECUTIVE failed requests (429, 5xx, or transport error alike),
+#      GDELT calls are SKIPPED outright (no sleep, no request) for
+#      ``GDELT_COOLDOWN_SECONDS``. Without this, a host that is refusing or
+#      ignoring us turns a long backfill into hours of guaranteed-failing
+#      requests. Skipping fast is what lets the other sources
+#      (EDGAR/Finnhub/Reddit) actually get their share of the wall-clock
+#      budget. Requiring CONSECUTIVE failures is what keeps a single flaky
+#      socket from opening it; one success resets the count and clears any
+#      open cooldown.
+#
+# Honesty note: GDELT publishes no hard rate-limit number, so the defaults
+# below are a conservative choice, not a documented contract. They are
+# settings precisely so an operator can tune them against observed behaviour.
+# Setting ``GDELT_MIN_REQUEST_INTERVAL_SECONDS=0``, ``GDELT_MAX_RETRIES=0``
+# and ``GDELT_COOLDOWN_THRESHOLD=0`` reproduces the pre-fix behaviour exactly.
+
+# One URL constant for both consumers — the shared budget is per-HOST, so the
+# endpoint they share is stated once rather than duplicated per class.
+_GDELT_API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+
+_gdelt_throttle_lock = threading.Lock()
+_gdelt_last_request_time: float = 0.0
+_gdelt_consecutive_failures: int = 0
+_gdelt_cooldown_until: float = 0.0
+_gdelt_cooldown_logged: bool = False
+
+
+class GDELTUnavailable(Exception):
+    """Raised internally when a GDELT request was skipped because the
+    cooldown is open, or exhausted its retries against a 429/5xx.
+
+    Named for the CONDITION (the host is not serving us) rather than for one
+    cause of it: a run of read timeouts opens the same cooldown a run of 429s
+    does, and callers take the same action either way. Callers convert this to
+    ``[]``/``{}`` (CONSTRAINT #6) -- it never escapes this module."""
+
+
+def reset_gdelt_rate_limiter() -> None:
+    """Clear the shared limiter's state (spacing clock, consecutive-429 count,
+    cooldown). For tests and for a long-lived process that wants a fresh
+    budget; never needed on the normal path."""
+    global _gdelt_last_request_time, _gdelt_consecutive_failures
+    global _gdelt_cooldown_until, _gdelt_cooldown_logged
+    with _gdelt_throttle_lock:
+        _gdelt_last_request_time = 0.0
+        _gdelt_consecutive_failures = 0
+        _gdelt_cooldown_until = 0.0
+        _gdelt_cooldown_logged = False
+
+
+def _gdelt_throttle(min_interval: float) -> None:
+    """Space request ISSUANCE by at least ``min_interval`` seconds.
+
+    The lock is deliberately held across the sleep (see the section comment
+    above). ``time.monotonic`` — not ``time.time`` — so an NTP step cannot
+    make the elapsed gap go negative and skip the delay.
+    """
+    global _gdelt_last_request_time
+    if min_interval <= 0:
+        return
+    with _gdelt_throttle_lock:
+        now = time.monotonic()
+        elapsed = now - _gdelt_last_request_time
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        _gdelt_last_request_time = time.monotonic()
+
+
+def _gdelt_in_cooldown() -> bool:
+    """True when the limiter is inside a post-failure cooldown, so the caller
+    must skip the request entirely rather than issue one that will almost
+    certainly fail."""
+    global _gdelt_cooldown_logged
+    with _gdelt_throttle_lock:
+        if _gdelt_cooldown_until <= 0.0:
+            return False
+        remaining = _gdelt_cooldown_until - time.monotonic()
+        if remaining <= 0:
+            return False
+        if not _gdelt_cooldown_logged:
+            logger.warning(
+                "GDELT cooldown active for another %.0fs after %d "
+                "consecutive failed requests (429/5xx/transport); skipping "
+                "GDELT calls until it expires (other sentiment sources are "
+                "unaffected).",
+                remaining, _gdelt_consecutive_failures,
+            )
+            _gdelt_cooldown_logged = True
+        return True
+
+
+def _gdelt_note_failure(threshold: int, cooldown_seconds: float) -> None:
+    """Record one failed request -- a 429, a 5xx, or a transport error, all
+    of which mean the host is not serving us. Opens the cooldown once
+    ``threshold`` CONSECUTIVE ones have been seen."""
+    global _gdelt_consecutive_failures, _gdelt_cooldown_until, _gdelt_cooldown_logged
+    with _gdelt_throttle_lock:
+        _gdelt_consecutive_failures += 1
+        if threshold > 0 and _gdelt_consecutive_failures >= threshold:
+            _gdelt_cooldown_until = time.monotonic() + max(0.0, cooldown_seconds)
+            _gdelt_cooldown_logged = False
+
+
+def _gdelt_note_success() -> None:
+    """Record one served response, clearing the consecutive-failure count and
+    any open cooldown."""
+    global _gdelt_consecutive_failures, _gdelt_cooldown_until, _gdelt_cooldown_logged
+    with _gdelt_throttle_lock:
+        _gdelt_consecutive_failures = 0
+        _gdelt_cooldown_until = 0.0
+        _gdelt_cooldown_logged = False
+
+
+def _gdelt_retry_after_seconds(resp: Any, fallback: float) -> float:
+    """Seconds to wait before retrying, preferring the server's own
+    ``Retry-After`` header over our computed backoff when it is present and
+    parseable as a delta-seconds integer (the form GDELT/its CDN emits)."""
+    try:
+        raw = resp.headers.get("Retry-After")
+    except Exception:
+        return fallback
+    if not raw:
+        return fallback
+    try:
+        return max(0.0, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _gdelt_get(params: Dict[str, Any], *, timeout: float = 10.0) -> Any:
+    """Issue one throttled, retrying GET against the GDELT DOC API.
+
+    Returns a successful ``requests.Response``. Raises ``GDELTUnavailable``
+    when the request was skipped (cooldown open) or every retry was rate
+    limited, and re-raises any other transport error for the caller's own
+    try/except to convert into the empty result the ABC requires.
+    """
+    from settings import settings as _settings
+
+    min_interval = float(getattr(_settings, "GDELT_MIN_REQUEST_INTERVAL_SECONDS", 5.0))
+    max_retries = int(getattr(_settings, "GDELT_MAX_RETRIES", 2))
+    backoff = float(getattr(_settings, "GDELT_RETRY_BACKOFF_SECONDS", 5.0))
+    threshold = int(getattr(_settings, "GDELT_COOLDOWN_THRESHOLD", 3))
+    cooldown = float(getattr(_settings, "GDELT_COOLDOWN_SECONDS", 300.0))
+
+    if _gdelt_in_cooldown():
+        raise GDELTUnavailable("GDELT cooldown is open; request skipped")
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(max(0, max_retries) + 1):
+        _gdelt_throttle(min_interval)
+        try:
+            resp = requests.get(_GDELT_API_URL, params=params, timeout=timeout)
+        except Exception:
+            # A transport error (read timeout / DNS / connection reset) is NOT
+            # retried here -- an immediate retry of a timeout just times out
+            # again at full cost -- but it DOES count toward the cooldown.
+            # Measured 2026-07-29: GDELT stopped answering this host with 429s
+            # and started read-timing-out instead, and a cooldown that only
+            # counted 429s let a 26-window backfill grind through every window
+            # at 10 s apiece for the same net-zero result the 429 storm gave.
+            # The breaker's job is "stop asking a host that is not serving
+            # us"; a RUN of consecutive timeouts satisfies that as squarely as
+            # a run of 429s does. Requiring `threshold` CONSECUTIVE failures
+            # is what keeps one flaky socket from opening it.
+            _gdelt_note_failure(threshold, cooldown)
+            raise
+        # Only a DEFINITE 429/5xx is retried. A transport that exposes no
+        # integer status (or none at all) falls through to raise_for_status(),
+        # which stays the authority for every other error -- a 404 is a bad
+        # query, not an overloaded host, and must not be retried into one.
+        try:
+            status = int(getattr(resp, "status_code", 200))
+        except (TypeError, ValueError):
+            status = 200
+        if status == 429 or 500 <= status < 600:
+            _gdelt_note_failure(threshold, cooldown)
+            last_exc = GDELTUnavailable(f"GDELT returned HTTP {status}")
+            if attempt >= max_retries or _gdelt_in_cooldown():
+                break
+            wait = _gdelt_retry_after_seconds(resp, backoff * (2 ** attempt))
+            logger.info(
+                "GDELT HTTP %d — retrying in %.0fs (attempt %d/%d).",
+                status, wait, attempt + 1, max_retries,
+            )
+            if wait > 0:
+                time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        _gdelt_note_success()
+        return resp
+
+    raise last_exc or GDELTUnavailable("GDELT request failed")
+
+
+# ---------------------------------------------------------------------------
 # GDELT — free, no auth, global news-tone database.
 # ---------------------------------------------------------------------------
 
@@ -351,10 +612,19 @@ class GDELTSource(SentimentSource):
     (CONSTRAINT #6): one failed window is skipped, not fatal to the rest of
     the range. Capped at ``_MAX_WINDOWS`` chunks as a safety bound against an
     unreasonably distant ``since``.
+
+    Every request goes through the shared GDELT rate limiter above (throttle +
+    retry + cooldown). Two consequences worth stating plainly: once the
+    cooldown opens, the remaining windows of this call are ABANDONED rather
+    than attempted -- a partial range is the honest outcome of a throttled
+    backfill, and grinding through 20 more certain-429 windows would only
+    starve the other sources of the cycle's wall-clock budget. And the
+    throttle's sleeps count against that same budget, so ``fetch`` also
+    honours ``self.deadline`` between windows (set by
+    ``CompositeSentimentSource``) instead of overrunning it inside one source.
     """
 
     name = "gdelt"
-    _API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
     _MAX_RECORDS_PER_CALL = 250  # GDELT DOC API's own per-call ceiling
     _CHUNK_DAYS = 7
     _MAX_WINDOWS = 60  # safety bound (~14 months at 7-day chunks)
@@ -365,8 +635,25 @@ class GDELTSource(SentimentSource):
         window_start = since
         windows = 0
         while window_start < now and windows < self._MAX_WINDOWS:
+            if self.deadline_exceeded():
+                logger.warning(
+                    "GDELTSource.fetch(%s): wall-clock budget reached after %d "
+                    "window(s); returning the %d document(s) already collected "
+                    "rather than overrunning the cycle budget.",
+                    symbol, windows, len(docs),
+                )
+                break
             window_end = min(window_start + timedelta(days=self._CHUNK_DAYS), now)
-            docs.extend(self._fetch_window(symbol, window_start, window_end))
+            try:
+                docs.extend(self._fetch_window(symbol, window_start, window_end))
+            except GDELTUnavailable as exc:
+                logger.warning(
+                    "GDELTSource.fetch(%s): abandoning the remaining windows "
+                    "after %d of them -- %s. %d document(s) collected from the "
+                    "windows that completed.",
+                    symbol, windows, exc, len(docs),
+                )
+                break
             window_start = window_end
             windows += 1
         return docs
@@ -374,10 +661,15 @@ class GDELTSource(SentimentSource):
     def _fetch_window(
         self, symbol: str, window_start: datetime, window_end: datetime,
     ) -> List[SentimentDocument]:
+        """Fetch one date-bounded window.
+
+        Raises ``GDELTUnavailable`` -- and only that -- so ``fetch`` can
+        abandon the rest of the range; every other failure is swallowed and
+        returns ``[]`` (one bad window is not fatal to the others).
+        """
         try:
-            resp = requests.get(
-                self._API_URL,
-                params={
+            resp = _gdelt_get(
+                {
                     "query": symbol,
                     "mode": "artlist",
                     "format": "json",
@@ -388,7 +680,6 @@ class GDELTSource(SentimentSource):
                 },
                 timeout=10,
             )
-            resp.raise_for_status()
             payload = resp.json()
             docs: List[SentimentDocument] = []
             for article in payload.get("articles", []):
@@ -405,6 +696,11 @@ class GDELTSource(SentimentSource):
                     text_content=title, raw_sentiment_score=score,
                 ))
             return docs
+        except GDELTUnavailable:
+            # Deliberately NOT swallowed: `fetch` needs to distinguish "this
+            # one window was malformed" from "the host is not serving us",
+            # because only the latter makes the remaining windows pointless.
+            raise
         except Exception as exc:
             logger.warning(
                 "GDELTSource.fetch(%s) window [%s, %s] failed: %s",
@@ -477,7 +773,10 @@ class GDELTVolumeSource:
     """
 
     name = "gdelt_timelinevol"
-    _API_URL = GDELTSource._API_URL  # same host, mode=timelinevol not artlist
+    # Same host, same courtesy budget, same limiter as GDELTSource -- see the
+    # "GDELT shared rate limiter" section above for why these two consumers
+    # must not throttle independently. mode=timelinevol, not artlist.
+    _API_URL = _GDELT_API_URL
 
     def fetch_daily_counts(
         self, query: str, since: datetime, until: Optional[datetime] = None,
@@ -495,9 +794,8 @@ class GDELTVolumeSource:
         """
         _until = until or datetime.now(timezone.utc)
         try:
-            resp = requests.get(
-                self._API_URL,
-                params={
+            resp = _gdelt_get(
+                {
                     "query": query,
                     "mode": "timelinevol",
                     "format": "json",
@@ -506,7 +804,6 @@ class GDELTVolumeSource:
                 },
                 timeout=10,
             )
-            resp.raise_for_status()
             payload = resp.json()
         except Exception as exc:
             logger.warning("GDELTVolumeSource.fetch_daily_counts(%r) failed: %s", query, exc)
@@ -575,6 +872,14 @@ def compute_sector_heat_factors(
     non-"Unknown" sector in ``sectors`` -- bounded by the small number of
     GICS sectors (single digits to ~11) typically present in a universe,
     never by ticker count.
+
+    Wall-clock note: those calls now go through the shared GDELT limiter, so
+    at the default ``GDELT_MIN_REQUEST_INTERVAL_SECONDS`` (5 s) a full
+    11-sector universe adds ~55 s of throttle to a cycle that has
+    ``SECTOR_HEAT_ENABLED`` turned on. No separate budget is imposed here
+    because the loop is bounded at ~11 by construction (and the master gate
+    defaults off); if the host is unresponsive the limiter's cooldown short-
+    circuits the remaining sectors anyway, each returning ``{}``.
 
     Returns ``{}`` immediately, with NO network call, when
     ``settings.SECTOR_HEAT_ENABLED`` is False (master gate) or ``sectors``
@@ -1530,6 +1835,11 @@ class CompositeSentimentSource:
                 )
                 continue
             source = self._sources[name]
+            # Hand the source this cycle's deadline so one that loops
+            # internally (GDELTSource's per-window backfill) can stop at the
+            # budget instead of overrunning it — the between-sources check
+            # above cannot interrupt a call already in progress.
+            source.deadline = self._cycle_deadline
             try:
                 docs = source.fetch(symbol, since)
                 self._consecutive_failures[name] = 0
