@@ -141,9 +141,14 @@ class TestFreshFitIsolationDispatch:
         mock_keras.callbacks = mock_callbacks
         mock_tf = types.ModuleType('tensorflow')
         mock_tf.keras = mock_keras
+        mock_tf.random = mock.MagicMock()  # tf.random.set_seed(...) -- CNN-LSTM reproducibility seed
         monkeypatch.setitem(sys.modules, 'tensorflow', mock_tf)
         monkeypatch.setitem(sys.modules, 'tensorflow.keras', mock_keras)
         monkeypatch.setitem(sys.modules, 'tensorflow.keras.callbacks', mock_callbacks)
+        # The legacy branch reads the MODULE-GLOBAL `tf` name (set at
+        # forecasting_engine.py's own import time), not a fresh per-call
+        # import -- same fragility as Sequential/Conv1D/etc above, same fix.
+        monkeypatch.setattr(forecasting_engine, "tf", mock_tf, raising=False)
 
         with mock.patch(
             "cnn_lstm_process_pool.run_in_subprocess",

@@ -42,6 +42,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Lint (ruff)
+        run: |
+          # Scoped to genuine-bug rules only (undefined names, syntax errors)
+          # -- NOT the full default ruleset, which the existing codebase has
+          # ~1200 pre-existing style violations against (unused imports, the
+          # deliberate tensorflow-before-pandas E402 import-order pattern,
+          # etc.) that a focused PR should not be gated on fixing wholesale.
+          # Widening `--select` is a deliberate follow-up, not an accident.
+          python -m ruff check . --select=F821,F822,F823,E9
+
       - name: Run offline test suite
         run: |
           # --cov reads .coveragerc, which sets fail_under=58 (a coverage-floor

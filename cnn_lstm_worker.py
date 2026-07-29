@@ -67,6 +67,12 @@ def _purged_train_val_split(
         train_end = val_start
     return X_seq[:train_end], Y_seq[:train_end], X_seq[val_start:], Y_seq[val_start:]
 
+# Fixed seed for reproducible CNN-LSTM weight init / dropout / validation-split
+# shuffling. Re-applied at the top of every fit call (not just once at import
+# time) so reproducibility holds per-ticker, per-call -- not just for whichever
+# ticker happens to train first in a given worker process.
+CNN_LSTM_RANDOM_SEED = 42
+
 
 def fit_predict_cnn_lstm(
     X_seq: np.ndarray,
@@ -92,6 +98,9 @@ def fit_predict_cnn_lstm(
     """
     if not TENSORFLOW_AVAILABLE:
         raise RuntimeError("tensorflow is not importable in this worker process")
+
+    np.random.seed(CNN_LSTM_RANDOM_SEED)
+    tf.random.set_seed(CNN_LSTM_RANDOM_SEED)
 
     _, time_steps, num_features = X_seq.shape
     model = Sequential([

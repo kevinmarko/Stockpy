@@ -14,6 +14,8 @@ build_forward_return_ranks — (from ml.feature_engineering) labeling targets
 build_meta_features        — extend the base feature matrix for MetaLabeler
 """
 
+from typing import TYPE_CHECKING
+
 from ml.feature_engineering import (
     build_pit_feature_matrix,
     build_forward_return_ranks,
@@ -21,6 +23,9 @@ from ml.feature_engineering import (
 )
 
 from ml.data.store import PITFeatureStore
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 __all__ = [
     "build_pit_feature_matrix",
