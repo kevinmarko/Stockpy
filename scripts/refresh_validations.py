@@ -1832,6 +1832,11 @@ def _build_signal_replay_adapter(
     Requires ``"SPY"`` present in ``closes.columns`` (relative_strength and
     cross_sectional_momentum both need it as benchmark) — raises cleanly,
     never fabricates a benchmark, if missing (CONSTRAINT #4).
+
+    MARKET-TREND OVERLAY (Faber SMA-200): see the comment at the
+    ``portfolio_returns.where(trend_gate, 0.0)`` line below for the full
+    rationale (41.8% MaxDD without it, failing the harness's <30% gate) —
+    same fixed, precedented convention as ``_build_lowvol_size_adapter``.
     """
     from data.historical_store import HistoricalStore
     from dto_models import MacroEconomicDTO, MarketBarDTO
@@ -2104,6 +2109,21 @@ def _build_signal_replay_adapter(
     weights = score_df.rank(axis=1, pct=True).ge(0.5).astype(float)
     weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
     portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    # MARKET-TREND OVERLAY (Faber SMA-200, fixed and economically-motivated --
+    # NOT tuned to any specific crash date): the fully-invested, always-in
+    # book above drew down 41.8% through 2008/2020, failing the harness's
+    # <30% MaxDD gate despite passing PBO/DSR/Sharpe. De-risked to cash on any
+    # day following a SPY close BELOW its own 200-day SMA -- the same
+    # established convention already used by _build_lowvol_size_adapter /
+    # _build_rsi2_adapter / _build_rsi14_extremes_adapter. spy_close (computed
+    # earlier in this function) already spans common_index; uptrend.shift(1)
+    # applies the same one-day lag already used by weights.shift(1) above, so
+    # this adds no additional lookahead beyond what the base book already has.
+    spy_sma200 = spy_close.rolling(window=200).mean()
+    uptrend = (spy_close > spy_sma200).shift(1, fill_value=False)
+    trend_gate = uptrend.reindex(score_df.index, fill_value=False)
+    portfolio_returns = portfolio_returns.where(trend_gate, 0.0)
 
     X = pd.DataFrame(index=score_df.index)
     X["SignalReplay_Composite"] = score_df.mean(axis=1).fillna(0.0)
