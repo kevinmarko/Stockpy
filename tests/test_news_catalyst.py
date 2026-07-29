@@ -25,7 +25,6 @@ TestRegimeGate          — is_active_in_regime suppression + SignalAggregator w
 """
 
 import math
-import os
 import types
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -756,7 +755,7 @@ class TestPreCompute:
         sig = _make_signal()
         ctx = _make_context()
         universe = _make_universe(["AAPL", "MSFT"])
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": ""}, clear=False):
+        with patch("settings.settings.FINNHUB_API_KEY", ""):
             sig.pre_compute(universe, ctx)
         # When no key, caches should be empty (module logs info and returns)
         assert sig._news_scores == {}
@@ -769,7 +768,7 @@ class TestPreCompute:
         mock_client = MagicMock()
         mock_client.company_news.side_effect = RuntimeError("rate limit")
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     sig.pre_compute(universe, ctx)
@@ -787,7 +786,7 @@ class TestPreCompute:
             {"headline": "Apple beats earnings expectations"}
         ]
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):  # skip courtesy delay
@@ -804,7 +803,7 @@ class TestPreCompute:
         mock_client = MagicMock()
         mock_client.company_news.return_value = []
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
@@ -826,7 +825,7 @@ class TestPreCompute:
         mock_client.earnings_calendar.return_value = {
             "earningsCalendar": [{"date": soon}]
         }
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
@@ -840,7 +839,7 @@ class TestPreCompute:
         ctx = _make_context()
         universe = pd.DataFrame({"Symbol": []})
         mock_client = MagicMock()
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 sig.pre_compute(universe, ctx)
         assert sig._news_scores == {}
@@ -871,7 +870,7 @@ class TestNewsHistoryArchive:
         mock_store_instance.get_finbert_score.return_value = None
         mock_store_cls = MagicMock(return_value=mock_store_instance)
 
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
@@ -942,7 +941,7 @@ class TestArchiveVsLiveScoreHonesty:
         mock_client = MagicMock()
         mock_client.company_news.side_effect = RuntimeError("rate limit")
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     sig.pre_compute(universe, ctx)
@@ -959,7 +958,7 @@ class TestArchiveVsLiveScoreHonesty:
         mock_client = MagicMock()
         mock_client.company_news.return_value = []  # zero headlines this cycle
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
@@ -978,7 +977,7 @@ class TestArchiveVsLiveScoreHonesty:
         mock_client = MagicMock()
         mock_client.company_news.return_value = [{"headline": "Apple beats and surges"}]
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
@@ -1001,7 +1000,7 @@ class TestArchiveVsLiveScoreHonesty:
             return [{"headline": "Great quarter"}]
 
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst.fetch_company_news", side_effect=_company_news):
                     with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
@@ -1031,7 +1030,7 @@ class TestArchiveVsLiveScoreHonesty:
         mock_store_instance.get_finbert_score.return_value = None
         mock_store_cls = MagicMock(return_value=mock_store_instance)
 
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "test_key"}):
+        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("data.historical_store.HistoricalStore", mock_store_cls):
@@ -1187,7 +1186,7 @@ class TestMultiSourceIngestion:
         ctx = _make_context()
         universe = _make_universe(["AAPL"])
         mock_source = MagicMock()
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": ""}, clear=False):
+        with patch("settings.settings.FINNHUB_API_KEY", ""):
             with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
                 with patch("data.sentiment_sources.get_sentiment_source", return_value=mock_source):
                     sig.pre_compute(universe, ctx)
@@ -1228,7 +1227,7 @@ class TestSentimentCredibilityBlend:
                      "aggregated_source_credibility": 1.0},
         }
         mock_store_cls = MagicMock(return_value=mock_store_instance)
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": ""}, clear=False):
+        with patch("settings.settings.FINNHUB_API_KEY", ""):
             with patch("data.historical_store.HistoricalStore", mock_store_cls):
                 sig.pre_compute(universe, ctx)
         assert ctx.sentiment_credibility_scores == {
