@@ -211,6 +211,8 @@ model's exposure-weighting design.
 
 ## 2026-07-29 addendum: `signal_replay_balanced_blend` (Category A)
 
+**PR:** [#464](https://github.com/kevinmarko/Stockpy/pull/464)
+
 `signal_replay_balanced_blend` — the real `SignalAggregator`/`SignalRegistry` replay
 backing the `balanced-blend` Pilot (`pilots/catalog.py`) — was added to
 `STRATEGY_REGISTRY` after the 2026-07-17 wave above and was never covered by it. Its
