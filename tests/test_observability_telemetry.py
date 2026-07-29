@@ -38,6 +38,39 @@ class TestSystemTelemetry:
         assert t.process_rss_bytes > 0
         assert t.sampled_at.tzinfo is not None  # UTC-aware
 
+    def test_process_reused_across_calls_not_reconstructed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression guard: a fresh ``psutil.Process()`` on every call would
+        make ``process_cpu_percent`` permanently stuck at 0.0 forever --
+        ``Process.cpu_percent(interval=None)`` reports the delta since the
+        PREVIOUS call on that SAME instance, tracked as an instance
+        attribute, so a brand-new instance never has one. Assert the module
+        reuses a single cached ``Process`` object across calls instead of
+        constructing a new one each time (regardless of what CPU% value that
+        happens to measure, which is inherently timing-dependent/flaky to
+        assert on directly)."""
+        monkeypatch.setattr(ot, "_cached_process", None)
+        constructed: list[object] = []
+        import psutil
+
+        real_process_cls = psutil.Process
+
+        class _CountingProcess(real_process_cls):  # type: ignore[misc, valid-type]
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                constructed.append(self)
+
+        monkeypatch.setattr(psutil, "Process", _CountingProcess)
+
+        ot.collect_system_telemetry()
+        ot.collect_system_telemetry()
+
+        assert len(constructed) == 1, (
+            "collect_system_telemetry() must reuse one cached psutil.Process() "
+            "instance across calls, not construct a fresh one each call"
+        )
+
     def test_psutil_missing_returns_nan(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Module-level ImportError fallback path produces NaN-shaped output."""
         # Force the lazy import inside collect_system_telemetry to fail.
