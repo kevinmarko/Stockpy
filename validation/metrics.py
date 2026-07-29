@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-from typing import List, Dict, Any, Tuple, Callable
+from typing import List, Dict, Any, Tuple, Callable, Optional
 
 # Set up module logger
 logger = logging.getLogger("Validation_Metrics")
@@ -137,11 +137,12 @@ def run_cpcv_evaluation(
     t1: pd.Series = None,
     n_splits: int = 10,
     n_test_splits: int = 2,
-    freq: int = 252
+    freq: int = 252,
+    cost_model_fn: Optional[Callable[[pd.Series, float], pd.Series]] = None,
 ) -> Dict[str, Any]:
     """
     Runs CPCV evaluation across all combination paths and calculates validation metrics.
-    
+
     Args:
         strategy_fn: Callable taking (X_train, y_train, X_test, y_test) and returning a list of dicts:
                      [{"params": dict/str, "train_returns": pd.Series, "test_returns": pd.Series}]
@@ -149,48 +150,82 @@ def run_cpcv_evaluation(
         X: Features DataFrame.
         y: Targets Series.
         t1: Event end times.
+        cost_model_fn: Optional ``(returns: pd.Series, turnover: float) -> pd.Series``
+            callable applying transaction-cost drag to a raw return series.
+            When provided, every trial's train_returns/test_returns are
+            cost-adjusted via ``cost_model_fn(returns, trial.get("turnover", 0.05))``
+            BEFORE any Sharpe/PBO/DSR/drawdown statistic is computed from
+            them, so PBO/DSR reflect the same net-of-cost basis as the
+            harness's other metrics instead of raw, cost-free returns. ``None``
+            (the default) reproduces the pre-existing gross-return behavior
+            exactly (see ``settings.VALIDATION_HARNESS_OOS_GATE_ENABLED``).
+
+    Returns a dict with ``paths``/``dsr``/``pbo``/``mean_oos_sharpe``/``distribution``
+    (pre-existing keys, unchanged in meaning) plus four new genuinely
+    out-of-sample aggregates for the DSR-selected strategy — each the MEAN of
+    a per-path metric computed independently on that path's own held-out
+    (purged+embargoed) returns, NOT a single concatenated equity curve.
+    CPCV's combinatorial test blocks are deliberately reused across paths (a
+    raw concatenation across all paths would double/triple-count most dates),
+    so this mirrors ``mean_oos_sharpe``'s own pre-existing aggregation
+    convention rather than requiring the AFML backtest-path-recombination
+    algorithm: ``mean_oos_max_dd``, ``mean_oos_sortino``, ``mean_oos_hit_rate``,
+    ``mean_oos_avg_trade_pct``, ``mean_oos_turnover``.
     """
     from validation.purged_cv import CombinatorialPurgedCV
-    
+    from validation.stress_scenarios import compute_max_drawdown
+
     cv = CombinatorialPurgedCV(n_splits=n_splits, n_test_splits=n_test_splits)
-    
+
     paths_data = []
     is_sharpe_matrix = []
     oos_sharpe_matrix = []
-    
+    all_trials_by_path: List[List[Dict[str, Any]]] = []
+
     # Store all path returns for the best strategy
     best_strategy_oos_returns = []
-    
+
     logger.info("Executing CPCV path evaluation...")
-    
+
     for train_idx, test_idx, path_id in cv.split(X, y, t1):
         if len(train_idx) == 0:
             continue
-            
+
         X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
         X_test, y_test = X.iloc[test_idx], y.iloc[test_idx]
-        
+
         # Run strategy evaluation
         trials = strategy_fn(X_train, y_train, X_test, y_test)
         if not trials:
             continue
-            
+
+        if cost_model_fn is not None:
+            trials = [
+                {
+                    **trial,
+                    "train_returns": cost_model_fn(trial["train_returns"], trial.get("turnover", 0.05)),
+                    "test_returns": cost_model_fn(trial["test_returns"], trial.get("turnover", 0.05)),
+                }
+                for trial in trials
+            ]
+
         is_sharpes = []
         oos_sharpes = []
-        
+
         for trial in trials:
             is_sr = sharpe_ratio(trial["train_returns"], freq=freq)
             oos_sr = sharpe_ratio(trial["test_returns"], freq=freq)
             is_sharpes.append(is_sr if not np.isnan(is_sr) else -999.0)
             oos_sharpes.append(oos_sr if not np.isnan(oos_sr) else -999.0)
-            
+
         is_sharpe_matrix.append(is_sharpes)
         oos_sharpe_matrix.append(oos_sharpes)
-        
+        all_trials_by_path.append(trials)
+
         # Track the best performing configuration on this path (in-sample)
         best_is_idx = np.argmax(is_sharpes)
         best_trial = trials[best_is_idx]
-        
+
         paths_data.append({
             "path_id": path_id,
             "sharpe": oos_sharpes[best_is_idx],
@@ -199,38 +234,44 @@ def run_cpcv_evaluation(
         })
         best_strategy_oos_returns.extend(best_trial["test_returns"].tolist())
 
+    _empty_result = {
+        "paths": [], "dsr": 0.0, "pbo": 1.0, "mean_oos_sharpe": 0.0, "distribution": np.array([]),
+        "mean_oos_max_dd": float("nan"), "mean_oos_sortino": float("nan"),
+        "mean_oos_hit_rate": float("nan"), "mean_oos_avg_trade_pct": float("nan"),
+        "mean_oos_turnover": float("nan"),
+    }
     if not is_sharpe_matrix:
-        return {"paths": [], "dsr": 0.0, "pbo": 1.0, "mean_oos_sharpe": 0.0, "distribution": np.array([])}
-        
+        return _empty_result
+
     is_sharpe_matrix = np.array(is_sharpe_matrix)
     oos_sharpe_matrix = np.array(oos_sharpe_matrix)
-    
+
     # 1. Calculate PBO
     pbo = probability_of_backtest_overfitting(is_sharpe_matrix, oos_sharpe_matrix)
-    
+
     # 2. Calculate DSR for the best overall selected strategy
     # Let's find the configuration that performed best overall in-sample (on average)
     mean_is_sharpes = is_sharpe_matrix.mean(axis=0)
     best_overall_idx = np.argmax(mean_is_sharpes)
     best_overall_oos_sharpes = oos_sharpe_matrix[:, best_overall_idx]
-    
+
     # Calculate returns skew/kurtosis of the selected strategy (all merged OOS returns)
     all_oos_returns = pd.Series(best_strategy_oos_returns)
     skew = all_oos_returns.skew() if len(all_oos_returns) > 2 else 0.0
     kurt = all_oos_returns.kurtosis() + 3.0 if len(all_oos_returns) > 2 else 3.0 # convert to non-excess
-    
+
     if np.isnan(skew): skew = 0.0
     if np.isnan(kurt): kurt = 3.0
-    
+
     # Observed Sharpe ratio is the mean OOS Sharpe of the selected strategy
     sr_observed = np.mean(best_overall_oos_sharpes)
     n_trials = is_sharpe_matrix.shape[1]
-    
+
     # Variance of Sharpe ratios across all trials
     sr_variance = np.var(mean_is_sharpes)
     if sr_variance == 0:
         sr_variance = 1e-6
-        
+
     dsr = deflated_sharpe_ratio(
         sr_observed=sr_observed,
         n_trials=n_trials,
@@ -240,14 +281,60 @@ def run_cpcv_evaluation(
         n_observations=len(X),
         freq=freq
     )
-    
+
     distribution = oos_sharpe_matrix[:, best_overall_idx]
     mean_oos_sharpe = float(np.mean(distribution))
-    
+
+    # Genuinely OOS drawdown/sortino/hit-rate/avg-trade/turnover for the
+    # DSR-selected strategy — the mean of each metric computed independently
+    # per CPCV path (see this function's own docstring for why this is not a
+    # single concatenated equity curve).
+    per_path_max_dd: List[float] = []
+    per_path_sortino: List[float] = []
+    per_path_hit_rate: List[float] = []
+    per_path_avg_trade: List[float] = []
+    per_path_turnover: List[float] = []
+    for trials in all_trials_by_path:
+        if best_overall_idx >= len(trials):
+            continue
+        selected_trial = trials[best_overall_idx]
+        oos_returns = selected_trial["test_returns"]
+        if oos_returns is None or len(oos_returns) == 0:
+            continue
+        per_path_max_dd.append(compute_max_drawdown(oos_returns))
+        downside = oos_returns[oos_returns < 0]
+        downside_std = downside.std()
+        sortino = (oos_returns.mean() / downside_std * np.sqrt(freq)) if downside_std > 0 else np.nan
+        per_path_sortino.append(sortino)
+        trade_days = oos_returns != 0
+        per_path_hit_rate.append(float((oos_returns[trade_days] > 0).mean()) if trade_days.any() else np.nan)
+        per_path_avg_trade.append(float(oos_returns[trade_days].mean()) if trade_days.any() else np.nan)
+        per_path_turnover.append(float(selected_trial.get("turnover", 0.05)))
+
+    def _nanmean_or(values: List[float], default: float) -> float:
+        # All-NaN input (e.g. a strategy with zero down-days ever, so every
+        # path's Sortino is NaN) is an expected, non-error case here -- avoid
+        # numpy's "Mean of empty slice" RuntimeWarning for it.
+        finite = [v for v in values if not np.isnan(v)]
+        if not finite:
+            return default
+        return float(np.mean(finite))
+
+    mean_oos_max_dd = _nanmean_or(per_path_max_dd, float("nan"))
+    mean_oos_sortino = _nanmean_or(per_path_sortino, float("nan"))
+    mean_oos_hit_rate = _nanmean_or(per_path_hit_rate, 0.0)
+    mean_oos_avg_trade_pct = _nanmean_or(per_path_avg_trade, 0.0)
+    mean_oos_turnover = _nanmean_or(per_path_turnover, 0.05)
+
     return {
         "paths": paths_data,
         "dsr": dsr,
         "pbo": pbo,
         "mean_oos_sharpe": mean_oos_sharpe,
-        "distribution": distribution
+        "distribution": distribution,
+        "mean_oos_max_dd": mean_oos_max_dd,
+        "mean_oos_sortino": mean_oos_sortino,
+        "mean_oos_hit_rate": mean_oos_hit_rate,
+        "mean_oos_avg_trade_pct": mean_oos_avg_trade_pct,
+        "mean_oos_turnover": mean_oos_turnover,
     }

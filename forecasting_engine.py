@@ -534,6 +534,44 @@ class ForecastingEngine:
         return np.array(X_seq), np.array(Y_seq)
 
     @staticmethod
+    def purged_train_val_split(
+        X_seq: np.ndarray,
+        Y_seq: np.ndarray,
+        lookback: int,
+        val_fraction: float = 0.2,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Purge overlapping windows at the internal train/validation boundary.
+
+        make_direct_multistep_windows() builds windows with stride 1, so window
+        k covers raw rows [k, k+lookback) and adjacent windows share
+        lookback-1 raw rows. Keras's own ``validation_split`` kwarg takes the
+        chronologically-last ``val_fraction`` of windows with no purge, so the
+        training windows immediately before that boundary are near-duplicates
+        of the first validation windows -- optimistically biasing the
+        val_loss that drives EarlyStopping's epoch selection (a training-
+        procedure leak, distinct from -- and in addition to -- the
+        train/inference scaler leakage fit_scalers_on_train already fixed).
+        This purges the ``lookback - 1`` training windows whose raw row span
+        overlaps the first validation window's span, the same purge principle
+        validation/purged_cv.py's CombinatorialPurgedCV applies to the
+        cross-sectional LGBM ranker.
+
+        Returns (X_train, Y_train, X_val, Y_val). Degrades to an unpurged
+        chronological split (matching the pre-existing validation_split=0.2
+        behavior) when there isn't enough data left after purging to build a
+        non-empty training set -- never raises, never returns an empty
+        training set silently swapped in for a real one.
+        """
+        n_total = len(X_seq)
+        n_val = max(1, int(round(n_total * val_fraction)))
+        val_start = max(0, n_total - n_val)
+        embargo = max(0, lookback - 1)
+        train_end = val_start - embargo
+        if train_end <= 0:
+            train_end = val_start
+        return X_seq[:train_end], Y_seq[:train_end], X_seq[val_start:], Y_seq[val_start:]
+
+    @staticmethod
     def fit_scalers_walkforward_windows(
         df_features: pd.DataFrame,
         feature_cols: list,
@@ -840,10 +878,18 @@ class ForecastingEngine:
                 early_stop = EarlyStopping(
                     monitor='val_loss', patience=5, restore_best_weights=True
                 )
+                # Purged internal train/val split (see purged_train_val_split's
+                # docstring) instead of Keras's own validation_split=0.2, which
+                # would leave the last lookback-1 training windows overlapping
+                # the first validation windows almost entirely.
+                X_tr, Y_tr, X_val, Y_val = self.purged_train_val_split(
+                    X_seq, Y_seq, lookback
+                )
                 model.fit(
-                    X_seq, Y_seq,
+                    X_tr, Y_tr,
+                    validation_data=(X_val, Y_val),
                     epochs=50, batch_size=16, verbose=0,
-                    validation_split=0.2, callbacks=[early_stop],
+                    callbacks=[early_stop],
                 )
                 pred_scaled = model.predict(last_window, verbose=0)[0]  # (n_horizons,)
 

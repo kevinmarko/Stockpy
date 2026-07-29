@@ -158,6 +158,8 @@ def _summary_row(summary: dict) -> Dict[str, object]:
         "Deployable": "✅" if deployable else "❌",
         "PBO": summary.get("pbo"),
         "DSR": summary.get("dsr"),
+        # Number of strategy configurations DSR/PBO corrected for -- surfaced
+        "# Configs Tried": summary.get("n_trials"),
         "Sharpe": summary.get("sharpe"),
         "MaxDD": summary.get("max_drawdown"),
         "Report date": summary.get("report_date", "—"),

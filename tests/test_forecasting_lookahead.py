@@ -298,6 +298,91 @@ class TestWalkforwardScalingOptIn:
 
 
 # =============================================================================
+# purged_train_val_split() -- purge/embargo at the internal train/val boundary
+# =============================================================================
+# make_direct_multistep_windows() uses stride-1 overlapping windows (adjacent
+# windows share lookback-1 raw rows). Keras's own validation_split=0.2 has no
+# purge, so the training windows immediately before the internal train/val
+# boundary are near-duplicates of the first validation windows -- optimistically
+# biasing the val_loss EarlyStopping selects on. These tests prove the purge
+# actually removes every overlapping window and that run_cnn_lstm_forecast
+# routes through it instead of Keras's unpurged validation_split kwarg.
+
+class TestPurgedTrainValSplit:
+    def test_no_raw_row_overlap_between_train_and_val_windows(self):
+        """Window k covers raw rows [k, k+lookback). After the purge, the last
+        training window's raw span must not intersect the first validation
+        window's raw span at all."""
+        lookback = 10
+        n_samples = 200
+        X_seq = np.arange(n_samples).reshape(-1, 1, 1).repeat(lookback, axis=1)
+        Y_seq = np.arange(n_samples).reshape(-1, 1)
+
+        X_tr, Y_tr, X_val, Y_val = ForecastingEngine.purged_train_val_split(
+            X_seq, Y_seq, lookback
+        )
+        assert len(X_tr) > 0 and len(X_val) > 0
+
+        last_train_window_idx = len(X_tr) - 1
+        first_val_window_idx = n_samples - len(X_val)
+        last_train_span = (last_train_window_idx, last_train_window_idx + lookback)
+        first_val_span = (first_val_window_idx, first_val_window_idx + lookback)
+        assert last_train_span[1] <= first_val_span[0], (
+            f"train window ending at {last_train_span} overlaps the raw row "
+            f"span of the first validation window {first_val_span}"
+        )
+
+    def test_val_fraction_matches_unpurged_boundary(self):
+        """The purge only trims the training side; the validation set itself
+        must still be exactly the chronologically-last val_fraction of
+        windows, matching Keras's own validation_split semantics."""
+        lookback = 5
+        n_samples = 100
+        X_seq = np.zeros((n_samples, lookback, 1))
+        Y_seq = np.zeros((n_samples, 1))
+
+        _, _, X_val, _ = ForecastingEngine.purged_train_val_split(
+            X_seq, Y_seq, lookback, val_fraction=0.2
+        )
+        assert len(X_val) == 20
+
+    def test_degenerate_small_input_falls_back_without_raising(self):
+        """When there isn't enough data to both purge and keep a non-empty
+        training set, degrade to the unpurged split rather than raising or
+        returning an empty training set."""
+        lookback = 60
+        n_samples = 5
+        X_seq = np.zeros((n_samples, lookback, 1))
+        Y_seq = np.zeros((n_samples, 1))
+
+        X_tr, Y_tr, X_val, Y_val = ForecastingEngine.purged_train_val_split(
+            X_seq, Y_seq, lookback
+        )
+        assert len(X_tr) > 0
+        assert len(X_val) > 0
+        assert len(X_tr) + len(X_val) <= n_samples
+
+    def test_run_cnn_lstm_forecast_uses_validation_data_not_validation_split(self, sine_wave_data):
+        """The in-process training path must call model.fit with an explicit
+        purged validation_data=(...), never the unpurged validation_split
+        kwarg."""
+        engine = ForecastingEngine()
+        horizons = (10, 30, 60, 90)
+
+        forecasts = engine.run_cnn_lstm_forecast(sine_wave_data, horizons=horizons)
+        assert isinstance(forecasts, dict) and len(forecasts) == len(horizons)
+
+        fit_mock = forecasting_engine.Sequential.return_value.fit
+        assert fit_mock.called, "model.fit was never called"
+        _, fit_kwargs = fit_mock.call_args
+        assert "validation_data" in fit_kwargs, (
+            "run_cnn_lstm_forecast must pass a purged validation_data=(...) "
+            "split, not rely on Keras's unpurged validation_split kwarg"
+        )
+        assert "validation_split" not in fit_kwargs
+
+
+# =============================================================================
 # build_lstm_features() -- direct perturbation coverage
 # =============================================================================
 # build_lstm_features()'s own docstring claims its causality "is verified by

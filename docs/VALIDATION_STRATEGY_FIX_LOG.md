@@ -259,6 +259,74 @@ no-lookahead) and doesn't alter any of them.
 
 ---
 
+## 2026-07-29 addendum: harness-level fix, `VALIDATION_HARNESS_OOS_GATE_ENABLED` (opt-in)
+
+**Scope note:** every fix above changed a `STRATEGY_REGISTRY` *adapter*. This entry is
+different — it changes `validation/harness.py`/`validation/metrics.py` THEMSELVES,
+which the rest of this log's strategies were explicitly fixed *without* touching (see
+"A mechanical finding worth flagging" above — that constraint applied to the per-
+strategy fix effort this log otherwise records, not a permanent prohibition on ever
+improving the harness). This entry is that harness-level follow-up, done as a separate,
+explicitly opt-in change specifically so it does not silently invalidate any
+`deployable`/PBO/DSR/Sharpe/MaxDD number already recorded above.
+
+**What was found (a genuine quant-integrity investigation of the harness itself, not
+an adapter):**
+
+1. `ValidationReport.sharpe`/`.max_dd`/`.sortino`/`.calmar`/`.hit_rate`/`.avg_trade_pct`/
+   `.turnover` — every one of them feeding the `deployable` gate's `Sharpe > 0.5` /
+   `MaxDD < 30%` criteria except PBO/DSR — were computed from
+   `self.strategy_fn(X, y, X, y)`: a "test" set **identical** to the training set, i.e.
+   an in-sample number masquerading as an out-of-sample one. Only PBO/DSR (via
+   `CombinatorialPurgedCV`) were genuinely out-of-sample.
+2. Separately, `run_cpcv_evaluation`'s own PBO/DSR Sharpes were computed on **gross**
+   (cost-free) returns, even though the in-sample Sharpe/MaxDD leg above applied
+   `_apply_cost_model`'s turnover-scaled cost — an inconsistent cost basis between the
+   two halves of the same gate.
+
+**Fix:** `run_cpcv_evaluation` (`validation/metrics.py`) gained an optional
+`cost_model_fn` parameter and four new genuinely-OOS aggregates
+(`mean_oos_max_dd`/`mean_oos_sortino`/`mean_oos_hit_rate`/`mean_oos_avg_trade_pct`/
+`mean_oos_turnover`) — each the mean of that metric computed independently on every
+CPCV path's own held-out (purged+embargoed) returns for the DSR-selected strategy (not
+a single concatenated equity curve — CPCV's combinatorial test-block reuse across paths
+makes a naive concatenation double/triple-count most dates; see the function's own
+docstring). `validation/harness.py` gained `settings.VALIDATION_HARNESS_OOS_GATE_ENABLED`
+(default `False`): when `True`, `run()` passes the harness's own cost model into
+`run_cpcv_evaluation` and replaces the seven gate/report numbers listed above with these
+new genuinely-OOS, now-also-cost-adjusted aggregates. `equity_curve`/`benchmark_curve`/
+`macro_benchmark_curve` are **unchanged either way** — a single non-overlapping OOS
+equity curve needs the AFML CPCV backtest-path-recombination algorithm, not implemented
+here; documented as a real, separate follow-up rather than silently claimed as fixed too.
+
+**Why this ships opt-in, default off, rather than replacing the gate outright:** flipping
+this on necessarily changes Sharpe/MaxDD (in-sample numbers are expected to run hotter
+than genuine OOS ones) for every strategy in the table above, and could flip some of the
+"✅ True" verdicts recorded in this log to `False` (or vice versa) — this sandboxed
+dev/CI environment has no live-market network access, so none of the 13 registered
+strategies could be re-run against real data to measure the actual before/after here (the
+same limitation this log's own "Verification methodology" section and several
+`docs/architecture/signal-engines.md` entries already document for other opt-in levers
+introduced without live-data access). Flipping this flag on is a deliberate, separate
+follow-up: re-run `python -m scripts.refresh_validations --json` for every
+`STRATEGY_REGISTRY` strategy with the flag enabled, and append the resulting before/after
+table here (and to each affected strategy's `docs/signals/<name>.md`) exactly like every
+other entry in this log, rather than assuming today's numbers still hold.
+
+**Not fixed by this entry** (documented, not silently glossed over): the flat-turnover-
+cost-charged-on-every-calendar-day issue flagged in "A mechanical finding worth
+flagging" above is unrelated and still open; `TieredCostModel`'s full spread/liquidity-
+tier richness is still not wired into `_apply_cost_model` (which remains a flat
+11bps-round-trip constant, now just applied consistently to both gate legs); and no
+genuine rolling-origin (walk-forward) loop was added — the existing static 60/40/70/30/
+80/20 "walk-forward stability checks" remain informational-only splits, unchanged.
+
+Tests: `tests/test_metrics_cpcv_oos_aggregates.py` (pure `run_cpcv_evaluation` math,
+hand-computed expected values), `tests/test_harness_oos_gate.py` (flag wiring, default-off
+byte-for-byte reproduction of the pre-existing in-sample fit, equity-curve scope limit).
+
+---
+
 ## Verification methodology
 
 Every fix in this log was independently re-run through the real walk-forward harness

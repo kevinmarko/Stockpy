@@ -693,6 +693,19 @@ class StrategyValidationHarness:
             else:
                 wf_sharpes[split_pct] = 0.0
 
+        # settings.VALIDATION_HARNESS_OOS_GATE_ENABLED (opt-in, default False —
+        # see settings.py for the full honesty writeup): when True, CPCV's own
+        # DSR/PBO Sharpes are computed net-of-cost (same turnover-scaled cost
+        # model as the rest of this harness) instead of on gross returns.
+        oos_gate_enabled = False
+        try:
+            from settings import settings as _oos_gate_settings
+            oos_gate_enabled = bool(
+                getattr(_oos_gate_settings, "VALIDATION_HARNESS_OOS_GATE_ENABLED", False)
+            )
+        except Exception:  # noqa: BLE001 - never let a settings read block validation
+            oos_gate_enabled = False
+
         # 4. CPCV across full sample
         cpcv_results = run_cpcv_evaluation(
             self.strategy_fn,
@@ -700,9 +713,10 @@ class StrategyValidationHarness:
             y,
             t1=None,
             n_splits=self.n_cpcv_splits,
-            n_test_splits=self.n_test_splits
+            n_test_splits=self.n_test_splits,
+            cost_model_fn=self._apply_cost_model if oos_gate_enabled else None,
         )
-        
+
         # 5. Performance Metrics (over the full sample)
         # Evaluate strategy over full sample
         full_trials = self.strategy_fn(X, y, X, y)
@@ -722,7 +736,7 @@ class StrategyValidationHarness:
 
         # Standard Performance calculations
         sharpe = sharpe_ratio(full_returns)
-        
+
         # Sortino
         downside_returns = full_returns[full_returns < 0]
         downside_std = downside_returns.std()
@@ -739,6 +753,32 @@ class StrategyValidationHarness:
         trade_days = full_returns != 0
         hit_rate = float((full_returns[trade_days] > 0).mean()) if trade_days.any() else 0.0
         avg_trade_pct = float(full_returns[trade_days].mean()) if trade_days.any() else 0.0
+
+        # settings.VALIDATION_HARNESS_OOS_GATE_ENABLED (see the settings-read
+        # above and settings.py's description for the full honesty writeup):
+        # sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover above
+        # were computed on strategy_fn(X, y, X, y) -- an in-sample "test" set
+        # IDENTICAL to the training set -- while PBO/DSR were already
+        # genuinely out-of-sample via CPCV. When enabled, replace these seven
+        # gate/report numbers with the mean of each metric computed
+        # independently on every CPCV path's own genuinely held-out
+        # (purged+embargoed), now-also-cost-adjusted OOS returns for the
+        # DSR-selected strategy (see run_cpcv_evaluation's docstring).
+        # equity_curve/benchmark_curve/macro_benchmark_curve deliberately stay
+        # on full_returns either way -- a single non-overlapping OOS equity
+        # curve needs the AFML CPCV backtest-path-recombination algorithm,
+        # which is not implemented here (a real follow-up, not silently faked).
+        if oos_gate_enabled:
+            sharpe = cpcv_results["mean_oos_sharpe"]
+            max_dd = cpcv_results["mean_oos_max_dd"]
+            sortino = cpcv_results["mean_oos_sortino"]
+            calmar = (
+                (cpcv_results["mean_oos_avg_trade_pct"] * 252 / max_dd)
+                if (not np.isnan(max_dd) and max_dd > 0) else np.nan
+            )
+            hit_rate = cpcv_results["mean_oos_hit_rate"]
+            avg_trade_pct = cpcv_results["mean_oos_avg_trade_pct"]
+            turnover = cpcv_results["mean_oos_turnover"]
 
         # Downsampled base-100 OOS equity curve for the Pilots PWA (same
         # net-of-cost series that fed sharpe/max_dd above — no extra backtest).
