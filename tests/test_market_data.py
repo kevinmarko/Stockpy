@@ -665,6 +665,26 @@ class TestCompositeProviderCache:
         assert mock_provider.get_latest_quote.call_count == 1
         assert q1 is q2
 
+    def test_logs_quote_cache_hit_and_miss(self, caplog):
+        import logging
+        cp, mock_provider = self._make_cp()
+        with caplog.at_level(logging.DEBUG, logger="data.market_data"):
+            cp.get_latest_quote("AAPL")  # miss
+            cp.get_latest_quote("AAPL")  # hit
+        messages = [r.message for r in caplog.records]
+        assert any("quote cache MISS for AAPL" in m for m in messages)
+        assert any("quote cache HIT for AAPL" in m for m in messages)
+
+    def test_logs_bars_cache_hit_and_miss(self, caplog):
+        import logging
+        cp, mock_provider = self._make_cp()
+        with caplog.at_level(logging.DEBUG, logger="data.market_data"):
+            cp.get_intraday_bars("AAPL")  # miss
+            cp.get_intraday_bars("AAPL")  # hit
+        messages = [r.message for r in caplog.records]
+        assert any("bars cache MISS for AAPL" in m for m in messages)
+        assert any("bars cache HIT for AAPL" in m for m in messages)
+
     def test_invalidate_forces_refetch(self):
         cp, mock_provider = self._make_cp()
         cp.get_latest_quote("AAPL")
@@ -703,6 +723,32 @@ class TestCompositeProviderCache:
         # Primary was consulted first, then the yfinance .info fallback fired.
         mock_primary.get_fundamentals.assert_called_once()
         assert result == yf_fund
+
+    def test_fundamentals_fallback_logs_a_warning(self, caplog):
+        """The silent emergency fallback to yfinance .info must be logged --
+        an operator needs to know the primary fundamentals source failed."""
+        import logging
+        from data.market_data import CompositeProvider
+        cp = CompositeProvider.__new__(CompositeProvider)
+        from data.market_data import (
+            _QuoteCache,
+            _FundamentalsCache,
+            YahooFundamentalsProvider,
+            YFinanceProvider,
+        )
+        cp._cache = _QuoteCache(ttl_seconds=30)
+        cp._quote_provider = MagicMock()
+        cp._fundamentals_cache = _FundamentalsCache(ttl_seconds=21600, neg_ttl_seconds=900)
+
+        mock_primary = MagicMock(spec=YahooFundamentalsProvider)
+        mock_primary.get_fundamentals.return_value = {}
+        cp._fundamentals_provider = mock_primary
+
+        with caplog.at_level(logging.WARNING, logger="data.market_data"), \
+             patch.object(YFinanceProvider, "get_fundamentals", return_value={"trailingPE": 28.5}):
+            cp.get_fundamentals("AAPL")
+
+        assert any("falling back to raw yfinance" in r.message for r in caplog.records)
 
     def test_fundamentals_uses_primary_when_non_empty(self):
         """When the primary (Yahoo) provider returns data, the composite uses it

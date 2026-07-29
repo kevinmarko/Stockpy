@@ -17,6 +17,7 @@ mock_tf.keras = mock_keras
 mock_keras.models = mock_models
 mock_keras.layers = mock_layers
 mock_keras.callbacks = mock_callbacks
+mock_tf.random = MagicMock()  # tf.random.set_seed(...) -- CNN-LSTM reproducibility seed
 
 # Create the specific mock class for Sequential
 mock_sequential = MagicMock()
@@ -40,6 +41,7 @@ sys.modules['tensorflow.keras.callbacks'] = mock_callbacks
 import forecasting_engine
 # Force TENSORFLOW_AVAILABLE to be True for testing.
 forecasting_engine.TENSORFLOW_AVAILABLE = True
+forecasting_engine.tf = mock_tf
 # Sequential/Conv1D/LSTM/Dense/MaxPooling1D are bound at forecasting_engine's
 # MODULE level only if `import tensorflow` succeeded at the time the module
 # was FIRST imported process-wide -- which, once another test module (e.g.
@@ -145,6 +147,21 @@ def test_forecasting_scaler_fit_on_train_only(sine_wave_data):
             assert len(arg) == expected_train_len, (
                 f"MinMaxScaler.fit was called on size {len(arg)} but training slice expected {expected_train_len}."
             )
+
+
+def test_legacy_in_process_path_seeds_numpy_and_tf_before_fit(sine_wave_data):
+    """The in-process fallback branch (CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED
+    off) must seed np.random/tf.random with CNN_LSTM_RANDOM_SEED before
+    building the model, same as the subprocess-isolated path in
+    cnn_lstm_worker.py (tests/test_cnn_lstm_worker.py)."""
+    from cnn_lstm_worker import CNN_LSTM_RANDOM_SEED
+
+    engine = ForecastingEngine()
+    with patch("numpy.random.seed") as mock_np_seed:
+        engine.run_cnn_lstm_forecast(sine_wave_data, horizons=(10, 30, 60, 90))
+
+    mock_np_seed.assert_called_once_with(CNN_LSTM_RANDOM_SEED)
+    mock_tf.random.set_seed.assert_called_with(CNN_LSTM_RANDOM_SEED)
 
 
 # =============================================================================

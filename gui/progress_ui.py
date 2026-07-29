@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 

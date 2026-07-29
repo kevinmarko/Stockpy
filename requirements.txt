@@ -83,6 +83,7 @@ regex==2026.5.9
 requests==2.34.2
 requests-oauthlib==2.0.0
 rich==15.0.0
+ruff==0.16.0  # CI lint step (.github/workflows/ci.yml) -- not used at runtime
 schedule==1.2.2
 scikit-learn==1.9.0
 scipy==1.17.1

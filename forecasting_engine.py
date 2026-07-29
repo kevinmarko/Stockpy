@@ -826,6 +826,9 @@ class ForecastingEngine:
                 model_saved_in_subprocess = bool(result.get("saved"))
             else:
                 from tensorflow.keras.callbacks import EarlyStopping
+                from cnn_lstm_worker import CNN_LSTM_RANDOM_SEED
+                np.random.seed(CNN_LSTM_RANDOM_SEED)
+                tf.random.set_seed(CNN_LSTM_RANDOM_SEED)
                 model = Sequential([
                     Conv1D(filters=32, kernel_size=3, activation='relu',
                            input_shape=(time_steps, num_features)),
