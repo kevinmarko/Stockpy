@@ -58,7 +58,6 @@ Auto-registered with ``global_registry`` at module import time (imported by
 
 import hashlib
 import logging
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -393,8 +392,27 @@ def build_finnhub_client() -> Optional[Any]:
     Public API (promoted alongside :func:`fetch_company_news` /
     :func:`fetch_next_earnings` in Tier 9 Scope 4) so ``llm/research.py``
     can obtain a Finnhub client without reaching into a private surface.
+
+    Reads the key from ``settings.FINNHUB_API_KEY`` -- NOT
+    ``os.environ.get("FINNHUB_API_KEY")``, which this function used until it
+    was fixed here. Pydantic-settings' ``env_file=".env"`` loads a value from
+    ``.env`` into the ``Settings`` model directly; it does not also copy it
+    into the process's real ``os.environ``. An operator whose ONLY source for
+    this key is `.env` (the documented, normal case -- see CLAUDE.md's
+    `gui/env_io.py` convention, and every other credential-gated source in
+    ``data/sentiment_sources.py``: ``RedditSource``/``EdgarSource`` both read
+    ``settings.REDDIT_CLIENT_ID``/``settings.EDGAR_USER_AGENT``, never
+    ``os.environ`` directly) therefore got a silent ``None`` here forever --
+    Finnhub contributed zero documents to every live cycle and to
+    ``scripts/backfill_sentiment_history.py``, with no error or warning,
+    because a missing key and a present-but-unreachable key look identical to
+    this function's caller. Confirmed live 2026-07-29: a real 6-month, 33-
+    symbol backfill run against a real Finnhub key configured only in `.env`
+    archived zero Finnhub documents.
     """
-    api_key = os.environ.get("FINNHUB_API_KEY", "")
+    from settings import settings as _settings
+
+    api_key = _settings.FINNHUB_API_KEY or ""
     if not api_key:
         return None
     try:
