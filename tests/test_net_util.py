@@ -31,7 +31,7 @@ class TestFindFreePort:
         # If the port were still in use, this bind would raise OSError.
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("", port))
+            sock.bind(("127.0.0.1", port))
 
     def test_returns_distinct_ports_across_calls(self) -> None:
         # Not a strict guarantee, but sanity-check we aren't always

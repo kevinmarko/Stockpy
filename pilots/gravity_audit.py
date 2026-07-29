@@ -158,7 +158,7 @@ def legacy_audit_status(path: Optional[str] = None) -> Dict[str, Any]:
             "available": False,
             "all_passed": None,
             "steps": [],
-            "reason": f"Log unreadable: {exc}",
+            "reason": "Log unreadable.",
         }
 
     report = _parse_trailing_json(text)
