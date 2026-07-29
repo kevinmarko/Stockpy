@@ -11,6 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Observability } from "./Observability";
 import { api } from "../api/client";
+import { mockEmptyLogAggregation, mockSystemTelemetryUnavailable } from "../api/mock";
 import type { LogAggregation, ObservabilitySummary } from "../api/types";
 
 function renderScreen() {
@@ -72,35 +73,20 @@ const COLD_START: ObservabilitySummary = {
     window_hours: 24,
     reason: "No active circuit-breaker trips in the last 24h.",
   },
-  system_telemetry: {
-    psutil_available: false,
-    cpu_percent: null,
-    cpu_count_logical: null,
-    load_avg_1m: null,
-    memory_percent: null,
-    memory_used_bytes: null,
-    memory_total_bytes: null,
-    disk_percent: null,
-    disk_used_bytes: null,
-    disk_total_bytes: null,
-    process_rss_bytes: null,
-    process_cpu_percent: null,
-    process_threads: null,
-    sampled_at: null,
-    reason: "psutil is not available in this environment.",
-  },
+  // mock.ts's mockSystemTelemetryUnavailable() is the canonical shape for
+  // this branch (exact mirror of pilots/observability.py::
+  // _empty_system_telemetry) -- calling it here instead of hand-rolling the
+  // same object keeps this test pinned to the mock's own copy rather than a
+  // separate one that could silently drift from it.
+  system_telemetry: mockSystemTelemetryUnavailable(),
 };
 
-const EMPTY_LOGS: LogAggregation = {
-  log_path: "logs/investyo.log",
-  total_lines: 0,
-  tally: { CRITICAL: 0, ERROR: 0, WARNING: 0, INFO: 0, DEBUG: 0, UNPARSED: 0 },
-  systemic_count: 0,
-  symbol_specific_count: 0,
-  entries: [],
-  returned_count: 0,
-  reason: "No log file yet at logs/investyo.log.",
-};
+// mock.ts's mockEmptyLogAggregation() is the canonical shape for this branch
+// (exact mirror of pilots/observability.py::_empty_log_aggregation) -- same
+// rationale as COLD_START.system_telemetry above.
+const EMPTY_LOGS: LogAggregation = mockEmptyLogAggregation(
+  "No log file yet at logs/investyo.log."
+);
 
 describe("Observability (Mission Control) screen (real mock API)", () => {
   afterEach(() => vi.restoreAllMocks());
