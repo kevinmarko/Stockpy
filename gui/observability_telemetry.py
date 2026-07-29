@@ -93,6 +93,12 @@ def _nan_telemetry(reason: str) -> SystemTelemetry:
     )
 
 
+# Cached across calls so ``psutil.Process.cpu_percent(interval=None)`` can
+# self-correct after its first sample -- see the comment at its call site
+# below for why a fresh ``psutil.Process()`` per call would never do this.
+_cached_process: Any = None
+
+
 def collect_system_telemetry(disk_path: str | Path = "/") -> SystemTelemetry:
     """Sample CPU / memory / disk for the host and the current process.
 
@@ -128,7 +134,26 @@ def collect_system_telemetry(disk_path: str | Path = "/") -> SystemTelemetry:
 
         vm = psutil.virtual_memory()
         du = psutil.disk_usage(str(disk_path))
-        proc = psutil.Process()
+
+        # ``Process.cpu_percent(interval=None)`` returns the CPU delta since
+        # the PREVIOUS call on that SAME instance (it tracks
+        # ``_last_proc_cpu_times`` as an instance attribute, unset on a fresh
+        # object). Constructing a new ``psutil.Process()`` on every call —
+        # what this used to do — means that attribute is always unset, so
+        # this unconditionally returns 0.0 on EVERY call, forever: a
+        # plausible-looking "0% CPU" that is actually "never measured," never
+        # distinguishable from a genuinely idle process (unlike the
+        # host-level ``psutil.cpu_percent()`` two lines up, which already
+        # self-corrects via psutil's own module-level cached state). Caching
+        # one ``Process()`` instance at module scope — always valid, since a
+        # no-arg ``Process()`` pins to ``os.getpid()`` for the life of this
+        # interpreter — lets the same self-correction happen here: still 0.0
+        # on the first call in this process's lifetime, but a real
+        # measurement on every call after that.
+        global _cached_process
+        if _cached_process is None:
+            _cached_process = psutil.Process()
+        proc = _cached_process
         proc_rss = int(proc.memory_info().rss)
         proc_cpu = float(proc.cpu_percent(interval=None))
         proc_threads = int(proc.num_threads())
