@@ -2919,15 +2919,6 @@ class Settings(BaseSettings):
             "list — CONSTRAINT #4)."
         ),
     )
-    ETF_HOLDINGS_MARKET_PROXY: str = Field(
-        default="SPY",
-        description=(
-            "Ticker treated as the broad-market ETF wrapper when a consumer "
-            "needs a single market-wide ownership baseline rather than the "
-            "full ETF_HOLDINGS_TICKERS suite. Only consulted once "
-            "ETF_HOLDINGS_ENABLED is True."
-        ),
-    )
     ETF_HOLDINGS_REFRESH_DAYS: int = Field(
         default=7,
         description=(
