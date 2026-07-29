@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import sys
 import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -37,6 +37,7 @@ mock_tf.keras = mock_keras
 mock_keras.models = mock_models
 mock_keras.layers = mock_layers
 mock_keras.callbacks = mock_callbacks
+mock_tf.random = MagicMock()  # tf.random.set_seed(...) -- CNN-LSTM reproducibility seed
 
 mock_sequential = MagicMock()
 mock_sequential.return_value.predict.return_value = np.ones((1, 4)) * 0.5
@@ -64,6 +65,7 @@ import cnn_lstm_worker  # noqa: E402
 # names are whatever that first import saw, regardless of what
 # sys.modules['tensorflow'] is reassigned to afterwards.
 cnn_lstm_worker.TENSORFLOW_AVAILABLE = True
+cnn_lstm_worker.tf = mock_tf
 cnn_lstm_worker.Sequential = mock_models.Sequential
 cnn_lstm_worker.load_model = mock_models.load_model
 cnn_lstm_worker.Conv1D = mock_layers.Conv1D
@@ -122,6 +124,16 @@ class TestFitPredictCnnLstm:
         X_seq, Y_seq, last_window = _windows()
         with pytest.raises(RuntimeError, match="tensorflow"):
             cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+
+    def test_seeds_numpy_and_tf_before_training(self):
+        """Reproducible fits: np.random.seed/tf.random.set_seed must be
+        applied with CNN_LSTM_RANDOM_SEED before the model is built, on
+        every call -- not just once at import time."""
+        X_seq, Y_seq, last_window = _windows()
+        with patch("numpy.random.seed") as mock_np_seed:
+            cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+        mock_np_seed.assert_called_once_with(cnn_lstm_worker.CNN_LSTM_RANDOM_SEED)
+        cnn_lstm_worker.tf.random.set_seed.assert_called_with(cnn_lstm_worker.CNN_LSTM_RANDOM_SEED)
 
     def test_model_architecture_matches_shape(self):
         """Conv1D input_shape and Dense width must match (time_steps,

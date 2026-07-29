@@ -15,7 +15,7 @@ it (see pipeline/steps.py).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:
     from pipeline.base import PipelineStep

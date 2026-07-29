@@ -478,6 +478,33 @@ CREATE INDEX IF NOT EXISTS idx_etf_holdings_holding
     ON etf_holdings (holding_symbol, as_of_date)
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# schema_version -- a single-row stamp for this DB file's schema shape.
+#
+# `_ensure_tables()`'s per-table `_migrate_*` helpers are all ADDITIVE
+# (`ALTER TABLE ADD COLUMN`, guarded by `PRAGMA table_info`) and are safe to
+# run unconditionally against any older DB -- that is what keeps this class
+# working across upgrades without a version check today. `schema_version`
+# does not replace that; it exists for the failure mode additive migration
+# can't self-detect: a DB file written by a NEWER build of this codebase (a
+# column renamed/removed, a type changed, a table restructured) being opened
+# by an OLDER build, which would otherwise read back whatever plain SQLite
+# happens to return -- silently wrong values, not an error. On mismatch this
+# only WARNS (never raises): per this module's CONSTRAINT #6 dead-letter
+# posture, a version stamp is a diagnostic signal for the operator, not a
+# gate that should take down the pipeline.
+# ─────────────────────────────────────────────────────────────────────────────
+
+CURRENT_SCHEMA_VERSION = 1
+
+_SCHEMA_VERSION_DDL = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    version    INTEGER NOT NULL,
+    updated_at TEXT    NOT NULL
+)
+"""
+
 # Column order returned by SELECT for price_bars reconstruction.
 _SELECT_COLS = "open, high, low, close, adj_close, volume"
 
@@ -605,13 +632,66 @@ class HistoricalStore:
                 conn.execute(_RAG_INDEXED_DOCS_INDEX_DDL)
                 conn.execute(_ETF_HOLDINGS_DDL)
                 conn.execute(_ETF_HOLDINGS_INDEX_DDL)
+                conn.execute(_SCHEMA_VERSION_DDL)
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
                 self._migrate_add_verification_method_column(conn)
+                self._ensure_schema_version(conn)
             finally:
                 raw_conn.close()
         except Exception as exc:
             logger.warning("HistoricalStore._ensure_tables failed: %s", exc)
+
+    def _ensure_schema_version(self, conn: sqlite3.Connection) -> None:
+        """Stamp/verify the ``schema_version`` row. See the DDL comment above
+        for what this is (and is not) a guard against. Never raises."""
+        try:
+            row = conn.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
+            now_ts = self._now_utc_iso()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO schema_version (id, version, updated_at) VALUES (1, ?, ?)",
+                    (CURRENT_SCHEMA_VERSION, now_ts),
+                )
+                conn.commit()
+                logger.info("HistoricalStore: stamped schema_version=%d.", CURRENT_SCHEMA_VERSION)
+                return
+
+            db_version = row[0]
+            if db_version < CURRENT_SCHEMA_VERSION:
+                conn.execute(
+                    "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+                    (CURRENT_SCHEMA_VERSION, now_ts),
+                )
+                conn.commit()
+                logger.info(
+                    "HistoricalStore: schema_version bumped %d -> %d.",
+                    db_version, CURRENT_SCHEMA_VERSION,
+                )
+            elif db_version > CURRENT_SCHEMA_VERSION:
+                logger.warning(
+                    "HistoricalStore: quant_platform.db schema_version=%d is NEWER than "
+                    "this build's CURRENT_SCHEMA_VERSION=%d. This DB was written by a "
+                    "newer version of this codebase; reads against it from this older "
+                    "build may silently return wrong values instead of an error. "
+                    "Update this checkout before trusting cached reads.",
+                    db_version, CURRENT_SCHEMA_VERSION,
+                )
+        except Exception as exc:
+            logger.warning("HistoricalStore._ensure_schema_version failed: %s", exc)
+
+    def get_schema_version(self) -> Optional[int]:
+        """Return the DB file's stamped ``schema_version``, or ``None`` if unset
+        (a DB created before this stamp existed, or an empty/fresh DB whose
+        ``_ensure_tables()`` hasn't run yet)."""
+        try:
+            with self._lock:
+                conn = self._get_conn()
+                row = conn.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
+            return int(row[0]) if row is not None else None
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_schema_version failed: %s", exc)
+            return None
 
     def _migrate_add_report_date_column(self, conn: sqlite3.Connection) -> None:
         """Additive migration: add ``fundamentals_history.report_date`` to a
@@ -998,6 +1078,22 @@ class HistoricalStore:
         typed = _raw_to_typed_fundamentals(raw)
 
         # ── Step 3: upsert into DB ───────────────────────────────────────────
+        # Never cache a totally empty provider response as if it were fresh
+        # data — an empty ``raw`` dict means the provider returned nothing
+        # (a common yfinance/Yahoo failure mode), and upserting it anyway
+        # would make the next call within `max_age_days` read back a
+        # "fresh" all-NaN row instead of retrying the live fetch, silently
+        # suppressing recovery until the TTL expires (cache poisoning).
+        # A non-empty `raw` with some missing fields is legitimate partial
+        # data and is still cached as-is.
+        if not raw:
+            logger.warning(
+                "HistoricalStore.get_fundamentals(%s): provider returned an "
+                "empty response; skipping DB upsert so the next call retries "
+                "instead of reading back a stale all-NaN cache hit.", symbol,
+            )
+            return typed
+
         try:
             self._upsert_fundamentals(symbol, typed, raw, source=_source_name(_provider))
         except Exception as exc:

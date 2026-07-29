@@ -142,6 +142,58 @@ class TestTableCreation:
         HistoricalStore(db_path=db)
 
 
+class TestSchemaVersion:
+    """schema_version is a diagnostic stamp -- see the DDL comment in
+    data/historical_store.py for what it is (and is not) a guard against."""
+
+    def test_fresh_db_stamped_with_current_version(self, tmp_path):
+        from data.historical_store import CURRENT_SCHEMA_VERSION
+
+        db = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db)
+        assert store.get_schema_version() == CURRENT_SCHEMA_VERSION
+
+    def test_older_version_row_is_bumped_on_init(self, tmp_path):
+        from data.historical_store import CURRENT_SCHEMA_VERSION
+
+        db = str(tmp_path / "test.db")
+        # Seed a pre-existing DB stamped at an older version.
+        HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE schema_version SET version = 0 WHERE id = 1")
+            conn.commit()
+
+        store = HistoricalStore(db_path=db)
+        assert store.get_schema_version() == CURRENT_SCHEMA_VERSION
+
+    def test_newer_version_row_is_left_alone_and_warns(self, tmp_path, caplog):
+        """A DB stamped by a newer build must not be silently downgraded --
+        only warned about (CONSTRAINT #6: diagnostic, not a hard gate)."""
+        import logging
+
+        db = str(tmp_path / "test.db")
+        HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE schema_version SET version = 999 WHERE id = 1")
+            conn.commit()
+
+        with caplog.at_level(logging.WARNING, logger="data.historical_store"):
+            store = HistoricalStore(db_path=db)
+
+        assert store.get_schema_version() == 999
+        assert any("NEWER" in rec.message for rec in caplog.records)
+
+    def test_get_schema_version_none_when_unset(self, tmp_path):
+        """A row-less schema_version table (e.g. DB predating this stamp)
+        degrades to None, never a fabricated version number."""
+        db = str(tmp_path / "test.db")
+        store = HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            conn.execute("DELETE FROM schema_version")
+            conn.commit()
+        assert store.get_schema_version() is None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1 — TestLatestBarDate
 # ─────────────────────────────────────────────────────────────────────────────
@@ -607,6 +659,36 @@ class TestFundamentalsHistory:
             result = store.get_fundamentals("FAIL", provider=provider)
 
         assert result == {}
+
+    def test_empty_provider_response_not_cached_as_fresh(self, tmp_path):
+        """Provider returns {} (not a raise, just nothing) → the all-NaN result
+        must NOT be upserted into the DB. Caching it would make the next call
+        within max_age_days read back a stale "fresh" cache hit instead of
+        retrying the live fetch — a cache-poisoning regression."""
+        import sqlite3 as _sqlite3
+
+        db = str(tmp_path / "fund.db")
+        store = HistoricalStore(db_path=db)
+        provider = _make_mock_provider(raw={})
+
+        result = store.get_fundamentals("EMPTY", max_age_days=1, provider=provider)
+
+        # Result is the all-NaN sentinel dict, never fabricated zeros.
+        assert isinstance(result, dict)
+        for val in result.values():
+            assert math.isnan(val)
+
+        # No row was written for an empty response.
+        with _sqlite3.connect(db) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM fundamentals_history WHERE symbol='EMPTY'"
+            ).fetchone()
+        assert row is None
+
+        # A second call within max_age_days must retry the provider — there
+        # is no cached row to (wrongly) treat as fresh.
+        store.get_fundamentals("EMPTY", max_age_days=1, provider=provider)
+        assert provider.get_fundamentals.call_count == 2
 
     def test_fundamentals_history_dataframe_shape(self, tmp_path):
         """After two daily writes, get_fundamentals_history returns correct columns."""

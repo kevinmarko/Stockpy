@@ -1244,7 +1244,9 @@ class CompositeProvider(MarketDataProvider):
 
         cached = self._cache.get(sym)
         if cached is not None:
+            logger.debug("CompositeProvider: quote cache HIT for %s.", sym)
             return cached
+        logger.debug("CompositeProvider: quote cache MISS for %s; fetching live.", sym)
 
         quote = self._quote_provider.get_latest_quote(sym)
         self._cache.put(quote)
@@ -1280,7 +1282,15 @@ class CompositeProvider(MarketDataProvider):
 
         cached = self._bars_cache.get(sym, lookback_days, interval)
         if cached is not None:
+            logger.debug(
+                "CompositeProvider: bars cache HIT for %s (lookback=%d, interval=%s).",
+                sym, lookback_days, interval,
+            )
             return cached
+        logger.debug(
+            "CompositeProvider: bars cache MISS for %s (lookback=%d, interval=%s); fetching live.",
+            sym, lookback_days, interval,
+        )
 
         bars = self._quote_provider.get_intraday_bars(
             symbol=sym, lookback_days=lookback_days, interval=interval
@@ -1315,13 +1325,25 @@ class CompositeProvider(MarketDataProvider):
 
         cached = self._fundamentals_cache.get(sym)
         if cached is not None:
+            logger.debug("CompositeProvider: fundamentals cache HIT for %s.", sym)
             return cached
+        logger.debug("CompositeProvider: fundamentals cache MISS for %s; fetching live.", sym)
 
         fund = self._fundamentals_provider.get_fundamentals(sym) or {}
         if not fund:
             # emergency fallback to raw yfinance .info (keeps its own
             # dividendYield normalization)
+            logger.warning(
+                "CompositeProvider: primary fundamentals provider (%s) returned "
+                "nothing for %s; falling back to raw yfinance .info.",
+                self.source_name, sym,
+            )
             fund = YFinanceProvider().get_fundamentals(sym)
+            if not fund:
+                logger.warning(
+                    "CompositeProvider: yfinance .info fallback also returned "
+                    "nothing for %s; caching empty result.", sym,
+                )
         self._fundamentals_cache.put(sym, fund)
         return fund
 
