@@ -891,6 +891,49 @@ class Settings(BaseSettings):
             "not the live pipeline; costs more compute per fit."
         ),
     )
+
+    # --- Strategy validation harness OOS gate (validation/harness.py) ---
+    VALIDATION_HARNESS_OOS_GATE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in fix for StrategyValidationHarness's deployability gate. Two "
+            "related integrity gaps: (1) report.sharpe/max_dd/sortino/calmar/"
+            "hit_rate/avg_trade_pct/turnover were computed from "
+            "self.strategy_fn(X, y, X, y) -- a 'test' set IDENTICAL to the "
+            "training set, i.e. an IN-SAMPLE number feeding the 'net-of-cost "
+            "Sharpe > 0.5' / 'MaxDD < 30%' deployability criteria -- while only "
+            "PBO/DSR were genuinely out-of-sample (via CombinatorialPurgedCV). "
+            "(2) CombinatorialPurgedCV's own DSR/PBO Sharpes were computed on "
+            "GROSS (cost-free) returns even though the in-sample Sharpe/MaxDD "
+            "leg applied _apply_cost_model's turnover-scaled cost -- an "
+            "inconsistent cost basis between the two gate legs. When True, "
+            "run_cpcv_evaluation applies the same turnover-scaled cost model to "
+            "every CPCV path's train/test returns before any Sharpe/PBO/DSR/"
+            "drawdown statistic is computed from them, and the harness's "
+            "reported sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/"
+            "turnover become the MEAN of each metric computed independently on "
+            "every CPCV path's own genuinely held-out (purged+embargoed) OOS "
+            "returns for the DSR-selected strategy, instead of the full-sample "
+            "in-sample fit -- see run_cpcv_evaluation's docstring for why this "
+            "is a per-path mean rather than one concatenated equity curve "
+            "(CPCV's combinatorial test blocks are deliberately reused across "
+            "paths). equity_curve/benchmark_curve/macro_benchmark_curve are "
+            "UNCHANGED either way (still the full-sample series) -- a single "
+            "non-overlapping OOS equity curve needs the AFML CPCV backtest-"
+            "path-recombination algorithm, not implemented here (a real, "
+            "separate follow-up, not silently faked). False (the default) "
+            "reproduces pre-existing behavior exactly: every currently-recorded "
+            "docs/VALIDATION_STRATEGY_FIX_LOG.md PBO/DSR/Sharpe/MaxDD baseline "
+            "for the registered STRATEGY_REGISTRY fleet was measured with this "
+            "flag off, and this sandboxed dev/CI environment has no live-market "
+            "network access to re-verify the fleet against the corrected "
+            "numbers -- flipping this on requires re-running "
+            "scripts/refresh_validations.py against live data and updating that "
+            "log, exactly like this codebase's other opt-in correctness levers "
+            "(e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above, "
+            "ETF_TRANSMISSION_SIZING_ENABLED)."
+        ),
+    )
     BERT_LLA_ENABLED: bool = Field(
         default=False,
         description=(

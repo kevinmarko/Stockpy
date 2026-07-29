@@ -292,7 +292,10 @@
                     </div>
                 </div>
                 <div class="card-footer">
-                    Gated on selection bias. Target: &gt; 95%.
+                    Gated on selection bias. Target: &gt; 95%. Corrects for
+                    {{ n_trials }} strategy configuration{{ "s" if n_trials != 1 else "" }}
+                    tested -- more configurations tried means a higher observed
+                    Sharpe is needed to clear this bar.
                 </div>
             </div>
 

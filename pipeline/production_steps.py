@@ -1222,18 +1222,16 @@ class StrategyEvalStep(PipelineStep):
                 )
 
                 stage = "edge_ratio"
+                # The real MAE/MFE/Edge Ratio — from an actual TransactionsStore
+                # trade's genuine intra-trade OHLC path, not a fictional window —
+                # are computed once for every ticker by ee.evaluate_portfolio()
+                # below and overwrite this placeholder unconditionally. A
+                # synthetic "entry 15 bars ago, exit today" pseudo-trade used to
+                # be computed here and appended to the Strategy Explainer Notes
+                # as if it were a real post-trade evaluation — misleading, since
+                # no real trade exists over that window, and wasted since the
+                # value was never read before being overwritten (removed).
                 edge_ratio_val = 0.0
-                if history_df is not None and len(history_df) >= 20:
-                    entry_d = history_df.index[-15]
-                    exit_d = history_df.index[-1]
-                    trade_entry_p = float(history_df["Close"].iloc[-15])
-
-                    edge_data = ee.calculate_edge_ratio(history_df, trade_entry_p, entry_d, exit_d)
-                    edge_ratio_val = float(edge_data['Edge Ratio'])
-                    strategy_output["Strategy Explainer Notes"] += (
-                        f"\nPOST-TRADE EDGE RATIO: {edge_data['Edge Ratio']:.2f} "
-                        f"(MFE: {edge_data['MFE']*100:.1f}%, MAE: {edge_data['MAE']*100:.1f}%)"
-                    )
 
                 stage = "results"
                 eval_results[ticker] = {

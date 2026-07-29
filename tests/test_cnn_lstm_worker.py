@@ -123,6 +123,41 @@ class TestFitPredictCnnLstm:
         with pytest.raises(RuntimeError, match="tensorflow"):
             cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
 
+    def test_fit_uses_purged_validation_data_not_validation_split(self):
+        """The subprocess worker must mirror forecasting_engine.py's purged
+        internal train/val split (ForecastingEngine.purged_train_val_split) --
+        never Keras's own unpurged validation_split kwarg, which would leave
+        the last lookback-1 overlapping training windows contaminating the
+        first validation windows."""
+        X_seq, Y_seq, last_window = _windows(n_samples=40, lookback=60)
+        cnn_lstm_worker.fit_predict_cnn_lstm(X_seq, Y_seq, last_window, num_horizons=4)
+
+        _, fit_kwargs = mock_sequential.return_value.fit.call_args
+        assert "validation_data" in fit_kwargs
+        assert "validation_split" not in fit_kwargs
+        X_val, Y_val = fit_kwargs["validation_data"]
+        assert len(X_val) > 0 and len(Y_val) > 0
+
+    def test_purged_train_val_split_matches_forecasting_engine(self):
+        """Pure index-arithmetic parity check against
+        ForecastingEngine.purged_train_val_split (forecasting_engine.py) --
+        this module deliberately duplicates that logic rather than importing
+        it (see module docstring), so a drift between the two would silently
+        make the subprocess-isolated path less rigorous than the in-process
+        path without either test file noticing."""
+        lookback = 10
+        n_samples = 200
+        X_seq = np.arange(n_samples).reshape(-1, 1, 1).repeat(lookback, axis=1)
+        Y_seq = np.arange(n_samples).reshape(-1, 1)
+
+        X_tr, Y_tr, X_val, Y_val = cnn_lstm_worker._purged_train_val_split(
+            X_seq, Y_seq, lookback
+        )
+        assert len(X_tr) > 0 and len(X_val) > 0
+        last_train_end = (len(X_tr) - 1) + lookback
+        first_val_start = n_samples - len(X_val)
+        assert last_train_end <= first_val_start
+
     def test_model_architecture_matches_shape(self):
         """Conv1D input_shape and Dense width must match (time_steps,
         num_features) from X_seq and num_horizons -- a drift here would

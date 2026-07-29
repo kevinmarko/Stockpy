@@ -41,7 +41,31 @@ except ImportError:
     TENSORFLOW_AVAILABLE = False
 
 import numpy as np
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
+
+
+def _purged_train_val_split(
+    X_seq: np.ndarray,
+    Y_seq: np.ndarray,
+    lookback: int,
+    val_fraction: float = 0.2,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Mirrors ForecastingEngine.purged_train_val_split (forecasting_engine.py)
+    exactly -- pure numpy, duplicated rather than imported because this module
+    must never import forecasting_engine (see module docstring). Purges the
+    lookback-1 training windows whose raw row span overlaps the first
+    validation window's span, instead of Keras's own unpurged
+    validation_split=0.2, which would leave the last lookback-1 training
+    windows overlapping the first validation windows almost entirely.
+    """
+    n_total = len(X_seq)
+    n_val = max(1, int(round(n_total * val_fraction)))
+    val_start = max(0, n_total - n_val)
+    embargo = max(0, lookback - 1)
+    train_end = val_start - embargo
+    if train_end <= 0:
+        train_end = val_start
+    return X_seq[:train_end], Y_seq[:train_end], X_seq[val_start:], Y_seq[val_start:]
 
 
 def fit_predict_cnn_lstm(
@@ -55,9 +79,10 @@ def fit_predict_cnn_lstm(
 
     Mirrors ForecastingEngine.run_cnn_lstm_forecast's architecture exactly
     (Conv1D -> MaxPooling1D -> LSTM -> Dense, Adam/MSE, 50 epochs with
-    EarlyStopping(patience=5) on a 0.2 validation split) so isolating this
-    into a subprocess is behavior-preserving, not a second implementation to
-    keep in sync by hand -- only WHERE it runs changes.
+    EarlyStopping(patience=5) on a purged internal train/val split -- see
+    _purged_train_val_split) so isolating this into a subprocess is
+    behavior-preserving, not a second implementation to keep in sync by hand
+    -- only WHERE it runs changes.
 
     Pure numpy in, JSON-safe dict out -- safe to submit to a
     ProcessPoolExecutor and pickle across the process boundary. Raises on
@@ -78,10 +103,12 @@ def fit_predict_cnn_lstm(
     ])
     model.compile(optimizer='adam', loss='mse')
     early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps)
     model.fit(
-        X_seq, Y_seq,
+        X_tr, Y_tr,
+        validation_data=(X_val, Y_val),
         epochs=50, batch_size=16, verbose=0,
-        validation_split=0.2, callbacks=[early_stop],
+        callbacks=[early_stop],
     )
     pred_scaled = model.predict(last_window, verbose=0)[0]
 

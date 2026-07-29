@@ -875,11 +875,17 @@ def test_lookahead_bias_prevention():
 
 def test_evaluation_engine_evaluate_portfolio():
     """
-    Verifies that evaluate_portfolio correctly computes and populates MAE, MFE,
-    Portfolio_Heat, and BF attribution effects on a test portfolio.
+    Verifies that evaluate_portfolio correctly populates Portfolio_Heat and BF
+    attribution effects on a test portfolio, and that MAE/MFE honestly stay
+    NaN for these three symbols (no real TransactionsStore trade backs any of
+    them here, and a single day's High/Low is not a genuine intra-trade
+    excursion path -- the degraded single-bar fallback that used to fabricate
+    a value from Entry_Price/High/Low alone was removed as a fabrication risk,
+    CONSTRAINT #4; see tests/test_evaluation_no_history.py for the dedicated
+    coverage of that removal).
     """
     from evaluation_engine import EvaluationEngine
-    
+
     test_df = pd.DataFrame({
         'Symbol': ['AAPL', 'AGNC', 'XOM'],
         'sector': ['Technology', 'Real Estate', 'Energy'],
@@ -899,18 +905,17 @@ def test_evaluation_engine_evaluate_portfolio():
 
     engine = EvaluationEngine()
     processed_df = engine.evaluate_portfolio(test_df, test_benchmark)
-    
+
     assert 'MAE' in processed_df.columns
     assert 'MFE' in processed_df.columns
     assert 'Portfolio_Heat' in processed_df.columns
     assert 'BF_Allocation' in processed_df.columns
     assert 'BF_Selection' in processed_df.columns
 
-    # Verify AAPL metrics:
-    # MAE = |145.0 - 150.0| / 150.0 = 0.0333  (positive loss magnitude, per F-02 convention)
-    # MFE = (160.0 - 150.0) / 150.0 = 0.0667
-    assert math.isclose(processed_df.loc[processed_df['Symbol'] == 'AAPL', 'MAE'].values[0], 0.0333, abs_tol=1e-3)
-    assert math.isclose(processed_df.loc[processed_df['Symbol'] == 'AAPL', 'MFE'].values[0], 0.0667, abs_tol=1e-3)
+    # No real trade history exists for these symbols, so MAE/MFE must stay
+    # NaN -- never fabricated from the single day's High/Low above.
+    assert processed_df.loc[processed_df['Symbol'] == 'AAPL', 'MAE'].isna().all()
+    assert processed_df.loc[processed_df['Symbol'] == 'AAPL', 'MFE'].isna().all()
 
     # Verify Portfolio Heat:
     # Apple risk = 15000 * 0.03 = 450

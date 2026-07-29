@@ -583,20 +583,16 @@ class EvaluationEngine:
                     except Exception as e:
                         logger.warning(f"Failed to fetch actual hold period history for {symbol}: {e}")
             
-            # If no transaction history was found but Entry_Price exists in the input df, we can fall back
-            if np.isnan(entry_price) and 'Entry_Price' in row and not pd.isna(row['Entry_Price']):
-                entry_price = float(row['Entry_Price'])
-                if 'High' in row and not pd.isna(row['High']) and 'Low' in row and not pd.isna(row['Low']):
-                    max_high = float(row['High'])
-                    min_low = float(row['Low'])
-                    mae, mfe = self.calculate_excursion_metrics(
-                        entry_price, max_high, min_low, 'long'
-                    )
-                    if mae > 0:
-                        edge_ratio = mfe / mae
-                    else:
-                        edge_ratio = mfe / 1e-6 if mfe > 0 else 0.0
-            
+            # NOTE: a fallback used to live here that, when no TransactionsStore
+            # trade existed, derived MAE/MFE from a single day's High/Low
+            # (whatever 'row' happened to carry) against 'Entry_Price' — that is
+            # not a genuine intra-trade excursion (it never reads the actual
+            # hold-period OHLC path, and it also hardcoded position_type='long'
+            # regardless of the real side). Removed as a fabrication risk
+            # (CONSTRAINT #4): MAE/MFE/Edge Ratio now stay NaN, matching every
+            # other "no real trade history" case, whenever a genuine trade +
+            # hold-period history isn't available.
+
             eval_results[idx] = {
                 'Entry_Price': entry_price,
                 'MAE': mae,
@@ -1203,6 +1199,11 @@ if __name__ == "__main__":
 
     engine = EvaluationEngine()
     processed_df = engine.evaluate_portfolio(test_df, test_benchmark)
-    
+
+    # NOTE: MAE/MFE/Edge Ratio print as NaN here -- this demo passes no
+    # data_provider and these three symbols have no real TransactionsStore
+    # trade history, so there is no genuine intra-trade OHLC path to compute
+    # them from (the single-bar 'High'/'Low' fields above are honestly no
+    # longer treated as a substitute for one -- see evaluate_portfolio).
     print("\n--- EVALUATION ENGINE DIAGNOSTICS ---")
     print(processed_df[['Symbol', 'Realized Slippage', 'CoVaR Proxy', 'MAE', 'MFE', 'Portfolio_Heat', 'BF_Allocation', 'BF_Selection']])
