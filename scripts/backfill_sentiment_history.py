@@ -36,6 +36,30 @@ validation gate weigh institutional depth separately from Reddit's, rather
 than one blended number that would overstate confidence in the weaker
 component.
 
+GDELT throttling shapes what a run can achieve
+---------------------------------------------------------------
+GDELT is queried in 7-day windows (its ``artlist`` mode caps at 250 records
+per call), so ``--months 6`` is roughly 26 GDELT requests PER SYMBOL. Before
+the shared limiter in ``data/sentiment_sources.py``, those went out
+back-to-back and GDELT answered HTTP 429 to substantially all of them: a run
+against a 33-symbol universe on 2026-07-29 archived zero GDELT documents
+while logging one warning per window.
+
+Two consequences for anyone running this script now:
+
+* ``--max-seconds-per-symbol`` has to cover the throttle, not just the
+  network. At the default ``settings.GDELT_MIN_REQUEST_INTERVAL_SECONDS``
+  (5 s) a 6-month GDELT backfill needs ~130 s of spacing per symbol on top of
+  request time, so the 300 s default is workable but not generous. Raise it
+  before lowering the interval.
+* A throttled run ends up with a PARTIAL range, by design. Once the
+  limiter's cooldown opens, ``GDELTSource`` abandons that symbol's remaining
+  windows instead of grinding through certain-to-fail requests — which is
+  what leaves wall-clock for EDGAR/Finnhub/Reddit. The per-source depth
+  report printed at the end (and
+  ``HistoricalStore.get_sentiment_archive_depth_by_source()``) is the honest
+  record of what was actually archived; re-run to extend it.
+
 Sequential by design
 ---------------------
 Unlike ``scripts/backfill_edgar_fundamentals.py`` (which parallelizes across
