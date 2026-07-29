@@ -896,6 +896,27 @@ function writeMacroGateEnabled(enabled: boolean) {
   }
 }
 
+// ---- Local Observability cold-start simulation (localStorage) so the
+// System Telemetry / Log Aggregation sections' honest-empty branches
+// (psutil unavailable / no log file yet -- see mockSystemTelemetryUnavailable
+// / mockEmptyLogAggregation below) are reachable by actually running the app
+// with USE_MOCK=true, not only through the test suite. Unlike every other
+// localStorage-backed simulation in this file, there is no real WRITE
+// endpoint this piggybacks off of -- system_telemetry/log_aggregation are
+// read-only diagnostics -- so there's no UI control for it either; flip it
+// from the browser devtools console instead:
+//   localStorage.setItem("stockpy.mock.observability_cold_start", "1")  // reload
+//   localStorage.removeItem("stockpy.mock.observability_cold_start")    // back to happy path
+const OBSERVABILITY_COLD_START_KEY = "stockpy.mock.observability_cold_start";
+
+function readObservabilityColdStart(): boolean {
+  try {
+    return localStorage.getItem(OBSERVABILITY_COLD_START_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 // ---- Local configured-interval simulation (localStorage) so a Save in the
 // demo visibly reflects on the next GET /automation/schedule read. ----
 const INTERVAL_KEY = "stockpy.mock.automation_interval";
@@ -3024,9 +3045,13 @@ function mockSystemTelemetry(): SystemTelemetry {
 
 // The honest "psutil unavailable" degrade -- an exact mirror of
 // pilots/observability.py::_empty_system_telemetry's shape (every metric
-// null, psutil_available:false, reason set). Exposed for tests (matching the
-// __resetMockDataUniverse convention above) so Observability.test.tsx's
-// cold-start system-telemetry case consumes this canonical, mock-owned copy
+// null, psutil_available:false, reason set). Exported (matching the
+// __resetMockDataUniverse convention above) for two consumers: (1)
+// mockObservabilitySummary below, gated behind the
+// stockpy.mock.observability_cold_start devtools toggle (see
+// readObservabilityColdStart above) so this branch is reachable by actually
+// running the app, not only through tests; (2) Observability.test.tsx's
+// cold-start case, so that test is pinned to this canonical, mock-owned copy
 // instead of a hand-rolled object that could silently drift from the real
 // backend's shape -- closing the gap where PR #427 added mockSystemTelemetry
 // with this honest branch reachable only via a test-only hand-built object.
@@ -3061,7 +3086,9 @@ function mockObservabilitySummary(range: PerfRange, horizon: number): Observabil
     forecast_skill: mockPortfolioForecastSkill(horizon),
     risk_gate_blocks: mockRiskGateBlocks(),
     circuit_breakers: mockCircuitBreakers(),
-    system_telemetry: mockSystemTelemetry(),
+    system_telemetry: readObservabilityColdStart()
+      ? mockSystemTelemetryUnavailable()
+      : mockSystemTelemetry(),
   };
 }
 
@@ -3142,11 +3169,15 @@ function mockObservabilityLogs(limit: number): LogAggregation {
 // populated tail -- a per-ENTRY null-guard), this is a WHOLE-RESPONSE degrade
 // (no log file has been written yet at all), so it can't be folded into the
 // happy-path default without emptying the list the "renders the log
-// aggregation KPI strip and entries from the mock" test asserts on. Exposed
-// for tests (matching the __resetMockDataUniverse convention above) so
-// Observability.test.tsx's empty-log-tail case consumes this canonical,
-// mock-owned copy instead of a hand-rolled object that could silently drift
-// from the real backend's shape -- closing the gap where PR #427 added
+// aggregation KPI strip and entries from the mock" test asserts on. Exported
+// (matching the __resetMockDataUniverse convention above) for two consumers:
+// (1) the getObservabilityLogs mock API method below, gated behind the
+// stockpy.mock.observability_cold_start devtools toggle (see
+// readObservabilityColdStart above) so this branch is reachable by actually
+// running the app, not only through tests; (2) Observability.test.tsx's
+// empty-log-tail case, so that test is pinned to this canonical, mock-owned
+// copy instead of a hand-rolled object that could silently drift from the
+// real backend's shape -- closing the gap where PR #427 added
 // mockObservabilityLogs with this honest branch reachable only via a
 // test-only hand-built object.
 export function mockEmptyLogAggregation(
@@ -4514,7 +4545,11 @@ export const mockApi = {
   },
 
   async getObservabilityLogs(limit = 300): Promise<LogAggregation> {
-    return delay(mockObservabilityLogs(limit));
+    return delay(
+      readObservabilityColdStart()
+        ? mockEmptyLogAggregation("No log file yet at logs/investyo.log.")
+        : mockObservabilityLogs(limit)
+    );
   },
 
   async putMacroGate(enabled: boolean, _reason: string): Promise<MacroGateUpdateResult> {
