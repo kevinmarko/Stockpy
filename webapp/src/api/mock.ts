@@ -2994,8 +2994,14 @@ function mockCircuitBreakers(): CircuitBreakerSummary {
 // A healthy-but-not-idle host: comfortably below the 75%/90% CPU and 90%
 // memory warning thresholds Observability.tsx's legacy-panel-derived
 // annotations key off of, but not an all-zero fixture either -- exercises
-// the normal rendering path, not just the "psutil unavailable" honesty
-// branch (which has its own dedicated unit tests server-side).
+// the normal rendering path. Unlike mockCircuitBreakers' one-null-trip-among-
+// several mixing above, the "psutil unavailable" honesty branch is a
+// WHOLE-OBJECT degrade (pilots/observability.py::_empty_system_telemetry --
+// psutil_available:false, every metric null), so it can't be folded into
+// this happy-path default without blanking the tiles the "renders system
+// telemetry tiles from the mock" test below asserts on. See
+// mockSystemTelemetryUnavailable() immediately below for the canonical
+// mock-owned copy of that shape.
 function mockSystemTelemetry(): SystemTelemetry {
   return {
     psutil_available: true,
@@ -3013,6 +3019,36 @@ function mockSystemTelemetry(): SystemTelemetry {
     process_threads: 6,
     sampled_at: new Date().toISOString(),
     reason: null,
+  };
+}
+
+// The honest "psutil unavailable" degrade -- an exact mirror of
+// pilots/observability.py::_empty_system_telemetry's shape (every metric
+// null, psutil_available:false, reason set). Exposed for tests (matching the
+// __resetMockDataUniverse convention above) so Observability.test.tsx's
+// cold-start system-telemetry case consumes this canonical, mock-owned copy
+// instead of a hand-rolled object that could silently drift from the real
+// backend's shape -- closing the gap where PR #427 added mockSystemTelemetry
+// with this honest branch reachable only via a test-only hand-built object.
+export function mockSystemTelemetryUnavailable(
+  reason = "psutil is not available in this environment."
+): SystemTelemetry {
+  return {
+    psutil_available: false,
+    cpu_percent: null,
+    cpu_count_logical: null,
+    load_avg_1m: null,
+    memory_percent: null,
+    memory_used_bytes: null,
+    memory_total_bytes: null,
+    disk_percent: null,
+    disk_used_bytes: null,
+    disk_total_bytes: null,
+    process_rss_bytes: null,
+    process_cpu_percent: null,
+    process_threads: null,
+    sampled_at: null,
+    reason,
   };
 }
 
@@ -3096,6 +3132,36 @@ function mockObservabilityLogs(limit: number): LogAggregation {
     entries,
     returned_count: entries.length,
     reason: null,
+  };
+}
+
+// The honest "no log file yet" degrade -- an exact mirror of
+// pilots/observability.py::_empty_log_aggregation's shape (zeroed tally,
+// empty entries, reason set). Unlike mockObservabilityLogs' own null-guard
+// demonstration above (one unparsed traceback line mixed into an otherwise
+// populated tail -- a per-ENTRY null-guard), this is a WHOLE-RESPONSE degrade
+// (no log file has been written yet at all), so it can't be folded into the
+// happy-path default without emptying the list the "renders the log
+// aggregation KPI strip and entries from the mock" test asserts on. Exposed
+// for tests (matching the __resetMockDataUniverse convention above) so
+// Observability.test.tsx's empty-log-tail case consumes this canonical,
+// mock-owned copy instead of a hand-rolled object that could silently drift
+// from the real backend's shape -- closing the gap where PR #427 added
+// mockObservabilityLogs with this honest branch reachable only via a
+// test-only hand-built object.
+export function mockEmptyLogAggregation(
+  reason: string,
+  logPath: string | null = "logs/investyo.log"
+): LogAggregation {
+  return {
+    log_path: logPath,
+    total_lines: 0,
+    tally: { CRITICAL: 0, ERROR: 0, WARNING: 0, INFO: 0, DEBUG: 0, UNPARSED: 0 },
+    systemic_count: 0,
+    symbol_specific_count: 0,
+    entries: [],
+    returned_count: 0,
+    reason,
   };
 }
 
