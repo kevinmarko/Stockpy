@@ -144,7 +144,12 @@ pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'
 # Read-only web-API scaffold (api/state_api.py) — future web/mobile frontend foundation
 fastapi>=0.110.0
 uvicorn>=0.29.0
-mcp
+# mcp 2.0.0 (released 2026-07-28) is a breaking rewrite that removed
+# mcp.server.fastmcp/FastMCP entirely (renamed mcp_types, restructured
+# client/server split) -- investyo_mcp_server.py depends on FastMCP and has
+# not been migrated. Ceiling pinned to the last known-good 1.x line until a
+# dedicated migration is done.
+mcp<2.0.0
 tabulate
 
 google-antigravity>=0.1.0
