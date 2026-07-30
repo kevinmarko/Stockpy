@@ -322,3 +322,111 @@ class TestRealFaissRoundTrip:
         # Query with a mismatched dimensionality (2-dim vs. the 3-dim index).
         results = vs.search([1.0, 0.0], k=1)
         assert results == []
+
+
+@pytest.mark.skipif(not _FAISS_INSTALLED, reason="faiss-cpu not installed in this environment")
+class TestFaissThreadCapRegression:
+    """Direct, mock-based guard for the Round 2 deadlock fix in
+    ``docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md``.
+
+    ``TestRealFaissRoundTrip`` above exercises real faiss end-to-end and
+    would in principle catch a regression here too -- but only when this
+    FILE runs downstream of a real (non-mocked) lightgbm unpickle in the
+    SAME process (as it does in the full suite, via
+    ``test_advisory_pause_gate.py``'s exercise of
+    ``ml.meta_bootstrap.bootstrap_meta_registry()``). Run this file alone,
+    as a developer iterating on ``data/rag_index.py`` normally would, and
+    that process history doesn't exist -- a regression that reintroduced
+    the deadlock would pass ``pytest tests/test_rag_index.py`` cleanly and
+    only hang hours later in a full CI run. These tests assert the actual
+    mechanism directly (``faiss.omp_set_num_threads`` gets called, exactly
+    once per process) so a regression is caught locally and immediately,
+    independent of what else has run in the process.
+    """
+
+    def setup_method(self):
+        # The guard flag is module-level and shared across the whole test
+        # session; reset it so each test observes a fresh "never capped yet"
+        # process, rather than inheriting state from whichever test using
+        # DocumentVectorStore ran first (import order in a full run is not
+        # guaranteed, and _faiss_threads_capped is deliberately sticky in
+        # production for the reason described in _cap_faiss_threads' own
+        # docstring).
+        import data.rag_index as rag_index_module
+
+        rag_index_module._faiss_threads_capped = False
+
+    def teardown_method(self):
+        import data.rag_index as rag_index_module
+
+        rag_index_module._faiss_threads_capped = False
+
+    def test_get_or_create_index_caps_faiss_threads(self, tmp_path):
+        from unittest.mock import patch
+
+        docs = [_doc(1, "doc-a")]
+        store = FakeRagStore(docs)
+        provider = FakeEmbeddingProvider({"doc-a": [1.0, 0.0, 0.0]})
+        vs = DocumentVectorStore(
+            index_path=str(tmp_path / "index.faiss"), store=store, embedding_provider=provider
+        )
+
+        import faiss
+
+        from datetime import datetime, timezone
+
+        with patch.object(faiss, "omp_set_num_threads") as mock_cap:
+            vs.index_new_documents(since=datetime(2020, 1, 1, tzinfo=timezone.utc))
+
+        mock_cap.assert_called_once_with(1)
+
+    def test_thread_cap_is_idempotent_across_calls(self, tmp_path):
+        """A second DocumentVectorStore in the same process must not
+        re-invoke omp_set_num_threads -- the guard flag is process-lifetime,
+        not per-instance (mirrors production: one process runs many cycles)."""
+        from unittest.mock import patch
+
+        import faiss
+
+        from datetime import datetime, timezone
+
+        docs = [_doc(1, "doc-a")]
+
+        with patch.object(faiss, "omp_set_num_threads") as mock_cap:
+            store1 = FakeRagStore(docs)
+            provider1 = FakeEmbeddingProvider({"doc-a": [1.0, 0.0, 0.0]})
+            vs1 = DocumentVectorStore(
+                index_path=str(tmp_path / "index1.faiss"), store=store1, embedding_provider=provider1
+            )
+            vs1.index_new_documents(since=datetime(2020, 1, 1, tzinfo=timezone.utc))
+
+            store2 = FakeRagStore(docs)
+            provider2 = FakeEmbeddingProvider({"doc-a": [1.0, 0.0, 0.0]})
+            vs2 = DocumentVectorStore(
+                index_path=str(tmp_path / "index2.faiss"), store=store2, embedding_provider=provider2
+            )
+            vs2.index_new_documents(since=datetime(2020, 1, 1, tzinfo=timezone.utc))
+
+        mock_cap.assert_called_once_with(1)
+
+    def test_thread_cap_failure_does_not_abort_indexing(self, tmp_path):
+        """CONSTRAINT #6: a capping failure must never be the reason RAG
+        indexing itself fails."""
+        from unittest.mock import patch
+
+        import faiss
+
+        from datetime import datetime, timezone
+
+        docs = [_doc(1, "doc-a")]
+        store = FakeRagStore(docs)
+        provider = FakeEmbeddingProvider({"doc-a": [1.0, 0.0, 0.0]})
+        vs = DocumentVectorStore(
+            index_path=str(tmp_path / "index.faiss"), store=store, embedding_provider=provider
+        )
+
+        with patch.object(faiss, "omp_set_num_threads", side_effect=RuntimeError("boom")):
+            count = vs.index_new_documents(since=datetime(2020, 1, 1, tzinfo=timezone.utc))
+
+        assert count == 1
+        assert store.get_rag_indexed_doc_count() == 1

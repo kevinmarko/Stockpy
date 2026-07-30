@@ -54,6 +54,79 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_INDEX_PATH = os.path.join("output", "rag_index", "index.faiss")
 
+# faiss's OpenMP thread pool is capped to 1 thread the first time real faiss
+# work happens in this process — see ``_cap_faiss_threads()`` below for the
+# full rationale (a genuine deadlock, not a performance tuning choice).
+_faiss_threads_capped = False
+
+
+def _cap_faiss_threads(faiss_module: Any) -> None:
+    """Force ``faiss``'s internal OpenMP thread pool to exactly one thread.
+
+    Fixes a real deadlock (docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md's
+    "Round 2" deadlock addendum), not a performance tuning choice.
+
+    Root cause: this venv carries THREE independently-compiled copies of
+    ``libomp.dylib`` -- Homebrew's (what ``lightgbm``'s native extension
+    resolves via ``@rpath``), and faiss's and scikit-learn's own bundled
+    copies -- none sharing an install name, so dyld treats them as distinct
+    images once more than one is loaded into the same process (see that
+    doc's `otool -L` evidence). The doc's existing fix addressed one
+    manifestation of this (a SEGFAULT, from `tests/test_rag_index.py`
+    eagerly `import faiss`-ing at module scope during pytest collection,
+    before any test ran). This addresses a SECOND, distinct manifestation:
+    a DEADLOCK, confirmed via a step-by-step isolated repro
+    (``bootstrap_meta_registry()`` -- a real, non-mocked ``lightgbm.Booster``
+    unpickle, exactly this codebase's own documented trigger -- followed by
+    real (lazy, exactly as this module already does it) faiss usage) that
+    the plain "import order" theory the existing doc's fix relies on does
+    NOT fully explain: `import faiss`, `IndexFlatIP` construction, and three
+    `add_with_ids` calls all completed instantly regardless of what ran
+    before them, but the FIRST real `Index.search()` call -- which is where
+    faiss actually enters its parallel, OpenMP-threaded distance-computation
+    code path, unlike construction/insertion of a handful of vectors --
+    deadlocks with 0% CPU (a genuine blocked wait, not a spin), reproduced
+    2/2 unfixed and 0/2 with this fix across repeated runs. Import order
+    alone therefore is not a sufficient guarantee: which OpenMP thread pool
+    actually gets *initialized* (lazily, on first real parallel region
+    entry) matters, not merely which `.dylib` got mapped into memory first
+    -- so this codebase's "production was never actually exposed" reasoning
+    (import order alone) is not by itself sufficient; capping the thread
+    pool removes faiss's side of the collision unconditionally, regardless
+    of what else has run in the process, which import-order reasoning
+    alone cannot guarantee.
+
+    ``faiss.omp_set_num_threads(1)`` (FAISS's own public API) rather than
+    the standard ``OMP_NUM_THREADS``/``KMP_DUPLICATE_LIB_OK`` environment
+    variables verified during this investigation: an env var is a blanket,
+    process-wide hammer that would also cap lightgbm's/numpy's/scikit-learn's
+    own OpenMP parallelism for the ENTIRE process, whereas this call scopes
+    the change to faiss's own thread pool alone. Zero real cost here: this
+    module's corpus is a single operator's sentiment-document archive (low
+    hundreds to low thousands of vectors, see ``settings.RAG_INDEX_MAX_DOCUMENTS``),
+    nowhere near the scale where FAISS's OpenMP parallelism would matter
+    even if it worked.
+
+    Applied in ``_get_or_create_index()`` -- the single choke point every
+    real search/add code path in this class reaches before touching faiss
+    (confirmed: neither ``search()`` nor ``index_new_documents()`` calls a
+    faiss operation without first obtaining ``idx`` from this method).
+    Guarded by a module-level flag so repeat calls (a fresh
+    ``DocumentVectorStore`` instance, a later cycle) are a cheap no-op
+    rather than a redundant real call; ``except Exception`` because a
+    thread-count-capping failure must never be the reason RAG indexing
+    itself fails (CONSTRAINT #6) -- worst case, the pre-existing deadlock
+    risk simply isn't mitigated for that one call.
+    """
+    global _faiss_threads_capped
+    if _faiss_threads_capped:
+        return
+    try:
+        faiss_module.omp_set_num_threads(1)
+    except Exception as exc:
+        logger.debug("DocumentVectorStore: faiss.omp_set_num_threads(1) failed: %s", exc)
+    _faiss_threads_capped = True
+
 
 @dataclass(frozen=True)
 class IndexedDocument:
@@ -134,6 +207,8 @@ class DocumentVectorStore:
         this is also reachable from :meth:`search`).
         """
         import faiss  # noqa: PLC0415
+
+        _cap_faiss_threads(faiss)
 
         if self._index is not None:
             return self._index
