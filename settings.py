@@ -3083,6 +3083,42 @@ class Settings(BaseSettings):
             "Only consulted once ETF_HOLDINGS_ENABLED is True."
         ),
     )
+    OPTIONS_TRUE_IVR_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: wires a real, options-chain-derived True_IVR into "
+            "technical_options_engine.build_premium_directive() -- the GUI Technical "
+            "Options Matrix tab, the get_options_directive MCP tool, "
+            "api/metrics_api.py, execution/options_queue_builder.py, and every other "
+            "build_premium_directive caller -- instead of leaving true IV rank "
+            "exclusive to main_orchestrator.py's pipeline/production_steps.py::"
+            "OptionsAnalysisStep path. When True, build_premium_directive fetches a "
+            "live 30-calendar-day ATM IV via volatility.iv_engine.get_30d_atm_iv() "
+            "(a fresh, lightweight DataEngine constructed with no FRED key purely "
+            "for its fetch_options_chain() -- CompositeProvider/data/market_data.py "
+            "has no chain-shaped method to reuse, so this mirrors exactly what "
+            "OptionsAnalysisStep already does rather than inventing a second "
+            "convention) and ranks it against the SAME iv_history table "
+            "(volatility.iv_engine.IVHistoryStore) OptionsAnalysisStep writes to via "
+            "calculate_true_ivr() -- strictly prior days only, never a lookahead. "
+            "The result is surfaced as a NEW True_IVR row key alongside the "
+            "existing realized-vol-only IVR_Proxy (never replacing it -- both stay "
+            "so provenance is honest); generate_strategy_pricing_matrix's true_ivr "
+            "argument prefers True_IVR over IVR_Proxy when the flag is on and a "
+            "finite value was computed, falling back to IVR_Proxy exactly as today "
+            "otherwise. Any failure at any step -- no live chain data, an empty "
+            "iv_history table during warm-start (this repo's dev/CI sandboxes never "
+            "populate GUI/MCP-path history since only OptionsAnalysisStep's "
+            "orchestrator path writes to it), a network error, or any exception -- "
+            "degrades to float('nan') for True_IVR and never crashes or changes "
+            "IVR_Proxy/Cash-Wait fallback behavior (CONSTRAINT #4/#6). False (the "
+            "default) reproduces today's exact behavior byte-for-byte -- no new "
+            "network call, no new DB read, True_IVR always NaN. Enabling this adds "
+            "one live options-chain fetch per symbol per render (GUI)/per call "
+            "(MCP) -- a real, non-trivial network cost the realized-vol proxy never "
+            "had."
+        ),
+    )
 
     @field_validator("OUTPUT_DIR")
     @classmethod

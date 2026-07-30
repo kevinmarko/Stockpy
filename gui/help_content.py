@@ -1276,9 +1276,16 @@ SECTION_HELP: Dict[str, str] = {
     ),
     "options.matrix_methodology": (
         "σ from GJR-GARCH(1,1) with 20-day realized fallback; **IVR proxy** is a "
-        "realized-vol percentile (true IVR requires an options chain). Trend bias is "
-        "Aroon+Coppock sign agreement. **Stale=True** marks delayed (~15 min) yfinance "
-        "quotes. Realizable Theta applies a DTE-scaled execution-friction haircut "
+        "realized-vol percentile (true IVR requires an options chain). **True IVR** "
+        "(opt-in, `OPTIONS_TRUE_IVR_ENABLED`, default off) fetches a live 30-day "
+        "ATM implied vol and ranks it against strictly-prior history in the same "
+        "`iv_history` table the daily pipeline writes to — N/A until that history "
+        "warms up, and adds one live options-chain network call per symbol per "
+        "render when on. When both a finite True IVR and the flag are present, the "
+        "strategy directive is priced off True IVR instead of the proxy; otherwise "
+        "the proxy is used exactly as before. Trend bias is Aroon+Coppock sign "
+        "agreement. **Stale=True** marks delayed (~15 min) yfinance quotes. "
+        "Realizable Theta applies a DTE-scaled execution-friction haircut "
         "(40% @ 1DTE, 22% @ 7DTE, 12% @ 30DTE, 5% baseline)."
     ),
     "strategy_matrix.signal_modules": (
@@ -1367,6 +1374,17 @@ METRIC_HELP: Dict[str, str] = {
     "IVR Proxy": (
         "Realized-vol IVR proxy [0–100].  Values above 50 suggest options IV is "
         "elevated relative to recent history — favorable for premium selling."
+    ),
+    "True_IVR": (
+        "Opt-in real, options-chain-derived IV rank [0-100] (settings."
+        "OPTIONS_TRUE_IVR_ENABLED, default off).  Fetches a live 30-day ATM "
+        "implied vol and ranks it against strictly-prior history in the same "
+        "iv_history table the daily pipeline writes to — N/A (never a fabricated "
+        "number) until the flag is on AND enough history has accumulated, or on "
+        "any chain-fetch/network failure.  Adds one live options-chain fetch per "
+        "symbol per render when enabled.  Preferred over IVR Proxy for pricing "
+        "the strategy directive whenever it resolves to a finite value; IVR Proxy "
+        "is always shown alongside it, never replaced."
     ),
     "RSI": "Relative Strength Index (14-period).  Above 70 = overbought; below 30 = oversold.",
     "RSI_2": (

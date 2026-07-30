@@ -2323,6 +2323,9 @@ def get_options_directive(symbol: str) -> str:
             spot_price = float(bars["Close"].iloc[-1])
             is_stale = True
 
+        # true_ivr_enabled is left at its default (None) — build_premium_directive
+        # reads settings.OPTIONS_TRUE_IVR_ENABLED itself, so this tool picks up
+        # the live flag with no extra plumbing here.
         directive = build_premium_directive(
             sym, bars, spot_price=spot_price, is_stale=is_stale
         )
@@ -2364,6 +2367,9 @@ def get_options_directive(symbol: str) -> str:
         lines.append(f"- **Realizable Daily Theta**: {_fmt('Realizable_Daily_Theta', money=True)}")
         lines.append(f"- **Sigma (GJR-GARCH, annualized)**: {_fmt('Sigma_GARCH')}")
         lines.append(f"- **IVR Proxy**: {_fmt('IVR_Proxy')}")
+        lines.append(f"- **True IVR** (opt-in, real options-chain-derived; N/A unless "
+                      f"OPTIONS_TRUE_IVR_ENABLED is on and history has warmed up): "
+                      f"{_fmt('True_IVR')}")
         lines.append(f"- **Aroon Oscillator**: {_fmt('Aroon_Oscillator')}")
         lines.append(f"- **Coppock Curve**: {_fmt('Coppock_Curve')}")
 
@@ -2403,6 +2409,7 @@ def get_options_directive(symbol: str) -> str:
             "realizable_daily_theta": _num(directive.get("Realizable_Daily_Theta")),
             "sigma_garch": _num(directive.get("Sigma_GARCH")),
             "ivr_proxy": _num(directive.get("IVR_Proxy")),
+            "true_ivr": _num(directive.get("True_IVR")),
             "short_strike": _num(directive.get("Short_Strike")),
             "short_delta": _num(directive.get("Short_Delta")),
             "long_strike": _num(directive.get("Long_Strike")),

@@ -17,9 +17,17 @@ Asserts (per `technical_options_engine`):
   * The :func:`validate_directive_integrity` helper returns
     ``{"ok": True, ...}`` for engine-generated directives and ``False`` when
     an off-grid strike is injected.
+  * Opt-in real ``True_IVR`` (``settings.OPTIONS_TRUE_IVR_ENABLED``): flag-off
+    is byte-identical to pre-feature behavior; flag-on with a populated
+    ``IVHistoryStore`` fixture yields a real ranked value that the strategy
+    directive is priced off of (preferred over ``IVR_Proxy``); flag-on with
+    empty history or any chain-fetch/store failure degrades to NaN without
+    crashing and without disturbing the ``IVR_Proxy``-driven fallback.
 """
 
 from __future__ import annotations
+
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
@@ -32,6 +40,7 @@ from technical_options_engine import (
     build_premium_directive,
     validate_directive_integrity,
 )
+from volatility.iv_engine import IVHistoryStore
 
 
 class _MacroProxy:
@@ -352,3 +361,244 @@ def test_build_premium_directive_defaults_are_byte_identical():
     assert plain["Strategy"] == explicit["Strategy"]
     assert plain["Legs"] == explicit["Legs"]
     assert plain["Integrity_OK"] == explicit["Integrity_OK"]
+
+
+# --------------------------------------------------------------------------- #
+# Opt-in real True_IVR (settings.OPTIONS_TRUE_IVR_ENABLED) -- fixtures        #
+# --------------------------------------------------------------------------- #
+
+
+class _FakeChain:
+    """Minimal OptionChain-shaped stub: one ATM strike, a fixed IV."""
+
+    def __init__(self, iv: float):
+        self.calls = pd.DataFrame({"strike": [100.0], "impliedVolatility": [iv]})
+        self.puts = pd.DataFrame({"strike": [100.0], "impliedVolatility": [iv]})
+
+
+class _FakeChainDataEngine:
+    """Minimal ``IDataProvider``-shaped stub exposing only
+    ``fetch_options_chain`` -- all ``volatility.iv_engine.get_30d_atm_iv``
+    touches when ``spot_price`` is supplied explicitly, which
+    ``build_premium_directive`` always does. Two future expirations
+    (20d/50d out from ``as_of``) with equal IV so calendar interpolation
+    resolves deterministically to that same IV (no fractional-interpolation
+    math to keep straight in the assertions)."""
+
+    def __init__(self, as_of: pd.Timestamp, iv: float = 0.30):
+        self._as_of = as_of
+        self._iv = iv
+        self._near = (as_of + timedelta(days=20)).strftime("%Y-%m-%d")
+        self._far = (as_of + timedelta(days=50)).strftime("%Y-%m-%d")
+
+    def fetch_options_chain(self, ticker, expiration=None):
+        if expiration is None:
+            return [self._near, self._far]
+        if expiration in (self._near, self._far):
+            return _FakeChain(self._iv)
+        return None
+
+
+class _RaisingChainDataEngine:
+    """Simulates a network/chain-fetch failure."""
+
+    def fetch_options_chain(self, ticker, expiration=None):
+        raise RuntimeError("simulated chain-fetch network failure")
+
+
+class _RaisingIVHistoryStore:
+    """Simulates a DB write failure on the real-IVR record path."""
+
+    def record_iv(self, ticker, date_val, iv_val):
+        raise RuntimeError("simulated DB write failure")
+
+    def get_historical_ivs(self, ticker, as_of_date, lookback_days=252):
+        return []
+
+
+def _true_ivr_kwargs(bars):
+    return dict(
+        spot_price=float(bars["Close"].iloc[-1]), is_stale=False,
+        target_dte=30, macro_dto=_MacroProxy(), vrp=None,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Flag off => byte-identical to pre-feature behavior                          #
+# --------------------------------------------------------------------------- #
+def test_true_ivr_flag_off_is_byte_identical_to_baseline():
+    bars = _synthetic_bars(252, seed=41)
+    kwargs = _true_ivr_kwargs(bars)
+
+    baseline = build_premium_directive("TEST", bars, **kwargs)
+    explicit_off = build_premium_directive("TEST", bars, **kwargs, true_ivr_enabled=False)
+
+    assert set(baseline.keys()) == set(explicit_off.keys())
+    for key in baseline:
+        if key == "True_IVR":
+            continue
+        a, b = baseline[key], explicit_off[key]
+        if isinstance(a, float) and isinstance(b, float) and np.isnan(a) and np.isnan(b):
+            continue
+        assert a == b, f"key {key!r} diverged: {a!r} vs {b!r}"
+
+    assert np.isnan(baseline["True_IVR"])
+    assert np.isnan(explicit_off["True_IVR"])
+
+
+def test_true_ivr_defaults_to_settings_when_not_overridden(monkeypatch):
+    """``true_ivr_enabled=None`` (the default) must read the live setting --
+    False by default, so an untouched call site never triggers the real-IVR
+    path (no import of volatility.iv_engine, no DataEngine construction)."""
+    import technical_options_engine as toe_mod
+
+    assert toe_mod.settings.OPTIONS_TRUE_IVR_ENABLED is False  # platform default
+
+    bars = _synthetic_bars(252, seed=43)
+    row = build_premium_directive("TEST", bars, **_true_ivr_kwargs(bars))
+    assert np.isnan(row["True_IVR"])
+
+
+# --------------------------------------------------------------------------- #
+# Flag on + populated history => real ranked value, preferred by the         #
+# strategy directive over IVR_Proxy                                          #
+# --------------------------------------------------------------------------- #
+def test_true_ivr_flag_on_with_history_returns_ranked_value():
+    bars = _synthetic_bars(252, seed=47)
+    as_of = bars.index[-1]
+    ticker = "TEST"
+
+    store = IVHistoryStore(db_url="sqlite:///:memory:")
+    for i, iv in enumerate([0.10, 0.15, 0.20, 0.25]):
+        d = (as_of - timedelta(days=(4 - i) * 5)).strftime("%Y-%m-%d")
+        store.record_iv(ticker, d, iv)
+
+    fake_engine = _FakeChainDataEngine(as_of, iv=0.30)  # above all prior history
+
+    row = build_premium_directive(
+        ticker, bars, **_true_ivr_kwargs(bars),
+        true_ivr_enabled=True, data_engine=fake_engine, iv_history_store=store,
+    )
+
+    assert np.isfinite(row["True_IVR"])
+    assert row["True_IVR"] == pytest.approx(100.0)
+    # IVR_Proxy stays present and untouched -- both keys coexist honestly.
+    assert "IVR_Proxy" in row
+
+
+def test_true_ivr_preferred_over_proxy_in_strategy_directive_when_finite(monkeypatch):
+    """When the flag is on and True_IVR resolves to a finite value, the
+    strategy directive must be priced off True_IVR, not IVR_Proxy."""
+    import technical_options_engine as toe_mod
+
+    captured = {}
+    original = toe_mod.OptionsPricingRecommender.generate_strategy_pricing_matrix
+
+    def _capture(self, true_ivr, *args, **kwargs):
+        captured["true_ivr"] = true_ivr
+        return original(self, true_ivr, *args, **kwargs)
+
+    monkeypatch.setattr(
+        toe_mod.OptionsPricingRecommender, "generate_strategy_pricing_matrix", _capture
+    )
+
+    bars = _synthetic_bars(252, seed=53)
+    as_of = bars.index[-1]
+    ticker = "TEST"
+    store = IVHistoryStore(db_url="sqlite:///:memory:")
+    store.record_iv(ticker, (as_of - timedelta(days=10)).strftime("%Y-%m-%d"), 0.05)
+    fake_engine = _FakeChainDataEngine(as_of, iv=0.40)
+
+    row = build_premium_directive(
+        ticker, bars, **_true_ivr_kwargs(bars),
+        true_ivr_enabled=True, data_engine=fake_engine, iv_history_store=store,
+    )
+
+    assert np.isfinite(row["True_IVR"])
+    # The value handed to the strategy directive is exactly True_IVR, not
+    # whatever IVR_Proxy happened to compute from the random synthetic bars.
+    assert captured["true_ivr"] == pytest.approx(row["True_IVR"])
+
+
+# --------------------------------------------------------------------------- #
+# Flag on + empty/insufficient history => NaN, Cash/Wait fallback unaffected  #
+# --------------------------------------------------------------------------- #
+def test_true_ivr_flag_on_empty_history_degrades_to_nan_and_fallback_unaffected():
+    bars = _synthetic_bars(252, seed=59)
+    as_of = bars.index[-1]
+    ticker = "TEST"
+
+    empty_store = IVHistoryStore(db_url="sqlite:///:memory:")  # no prior rows at all
+    fake_engine = _FakeChainDataEngine(as_of, iv=0.30)
+
+    row = build_premium_directive(
+        ticker, bars, **_true_ivr_kwargs(bars),
+        true_ivr_enabled=True, data_engine=fake_engine, iv_history_store=empty_store,
+    )
+    assert np.isnan(row["True_IVR"])
+
+    # The IVR_Proxy-driven directive must be identical to the flag-off case --
+    # an empty real-IVR history degrades silently, it never forces Cash/Wait
+    # or otherwise perturbs the existing fallback path.
+    flag_off_row = build_premium_directive(
+        ticker, bars, **_true_ivr_kwargs(bars), true_ivr_enabled=False,
+    )
+    assert row["Strategy"] == flag_off_row["Strategy"]
+    assert row["Action"] == flag_off_row["Action"]
+    assert row["Legs"] == flag_off_row["Legs"]
+    assert row["Integrity_OK"] == flag_off_row["Integrity_OK"]
+
+
+# --------------------------------------------------------------------------- #
+# Flag on + failures (chain fetch raises / store write raises) => NaN, no    #
+# crash, Cash/Wait fallback unaffected (CONSTRAINT #4/#6)                     #
+# --------------------------------------------------------------------------- #
+def test_true_ivr_flag_on_chain_fetch_exception_degrades_to_nan_without_crash():
+    bars = _synthetic_bars(252, seed=61)
+    ticker = "TEST"
+    store = IVHistoryStore(db_url="sqlite:///:memory:")
+
+    row = build_premium_directive(
+        ticker, bars, **_true_ivr_kwargs(bars),
+        true_ivr_enabled=True, data_engine=_RaisingChainDataEngine(), iv_history_store=store,
+    )
+    assert np.isnan(row["True_IVR"])
+    assert row["Symbol"] == ticker
+    assert isinstance(row["Strategy"], str)  # completed without raising
+
+
+def test_true_ivr_flag_on_store_write_exception_degrades_to_nan_without_crash():
+    bars = _synthetic_bars(252, seed=67)
+    as_of = bars.index[-1]
+    ticker = "TEST"
+    fake_engine = _FakeChainDataEngine(as_of, iv=0.30)
+
+    row = build_premium_directive(
+        ticker, bars, **_true_ivr_kwargs(bars),
+        true_ivr_enabled=True, data_engine=fake_engine,
+        iv_history_store=_RaisingIVHistoryStore(),
+    )
+    assert np.isnan(row["True_IVR"])
+    assert row["Symbol"] == ticker
+    assert isinstance(row["Strategy"], str)  # completed without raising
+
+
+def test_true_ivr_flag_on_too_few_bars_does_not_crash():
+    """The pre-existing too-few-bars degradation path (Cash/Wait, no pricing)
+    must still hold with the flag on -- True_IVR is attempted independently
+    of the GARCH/price gate but must never itself raise. Uses the same fake
+    chain / in-memory store fixtures as the tests above so this stays fully
+    offline -- leaving data_engine/iv_history_store at their defaults here
+    would silently fall through to a real network call and the real on-disk
+    quant_platform.db, which is exactly what this suite must never do."""
+    short_bars = _synthetic_bars(10, seed=71)
+    fake_engine = _FakeChainDataEngine(short_bars.index[-1], iv=0.30)
+    store = IVHistoryStore(db_url="sqlite:///:memory:")
+    row = build_premium_directive(
+        "SHORT", short_bars,
+        spot_price=float(short_bars["Close"].iloc[-1]), is_stale=True,
+        target_dte=30, macro_dto=_MacroProxy(),
+        true_ivr_enabled=True, data_engine=fake_engine, iv_history_store=store,
+    )
+    assert row["Symbol"] == "SHORT"
+    assert row["Strategy"] in {"Cash", "Cash / Wait"} or not row["Legs"]

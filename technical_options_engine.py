@@ -730,6 +730,10 @@ def build_premium_directive(
     delta_target_scale: float = 1.0,
     delta_tolerance: float = 0.05,
     strike_grid: float = STRIKE_GRID_USD,
+    true_ivr_enabled: Optional[bool] = None,
+    data_engine: Optional[Any] = None,
+    iv_history_store: Optional[Any] = None,
+    as_of_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compute a fully-hydrated premium-selling row for one symbol.
 
@@ -762,6 +766,30 @@ def build_premium_directive(
         Forwarded to :func:`validate_directive_integrity` so the per-run
         matrix-integrity check (delta-target tolerance + strike grid) is
         operator-adjustable. Default to the engine constants.
+    true_ivr_enabled :
+        Tri-state override for ``settings.OPTIONS_TRUE_IVR_ENABLED``: ``None``
+        (default) reads the live setting; an explicit ``True``/``False`` lets
+        callers/tests force the branch without monkeypatching settings. When
+        effectively ``False`` (the platform default), the real-IVR block below
+        never runs and this function is byte-identical to before the flag
+        existed.
+    data_engine, iv_history_store :
+        Injection points for the real-IVR path (mainly for tests). When the
+        flag is on and either is left ``None``, a fresh, lightweight
+        ``data_engine.DataEngine(fred_api_key="")`` (no network calls at
+        construction — only ``fetch_options_chain`` touches the network) and
+        ``volatility.iv_engine.IVHistoryStore()`` (the SAME on-disk table
+        ``pipeline/production_steps.py::OptionsAnalysisStep`` already writes
+        to) are constructed. ``data/market_data.py``'s ``CompositeProvider`` —
+        the convention-mandated provider for GUI/MCP-path quote/bar/
+        fundamentals fetches — exposes no chain-shaped method at all, so
+        reusing/extending it here would contradict its own contract; a fresh
+        ``DataEngine`` scoped to this one call is the least-invasive fit that
+        matches what ``OptionsAnalysisStep`` already does.
+    as_of_date :
+        Explicit ``YYYY-MM-DD`` cutoff for the real-IVR lookup (mainly for
+        tests / historical replays). Defaults to ``bars.index[-1]`` — the
+        latest bar date — matching ``OptionsAnalysisStep``'s own convention.
 
     Returns
     -------
@@ -770,7 +798,12 @@ def build_premium_directive(
         underlying primitive could not be computed (never fabricated as 0.0,
         CONSTRAINT #4).  The ``"integrity"`` sub-dict is the output of
         :func:`validate_directive_integrity` so callers can show pass/fail
-        without re-walking the legs.
+        without re-walking the legs. ``True_IVR`` is the opt-in real,
+        options-chain-derived IV rank (NaN unless
+        ``settings.OPTIONS_TRUE_IVR_ENABLED`` is on AND a chain fetch +
+        history lookup both succeeded) — surfaced ALONGSIDE ``IVR_Proxy``
+        (the realized-vol proxy, untouched) rather than replacing it, so
+        provenance stays honest.
     """
     toe = TechnicalOptionsEngine()
     nan = float("nan")
@@ -780,6 +813,7 @@ def build_premium_directive(
         "Stale": bool(is_stale),
         "Sigma_GARCH": nan,
         "IVR_Proxy": nan,
+        "True_IVR": nan,
         "Aroon_Oscillator": nan,
         "Coppock_Curve": nan,
         "Trend_Bias": "Neutral",
@@ -815,6 +849,39 @@ def build_premium_directive(
         except Exception as exc:  # noqa: BLE001
             logger.warning("IVR proxy failed for %s: %s", symbol, exc)
 
+    # 2b) True IVR (opt-in, real options-chain-derived — settings.
+    # OPTIONS_TRUE_IVR_ENABLED). Independent of the GARCH sigma computed in
+    # step 1 above: a live options chain is a different data source entirely,
+    # so this attempts a real IV rank even on a GARCH failure. Degrades to NaN
+    # (never fabricated, never raises — CONSTRAINT #4/#6) on ANY failure: no
+    # chain data, an empty/warm-start iv_history table, a network error, or
+    # any other exception. Flag off (the default) => this block never runs =>
+    # byte-identical to the pre-existing IVR_Proxy-only behavior.
+    true_ivr_flag = (
+        settings.OPTIONS_TRUE_IVR_ENABLED if true_ivr_enabled is None else bool(true_ivr_enabled)
+    )
+    if true_ivr_flag and np.isfinite(row["Price"]) and bars is not None and not bars.empty:
+        try:
+            from volatility.iv_engine import IVHistoryStore, calculate_true_ivr, get_30d_atm_iv
+
+            de = data_engine
+            if de is None:
+                from data_engine import DataEngine
+
+                de = DataEngine(fred_api_key="")
+            store = iv_history_store
+            if store is None:
+                store = IVHistoryStore()
+
+            resolved_as_of = as_of_date or bars.index[-1].strftime("%Y-%m-%d")
+            current_iv = get_30d_atm_iv(de, symbol, resolved_as_of, spot_price=row["Price"])
+            if np.isfinite(current_iv):
+                store.record_iv(symbol, resolved_as_of, current_iv)
+                ranked = calculate_true_ivr(symbol, current_iv, resolved_as_of, store)
+                row["True_IVR"] = float(ranked) if np.isfinite(ranked) else nan
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("True IVR computation failed for %s: %s", symbol, exc)
+
     # 3) Trend bias (Aroon + Coppock).
     try:
         indicators = toe.calculate_indicators(bars)
@@ -848,7 +915,16 @@ def build_premium_directive(
         logger.warning("ATM Greeks failed for %s: %s", symbol, exc)
 
     # 5) Strategy directive (already VRP / regime-gated inside the engine).
-    ivr_value = row["IVR_Proxy"] if np.isfinite(row["IVR_Proxy"]) else 50.0
+    # Prefer the real, options-chain-derived True_IVR over the realized-vol
+    # proxy when the flag produced a finite value this call; otherwise fall
+    # back to IVR_Proxy exactly as before True_IVR existed (byte-identical
+    # when the flag is off, since True_IVR is always NaN in that case).
+    if true_ivr_flag and np.isfinite(row["True_IVR"]):
+        ivr_value = row["True_IVR"]
+    elif np.isfinite(row["IVR_Proxy"]):
+        ivr_value = row["IVR_Proxy"]
+    else:
+        ivr_value = 50.0
     try:
         directive = recommender.generate_strategy_pricing_matrix(
             true_ivr=float(ivr_value),
