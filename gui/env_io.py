@@ -116,6 +116,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (FOLLOW_API_TOKEN) stays in SECRET_KEYS.
     "PILOTS_API_ENABLED",
     "PILOTS_API_PORT",
+    "JOBS_API_ENABLED",
     # Persisted Pilots-PWA analytics artifacts (options premium matrix + pairs
     # radar). When on, the pipeline writes output/options_matrix.json /
     # output/pairs.json for the AST-guarded Pilots API to read. Non-secret.

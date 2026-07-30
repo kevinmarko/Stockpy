@@ -193,6 +193,14 @@ class Settings(BaseSettings):
             "standalone launch command (`uvicorn api.pilots_api:app --port 8602`)."
         ),
     )
+    JOBS_API_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable background process execution and SSE log streaming endpoints "
+            "on the orchestrator Control API (api/control_api.py). False (default) "
+            "preserves fail-closed behavior for jobs execution."
+        ),
+    )
 
     # --- Market-data layer (data/market_data.py) ---
     # Explicit provider override.  When absent the platform auto-selects:

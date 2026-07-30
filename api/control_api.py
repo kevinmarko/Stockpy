@@ -92,17 +92,23 @@ needs POST for ``/run`` and PUT for ``/interval``).
 
 from __future__ import annotations
 
-import hmac
+import asyncio
 import logging
+import os
+import threading
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
 from settings import INTERVAL_MAX_SECONDS, settings, validate_interval_seconds
+from api.auth import (
+    require_orchestrator_command_token as require_command_token,
+    require_read_token,
+    require_stream_token,
+)
 from desktop.daemon_runtime import OrchestratorDaemon, RunRecord, TriggerOutcome
 from desktop.run_history_store import RunHistoryStore
 from execution.kill_switch import GlobalKillSwitch
@@ -129,8 +135,6 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-_bearer = HTTPBearer(auto_error=False)
-
 # ---------------------------------------------------------------------------
 # Daemon registry — set once by the process entrypoint after daemon.start()
 # ---------------------------------------------------------------------------
@@ -154,42 +158,8 @@ def get_daemon() -> Optional[OrchestratorDaemon]:
     return _daemon
 
 
-# ---------------------------------------------------------------------------
-# Auth guards
-# ---------------------------------------------------------------------------
-
-
-def require_read_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
-    """Bearer-token guard for read endpoints. FAIL-OPEN when
-    STATE_API_TOKEN is unset (mirrors api/state_api.py's require_token
-    exactly). Constant-time compare; token never logged (CONSTRAINT #3)."""
-    token = settings.STATE_API_TOKEN
-    if not token:  # unset/empty -> auth disabled (open)
-        return
-    presented = credentials.credentials if credentials else ""
-    if not hmac.compare_digest(presented, token):
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-
-
-def require_command_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
-    """Bearer-token guard for the command endpoint (POST /run). FAIL-CLOSED
-    when ORCHESTRATOR_DAEMON_TOKEN is unset -- unlike the read guard, silence
-    must never mean "open" here since this endpoint can trigger a real
-    pipeline run. Constant-time compare; token never logged (CONSTRAINT #3)."""
-    token = settings.ORCHESTRATOR_DAEMON_TOKEN
-    if not token:
-        raise HTTPException(
-            status_code=403,
-            detail="Command endpoint disabled: ORCHESTRATOR_DAEMON_TOKEN not configured.",
-        )
-    presented = credentials.credentials if credentials else ""
-    if not hmac.compare_digest(presented, token):
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-
+# Auth guards (require_read_token / require_command_token) are imported from
+# api/auth.py at module top — see there for the shared implementation.
 
 if not settings.STATE_API_TOKEN:
     logger.warning(
@@ -471,3 +441,208 @@ def set_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
 
     daemon.set_interval(body.interval_seconds)
     return {"interval_seconds": body.interval_seconds}
+
+
+@app.post("/daemon/restart", dependencies=[Depends(require_command_token)])
+def restart_daemon() -> Dict[str, Any]:
+    """Terminate this process so its process supervisor (systemd
+    ``Restart=always``, launchd ``KeepAlive``) respawns it with freshly
+    -written ``.env`` values picked up.
+
+    Honesty note: whether anything actually respawns this process depends
+    entirely on how it's being run. ``deploy/investyo-daemon.service``
+    (``Restart=always``) and ``scripts/com.investyo.stack.plist``
+    (``KeepAlive``) both respawn on exit. The plain desktop-shell path
+    (``app_shell.py`` spawning ``desktop/orchestrator_daemon.py`` via
+    ``gui.orchestrator_runner.launch_daemon_engine`` — a bare
+    ``subprocess.Popen`` with no restart-on-death watchdog) does NOT: this
+    call simply stops the daemon until the operator relaunches the app. This
+    endpoint has no way to know which case it's in, so it cannot promise a
+    respawn — only an honest, clean exit.
+    """
+    daemon = get_daemon()
+    if daemon is not None and daemon.is_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot restart while an orchestrator run is currently active.",
+        )
+
+    # A plain background thread (NOT asyncio.get_event_loop().call_later),
+    # so the process exits reliably regardless of which thread is hosting
+    # this request handler. `os._exit()` is an unconditional OS-level
+    # process exit -- unlike `sys.exit()` (raises SystemExit, which only
+    # terminates the CALLING thread when that thread isn't the main one,
+    # e.g. when uvicorn is hosted on a background thread as it is inside
+    # desktop/orchestrator_daemon.py), this reliably kills the whole process.
+    threading.Timer(0.5, os._exit, args=(0,)).start()
+    return {
+        "restarting": True,
+        "message": (
+            "Process exiting in ~0.5s. Whether it comes back up depends on "
+            "the process supervisor (systemd/launchd auto-restart, or none)."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Background Job Execution & Log Streaming Endpoints (JOBS_API_ENABLED=True)
+# ---------------------------------------------------------------------------
+
+
+def _require_jobs_api_enabled() -> None:
+    if not settings.JOBS_API_ENABLED:
+        raise HTTPException(status_code=403, detail="JOBS_API_ENABLED is False.")
+
+
+class JobCreateRequest(BaseModel):
+    job_type: str = Field(..., description="Job type to execute")
+    params: Optional[Dict[str, Any]] = Field(default=None, description="Optional job parameters")
+
+
+@app.post(
+    "/jobs",
+    dependencies=[Depends(require_command_token), Depends(_require_jobs_api_enabled)],
+)
+def create_job(body: JobCreateRequest) -> Dict[str, Any]:
+    """Launch a background process job (preflight, pytest, validation, verify, gravity, advisory, orchestrator)."""
+    from api._jobs import JobType, job_manager
+
+    try:
+        jtype = JobType(body.job_type)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=f"Unknown job_type: {body.job_type!r}") from err
+
+    try:
+        rec = job_manager.start_job(jtype, body.params)
+    except RuntimeError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+    return {
+        "job_id": rec.job_id,
+        "job_type": rec.job_type.value,
+        "status": rec.status(),
+        "cancellable": rec.cancellable,
+    }
+
+
+@app.get(
+    "/jobs/{job_id}",
+    dependencies=[Depends(require_read_token), Depends(_require_jobs_api_enabled)],
+)
+def get_job_status(job_id: str) -> Dict[str, Any]:
+    """Inspect the status of a launched background job."""
+    from api._jobs import job_manager
+
+    rec = job_manager.get_job(job_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}")
+
+    return {
+        "job_id": rec.job_id,
+        "job_type": rec.job_type.value,
+        "status": rec.status(),
+        "exit_code": rec.exit_code(),
+        "is_running": rec.handle.is_running(),
+        "cancellable": rec.cancellable,
+    }
+
+
+@app.post(
+    "/jobs/{job_id}/cancel",
+    dependencies=[Depends(require_command_token), Depends(_require_jobs_api_enabled)],
+)
+def cancel_job(job_id: str) -> Dict[str, Any]:
+    """Cancel a running background job. ``cancelled: false`` (200, not an
+    error) reports an honest "asked, but stop could not be confirmed" rather
+    than claiming success stop_run() didn't actually achieve."""
+    from api._jobs import job_manager
+
+    try:
+        confirmed = job_manager.cancel_job(job_id)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}") from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+    return {"job_id": job_id, "cancelled": confirmed}
+
+
+_SSE_HEARTBEAT_SECONDS = 15.0
+_SSE_POLL_SECONDS = 0.5
+
+
+@app.get(
+    "/jobs/{job_id}/stream",
+    dependencies=[Depends(require_stream_token), Depends(_require_jobs_api_enabled)],
+)
+def stream_job_logs(
+    job_id: str,
+    offset: int = 0,
+    last_event_id: Optional[str] = Header(default=None, alias="Last-Event-ID"),
+):
+    """Stream live logs for a job over Server-Sent Events (SSE).
+
+    Auth via ``require_stream_token`` (not ``require_read_token``): the
+    browser's native ``EventSource`` cannot set an ``Authorization`` header,
+    so this endpoint also accepts ``?token=``.
+
+    Resume: a reconnecting ``EventSource`` automatically resends the last
+    ``id:`` it saw as a ``Last-Event-ID`` header — that's the standard
+    signal a real reconnect (network blip, backgrounded tab) sends, so it
+    takes priority over ``?offset=`` (which only reflects the URL the
+    component was first mounted with).
+    """
+    import time as _time
+    from fastapi.responses import StreamingResponse
+    from api._jobs import job_manager
+    from api._redact import redact_line
+
+    rec = job_manager.get_job(job_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}")
+
+    log_path = rec.handle.log_path
+
+    resume_offset = offset
+    if last_event_id:
+        try:
+            resume_offset = int(last_event_id)
+        except ValueError:
+            pass  # malformed header -> fall back to ?offset=
+
+    async def log_event_generator():
+        current_offset = max(0, resume_offset)
+        last_sent = _time.monotonic()
+        while True:
+            sent_any = False
+            if log_path.exists():
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(current_offset)
+                    lines = f.readlines()
+                    if lines:
+                        for line in lines:
+                            scrubbed = redact_line(line.rstrip("\n"))
+                            yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
+                        current_offset = f.tell()
+                        sent_any = True
+
+            if not rec.handle.is_running():
+                # Stream final lines if any and stop
+                yield f"event: end\ndata: Job completed with exit code {rec.exit_code()}\n\n"
+                break
+
+            now = _time.monotonic()
+            if sent_any:
+                last_sent = now
+            elif now - last_sent >= _SSE_HEARTBEAT_SECONDS:
+                # Keep-alive comment (ignored by EventSource.onmessage) so
+                # an idle job's connection survives a proxy's read timeout.
+                yield ": heartbeat\n\n"
+                last_sent = now
+
+            await asyncio.sleep(_SSE_POLL_SECONDS)
+
+    return StreamingResponse(log_event_generator(), media_type="text/event-stream")
+

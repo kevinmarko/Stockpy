@@ -53,6 +53,7 @@ import type {
   IntervalUpdateResult,
   ExecutionModeUpdateRequest,
   ExecutionModeUpdateResult,
+  JobRecord,
   KillSwitchActionResult,
   LlmCapabilityRow,
   LlmProviderName,
@@ -85,6 +86,7 @@ import type {
   PortfolioRiskMetrics,
   RealizedPerformance,
   RegimeOverlay,
+  RestartDaemonResult,
   RiskGateBlockEntry,
   RiskGateBlockLog,
   RealizedTrade,
@@ -3559,6 +3561,11 @@ const MOCK_AGENT_LOOP: AgentLoopStatus = {
   reason: null,
 };
 
+// In-memory job bookkeeping for createJob/getJobStatus/cancelJob — just
+// enough state so the mock's status-polling story (running -> success, or
+// running -> cancelled) is believable rather than always-terminal.
+const _mockJobs: Record<string, { jobType: string; startedAt: number; cancelled: boolean }> = {};
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
   async health() {
@@ -5166,6 +5173,57 @@ export const mockApi = {
         note: already
           ? `${sym} is already on the watchlist.`
           : "Added to watchlist.txt — the pipeline will evaluate it on the next run. No order was placed.",
+      },
+      150
+    );
+  },
+
+  async createJob(job_type: string, _params?: Record<string, unknown>): Promise<JobRecord> {
+    const job_id = `mock-job-${Object.keys(_mockJobs).length + 1}`;
+    _mockJobs[job_id] = { jobType: job_type, startedAt: Date.now(), cancelled: false };
+    return delay({
+      job_id,
+      job_type: job_type as any,
+      status: "running",
+      cancellable: job_type !== "orchestrator",
+    }, 150);
+  },
+
+  async getJobStatus(job_id: string): Promise<JobRecord> {
+    const job = _mockJobs[job_id];
+    // A believable "running for a couple seconds, then done" lifecycle, so
+    // Console.tsx's status-polling loop has something real to demonstrate
+    // even against the mock backend rather than reporting terminal on the
+    // very first poll.
+    const cancellable = job ? job.jobType !== "orchestrator" : true;
+    const status = !job
+      ? "success"
+      : job.cancelled
+        ? "cancelled"
+        : Date.now() - job.startedAt < 2000
+          ? "running"
+          : "success";
+    return delay({
+      job_id,
+      job_type: (job?.jobType ?? "preflight") as any,
+      status,
+      exit_code: status === "running" ? null : status === "cancelled" ? -15 : 0,
+      is_running: status === "running",
+      cancellable,
+    }, 100);
+  },
+
+  async cancelJob(job_id: string): Promise<{ job_id: string; cancelled: boolean }> {
+    const job = _mockJobs[job_id];
+    if (job) job.cancelled = true;
+    return delay({ job_id, cancelled: true }, 100);
+  },
+
+  async restartDaemon(): Promise<RestartDaemonResult> {
+    return delay(
+      {
+        restarting: true,
+        message: "(mock) Process exiting in ~0.5s. No real process was restarted.",
       },
       150
     );

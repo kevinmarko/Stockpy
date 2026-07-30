@@ -367,6 +367,17 @@ def test_get_universe_reads_default_tickers():
     assert resp.json() == {"symbols": ["AAPL", "MSFT"], "count": 2}
 
 
+def test_put_universe_requires_token_even_when_unset(monkeypatch):
+    """PUT /data/universe actually mutates .env (DEFAULT_TICKERS), unlike the
+    GET endpoints on this API — it uses require_write_token, which fails
+    CLOSED when STATE_API_TOKEN is unset (the opposite of every read
+    endpoint's fail-open default)."""
+    monkeypatch.setattr("gui.env_io.write_setting", lambda key, value: ".env")
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.put("/data/universe", json=["aapl", " nvda ", ""])
+    assert resp.status_code == 403
+
+
 def test_put_universe_writes_default_tickers(monkeypatch):
     written = {}
 
@@ -376,8 +387,12 @@ def test_put_universe_writes_default_tickers(monkeypatch):
         return ".env"
 
     monkeypatch.setattr("gui.env_io.write_setting", _fake_write)
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.put("/data/universe", json=["aapl", " nvda ", ""])
+    with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+        resp = client.put(
+            "/data/universe",
+            json=["aapl", " nvda ", ""],
+            headers={"Authorization": "Bearer secret"},
+        )
     assert resp.status_code == 200
     assert resp.json() == {"status": "updated", "symbols": ["AAPL", "NVDA"]}
     assert written["key"] == "DEFAULT_TICKERS"

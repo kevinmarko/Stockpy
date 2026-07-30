@@ -6,6 +6,29 @@
  * JSON. Nothing else in the app hard-codes a response shape.
  */
 
+export type JobType =
+  | "preflight"
+  | "pytest"
+  | "validation"
+  | "verify"
+  | "gravity"
+  | "advisory"
+  | "orchestrator";
+
+export interface JobRecord {
+  job_id: string;
+  job_type: JobType;
+  status: string;
+  exit_code?: number | null;
+  is_running?: boolean;
+  cancellable: boolean;
+}
+
+export interface RestartDaemonResult {
+  restarting: boolean;
+  message: string;
+}
+
 export type PilotCategory =
   | "Momentum"
   | "Mean Reversion"

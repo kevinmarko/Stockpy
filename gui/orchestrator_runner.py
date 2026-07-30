@@ -113,6 +113,15 @@ VALIDATION_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_validation.log"
 # so the operator can tail the full readiness gate independently of a refresh.
 VERIFY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_verify.log"
 
+# Log written by ``launch_preflight`` — the pre-live readiness gate
+# (``scripts/preflight_check.py``: env vars, kill switch, ADVISORY_ONLY/paper
+# posture, etc.). Deliberately distinct from VERIFY_LOG_PATH/launch_verify:
+# preflight is a fast, non-mutating check, while ``make verify`` additionally
+# runs the full pytest suite and one live pipeline cycle — conflating the two
+# would make a "Preflight Check" button silently run something much heavier
+# (and network-touching) than its label promises.
+PREFLIGHT_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_preflight.log"
+
 # Log written by ``launch_gravity_audit`` — the Gravity Audit tab's "Run Gravity
 # AI Review Suite" button.  Distinct file so the operator can tail the audit run
 # and the parsed JSON report is read back from this log independently of any
@@ -643,6 +652,58 @@ def launch_pytest() -> RunHandle:
         refresh_account=False,
         log_path=PYTEST_LOG_PATH,
         mode="pytest",
+        _popen=popen,
+    )
+
+
+def launch_preflight() -> RunHandle:
+    """Spawn ``scripts/preflight_check.py`` as a non-blocking subprocess.
+
+    A fast, read-only readiness gate (env vars, kill switch, ADVISORY_ONLY/
+    paper posture, …) — distinct from :func:`launch_verify`, which additionally
+    runs the full pytest suite and one live pipeline cycle. Like every other
+    launcher in this module, spawned via a detached :class:`subprocess.Popen`
+    with a tailed log rather than run inline.
+
+    The child runs ``[sys.executable, "scripts/preflight_check.py"]`` from the
+    repo root, inheriting the current environment. stdout+stderr are
+    redirected to :data:`PREFLIGHT_LOG_PATH`, truncated at launch.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="preflight"``, ``log_path=PREFLIGHT_LOG_PATH``) for
+        polling status, tailing the log via :func:`read_log_tail`, and
+        stopping via :func:`stop_run`.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "scripts/preflight_check.py"]
+
+    log_file = open(PREFLIGHT_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo preflight check launch @ {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched preflight check pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=False,
+        log_path=PREFLIGHT_LOG_PATH,
+        mode="preflight",
         _popen=popen,
     )
 

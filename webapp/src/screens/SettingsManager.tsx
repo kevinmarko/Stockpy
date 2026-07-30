@@ -183,6 +183,20 @@ function TunablesEditor({
             differ{data.env_drift.keys.length === 1 ? "s" : ""} from the running process
             ({data.env_drift.keys.join(", ")}). {data.env_drift.note}
           </span>
+          <Button
+            variant="neutral"
+            style={{ marginLeft: 12, fontSize: 12.5, padding: "4px 10px" }}
+            onClick={async () => {
+              try {
+                const res = await api.restartDaemon();
+                alert(res.message);
+              } catch (err: any) {
+                alert(`Failed to request restart: ${err.message || err}`);
+              }
+            }}
+          >
+            Restart Daemon
+          </Button>
         </Notice>
       )}
 

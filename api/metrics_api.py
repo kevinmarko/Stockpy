@@ -21,7 +21,6 @@ This module MAY import the heavy calculation engines (unlike ``state_api.py`` /
 """
 from __future__ import annotations
 
-import hmac
 import logging
 import math
 from datetime import datetime
@@ -30,9 +29,9 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from settings import settings
+from api.auth import require_read_token as require_token
 from data.historical_store import HistoricalStore
 from data.market_data import MarketDataError, get_provider
 from processing_engine import ProcessingEngine
@@ -60,20 +59,6 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-_bearer = HTTPBearer(auto_error=False)
-
-
-def require_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
-    token = settings.STATE_API_TOKEN
-    if not token:
-        return
-    presented = credentials.credentials if credentials else ""
-    if not hmac.compare_digest(presented, token):
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-
 
 def _clean_nan(obj: Any) -> Any:
     """Recursively convert NaN/inf floats to ``None`` (JSON ``null``)."""

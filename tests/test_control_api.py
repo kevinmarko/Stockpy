@@ -687,6 +687,257 @@ class TestCORS:
 
 
 # ---------------------------------------------------------------------------
+# POST /daemon/restart
+# ---------------------------------------------------------------------------
+
+
+class TestDaemonRestart:
+    def test_409_while_a_run_is_active(self):
+        daemon = _make_fake_daemon()
+        daemon.is_running.return_value = True
+        control_api.set_daemon(daemon)
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post(
+                "/daemon/restart", headers={"Authorization": "Bearer cmd-tok"}
+            )
+        assert resp.status_code == 409
+
+    def test_requires_command_token(self):
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post("/daemon/restart")
+        assert resp.status_code == 401
+
+    def test_schedules_a_real_process_exit_not_just_this_thread(self):
+        """os._exit() (an unconditional OS-level exit) is what actually
+        fixes the bug this endpoint exists for -- a bare sys.exit() only
+        terminates the CALLING thread when that thread isn't the main one,
+        which is exactly how uvicorn is hosted inside
+        desktop/orchestrator_daemon.py. Patches os._exit to a no-op so this
+        test doesn't kill the test runner, and waits out the real
+        threading.Timer delay to prove the call actually happens."""
+        import time as _time
+
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(control_api.os, "_exit") as fake_exit:
+            resp = client.post(
+                "/daemon/restart", headers={"Authorization": "Bearer cmd-tok"}
+            )
+            assert resp.status_code == 200
+            assert resp.json()["restarting"] is True
+            _time.sleep(0.7)
+            fake_exit.assert_called_once_with(0)
+
+
+# ---------------------------------------------------------------------------
+# Background job runner (JOBS_API_ENABLED) -- api/_jobs.py + the /jobs*
+# routes on this API. Every launcher is monkeypatched to a fake RunHandle so
+# no real subprocess (pytest, preflight_check.py, ...) is ever spawned by
+# this test file itself.
+# ---------------------------------------------------------------------------
+
+import api._jobs as jobs_module
+
+
+class _FakeHandle:
+    """Stands in for gui.orchestrator_runner.RunHandle: only is_running(),
+    returncode(), log_path, and backend are ever touched by api/_jobs.py."""
+
+    def __init__(self, *, running=True, rc=None, backend="subprocess", log_path=None):
+        self._running = running
+        self._rc = rc
+        self.backend = backend
+        self.log_path = log_path or __import__("pathlib").Path("/tmp/_fake_job.log")
+
+    def is_running(self):
+        return self._running
+
+    def returncode(self):
+        return self._rc
+
+
+@pytest.fixture(autouse=True)
+def _reset_job_manager():
+    jobs_module.job_manager._jobs.clear()
+    yield
+    jobs_module.job_manager._jobs.clear()
+
+
+class TestJobsApi:
+    def _enabled(self):
+        return (
+            mock.patch.object(settings, "JOBS_API_ENABLED", True),
+            mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"),
+        )
+
+    def test_disabled_by_default_even_with_valid_token(self, monkeypatch):
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: _FakeHandle())
+        with mock.patch.object(settings, "JOBS_API_ENABLED", False), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post(
+                "/jobs",
+                json={"job_type": "preflight"},
+                headers={"Authorization": "Bearer cmd-tok"},
+            )
+        assert resp.status_code == 403
+
+    def test_create_requires_command_token(self, monkeypatch):
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: _FakeHandle())
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post("/jobs", json={"job_type": "preflight"})
+        assert resp.status_code == 401
+
+    def test_create_unknown_job_type_is_400(self):
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post(
+                "/jobs",
+                json={"job_type": "not_a_real_type"},
+                headers={"Authorization": "Bearer cmd-tok"},
+            )
+        assert resp.status_code == 400
+
+    def test_validation_missing_params_is_400(self):
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post(
+                "/jobs",
+                json={"job_type": "validation"},
+                headers={"Authorization": "Bearer cmd-tok"},
+            )
+        assert resp.status_code == 400
+
+    def test_single_flight_second_launch_is_409(self, monkeypatch):
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: _FakeHandle(running=True))
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            first = client.post("/jobs", json={"job_type": "preflight"}, headers=headers)
+            assert first.status_code == 200
+            second = client.post("/jobs", json={"job_type": "preflight"}, headers=headers)
+        assert second.status_code == 409
+
+    def test_status_reflects_completion(self, monkeypatch):
+        handle = _FakeHandle(running=True)
+        monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            created = client.post(
+                "/jobs",
+                json={"job_type": "pytest"},
+                headers={"Authorization": "Bearer cmd-tok"},
+            ).json()
+            job_id = created["job_id"]
+            assert created["status"] == "running"
+
+            running = client.get(
+                f"/jobs/{job_id}", headers={"Authorization": "Bearer cmd-tok"}
+            ).json()
+            assert running["status"] == "running"
+            assert running["exit_code"] is None
+
+            handle._running = False
+            handle._rc = 0
+            done = client.get(
+                f"/jobs/{job_id}", headers={"Authorization": "Bearer cmd-tok"}
+            ).json()
+        assert done["status"] == "success"
+        assert done["exit_code"] == 0
+
+    def test_get_unknown_job_is_404(self):
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.get(
+                "/jobs/does-not-exist", headers={"Authorization": "Bearer cmd-tok"}
+            )
+        assert resp.status_code == 404
+
+    def test_cancel_unknown_job_is_404(self):
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            resp = client.post(
+                "/jobs/does-not-exist/cancel", headers={"Authorization": "Bearer cmd-tok"}
+            )
+        assert resp.status_code == 404
+
+    def test_cancel_daemon_backed_job_is_400_not_cancellable(self, monkeypatch):
+        # backend="daemon" -- launch_orchestrator's ORCHESTRATOR_DAEMON_ENABLED
+        # fast path. No local PID to signal; stop_run() itself refuses this.
+        monkeypatch.setattr(
+            jobs_module, "launch_orchestrator",
+            lambda **kw: _FakeHandle(running=True, backend="daemon"),
+        )
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            created = client.post(
+                "/jobs", json={"job_type": "orchestrator"}, headers=headers
+            ).json()
+            assert created["cancellable"] is False
+            resp = client.post(f"/jobs/{created['job_id']}/cancel", headers=headers)
+        assert resp.status_code == 400
+
+    def test_cancel_subprocess_backed_job_succeeds(self, monkeypatch):
+        handle = _FakeHandle(running=True, backend="subprocess")
+        monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
+        monkeypatch.setattr(jobs_module, "stop_run", lambda h: True)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            created = client.post(
+                "/jobs", json={"job_type": "pytest"}, headers=headers
+            ).json()
+            resp = client.post(f"/jobs/{created['job_id']}/cancel", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json() == {"job_id": created["job_id"], "cancelled": True}
+
+    def test_cancel_unconfirmed_stop_reports_false_not_success(self, monkeypatch):
+        handle = _FakeHandle(running=True, backend="subprocess")
+        monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
+        monkeypatch.setattr(jobs_module, "stop_run", lambda h: False)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            created = client.post(
+                "/jobs", json={"job_type": "pytest"}, headers=headers
+            ).json()
+            resp = client.post(f"/jobs/{created['job_id']}/cancel", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["cancelled"] is False
+
+    def test_stream_unknown_job_is_404(self):
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True):
+            resp = client.get("/jobs/does-not-exist/stream")
+        assert resp.status_code == 404
+
+    def test_stream_requires_token_via_header_or_query(self, monkeypatch, tmp_path):
+        log_path = tmp_path / "job.log"
+        log_path.write_text("line one\n")
+        handle = _FakeHandle(running=False, rc=0, log_path=log_path)
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: handle)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            created = client.post(
+                "/jobs",
+                json={"job_type": "preflight"},
+                headers={"Authorization": "Bearer cmd-tok"},
+            ).json()
+            job_id = created["job_id"]
+
+            no_auth = client.get(f"/jobs/{job_id}/stream")
+            assert no_auth.status_code == 401
+
+            via_header = client.get(
+                f"/jobs/{job_id}/stream", headers={"Authorization": "Bearer read-tok"}
+            )
+            assert via_header.status_code == 200
+
+            via_query = client.get(f"/jobs/{job_id}/stream?token=read-tok")
+            assert via_query.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Architectural guard
 # ---------------------------------------------------------------------------
 

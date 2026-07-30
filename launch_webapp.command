@@ -161,8 +161,8 @@ LIVE_MODE=false
 if [ "$LIVE_MODE" = true ]; then
     # ── venv for the Python backends ─────────────────────────────────────────
     if [ ! -d ".venv" ]; then
-        echo "  ERROR: .venv not found in $SCRIPT_DIR — create it with ./setup.sh"
-        exit 1
+        echo "  ▶  Creating .venv via ./setup.sh..."
+        ./setup.sh || { echo "  ERROR: ./setup.sh failed"; exit 1; }
     fi
     # shellcheck disable=SC1091
     source ".venv/bin/activate" || { echo "  ERROR: could not activate .venv"; exit 1; }
@@ -180,11 +180,7 @@ if [ "$LIVE_MODE" = true ]; then
     _start_api "api.pilots_api:app"   8602 "pilots_api"
     _start_api "api.data_api:app"     8603 "data_api"
     _start_api "api.metrics_api:app"  8604 "metrics_api"
-    if _port_up 8601; then
-        echo "  ✓  control_api already up on :8601 (daemon)"
-    else
-        echo "  ·  control_api (:8601) not running — Pipeline Dashboard controls will be idle (daemon not started by this script)."
-    fi
+    _start_api "api.control_api:app"  8601 "control_api"
 
     # ── Write webapp/.env.local so the PWA points at the live backends ───────
     TOKEN_VALUE="$(_read_env_value STATE_API_TOKEN)"

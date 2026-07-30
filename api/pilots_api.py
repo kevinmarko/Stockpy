@@ -85,7 +85,6 @@ figure.
 
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 import math
@@ -96,12 +95,15 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
 from settings import settings
 from settings import INTERVAL_MAX_SECONDS as _INTERVAL_MAX_SECONDS
 from settings import validate_interval_seconds as _validate_interval_seconds
+from api.auth import (
+    require_follow_command_token as require_command_token,
+    require_read_token,
+)
 
 # Deployability-gate thresholds — a pure, import-free leaf module (see its own
 # docstring: "Never hard-code these numbers elsewhere"). Backs GET /thresholds
@@ -230,8 +232,6 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-_bearer = HTTPBearer(auto_error=False)
-
 # The performance ?range= toggles the PWA exposes (echoed for API symmetry — no
 # per-range curve is persisted yet, see pilots/performance.py).
 _ALLOWED_RANGES = ("1W", "1M", "3M", "6M", "1Y", "2Y")
@@ -255,39 +255,11 @@ _DETAIL_TRADES_LIMIT = 10
 
 
 # ---------------------------------------------------------------------------
-# Auth guards
+# Auth guards — require_read_token / require_command_token are imported from
+# api/auth.py at module top (require_command_token bound to FOLLOW_API_TOKEN
+# specifically). require_loopback stays local: it's a defense-in-depth guard
+# unique to the brokerage-credential intake path, not shared across services.
 # ---------------------------------------------------------------------------
-
-
-def require_read_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
-    """Read-endpoint guard. FAIL-OPEN when ``STATE_API_TOKEN`` is unset
-    (mirrors ``api/state_api.py``). Constant-time compare; token never logged."""
-    token = settings.STATE_API_TOKEN
-    if not token:  # unset/empty -> auth disabled (open)
-        return
-    presented = credentials.credentials if credentials else ""
-    if not hmac.compare_digest(presented, token):
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-
-
-def require_command_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
-    """Follow write-path guard. FAIL-CLOSED when ``FOLLOW_API_TOKEN`` is unset —
-    silence must never mean "open" here, since a follow produces a gated order
-    queue. Constant-time compare; token never logged (CONSTRAINT #3)."""
-    token = settings.FOLLOW_API_TOKEN
-    if not token:
-        raise HTTPException(
-            status_code=403,
-            detail="Follow endpoints disabled: FOLLOW_API_TOKEN not configured.",
-        )
-    presented = credentials.credentials if credentials else ""
-    if not hmac.compare_digest(presented, token):
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -3342,9 +3314,10 @@ def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
         "written": accepted,
         "rejected": rejected,
         "applies": "next_daemon_restart",
+        "restart_required": True,
+        "restart_endpoint": "POST /daemon/restart",
         "note": (
             "Accepted values written to .env. settings is not patched "
-            "in-process — this API and any already-launched pipeline still use "
-            "the previous values until restarted."
+            "in-process — restart the daemon via POST /daemon/restart to apply."
         ),
     }
