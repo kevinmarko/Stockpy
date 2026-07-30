@@ -10,9 +10,13 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    // A new job id means a genuinely different job -- starting it from the
+    // previous job's log lines still on screen would read as one garbled
+    // transcript instead of two separate runs.
+    setLogs([]);
     if (!jobId || !isStreaming || USE_MOCK) return;
 
     const eventSource = new EventSource(jobStreamUrl(jobId, 0));
@@ -40,8 +44,11 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
   }, [jobId, isStreaming]);
 
   useEffect(() => {
-    if (autoScroll) {
-      bottomRef.current?.scrollIntoView({ block: "end" });
+    // Scroll only this panel's own list, never scrollIntoView() -- that
+    // bubbles up through every scrollable ancestor, including the outer
+    // page, and can carry the whole viewport away from the Console screen.
+    if (autoScroll && listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [logs, autoScroll]);
 
@@ -77,7 +84,7 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto space-y-1">
+      <div ref={listRef} className="flex-1 overflow-y-auto space-y-1">
         {USE_MOCK ? (
           <div className="text-zinc-500 text-xs italic">
             Log streaming is only available in live mode.
@@ -85,14 +92,11 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
         ) : filteredLogs.length === 0 ? (
           <div className="text-zinc-500 text-xs italic">No logs received yet...</div>
         ) : (
-          <>
-            {filteredLogs.map((line, idx) => (
-              <div key={idx} className="whitespace-pre-wrap break-all leading-snug">
-                {line}
-              </div>
-            ))}
-            <div ref={bottomRef} />
-          </>
+          filteredLogs.map((line, idx) => (
+            <div key={idx} className="whitespace-pre-wrap break-all leading-snug">
+              {line}
+            </div>
+          ))
         )}
       </div>
     </div>
