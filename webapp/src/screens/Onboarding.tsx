@@ -118,7 +118,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                         ? "—"
                         : `${fmtNum(p.headline.sharpe, 2)} Sharpe`}
                     </span>
-                    <DeployableBadge deployable={p.headline.deployable} />
+                    {/* interactive=false: this row IS a <button> (selects the
+                        Pilot); an InfoTip's own tap trigger nested inside would
+                        be a second focusable/clickable element inside a
+                        <button> -- invalid HTML. Picking this Pilot advances
+                        to the next onboarding step, which can look it up on
+                        Pilot Detail (via HonestyRow) where the badge is
+                        interactive. */}
+                    <DeployableBadge deployable={p.headline.deployable} interactive={false} />
                   </div>
                 </button>
               ))}

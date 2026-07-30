@@ -5,6 +5,7 @@
  * a fabricated $0 portfolio.
  */
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Portfolio } from "./Portfolio";
@@ -52,7 +53,12 @@ describe("Portfolio screen (real mock API)", () => {
 
     const badge = await screen.findByText("stale");
     expect(badge).toBeInTheDocument();
-    expect(badge).toHaveAttribute("title", "30.0h old");
+    // Native title= never fires on tap; the age explanation is now a
+    // tap-to-open InfoTip (see components/ui.tsx) -- closed by default,
+    // opened by clicking the badge, and readable via role="tooltip".
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    await userEvent.click(badge);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("30.0h old");
   });
 
   it("an unavailable account snapshot renders the honest error state, never a fabricated $0 portfolio", async () => {

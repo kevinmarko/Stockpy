@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { SectorSelectionRow, SectorSelectionView } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Input, Loading, Notice, StaleDataNotice, Table } from "../components/ui";
+import { ErrorState, Input, InfoTip, Loading, Notice, StaleDataNotice, Table } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { fmtDate, fmtNum } from "../format";
@@ -49,9 +49,9 @@ function SectorRow({ row }: { row: SectorSelectionRow }) {
       <td>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {row.selected && (
-            <span className="badge badge-good" title="In the top-N selection">
+            <InfoTip triggerClassName="badge badge-good" content="In the top-N selection">
               ✓
-            </span>
+            </InfoTip>
           )}
           <span style={{ fontWeight: row.selected ? 700 : 500 }}>{row.sector}</span>
         </div>

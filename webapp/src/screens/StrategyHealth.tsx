@@ -10,7 +10,7 @@ import type {
   Thresholds,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { DeployableBadge, ErrorState, Loading, Select, Table } from "../components/ui";
+import { DeployableBadge, ErrorState, InfoTip, Loading, Select, Table } from "../components/ui";
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
 import { ValidationTrend } from "../components/ValidationTrend";
@@ -51,12 +51,12 @@ function GateChip({ gate }: { gate: StrategyHealthGate }) {
     gate.passed == null ? "badge badge-neutral" : gate.passed ? "badge badge-good" : "badge badge-bad";
   const valueStr = gate.value == null ? "—" : formatGateNumber(gate, gate.value);
   return (
-    <span className={cls} title={gate.label}>
+    <InfoTip triggerClassName={cls} content={gate.label}>
       {GATE_SHORT_LABEL[gate.key]} {valueStr}{" "}
       <span style={{ opacity: 0.75 }}>
         ({directionGlyph(gate.direction)} {formatGateNumber(gate, gate.threshold)})
       </span>
-    </span>
+    </InfoTip>
   );
 }
 
@@ -76,12 +76,12 @@ function StressGateChip({
   const ddText =
     stressMaxDrawdown == null ? "—" : fmtPct(stressMaxDrawdown, 0, { fromFraction: true });
   return (
-    <span
-      className={passed ? "badge badge-good" : "badge badge-bad"}
-      title={`Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < ${ddText} drawdown`}
+    <InfoTip
+      triggerClassName={passed ? "badge badge-good" : "badge badge-bad"}
+      content={`Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < ${ddText} drawdown`}
     >
       Stress {passed ? "✓ passed" : "✗ failed"}
-    </span>
+    </InfoTip>
   );
 }
 

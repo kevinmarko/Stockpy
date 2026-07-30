@@ -7,7 +7,7 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,
+  Tooltip as ChartTooltip,
 } from "recharts";
 import { api } from "../api/client";
 import type {
@@ -17,7 +17,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
+import { Button, ErrorState, Input, InfoTip, Loading, Notice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
@@ -153,7 +153,7 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
                   height={50}
                 />
                 <YAxis tick={chartAxisTick} {...chartAxisLine} allowDecimals={false} />
-                <Tooltip
+                <ChartTooltip
                   contentStyle={chartTooltipStyle}
                   labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
                   itemStyle={{ fontSize: 11 }}
@@ -311,14 +311,26 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
                         ? "configured, not scored last run"
                         : `${m.symbols_scored ?? "—"} symbols scored`}
                   </div>
-                  <div
-                    style={{ fontSize: 11, color: theme.textMuted, marginTop: 2, fontFamily: "monospace" }}
-                    title="sha256-prefix fingerprint of signals/<name>.py + its last-modified time"
+                  <InfoTip
+                    triggerStyle={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      fontSize: 11,
+                      color: theme.textMuted,
+                      marginTop: 2,
+                      fontFamily: "monospace",
+                      cursor: "pointer",
+                    }}
+                    content="sha256-prefix fingerprint of signals/<name>.py + its last-modified time"
                   >
                     {m.version_hash
                       ? `v${m.version_hash} · modified ${timeAgo(m.last_modified)}`
                       : "no file on disk"}
-                  </div>
+                  </InfoTip>
                 </div>
                 <Toggle
                   checked={enabled}
