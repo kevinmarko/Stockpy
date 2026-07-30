@@ -6,9 +6,23 @@ import { LogStream } from "../components/LogStream";
 const TERMINAL_STATUSES = new Set(["success", "failed", "cancelled", "unknown"]);
 const STATUS_POLL_MS = 1500;
 
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function yearAgoIso(): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 export const Console: React.FC = () => {
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showBacktestForm, setShowBacktestForm] = useState(false);
+  const [backtestStrategies, setBacktestStrategies] = useState("");
+  const [backtestStart, setBacktestStart] = useState(yearAgoIso());
+  const [backtestEnd, setBacktestEnd] = useState(todayIso());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = () => {
@@ -41,16 +55,33 @@ export const Console: React.FC = () => {
 
   useEffect(() => stopPolling, []);
 
-  const handleLaunch = async (jobType: string) => {
+  const handleLaunch = async (jobType: string, params?: Record<string, unknown>) => {
     try {
       setLoading(true);
-      const res = await api.createJob(jobType);
+      const res = await api.createJob(jobType, params);
       setActiveJob(res);
     } catch (err: any) {
       alert(`Failed to launch job: ${err.message || err}`);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleRunBacktest = async () => {
+    const strategies = backtestStrategies
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (strategies.length === 0) {
+      alert("Enter at least one strategy id (comma-separated).");
+      return;
+    }
+    if (!backtestStart || !backtestEnd) {
+      alert("Start and end dates are required.");
+      return;
+    }
+    await handleLaunch("validation", { strategies, start: backtestStart, end: backtestEnd });
+    setShowBacktestForm(false);
   };
 
   const handleCancel = async () => {
@@ -121,7 +152,76 @@ export const Console: React.FC = () => {
           <div className="font-semibold text-zinc-200 mb-1">⚡ Full Verification</div>
           <div className="text-xs text-zinc-400">Env + Tests + Live Cycle</div>
         </button>
+
+        <button
+          disabled={loading}
+          onClick={() => handleLaunch("gravity")}
+          className="p-4 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left transition-all"
+        >
+          <div className="font-semibold text-zinc-200 mb-1">🔍 Gravity Audit</div>
+          <div className="text-xs text-zinc-400">Run Gravity AI Review Suite</div>
+        </button>
+
+        <button
+          disabled={loading}
+          onClick={() => setShowBacktestForm((v) => !v)}
+          className="p-4 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left transition-all"
+        >
+          <div className="font-semibold text-zinc-200 mb-1">📊 Run Backtest</div>
+          <div className="text-xs text-zinc-400">Validation harness (PBO/DSR/Sharpe)</div>
+        </button>
       </div>
+
+      {showBacktestForm && (
+        <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-lg space-y-3">
+          <div className="font-semibold text-zinc-200">Run Backtest</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="text-xs text-zinc-400 space-y-1">
+              <div>Strategies (comma-separated ids)</div>
+              <input
+                type="text"
+                value={backtestStrategies}
+                onChange={(e) => setBacktestStrategies(e.target.value)}
+                placeholder="rsi2_mean_reversion, macd_trend"
+                className="w-full bg-zinc-950 border border-zinc-700 text-sm text-zinc-200 px-2 py-1.5 rounded focus:outline-none focus:border-zinc-500"
+              />
+            </label>
+            <label className="text-xs text-zinc-400 space-y-1">
+              <div>Start date</div>
+              <input
+                type="date"
+                value={backtestStart}
+                onChange={(e) => setBacktestStart(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-700 text-sm text-zinc-200 px-2 py-1.5 rounded focus:outline-none focus:border-zinc-500"
+              />
+            </label>
+            <label className="text-xs text-zinc-400 space-y-1">
+              <div>End date</div>
+              <input
+                type="date"
+                value={backtestEnd}
+                onChange={(e) => setBacktestEnd(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-700 text-sm text-zinc-200 px-2 py-1.5 rounded focus:outline-none focus:border-zinc-500"
+              />
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <button
+              disabled={loading}
+              onClick={handleRunBacktest}
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white font-medium text-sm rounded transition-colors"
+            >
+              Run Backtest
+            </button>
+            <button
+              onClick={() => setShowBacktestForm(false)}
+              className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium text-sm rounded transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {activeJob && (
         <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-lg flex items-center justify-between">
