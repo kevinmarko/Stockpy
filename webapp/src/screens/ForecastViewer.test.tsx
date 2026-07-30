@@ -6,7 +6,7 @@
  * bars-empty fallback not blocking the forecast tiles.
  */
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForecastViewer } from "./ForecastViewer";
 import { api } from "../api/client";

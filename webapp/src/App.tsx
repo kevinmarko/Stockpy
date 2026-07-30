@@ -5,7 +5,7 @@ import {
   Routes,
   useLocation,
   useNavigate,
-} from "react-router-dom";
+} from "react-router";
 import { Dashboard } from "./screens/Dashboard";
 import { Comparison } from "./screens/Comparison";
 import { Marketplace } from "./screens/Marketplace";

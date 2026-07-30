@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import type { ExecutionQueue, ExecutionQueueIntent } from "../api/types";

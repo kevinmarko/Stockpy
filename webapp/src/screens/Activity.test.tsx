@@ -5,7 +5,7 @@
  * fabricated alert) when the feed is empty.
  */
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Activity } from "./Activity";
 import { api } from "../api/client";

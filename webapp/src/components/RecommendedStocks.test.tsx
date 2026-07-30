@@ -4,7 +4,7 @@
  * onSelect, the default navigation path, and the honest empty state.
  */
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RecommendedStocks } from "./RecommendedStocks";
 import { api } from "../api/client";

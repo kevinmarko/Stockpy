@@ -3,7 +3,7 @@
  * deployable badges and renders "—" (never a fabricated 0) for null metrics.
  */
 import { render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Models } from "./Models";
 import { api } from "../api/client";

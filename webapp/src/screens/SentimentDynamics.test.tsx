@@ -6,7 +6,7 @@
  * never a guessed number).
  */
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SentimentDynamics } from "./SentimentDynamics";
 import { api } from "../api/client";

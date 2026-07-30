@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { Bar, Fundamentals, MacroSnapshot, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";

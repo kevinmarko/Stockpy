@@ -4,7 +4,7 @@
  * cold-start (no bars) all-null / empty-modules honest state.
  */
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SignalBreakdown } from "./SignalBreakdown";
 import { api } from "../api/client";

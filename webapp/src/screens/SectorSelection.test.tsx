@@ -6,7 +6,7 @@
  * state for an untracked symbol.
  */
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SectorSelection } from "./SectorSelection";
 import { api } from "../api/client";

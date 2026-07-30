@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { ExecutionQueue, Recommendation, RecommendationsResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
