@@ -84,6 +84,7 @@ def _compute_directive_row(
     delta_target_scale: float = 1.0,
     delta_tolerance: float = 0.05,
     strike_grid: float = 0.50,
+    true_ivr_enabled: bool = False,
 ) -> Dict[str, Any]:
     """Cached single-symbol premium-directive compute.
 
@@ -96,6 +97,13 @@ def _compute_directive_row(
     The five ``ivr_*``/``delta_*``/``strike_grid`` kwargs are the session-scoped
     operator controls; ALL default to the engine constants so an untouched
     controls form reproduces the pre-controls output byte-for-byte.
+
+    ``true_ivr_enabled`` mirrors ``settings.OPTIONS_TRUE_IVR_ENABLED`` (passed
+    explicitly by the caller rather than read here so it participates in the
+    ``st.cache_data`` key — flipping the setting invalidates stale cached
+    rows instead of waiting out the TTL). Default ``False`` reproduces
+    today's exact behavior; ``True`` adds a live options-chain fetch per
+    symbol on a cache miss (see ``build_premium_directive``'s docstring).
     """
     from technical_options_engine import build_premium_directive
     from data.market_data import get_provider, MarketDataError
@@ -119,6 +127,7 @@ def _compute_directive_row(
             delta_target_scale=float(delta_target_scale),
             delta_tolerance=float(delta_tolerance),
             strike_grid=float(strike_grid),
+            true_ivr_enabled=bool(true_ivr_enabled),
         )
         return {"row": row, "error": None}
     except MarketDataError as exc:
@@ -239,6 +248,7 @@ def render_options_matrix() -> None:
             delta_target_scale=float(target_delta_scale),
             delta_tolerance=float(delta_tolerance_w),
             strike_grid=float(strike_grid_w),
+            true_ivr_enabled=bool(settings.OPTIONS_TRUE_IVR_ENABLED),
         )
         rows.append(result["row"])
         if result["error"]:
@@ -267,7 +277,7 @@ def render_options_matrix() -> None:
     # they overlap. NaN columns are tolerated by Streamlit's dataframe widget.
     column_order = [
         "Symbol", "Price", "Stale",
-        "Sigma_GARCH", "IVR_Proxy",
+        "Sigma_GARCH", "IVR_Proxy", "True_IVR",
         "Aroon_Oscillator", "Coppock_Curve", "Trend_Bias",
         "Strategy", "Action",
         "Short_Strike", "Short_Delta", "Long_Strike", "Long_Delta",
@@ -276,7 +286,19 @@ def render_options_matrix() -> None:
         "Integrity_OK",
     ]
     display_cols = [c for c in column_order if c in df.columns]
-    st.dataframe(df[display_cols], width="stretch")
+    column_config = {}
+    if "IVR_Proxy" in display_cols:
+        column_config["IVR_Proxy"] = st.column_config.NumberColumn(help=metric_help("IVR Proxy") or None)
+    if "True_IVR" in display_cols:
+        column_config["True_IVR"] = st.column_config.NumberColumn(help=metric_help("True_IVR") or None)
+    st.dataframe(df[display_cols], width="stretch", column_config=column_config or None)
+
+    if "True_IVR" in df.columns and not bool(settings.OPTIONS_TRUE_IVR_ENABLED):
+        st.caption(
+            "True IVR is off (`OPTIONS_TRUE_IVR_ENABLED=false`) — the column above "
+            "stays N/A. Enable it in `.env` to attempt a real options-chain-derived "
+            "IV rank; see the methodology note below for what that costs per render."
+        )
 
     # Integrity verdict summary (top-line readout — drill-down available below).
     if "Integrity_OK" in df.columns:

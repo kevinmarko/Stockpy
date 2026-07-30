@@ -32,11 +32,18 @@ def main():
             logger.info(f"Fetching historical prices for {ticker} starting from {start_date}...")
             t = yf.Ticker(ticker)
             df = t.history(start=start_date)
-            
+
             if df.empty:
                 logger.warning(f"No price history found for {ticker}. Skipping.")
                 continue
-                
+
+            # yfinance returns a tz-aware (America/New_York) DatetimeIndex; the
+            # cutoff_date comparison below is tz-naive, so normalize here or every
+            # ticker fails with "Invalid comparison between dtype=datetime64[ns, tz]
+            # and Timestamp" before a single row is ever recorded.
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+
             # Compute 20-day rolling annualized standard deviation
             returns = df['Close'].pct_change().dropna()
             rolling_vol = returns.rolling(window=20).std() * np.sqrt(252)
