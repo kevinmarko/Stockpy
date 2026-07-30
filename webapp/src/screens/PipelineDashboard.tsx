@@ -63,8 +63,8 @@ function StateBadge({ state }: { state: RunRecord["state"] }) {
 function StatusBanner({ status }: { status: ControlStatus }) {
   const running = status.is_running;
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
         <span
           aria-hidden
           style={{
@@ -85,7 +85,7 @@ function StatusBanner({ status }: { status: ControlStatus }) {
       </div>
 
       {running && status.current_run_id && (
-        <p style={{ color: theme.textSecondary, fontSize: 13, margin: "8px 0 0" }}>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: "var(--s-2) 0 0" }}>
           Current run:{" "}
           <span className="num" style={{ fontFamily: "monospace" }}>
             {status.current_run_id}
@@ -93,7 +93,7 @@ function StatusBanner({ status }: { status: ControlStatus }) {
         </p>
       )}
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
         <span className={status.engines_warm ? "badge badge-good" : "badge badge-neutral"}>
           Engines {status.engines_warm ? "warm" : "cold"}
         </span>
@@ -105,7 +105,7 @@ function StatusBanner({ status }: { status: ControlStatus }) {
       </div>
 
       {status.kill_switch_active && (
-        <Notice variant="warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span aria-hidden>⚠️</span>
           <span>
             Kill switch active
@@ -142,9 +142,9 @@ function Controls({
   const busy = disabled || trigger.pending;
 
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
-      <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>Trigger a run</h2>
-      <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Trigger a run</h2>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Runs are handled by the daemon; this page reflects whatever the daemon
         actually accepted.
       </p>
@@ -160,7 +160,7 @@ function Controls({
         Run full advisory pipeline
       </Button>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+      <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-2-5)" }}>
         <div style={{ flex: 1 }}>
           <Button
             block
@@ -186,13 +186,13 @@ function Controls({
       </div>
 
       {trigger.error && (
-        <Notice variant="warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           <span aria-hidden>⚠️</span>
           <span>{trigger.error}</span>
         </Notice>
       )}
       {trigger.result && (
-        <Notice variant="success" style={{ marginTop: 10 }}>
+        <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }}>
           <span aria-hidden>✅</span>
           <span>
             {trigger.result.state ?? "queued"}
@@ -223,7 +223,7 @@ function RunsTable({ runs }: { runs: RunRecord[] }) {
       <tbody>
         {runs.map((r) => (
           <tr key={r.run_id}>
-            <td style={{ fontFamily: "monospace", fontSize: 12 }}>
+            <td style={{ fontFamily: "monospace", fontSize: "var(--t-caption)" }}>
               {r.run_id}
             </td>
             <td>
@@ -237,7 +237,7 @@ function RunsTable({ runs }: { runs: RunRecord[] }) {
               <StateBadge state={r.state} />
               {r.error && (
                 <div
-                  style={{ color: theme.textMuted, fontSize: 11, marginTop: 4 }}
+                  style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-1)" }}
                   data-testid="run-error"
                 >
                   {r.error}
@@ -259,8 +259,8 @@ function RunsTable({ runs }: { runs: RunRecord[] }) {
 
 function RunHistory({ runs }: { runs: RunRecord[] }) {
   return (
-    <section className="card card-pad" style={{ marginTop: 16, overflowX: "auto" }}>
-      <h2 style={{ margin: "0 0 12px", fontSize: "var(--t-title)" }}>Run history</h2>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)", overflowX: "auto" }}>
+      <h2 style={{ margin: "0 0 var(--s-3)", fontSize: "var(--t-title)" }}>Run history</h2>
       {runs.length === 0 ? (
         <EmptyState
           title="No recent runs"
@@ -297,20 +297,20 @@ function DurableRunHistory({
   onReload: () => void;
 }) {
   return (
-    <section className="card card-pad" style={{ marginTop: 16, overflowX: "auto" }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)", overflowX: "auto" }}>
       <div
         style={{
           display: "flex",
           alignItems: "flex-start",
           justifyContent: "space-between",
-          gap: 8,
+          gap: "var(--s-2)",
         }}
       >
         <div>
-          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
+          <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
             Full run history
           </h2>
-          <p style={{ color: theme.textSecondary, fontSize: 13, margin: 0 }}>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: 0 }}>
             Persisted to the database — survives a daemon restart.
           </p>
         </div>
@@ -324,22 +324,22 @@ function DurableRunHistory({
       </div>
 
       {loading && !runs ? (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           <Loading />
         </div>
       ) : error && !runs ? (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           <ErrorState message={error} status={httpStatus} onRetry={onReload} />
         </div>
       ) : !runs || runs.length === 0 ? (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           <EmptyState
             title="No persisted run history yet"
             hint="History is written once a triggered run finishes."
           />
         </div>
       ) : (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           <RunsTable runs={runs} />
         </div>
       )}
@@ -394,7 +394,7 @@ export function PipelineDashboard() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
+          fontSize: "var(--t-callout)",
         }}
       >
         ‹ Back

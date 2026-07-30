@@ -47,7 +47,7 @@ function SectorRow({ row }: { row: SectorSelectionRow }) {
   return (
     <tr>
       <td>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
           {row.selected && (
             <InfoTip triggerClassName="badge badge-good" content="In the top-N selection">
               ✓
@@ -56,7 +56,7 @@ function SectorRow({ row }: { row: SectorSelectionRow }) {
           <span style={{ fontWeight: row.selected ? 700 : 500 }}>{row.sector}</span>
         </div>
         {row.degraded_reason && (
-          <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
+          <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
             {degradedReasonLabel(row.degraded_reason)}
           </div>
         )}
@@ -120,8 +120,8 @@ export function SectorSelection() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Back
@@ -129,7 +129,7 @@ export function SectorSelection() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h1 className="screen-title">Sector Selection</h1>
         {data?.as_of && (
-          <span style={{ fontSize: 12, color: theme.textMuted }}>{fmtDate(data.as_of)}</span>
+          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{fmtDate(data.as_of)}</span>
         )}
       </div>
 
@@ -142,7 +142,7 @@ export function SectorSelection() {
         pending={loading}
       />
 
-      <div style={{ maxWidth: 160, marginBottom: 16 }}>
+      <div style={{ maxWidth: 160, marginBottom: "var(--s-4)" }}>
         <Input
           label={`Related sectors to select (${MIN_N}-${MAX_N})`}
           type="number"
@@ -164,7 +164,7 @@ export function SectorSelection() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
 
       {!loading && !error && data && rows.length === 0 && (
-        <div className="empty" style={{ padding: 30 }}>
+        <div className="empty" style={{ padding: "var(--s-7-5)" }}>
           {data.reason ?? "No sector selection has been computed for this symbol yet."}
         </div>
       )}
@@ -175,9 +175,9 @@ export function SectorSelection() {
             style={{
               display: "flex",
               flexWrap: "wrap",
-              gap: 8,
-              margin: "8px 0 12px",
-              fontSize: 12.5,
+              gap: "var(--s-2)",
+              margin: "var(--s-2) 0 var(--s-3)",
+              fontSize: "var(--t-label)",
               color: theme.textSecondary,
             }}
           >
@@ -193,7 +193,7 @@ export function SectorSelection() {
           </div>
 
           {anyReviewUnavailable && (
-            <Notice variant="warn" style={{ marginBottom: 12 }} data-testid="review-unavailable-banner">
+            <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }} data-testid="review-unavailable-banner">
               <span>
                 Investor-forum comment volume is not being ingested, so the Review term is
                 unavailable. Sector Heat is computed from news volume only.
@@ -221,7 +221,7 @@ export function SectorSelection() {
             </Table>
           </section>
 
-          <p style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 10, lineHeight: 1.5 }}>
+          <p style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-2-5)", lineHeight: 1.5 }}>
             Ranked by <code>correlation_coefficient = cosine_similarity × Sector Heat Factor</code>,
             over a trailing 22-trading-day window. Advisory research only — this does not feed any
             order or sizing decision.

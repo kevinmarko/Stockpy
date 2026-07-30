@@ -46,7 +46,7 @@ function ModuleRow({ m, max }: { m: SignalModuleScore; max: number }) {
   const contribTone = m.contribution == null ? undefined : pnlColor(m.contribution);
   return (
     <tr>
-      <td style={{ fontFamily: "monospace", fontSize: 13 }}>{m.name}</td>
+      <td style={{ fontFamily: "monospace", fontSize: "var(--t-body)" }}>{m.name}</td>
       <td className="num">
         {m.score == null ? DASH : fmtNum(m.score, 2)}
       </td>
@@ -79,7 +79,7 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
 
   return (
     <>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-4)" }}>
         <Tile
           label="Action"
           value={<span style={{ color: actionColor(d.action) }}>{d.action ?? DASH}</span>}
@@ -89,13 +89,13 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
       </div>
 
       {modules.length === 0 ? (
-        <div className="empty" style={{ padding: 24 }}>
+        <div className="empty" style={{ padding: "var(--s-6)" }}>
           No signal modules ran for {d.symbol} yet — this symbol has no bars in the
           store. Run the pipeline, then reload.
         </div>
       ) : (
         <section className="card card-pad">
-          <h2 style={{ fontSize: 15, margin: "0 0 8px" }}>Module contributions</h2>
+          <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Module contributions</h2>
           <div style={{ overflowX: "auto" }}>
             <Table>
               <thead>
@@ -114,7 +114,7 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
               </tbody>
             </Table>
           </div>
-          <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-3)", lineHeight: 1.5 }}>
             Contribution = score × weight. A module with no score this cycle shows {DASH},
             never a fabricated 0.
           </p>
@@ -149,9 +149,9 @@ function GlobalImportancePanel() {
   const maxAbs = Math.max(0, ...(data?.rows.map((r) => r.mean_abs_contribution ?? 0) ?? []));
 
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }} data-testid="global-importance-panel">
-      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Signal driver weights (universe-wide)</h2>
-      <p style={{ color: theme.textMuted, fontSize: 12, margin: "0 0 10px", lineHeight: 1.5 }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }} data-testid="global-importance-panel">
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Signal driver weights (universe-wide)</h2>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "0 0 var(--s-2-5)", lineHeight: 1.5 }}>
         Mean absolute contribution per module, averaged across every symbol currently
         tracked. This is a configured-weight breakdown (score × weight), not a
         feature-importance or SHAP measure — it shows no interaction effects between
@@ -160,21 +160,21 @@ function GlobalImportancePanel() {
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && data.rows.length === 0 && (
-        <div className="empty" style={{ padding: 20 }}>
+        <div className="empty" style={{ padding: "var(--s-5)" }}>
           No tracked symbols yet — run the pipeline, then reload.
         </div>
       )}
       {!loading && !error && data && data.rows.length > 0 && (
         <>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
             {data.rows.map((r) => (
-              <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div key={r.name} style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
                 <span
                   style={{
                     width: 150,
                     flex: "0 0 auto",
                     fontFamily: "monospace",
-                    fontSize: 12,
+                    fontSize: "var(--t-caption)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -202,14 +202,14 @@ function GlobalImportancePanel() {
                 </div>
                 <span
                   className="num"
-                  style={{ width: 60, flex: "0 0 auto", textAlign: "right", fontSize: 12, fontWeight: 600 }}
+                  style={{ width: 60, flex: "0 0 auto", textAlign: "right", fontSize: "var(--t-caption)", fontWeight: 600 }}
                 >
                   {r.mean_abs_contribution == null ? DASH : fmtNum(r.mean_abs_contribution, 2)}
                 </span>
               </div>
             ))}
           </div>
-          <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-3)", lineHeight: 1.5 }}>
             Based on {data.n_symbols_scored} of {data.n_symbols_requested} tracked symbols with a
             score this cycle. A module with no data this batch shows {DASH}, never a fabricated 0.
           </p>
@@ -232,7 +232,7 @@ export function SignalBreakdown() {
     <div className="screen">
       <button
         onClick={back}
-        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: theme.textSecondary, fontSize: 14, marginBottom: 8 }}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: theme.textSecondary, fontSize: "var(--t-callout)", marginBottom: "var(--s-2)" }}
       >
         ← Back
       </button>

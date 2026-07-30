@@ -47,7 +47,7 @@ export const chartTooltipStyle = {
   border: `1px solid ${theme.borderStrong}`,
   borderRadius: 10,
   color: theme.textPrimary,
-  fontSize: 12,
+  fontSize: "var(--t-caption)",
 } as const;
 
 /**
@@ -193,7 +193,7 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
   const rows = slices.map((s, i) => ({ ...s, color: sectorColor(i) }));
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
       <div style={{ width: 148, height: 148, flex: "0 0 auto" }}>
         <ResponsiveContainer>
           <PieChart>
@@ -230,7 +230,7 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
           flex: 1,
           display: "flex",
           flexDirection: "column",
-          gap: 6,
+          gap: "var(--s-1-5)",
           minWidth: 0,
         }}
       >
@@ -240,8 +240,8 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
-              fontSize: 12.5,
+              gap: "var(--s-2)",
+              fontSize: "var(--t-label)",
             }}
           >
             <span
@@ -618,11 +618,11 @@ export function AttentionHeatmapStrip({ attention }: { attention: ForecastAttent
   if (!attention || attention.weights.length === 0) return null;
   const maxAlpha = Math.max(...attention.weights.map((w) => w.alpha), 1e-9);
   return (
-    <div style={{ marginTop: 10 }} data-testid="attention-heatmap-strip">
-      <div style={{ color: theme.textMuted, fontSize: 11, marginBottom: 4 }}>
+    <div style={{ marginTop: "var(--s-2-5)" }} data-testid="attention-heatmap-strip">
+      <div style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginBottom: "var(--s-1)" }}>
         {attention.model} attention ({attention.window_size}-day lookback)
       </div>
-      <div style={{ display: "flex", gap: 2 }}>
+      <div style={{ display: "flex", gap: "var(--s-0-5)" }}>
         {attention.weights.map((w) => {
           const label = `${w.date}: alpha ${w.alpha.toFixed(3)}`;
           return (

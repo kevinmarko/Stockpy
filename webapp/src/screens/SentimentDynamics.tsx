@@ -34,7 +34,7 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
   return (
     <>
       {d.source === "unavailable" && (
-        <Notice variant="info" style={{ marginBottom: 16 }}>
+        <Notice variant="info" style={{ marginBottom: "var(--s-4)" }}>
           <span>
             🔌 <strong>Antigravity agent unavailable for this request</strong> — the
             agent isn't configured (SDK/API key) or the live call failed. Sentiment
@@ -46,7 +46,7 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
         </Notice>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-4)" }}>
         <Tile
           label="Sentiment Score"
           value={<span style={{ color: getScoreColor(d.sentiment_score) }}>{fmtNum(d.sentiment_score, 2)}</span>}
@@ -57,8 +57,8 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
       </div>
 
       <section className="card card-pad">
-        <h2 style={{ fontSize: 15, margin: "0 0 8px" }}>Interpretation</h2>
-        <p style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 1.5 }}>
+        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Interpretation</h2>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-callout)", lineHeight: 1.5 }}>
           <strong>Score (-1 to 1):</strong> Positive means bullish news sentiment, negative means bearish.
           <br/>
           <strong>Intensity (0.1 to 1):</strong> High values mean extreme emotional language or high news volume.
@@ -123,9 +123,9 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
   const error = vix.error || sentimentHist.error;
 
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }} data-testid="sentiment-vix-chart">
-      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Sentiment vs. VIX</h2>
-      <p style={{ color: theme.textMuted, fontSize: 12, margin: "0 0 10px", lineHeight: 1.5 }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }} data-testid="sentiment-vix-chart">
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Sentiment vs. VIX</h2>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "0 0 var(--s-2-5)", lineHeight: 1.5 }}>
         Archived daily news sentiment for {symbol} alongside the CBOE Volatility
         Index, on a shared date axis. No lead-lag relationship is computed or
         implied here — the sentiment archive is new, and this is a raw trend view,
@@ -144,7 +144,7 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
         />
       )}
       {!loading && !error && chartData.length === 0 && (
-        <div className="empty" style={{ padding: 20 }} data-testid="sentiment-vix-empty">
+        <div className="empty" style={{ padding: "var(--s-5)" }} data-testid="sentiment-vix-empty">
           No VIX or sentiment history archived yet.
         </div>
       )}
@@ -153,7 +153,7 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
           {alignedDays < _MIN_ALIGNED_DAYS && (
             <Notice
               variant="info"
-              style={{ marginBottom: 12 }}
+              style={{ marginBottom: "var(--s-3)" }}
               data-testid="sentiment-vix-coverage-notice"
             >
               <span>
@@ -189,7 +189,7 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
               </LineChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ color: theme.textMuted, fontSize: 11, marginBottom: 8 }}>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginBottom: "var(--s-2)" }}>
             VIX (CBOE Volatility Index)
           </div>
 
@@ -225,7 +225,7 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
               </LineChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ color: theme.textMuted, fontSize: 11 }}>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-micro)" }}>
             Archived news sentiment (FinBERT/lexicon, daily) — gaps are honest: a real
             fetch failure or a day with zero headlines, never plotted as neutral 0.
           </div>
@@ -248,7 +248,7 @@ export function SentimentDynamics() {
     <div className="screen">
       <button
         onClick={back}
-        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: theme.textSecondary, fontSize: 14, marginBottom: 8 }}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: theme.textSecondary, fontSize: "var(--t-callout)", marginBottom: "var(--s-2)" }}
       >
         ← Back
       </button>

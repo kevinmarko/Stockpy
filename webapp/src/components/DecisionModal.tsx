@@ -51,14 +51,14 @@ export function DecisionModal({
 
   return (
     <Modal ariaLabel={`Log decision for ${signal.symbol}`} onClose={onClose}>
-      <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>Log decision — {signal.symbol}</h2>
-      <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Log decision — {signal.symbol}</h2>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
         System recommendation: <strong>{signal.action ?? "—"}</strong>
         {signal.conviction != null && <> · conviction {fmtNum(signal.conviction, 2)}</>}
       </p>
 
       {result ? (
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: "var(--s-2)" }}>
           <div
             className="notice"
             data-testid="decision-result"
@@ -77,7 +77,7 @@ export function DecisionModal({
                   : " · no trade match within 24h")}
             </span>
           </div>
-          <div style={{ display: "flex", marginTop: 16 }}>
+          <div style={{ display: "flex", marginTop: "var(--s-4)" }}>
             <Button variant="primary" block onClick={() => { onLogged(); onClose(); }}>
               Done
             </Button>
@@ -85,7 +85,7 @@ export function DecisionModal({
         </div>
       ) : (
         <>
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: "var(--s-2-5)" }}>
             <Textarea
               id="dj-notes"
               label="Notes (required when modifying)"
@@ -96,12 +96,12 @@ export function DecisionModal({
             />
           </div>
           {error && (
-            <Notice variant="warn" style={{ marginTop: 10 }}>
+            <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
               <span>⚠️</span>
               <span>{error}</span>
             </Notice>
           )}
-          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
             <Button variant="primary" onClick={() => submit("acted")} pending={pending} style={{ flex: 1 }}>
               ✅ Acted
             </Button>
@@ -118,7 +118,7 @@ export function DecisionModal({
               🔁 Modified
             </Button>
           </div>
-          <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)" }}>
             "Modified" needs a note describing what you changed.
           </p>
         </>

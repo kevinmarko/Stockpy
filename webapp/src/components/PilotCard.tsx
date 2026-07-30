@@ -22,14 +22,14 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "flex-start",
-          gap: 6,
+          gap: "var(--s-1-5)",
         }}
       >
         <CategoryChip category={pilot.category} />
         {pilot.long_only && <span className="chip">Long-only</span>}
       </div>
 
-      <div style={{ fontSize: 17, fontWeight: 700, marginTop: 10 }}>
+      <div style={{ fontSize: 17, fontWeight: 700, marginTop: "var(--s-2-5)" }}>
         {pilot.name}
       </div>
 
@@ -37,8 +37,8 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
         style={{
           display: "flex",
           alignItems: "baseline",
-          gap: 8,
-          marginTop: 10,
+          gap: "var(--s-2)",
+          marginTop: "var(--s-2-5)",
         }}
       >
         <span
@@ -52,16 +52,16 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
         >
           {sharpe == null ? "—" : fmtNum(sharpe, 2)}
         </span>
-        <span style={{ fontSize: 12, color: theme.textMuted }}>Sharpe</span>
+        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>Sharpe</span>
       </div>
 
       <div
         style={{
-          fontSize: 12,
+          fontSize: "var(--t-caption)",
           color: theme.textSecondary,
-          marginTop: 2,
+          marginTop: "var(--s-0-5)",
           display: "flex",
-          gap: 10,
+          gap: "var(--s-2-5)",
         }}
       >
         <span>
@@ -73,7 +73,7 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
         <span>· {pilot.holdings_count} holdings</span>
       </div>
 
-      <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: "var(--s-3)" }}>
         {/* interactive=false: this badge is nested inside the card's own
             <Link>, and an InfoTip's own tap trigger would be a second
             focusable/clickable element inside an <a> -- invalid HTML and
@@ -91,15 +91,15 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
 export function PopularCard({ pilot }: { pilot: PilotSummary }) {
   return (
     <Link to={`/pilots/${pilot.id}`} className="card popular-card">
-      <div style={{ fontSize: 16, fontWeight: 700 }}>{pilot.name}</div>
-      <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2 }}>
+      <div style={{ fontSize: "var(--t-input)", fontWeight: 700 }}>{pilot.name}</div>
+      <div style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
         {pilot.category}
       </div>
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          marginTop: 14,
+          marginTop: "var(--s-3-5)",
         }}
       >
         <div>

@@ -13,7 +13,7 @@ export function Activity() {
           <p className="screen-sub">Recent alerts from the Stockpy pipeline.</p>
         </div>
         {apiMeta.useMock && (
-          <InfoTip triggerClassName="chip" triggerStyle={{ marginTop: 10 }} content="Running on mock data">
+          <InfoTip triggerClassName="chip" triggerStyle={{ marginTop: "var(--s-2-5)" }} content="Running on mock data">
             demo
           </InfoTip>
         )}
@@ -25,15 +25,15 @@ export function Activity() {
         The feed component owns loading / error / honest empty-state (reason)
         and the level-labeled alert cards — the screen just frames it.
       */}
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: "var(--s-2)" }}>
         <ActivityFeed limit={50} />
       </div>
 
       <p
         style={{
           color: theme.textMuted,
-          fontSize: 11.5,
-          marginTop: 20,
+          fontSize: "var(--t-footnote)",
+          marginTop: "var(--s-5)",
           textAlign: "center",
           lineHeight: 1.5,
         }}

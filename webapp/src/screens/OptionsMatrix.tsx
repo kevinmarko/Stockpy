@@ -125,14 +125,14 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
         display: "block",
         width: "100%",
         textAlign: "left",
-        marginBottom: 10,
+        marginBottom: "var(--s-2-5)",
         cursor: "pointer",
         border: "1px solid var(--border)",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontWeight: 700, fontSize: 16 }}>{d.Symbol}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <span style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>{d.Symbol}</span>
           {d.Stale === true && (
             <InfoTip triggerClassName="badge badge-warn" content="Quote is stale">
               stale
@@ -148,7 +148,7 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginTop: 8,
+          marginTop: "var(--s-2)",
         }}
       >
         <span style={{ fontWeight: 600 }}>{d.Strategy ?? "—"}</span>
@@ -158,16 +158,16 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
         style={{
           display: "flex",
           flexWrap: "wrap",
-          gap: 14,
-          marginTop: 10,
+          gap: "var(--s-3-5)",
+          marginTop: "var(--s-2-5)",
           alignItems: "baseline",
         }}
       >
         <PremiumLabel d={d} />
-        <span style={{ fontSize: 13, color: theme.textSecondary }}>
+        <span style={{ fontSize: "var(--t-body)", color: theme.textSecondary }}>
           IVR <span className="num">{fmtNum(d.IVR_Proxy ?? null, 0)}</span>
         </span>
-        <span style={{ fontSize: 13, color: theme.textSecondary }}>{d.Trend_Bias ?? "—"}</span>
+        <span style={{ fontSize: "var(--t-body)", color: theme.textSecondary }}>{d.Trend_Bias ?? "—"}</span>
         {isFlagged(d) && (
           <span className="badge badge-bad" style={{ marginLeft: "auto" }}>
             ⚠ Integrity
@@ -222,7 +222,7 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
         <h2 style={{ fontSize: 18, margin: 0 }}>{d.Symbol}</h2>
         <span className="num" style={{ color: theme.textSecondary }}>{fmtUsd(d.Price ?? null)}</span>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginTop: "var(--s-1-5)" }}>
         <span style={{ fontWeight: 600 }}>{d.Strategy ?? "—"}</span>
         <span className={`badge ${actionBadgeClass(d.Action)}`}>{d.Action ?? "—"}</span>
         {d.Stale === true && <span className="badge badge-warn">stale</span>}
@@ -232,19 +232,19 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
       <div className="options-vol-panel-vis">
         <div className="options-vol-item">
           <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>Expected Move</div>
-          <div className="num" style={{ fontSize: 16, fontWeight: 700 }}>
+          <div className="num" style={{ fontSize: "var(--t-input)", fontWeight: 700 }}>
             {expectedMove > 0 ? `± ${fmtUsd(expectedMove)}` : "—"}
           </div>
         </div>
         <div className="options-vol-item" style={{ textAlign: "center" }}>
           <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>Prob of Profit (POP)</div>
-          <div className="num" style={{ fontSize: 16, fontWeight: 700, color: theme.growth }}>
+          <div className="num" style={{ fontSize: "var(--t-input)", fontWeight: 700, color: theme.growth }}>
             {popPercent !== null ? `${fmtNum(popPercent, 1)}%` : "—"}
           </div>
         </div>
         <div className="options-vol-item" style={{ textAlign: "right" }}>
           <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>IVR Proxy</div>
-          <div className="num" style={{ fontSize: 16, fontWeight: 700 }}>
+          <div className="num" style={{ fontSize: "var(--t-input)", fontWeight: 700 }}>
             {fmtNum(d.IVR_Proxy ?? null, 0)}
           </div>
         </div>
@@ -252,8 +252,8 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
 
       {/* Visual legs view */}
       {legs.length > 0 && (
-        <section style={{ marginTop: 16 }}>
-          <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 6px" }}>Visual Structure</h3>
+        <section style={{ marginTop: "var(--s-4)" }}>
+          <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1-5)" }}>Visual Structure</h3>
           <div className="options-legs-row">
             {legs.map((leg, i) => (
               <div
@@ -275,9 +275,9 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
 
       {/* Interactive Payoff Curve */}
       {chartData.length > 0 && (
-        <section style={{ marginTop: 16 }}>
-          <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 6px" }}>P/L Payoff Curve</h3>
-          <div style={{ width: "100%", height: 180, background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 10px 0 0" }}>
+        <section style={{ marginTop: "var(--s-4)" }}>
+          <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1-5)" }}>P/L Payoff Curve</h3>
+          <div style={{ width: "100%", height: 180, background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "var(--s-2-5) var(--s-2-5) 0 0" }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid {...chartGridProps} />
@@ -353,8 +353,8 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
       )}
 
       {/* Greeks Grid */}
-      <section style={{ marginTop: 16 }}>
-        <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>Greeks</h3>
+      <section style={{ marginTop: "var(--s-4)" }}>
+        <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Greeks</h3>
         <div className="options-greeks-grid">
           <div className="options-greek-card-vis">
             <div className="options-greek-label-vis">Delta</div>
@@ -373,39 +373,39 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
             <div className="options-greek-value-vis">{fmtNum(d.ATM_Theta_Daily ?? null, 3)}</div>
           </div>
         </div>
-        <p style={{ fontSize: 11, color: theme.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+        <p style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginTop: "var(--s-1)", lineHeight: 1.4 }}>
           ATM Greeks reflect sensitivity per option contract at spot & σ, not structure exposure.
         </p>
       </section>
 
       {/* Realizable Theta details */}
-      <section style={{ marginTop: 16 }}>
-        <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>Realizable Theta</h3>
+      <section style={{ marginTop: "var(--s-4)" }}>
+        <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Realizable Theta</h3>
         {theta.note ? (
           <>
-            <div className="num muted" style={{ fontSize: 15 }}>—</div>
-            <p style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 4, lineHeight: 1.45 }}>
+            <div className="num muted" style={{ fontSize: "var(--t-subhead)" }}>—</div>
+            <p style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-1)", lineHeight: 1.45 }}>
               {theta.note}
             </p>
           </>
         ) : (
-          <div className="num" style={{ fontSize: 15, fontWeight: 700 }}>
+          <div className="num" style={{ fontSize: "var(--t-subhead)", fontWeight: 700 }}>
             {fmtNum(theta.value, 3)}
-            <span style={{ fontSize: 12, fontWeight: 400, color: theme.textMuted }}> /day</span>
+            <span style={{ fontSize: "var(--t-caption)", fontWeight: 400, color: theme.textMuted }}> /day</span>
           </div>
         )}
       </section>
 
       {/* Integrity */}
-      <section style={{ marginTop: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <h3 style={{ fontSize: 13, color: theme.textMuted, margin: 0 }}>Integrity</h3>
+      <section style={{ marginTop: "var(--s-4)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: 0 }}>Integrity</h3>
           <span className={`badge ${d.Integrity_OK === true ? "badge-good" : "badge-bad"}`}>
             {d.Integrity_OK === true ? "✓ clean" : "✗ flagged"}
           </span>
         </div>
         {Array.isArray(d.Integrity_Issues) && d.Integrity_Issues.length > 0 && (
-          <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 12.5, color: theme.textSecondary, lineHeight: 1.5 }}>
+          <ul style={{ margin: "var(--s-2) 0 0", paddingLeft: 18, fontSize: "var(--t-label)", color: theme.textSecondary, lineHeight: 1.5 }}>
             {d.Integrity_Issues.map((issue, i) => (
               <li key={i}>{issue}</li>
             ))}
@@ -413,7 +413,7 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
         )}
       </section>
 
-      <div style={{ marginTop: 18 }}>
+      <div style={{ marginTop: "var(--s-4-5)" }}>
         <Link to={`/symbol/${d.Symbol}`} className="btn" style={{ display: "inline-block" }}>
           View {d.Symbol} →
         </Link>
@@ -465,7 +465,7 @@ function GreeksRollup({ directives }: { directives: OptionsDirective[] }) {
   }, [included]);
 
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -483,25 +483,25 @@ function GreeksRollup({ directives }: { directives: OptionsDirective[] }) {
           color: theme.textPrimary,
         }}
       >
-        <span style={{ fontWeight: 700, fontSize: 15 }}>ATM Greeks roll-up (held, actionable)</span>
+        <span style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>ATM Greeks roll-up (held, actionable)</span>
         <span style={{ color: theme.textMuted }}>{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           {portfolio.loading ? (
             <Loading lines={1} />
           ) : !held ? (
-            <div className="empty" style={{ padding: 18 }}>
+            <div className="empty" style={{ padding: "var(--s-4-5)" }}>
               No account snapshot — connect a brokerage or run the pipeline to populate holdings.
             </div>
           ) : included.length === 0 ? (
-            <div className="empty" style={{ padding: 18 }}>
+            <div className="empty" style={{ padding: "var(--s-4-5)" }}>
               None of your held symbols has an actionable directive with ATM Greeks.
             </div>
           ) : (
             <>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 18 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-4-5)" }}>
                 <RollupStat label="Σ Δ delta" value={fmtNum(sums.delta, 3)} />
                 <RollupStat label="Σ Γ gamma" value={fmtNum(sums.gamma, 3)} />
                 <RollupStat label="Σ V vega" value={fmtNum(sums.vega, 3)} />
@@ -511,7 +511,7 @@ function GreeksRollup({ directives }: { directives: OptionsDirective[] }) {
                   value={fmtNum(sums.theta * 30, 2)}
                 />
               </div>
-              <p style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 10, lineHeight: 1.5 }}>
+              <p style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-2-5)", lineHeight: 1.5 }}>
                 Unweighted sum of per-contract ATM Greeks across {included.length} held{" "}
                 {included.length === 1 ? "symbol" : "symbols"} with an actionable directive.{" "}
                 <strong>Not position-sized</strong> — this does not know your contract count
@@ -531,8 +531,8 @@ function GreeksRollup({ directives }: { directives: OptionsDirective[] }) {
 function RollupStat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: theme.textMuted }}>{label}</div>
-      <div className="num" style={{ fontSize: 15, fontWeight: 700 }}>{value}</div>
+      <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted }}>{label}</div>
+      <div className="num" style={{ fontSize: "var(--t-subhead)", fontWeight: 700 }}>{value}</div>
     </div>
   );
 }
@@ -587,9 +587,9 @@ function OptionsRecomputeSection() {
     : null;
 
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
-      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Recompute with custom parameters</h2>
-      <p style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Recompute with custom parameters</h2>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Compute a fresh premium-selling directive for up to {RECOMPUTE_MAX_SYMBOLS} symbols you
         pick, with your own delta-scale/IVR/risk-free-rate/strike-grid controls — computed live,
         not from the pipeline's last run.
@@ -603,7 +603,7 @@ function OptionsRecomputeSection() {
         invalid={uniqueCount > 0 && !canSubmit}
       />
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+      <div style={{ display: "flex", gap: "var(--s-2-5)", flexWrap: "wrap", marginTop: "var(--s-2-5)" }}>
         <div style={{ flex: "1 1 100px" }}>
           <Input
             label="Target DTE"
@@ -646,7 +646,7 @@ function OptionsRecomputeSection() {
           />
         </div>
       </div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+      <div style={{ display: "flex", gap: "var(--s-2-5)", flexWrap: "wrap", marginTop: "var(--s-2-5)" }}>
         <div style={{ flex: "1 1 100px" }}>
           <Input
             label="Risk-free rate % (blank = default)"
@@ -682,7 +682,7 @@ function OptionsRecomputeSection() {
         </div>
       </div>
 
-      <div style={{ marginTop: 14 }}>
+      <div style={{ marginTop: "var(--s-3-5)" }}>
         <Button
           variant="primary"
           pending={mutation.pending}
@@ -694,20 +694,20 @@ function OptionsRecomputeSection() {
       </div>
 
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
         </Notice>
       )}
 
       {result && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: "var(--s-4)" }}>
           <div
             style={{
               display: "flex",
               flexWrap: "wrap",
-              gap: 8,
-              marginBottom: 12,
-              fontSize: 12.5,
+              gap: "var(--s-2)",
+              marginBottom: "var(--s-3)",
+              fontSize: "var(--t-label)",
               color: theme.textSecondary,
             }}
           >
@@ -717,7 +717,7 @@ function OptionsRecomputeSection() {
           </div>
 
           {result.errors.length > 0 && (
-            <Notice variant="warn" style={{ marginBottom: 12 }}>
+            <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {result.errors.map((e) => (
                   <li key={e}>{e}</li>
@@ -727,7 +727,7 @@ function OptionsRecomputeSection() {
           )}
 
           {directives.length === 0 ? (
-            <div className="empty" style={{ padding: 18 }}>
+            <div className="empty" style={{ padding: "var(--s-4-5)" }}>
               No directives computed.
             </div>
           ) : (
@@ -792,8 +792,8 @@ export function OptionsMatrix() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Back
@@ -801,7 +801,7 @@ export function OptionsMatrix() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h1 className="screen-title">Options premium</h1>
         {data?.as_of && (
-          <span style={{ fontSize: 12, color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
         )}
       </div>
 
@@ -813,7 +813,7 @@ export function OptionsMatrix() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
 
       {!loading && !error && data && directives.length === 0 && (
-        <div className="empty" style={{ padding: 30 }}>
+        <div className="empty" style={{ padding: "var(--s-7-5)" }}>
           {data.reason ?? "No options directives generated yet."}
         </div>
       )}
@@ -825,9 +825,9 @@ export function OptionsMatrix() {
             style={{
               display: "flex",
               flexWrap: "wrap",
-              gap: 8,
-              margin: "8px 0 12px",
-              fontSize: 12.5,
+              gap: "var(--s-2)",
+              margin: "var(--s-2) 0 var(--s-3)",
+              fontSize: "var(--t-label)",
               color: theme.textSecondary,
             }}
           >
@@ -839,7 +839,7 @@ export function OptionsMatrix() {
           </div>
 
           {/* Persistent honesty banner */}
-          <Notice variant="warn" style={{ marginBottom: 12 }}>
+          <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
             <span>
               <strong>IVR here is a realized-volatility rank</strong> (IVR_Proxy) — no options
               chain is fetched, so this is <em>not</em> true implied-vol rank. Advisory only; no
@@ -848,7 +848,7 @@ export function OptionsMatrix() {
           </Notice>
 
           {/* Integrity strip */}
-          <div style={{ fontSize: 13, marginBottom: 12 }}>
+          <div style={{ fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
             {flaggedCount === 0 ? (
               <span style={{ color: theme.growth }}>✅ {cleanCount}/{directives.length} legs clean</span>
             ) : (
@@ -862,10 +862,10 @@ export function OptionsMatrix() {
           <div
             style={{
               display: "flex",
-              gap: 8,
+              gap: "var(--s-2)",
               overflowX: "auto",
               paddingBottom: 4,
-              marginBottom: 10,
+              marginBottom: "var(--s-2-5)",
             }}
           >
             {FILTERS.map((f) => {
@@ -893,7 +893,7 @@ export function OptionsMatrix() {
           </div>
 
           {/* Sort */}
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: "var(--s-3)" }}>
             <Select
               label="Sort"
               value={sort}
@@ -903,7 +903,7 @@ export function OptionsMatrix() {
           </div>
 
           {visible.length === 0 ? (
-            <div className="empty" style={{ padding: 24 }}>
+            <div className="empty" style={{ padding: "var(--s-6)" }}>
               No directives match this filter.
             </div>
           ) : (
@@ -929,7 +929,7 @@ export function OptionsMatrix() {
         onClick={() => setShowRecompute((v) => !v)}
         aria-expanded={showRecompute}
         className="btn btn-neutral"
-        style={{ marginTop: 20, width: "100%" }}
+        style={{ marginTop: "var(--s-5)", width: "100%" }}
       >
         {showRecompute ? "▲ Hide" : "▼"} Recompute with custom parameters
       </button>

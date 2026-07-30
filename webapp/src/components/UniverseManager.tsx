@@ -66,9 +66,9 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
       )}
       {!loaded.loading && !loaded.error && (
         <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-3)" }}>
             {list.length === 0 ? (
-              <span style={{ fontSize: 13, color: theme.textMuted }}>No symbols tracked yet.</span>
+              <span style={{ fontSize: "var(--t-body)", color: theme.textMuted }}>No symbols tracked yet.</span>
             ) : (
               list.map((s) => (
                 <span
@@ -77,12 +77,12 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
-                    gap: 6,
+                    gap: "var(--s-1-5)",
                     background: theme.surface2,
                     border: `1px solid ${theme.border}`,
                     borderRadius: 20,
-                    padding: "4px 6px 4px 12px",
-                    fontSize: 13,
+                    padding: "var(--s-1) var(--s-1-5) var(--s-1) var(--s-3)",
+                    fontSize: "var(--t-body)",
                   }}
                 >
                   <button
@@ -98,7 +98,7 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
                     data-testid={`universe-remove-${s}`}
                     onClick={() => remove(s)}
                     disabled={pending}
-                    style={{ background: "none", border: "none", cursor: "pointer", color: theme.textMuted, fontSize: 15, lineHeight: 1, padding: "0 2px" }}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: theme.textMuted, fontSize: "var(--t-subhead)", lineHeight: 1, padding: "0 var(--s-0-5)" }}
                   >
                     ×
                   </button>
@@ -112,7 +112,7 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
               e.preventDefault();
               void add();
             }}
-            style={{ display: "flex", gap: 8, alignItems: "flex-end" }}
+            style={{ display: "flex", gap: "var(--s-2)", alignItems: "flex-end" }}
           >
             <div style={{ flex: 1 }}>
               <Input
@@ -127,7 +127,7 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
             </Button>
           </form>
           {(note || saveError) && (
-            <div style={{ marginTop: 8, fontSize: 13, color: saveError ? theme.decline : theme.textMuted }}>
+            <div style={{ marginTop: "var(--s-2)", fontSize: "var(--t-body)", color: saveError ? theme.decline : theme.textMuted }}>
               {saveError ?? note}
             </div>
           )}

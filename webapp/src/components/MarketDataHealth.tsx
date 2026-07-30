@@ -143,14 +143,14 @@ export function MarketDataHealth() {
           : { label: `Down (${okCount}/${total} ok)`, color: theme.decline };
 
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }} data-testid="market-data-health">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-        <h2 style={{ fontSize: 15, margin: 0 }}>Market data connection</h2>
-        <span style={{ fontSize: 12, fontWeight: 700, color: badge.color }} data-testid="md-health-badge">
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }} data-testid="market-data-health">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--s-2)", flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Market data connection</h2>
+        <span style={{ fontSize: "var(--t-caption)", fontWeight: 700, color: badge.color }} data-testid="md-health-badge">
           {badge.label}
         </span>
       </div>
-      <p style={{ margin: "6px 0 10px", fontSize: 13, color: theme.textMuted }}>
+      <p style={{ margin: "var(--s-1-5) 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
         Checks the live quote feed for each tracked symbol and times the round trip — a quick
         read on whether the data layer feeding every screen is actually up.
       </p>
@@ -171,17 +171,17 @@ export function MarketDataHealth() {
             Check connection
           </Button>
           {truncated && (
-            <div style={{ marginTop: 8, fontSize: 12, color: theme.textMuted }}>
+            <div style={{ marginTop: "var(--s-2)", fontSize: "var(--t-caption)", color: theme.textMuted }}>
               Showing the first {MAX_CHECK_SYMBOLS} of {allSymbols.length} tracked symbols.
             </div>
           )}
           {progress && (
-            <div style={{ marginTop: 10, fontSize: 12, color: theme.textMuted }} data-testid="md-progress">
+            <div style={{ marginTop: "var(--s-2-5)", fontSize: "var(--t-caption)", color: theme.textMuted }} data-testid="md-progress">
               Checking {progress.i}/{progress.n}…
             </div>
           )}
           {results.length > 0 && (
-            <div style={{ marginTop: 12, overflowX: "auto" }}>
+            <div style={{ marginTop: "var(--s-3)", overflowX: "auto" }}>
               <Table>
                 <thead>
                   <tr>

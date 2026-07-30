@@ -49,9 +49,9 @@ export function RecommendedStocks({
   };
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="recommended-stocks">
-      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Recommended stocks</h2>
-      <p style={{ margin: "0 0 10px", fontSize: 13, color: theme.textMuted }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="recommended-stocks">
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Recommended stocks</h2>
+      <p style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
         The platform's current BUY picks, ranked by conviction. From the latest pipeline run
         {data && ` (${timeAgo(data.as_of)})`}.
       </p>
@@ -91,7 +91,7 @@ function RecRow({
 }) {
   return (
     <li style={{ borderTop: `1px solid ${theme.border}` }}>
-      <div style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
+      <div style={{ display: "flex", alignItems: "stretch", gap: "var(--s-1)" }}>
         <button
           type="button"
           onClick={() => onSelect(r.symbol)}
@@ -101,8 +101,8 @@ function RecRow({
             flex: 1,
             minWidth: 0,
             alignItems: "center",
-            gap: 12,
-            padding: "10px 4px",
+            gap: "var(--s-3)",
+            padding: "var(--s-2-5) var(--s-1)",
             background: "none",
             border: "none",
             cursor: "pointer",
@@ -111,17 +111,17 @@ function RecRow({
           }}
         >
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
               <span style={{ fontWeight: 700, color: theme.textPrimary }}>{r.symbol}</span>
               {r.action && (
                 <span
                   style={{
-                    fontSize: 11,
+                    fontSize: "var(--t-micro)",
                     fontWeight: 700,
                     color: theme.growth,
                     background: "rgba(16,185,129,0.12)",
                     padding: "1px 6px",
-                    borderRadius: 4,
+                    borderRadius: "var(--r-2xs)",
                     whiteSpace: "nowrap",
                   }}
                 >
@@ -129,7 +129,7 @@ function RecRow({
                 </span>
               )}
             </div>
-            <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginTop: "var(--s-0-5)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {[r.sector, r.buy_range].filter(Boolean).join(" · ") || "—"}
             </div>
           </div>
@@ -137,7 +137,7 @@ function RecRow({
             <div style={{ fontWeight: 700, color: theme.accent }}>
               {fmtPct(r.conviction, 0, { fromFraction: true })}
             </div>
-            <div style={{ fontSize: 12, color: theme.textMuted }}>
+            <div style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>
               score {fmtNum(r.score, 1)}
             </div>
           </div>
@@ -149,7 +149,7 @@ function RecRow({
             flexDirection: "column",
             alignItems: "flex-end",
             justifyContent: "center",
-            gap: 4,
+            gap: "var(--s-1)",
             paddingRight: 4,
             flexShrink: 0,
           }}
@@ -159,12 +159,12 @@ function RecRow({
               to="/agentic"
               data-testid={`rec-queued-${r.symbol}`}
               style={{
-                fontSize: 11,
+                fontSize: "var(--t-micro)",
                 fontWeight: 700,
                 color: theme.accent,
                 background: "rgba(56,189,248,0.12)",
                 padding: "1px 6px",
-                borderRadius: 4,
+                borderRadius: "var(--r-2xs)",
                 whiteSpace: "nowrap",
                 textDecoration: "none",
               }}
@@ -176,7 +176,7 @@ function RecRow({
             to={`/symbol/${encodeURIComponent(r.symbol)}`}
             data-testid={`rec-detail-${r.symbol}`}
             style={{
-              fontSize: 12,
+              fontSize: "var(--t-caption)",
               color: theme.textMuted,
               whiteSpace: "nowrap",
               textDecoration: "none",

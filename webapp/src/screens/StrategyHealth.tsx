@@ -133,13 +133,13 @@ function HealthCard({
       : true;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 15, wordBreak: "break-word" }}>
+          <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>
             {row.pilot_name}
           </div>
-          <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
             {row.strategy_id ? `backtest: ${row.strategy_id}` : "no backtest joined"}
           </div>
         </div>
@@ -148,7 +148,7 @@ function HealthCard({
 
       {hasGates ? (
         <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
             {row.gates.map((g) => (
               <GateChip key={g.key} gate={g} />
             ))}
@@ -160,13 +160,13 @@ function HealthCard({
             )}
           </div>
           {row.report_date && (
-            <div style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>
+            <div style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)" }}>
               Report date {row.report_date}
             </div>
           )}
           {curve.length >= 2 && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 11, color: theme.textMuted, marginBottom: 2 }}>
+            <div style={{ marginTop: "var(--s-2-5)" }}>
+              <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "var(--s-0-5)" }}>
                 {GATE_SHORT_LABEL[metric]}, last {curve.length} runs
               </div>
               <Sparkline data={curve} positive={trendingBetter} />
@@ -174,7 +174,7 @@ function HealthCard({
           )}
         </>
       ) : (
-        <p style={{ color: theme.textSecondary, fontSize: 12.5, lineHeight: 1.5, marginTop: 12 }}>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", lineHeight: 1.5, marginTop: "var(--s-3)" }}>
           {row.reason ?? "No validation data available for this pilot."}
         </p>
       )}
@@ -231,8 +231,8 @@ function Banner({
         background,
         border: `1px solid ${border}`,
         borderRadius: "var(--r-md)",
-        padding: "10px 12px",
-        fontSize: 12.5,
+        padding: "var(--s-2-5) var(--s-3)",
+        fontSize: "var(--t-label)",
         lineHeight: 1.45,
       }}
     >
@@ -243,8 +243,8 @@ function Banner({
 
 function AiAuditStepTable({ steps }: { steps: GravityAiAuditStep[] }) {
   return (
-    <div style={{ overflowX: "auto", marginTop: 10 }}>
-      <Table style={{ fontSize: 12, minWidth: 420 }}>
+    <div style={{ overflowX: "auto", marginTop: "var(--s-2-5)" }}>
+      <Table style={{ fontSize: "var(--t-caption)", minWidth: 420 }}>
         <thead>
           <tr>
             <th>Step</th>
@@ -283,9 +283,9 @@ function GravityAuditSection() {
   );
 
   return (
-    <section style={{ marginTop: 24 }}>
-      <h2 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 4px" }}>🛡️ Gravity Audit</h2>
-      <p style={{ color: theme.textMuted, fontSize: 12.5, lineHeight: 1.5, marginBottom: 12 }}>
+    <section style={{ marginTop: "var(--s-6)" }}>
+      <h2 style={{ fontSize: "var(--t-subhead)", fontWeight: 700, margin: "0 0 var(--s-1)" }}>🛡️ Gravity Audit</h2>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", lineHeight: 1.5, marginBottom: "var(--s-3)" }}>
         The platform's own structural + AI-cross-checked self-audit — read-only
         here; a new run is triggered from the desktop Command Center's Safety
         tab.
@@ -296,14 +296,14 @@ function GravityAuditSection() {
       {!loading && !error && data && (
         <>
           {/* ---- AI Gravity audit runner ---- */}
-          <div className="card card-pad" style={{ marginBottom: 12 }}>
+          <div className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
             <div
               style={{
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                gap: 8,
-                marginBottom: 10,
+                gap: "var(--s-2)",
+                marginBottom: "var(--s-2-5)",
               }}
             >
               <div style={{ fontWeight: 700, fontSize: 13.5 }}>AI Gravity Audit (Claude + Gemini)</div>
@@ -311,7 +311,7 @@ function GravityAuditSection() {
             </div>
 
             {AI_STATUS_NOTE[data.ai_audit.status] && (
-              <p style={{ color: theme.textSecondary, fontSize: 12.5, lineHeight: 1.5, marginBottom: 10 }}>
+              <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", lineHeight: 1.5, marginBottom: "var(--s-2-5)" }}>
                 {AI_STATUS_NOTE[data.ai_audit.status]}
               </p>
             )}
@@ -319,7 +319,7 @@ function GravityAuditSection() {
             <Banner {...AI_HEALTH_STYLE[data.ai_audit.health]}>{data.ai_audit.health_caption}</Banner>
 
             {data.ai_audit.total_steps > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
                 <span className="chip">{data.ai_audit.total_steps} steps</span>
                 <span className="chip">
                   Claude {data.ai_audit.claude_passed}✓ / {data.ai_audit.claude_failed}✗
@@ -337,10 +337,10 @@ function GravityAuditSection() {
 
           {/* ---- Legacy structural Gravity Review Suite ---- */}
           <div className="card card-pad">
-            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: "var(--s-2-5)" }}>
               Legacy Structural Audit
             </div>
-            <p style={{ color: theme.textMuted, fontSize: 11.5, lineHeight: 1.5, marginBottom: 10 }}>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", lineHeight: 1.5, marginBottom: "var(--s-2-5)" }}>
               Pandera schema conformance, lookahead-bias perturbation,
               signal-registry health, sizing/risk gates — no LLM calls.
             </p>
@@ -355,8 +355,8 @@ function GravityAuditSection() {
                     ? "✅ All steps passed on the last run."
                     : "❌ At least one step failed on the last run — not cleared for live."}
                 </Banner>
-                <div style={{ overflowX: "auto", marginTop: 10 }}>
-                  <Table style={{ fontSize: 12, minWidth: 320 }}>
+                <div style={{ overflowX: "auto", marginTop: "var(--s-2-5)" }}>
+                  <Table style={{ fontSize: "var(--t-caption)", minWidth: 320 }}>
                     <tbody>
                       {data.legacy_audit.steps.map((s) => (
                         <tr key={s.step}>
@@ -373,7 +373,7 @@ function GravityAuditSection() {
                 </div>
               </>
             ) : (
-              <p style={{ color: theme.textSecondary, fontSize: 12.5, lineHeight: 1.5 }}>
+              <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", lineHeight: 1.5 }}>
                 {data.legacy_audit.reason}
               </p>
             )}
@@ -433,8 +433,8 @@ export function StrategyHealth() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Pilots
@@ -451,7 +451,7 @@ export function StrategyHealth() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
         data.length === 0 ? (
-          <div className="empty" style={{ padding: 30 }}>
+          <div className="empty" style={{ padding: "var(--s-7-5)" }}>
             No pilots in the catalog yet.
           </div>
         ) : (
@@ -462,12 +462,12 @@ export function StrategyHealth() {
                 flexWrap: "wrap",
                 justifyContent: "space-between",
                 alignItems: "center",
-                gap: 8,
-                margin: "4px 0 14px",
+                gap: "var(--s-2)",
+                margin: "var(--s-1) 0 var(--s-3-5)",
               }}
             >
               {summary && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)" }}>
                   <span className="chip">
                     {summary.deployableCount}/{summary.evaluated} evaluated deployable
                   </span>
@@ -499,8 +499,8 @@ export function StrategyHealth() {
 
       {!loading && !error && data && data.length > 0 && (
         <>
-          <h2 style={{ fontSize: 15, margin: "24px 0 4px" }}>Cross-strategy validation</h2>
-          <p style={{ margin: "0 0 14px", fontSize: 13, color: theme.textMuted }}>
+          <h2 style={{ fontSize: "var(--t-subhead)", margin: "var(--s-6) 0 var(--s-1)" }}>Cross-strategy validation</h2>
+          <p style={{ margin: "0 0 var(--s-3-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
             Every strategy <code>validation.harness</code> has validated, not just the
             ones above wired to a Pilot — plus the run-over-run trend and macro-regime
             timeline behind those numbers.
@@ -512,8 +512,8 @@ export function StrategyHealth() {
       <p
         style={{
           color: theme.textMuted,
-          fontSize: 11.5,
-          marginTop: 20,
+          fontSize: "var(--t-footnote)",
+          marginTop: "var(--s-5)",
           textAlign: "center",
           lineHeight: 1.5,
         }}

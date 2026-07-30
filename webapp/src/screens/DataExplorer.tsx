@@ -31,7 +31,7 @@ function fmtValue(v: number | string | null): string {
 function BarsChart({ bars }: { bars: Bar[] }) {
   if (bars.length === 0) {
     return (
-      <div className="empty" style={{ padding: 24 }}>
+      <div className="empty" style={{ padding: "var(--s-6)" }}>
         No bars in the store for this symbol. Run the pipeline or check the ticker.
       </div>
     );
@@ -44,7 +44,7 @@ function BarsChart({ bars }: { bars: Bar[] }) {
   const last = bars[bars.length - 1];
   return (
     <>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 8, marginBottom: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: "var(--s-2)", marginBottom: "var(--s-2-5)" }}>
         <Tile label="Last close" value={last.Close == null ? DASH : fmtNum(last.Close, 2)} />
         <Tile label="Bars" value={String(bars.length)} />
         <Tile label="From" value={bars[0].date} />
@@ -52,7 +52,7 @@ function BarsChart({ bars }: { bars: Bar[] }) {
       {curve.length > 0 ? (
         <PerfLine data={curve} valueLabel="Close" yTickDecimals={0} />
       ) : (
-        <div className="empty" style={{ padding: 16 }}>No priced closes to chart.</div>
+        <div className="empty" style={{ padding: "var(--s-4)" }}>No priced closes to chart.</div>
       )}
     </>
   );
@@ -61,7 +61,7 @@ function BarsChart({ bars }: { bars: Bar[] }) {
 function FundamentalsTable({ f }: { f: Fundamentals }) {
   const entries = Object.entries(f);
   if (entries.length === 0) {
-    return <div className="empty" style={{ padding: 16 }}>No fundamentals available.</div>;
+    return <div className="empty" style={{ padding: "var(--s-4)" }}>No fundamentals available.</div>;
   }
   return (
     <div style={{ overflowX: "auto" }}>
@@ -90,12 +90,12 @@ function MacroSection() {
     ["high_yield_oas", "HY OAS"],
   ];
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
-      <h2 style={{ fontSize: 15, margin: "0 0 8px" }}>Macro snapshot</h2>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Macro snapshot</h2>
       {loading && <Loading lines={1} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "var(--s-2-5)" }}>
           {known.map(([key, lbl]) =>
             key in data ? (
               <Tile key={key} label={lbl} value={fmtValue(data[key])} />
@@ -118,7 +118,7 @@ export function DataExplorer() {
     <div className="screen">
       <button
         onClick={back}
-        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: theme.textSecondary, fontSize: 14, marginBottom: 8 }}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: theme.textSecondary, fontSize: "var(--t-callout)", marginBottom: "var(--s-2)" }}
       >
         ← Back
       </button>
@@ -135,8 +135,8 @@ export function DataExplorer() {
 
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={bars.loading} />
 
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 15, margin: "0 0 8px" }}>Price bars · {symbol}</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Price bars · {symbol}</h2>
         {bars.loading && <Loading lines={2} />}
         {!bars.loading && bars.error && (
           <ErrorState message={bars.error} status={bars.status} onRetry={bars.reload} />
@@ -145,7 +145,7 @@ export function DataExplorer() {
       </section>
 
       <section className="card card-pad">
-        <h2 style={{ fontSize: 15, margin: "0 0 8px" }}>Fundamentals · {symbol}</h2>
+        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Fundamentals · {symbol}</h2>
         {fundamentals.loading && <Loading lines={2} />}
         {!fundamentals.loading && fundamentals.error && (
           <ErrorState message={fundamentals.error} status={fundamentals.status} onRetry={fundamentals.reload} />

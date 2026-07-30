@@ -178,11 +178,11 @@ export function Comparison() {
       <TabGuide tabKey="compare" />
 
       {/* Pilot Checklist */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <h2 style={{ fontSize: 16, margin: 0 }}>Select Pilots (max 5)</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)" }}>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Select Pilots (max 5)</h2>
           {selectedIds.length > 0 && (
-            <button className="btn btn-neutral" onClick={clearAll} style={{ fontSize: 12, padding: "4px 8px" }}>
+            <button className="btn btn-neutral" onClick={clearAll} style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}>
               Clear All
             </button>
           )}
@@ -193,7 +193,7 @@ export function Comparison() {
         ) : pilotsList.error || !pilotsList.data ? (
           <ErrorState message={pilotsList.error ?? "No data"} status={pilotsList.status} onRetry={pilotsList.reload} />
         ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2-5)" }}>
             {pilotsList.data.map(p => {
               const checked = selectedIds.includes(p.id);
               const disabled = !checked && selectedIds.length >= 5;
@@ -203,14 +203,14 @@ export function Comparison() {
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 6,
+                    gap: "var(--s-1-5)",
                     background: checked ? theme.surface3 : theme.surface2,
-                    padding: "6px 12px",
+                    padding: "var(--s-1-5) var(--s-3)",
                     borderRadius: 20,
                     border: `1px solid ${checked ? theme.accent : theme.border}`,
                     cursor: disabled ? "not-allowed" : "pointer",
                     opacity: disabled ? 0.5 : 1,
-                    fontSize: 13,
+                    fontSize: "var(--t-body)",
                   }}
                 >
                   <input
@@ -239,7 +239,7 @@ export function Comparison() {
 
       {/* Row Error Banner for fetch failures */}
       {Object.keys(fetchErrors).length > 0 && (
-        <Notice variant="warn" style={{ marginBottom: 16 }} data-testid="row-error-banner">
+        <Notice variant="warn" style={{ marginBottom: "var(--s-4)" }} data-testid="row-error-banner">
           <strong>Notice:</strong> Failed to load performance curve data for some strategies.
         </Notice>
       )}
@@ -252,8 +252,8 @@ export function Comparison() {
       ) : (
         <>
           {/* Overlaid Performance Chart */}
-          <section className="card card-pad" style={{ marginBottom: 16 }}>
-            <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Overlaid Performance</h2>
+          <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Overlaid Performance</h2>
             {loadingCurves ? (
               <div className="skeleton" style={{ height: 200 }} />
             ) : chartData.length === 0 ? (
@@ -269,10 +269,10 @@ export function Comparison() {
                     <YAxis tick={chartAxisTick} {...chartAxisLine} domain={["auto", "auto"]} />
                     <Tooltip
                       contentStyle={chartTooltipStyle}
-                      labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
-                      itemStyle={{ fontSize: 11 }}
+                      labelStyle={{ color: theme.textSecondary, fontSize: "var(--t-micro)" }}
+                      itemStyle={{ fontSize: "var(--t-micro)" }}
                     />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                    <Legend wrapperStyle={{ fontSize: "var(--t-micro)", paddingTop: 10 }} />
                     {chartPilots.map((p, index) => (
                       <Line
                         key={p.id}
@@ -301,12 +301,12 @@ export function Comparison() {
               <div
                 data-testid="no-series-note"
                 className="empty"
-                style={{ marginTop: 12, padding: "16px 12px", background: "var(--surface-2)", borderRadius: 12 }}
+                style={{ marginTop: "var(--s-3)", padding: "var(--s-4) var(--s-3)", background: "var(--surface-2)", borderRadius: "var(--r-md)" }}
               >
                 <div style={{ fontWeight: 600, color: theme.textSecondary }}>
                   No backtest series for: {nullCurvePilots.map(p => p.name).join(", ")}
                 </div>
-                <div style={{ marginTop: 6, fontSize: 13, color: theme.textMuted }}>
+                <div style={{ marginTop: "var(--s-1-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
                   These Pilots have no persisted return curve yet, so no line is drawn for them.
                   Their metrics below are shown honestly.
                 </div>
@@ -316,7 +316,7 @@ export function Comparison() {
 
           {/* Comparison Table */}
           <section className="card card-pad" style={{ overflowX: "auto" }}>
-            <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Key Metrics Comparison</h2>
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Key Metrics Comparison</h2>
             <Table>
               <thead>
                 <tr>
@@ -398,7 +398,7 @@ export function Comparison() {
                       <button
                         className="btn btn-primary"
                         onClick={() => setFollowPilot(p)}
-                        style={{ fontSize: 12, padding: "4px 8px" }}
+                        style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
                         data-testid={`follow-pilot-btn-${p.id}`}
                       >
                         Follow
@@ -411,8 +411,8 @@ export function Comparison() {
           </section>
 
           {/* Recent pilot alerts */}
-          <section className="card card-pad" style={{ marginTop: 16 }} data-testid="comparison-activity-feed">
-            <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Recent pilot alerts</h2>
+          <section className="card card-pad" style={{ marginTop: "var(--s-4)" }} data-testid="comparison-activity-feed">
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Recent pilot alerts</h2>
             <ActivityFeed limit={5} pilotIds={selectedIds} />
           </section>
         </>

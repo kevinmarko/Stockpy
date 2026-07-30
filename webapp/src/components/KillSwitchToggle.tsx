@@ -82,10 +82,10 @@ export function KillSwitchToggle({
         pending={busy}
       />
       {showReason && active && reason && (
-        <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>Reason: {reason}</p>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>Reason: {reason}</p>
       )}
       {resumeBlocked && (
-        <p style={{ color: theme.caution, fontSize: 12, marginTop: 8 }}>
+        <p style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
           Resume must be done at the console while live trading is enabled.
         </p>
       )}
@@ -93,7 +93,7 @@ export function KillSwitchToggle({
         style={{
           color: theme.textMuted,
           fontSize: "var(--t-caption)",
-          marginTop: 8,
+          marginTop: "var(--s-2)",
           lineHeight: 1.45,
         }}
       >
@@ -101,7 +101,7 @@ export function KillSwitchToggle({
         produce no recommendations (or submit no orders in live mode).
       </p>
       {(pauseMutation.error || resumeMutation.error) && (
-        <Notice variant="warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           <span>⚠️</span>
           <span>{pauseMutation.error ?? resumeMutation.error}</span>
         </Notice>
@@ -112,10 +112,10 @@ export function KillSwitchToggle({
           ariaLabel={confirmKind === "pause" ? `Pause ${nounLower}` : `Resume ${nounLower}`}
           onClose={() => setConfirmKind(null)}
         >
-          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
+          <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
             {confirmKind === "pause" ? `Pause ${nounLower}?` : `Resume ${nounLower}?`}
           </h2>
-          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
             {confirmKind === "pause"
               ? "New recommendations stop until resumed. The schedule keeps running."
               : "Recommendations resume on the next scheduled or manual run."}
@@ -126,7 +126,7 @@ export function KillSwitchToggle({
             onChange={(e) => setInputReason(e.target.value)}
             hint="Required."
           />
-          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
             <Button variant="neutral" onClick={() => setConfirmKind(null)} style={{ flex: 1 }}>
               Cancel
             </Button>

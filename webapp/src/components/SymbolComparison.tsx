@@ -112,16 +112,16 @@ export function SymbolComparison() {
   const notTracked = (compare.data?.symbols ?? []).filter((s) => !s.found);
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="symbol-comparison">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-        <h2 style={{ fontSize: 16, margin: 0 }}>Symbol Comparison</h2>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="symbol-comparison">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-1)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Symbol Comparison</h2>
         {selected.length > 0 && (
-          <button className="btn btn-neutral" onClick={clearAll} style={{ fontSize: 12, padding: "4px 8px" }}>
+          <button className="btn btn-neutral" onClick={clearAll} style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}>
             Clear All
           </button>
         )}
       </div>
-      <p style={{ margin: "0 0 12px", fontSize: 13, color: theme.textMuted }}>
+      <p style={{ margin: "0 0 var(--s-3)", fontSize: "var(--t-body)", color: theme.textMuted }}>
         Pick {MIN_SELECTED}-{MAX_SELECTED} tracked symbols to see score, sizing, and
         volatility side by side.
       </p>
@@ -135,7 +135,7 @@ export function SymbolComparison() {
           No tracked symbols yet — run the pipeline to populate the universe.
         </div>
       ) : (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2-5)", marginBottom: "var(--s-4)" }}>
           {universe.data.symbols.map((row) => {
             const checked = selected.includes(row.symbol);
             const disabled = !checked && selected.length >= MAX_SELECTED;
@@ -145,14 +145,14 @@ export function SymbolComparison() {
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 6,
+                  gap: "var(--s-1-5)",
                   background: checked ? theme.surface3 : theme.surface2,
-                  padding: "6px 12px",
+                  padding: "var(--s-1-5) var(--s-3)",
                   borderRadius: 20,
                   border: `1px solid ${checked ? theme.accent : theme.border}`,
                   cursor: disabled ? "not-allowed" : "pointer",
                   opacity: disabled ? 0.5 : 1,
-                  fontSize: 13,
+                  fontSize: "var(--t-body)",
                 }}
               >
                 <input
@@ -171,7 +171,7 @@ export function SymbolComparison() {
       )}
 
       {selected.length < MIN_SELECTED ? (
-        <div className="empty" data-testid="symbol-comparison-select-more" style={{ padding: 24 }}>
+        <div className="empty" data-testid="symbol-comparison-select-more" style={{ padding: "var(--s-6)" }}>
           Select at least {MIN_SELECTED} symbols above to compare.
         </div>
       ) : compare.loading ? (
@@ -256,15 +256,15 @@ export function SymbolComparison() {
             <div
               data-testid="symbol-comparison-not-tracked-note"
               className="empty"
-              style={{ marginTop: 12, padding: "12px", background: "var(--surface-2)", borderRadius: 12, fontSize: 13 }}
+              style={{ marginTop: "var(--s-3)", padding: "var(--s-3)", background: "var(--surface-2)", borderRadius: "var(--r-md)", fontSize: "var(--t-body)" }}
             >
               Not tracked in the latest snapshot: {notTracked.map((s) => s.symbol).join(", ")}.
             </div>
           )}
 
-          <h3 style={{ fontSize: 14, margin: "16px 0 8px" }}>Score-component breakdown</h3>
+          <h3 style={{ fontSize: "var(--t-callout)", margin: "var(--s-4) 0 var(--s-2)" }}>Score-component breakdown</h3>
           {chartData.length === 0 ? (
-            <div className="empty" data-testid="symbol-comparison-no-components" style={{ padding: 24 }}>
+            <div className="empty" data-testid="symbol-comparison-no-components" style={{ padding: "var(--s-6)" }}>
               No score-component breakdown available for the selected symbols this cycle.
             </div>
           ) : (
@@ -283,10 +283,10 @@ export function SymbolComparison() {
                   <YAxis tick={chartAxisTick} {...chartAxisLine} />
                   <Tooltip
                     contentStyle={chartTooltipStyle}
-                    labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
-                    itemStyle={{ fontSize: 11 }}
+                    labelStyle={{ color: theme.textSecondary, fontSize: "var(--t-micro)" }}
+                    itemStyle={{ fontSize: "var(--t-micro)" }}
                   />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Legend wrapperStyle={{ fontSize: "var(--t-micro)" }} />
                   {chartSymbols.map((s, index) => (
                     <Bar key={s.symbol} dataKey={s.symbol} fill={seriesColor(index)} />
                   ))}

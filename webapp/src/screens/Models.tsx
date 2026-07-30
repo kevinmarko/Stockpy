@@ -17,17 +17,17 @@ import { theme } from "../theme";
  */
 function ModelCard({ m, thresholds }: { m: ModelRow; thresholds: Thresholds | null }) {
   return (
-    <section className="card card-pad" style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 15, wordBreak: "break-word" }}>{m.name}</div>
+          <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>{m.name}</div>
           {m.role && (
-            <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>{m.role}</div>
+            <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>{m.role}</div>
           )}
         </div>
         <DeployableBadge deployable={m.deployable} />
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
         <MetricBadge
           label="DSR"
           value={m.cpcv_dsr == null ? "—" : fmtNum(m.cpcv_dsr, 3)}
@@ -61,7 +61,7 @@ function ModelCard({ m, thresholds }: { m: ModelRow; thresholds: Thresholds | nu
         )}
       </div>
       {m.notes && (
-        <p style={{ color: theme.textSecondary, fontSize: 12.5, lineHeight: 1.5, marginTop: 12 }}>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", lineHeight: 1.5, marginTop: "var(--s-3)" }}>
           {m.notes}
         </p>
       )}
@@ -103,8 +103,8 @@ export function Models() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Pilots
@@ -121,11 +121,11 @@ export function Models() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
         data.length === 0 ? (
-          <div className="empty" style={{ padding: 30 }}>
+          <div className="empty" style={{ padding: "var(--s-7-5)" }}>
             No model registry available yet.
           </div>
         ) : (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: "var(--s-3)" }}>
             {data.map((m) => (
               <ModelCard key={m.name} m={m} thresholds={thresholds} />
             ))}
@@ -135,8 +135,8 @@ export function Models() {
       <p
         style={{
           color: theme.textMuted,
-          fontSize: 11.5,
-          marginTop: 20,
+          fontSize: "var(--t-footnote)",
+          marginTop: "var(--s-5)",
           textAlign: "center",
           lineHeight: 1.5,
         }}

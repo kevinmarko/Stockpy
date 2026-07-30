@@ -48,8 +48,8 @@ export function AIControlCenter() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Settings
@@ -118,9 +118,9 @@ function CapabilityToggles({ data, onSaved }: { data: LlmStatus; onSaved: () => 
   const groups = groupByToggleKey(data.capabilities);
 
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
       {!data.writable && (
-        <Notice variant="warn" style={{ marginBottom: 12 }}>
+        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
           <span aria-hidden>⚠️</span>
           <span>{data.writable_note}</span>
         </Notice>
@@ -165,7 +165,7 @@ function ToggleGroupRow({
   };
 
   return (
-    <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
+    <div style={{ marginBottom: "var(--s-3-5)", paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
       <Toggle
         checked={checked}
         onChange={handleToggle}
@@ -173,18 +173,18 @@ function ToggleGroupRow({
         disabled={!writable}
         pending={mutation.pending}
       />
-      <p style={{ color: theme.textMuted, fontSize: 12, margin: "4px 0 0" }}>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1) 0 0" }}>
         <code>{toggleKey}</code>
         {rows.length > 1 ? " -- covers all capabilities listed above." : ""}
       </p>
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 8 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
           <span aria-hidden>⚠️</span>
           <span>{mutation.error}</span>
         </Notice>
       )}
       {mutation.result && !mutation.error && (
-        <p style={{ color: theme.textMuted, fontSize: 12, margin: "6px 0 0" }}>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1-5) 0 0" }}>
           {mutation.result.note}
         </p>
       )}
@@ -224,7 +224,7 @@ function ProviderSelectRow({
   };
 
   return (
-    <div style={{ marginTop: 10, marginLeft: 4 }}>
+    <div style={{ marginTop: "var(--s-2-5)", marginLeft: 4 }}>
       <Select
         label={`${row.label} provider`}
         value={current}
@@ -233,10 +233,10 @@ function ProviderSelectRow({
         options={options}
       />
       {mutation.pending && (
-        <span style={{ fontSize: 12, color: theme.textMuted }}>Saving…</span>
+        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>Saving…</span>
       )}
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 6 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-1-5)" }}>
           <span aria-hidden>⚠️</span>
           <span>{mutation.error}</span>
         </Notice>
@@ -265,9 +265,9 @@ const LLM_BADGE_LABEL: Record<LlmCapabilityRow["status"], string> = {
  */
 function TelemetrySection({ data }: { data: LlmStatus }) {
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
-      <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>Provider telemetry</h2>
-      <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Provider telemetry</h2>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         What happened on the last real call to each provider.
       </p>
       <div className="list">
@@ -281,7 +281,7 @@ function TelemetrySection({ data }: { data: LlmStatus }) {
                 ? false
                 : null;
           return (
-            <div key={c.key} style={{ marginBottom: 6 }}>
+            <div key={c.key} style={{ marginBottom: "var(--s-1-5)" }}>
               <div className="row">
                 <span className="row-title">{c.label}</span>
                 <MetricBadge
@@ -291,7 +291,7 @@ function TelemetrySection({ data }: { data: LlmStatus }) {
                 />
               </div>
               {c.status === "invalid_key" && c.invalid_provider && (
-                <Notice variant="warn" style={{ marginTop: 8 }}>
+                <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
                   <span aria-hidden>⚠️</span>
                   <span>
                     The last real {c.invalid_provider} call
@@ -303,7 +303,7 @@ function TelemetrySection({ data }: { data: LlmStatus }) {
                 </Notice>
               )}
               {c.status === "missing_key" && (
-                <Notice variant="warn" style={{ marginTop: 8 }}>
+                <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
                   <span aria-hidden>⚠️</span>
                   <span>
                     Enabled, but <code>{c.provider_keys.join(", ")}</code> is unset in{" "}
@@ -312,12 +312,12 @@ function TelemetrySection({ data }: { data: LlmStatus }) {
                 </Notice>
               )}
               {tel?.source === "key_rotated" && (
-                <p style={{ color: theme.textMuted, fontSize: 12, margin: "4px 0 0" }}>
+                <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1) 0 0" }}>
                   Key changed since the last recorded call — no telemetry for the current key yet.
                 </p>
               )}
               {tel?.source === "last_call" && tel.ok === false && c.status !== "invalid_key" && (
-                <p style={{ color: theme.textMuted, fontSize: 12, margin: "4px 0 0" }}>
+                <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1) 0 0" }}>
                   Last call failed: {tel.error_kind}
                   {tel.checked_at ? ` · ${timeAgo(tel.checked_at)}` : ""} (not a key problem).
                 </p>
@@ -329,7 +329,7 @@ function TelemetrySection({ data }: { data: LlmStatus }) {
           style={{
             color: theme.textMuted,
             fontSize: "var(--t-caption)",
-            marginTop: 12,
+            marginTop: "var(--s-3)",
             lineHeight: 1.5,
           }}
         >

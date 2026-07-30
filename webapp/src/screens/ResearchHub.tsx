@@ -42,7 +42,7 @@ export function ResearchHub() {
         Strategies and symbols worth a closer look before you act.
       </p>
 
-      <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: "var(--s-3)" }}>
         {CARDS.map((c) => (
           <button
             key={c.to}
@@ -52,20 +52,20 @@ export function ResearchHub() {
             style={{
               display: "flex",
               alignItems: "flex-start",
-              gap: 12,
+              gap: "var(--s-3)",
               width: "100%",
               textAlign: "left",
-              marginBottom: 12,
+              marginBottom: "var(--s-3)",
               background: "none",
               cursor: "pointer",
             }}
           >
-            <span aria-hidden style={{ fontSize: 22, lineHeight: 1 }}>
+            <span aria-hidden style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>
               {c.ico}
             </span>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 15 }}>{c.label}</div>
-              <div style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 4, lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{c.label}</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-label)", marginTop: "var(--s-1)", lineHeight: 1.5 }}>
                 {c.description}
               </div>
             </div>

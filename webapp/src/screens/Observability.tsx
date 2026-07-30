@@ -64,10 +64,10 @@ function regimeColor(regime: string | null): string {
 
 function SectionHeading({ title, sub }: { title: string; sub?: string }) {
   return (
-    <div style={{ marginTop: 24, marginBottom: 10 }}>
+    <div style={{ marginTop: "var(--s-6)", marginBottom: "var(--s-2-5)" }}>
       <h2 style={{ margin: 0, fontSize: "var(--t-title)" }}>{title}</h2>
       {sub && (
-        <p style={{ margin: "4px 0 0", color: theme.textMuted, fontSize: 12.5 }}>{sub}</p>
+        <p style={{ margin: "var(--s-1) 0 0", color: theme.textMuted, fontSize: "var(--t-label)" }}>{sub}</p>
       )}
     </div>
   );
@@ -121,7 +121,7 @@ function MacroGateControl({
   };
 
   return (
-    <div style={{ marginTop: 10 }}>
+    <div style={{ marginTop: "var(--s-2-5)" }}>
       <Toggle
         checked={on}
         onChange={openConfirm}
@@ -130,17 +130,17 @@ function MacroGateControl({
         pending={putMutation.pending}
       />
       {!on && (
-        <p style={{ color: theme.caution, fontSize: 12, marginTop: 6 }}>
+        <p style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>
           Technical BUY signals run without a macro veto. Re-enable before going live.
         </p>
       )}
       {!writable && (
-        <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 6 }}>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>
           {regime.macro_gate_writable_note}
         </p>
       )}
       {putMutation.error && (
-        <Notice variant="warn" style={{ marginTop: 8 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
           <span>⚠️</span>
           <span>{putMutation.error}</span>
         </Notice>
@@ -151,10 +151,10 @@ function MacroGateControl({
           ariaLabel={confirmKind === "disable" ? "Disable macro regime gate" : "Enable macro regime gate"}
           onClose={() => setConfirmKind(null)}
         >
-          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
+          <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
             {confirmKind === "disable" ? "Disable macro regime gate?" : "Enable macro regime gate?"}
           </h2>
-          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
             {confirmKind === "disable"
               ? "Technical BUY signals will run without a veto during RECESSION/CREDIT EVENT regimes (Sahm Rule ≥ 0.5, VIX > 30, or HY OAS > 6%). Always re-enable before going live."
               : "Restores the autonomous macro veto — new BUY orders will be blocked during RECESSION/CREDIT EVENT regimes."}
@@ -165,7 +165,7 @@ function MacroGateControl({
             onChange={(e) => setInputReason(e.target.value)}
             hint="Required."
           />
-          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
             <Button variant="neutral" onClick={() => setConfirmKind(null)} style={{ flex: 1 }}>
               Cancel
             </Button>
@@ -193,7 +193,7 @@ function RegimeBadgeRow({
   onChanged: () => void;
 }) {
   if (regime.reason) {
-    return <div className="empty" style={{ padding: 16 }}>{regime.reason}</div>;
+    return <div className="empty" style={{ padding: "var(--s-4)" }}>{regime.reason}</div>;
   }
   const badges: { label: string; value: string }[] = [
     { label: "As of", value: timeAgo(regime.as_of) },
@@ -211,7 +211,7 @@ function RegimeBadgeRow({
     <>
       <div
         data-testid="regime-badges"
-        style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}
+        style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}
       >
         {badges.map((b) => (
           <span
@@ -241,29 +241,29 @@ function ForecastSkillSection({
   skill: ObservabilitySummary["forecast_skill"];
 }) {
   if (skill.reason) {
-    return <div className="empty" style={{ padding: 20 }}>{skill.reason}</div>;
+    return <div className="empty" style={{ padding: "var(--s-5)" }}>{skill.reason}</div>;
   }
   const weights = Object.entries(skill.skill_weights).sort((a, b) => b[1] - a[1]);
   return (
     <div>
-      <div style={{ display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: "var(--s-4)", marginBottom: "var(--s-3)", flexWrap: "wrap" }}>
         <Tile label="Pending" value={skill.pending} />
         <Tile label="Completed" value={skill.completed} />
         <Tile label="Window" value={`${skill.window_days}d`} />
         <Tile label="Min obs" value={skill.min_obs} />
       </div>
       {weights.length === 0 ? (
-        <div className="empty" style={{ padding: 16 }}>
+        <div className="empty" style={{ padding: "var(--s-4)" }}>
           No skill weights yet — not enough completed forecasts in the window.
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
           {weights.map(([model, weight]) => (
-            <div key={model} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ width: 96, fontSize: 12.5, color: theme.textSecondary, flex: "0 0 auto" }}>
+            <div key={model} style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+              <span style={{ width: 96, fontSize: "var(--t-label)", color: theme.textSecondary, flex: "0 0 auto" }}>
                 {model}
               </span>
-              <div style={{ flex: 1, height: 8, borderRadius: 4, background: theme.surface2, overflow: "hidden" }}>
+              <div style={{ flex: 1, height: 8, borderRadius: "var(--r-2xs)", background: theme.surface2, overflow: "hidden" }}>
                 <div
                   style={{
                     width: `${Math.max(0, Math.min(1, weight)) * 100}%`,
@@ -272,7 +272,7 @@ function ForecastSkillSection({
                   }}
                 />
               </div>
-              <span className="num" style={{ width: 46, textAlign: "right", fontSize: 12.5 }}>
+              <span className="num" style={{ width: 46, textAlign: "right", fontSize: "var(--t-label)" }}>
                 {fmtPct(weight, 0, { fromFraction: true })}
               </span>
             </div>
@@ -280,8 +280,8 @@ function ForecastSkillSection({
         </div>
       )}
       {skill.reliability_curve.length > 0 && (
-        <div style={{ marginTop: 16, overflowX: "auto" }}>
-          <Table style={{ fontSize: 12 }}>
+        <div style={{ marginTop: "var(--s-4)", overflowX: "auto" }}>
+          <Table style={{ fontSize: "var(--t-caption)" }}>
             <thead>
               <tr>
                 <th>Model</th>
@@ -315,24 +315,24 @@ function BlockLogRow({ entry }: { entry: RiskGateBlockEntry }) {
   return (
     <div
       className="card card-pad"
-      style={{ marginBottom: 8 }}
+      style={{ marginBottom: "var(--s-2)" }}
       data-testid="risk-gate-block-row"
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--s-2)" }}>
         <span style={{ fontWeight: 700, fontSize: 13.5 }}>
           {entry.symbol ?? "—"} {entry.side ? entry.side.toUpperCase() : ""}
           {entry.qty != null ? ` × ${fmtNum(entry.qty, 2)}` : ""}
         </span>
-        <span style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: "var(--t-micro)", color: theme.textMuted, whiteSpace: "nowrap" }}>
           {entry.ts ? timeAgo(entry.ts) : "—"}
         </span>
       </div>
-      <div style={{ fontSize: 11.5, color: theme.caution, marginTop: 2 }}>
+      <div style={{ fontSize: "var(--t-footnote)", color: theme.caution, marginTop: "var(--s-0-5)" }}>
         {entry.check ?? "—"}
         {entry.strategy_id ? ` · ${entry.strategy_id}` : ""}
       </div>
       {entry.reason && (
-        <div style={{ fontSize: 12.5, color: theme.textSecondary, marginTop: 4, lineHeight: 1.4 }}>
+        <div style={{ fontSize: "var(--t-label)", color: theme.textSecondary, marginTop: "var(--s-1)", lineHeight: 1.4 }}>
           {entry.reason}
         </div>
       )}
@@ -358,21 +358,21 @@ function SeverityBadge({ severity }: { severity: CircuitBreakerTrip["severity"] 
  * classified/deduped-within-window projection, not the raw JSONL tail. */
 function CircuitBreakerRow({ trip }: { trip: CircuitBreakerTrip }) {
   return (
-    <div className="card card-pad" style={{ marginBottom: 8 }} data-testid="circuit-breaker-row">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div className="card card-pad" style={{ marginBottom: "var(--s-2)" }} data-testid="circuit-breaker-row">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--s-2)" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <SeverityBadge severity={trip.severity} />
           <span style={{ fontWeight: 700, fontSize: 13.5 }}>{trip.name}</span>
         </span>
-        <span style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: "var(--t-micro)", color: theme.textMuted, whiteSpace: "nowrap" }}>
           {trip.triggered_at ? timeAgo(trip.triggered_at) : "—"}
         </span>
       </div>
-      <div style={{ fontSize: 12.5, color: theme.textSecondary, marginTop: 4, lineHeight: 1.4 }}>
+      <div style={{ fontSize: "var(--t-label)", color: theme.textSecondary, marginTop: "var(--s-1)", lineHeight: 1.4 }}>
         {trip.summary}
       </div>
       {(trip.threshold != null || trip.observed != null) && (
-        <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 4 }}>
+        <div style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-1)" }}>
           {trip.threshold != null && `Threshold: ${fmtNum(trip.threshold, 3)}`}
           {trip.threshold != null && trip.observed != null && " · "}
           {trip.observed != null && `Observed: ${fmtNum(trip.observed, 3)}`}
@@ -392,7 +392,7 @@ function CircuitBreakerSection({
 }) {
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
         <Tile
           label="Critical trips"
           value={breakers.counts.critical}
@@ -406,7 +406,7 @@ function CircuitBreakerSection({
         <Tile label="Total" value={breakers.counts.total} />
       </div>
       {breakers.trips.length === 0 ? (
-        <div className="empty" style={{ padding: 16 }}>
+        <div className="empty" style={{ padding: "var(--s-4)" }}>
           {breakers.reason ?? "No active circuit-breaker trips."}
         </div>
       ) : (
@@ -441,7 +441,7 @@ function fmtBytes(n: number | null): string {
 function SystemTelemetrySection({ telemetry }: { telemetry: ObservabilitySummary["system_telemetry"] }) {
   if (!telemetry.psutil_available) {
     return (
-      <div className="empty" style={{ padding: 16 }}>
+      <div className="empty" style={{ padding: "var(--s-4)" }}>
         {telemetry.reason ?? "psutil is not available — telemetry cannot be sampled."}
       </div>
     );
@@ -453,7 +453,7 @@ function SystemTelemetrySection({ telemetry }: { telemetry: ObservabilitySummary
 
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 8 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-2)" }}>
         <Tile label="Host CPU" value={fmtPct(telemetry.cpu_percent, 1)} tone={cpuHot ? "neg" : undefined} />
         <Tile label="Host memory" value={fmtPct(telemetry.memory_percent, 1)} tone={memHot ? "neg" : undefined} />
         <Tile label="Host disk" value={fmtPct(telemetry.disk_percent, 1)} />
@@ -461,28 +461,28 @@ function SystemTelemetrySection({ telemetry }: { telemetry: ObservabilitySummary
         <Tile label="Process CPU" value={fmtPct(telemetry.process_cpu_percent, 1)} />
         <Tile label="Threads" value={telemetry.process_threads ?? "—"} />
       </div>
-      <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 4 }}>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
         Memory: {fmtBytes(telemetry.memory_used_bytes)} / {fmtBytes(telemetry.memory_total_bytes)}
         {" · "}Disk: {fmtBytes(telemetry.disk_used_bytes)} / {fmtBytes(telemetry.disk_total_bytes)}
         {telemetry.cpu_count_logical != null && ` · ${telemetry.cpu_count_logical} logical cores`}
         {telemetry.load_avg_1m != null && ` · Load avg (1m): ${fmtNum(telemetry.load_avg_1m, 2)}`}
       </p>
       {cpuHot && (
-        <p style={{ color: theme.decline, fontSize: 12.5, marginTop: 4 }}>
+        <p style={{ color: theme.decline, fontSize: "var(--t-label)", marginTop: "var(--s-1)" }}>
           CPU saturated at {fmtPct(telemetry.cpu_percent, 0)} — strategy backtests may be queuing.
         </p>
       )}
       {cpuWarm && (
-        <p style={{ color: theme.caution, fontSize: 12.5, marginTop: 4 }}>
+        <p style={{ color: theme.caution, fontSize: "var(--t-label)", marginTop: "var(--s-1)" }}>
           CPU at {fmtPct(telemetry.cpu_percent, 0)} — watch for slowdowns.
         </p>
       )}
       {memHot && (
-        <p style={{ color: theme.decline, fontSize: 12.5, marginTop: 4 }}>
+        <p style={{ color: theme.decline, fontSize: "var(--t-label)", marginTop: "var(--s-1)" }}>
           Memory at {fmtPct(telemetry.memory_percent, 0)} — consider releasing caches.
         </p>
       )}
-      <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 8 }}>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)" }}>
         Sampled {telemetry.sampled_at ? timeAgo(telemetry.sampled_at) : "—"} — reload the screen to re-sample.
       </p>
     </div>
@@ -519,11 +519,11 @@ function LogEntryRow({ entry }: { entry: LogAggregationEntry }) {
       data-testid="log-entry-row"
       style={{
         display: "flex",
-        gap: 8,
+        gap: "var(--s-2)",
         alignItems: "baseline",
         padding: "3px 0",
         fontFamily: "var(--font-mono, ui-monospace, monospace)",
-        fontSize: 11.5,
+        fontSize: "var(--t-footnote)",
       }}
     >
       <span style={{ color: theme.textMuted, whiteSpace: "nowrap" }}>
@@ -567,7 +567,7 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
 
   if (logs.entries.length === 0) {
     return (
-      <div className="empty" style={{ padding: 20 }}>
+      <div className="empty" style={{ padding: "var(--s-5)" }}>
         {logs.reason ?? "No log entries yet."}
       </div>
     );
@@ -575,7 +575,7 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
 
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
         <Tile label="Critical" value={logs.tally.CRITICAL} tone={logs.tally.CRITICAL > 0 ? "neg" : undefined} />
         <Tile label="Error" value={logs.tally.ERROR} tone={logs.tally.ERROR > 0 ? "neg" : undefined} />
         <Tile label="Warning" value={logs.tally.WARNING} tone={logs.tally.WARNING > 0 ? "neg" : undefined} />
@@ -584,7 +584,7 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
         <Tile label="Symbol-specific" value={logs.symbol_specific_count} />
       </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 10 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", alignItems: "flex-end", marginBottom: "var(--s-2-5)" }}>
         <div style={{ minWidth: 140 }}>
           <Select
             label="Minimum level"
@@ -599,12 +599,12 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
         </div>
       </div>
 
-      <p style={{ color: theme.textMuted, fontSize: 11.5, marginBottom: 6 }}>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginBottom: "var(--s-1-5)" }}>
         Showing {filtered.length} of {logs.returned_count} returned lines ({logs.total_lines} in the full tail).
       </p>
 
       {filtered.length === 0 ? (
-        <div className="empty" style={{ padding: 16 }}>
+        <div className="empty" style={{ padding: "var(--s-4)" }}>
           No log lines match the current filter.
         </div>
       ) : (
@@ -612,8 +612,8 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
           style={{
             background: theme.surface,
             border: `1px solid ${theme.border}`,
-            borderRadius: 6,
-            padding: "6px 10px",
+            borderRadius: "var(--r-xs)",
+            padding: "var(--s-1-5) var(--s-2-5)",
             maxHeight: 320,
             overflowY: "auto",
           }}
@@ -660,8 +660,8 @@ export function Observability() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Pilots
@@ -682,7 +682,7 @@ export function Observability() {
         <>
           {/* 1. Portfolio risk metrics */}
           <SectionHeading title="Portfolio risk" sub="Over the full account equity history" />
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)" }}>
             <Tile label="Sharpe" value={fmtNum(data.portfolio_risk.sharpe_ratio, 2)} />
             <Tile label="Calmar" value={fmtNum(data.portfolio_risk.calmar_ratio, 2)} />
             <Tile
@@ -718,23 +718,23 @@ export function Observability() {
             />
           </div>
           {data.portfolio_risk.reason && (
-            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
               {data.portfolio_risk.reason}
             </p>
           )}
           {data.portfolio_heat.reason && (
-            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 4 }}>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
               Portfolio heat: {data.portfolio_heat.reason}
             </p>
           )}
 
           {/* 2. Equity + drawdown + regime overlay */}
           <SectionHeading title="Equity, drawdown &amp; regime" />
-          <div style={{ marginBottom: 10 }}>
+          <div style={{ marginBottom: "var(--s-2-5)" }}>
             <RangeToggle value={range} onChange={setRange} />
           </div>
           {data.equity_curve.points.length === 0 ? (
-            <div className="empty" style={{ padding: 20 }}>
+            <div className="empty" style={{ padding: "var(--s-5)" }}>
               {data.equity_curve.reason ?? "No account equity history yet."}
             </div>
           ) : (
@@ -752,7 +752,7 @@ export function Observability() {
             title="Forecast skill"
             sub="Portfolio-wide reliability and inverse-RMSE model weights"
           />
-          <div style={{ marginBottom: 10 }}>
+          <div style={{ marginBottom: "var(--s-2-5)" }}>
             <HorizonToggle value={horizon} onChange={setHorizon} />
           </div>
           <ForecastSkillSection skill={data.forecast_skill} />
@@ -772,7 +772,7 @@ export function Observability() {
             sub={`Last ${data.risk_gate_blocks.count} blocked order(s), raw log`}
           />
           {data.risk_gate_blocks.entries.length === 0 ? (
-            <div className="empty" style={{ padding: 20 }}>
+            <div className="empty" style={{ padding: "var(--s-5)" }}>
               {data.risk_gate_blocks.reason ?? "No blocked orders in the log."}
             </div>
           ) : (

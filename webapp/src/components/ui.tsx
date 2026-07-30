@@ -276,7 +276,7 @@ export function MetricBadge({
  */
 export function HonestyRow({ h }: { h: Headline }) {
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)" }}>
       <DeployableBadge deployable={h.deployable} />
       <MetricBadge
         label="DSR"
@@ -321,7 +321,7 @@ export function Tile({
 
 export function Loading({ lines = 3 }: { lines?: number }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
       {Array.from({ length: lines }).map((_, i) => (
         <div key={i} className="skeleton" style={{ height: 72 }} />
       ))}
@@ -338,10 +338,10 @@ export function EmptyState({
 }) {
   return (
     <div className="empty">
-      <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-secondary)" }}>
+      <div style={{ fontSize: "var(--t-subhead)", fontWeight: 600, color: "var(--text-secondary)" }}>
         {title}
       </div>
-      {hint && <div style={{ marginTop: 6 }}>{hint}</div>}
+      {hint && <div style={{ marginTop: "var(--s-1-5)" }}>{hint}</div>}
     </div>
   );
 }
@@ -398,7 +398,7 @@ export function StaleDataNotice({
   return (
     <Notice
       variant="warn"
-      style={{ marginBottom: 12, alignItems: "center" }}
+      style={{ marginBottom: "var(--s-3)", alignItems: "center" }}
       data-testid="stale-data-notice"
     >
       <span>
@@ -408,7 +408,7 @@ export function StaleDataNotice({
         <button
           className="btn"
           onClick={onRetry}
-          style={{ marginLeft: "auto", fontSize: 12, padding: "2px 8px" }}
+          style={{ marginLeft: "auto", fontSize: "var(--t-caption)", padding: "var(--s-0-5) var(--s-2)" }}
         >
           Retry
         </button>
@@ -430,16 +430,16 @@ export function ErrorState({
   const isColdStart = status === 404;
   return (
     <div className="empty">
-      <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-secondary)" }}>
+      <div style={{ fontSize: "var(--t-subhead)", fontWeight: 600, color: "var(--text-secondary)" }}>
         {isColdStart ? "Nothing here yet" : "Couldn't load"}
       </div>
-      <div style={{ marginTop: 6 }}>
+      <div style={{ marginTop: "var(--s-1-5)" }}>
         {isColdStart
           ? "Run the Stockpy pipeline to produce data, then pull to refresh."
           : message}
       </div>
       {onRetry && !isColdStart && (
-        <button className="btn" style={{ marginTop: 16 }} onClick={onRetry}>
+        <button className="btn" style={{ marginTop: "var(--s-4)" }} onClick={onRetry}>
           Retry
         </button>
       )}
@@ -491,7 +491,7 @@ export function Input({
       <label
         htmlFor={inputId}
         className="tile-label"
-        style={{ display: "block", marginBottom: 6 }}
+        style={{ display: "block", marginBottom: "var(--s-1-5)" }}
       >
         {label}
       </label>
@@ -513,7 +513,7 @@ export function Input({
         <div
           id={hintId}
           style={{
-            marginTop: 6,
+            marginTop: "var(--s-1-5)",
             fontSize: "var(--t-caption)",
             color: invalid ? "var(--decline)" : "var(--text-muted)",
           }}

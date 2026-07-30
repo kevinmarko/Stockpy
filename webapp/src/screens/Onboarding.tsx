@@ -51,7 +51,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   return (
     <div className="screen" style={{ paddingBottom: 24 }}>
       {/* progress dots */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+      <div style={{ display: "flex", gap: "var(--s-1-5)", marginBottom: "var(--s-5)" }}>
         {[0, 1, 2].map((i) => (
           <div
             key={i}
@@ -83,7 +83,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   className="card card-pad"
                   style={{
                     textAlign: "left",
-                    marginBottom: 10,
+                    marginBottom: "var(--s-2-5)",
                     border:
                       pilotId === p.id
                         ? `1.5px solid ${theme.growth}`
@@ -99,14 +99,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                       alignItems: "center",
                     }}
                   >
-                    <span style={{ fontWeight: 700, fontSize: 16 }}>{p.name}</span>
+                    <span style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>{p.name}</span>
                     <CategoryChip category={p.category} />
                   </div>
                   <div
                     style={{
                       display: "flex",
-                      gap: 10,
-                      marginTop: 8,
+                      gap: "var(--s-2-5)",
+                      marginTop: "var(--s-2)",
                       alignItems: "center",
                     }}
                   >
@@ -133,7 +133,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           )}
           <button
             className="btn btn-primary btn-block"
-            style={{ marginTop: 16 }}
+            style={{ marginTop: "var(--s-4)" }}
             disabled={!pilotId}
             onClick={() => setStep(1)}
           >
@@ -153,8 +153,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               border: "none",
               color: theme.textMuted,
               width: "100%",
-              marginTop: 16,
-              fontSize: 13,
+              marginTop: "var(--s-4)",
+              fontSize: "var(--t-body)",
               textAlign: "center",
             }}
           >
@@ -179,17 +179,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             style={{
               textAlign: "left",
               width: "100%",
-              marginBottom: 10,
+              marginBottom: "var(--s-2-5)",
               border:
                 brokerage === "paper"
                   ? `1.5px solid ${theme.growth}`
                   : "1px solid var(--border)",
             }}
           >
-            <div style={{ fontWeight: 700, fontSize: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>
               📝 Paper trading (recommended)
             </div>
-            <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 4 }}>
+            <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
               Simulated fills against your watchlist. Zero real money at risk.
             </div>
           </button>
@@ -200,17 +200,17 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             style={{
               textAlign: "left",
               width: "100%",
-              marginBottom: 10,
+              marginBottom: "var(--s-2-5)",
               border:
                 brokerage === "robinhood"
                   ? `1.5px solid ${theme.growth}`
                   : "1px solid var(--border)",
             }}
           >
-            <div style={{ fontWeight: 700, fontSize: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>
               🔗 Connect Robinhood{rhConnected ? " — connected" : ""}
             </div>
-            <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 4 }}>
+            <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
               Credentials go only to your local backend and are verified with a
               read-only login before anything is saved — never sent anywhere else.
             </div>
@@ -232,13 +232,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   : "1px solid var(--border)",
             }}
           >
-            <div style={{ fontWeight: 700, fontSize: 16 }}>Browse only for now</div>
-            <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 4 }}>
+            <div style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>Browse only for now</div>
+            <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
               Explore Pilots without connecting. You can link a brokerage later.
             </div>
           </button>
 
-          <Notice variant="info" style={{ marginTop: 16 }}>
+          <Notice variant="info" style={{ marginTop: "var(--s-4)" }}>
             <span>ℹ️</span>
             <span>
               Execution mode is currently <strong>{apiMeta.mockMode ?? "review"}</strong>.
@@ -246,7 +246,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             </span>
           </Notice>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4)" }}>
             <button className="btn" style={{ flex: 1 }} onClick={() => setStep(0)}>
               Back
             </button>
@@ -278,8 +278,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <label className="tile-label" htmlFor="ob-amount">
             Allocation (USD)
           </label>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 22, fontWeight: 700, color: theme.textMuted }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+            <span style={{ fontSize: "var(--t-display)", fontWeight: 700, color: theme.textMuted }}>
               $
             </span>
             <input
@@ -294,7 +294,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             />
           </div>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
             {[250, 500, 1000, 2500].map((a) => (
               <button
                 key={a}
@@ -307,7 +307,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             ))}
           </div>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-6)" }}>
             <button className="btn" style={{ flex: 1 }} onClick={() => setStep(1)}>
               Back
             </button>
@@ -331,8 +331,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               border: "none",
               color: theme.textMuted,
               width: "100%",
-              marginTop: 16,
-              fontSize: 13,
+              marginTop: "var(--s-4)",
+              fontSize: "var(--t-body)",
             }}
           >
             Skip for now
