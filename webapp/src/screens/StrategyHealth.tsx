@@ -10,7 +10,7 @@ import type {
   Thresholds,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { DeployableBadge, ErrorState, Loading } from "../components/ui";
+import { DeployableBadge, ErrorState, Loading, Table } from "../components/ui";
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
 import { ValidationTrend } from "../components/ValidationTrend";
@@ -189,20 +189,6 @@ function HealthCard({
 // full reasoning.
 // ---------------------------------------------------------------------------
 
-const thL: React.CSSProperties = {
-  textAlign: "left",
-  padding: "6px 8px",
-  color: theme.textMuted,
-  fontWeight: 600,
-  borderBottom: `1px solid ${theme.border}`,
-};
-const tdL: React.CSSProperties = {
-  textAlign: "left",
-  padding: "6px 8px",
-  borderBottom: `1px solid ${theme.border}`,
-  verticalAlign: "top",
-};
-
 const AI_HEALTH_STYLE: Record<
   GravityAuditStatus["ai_audit"]["health"],
   { color: string; background: string; border: string }
@@ -254,19 +240,19 @@ function Banner({
 function AiAuditStepTable({ steps }: { steps: GravityAiAuditStep[] }) {
   return (
     <div style={{ overflowX: "auto", marginTop: 10 }}>
-      <table style={{ width: "100%", fontSize: 12, minWidth: 420, borderCollapse: "collapse" }}>
+      <Table style={{ fontSize: 12, minWidth: 420 }}>
         <thead>
           <tr>
-            <th style={thL}>Step</th>
-            <th style={thL}>Claude</th>
-            <th style={thL}>Gemini</th>
-            <th style={thL}>Notes</th>
+            <th>Step</th>
+            <th>Claude</th>
+            <th>Gemini</th>
+            <th>Notes</th>
           </tr>
         </thead>
         <tbody>
           {steps.map((s, i) => (
             <tr key={`${s.step_number ?? i}-${s.step_title}`}>
-              <td style={tdL}>
+              <td style={{ verticalAlign: "top" }}>
                 {s.step_number != null ? `${s.step_number}. ` : ""}
                 {s.step_title}
                 {s.disagreement && (
@@ -275,13 +261,13 @@ function AiAuditStepTable({ steps }: { steps: GravityAiAuditStep[] }) {
                   </span>
                 )}
               </td>
-              <td style={tdL}>{s.claude}</td>
-              <td style={tdL}>{s.gemini}</td>
-              <td style={{ ...tdL, color: theme.textMuted }}>{s.notes || "—"}</td>
+              <td style={{ verticalAlign: "top" }}>{s.claude}</td>
+              <td style={{ verticalAlign: "top" }}>{s.gemini}</td>
+              <td style={{ verticalAlign: "top", color: theme.textMuted }}>{s.notes || "—"}</td>
             </tr>
           ))}
         </tbody>
-      </table>
+      </Table>
     </div>
   );
 }
@@ -366,12 +352,12 @@ function GravityAuditSection() {
                     : "❌ At least one step failed on the last run — not cleared for live."}
                 </Banner>
                 <div style={{ overflowX: "auto", marginTop: 10 }}>
-                  <table style={{ width: "100%", fontSize: 12, minWidth: 320, borderCollapse: "collapse" }}>
+                  <Table style={{ fontSize: 12, minWidth: 320 }}>
                     <tbody>
                       {data.legacy_audit.steps.map((s) => (
                         <tr key={s.step}>
-                          <td style={tdL}>{s.step}</td>
-                          <td style={{ ...tdL, textAlign: "right" }}>
+                          <td style={{ verticalAlign: "top" }}>{s.step}</td>
+                          <td className="num" style={{ verticalAlign: "top" }}>
                             <span className={s.passed ? "badge badge-good" : "badge badge-bad"}>
                               {s.status}
                             </span>
@@ -379,7 +365,7 @@ function GravityAuditSection() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </Table>
                 </div>
               </>
             ) : (

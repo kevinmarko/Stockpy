@@ -9,7 +9,7 @@ import type {
   RecTrackingRow,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { Button, EmptyState, ErrorState, Loading, Tile } from "../components/ui";
+import { Button, EmptyState, ErrorState, Loading, Table, Tile } from "../components/ui";
 import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct } from "../format";
@@ -256,45 +256,40 @@ function RecTrackingTable({ rows }: { rows: RecTrackingRow[] }) {
   const pct = (v: number | null) => fmtPct(v, 2, { fromFraction: true, signed: true });
   return (
     <div style={{ overflowX: "auto", marginTop: 12 }}>
-      <table style={{ width: "100%", fontSize: 12.5, minWidth: 460, borderCollapse: "collapse" }}>
+      <Table style={{ fontSize: 12.5, minWidth: 460 }}>
         <thead>
           <tr>
-            <th style={thL}>Symbol</th>
-            <th style={thL}>Signal</th>
-            <th style={thR}>Conv.</th>
-            <th style={thL}>Decision</th>
-            <th style={thR}>Model</th>
-            <th style={thR}>Actual</th>
-            <th style={thR}>Held</th>
+            <th>Symbol</th>
+            <th>Signal</th>
+            <th className="num">Conv.</th>
+            <th>Decision</th>
+            <th className="num">Model</th>
+            <th className="num">Actual</th>
+            <th className="num">Held</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={`${r.symbol}-${r.signal_ts}-${i}`}>
-              <td style={tdL}>{r.symbol}</td>
-              <td style={tdL}>{r.signal_action ?? "—"}</td>
-              <td style={tdR}>{fmtNum(r.conviction, 2)}</td>
-              <td style={tdL}>
+              <td>{r.symbol}</td>
+              <td>{r.signal_action ?? "—"}</td>
+              <td className="num">{fmtNum(r.conviction, 2)}</td>
+              <td>
                 {r.action_taken ?? "—"}
                 {!r.completed && (
                   <span style={{ color: theme.textMuted }}> (pending)</span>
                 )}
               </td>
-              <td style={tdR}>{pct(r.model_return)}</td>
-              <td style={tdR}>{pct(r.actual_return)}</td>
-              <td style={tdR}>{r.days_held == null ? "—" : `${r.days_held}d`}</td>
+              <td className="num">{pct(r.model_return)}</td>
+              <td className="num">{pct(r.actual_return)}</td>
+              <td className="num">{r.days_held == null ? "—" : `${r.days_held}d`}</td>
             </tr>
           ))}
         </tbody>
-      </table>
+      </Table>
     </div>
   );
 }
-
-const thL: React.CSSProperties = { textAlign: "left", padding: "6px 8px", color: theme.textMuted, fontWeight: 600, borderBottom: `1px solid ${theme.border}` };
-const thR: React.CSSProperties = { ...thL, textAlign: "right" };
-const tdL: React.CSSProperties = { textAlign: "left", padding: "6px 8px", borderBottom: `1px solid ${theme.border}` };
-const tdR: React.CSSProperties = { ...tdL, textAlign: "right" };
 
 // ---------------------------------------------------------------------------
 // MFE / MAE scatter (inline SVG)
@@ -424,30 +419,30 @@ function EdgeByStrategySection() {
   }
   return (
     <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", fontSize: 12.5, minWidth: 460, borderCollapse: "collapse" }}>
+      <Table style={{ fontSize: 12.5, minWidth: 460 }}>
         <thead>
           <tr>
-            <th style={thL}>Strategy</th>
-            <th style={thR}>Trades</th>
-            <th style={thR}>Mean edge</th>
-            <th style={thR}>Median edge</th>
-            <th style={thR}>Mean MFE</th>
-            <th style={thR}>Mean MAE</th>
+            <th>Strategy</th>
+            <th className="num">Trades</th>
+            <th className="num">Mean edge</th>
+            <th className="num">Median edge</th>
+            <th className="num">Mean MFE</th>
+            <th className="num">Mean MAE</th>
           </tr>
         </thead>
         <tbody>
           {data.rows.map((r) => (
             <tr key={r.strategy}>
-              <td style={tdL}>{r.strategy}</td>
-              <td style={tdR}>{r.n_trades}</td>
-              <td style={tdR}>{fmtNum(r.mean_edge_ratio, 2)}</td>
-              <td style={tdR}>{fmtNum(r.median_edge_ratio, 2)}</td>
-              <td style={tdR}>{fmtPct(r.mean_mfe, 1, { fromFraction: true })}</td>
-              <td style={tdR}>{fmtPct(r.mean_mae, 1, { fromFraction: true })}</td>
+              <td>{r.strategy}</td>
+              <td className="num">{r.n_trades}</td>
+              <td className="num">{fmtNum(r.mean_edge_ratio, 2)}</td>
+              <td className="num">{fmtNum(r.median_edge_ratio, 2)}</td>
+              <td className="num">{fmtPct(r.mean_mfe, 1, { fromFraction: true })}</td>
+              <td className="num">{fmtPct(r.mean_mae, 1, { fromFraction: true })}</td>
             </tr>
           ))}
         </tbody>
-      </table>
+      </Table>
     </div>
   );
 }
@@ -511,28 +506,28 @@ function DecisionJournalSection({
         </p>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", fontSize: 12.5, minWidth: 420, borderCollapse: "collapse" }}>
+          <Table style={{ fontSize: 12.5, minWidth: 420 }}>
             <thead>
               <tr>
-                <th style={thL}>Symbol</th>
-                <th style={thL}>Decision</th>
-                <th style={thL}>Signal</th>
-                <th style={thL}>When</th>
-                <th style={thR}>Trade</th>
+                <th>Symbol</th>
+                <th>Decision</th>
+                <th>Signal</th>
+                <th>When</th>
+                <th className="num">Trade</th>
               </tr>
             </thead>
             <tbody>
               {recent.decisions.map((d, i) => (
                 <tr key={`${d.symbol}-${d.timestamp}-${i}`}>
-                  <td style={tdL}>{d.symbol ?? "—"}</td>
-                  <td style={tdL}>{d.action_taken ?? "—"}</td>
-                  <td style={tdL}>{d.signal_action ?? "—"}</td>
-                  <td style={tdL}>{d.timestamp ? d.timestamp.slice(0, 10) : "—"}</td>
-                  <td style={tdR}>{d.trade_id == null ? "—" : `#${d.trade_id}`}</td>
+                  <td>{d.symbol ?? "—"}</td>
+                  <td>{d.action_taken ?? "—"}</td>
+                  <td>{d.signal_action ?? "—"}</td>
+                  <td>{d.timestamp ? d.timestamp.slice(0, 10) : "—"}</td>
+                  <td className="num">{d.trade_id == null ? "—" : `#${d.trade_id}`}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         </div>
       )}
 

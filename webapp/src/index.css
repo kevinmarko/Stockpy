@@ -252,6 +252,44 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Tables ----
+   Standardizes the app's ~12 hand-rolled <table> layouts, which previously
+   carried 10 different inline th/td padding values (audited 2026-07: "6px
+   8px" was the plurality at 27 uses). No --s-* token lands exactly on 6px,
+   so this rounds up to --s-2 (8px) on both axes rather than inventing a
+   bespoke literal -- closest token match to the plurality winner. Apply
+   `.table` to the <table> element itself; callers keep their own
+   `overflowX: "auto"` wrapper div and any per-table `minWidth`/`fontSize`
+   override via inline `style` (layout concerns, not a table-cell style, and
+   inline styles still win over this class). Numeric columns reuse the
+   existing `.num` class (tabular-nums, above) rather than a new one --
+   inside `.table` it also right-aligns, so `<td className="num">` gets both
+   in one class, on th or td alike. */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-body);
+}
+.table th,
+.table td {
+  padding: var(--s-2) var(--s-2);
+  text-align: left;
+}
+.table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+.table td {
+  border-bottom: 1px solid var(--border);
+}
+.table tbody tr:hover {
+  background: var(--surface-2);
+}
+.table .num {
+  text-align: right;
+}
+
 /* ---- Combobox (symbol autocomplete) ---- */
 .combobox-list {
   list-style: none;

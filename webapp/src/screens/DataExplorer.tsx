@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Bar, Fundamentals, MacroSnapshot, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Tile } from "../components/ui";
+import { ErrorState, Loading, Table, Tile } from "../components/ui";
 import { PerfLine } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { RecommendedStocks } from "../components/RecommendedStocks";
@@ -65,18 +65,18 @@ function FundamentalsTable({ f }: { f: Fundamentals }) {
   }
   return (
     <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <Table>
         <tbody>
           {entries.map(([k, v]) => (
-            <tr key={k} style={{ borderTop: "1px solid var(--border)" }}>
-              <td style={{ padding: "7px 6px", color: theme.textSecondary }}>{label(k)}</td>
-              <td style={{ padding: "7px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: v == null ? theme.textMuted : theme.textPrimary }}>
+            <tr key={k}>
+              <td style={{ color: theme.textSecondary }}>{label(k)}</td>
+              <td className="num" style={{ color: v == null ? theme.textMuted : theme.textPrimary }}>
                 {fmtValue(v)}
               </td>
             </tr>
           ))}
         </tbody>
-      </table>
+      </Table>
     </div>
   );
 }

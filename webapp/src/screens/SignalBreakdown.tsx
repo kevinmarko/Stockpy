@@ -7,7 +7,7 @@ import type {
   SignalModuleScore,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Tile } from "../components/ui";
+import { ErrorState, Loading, Table, Tile } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum } from "../format";
@@ -45,18 +45,18 @@ function ContributionBar({ contribution, max }: { contribution: number | null; m
 function ModuleRow({ m, max }: { m: SignalModuleScore; max: number }) {
   const contribTone = m.contribution == null ? undefined : pnlColor(m.contribution);
   return (
-    <tr style={{ borderTop: "1px solid var(--border)" }}>
-      <td style={{ padding: "8px 6px", fontFamily: "monospace", fontSize: 13 }}>{m.name}</td>
-      <td style={{ padding: "8px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+    <tr>
+      <td style={{ fontFamily: "monospace", fontSize: 13 }}>{m.name}</td>
+      <td className="num">
         {m.score == null ? DASH : fmtNum(m.score, 2)}
       </td>
-      <td style={{ padding: "8px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: theme.textMuted }}>
+      <td className="num" style={{ color: theme.textMuted }}>
         {fmtNum(m.weight, 0)}
       </td>
-      <td style={{ padding: "8px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: contribTone, fontWeight: 600 }}>
+      <td className="num" style={{ color: contribTone, fontWeight: 600 }}>
         {m.contribution == null ? DASH : fmtNum(m.contribution, 2)}
       </td>
-      <td style={{ padding: "8px 6px", width: "28%", minWidth: 90 }}>
+      <td style={{ width: "28%", minWidth: 90 }}>
         <ContributionBar contribution={m.contribution} max={max} />
       </td>
     </tr>
@@ -97,14 +97,14 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
         <section className="card card-pad">
           <h2 style={{ fontSize: 15, margin: "0 0 8px" }}>Module contributions</h2>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <Table>
               <thead>
-                <tr style={{ color: theme.textMuted, textAlign: "left" }}>
-                  <th style={{ padding: "0 6px 6px" }}>Module</th>
-                  <th style={{ padding: "0 6px 6px", textAlign: "right" }}>Score</th>
-                  <th style={{ padding: "0 6px 6px", textAlign: "right" }}>Weight</th>
-                  <th style={{ padding: "0 6px 6px", textAlign: "right" }}>Contribution</th>
-                  <th style={{ padding: "0 6px 6px" }} aria-label="magnitude" />
+                <tr>
+                  <th>Module</th>
+                  <th className="num">Score</th>
+                  <th className="num">Weight</th>
+                  <th className="num">Contribution</th>
+                  <th aria-label="magnitude" />
                 </tr>
               </thead>
               <tbody>
@@ -112,7 +112,7 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
                   <ModuleRow key={m.name} m={m} max={max} />
                 ))}
               </tbody>
-            </table>
+            </Table>
           </div>
           <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
             Contribution = score × weight. A module with no score this cycle shows {DASH},

@@ -13,7 +13,7 @@ import type {
 import { LOG_LEVELS } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading, Tile } from "../components/ui";
+import { Button, ErrorState, Input, Loading, Table, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { RangeToggle } from "../components/RangeToggle";
 import { DrawdownArea, PerfLine } from "../components/charts";
@@ -281,30 +281,30 @@ function ForecastSkillSection({
       )}
       {skill.reliability_curve.length > 0 && (
         <div style={{ marginTop: 16, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <Table style={{ fontSize: 12 }}>
             <thead>
-              <tr style={{ color: theme.textMuted, textAlign: "left" }}>
-                <th style={{ padding: "4px 8px" }}>Model</th>
-                <th style={{ padding: "4px 8px" }}>Bin</th>
-                <th style={{ padding: "4px 8px" }}>Mean error</th>
-                <th style={{ padding: "4px 8px" }}>Count</th>
+              <tr>
+                <th>Model</th>
+                <th className="num">Bin</th>
+                <th className="num">Mean error</th>
+                <th className="num">Count</th>
               </tr>
             </thead>
             <tbody>
               {skill.reliability_curve.map((bin, i) => (
-                <tr key={i} style={{ borderTop: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: "4px 8px" }}>{bin.model_name}</td>
-                  <td className="num" style={{ padding: "4px 8px" }}>
+                <tr key={i}>
+                  <td>{bin.model_name}</td>
+                  <td className="num">
                     {bin.bin_center == null ? "—" : fmtPct(bin.bin_center, 0, { fromFraction: true })}
                   </td>
-                  <td className="num" style={{ padding: "4px 8px" }}>
+                  <td className="num">
                     {bin.mean_pct_error == null ? "—" : fmtPct(bin.mean_pct_error, 1, { fromFraction: true, signed: true })}
                   </td>
-                  <td className="num" style={{ padding: "4px 8px" }}>{bin.count}</td>
+                  <td className="num">{bin.count}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         </div>
       )}
     </div>
