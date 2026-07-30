@@ -12,7 +12,7 @@ import {
 import { api } from "../api/client";
 import type { ValidationTrendSnapshot } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { DeployableBadge, ErrorState, Loading, Table } from "./ui";
+import { DeployableBadge, ErrorState, Loading, Select, Table } from "./ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "./charts";
 import { seriesColor, theme } from "../theme";
 import { fmtDate, fmtNum, fmtPct } from "../format";
@@ -50,6 +50,10 @@ const METRIC_LABELS: Record<MetricKey, string> = {
   sharpe: "Sharpe",
   max_drawdown: "Max Drawdown",
 };
+
+const METRIC_OPTIONS: { value: MetricKey; label: string }[] = (
+  Object.keys(METRIC_LABELS) as MetricKey[]
+).map((key) => ({ value: key, label: METRIC_LABELS[key] }));
 
 function fmtGateNum(key: MetricKey, value: number | null): string {
   if (value == null) return "—";
@@ -180,25 +184,16 @@ export function ValidationTrend() {
         >
           <h2 style={{ fontSize: 16, margin: 0 }}>Validation trend across strategies</h2>
           {strategiesWithTrend.length > 0 && (
-            <select
-              value={metric}
-              onChange={(e) => setMetric(e.target.value as MetricKey)}
-              data-testid="validation-trend-metric-select"
-              style={{
-                background: theme.surface2,
-                color: theme.textSecondary,
-                border: `1px solid ${theme.border}`,
-                borderRadius: 6,
-                padding: "4px 8px",
-                fontSize: 12,
-              }}
-            >
-              {(Object.keys(METRIC_LABELS) as MetricKey[]).map((key) => (
-                <option key={key} value={key}>
-                  {METRIC_LABELS[key]}
-                </option>
-              ))}
-            </select>
+            <div style={{ minWidth: 120 }}>
+              <Select
+                label="Trend metric"
+                hideLabel
+                value={metric}
+                onChange={(e) => setMetric(e.target.value as MetricKey)}
+                options={METRIC_OPTIONS}
+                testId="validation-trend-metric-select"
+              />
+            </div>
           )}
         </div>
         <p style={{ margin: "0 0 12px", fontSize: 13, color: theme.textMuted }}>

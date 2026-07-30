@@ -3,7 +3,7 @@ import { api } from "../api/client";
 import type { LlmCapabilityRow, LlmStatus } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { ErrorState, Loading, MetricBadge, Notice, StaleDataNotice } from "../components/ui";
+import { ErrorState, Loading, MetricBadge, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
@@ -225,32 +225,16 @@ function ProviderSelectRow({
 
   return (
     <div style={{ marginTop: 10, marginLeft: 4 }}>
-      <label style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12.5, color: theme.textMuted }}>{row.label} provider</span>
-        <select
-          value={current}
-          disabled={!writable || mutation.pending}
-          onChange={(e) => handleChange(e.target.value)}
-          aria-label={`${row.label} provider`}
-          style={{
-            fontSize: 14,
-            padding: "6px 10px",
-            borderRadius: "var(--r-md)",
-            background: "var(--surface-2)",
-            color: theme.textPrimary,
-            border: "1px solid var(--border)",
-          }}
-        >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        {mutation.pending && (
-          <span style={{ fontSize: 12, color: theme.textMuted }}>Saving…</span>
-        )}
-      </label>
+      <Select
+        label={`${row.label} provider`}
+        value={current}
+        disabled={!writable || mutation.pending}
+        onChange={(e) => handleChange(e.target.value)}
+        options={options}
+      />
+      {mutation.pending && (
+        <span style={{ fontSize: 12, color: theme.textMuted }}>Saving…</span>
+      )}
       {mutation.error && (
         <Notice variant="warn" style={{ marginTop: 6 }}>
           <span aria-hidden>⚠️</span>

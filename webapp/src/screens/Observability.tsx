@@ -13,7 +13,7 @@ import type {
 import { LOG_LEVELS } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading, Notice, Table, Tile } from "../components/ui";
+import { Button, ErrorState, Input, Loading, Notice, Select, Table, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { RangeToggle } from "../components/RangeToggle";
 import { DrawdownArea, PerfLine } from "../components/charts";
@@ -497,6 +497,11 @@ const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
   CRITICAL: 4,
 };
 
+const LOG_LEVEL_OPTIONS: { value: LogLevel; label: string }[] = LOG_LEVELS.map((lvl) => ({
+  value: lvl,
+  label: lvl,
+}));
+
 function LogLevelBadge({ level }: { level: LogLevel | null }) {
   if (!level) return <span className="badge badge-neutral">—</span>;
   const cls =
@@ -580,28 +585,15 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 10 }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: theme.textMuted }}>
-          Minimum level
-          <select
+        <div style={{ minWidth: 140 }}>
+          <Select
+            label="Minimum level"
             value={minLevel}
             onChange={(e) => setMinLevel(e.target.value as LogLevel)}
-            data-testid="log-level-select"
-            style={{
-              background: theme.surface2,
-              color: theme.textSecondary,
-              border: `1px solid ${theme.border}`,
-              borderRadius: 6,
-              padding: "4px 8px",
-              fontSize: 12,
-            }}
-          >
-            {LOG_LEVELS.map((lvl) => (
-              <option key={lvl} value={lvl}>
-                {lvl}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={LOG_LEVEL_OPTIONS}
+            testId="log-level-select"
+          />
+        </div>
         <div style={{ flex: 1, minWidth: 160 }}>
           <Input label="Filter (substring)" value={needle} onChange={(e) => setNeedle(e.target.value)} />
         </div>
