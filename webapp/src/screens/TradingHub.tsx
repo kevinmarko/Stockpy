@@ -30,7 +30,7 @@ function HubCardRow({ card, onOpen }: { card: HubCard; onOpen: () => void }) {
   return (
     <section
       className="card card-pad"
-      style={{ marginBottom: 12, cursor: "pointer" }}
+      style={{ marginBottom: "var(--s-3)", cursor: "pointer" }}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -41,16 +41,16 @@ function HubCardRow({ card, onOpen }: { card: HubCard; onOpen: () => void }) {
         }
       }}
     >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-        <span style={{ fontSize: 22, lineHeight: 1 }}>{card.icon}</span>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <span style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>{card.icon}</span>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>{card.label}</div>
+          <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{card.label}</div>
           <p
             style={{
               color: theme.textSecondary,
-              fontSize: 12.5,
+              fontSize: "var(--t-label)",
               lineHeight: 1.5,
-              marginTop: 4,
+              marginTop: "var(--s-1)",
             }}
           >
             {card.description}
@@ -75,8 +75,8 @@ export function TradingHub() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Pilots
@@ -84,7 +84,7 @@ export function TradingHub() {
       <h1 className="screen-title">Trading Tools</h1>
       <p className="screen-sub">Grading and acting on your own portfolio.</p>
 
-      <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: "var(--s-3)" }}>
         {CARDS.map((card) => (
           <HubCardRow key={card.to} card={card} onOpen={() => nav(card.to)} />
         ))}

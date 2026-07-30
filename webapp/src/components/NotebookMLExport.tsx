@@ -123,19 +123,19 @@ export function NotebookMLExport({
   };
 
   return (
-    <div data-testid="notebook-export-widget" style={{ fontSize: 13 }}>
-      <p style={{ color: theme.textSecondary, marginBottom: 12 }}>
+    <div data-testid="notebook-export-widget" style={{ fontSize: "var(--t-body)" }}>
+      <p style={{ color: theme.textSecondary, marginBottom: "var(--s-3)" }}>
         Export current portfolio positions and active strategy follows formatted for NotebookML.
       </p>
 
       <div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-3)" }}>
           <button
             className="btn"
             onClick={handleCopy}
             disabled={!ready}
             data-testid="copy-export-btn"
-            style={{ flex: 1, padding: "6px 12px", opacity: ready ? 1 : 0.5 }}
+            style={{ flex: 1, padding: "var(--s-1-5) var(--s-3)", opacity: ready ? 1 : 0.5 }}
           >
             {copySuccess ? "Copied! ✓" : "Copy JSON"}
           </button>
@@ -144,7 +144,7 @@ export function NotebookMLExport({
             onClick={handleDownload}
             disabled={!ready}
             data-testid="download-export-btn"
-            style={{ flex: 1, padding: "6px 12px", opacity: ready ? 1 : 0.5 }}
+            style={{ flex: 1, padding: "var(--s-1-5) var(--s-3)", opacity: ready ? 1 : 0.5 }}
           >
             Download JSON
           </button>
@@ -153,14 +153,14 @@ export function NotebookMLExport({
         {!ready && (
           <div
             data-testid="export-not-ready"
-            style={{ color: theme.textMuted, fontSize: 12, marginBottom: 8 }}
+            style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginBottom: "var(--s-2)" }}
           >
             Waiting for portfolio data before building the export…
           </div>
         )}
 
         {fallbackWarning && (
-          <div data-testid="clipboard-fallback-warning" style={{ color: theme.caution, fontSize: 12, marginBottom: 8 }}>
+          <div data-testid="clipboard-fallback-warning" style={{ color: theme.caution, fontSize: "var(--t-caption)", marginBottom: "var(--s-2)" }}>
             {fallbackWarning}
           </div>
         )}
@@ -170,11 +170,11 @@ export function NotebookMLExport({
           style={{
             background: theme.surface,
             border: `1px solid ${theme.border}`,
-            padding: 8,
-            borderRadius: 4,
+            padding: "var(--s-2)",
+            borderRadius: "var(--r-2xs)",
             maxHeight: 120,
             overflowY: "auto",
-            fontSize: 11,
+            fontSize: "var(--t-micro)",
             fontFamily: "monospace",
             color: theme.textSecondary,
             textAlign: "left",

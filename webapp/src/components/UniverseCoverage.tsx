@@ -70,7 +70,7 @@ export function UniverseCoverage() {
 
   if (rows.length === 0) {
     return (
-      <div className="empty" data-testid="universe-coverage-empty" style={{ marginTop: 12 }}>
+      <div className="empty" data-testid="universe-coverage-empty" style={{ marginTop: "var(--s-3)" }}>
         No symbols tracked yet — a held position or a Robinhood/watchlist-file
         entry will appear here once one exists.
       </div>
@@ -90,8 +90,8 @@ export function UniverseCoverage() {
   const filtered = gapsOnly ? rows.filter((r) => r.coverage !== "full") : rows;
 
   return (
-    <div data-testid="universe-coverage" style={{ marginTop: 16 }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+    <div data-testid="universe-coverage" style={{ marginTop: "var(--s-4)" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
         <MetricBadge label="Symbols" value={String(rows.length)} />
         <MetricBadge label="Full" value={String(counts.full)} good />
         <MetricBadge
@@ -107,13 +107,13 @@ export function UniverseCoverage() {
       </div>
 
       {data.generated_at && (
-        <p style={{ fontSize: 12, color: theme.textMuted, margin: "0 0 10px" }}>
+        <p style={{ fontSize: "var(--t-caption)", color: theme.textMuted, margin: "0 0 var(--s-2-5)" }}>
           Last checked {timeAgo(data.generated_at)}
           {data.provider_source && ` · ${data.provider_source}`}
         </p>
       )}
 
-      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, marginBottom: 10 }}>
+      <label style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)", fontSize: "var(--t-body)", marginBottom: "var(--s-2-5)" }}>
         <input
           type="checkbox"
           checked={gapsOnly}
@@ -124,7 +124,7 @@ export function UniverseCoverage() {
       </label>
 
       {filtered.length === 0 ? (
-        <div className="empty" data-testid="universe-coverage-no-gaps" style={{ padding: 16 }}>
+        <div className="empty" data-testid="universe-coverage-no-gaps" style={{ padding: "var(--s-4)" }}>
           No coverage gaps — everything is FULL.
         </div>
       ) : (
@@ -136,7 +136,7 @@ export function UniverseCoverage() {
                   {r.symbol}
                 </span>
                 {r.diagnostic && (
-                  <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
+                  <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
                     {r.diagnostic}
                   </div>
                 )}

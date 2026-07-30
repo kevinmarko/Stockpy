@@ -117,11 +117,11 @@ export function ValidationTrend() {
     <>
       <section
         className="card card-pad"
-        style={{ marginBottom: 16 }}
+        style={{ marginBottom: "var(--s-4)" }}
         data-testid="validation-trend-strategies"
       >
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>All validated strategies</h2>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: theme.textMuted }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>All validated strategies</h2>
+        <p style={{ margin: "0 0 var(--s-3)", fontSize: "var(--t-body)", color: theme.textMuted }}>
           Every validated strategy on disk, including ones not yet wired to a Pilot above.
         </p>
         {data.strategies.length === 0 ? (
@@ -176,13 +176,13 @@ export function ValidationTrend() {
 
       <section
         className="card card-pad"
-        style={{ marginBottom: 16 }}
+        style={{ marginBottom: "var(--s-4)" }}
         data-testid="validation-trend-chart"
       >
         <div
-          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8 }}
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-1)", gap: "var(--s-2)" }}
         >
-          <h2 style={{ fontSize: 16, margin: 0 }}>Validation trend across strategies</h2>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Validation trend across strategies</h2>
           {strategiesWithTrend.length > 0 && (
             <div style={{ minWidth: 120 }}>
               <Select
@@ -196,7 +196,7 @@ export function ValidationTrend() {
             </div>
           )}
         </div>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: theme.textMuted }}>
+        <p style={{ margin: "0 0 var(--s-3)", fontSize: "var(--t-body)", color: theme.textMuted }}>
           One point per harness run; a strategy needs at least 2 recorded runs before it appears.
         </p>
         {strategiesWithTrend.length === 0 ? (
@@ -212,11 +212,11 @@ export function ValidationTrend() {
                 <YAxis tick={chartAxisTick} {...chartAxisLine} />
                 <Tooltip
                   contentStyle={chartTooltipStyle}
-                  labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
-                  itemStyle={{ fontSize: 11 }}
+                  labelStyle={{ color: theme.textSecondary, fontSize: "var(--t-micro)" }}
+                  itemStyle={{ fontSize: "var(--t-micro)" }}
                   labelFormatter={(d) => fmtDate(String(d))}
                 />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Legend wrapperStyle={{ fontSize: "var(--t-micro)" }} />
                 {strategiesWithTrend.map((sid, index) => (
                   <Line
                     key={sid}
@@ -241,11 +241,11 @@ export function ValidationTrend() {
 
       <section
         className="card card-pad"
-        style={{ marginBottom: 16 }}
+        style={{ marginBottom: "var(--s-4)" }}
         data-testid="validation-trend-regime"
       >
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Macro regime timeline</h2>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: theme.textMuted }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Macro regime timeline</h2>
+        <p style={{ margin: "0 0 var(--s-3)", fontSize: "var(--t-body)", color: theme.textMuted }}>
           {data.n_rotated_snapshots} rotated snapshot{data.n_rotated_snapshots === 1 ? "" : "s"} available
           in output/history/; only regime CHANGES are listed below.
         </p>
@@ -254,7 +254,7 @@ export function ValidationTrend() {
             {data.regime_reason ?? "No regime timeline yet."}
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }} data-testid="validation-trend-regime-list">
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-1-5)" }} data-testid="validation-trend-regime-list">
             {data.regime_timeline.map((t, i) => (
               <div
                 key={`${t.timestamp}-${i}`}
@@ -262,13 +262,13 @@ export function ValidationTrend() {
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
-                  padding: "6px 10px",
+                  padding: "var(--s-1-5) var(--s-2-5)",
                   background: theme.surface2,
-                  borderRadius: 6,
-                  fontSize: 13,
+                  borderRadius: "var(--r-xs)",
+                  fontSize: "var(--t-body)",
                 }}
               >
-                <span style={{ color: theme.textMuted, fontSize: 12 }}>{fmtDate(t.timestamp)}</span>
+                <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>{fmtDate(t.timestamp)}</span>
                 <span style={{ color: regimeColor(t.market_regime), fontWeight: 700 }}>
                   {t.market_regime}
                 </span>

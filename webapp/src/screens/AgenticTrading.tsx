@@ -63,7 +63,7 @@ export function AgenticTrading() {
       <div className="rail-head">
         <h1>Agentic Trading</h1>
       </div>
-      <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: 16 }}>
+      <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: "var(--s-4)" }}>
         What the agent is doing, what it's found, and the gated controls that
         drive it. Placing a real order always requires a separate,
         human-confirmed step in Claude Code — nothing on this screen does that.
@@ -101,10 +101,10 @@ function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
-      <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>{title}</h2>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>{title}</h2>
       {sub && (
-        <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
           {sub}
         </p>
       )}
@@ -122,7 +122,7 @@ function AgentStatusHeader({
 }) {
   return (
     <SectionCard title="Agent status">
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap", marginBottom: "var(--s-3)" }}>
         <ModeBadge mode={data.mode} />
         {data.kill_switch.active && <Chip label="Kill switch ACTIVE" tone="decline" />}
         <Chip
@@ -135,7 +135,7 @@ function AgentStatusHeader({
         />
       </div>
       {data.kill_switch.active && data.kill_switch.reason && (
-        <p style={{ color: theme.caution, fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+        <p style={{ color: theme.caution, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
           Reason: {data.kill_switch.reason}
         </p>
       )}
@@ -169,7 +169,7 @@ function AgentStatusHeader({
           }
         />
       </div>
-      <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: "var(--s-3)" }}>
         <Button variant="neutral" onClick={onRefreshAll}>
           Refresh all
         </Button>
@@ -185,9 +185,9 @@ function StatRow({ label, value }: { label: string; value: string }) {
   // once the value became a full descriptive sentence. Stacked layout wraps
   // normally at any width instead.
   return (
-    <div style={{ padding: "10px 0", borderBottom: `1px solid ${theme.border}` }}>
-      <div style={{ fontWeight: 500, fontSize: 13, color: theme.textPrimary }}>{label}</div>
-      <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 2 }}>{value}</div>
+    <div style={{ padding: "var(--s-2-5) 0", borderBottom: `1px solid ${theme.border}` }}>
+      <div style={{ fontWeight: 500, fontSize: "var(--t-body)", color: theme.textPrimary }}>{label}</div>
+      <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>{value}</div>
     </div>
   );
 }
@@ -232,7 +232,7 @@ function DiscoverySection({ refreshToken }: { refreshToken: number }) {
               state below already covers that, so this renders nothing rather
               than a fabricated "as of never" line. */}
           {discovery.data.generated_at && (
-            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: -6, marginBottom: 12 }}>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: -6, marginBottom: "var(--s-3)" }}>
               As of {timeAgo(discovery.data.generated_at)}
             </p>
           )}
@@ -242,31 +242,31 @@ function DiscoverySection({ refreshToken }: { refreshToken: number }) {
               hint={discovery.data.reason ?? "No scan has run yet."}
             />
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)", marginBottom: "var(--s-4)" }}>
               {discovery.data.candidates.map((c) => (
                 <CandidateRow key={c.symbol} c={c} />
               ))}
             </div>
           )}
 
-          <div style={{ marginBottom: 8 }}>
-            <div className="tile-label" style={{ marginBottom: 6 }}>
+          <div style={{ marginBottom: "var(--s-2)" }}>
+            <div className="tile-label" style={{ marginBottom: "var(--s-1-5)" }}>
               Scan configs
             </div>
             {discovery.data.scan_configs.length === 0 ? (
-              <p style={{ color: theme.textMuted, fontSize: 13 }}>None configured yet.</p>
+              <p style={{ color: theme.textMuted, fontSize: "var(--t-body)" }}>None configured yet.</p>
             ) : (
               <>
-                <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 0, marginBottom: 10 }}>
+                <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: 0, marginBottom: "var(--s-2-5)" }}>
                   Copy a command below into a separate Claude Code session to run just that scan —
                   nothing on this screen runs it for you.
                 </p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
                   {discovery.data.scan_configs.map((cfg) => (
-                    <div key={cfg.name} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div key={cfg.name} style={{ display: "flex", flexDirection: "column", gap: "var(--s-1-5)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
                         <Chip label={cfg.enabled ? "enabled" : "disabled"} tone={cfg.enabled ? "growth" : "muted"} />
-                        <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: 13 }}>
+                        <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontSize: "var(--t-body)" }}>
                           {cfg.name}
                         </span>
                       </div>
@@ -286,7 +286,7 @@ function DiscoverySection({ refreshToken }: { refreshToken: number }) {
               Add scan config
             </Button>
           ) : (
-            <p style={{ color: theme.textMuted, fontSize: 12 }}>{discovery.data.note}</p>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>{discovery.data.note}</p>
           )}
 
           {adding && (
@@ -332,42 +332,42 @@ function CandidateRow({ c }: { c: DiscoveryCandidate }) {
     <div
       data-testid="discovery-candidate-row"
       style={{
-        padding: "10px 12px",
+        padding: "var(--s-2-5) var(--s-3)",
         background: theme.surface,
         border: `1px solid ${theme.border}`,
-        borderRadius: 8,
+        borderRadius: "var(--r-sm)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
         <Link
           to={`/symbol/${encodeURIComponent(c.symbol)}`}
           style={{ textDecoration: "none", flex: 1, minWidth: 0 }}
         >
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap" }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>{c.symbol}</span>
             {c.action ? (
               <span
                 style={{
                   color: c.action === "BUY" ? theme.growth : theme.decline,
                   fontWeight: 600,
-                  fontSize: 12,
+                  fontSize: "var(--t-caption)",
                 }}
               >
                 {c.action}
               </span>
             ) : (
-              <span style={{ color: theme.textMuted, fontSize: 12 }}>not scored</span>
+              <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>not scored</span>
             )}
             {c.conviction !== null && (
-              <span style={{ color: theme.textMuted, fontSize: 12 }}>
+              <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
                 conviction {(c.conviction * 100).toFixed(0)}%
               </span>
             )}
             {c.scan_name && (
-              <span style={{ color: theme.textMuted, fontSize: 11 }}>{c.scan_name}</span>
+              <span style={{ color: theme.textMuted, fontSize: "var(--t-micro)" }}>{c.scan_name}</span>
             )}
             {c.discovered_at && (
-              <span style={{ color: theme.textMuted, fontSize: 11 }}>
+              <span style={{ color: theme.textMuted, fontSize: "var(--t-micro)" }}>
                 discovered {timeAgo(c.discovered_at)}
               </span>
             )}
@@ -376,14 +376,14 @@ function CandidateRow({ c }: { c: DiscoveryCandidate }) {
         <Button
           variant="neutral"
           onClick={() => setLogging(true)}
-          style={{ padding: "4px 10px", fontSize: 12 }}
+          style={{ padding: "var(--s-1) var(--s-2-5)", fontSize: "var(--t-caption)" }}
         >
           Log
         </Button>
         {added || alreadyWatching ? (
           <span
             data-testid="watch-status"
-            style={{ color: theme.textMuted, fontSize: 12, whiteSpace: "nowrap" }}
+            style={{ color: theme.textMuted, fontSize: "var(--t-caption)", whiteSpace: "nowrap" }}
           >
             {added ? "✓ Watching" : "Already watching"}
           </span>
@@ -392,22 +392,22 @@ function CandidateRow({ c }: { c: DiscoveryCandidate }) {
             variant="neutral"
             onClick={() => watch.run()}
             pending={watch.pending}
-            style={{ padding: "4px 10px", fontSize: 12 }}
+            style={{ padding: "var(--s-1) var(--s-2-5)", fontSize: "var(--t-caption)" }}
           >
             Watch
           </Button>
         )}
       </div>
       {c.scan_reason && (
-        <div style={{ color: theme.textSecondary, fontSize: 12, marginTop: 6 }}>{c.scan_reason}</div>
+        <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>{c.scan_reason}</div>
       )}
       {added && (
-        <div style={{ color: theme.growth, fontSize: 12, marginTop: 6 }}>
+        <div style={{ color: theme.growth, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>
           Added to your watchlist — the pipeline will evaluate it on the next run. No order was placed.
         </div>
       )}
       {watch.error && (
-        <div style={{ color: theme.caution, fontSize: 12, marginTop: 6 }}>{watch.error}</div>
+        <div style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>{watch.error}</div>
       )}
       {logging && (
         <DecisionModal
@@ -445,8 +445,8 @@ function ScanConfigModal({
 
   return (
     <Modal ariaLabel="Add scan config" onClose={onClose}>
-      <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>Add scan config</h2>
-      <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Add scan config</h2>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
         Saved to output/scan_configs.json. The agentic-discovery skill reads
         this the next time it runs — nothing runs automatically.
       </p>
@@ -464,12 +464,12 @@ function ScanConfigModal({
         onChange={(e) => setMinVolume(e.target.value)}
       />
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           <span>⚠️</span>
           <span>{mutation.error}</span>
         </Notice>
       )}
-      <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+      <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
         <Button variant="neutral" onClick={onClose} style={{ flex: 1 }}>
           Cancel
         </Button>
@@ -536,11 +536,11 @@ function DecisionJournalSection({ refreshToken }: { refreshToken: number }) {
                     </span>
                   )}
                   {d.notes && (
-                    <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>{d.notes}</div>
+                    <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>{d.notes}</div>
                   )}
                 </div>
                 <div className="row-end">
-                  <span style={{ color: theme.textMuted, fontSize: 12 }}>
+                  <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
                     {d.timestamp ? timeAgo(d.timestamp) : "—"}
                   </span>
                 </div>
@@ -562,7 +562,7 @@ function ControlsSection({
 }) {
   return (
     <SectionCard title="Controls">
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: "var(--s-4)" }}>
         {/* The SAME global kill switch as Settings → Signal generation
             (execution/kill_switch.py), shared via KillSwitchToggle so the two
             surfaces can't drift again (UX backlog finding #6). `showReason` is
@@ -579,21 +579,21 @@ function ControlsSection({
           onChanged={onChanged}
           disabled={status === null}
         />
-        <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
           Same global kill switch as Settings → Signal generation.
         </p>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2-5)" }}>
         <Link to="/settings" className="card card-pad" style={{ textDecoration: "none" }}>
           <div style={{ fontWeight: 600, color: theme.textPrimary }}>Change execution mode →</div>
-          <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
             Advisory / simulation / paper / live — a deliberate safety ladder, managed in Settings.
           </div>
         </Link>
         <Link to="/marketplace" className="card card-pad" style={{ textDecoration: "none" }}>
           <div style={{ fontWeight: 600, color: theme.textPrimary }}>Manage Pilot follows →</div>
-          <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
             Follow, adjust, or cancel a Pilot — feeds this queue via the gated mirror rebalance.
           </div>
         </Link>

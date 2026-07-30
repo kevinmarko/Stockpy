@@ -23,7 +23,7 @@ function LevelDot({ level }: { level: string | null }) {
     label: level ?? "—",
   };
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1-5)" }}>
       <span
         aria-hidden
         style={{
@@ -34,7 +34,7 @@ function LevelDot({ level }: { level: string | null }) {
           flex: "0 0 auto",
         }}
       />
-      <span style={{ color: style.color, fontSize: 11.5, fontWeight: 700 }}>
+      <span style={{ color: style.color, fontSize: "var(--t-footnote)", fontWeight: 700 }}>
         {style.label}
       </span>
     </span>
@@ -45,7 +45,7 @@ function AlertCard({ entry }: { entry: AlertEntry }) {
   return (
     <div
       className="card card-pad"
-      style={{ marginBottom: 10, background: theme.surface, border: `1px solid ${theme.border}` }}
+      style={{ marginBottom: "var(--s-2-5)", background: theme.surface, border: `1px solid ${theme.border}` }}
       data-testid="alert-card"
     >
       <div
@@ -53,15 +53,15 @@ function AlertCard({ entry }: { entry: AlertEntry }) {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 4,
+          marginBottom: "var(--s-1)",
         }}
       >
         <LevelDot level={entry.level} />
-        <span style={{ fontSize: 11.5, color: theme.textMuted }}>
+        <span style={{ fontSize: "var(--t-footnote)", color: theme.textMuted }}>
           {timeAgo(entry.timestamp)}
         </span>
       </div>
-      <div style={{ fontSize: 13, color: theme.textPrimary, lineHeight: 1.45 }}>
+      <div style={{ fontSize: "var(--t-body)", color: theme.textPrimary, lineHeight: 1.45 }}>
         {entry.message ?? "—"}
       </div>
     </div>
@@ -143,17 +143,17 @@ export function ActivityFeed({
 
   return (
     <div data-testid="activity-feed-widget">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <button
             className="btn"
             onClick={handleManualRefresh}
-            style={{ fontSize: 11, padding: "4px 8px" }}
+            style={{ fontSize: "var(--t-micro)", padding: "var(--s-1) var(--s-2)" }}
             data-testid="refresh-alerts-btn"
           >
             Refresh
           </button>
-          <label style={{ fontSize: 11, color: theme.textSecondary, display: "flex", alignItems: "center", gap: 4 }}>
+          <label style={{ fontSize: "var(--t-micro)", color: theme.textSecondary, display: "flex", alignItems: "center", gap: "var(--s-1)" }}>
             <input
               type="checkbox"
               checked={pollingActive}
@@ -174,7 +174,7 @@ export function ActivityFeed({
       {!loading && !error && (
         <>
           {filteredAlerts.length === 0 ? (
-            <div className="empty" style={{ padding: 20 }} data-testid="empty-alerts">
+            <div className="empty" style={{ padding: "var(--s-5)" }} data-testid="empty-alerts">
               {reason ?? "No alerts yet."}
             </div>
           ) : (

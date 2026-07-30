@@ -59,8 +59,8 @@ export function SettingsManager() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Settings
@@ -72,7 +72,7 @@ export function SettingsManager() {
         an order.
       </p>
 
-      <Notice variant="info" style={{ marginBottom: 12 }} data-testid="applies-notice">
+      <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="applies-notice">
         <span>ℹ️</span>
         <span>Changes apply on the next pipeline / daemon restart (no hot-reload).</span>
       </Notice>
@@ -176,7 +176,7 @@ function TunablesEditor({
   return (
     <>
       {data.env_drift.detected && (
-        <Notice variant="info" style={{ marginBottom: 12 }} data-testid="env-drift-notice">
+        <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="env-drift-notice">
           <span>ℹ️</span>
           <span>
             {data.env_drift.keys.length} setting{data.env_drift.keys.length === 1 ? "" : "s"}{" "}
@@ -187,7 +187,7 @@ function TunablesEditor({
       )}
 
       {writtenKeys.length > 0 && (
-        <Notice variant="success" style={{ marginBottom: 12 }} data-testid="written-notice">
+        <Notice variant="success" style={{ marginBottom: "var(--s-3)" }} data-testid="written-notice">
           <span>✅</span>
           <span>
             Saved to .env: {writtenKeys.join(", ")}. The running engine keeps the
@@ -197,7 +197,7 @@ function TunablesEditor({
       )}
 
       {Object.keys(rejected).length > 0 && (
-        <Notice variant="warn" style={{ marginBottom: 12 }} data-testid="rejected-notice">
+        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }} data-testid="rejected-notice">
           <span>⚠️</span>
           <span>
             {Object.keys(rejected).length} change
@@ -208,7 +208,7 @@ function TunablesEditor({
       )}
 
       {mutation.error && (
-        <Notice variant="warn" style={{ marginBottom: 12 }}>
+        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
           <span>⚠️</span>
           <span>{mutation.error}</span>
         </Notice>
@@ -216,9 +216,9 @@ function TunablesEditor({
 
       {data.groups.map((group) =>
         group.fields.length === 0 ? null : (
-          <section key={group.name} className="card card-pad" style={{ marginBottom: 12 }}>
-            <h2 style={{ margin: "0 0 10px", fontSize: "var(--t-title)" }}>{group.name}</h2>
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <section key={group.name} className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
+            <h2 style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-title)" }}>{group.name}</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               {group.fields.map((f) => (
                 <FieldRow
                   key={f.key}
@@ -234,7 +234,7 @@ function TunablesEditor({
         ),
       )}
 
-      <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: 12 }}>
+      <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
         <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>
           {dirty ? `Save ${dirtyKeys.length} change${dirtyKeys.length === 1 ? "" : "s"}` : "Save changes"}
         </Button>
@@ -298,7 +298,7 @@ function FieldRow({
             onChange={(v) => onChange(v)}
             label={f.key}
           />
-          <p style={{ color: theme.textSecondary, fontSize: 12.5, margin: "6px 0 0" }}>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", margin: "var(--s-1-5) 0 0" }}>
             {f.description}
           </p>
         </>
@@ -336,12 +336,12 @@ function FieldRow({
         />
       )}
 
-      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "6px 0 0" }}>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1-5) 0 0" }}>
         Default: {defaultLabel(f)}
       </p>
 
       {rejectedReason && (
-        <Notice variant="warn" style={{ marginTop: 8 }} data-testid={`rejected-${f.key}`}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2)" }} data-testid={`rejected-${f.key}`}>
           <span>⚠️</span>
           <span>{rejectedReason}</span>
         </Notice>

@@ -81,8 +81,8 @@ export function Settings() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Back
@@ -147,7 +147,7 @@ export function Settings() {
 
       <AiControlCenterLink />
 
-      <div style={{ marginTop: 16 }}>
+      <div style={{ marginTop: "var(--s-4)" }}>
         <PwaStatusSection />
       </div>
 
@@ -157,7 +157,7 @@ export function Settings() {
         style={{
           color: theme.textMuted,
           fontSize: "var(--t-footnote)",
-          marginTop: 20,
+          marginTop: "var(--s-5)",
           textAlign: "center",
           lineHeight: 1.5,
         }}
@@ -188,7 +188,7 @@ function AiControlCenterLink() {
     <Link
       to="/settings/ai"
       className="card card-pad"
-      style={{ display: "block", textDecoration: "none", marginTop: 16 }}
+      style={{ display: "block", textDecoration: "none", marginTop: "var(--s-4)" }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
@@ -200,13 +200,13 @@ function AiControlCenterLink() {
               </span>
             )}
           </div>
-          <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 2 }}>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
             {total == null
               ? "LLM commentary, Gravity AI runner, Opal research"
               : `${readyCount}/${total} ready`}
           </div>
         </div>
-        <span style={{ color: theme.textMuted, fontSize: 20 }}>›</span>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
       </div>
     </Link>
   );
@@ -259,12 +259,12 @@ function BrokerageSection() {
             <Button
               variant="neutral"
               onClick={() => setConfirmingDisconnect(true)}
-              style={{ marginTop: 12 }}
+              style={{ marginTop: "var(--s-3)" }}
             >
               Disconnect
             </Button>
             {disconnect.error && (
-              <Notice variant="warn" style={{ marginTop: 10 }}>
+              <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
                 <span>⚠️</span>
                 <span>{disconnect.error}</span>
               </Notice>
@@ -273,7 +273,7 @@ function BrokerageSection() {
               style={{
                 color: theme.textMuted,
                 fontSize: "var(--t-caption)",
-                marginTop: 12,
+                marginTop: "var(--s-3)",
                 lineHeight: 1.45,
               }}
             >
@@ -286,9 +286,9 @@ function BrokerageSection() {
             <p
               style={{
                 color: theme.textSecondary,
-                fontSize: 13,
+                fontSize: "var(--t-body)",
                 marginTop: 0,
-                marginBottom: 12,
+                marginBottom: "var(--s-3)",
               }}
             >
               Not connected. Credentials go only to your local backend and are
@@ -304,14 +304,14 @@ function BrokerageSection() {
           ariaLabel="Disconnect brokerage"
           onClose={() => setConfirmingDisconnect(false)}
         >
-          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>
+          <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
             Disconnect Robinhood?
           </h2>
-          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
             Clears the stored Robinhood credentials from this machine. Portfolio
             snapshots stop refreshing until you reconnect.
           </p>
-          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
             <Button
               variant="neutral"
               onClick={() => setConfirmingDisconnect(false)}
@@ -344,10 +344,10 @@ function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <section className="card card-pad" style={{ marginTop: 16 }}>
-      <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>{title}</h2>
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>{title}</h2>
       {sub && (
-        <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
           {sub}
         </p>
       )}
@@ -369,18 +369,18 @@ function SignalModulesLink() {
     <Link
       to="/settings/strategy"
       className="card card-pad"
-      style={{ display: "block", textDecoration: "none", marginTop: 16 }}
+      style={{ display: "block", textDecoration: "none", marginTop: "var(--s-4)" }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Signal modules</div>
-          <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 2 }}>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
             {count == null
               ? "Signal weights & enabled modules"
               : `${count} modules · ${disabledCount} disabled`}
           </div>
         </div>
-        <span style={{ color: theme.textMuted, fontSize: 20 }}>›</span>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
       </div>
     </Link>
   );
@@ -401,18 +401,18 @@ function TunablesLink() {
     <Link
       to="/settings/tunables"
       className="card card-pad"
-      style={{ display: "block", textDecoration: "none", marginTop: 16 }}
+      style={{ display: "block", textDecoration: "none", marginTop: "var(--s-4)" }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Runtime tunables</div>
-          <div style={{ color: theme.textSecondary, fontSize: 13, marginTop: 2 }}>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
             {fieldCount == null
               ? "Sizing, forecasting & data settings"
               : `${fieldCount} tunables · ${groupCount} groups`}
           </div>
         </div>
-        <span style={{ color: theme.textMuted, fontSize: 20 }}>›</span>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
       </div>
     </Link>
   );
@@ -440,18 +440,18 @@ function RunNowButton({
   };
 
   return (
-    <div style={{ marginTop: 12 }}>
+    <div style={{ marginTop: "var(--s-3)" }}>
       <Button variant="primary" block pending={pending} disabled={disabled} onClick={handleClick}>
         Run now
       </Button>
       {error && (
-        <Notice variant="warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           <span>⚠️</span>
           <span>{error}</span>
         </Notice>
       )}
       {result && !result.ok && result.error === "already_running" && (
-        <Notice variant="info" style={{ marginTop: 10 }}>
+        <Notice variant="info" style={{ marginTop: "var(--s-2-5)" }}>
           <span>ℹ️</span>
           <span>
             A run is already in flight
@@ -460,7 +460,7 @@ function RunNowButton({
         </Notice>
       )}
       {result && !result.ok && result.error === "kill_switch_active" && (
-        <Notice variant="warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           <span>⚠️</span>
           <span>
             Kill switch active{result.kill_switch_reason ? `: ${result.kill_switch_reason}` : ""}.
@@ -468,13 +468,13 @@ function RunNowButton({
         </Notice>
       )}
       {result && !result.ok && result.error === "unavailable" && (
-        <Notice variant="warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           <span>⚠️</span>
           <span>Orchestrator daemon is not reachable.</span>
         </Notice>
       )}
       {result?.ok && (
-        <Notice variant="success" style={{ marginTop: 10 }}>
+        <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }}>
           <span>✅</span>
           <span>Run queued{result.run_id ? ` (${result.run_id})` : ""}.</span>
         </Notice>
@@ -534,12 +534,12 @@ function PipelineStatusSection({
                 }
               />
             ) : (
-              <span style={{ color: theme.textMuted, fontSize: 13 }}>—</span>
+              <span style={{ color: theme.textMuted, fontSize: "var(--t-body)" }}>—</span>
             )}
           </div>
 
           {status.last_run_source === "state_snapshot" && (
-            <Notice variant="info" style={{ marginTop: 10 }}>
+            <Notice variant="info" style={{ marginTop: "var(--s-2-5)" }}>
               <span>ℹ️</span>
               <span>
                 No run record — the daemon has never triggered a run this
@@ -551,7 +551,7 @@ function PipelineStatusSection({
 
           <div className="row">
             <span className="row-title">Last pipeline output</span>
-            <span style={{ color: theme.textSecondary, fontSize: 13 }}>
+            <span style={{ color: theme.textSecondary, fontSize: "var(--t-body)" }}>
               {fmtAge(status.pipeline.snapshot_age_seconds)}
               {status.pipeline.snapshot_age_source === "mtime" && " (file time)"}
             </span>
@@ -562,7 +562,7 @@ function PipelineStatusSection({
           )}
 
           {status.kill_switch.active && (
-            <Notice variant="warn" style={{ marginTop: 10 }}>
+            <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
               <span>⚠️</span>
               <span>
                 Kill switch active{status.kill_switch.reason ? `: ${status.kill_switch.reason}` : ""}.
@@ -578,7 +578,7 @@ function PipelineStatusSection({
             style={{
               color: theme.textMuted,
               fontSize: "var(--t-caption)",
-              marginTop: 12,
+              marginTop: "var(--s-3)",
               lineHeight: 1.45,
             }}
           >
@@ -603,7 +603,7 @@ function ProgressDetail({ progress }: { progress: ProgressState }) {
     <div className="row" style={{ flexDirection: "column", alignItems: "stretch" }}>
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <span className="row-title">In progress</span>
-        <span style={{ color: theme.accent, fontSize: 13 }}>
+        <span style={{ color: theme.accent, fontSize: "var(--t-body)" }}>
           {progress.stage} ({progress.stage_index + 1}/
           {progress.stage_total}) · {progress.percent.toFixed(0)}%
         </span>
@@ -613,7 +613,7 @@ function ProgressDetail({ progress }: { progress: ProgressState }) {
         <div
           role="img"
           aria-label={`Stage ${progress.stage_index + 1} of ${progress.stage_total}`}
-          style={{ display: "flex", gap: 4, marginTop: 8 }}
+          style={{ display: "flex", gap: "var(--s-1)", marginTop: "var(--s-2)" }}
         >
           {Array.from({ length: progress.stage_total }, (_, i) => (
             <span
@@ -643,13 +643,13 @@ function ProgressDetail({ progress }: { progress: ProgressState }) {
       )}
 
       {progress.symbols_total > 0 && (
-        <div className="row-sub" style={{ marginTop: 6 }}>
+        <div className="row-sub" style={{ marginTop: "var(--s-1-5)" }}>
           {progress.symbols_done}/{progress.symbols_total} symbols in this stage
         </div>
       )}
 
       {progress.message && (
-        <div className="row-sub" style={{ marginTop: 2, color: theme.textMuted }}>
+        <div className="row-sub" style={{ marginTop: "var(--s-0-5)", color: theme.textMuted }}>
           {progress.message}
         </div>
       )}
@@ -660,8 +660,8 @@ function ProgressDetail({ progress }: { progress: ProgressState }) {
 function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
   if (errors.entry_count === 0) {
     return (
-      <div style={{ marginTop: 12 }}>
-        <div className="row-sub" style={{ marginBottom: 4 }}>
+      <div style={{ marginTop: "var(--s-3)" }}>
+        <div className="row-sub" style={{ marginBottom: "var(--s-1)" }}>
           Errors · as of {timeAgo(errors.generated_at)}
         </div>
         <EmptyState title="No errors" hint="The last run completed cleanly." />
@@ -669,8 +669,8 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
     );
   }
   return (
-    <div style={{ marginTop: 12 }}>
-      <div className="row-sub" style={{ marginBottom: 4 }}>
+    <div style={{ marginTop: "var(--s-3)" }}>
+      <div className="row-sub" style={{ marginBottom: "var(--s-1)" }}>
         Errors ({errors.entry_count}) · as of {timeAgo(errors.generated_at)}
       </div>
       <Notice variant="warn">
@@ -683,9 +683,9 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
           .
         </span>
       </Notice>
-      <div className="list" style={{ marginTop: 4 }}>
+      <div className="list" style={{ marginTop: "var(--s-1)" }}>
         {errors.entries.map((entry, i) => (
-          <div className="row" key={i} style={{ padding: "6px 0" }}>
+          <div className="row" key={i} style={{ padding: "var(--s-1-5) 0" }}>
             <span className="row-sub">{JSON.stringify(entry)}</span>
           </div>
         ))}
@@ -725,14 +725,14 @@ function IntervalEditor({
 
   if (!schedule.interval.writable) {
     return (
-      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: 8 }}>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
         {schedule.interval.note}
       </p>
     );
   }
 
   return (
-    <div style={{ marginTop: 10 }}>
+    <div style={{ marginTop: "var(--s-2-5)" }}>
       <Input
         label="Configured interval (seconds)"
         type="number"
@@ -747,12 +747,12 @@ function IntervalEditor({
         onClick={save}
         disabled={invalid}
         pending={pending}
-        style={{ marginTop: 8 }}
+        style={{ marginTop: "var(--s-2)" }}
       >
         Save
       </Button>
       {error && (
-        <Notice variant="warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           <span>⚠️</span>
           <span>{error}</span>
         </Notice>
@@ -785,7 +785,7 @@ function ScheduleSection({
           <div className="list">
             <div className="row">
               <span className="row-title">Interval</span>
-              <span style={{ color: theme.textSecondary, fontSize: 13 }}>
+              <span style={{ color: theme.textSecondary, fontSize: "var(--t-body)" }}>
                 {schedule.interval.running_value == null
                   ? "unknown"
                   : `${schedule.interval.running_value}s`}
@@ -793,7 +793,7 @@ function ScheduleSection({
             </div>
           </div>
           {schedule.interval.drift && (
-            <Notice variant="info" style={{ marginTop: 10 }}>
+            <Notice variant="info" style={{ marginTop: "var(--s-2-5)" }}>
               <span>ℹ️</span>
               <span>
                 Running: {schedule.interval.running_value}s · Configured:{" "}
@@ -805,15 +805,15 @@ function ScheduleSection({
 
           <IntervalEditor schedule={schedule} onSaved={onRetry} />
 
-          <div style={{ marginTop: 14 }}>
-            <div className="row-sub" style={{ marginBottom: 6 }}>
+          <div style={{ marginTop: "var(--s-3-5)" }}>
+            <div className="row-sub" style={{ marginBottom: "var(--s-1-5)" }}>
               Cron ({schedule.cron.source})
             </div>
             <div className="list">
               {schedule.cron.entries.map((entry, i) => (
                 <div className="row" key={i} style={{ alignItems: "flex-start" }}>
                   <div className="row-main">
-                    <span className="row-title" style={{ fontFamily: "monospace", fontSize: 13 }}>
+                    <span className="row-title" style={{ fontFamily: "monospace", fontSize: "var(--t-body)" }}>
                       {entry.schedule}
                     </span>
                     {entry.comment && <span className="row-sub">{entry.comment}</span>}
@@ -825,7 +825,7 @@ function ScheduleSection({
               style={{
                 color: theme.textMuted,
                 fontSize: "var(--t-caption)",
-                marginTop: 8,
+                marginTop: "var(--s-2)",
                 lineHeight: 1.45,
               }}
             >
@@ -918,10 +918,10 @@ function ExecutionModeSection({
 
   return (
     <SectionCard title="Execution Mode">
-      <div style={{ marginBottom: 12, color: "var(--text-muted)" }}>
+      <div style={{ marginBottom: "var(--s-3)", color: "var(--text-muted)" }}>
         Controls whether the orchestrator is permitted to place live trades or is quarantined.
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2-5)" }}>
         <Button
           variant={currentMode === "advisory" ? "primary" : "neutral"}
           onClick={() => setSelectedMode("advisory")}
@@ -955,13 +955,13 @@ function ExecutionModeSection({
       
       {selectedMode && (
         <Modal ariaLabel="Confirm Mode Change" onClose={() => setSelectedMode(null)}>
-          <div style={{ marginBottom: 16 }}>
-            <h3 style={{ margin: "0 0 16px 0" }}>Confirm Mode Change</h3>
+          <div style={{ marginBottom: "var(--s-4)" }}>
+            <h3 style={{ margin: "0 0 var(--s-4) 0" }}>Confirm Mode Change</h3>
             You are changing the execution mode from <strong>{currentMode}</strong> to <strong>{selectedMode}</strong>.
             <br/><br/>
             {selectedMode === "live" && <strong style={{ color: "var(--decline)" }}>WARNING: This will allow the engine to execute real trades with real money.</strong>}
           </div>
-          <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ display: "flex", gap: "var(--s-2-5)" }}>
             <Button variant="neutral" onClick={() => setSelectedMode(null)} style={{ flex: 1 }}>
               Cancel
             </Button>
@@ -1064,7 +1064,7 @@ function ResetOnboardingSection() {
 
   return (
     <SectionCard title="Reset onboarding">
-      <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Clears the local "onboarding complete" marker and returns to the
         Choose Pilot step. Does not touch any account, follow, or backend
         state — this is a local device setting only.
@@ -1075,12 +1075,12 @@ function ResetOnboardingSection() {
 
       {confirming && (
         <Modal ariaLabel="Reset onboarding" onClose={() => setConfirming(false)}>
-          <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>Reset onboarding?</h2>
-          <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+          <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Reset onboarding?</h2>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
             You'll be taken back to the Choose Pilot step. This only affects
             this device.
           </p>
-          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
             <Button variant="neutral" onClick={() => setConfirming(false)} style={{ flex: 1 }}>
               Cancel
             </Button>

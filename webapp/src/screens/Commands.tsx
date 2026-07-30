@@ -34,7 +34,7 @@ export function Commands() {
       <div className="rail-head">
         <h1>Commands</h1>
       </div>
-      <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: 16 }}>
+      <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: "var(--s-4)" }}>
         Autocomplete for the platform's command-line tools. Compose a command,
         then copy it to run in your terminal — this screen never executes anything.
         {data && ` Manifest generated ${timeAgo(data.generated_at)}.`}
@@ -142,8 +142,8 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
             role="listbox"
             style={{
               listStyle: "none",
-              margin: "4px 0 0",
-              padding: 4,
+              margin: "var(--s-1) 0 0",
+              padding: "var(--s-1)",
               position: "absolute",
               zIndex: 30,
               left: 0,
@@ -170,9 +170,9 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
                   style={{
                     display: "flex",
                     alignItems: "baseline",
-                    gap: 10,
-                    padding: "8px 10px",
-                    borderRadius: 8,
+                    gap: "var(--s-2-5)",
+                    padding: "var(--s-2) var(--s-2-5)",
+                    borderRadius: "var(--r-sm)",
                     cursor: "pointer",
                     background: selected ? theme.surface3 : "transparent",
                   }}
@@ -184,7 +184,7 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
                     {s.label}
                   </span>
                   {s.description && (
-                    <span style={{ color: theme.textMuted, fontSize: 12 }}>{s.description}</span>
+                    <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>{s.description}</span>
                   )}
                 </li>
               );
@@ -195,14 +195,14 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
 
       {/* Validation hints */}
       {parsed.hints.length > 0 && (
-        <ul data-testid="command-hints" style={{ listStyle: "none", padding: 0, margin: "10px 0 0" }}>
+        <ul data-testid="command-hints" style={{ listStyle: "none", padding: 0, margin: "var(--s-2-5) 0 0" }}>
           {parsed.hints.map((h, i) => (
             <li
               key={i}
               style={{
                 color: h.level === "error" ? theme.decline : theme.caution,
-                fontSize: 13,
-                marginTop: 4,
+                fontSize: "var(--t-body)",
+                marginTop: "var(--s-1)",
               }}
             >
               {h.level === "error" ? "✗" : "!"} {h.message}
@@ -213,7 +213,7 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
 
       {/* Composed command + copy */}
       {parsed.composed && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: "var(--s-4)" }}>
           <CopyCommandBlock
             command={parsed.composed}
             label={`Command to run${errors.length ? " (incomplete — see above)" : ""}`}
@@ -224,11 +224,11 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
 
       {/* Reference list when nothing typed yet */}
       {input.trim() === "" && (
-        <div style={{ marginTop: 24 }}>
-          <div className="tile-label" style={{ marginBottom: 8 }}>
+        <div style={{ marginTop: "var(--s-6)" }}>
+          <div className="tile-label" style={{ marginBottom: "var(--s-2)" }}>
             Available commands
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
             {commands.map((c) => (
               <button
                 key={c.name}
@@ -239,10 +239,10 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
                 }}
                 style={{
                   textAlign: "left",
-                  padding: "10px 12px",
+                  padding: "var(--s-2-5) var(--s-3)",
                   background: theme.surface,
                   border: `1px solid ${theme.border}`,
-                  borderRadius: 8,
+                  borderRadius: "var(--r-sm)",
                   cursor: "pointer",
                 }}
               >
@@ -250,9 +250,9 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
                   {c.name}
                 </div>
                 {c.description && (
-                  <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>{c.description}</div>
+                  <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>{c.description}</div>
                 )}
-                <div style={{ color: theme.textSecondary, fontSize: 11, marginTop: 2 }}>{c.invocation}</div>
+                <div style={{ color: theme.textSecondary, fontSize: "var(--t-micro)", marginTop: "var(--s-0-5)" }}>{c.invocation}</div>
               </button>
             ))}
           </div>

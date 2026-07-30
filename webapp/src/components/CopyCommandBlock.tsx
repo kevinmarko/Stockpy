@@ -45,19 +45,19 @@ export function CopyCommandBlock({
   return (
     <div>
       {label !== undefined && (
-        <div className="tile-label" style={{ marginBottom: 6 }}>
+        <div className="tile-label" style={{ marginBottom: "var(--s-1-5)" }}>
           {label}
         </div>
       )}
-      <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
+      <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "stretch" }}>
         <code
           data-testid={`${testIdPrefix}-composed`}
           style={{
             flex: 1,
-            padding: "10px 12px",
+            padding: "var(--s-2-5) var(--s-3)",
             background: theme.surface,
             border: `1px solid ${theme.border}`,
-            borderRadius: 8,
+            borderRadius: "var(--r-sm)",
             fontFamily: "var(--font-mono, ui-monospace, monospace)",
             color: theme.textPrimary,
             overflowX: "auto",

@@ -57,25 +57,25 @@ export function PilotDetail() {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <h1 className="screen-title" style={{ marginBottom: 2 }}>
+          <h1 className="screen-title" style={{ marginBottom: "var(--s-0-5)" }}>
             {pilot.name}
           </h1>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
             <span className="chip">{pilot.category}</span>
             {pilot.long_only && <span className="chip">Long-only</span>}
-            <span style={{ fontSize: 12, color: theme.textMuted }}>
+            <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>
               as of {timeAgo(pilot.as_of)}
             </span>
           </div>
         </div>
       </div>
 
-      <p style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 1.5, marginTop: 12 }}>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-callout)", lineHeight: 1.5, marginTop: "var(--s-3)" }}>
         {pilot.description}
       </p>
 
       {/* Honesty badges */}
-      <div style={{ margin: "6px 0 18px" }}>
+      <div style={{ margin: "var(--s-1-5) 0 var(--s-4-5)" }}>
         <HonestyRow h={pilot.headline} />
       </div>
 
@@ -84,17 +84,17 @@ export function PilotDetail() {
       <div className={pilot.sector_allocation.length > 0 ? "detail-grid" : undefined}>
         <section
           className="card card-pad"
-          style={pilot.sector_allocation.length > 0 ? undefined : { marginBottom: 16 }}
+          style={pilot.sector_allocation.length > 0 ? undefined : { marginBottom: "var(--s-4)" }}
         >
           <div
             style={{
               display: "flex",
               justifyContent: "space-between",
               alignItems: "baseline",
-              marginBottom: 12,
+              marginBottom: "var(--s-3)",
             }}
           >
-            <h2 style={{ fontSize: 16, margin: 0 }}>Performance</h2>
+            <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Performance</h2>
             {perf.data?.curve && perf.data.curve.length > 1 && (
               <PerfDelta curve={perf.data.curve} />
             )}
@@ -115,24 +115,24 @@ export function PilotDetail() {
           ) : (
             <div
               className="empty"
-              style={{ padding: "44px 8px", background: "var(--surface-2)", borderRadius: 12 }}
+              style={{ padding: "44px 8px", background: "var(--surface-2)", borderRadius: "var(--r-md)" }}
             >
               <div style={{ fontWeight: 600, color: theme.textSecondary }}>
                 No backtest series yet
               </div>
-              <div style={{ marginTop: 6, fontSize: 13 }}>
+              <div style={{ marginTop: "var(--s-1-5)", fontSize: "var(--t-body)" }}>
                 {perf.data?.reason ??
                   "This Pilot's validation report has no persisted return curve."}
               </div>
             </div>
           )}
 
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: "var(--s-3)" }}>
             <RangeToggle value={range} onChange={setRange} />
           </div>
           {perf.data?.curve &&
             (perf.data.benchmark || perf.data.macro_benchmark) && (
-              <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11.5 }}>
+              <div style={{ display: "flex", gap: "var(--s-4)", marginTop: "var(--s-2-5)", fontSize: "var(--t-footnote)" }}>
                 <LegendDot color={theme.growth} label="Pilot" />
                 {perf.data.benchmark && (
                   <LegendDot color={theme.textMuted} label="Benchmark" dashed />
@@ -147,15 +147,15 @@ export function PilotDetail() {
         {/* Sector allocation donut */}
         {pilot.sector_allocation.length > 0 && (
           <section className="card card-pad">
-            <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Sector allocation</h2>
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Sector allocation</h2>
             <SectorDonut slices={pilot.sector_allocation} />
           </section>
         )}
       </div>
 
       {/* Holdings */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>
           Holdings <span style={{ color: theme.textMuted }}>({pilot.holdings.length})</span>
         </h2>
         <div className="list">
@@ -181,10 +181,10 @@ export function PilotDetail() {
       </section>
 
       {/* Recent trades */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Recent signal changes</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Recent signal changes</h2>
         {pilot.recent_trades.length === 0 ? (
-          <div className="empty" style={{ padding: 20 }}>
+          <div className="empty" style={{ padding: "var(--s-5)" }}>
             No signal changes in the recent window.
           </div>
         ) : (
@@ -224,12 +224,12 @@ export function PilotDetail() {
         style={{
           position: "sticky",
           bottom: "calc(76px + var(--safe-bottom))",
-          marginTop: 8,
+          marginTop: "var(--s-2)",
         }}
       >
         <button
           className="btn btn-primary btn-block"
-          style={{ minHeight: 52, fontSize: 16, boxShadow: theme.growth + "33 0 8px 24px" }}
+          style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: theme.growth + "33 0 8px 24px" }}
           onClick={() => setShowFollow(true)}
         >
           Follow · allocate {pilot.headline.sharpe != null ? `${fmtNum(pilot.headline.sharpe, 2)} Sharpe` : ""}
@@ -251,7 +251,7 @@ function PerfDelta({ curve }: { curve: { value: number }[] }) {
   return (
     <span
       className="num"
-      style={{ color: up ? theme.growth : theme.decline, fontWeight: 700, fontSize: 15 }}
+      style={{ color: up ? theme.growth : theme.decline, fontWeight: 700, fontSize: "var(--t-subhead)" }}
     >
       {up ? "▲" : "▼"} {up ? "+" : ""}
       {pct.toFixed(2)}%
@@ -261,7 +261,7 @@ function PerfDelta({ curve }: { curve: { value: number }[] }) {
 
 function LegendDot({ color, label, dashed }: { color: string; label: string; dashed?: boolean }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: theme.textSecondary }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1-5)", color: theme.textSecondary }}>
       <span
         style={{
           width: 14,
@@ -279,7 +279,7 @@ function BackLink() {
   return (
     <Link
       to="/"
-      style={{ color: theme.textSecondary, fontSize: 14, display: "inline-block", marginBottom: 8 }}
+      style={{ color: theme.textSecondary, fontSize: "var(--t-callout)", display: "inline-block", marginBottom: "var(--s-2)" }}
     >
       ← Pilots
     </Link>

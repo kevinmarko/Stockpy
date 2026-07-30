@@ -85,7 +85,7 @@ function ForecastView({
 
   return (
     <>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 8, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: "var(--s-2)", marginBottom: "var(--s-3-5)" }}>
         {HORIZONS.map((h) => (
           <Tile
             key={h.days}
@@ -95,28 +95,28 @@ function ForecastView({
         ))}
       </div>
 
-      <section className="card card-pad" style={{ marginBottom: 14 }}>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)" }}>
         <div
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "baseline",
             flexWrap: "wrap",
-            gap: 8,
-            marginBottom: 8,
+            gap: "var(--s-2)",
+            marginBottom: "var(--s-2)",
           }}
         >
-          <h2 style={{ fontSize: 15, margin: 0 }}>Price & forecast</h2>
+          <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price & forecast</h2>
           <LookbackToggle value={lookbackDays} onChange={onLookbackChange} />
         </div>
         {chartEmpty ? (
-          <div className="empty" style={{ padding: 20 }}>
+          <div className="empty" style={{ padding: "var(--s-5)" }}>
             Not enough forecast or price data to draw a chart.
           </div>
         ) : (
           <>
             {noHistory && (
-              <div className="empty" style={{ padding: 12, marginBottom: 10, fontSize: 12.5 }}>
+              <div className="empty" style={{ padding: "var(--s-3)", marginBottom: "var(--s-2-5)", fontSize: "var(--t-label)" }}>
                 No price history in the store for this symbol — showing the
                 forecast projection only.
               </div>
@@ -124,7 +124,7 @@ function ForecastView({
             <ForecastCandleChart bars={bars} forecast={forecast} />
             <AttentionHeatmapStrip attention={d.attention} />
             {d.attention && (
-              <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 8, lineHeight: 1.5 }}>
+              <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)", lineHeight: 1.5 }}>
                 Darker cells show which days the BERT-LLA model weighted most
                 heavily when forming this forecast — not a stronger buy/sell
                 signal.
@@ -135,8 +135,8 @@ function ForecastView({
       </section>
 
       <section className="card card-pad">
-        <h2 style={{ fontSize: 15, margin: "0 0 8px" }}>Model detail</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
+        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Model detail</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "var(--s-2-5)" }}>
           <Tile label="ARIMA" value={d.ARIMA == null ? DASH : fmtNum(d.ARIMA, 2)} />
           <Tile
             label="MC band"
@@ -147,7 +147,7 @@ function ForecastView({
             }
           />
         </div>
-        <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 12, lineHeight: 1.5 }}>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-3)", lineHeight: 1.5 }}>
           Multi-horizon blended forecast (ARIMA / Monte Carlo / Holt-Winters /
           CNN-LSTM) with the Monte-Carlo confidence band, plotted above as a
           widening cone against real price history. A horizon that didn't
@@ -180,7 +180,7 @@ export function ForecastViewer() {
     <div className="screen">
       <button
         onClick={back}
-        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: theme.textSecondary, fontSize: 14, marginBottom: 8 }}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: theme.textSecondary, fontSize: "var(--t-callout)", marginBottom: "var(--s-2)" }}
       >
         ← Back
       </button>

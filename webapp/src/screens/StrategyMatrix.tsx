@@ -74,8 +74,8 @@ export function StrategyMatrix() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Settings
@@ -83,7 +83,7 @@ export function StrategyMatrix() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h1 className="screen-title">Signal modules</h1>
         {data?.as_of && (
-          <span style={{ fontSize: 12, color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
         )}
       </div>
       <p className="screen-sub">
@@ -126,15 +126,15 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
   );
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="meta-label-section">
-      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Meta-label confidence distribution</h2>
-      <p style={{ margin: "0 0 10px", fontSize: 13, color: theme.textMuted }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="meta-label-section">
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Meta-label confidence distribution</h2>
+      <p style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
         Distribution of meta-label confidence (geometric mean of active
         modules' P(signal correct)) across all symbols in the last snapshot.
       </p>
 
       {dist.count === 0 ? (
-        <div className="empty" data-testid="meta-label-empty" style={{ padding: 20 }}>
+        <div className="empty" data-testid="meta-label-empty" style={{ padding: "var(--s-5)" }}>
           {dist.reason ?? "No meta-label data available."}
         </div>
       ) : (
@@ -155,8 +155,8 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
                 <YAxis tick={chartAxisTick} {...chartAxisLine} allowDecimals={false} />
                 <ChartTooltip
                   contentStyle={chartTooltipStyle}
-                  labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
-                  itemStyle={{ fontSize: 11 }}
+                  labelStyle={{ color: theme.textSecondary, fontSize: "var(--t-micro)" }}
+                  itemStyle={{ fontSize: "var(--t-micro)" }}
                 />
                 <Bar dataKey="count" fill={theme.accent} />
               </BarChart>
@@ -164,7 +164,7 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
           </div>
 
           {dist.all_unity ? (
-            <Notice variant="info" style={{ marginTop: 10 }} data-testid="meta-label-all-unity-notice">
+            <Notice variant="info" style={{ marginTop: "var(--s-2-5)" }} data-testid="meta-label-all-unity-notice">
               <span>ℹ️</span>
               <span>
                 Every symbol shows exactly 1.0 — this is expected pre-Stage-4-deployment.
@@ -177,7 +177,7 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
               </span>
             </Notice>
           ) : (
-            <p style={{ margin: "10px 0 0", fontSize: 12.5, color: theme.textMuted }} data-testid="meta-label-gated-caption">
+            <p style={{ margin: "var(--s-2-5) 0 0", fontSize: "var(--t-label)", color: theme.textMuted }} data-testid="meta-label-gated-caption">
               {dist.count} symbols. {dist.n_gated} currently hard-gated to 0.0
               (a registered MetaLabeler's P(correct) fell below{" "}
               {dist.min_confidence.toFixed(2)}).
@@ -263,26 +263,26 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
   return (
     <>
       {/* Context row */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "4px 0 12px" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", margin: "var(--s-1) 0 var(--s-3)" }}>
         <span className="chip">Regime {data.market_regime ?? "—"}</span>
         <span className="chip">Max weight {fmtNum(max, 0)}</span>
         {data.regime_overrides_active && <span className="chip">Regime overrides active</span>}
       </div>
 
       {!data.writable && (
-        <Notice variant="warn" style={{ marginBottom: 12 }}>
+        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
           <span>{data.note}</span>
         </Notice>
       )}
 
       {data.env_drift.detected && (
-        <Notice variant="info" style={{ marginBottom: 12 }} data-testid="env-drift-notice">
+        <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="env-drift-notice">
           <span>{data.env_drift.note}</span>
         </Notice>
       )}
 
       {saved && (
-        <Notice variant="success" style={{ marginBottom: 12 }} data-testid="saved-notice">
+        <Notice variant="success" style={{ marginBottom: "var(--s-3)" }} data-testid="saved-notice">
           <span>
             Saved to .env. The running engine keeps the previous values until its
             next restart.
@@ -299,12 +299,12 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
             <section
               key={m.name}
               className="card card-pad"
-              style={{ marginBottom: 10, opacity: enabled ? 1 : 0.6 }}
+              style={{ marginBottom: "var(--s-2-5)", opacity: enabled ? 1 : 0.6 }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <div style={{ fontWeight: 700 }}>{m.name}</div>
-                  <div style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 2 }}>
+                  <div style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
                     {m.source === "snapshot"
                       ? "scored last run, no configured weight"
                       : m.source === "weights"
@@ -319,9 +319,9 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
                       background: "none",
                       border: "none",
                       padding: 0,
-                      fontSize: 11,
+                      fontSize: "var(--t-micro)",
                       color: theme.textMuted,
-                      marginTop: 2,
+                      marginTop: "var(--s-0-5)",
                       fontFamily: "monospace",
                       cursor: "pointer",
                     }}
@@ -339,7 +339,7 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
                   disabled={!data.writable}
                 />
               </div>
-              <div style={{ marginTop: 10, maxWidth: 180 }}>
+              <div style={{ marginTop: "var(--s-2-5)", maxWidth: 180 }}>
                 <Input
                   label="Weight"
                   type="number"
@@ -365,7 +365,7 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
       </div>
 
       {data.writable && (
-        <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: 12 }}>
+        <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
           <Button
             variant="primary"
             block
@@ -379,15 +379,15 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
 
       {confirming && (
         <Modal ariaLabel="Confirm signal-module changes" onClose={() => setConfirming(false)}>
-          <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>Confirm changes</h2>
-          <p style={{ fontSize: 13, color: theme.textSecondary, marginTop: 0 }}>
+          <h2 style={{ fontSize: 18, margin: "0 0 var(--s-2)" }}>Confirm changes</h2>
+          <p style={{ fontSize: "var(--t-body)", color: theme.textSecondary, marginTop: 0 }}>
             These write to <code>.env</code> and apply on the engine's next restart —
             not immediately.
           </p>
           {changes.weightDiffs.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>Weights</h3>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
+            <div style={{ marginTop: "var(--s-2)" }}>
+              <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Weights</h3>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: "var(--t-body)", lineHeight: 1.6 }}>
                 {changes.weightDiffs.map((d) => (
                   <li key={d.name}>
                     <strong>{d.name}</strong>: {d.from} → {d.to}
@@ -397,9 +397,9 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
             </div>
           )}
           {changes.toggles.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <h3 style={{ fontSize: 13, color: theme.textMuted, margin: "0 0 4px" }}>Modules</h3>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
+            <div style={{ marginTop: "var(--s-3)" }}>
+              <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Modules</h3>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: "var(--t-body)", lineHeight: 1.6 }}>
                 {changes.toggles.map((t) => (
                   <li key={t.name}>
                     <strong>{t.name}</strong>: {t.enabled ? "enabled" : "disabled"}
@@ -409,11 +409,11 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
             </div>
           )}
           {mutation.error && (
-            <Notice variant="warn" style={{ marginTop: 12 }}>
+            <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
               <span>{mutation.error}</span>
             </Notice>
           )}
-          <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
             <Button variant="neutral" block onClick={() => setConfirming(false)}>
               Cancel
             </Button>

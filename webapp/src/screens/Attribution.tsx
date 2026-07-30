@@ -39,8 +39,8 @@ function FactorTiltBar({ label, value }: { label: string; value: number | null }
   const color = value == null ? theme.textMuted : positive ? theme.growth : theme.decline;
 
   return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+    <div style={{ marginBottom: "var(--s-3)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--t-label)" }}>
         <span style={{ color: theme.textSecondary }}>{label}</span>
         <span className="num" style={{ color, fontWeight: 700 }}>
           {value == null ? "—" : fmtNum(value, 2)}
@@ -50,9 +50,9 @@ function FactorTiltBar({ label, value }: { label: string; value: number | null }
         style={{
           position: "relative",
           height: 8,
-          borderRadius: 4,
+          borderRadius: "var(--r-2xs)",
           background: theme.surface2,
-          marginTop: 4,
+          marginTop: "var(--s-1)",
           overflow: "hidden",
         }}
       >
@@ -75,7 +75,7 @@ function FactorTiltBar({ label, value }: { label: string; value: number | null }
               bottom: 0,
               left: positive ? "50%" : `${50 - halfWidthPct}%`,
               width: `${halfWidthPct}%`,
-              borderRadius: 4,
+              borderRadius: "var(--r-2xs)",
               background: color,
             }}
           />
@@ -87,9 +87,9 @@ function FactorTiltBar({ label, value }: { label: string; value: number | null }
 
 function ClusterCard({ c }: { c: CorrelationCluster }) {
   return (
-    <section className="card card-pad" style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, wordBreak: "break-word" }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
+        <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>
           {c.symbols.join(" + ")}
         </div>
         {c.weight_pct != null && (
@@ -99,19 +99,19 @@ function ClusterCard({ c }: { c: CorrelationCluster }) {
         )}
       </div>
       {c.insufficient_history ? (
-        <p style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 8 }}>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", marginTop: "var(--s-2)" }}>
           Not enough price history yet to correlate{" "}
           {c.n_symbols === 1 ? "this holding" : "these holdings"}.
         </p>
       ) : (
-        <div style={{ display: "flex", gap: 20, marginTop: 10 }}>
+        <div style={{ display: "flex", gap: "var(--s-5)", marginTop: "var(--s-2-5)" }}>
           <div>
-            <div style={{ fontSize: 11, color: theme.textMuted }}>Holdings</div>
-            <div className="num" style={{ fontSize: 14 }}>{c.n_symbols}</div>
+            <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted }}>Holdings</div>
+            <div className="num" style={{ fontSize: "var(--t-callout)" }}>{c.n_symbols}</div>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: theme.textMuted }}>Avg correlation</div>
-            <div className="num" style={{ fontSize: 14 }}>
+            <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted }}>Avg correlation</div>
+            <div className="num" style={{ fontSize: "var(--t-callout)" }}>
               {c.avg_intra_corr == null ? "—" : fmtNum(c.avg_intra_corr, 2)}
             </div>
           </div>
@@ -206,7 +206,7 @@ function NumCell({
       aria-label={ariaLabel}
       value={value}
       step={0.1}
-      style={{ width: 84, padding: "6px 8px", fontSize: 13, textAlign: "right" }}
+      style={{ width: 84, padding: "var(--s-1-5) var(--s-2)", fontSize: "var(--t-body)", textAlign: "right" }}
       onChange={(e) => {
         const n = Number(e.target.value);
         onChange(Number.isFinite(n) ? n : 0);
@@ -238,14 +238,14 @@ function BrinsonFachlerSection() {
 
   return (
     <>
-      <h2 style={{ fontSize: 15, marginTop: 24, marginBottom: 4 }}>Brinson-Fachler attribution</h2>
+      <h2 style={{ fontSize: "var(--t-subhead)", marginTop: "var(--s-6)", marginBottom: "var(--s-1)" }}>Brinson-Fachler attribution</h2>
       <p className="screen-sub" style={{ marginTop: 0 }}>
         Type a sector-level portfolio-vs-benchmark matrix to see how much of the active return
         came from allocation, selection, or their interaction. Manual input -- point-in-time
         sector benchmark returns aren't available to derive this automatically.
       </p>
 
-      <section className="card card-pad" style={{ marginBottom: 16, overflowX: "auto" }}>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)", overflowX: "auto" }}>
         <Table>
           <thead>
             <tr>
@@ -262,7 +262,7 @@ function BrinsonFachlerSection() {
               <tr key={row.sector}>
                 <td style={{ whiteSpace: "nowrap" }}>{row.sector}</td>
                 {_BF_COLUMNS.map((c) => (
-                  <td key={c.field} style={{ padding: "4px" }}>
+                  <td key={c.field} style={{ padding: "var(--s-1)" }}>
                     <NumCell
                       ariaLabel={`${row.sector} ${c.labelSuffix}`}
                       value={row[c.field]}
@@ -276,7 +276,7 @@ function BrinsonFachlerSection() {
         </Table>
 
         {clientWarnings.length > 0 && (
-          <Notice variant="warn" style={{ marginTop: 12 }}>
+          <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {clientWarnings.map((w) => (
                 <li key={w}>{w}</li>
@@ -285,14 +285,14 @@ function BrinsonFachlerSection() {
           </Notice>
         )}
 
-        <div style={{ marginTop: 14 }}>
+        <div style={{ marginTop: "var(--s-3-5)" }}>
           <Button variant="primary" pending={mutation.pending} onClick={() => mutation.run(rows)}>
             Compute
           </Button>
         </div>
 
         {mutation.error && (
-          <Notice variant="warn" style={{ marginTop: 12 }} data-testid="brinson-error">
+          <Notice variant="warn" style={{ marginTop: "var(--s-3)" }} data-testid="brinson-error">
             <span>{mutation.error}</span>
           </Notice>
         )}
@@ -300,7 +300,7 @@ function BrinsonFachlerSection() {
 
       {result && (
         <>
-          <div className="tiles" style={{ marginBottom: 16 }}>
+          <div className="tiles" style={{ marginBottom: "var(--s-4)" }}>
             <EffectTile label="Portfolio return" fraction={result["Portfolio Return"]} />
             <EffectTile label="Benchmark return" fraction={result["Benchmark Return"]} />
             <EffectTile label="Active return" fraction={result["Active Return"]} />
@@ -310,7 +310,7 @@ function BrinsonFachlerSection() {
           </div>
 
           {result.validation_warnings.length > 0 && (
-            <Notice variant="info" style={{ marginBottom: 12 }}>
+            <Notice variant="info" style={{ marginBottom: "var(--s-3)" }}>
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {result.validation_warnings.map((w) => (
                   <li key={w}>{w}</li>
@@ -319,8 +319,8 @@ function BrinsonFachlerSection() {
             </Notice>
           )}
 
-          <section className="card card-pad" style={{ marginBottom: 16, overflowX: "auto" }}>
-            <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>Per-sector effects</h3>
+          <section className="card card-pad" style={{ marginBottom: "var(--s-4)", overflowX: "auto" }}>
+            <h3 style={{ fontSize: "var(--t-callout)", margin: "0 0 var(--s-2)" }}>Per-sector effects</h3>
             <Table>
               <thead>
                 <tr>
@@ -388,7 +388,7 @@ function AttributionBody({ data }: { data: PortfolioAttributionT }) {
 
   return (
     <>
-      <h2 style={{ fontSize: 15, marginTop: 8, marginBottom: 8 }}>Factor exposure</h2>
+      <h2 style={{ fontSize: "var(--t-subhead)", marginTop: "var(--s-2)", marginBottom: "var(--s-2)" }}>Factor exposure</h2>
       {fe.coverage.held_count === 0 ? (
         <EmptyState
           title="No holdings yet"
@@ -400,11 +400,11 @@ function AttributionBody({ data }: { data: PortfolioAttributionT }) {
           hint={fe.reason ?? "Run the pipeline to score your holdings."}
         />
       ) : (
-        <section className="card card-pad" style={{ marginBottom: 16 }}>
+        <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
           {(Object.keys(FACTOR_LABELS) as (keyof FactorExposure)[]).map((key) => (
             <FactorTiltBar key={key} label={FACTOR_LABELS[key]} value={fe.exposures[key]} />
           ))}
-          <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 8 }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-2)" }}>
             Covers {fmtPct(fe.coverage.matched_value_pct, 0, { fromFraction: true })} of your
             book ({fe.coverage.matched_count} of {fe.coverage.held_count} holdings scored).
             {fe.coverage.unmatched_symbols.length > 0 && (
@@ -412,20 +412,20 @@ function AttributionBody({ data }: { data: PortfolioAttributionT }) {
             )}
           </p>
           {fe.as_of && (
-            <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 4 }}>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-1)" }}>
               As of {timeAgo(fe.as_of)}
             </p>
           )}
         </section>
       )}
 
-      <h2 style={{ fontSize: 15, marginBottom: 4 }}>Correlation clusters</h2>
+      <h2 style={{ fontSize: "var(--t-subhead)", marginBottom: "var(--s-1)" }}>Correlation clusters</h2>
       <p className="screen-sub" style={{ marginTop: 0 }}>
         Holdings that tend to move together, over the last {cc.lookback_days} trading days.
       </p>
 
       {heavy.length > 0 && (
-        <Notice variant="warn" style={{ marginBottom: 12 }}>
+        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
           <span>
             High concentration: {heavy.map((c) => c.symbols.join("+")).join(", ")} move together
             and make up a large share of your book. Consider diversifying.
@@ -461,8 +461,8 @@ export function Attribution() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Pilots

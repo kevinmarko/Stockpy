@@ -155,7 +155,7 @@ function CalibrationSection({ cal }: { cal: CalibrationSummary["calibration"] })
   const insufficient = cal.bins.filter((b) => b.win_rate == null && b.count > 0);
   return (
     <>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
         <Tile label="Trades w/ conviction" value={String(cal.total)} />
         <Tile label="Overall win rate" value={fmtPct(cal.overall_win_rate, 1, { fromFraction: true })} />
         <Tile label="Calibration error" value={fmtNum(cal.calibration_error, 3)} />
@@ -164,7 +164,7 @@ function CalibrationSection({ cal }: { cal: CalibrationSummary["calibration"] })
       {cal.n_scored_bins > 0 ? (
         <div className="card card-pad">
           <ReliabilityDiagram bins={cal.bins} />
-          <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 8, lineHeight: 1.5 }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-2)", lineHeight: 1.5 }}>
             Bars are the realized win rate per conviction bucket; the dashed line is perfect
             calibration (say 0.70 → win 70%). Calibration error is the mean gap between the two.
           </p>
@@ -176,7 +176,7 @@ function CalibrationSection({ cal }: { cal: CalibrationSummary["calibration"] })
         />
       )}
       {insufficient.length > 0 && (
-        <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 8 }}>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-2)" }}>
           {insufficient.length} bin{insufficient.length === 1 ? "" : "s"} had fewer than{" "}
           {cal.min_trades_per_bin} trades — shown as insufficient data, not a fabricated rate.
         </p>
@@ -206,7 +206,7 @@ function RecTrackingSection({
       <div
         role="group"
         aria-label="Return horizon"
-        style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}
+        style={{ display: "flex", gap: "var(--s-1-5)", marginBottom: "var(--s-3)", flexWrap: "wrap" }}
       >
         {HORIZONS.map((h) => (
           <button
@@ -231,7 +231,7 @@ function RecTrackingSection({
         />
       ) : (
         <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)" }}>
             <Tile label={`Model ${tracking.horizon_days}d return`} value={pct(tracking.model_return)} />
             <Tile label="Operator return" value={pct(tracking.operator_return)} />
             <Tile label="Delta (op − model)" value={pct(tracking.delta)} tone={deltaTone} />
@@ -240,7 +240,7 @@ function RecTrackingSection({
             <Tile label="Completed" value={String(tracking.n_completed)} />
           </div>
           {tracking.model_return == null && (
-            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
               No logged BUY signal has reached the {tracking.horizon_days}-day horizon yet — check
               back once it elapses.
             </p>
@@ -255,8 +255,8 @@ function RecTrackingSection({
 function RecTrackingTable({ rows }: { rows: RecTrackingRow[] }) {
   const pct = (v: number | null) => fmtPct(v, 2, { fromFraction: true, signed: true });
   return (
-    <div style={{ overflowX: "auto", marginTop: 12 }}>
-      <Table style={{ fontSize: 12.5, minWidth: 460 }}>
+    <div style={{ overflowX: "auto", marginTop: "var(--s-3)" }}>
+      <Table style={{ fontSize: "var(--t-label)", minWidth: 460 }}>
         <thead>
           <tr>
             <th>Symbol</th>
@@ -390,7 +390,7 @@ function MfeMaeSection({ mfeMae }: { mfeMae: CalibrationSummary["mfe_mae"] }) {
   return (
     <div className="card card-pad">
       <MfeMaeScatter points={mfeMae.points} />
-      <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 8, lineHeight: 1.5 }}>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-2)", lineHeight: 1.5 }}>
         Each dot is a current signal. Above the dashed line (green) the favorable move exceeded the
         adverse one (edge ratio &gt; 1); below it (red) the trade was underwater more than it ran up.
       </p>
@@ -419,7 +419,7 @@ function EdgeByStrategySection() {
   }
   return (
     <div style={{ overflowX: "auto" }}>
-      <Table style={{ fontSize: 12.5, minWidth: 460 }}>
+      <Table style={{ fontSize: "var(--t-label)", minWidth: 460 }}>
         <thead>
           <tr>
             <th>Strategy</th>
@@ -465,7 +465,7 @@ function DecisionJournalSection({
   const [journaling, setJournaling] = useState<MfeMaePoint | null>(null);
   return (
     <>
-      <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, lineHeight: 1.5 }}>
         Record whether you acted on, passed, or modified each current signal. "Acted" decisions are
         best-effort linked to a real trade within 24h so the tracking report above can measure your
         judgment against the model.
@@ -477,16 +477,16 @@ function DecisionJournalSection({
           hint="Run the pipeline to produce signals with excursion data, then log your decisions here."
         />
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
           {signals.map((s) => (
             <div
               key={s.symbol}
               className="card card-pad"
-              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--s-2)" }}
             >
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 700 }}>{s.symbol}</div>
-                <div style={{ color: theme.textMuted, fontSize: 12 }}>
+                <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
                   {s.action}
                   {s.conviction != null && <> · conv {fmtNum(s.conviction, 2)}</>}
                 </div>
@@ -499,14 +499,14 @@ function DecisionJournalSection({
         </div>
       )}
 
-      <h3 style={{ fontSize: 14, margin: "20px 0 8px", color: theme.textSecondary }}>Recent decisions</h3>
+      <h3 style={{ fontSize: "var(--t-callout)", margin: "var(--s-5) 0 var(--s-2)", color: theme.textSecondary }}>Recent decisions</h3>
       {recent.decisions.length === 0 ? (
-        <p style={{ color: theme.textMuted, fontSize: 12.5 }}>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-label)" }}>
           {recent.reason ?? "No decisions logged yet."}
         </p>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <Table style={{ fontSize: 12.5, minWidth: 420 }}>
+          <Table style={{ fontSize: "var(--t-label)", minWidth: 420 }}>
             <thead>
               <tr>
                 <th>Symbol</th>
@@ -548,9 +548,9 @@ function DecisionJournalSection({
 
 function SectionHead({ title, sub }: { title: string; sub?: string }) {
   return (
-    <div style={{ margin: "24px 0 10px" }}>
+    <div style={{ margin: "var(--s-6) 0 var(--s-2-5)" }}>
       <h2 style={{ margin: 0, fontSize: "var(--t-title)" }}>{title}</h2>
-      {sub && <p style={{ color: theme.textMuted, fontSize: 12.5, margin: "2px 0 0" }}>{sub}</p>}
+      {sub && <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", margin: "var(--s-0-5) 0 0" }}>{sub}</p>}
     </div>
   );
 }
@@ -575,8 +575,8 @@ export function Calibration() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Back
@@ -631,8 +631,8 @@ export function Calibration() {
       <p
         style={{
           color: theme.textMuted,
-          fontSize: 11.5,
-          marginTop: 24,
+          fontSize: "var(--t-footnote)",
+          marginTop: "var(--s-6)",
           textAlign: "center",
           lineHeight: 1.5,
         }}

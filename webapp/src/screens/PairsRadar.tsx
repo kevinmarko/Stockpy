@@ -34,9 +34,9 @@ function signalColor(signal: string): string {
 
 function PairCard({ p }: { p: PairRow }) {
   return (
-    <section className="card card-pad" style={{ marginBottom: 12 }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <div style={{ fontWeight: 700, fontSize: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>
           {p.ticker1} <span style={{ color: theme.textMuted }}>/</span> {p.ticker2}
         </div>
         <span
@@ -46,7 +46,7 @@ function PairCard({ p }: { p: PairRow }) {
           {p.signal}
         </span>
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginTop: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-4)", marginTop: "var(--s-3)" }}>
         <Metric label="z-score" value={fmtNum(p.z_score, 2)} />
         <Metric label="Half-life" value={p.half_life == null ? "—" : `${fmtNum(p.half_life, 0)}d`} />
         <Metric label="p-value" value={fmtNum(p.p_value, 4)} />
@@ -60,8 +60,8 @@ function PairCard({ p }: { p: PairRow }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: theme.textMuted }}>{label}</div>
-      <div className="num" style={{ fontSize: 15, fontWeight: 700 }}>{value}</div>
+      <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted }}>{label}</div>
+      <div className="num" style={{ fontSize: "var(--t-subhead)", fontWeight: 700 }}>{value}</div>
     </div>
   );
 }
@@ -87,13 +87,13 @@ function PairAnalyzeSection() {
     symY.trim().toUpperCase() !== symX.trim().toUpperCase();
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }}>
-      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Analyze a pair</h2>
-      <p style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Analyze a pair</h2>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Cointegration test + current spread state for two tickers you pick — computed
         live, not from the pipeline's last run. Advisory only.
       </p>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: "var(--s-2-5)", flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 120px" }}>
           <Input
             label="Symbol Y (dependent)"
@@ -109,7 +109,7 @@ function PairAnalyzeSection() {
           />
         </div>
       </div>
-      <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: "var(--s-3)" }}>
         <Button
           variant="primary"
           pending={mutation.pending}
@@ -121,21 +121,21 @@ function PairAnalyzeSection() {
       </div>
 
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
         </Notice>
       )}
 
       {result && !result.found && (
-        <div className="empty" style={{ padding: 18, marginTop: 12 }}>
+        <div className="empty" style={{ padding: "var(--s-4-5)", marginTop: "var(--s-3)" }}>
           {result.reason ?? "No result for this pair."}
         </div>
       )}
 
       {result && result.found && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: "var(--s-4)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>
               {result.ticker1} <span style={{ color: theme.textMuted }}>/</span> {result.ticker2}
             </div>
             <span
@@ -146,7 +146,7 @@ function PairAnalyzeSection() {
             </span>
           </div>
 
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginTop: 12 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-4)", marginTop: "var(--s-3)" }}>
             <Metric label="z-score" value={fmtNum(result.z_score, 2)} />
             <Metric
               label="Half-life"
@@ -158,7 +158,7 @@ function PairAnalyzeSection() {
           </div>
 
           {result.half_life_tradeable === false && (
-            <Notice variant="warn" style={{ marginTop: 12 }}>
+            <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
               <span>
                 Half-life is outside the tradeable 5–60 day band — treat this pair as not
                 currently actionable even though a signal is shown above.
@@ -167,7 +167,7 @@ function PairAnalyzeSection() {
           )}
 
           {result.z_score_series.length > 1 && (
-            <div style={{ marginTop: 16, height: 200 }}>
+            <div style={{ marginTop: "var(--s-4)", height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={result.z_score_series}>
                   <CartesianGrid {...chartGridProps} />
@@ -189,13 +189,13 @@ function PairAnalyzeSection() {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              <p style={{ fontSize: 11, color: theme.textMuted, marginTop: 4 }}>
+              <p style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginTop: "var(--s-1)" }}>
                 Spread z-score over time. Dashed lines mark the ±2 entry band.
               </p>
             </div>
           )}
 
-          <p style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 12 }}>
+          <p style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-3)" }}>
             This is a displayed signal, not an order — the platform never trades pairs
             automatically.
           </p>
@@ -223,9 +223,9 @@ function PairScanSection() {
   const canSubmit = uniqueCount >= 2 && uniqueCount <= 15;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }}>
-      <h2 style={{ fontSize: 15, margin: "0 0 4px" }}>Scan for pairs</h2>
-      <p style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Scan for pairs</h2>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Cointegration scan over a symbol list you pick (2–15 tickers) — computed live.
         Advisory only.
       </p>
@@ -236,7 +236,7 @@ function PairScanSection() {
         hint={`${uniqueCount} distinct symbol${uniqueCount === 1 ? "" : "s"} entered (need 2–15).`}
         invalid={uniqueCount > 0 && !canSubmit}
       />
-      <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: "var(--s-3)" }}>
         <Button
           variant="primary"
           pending={mutation.pending}
@@ -248,20 +248,20 @@ function PairScanSection() {
       </div>
 
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
         </Notice>
       )}
 
       {result && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: "var(--s-4)" }}>
           {result.missing.length > 0 && (
-            <p style={{ fontSize: 12, color: theme.textMuted, marginBottom: 10 }}>
+            <p style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginBottom: "var(--s-2-5)" }}>
               No data for: {result.missing.join(", ")} (skipped).
             </p>
           )}
           {result.pairs.length === 0 ? (
-            <div className="empty" style={{ padding: 18 }}>
+            <div className="empty" style={{ padding: "var(--s-4-5)" }}>
               {result.reason ?? "No cointegrated pairs found."}
             </div>
           ) : (
@@ -292,8 +292,8 @@ export function PairsRadar() {
           padding: 0,
           cursor: "pointer",
           color: theme.textSecondary,
-          fontSize: 14,
-          marginBottom: 8,
+          fontSize: "var(--t-callout)",
+          marginBottom: "var(--s-2)",
         }}
       >
         ← Pilots
@@ -301,7 +301,7 @@ export function PairsRadar() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h1 className="screen-title">Pairs radar</h1>
         {data?.as_of && (
-          <span style={{ fontSize: 12, color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
         )}
       </div>
       <p className="screen-sub">
@@ -315,11 +315,11 @@ export function PairsRadar() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
         data.pairs.length === 0 ? (
-          <div className="empty" style={{ padding: 30 }}>
+          <div className="empty" style={{ padding: "var(--s-7-5)" }}>
             {data.reason ?? "No cointegrated pairs found yet."}
           </div>
         ) : (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: "var(--s-3)" }}>
             {data.pairs.map((p) => (
               <PairCard key={`${p.ticker1}-${p.ticker2}`} p={p} />
             ))}
@@ -329,8 +329,8 @@ export function PairsRadar() {
       <p
         style={{
           color: theme.textMuted,
-          fontSize: 11.5,
-          marginTop: 20,
+          fontSize: "var(--t-footnote)",
+          marginTop: "var(--s-5)",
           textAlign: "center",
           lineHeight: 1.5,
         }}
@@ -344,13 +344,13 @@ export function PairsRadar() {
         onClick={() => setShowRecompute((v) => !v)}
         aria-expanded={showRecompute}
         className="btn btn-neutral"
-        style={{ marginTop: 20, width: "100%" }}
+        style={{ marginTop: "var(--s-5)", width: "100%" }}
       >
         {showRecompute ? "▲ Hide" : "▼"} Recompute with custom symbols
       </button>
 
       {showRecompute && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: "var(--s-4)" }}>
           <PairAnalyzeSection />
           <PairScanSection />
         </div>

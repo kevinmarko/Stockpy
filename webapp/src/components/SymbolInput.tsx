@@ -160,13 +160,13 @@ export function SymbolInput({
   return (
     <form
       onSubmit={submit}
-      style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 16 }}
+      style={{ display: "flex", gap: "var(--s-2)", alignItems: "flex-end", marginBottom: "var(--s-4)" }}
     >
       <div style={{ flex: 1, position: "relative" }}>
         <label
           htmlFor={autoId}
           className="tile-label"
-          style={{ display: "block", marginBottom: 6 }}
+          style={{ display: "block", marginBottom: "var(--s-1-5)" }}
         >
           {label}
         </label>
@@ -201,7 +201,7 @@ export function SymbolInput({
         <div
           id={hintId}
           style={{
-            marginTop: 6,
+            marginTop: "var(--s-1-5)",
             fontSize: "var(--t-caption)",
             color: "var(--text-muted)",
           }}

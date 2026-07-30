@@ -27,7 +27,7 @@ export function ExecutionQueueSection() {
       <div className="rail-head">
         <h2>Robinhood execution queue</h2>
       </div>
-      <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: 16 }}>
+      <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: "var(--s-4)" }}>
         What's currently staged to trade. To place any of these, ask me in Claude
         Code — I'll run the paper-first, per-trade-confirmed Robinhood flow
         (skills/robinhood-execution). Nothing here is ever placed automatically.
@@ -44,14 +44,14 @@ export function ExecutionQueueSection() {
           />
         ) : (
           <div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap", marginBottom: "var(--s-3)" }}>
               <ModeBadge mode={data.mode} />
               {data.kill_switch_active && <Chip label="Kill switch ACTIVE" tone="decline" />}
               {data.stale && <Chip label="Queue is stale" tone="caution" />}
               <Chip label={`${data.n_placeable}/${data.n_intents} placeable`} tone="muted" />
               <Chip label={`as of ${timeAgo(data.generated_at)}`} tone="muted" />
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
               {data.intents.map((intent) => (
                 <IntentRow key={intent.client_order_id || `${intent.symbol}-${intent.side}`} intent={intent} />
               ))}
@@ -79,10 +79,10 @@ export function Chip({
   return (
     <span
       style={{
-        fontSize: 11,
+        fontSize: "var(--t-micro)",
         fontWeight: 600,
         padding: "3px 8px",
-        borderRadius: 999,
+        borderRadius: "var(--r-pill)",
         border: `1px solid ${color}`,
         color,
       }}
@@ -103,25 +103,25 @@ function IntentRow({ intent }: { intent: ExecutionQueueIntent }) {
     <div
       data-testid="execution-intent-row"
       style={{
-        padding: "10px 12px",
+        padding: "var(--s-2-5) var(--s-3)",
         background: theme.surface,
         border: `1px solid ${theme.border}`,
-        borderRadius: 8,
+        borderRadius: "var(--r-sm)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap" }}>
         <Link
           to={`/symbol/${encodeURIComponent(intent.symbol)}`}
           style={{ fontWeight: 700, color: theme.textPrimary, textDecoration: "none" }}
         >
           {intent.symbol}
         </Link>
-        <span style={{ color: intent.action === "BUY" ? theme.growth : theme.decline, fontWeight: 600, fontSize: 12 }}>
+        <span style={{ color: intent.action === "BUY" ? theme.growth : theme.decline, fontWeight: 600, fontSize: "var(--t-caption)" }}>
           {intent.action}
         </span>
-        <span style={{ color: theme.textSecondary, fontSize: 12 }}>{size}</span>
+        <span style={{ color: theme.textSecondary, fontSize: "var(--t-caption)" }}>{size}</span>
         {intent.conviction !== null && (
-          <span style={{ color: theme.textMuted, fontSize: 12 }}>
+          <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
             conviction {(intent.conviction * 100).toFixed(0)}%
           </span>
         )}
@@ -134,10 +134,10 @@ function IntentRow({ intent }: { intent: ExecutionQueueIntent }) {
         </span>
       </div>
       {intent.rationale && (
-        <div style={{ color: theme.textSecondary, fontSize: 12, marginTop: 6 }}>{intent.rationale}</div>
+        <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>{intent.rationale}</div>
       )}
       {!intent.allow_place && intent.gate_reasons.length > 0 && (
-        <div style={{ color: theme.caution, fontSize: 12, marginTop: 4 }}>
+        <div style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
           {intent.gate_reasons.join(", ")}
         </div>
       )}

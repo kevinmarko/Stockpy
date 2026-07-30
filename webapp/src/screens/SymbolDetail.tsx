@@ -107,9 +107,9 @@ function RegimeSizingCard({
 
   if (pre == null || post == null) {
     return (
-      <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="regime-sizing-card">
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Regime sizing impact</h2>
-        <p style={{ color: theme.textMuted, fontSize: 13, marginTop: 10 }}>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="regime-sizing-card">
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Regime sizing impact</h2>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-2-5)" }}>
           Pre/post-regime Kelly Target breakdown is not available for {symbol}{" "}
           (missing from the latest snapshot, or the strategy engine didn't
           run for this symbol this cycle).
@@ -125,9 +125,9 @@ function RegimeSizingCard({
   ];
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }} data-testid="regime-sizing-card">
-      <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Regime sizing impact</h2>
-      <p style={{ margin: "0 0 10px", fontSize: 13, color: theme.textMuted }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="regime-sizing-card">
+      <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Regime sizing impact</h2>
+      <p style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
         Kelly Target before vs. after the HMM regime multiplier + meta-label
         composite were applied.
       </p>
@@ -138,7 +138,7 @@ function RegimeSizingCard({
           value={
             <span>
               {fmtPct(post, 2, { fromFraction: true })}{" "}
-              <span style={{ color: deltaPp >= 0 ? theme.growth : theme.decline, fontSize: 12 }}>
+              <span style={{ color: deltaPp >= 0 ? theme.growth : theme.decline, fontSize: "var(--t-caption)" }}>
                 ({deltaPp >= 0 ? "+" : ""}
                 {deltaPp.toFixed(2)}pp)
               </span>
@@ -148,16 +148,16 @@ function RegimeSizingCard({
         <StatRow label="HMM regime multiplier" value={regime_multiplier == null ? "—" : regime_multiplier.toFixed(3)} />
       </div>
 
-      <div style={{ height: 160, marginTop: 12 }} data-testid="regime-sizing-chart">
+      <div style={{ height: 160, marginTop: "var(--s-3)" }} data-testid="regime-sizing-chart">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
             <CartesianGrid {...chartGridProps} />
-            <XAxis dataKey="label" tick={{ ...chartAxisTick, fontSize: 11 }} {...chartAxisLine} />
+            <XAxis dataKey="label" tick={{ ...chartAxisTick, fontSize: "var(--t-micro)" }} {...chartAxisLine} />
             <YAxis tick={chartAxisTick} {...chartAxisLine} unit="%" />
             <Tooltip
               contentStyle={chartTooltipStyle}
-              labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
-              itemStyle={{ fontSize: 11 }}
+              labelStyle={{ color: theme.textSecondary, fontSize: "var(--t-micro)" }}
+              itemStyle={{ fontSize: "var(--t-micro)" }}
               formatter={(v) => `${Number(v).toFixed(2)}%`}
             />
             <Bar dataKey="value" fill={theme.accent} />
@@ -165,7 +165,7 @@ function RegimeSizingCard({
         </ResponsiveContainer>
       </div>
 
-      <p style={{ margin: "10px 0 0", fontSize: 12, color: theme.textMuted }} data-testid="regime-sizing-meta-label">
+      <p style={{ margin: "var(--s-2-5) 0 0", fontSize: "var(--t-caption)", color: theme.textMuted }} data-testid="regime-sizing-meta-label">
         Meta-label composite currently{" "}
         {meta_label_composite == null ? "—" : meta_label_composite.toFixed(3)}{" "}
         (multiplied in alongside the regime multiplier, then re-clamped to{" "}
@@ -200,20 +200,20 @@ function ForecastErrorChart({ rows }: { rows: ForecastModelError[] }) {
     n: r.n,
   }));
   return (
-    <div style={{ marginTop: 16 }} data-testid="forecast-error-chart">
-      <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 6 }}>
+    <div style={{ marginTop: "var(--s-4)" }} data-testid="forecast-error-chart">
+      <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginBottom: "var(--s-1-5)" }}>
         Forecast error by model (lower is better)
       </div>
       <div style={{ height: 200 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
             <CartesianGrid {...chartGridProps} />
-            <XAxis dataKey="label" tick={{ ...chartAxisTick, fontSize: 11 }} {...chartAxisLine} />
+            <XAxis dataKey="label" tick={{ ...chartAxisTick, fontSize: "var(--t-micro)" }} {...chartAxisLine} />
             <YAxis tick={chartAxisTick} {...chartAxisLine} tickFormatter={(v: number) => fmtUsd(v)} />
             <Tooltip
               contentStyle={chartTooltipStyle}
-              labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
-              itemStyle={{ fontSize: 11 }}
+              labelStyle={{ color: theme.textSecondary, fontSize: "var(--t-micro)" }}
+              itemStyle={{ fontSize: "var(--t-micro)" }}
               formatter={(value, name, entry: { payload?: { n: number } }) => {
                 const label = name === "rmse" ? "RMSE" : "Mean absolute error";
                 if (typeof value !== "number") return ["—", label];
@@ -222,7 +222,7 @@ function ForecastErrorChart({ rows }: { rows: ForecastModelError[] }) {
               }}
             />
             <Legend
-              wrapperStyle={{ fontSize: 11 }}
+              wrapperStyle={{ fontSize: "var(--t-micro)" }}
               formatter={(value: string) => (value === "rmse" ? "RMSE" : "Mean absolute error")}
             />
             <Bar dataKey="rmse" name="rmse" fill={seriesColor(0)} />
@@ -289,13 +289,13 @@ export function SymbolDetail() {
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <h1 className="screen-title" style={{ marginBottom: 2 }}>
+          <h1 className="screen-title" style={{ marginBottom: "var(--s-0-5)" }}>
             {data.symbol}
           </h1>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
             {identity.sector && <span className="chip">{identity.sector}</span>}
             <ActionBadge action={identity.action} />
-            <span style={{ fontSize: 12, color: theme.textMuted }}>
+            <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>
               as of {timeAgo(data.as_of)}
             </span>
           </div>
@@ -306,14 +306,14 @@ export function SymbolDetail() {
       </div>
 
       {data.reason && (
-        <p style={{ color: theme.textMuted, fontSize: 13, marginTop: 10 }}>{data.reason}</p>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-2-5)" }}>{data.reason}</p>
       )}
 
       <TabGuide tabKey="symbol-detail" />
 
       {/* Advisory */}
-      <section className="card card-pad" style={{ margin: "16px 0" }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Advisory</h2>
+      <section className="card card-pad" style={{ margin: "var(--s-4) 0" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Advisory</h2>
         <div className="list">
           <StatRow label="Recommendation" value={<ActionBadge action={advisory.action} />} />
           <StatRow
@@ -331,7 +331,7 @@ export function SymbolDetail() {
           <StatRow label="Score" value={fmtNum(advisory.score, 1)} />
         </div>
         {advisory.rationale && (
-          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: 12 }}>
+          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: "var(--s-3)" }}>
             {advisory.rationale}
           </p>
         )}
@@ -344,21 +344,21 @@ export function SymbolDetail() {
           portfolio-wide journal (../components/DecisionModal); this section
           is the standalone, symbol-scoped read (GET /decisions?symbol=...)
           Calibration's bundled recent-decisions preview doesn't offer. */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ fontSize: 16, margin: 0 }}>Decision journal</h2>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Decision journal</h2>
           <Button variant="neutral" onClick={() => setJournaling(true)}>
             Log decision
           </Button>
         </div>
         {decisions.loading && <Loading lines={2} />}
         {!decisions.loading && (!decisions.data || decisions.data.length === 0) && (
-          <p style={{ color: theme.textMuted, fontSize: 13, marginTop: 10 }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-2-5)" }}>
             No decisions logged yet for {data.symbol}.
           </p>
         )}
         {!decisions.loading && decisions.data && decisions.data.length > 0 && (
-          <div className="list" style={{ marginTop: 8 }}>
+          <div className="list" style={{ marginTop: "var(--s-2)" }}>
             {decisions.data.map((d, i) => (
               <div key={`${d.timestamp}-${i}`} className="row">
                 <div className="row-main">
@@ -366,11 +366,11 @@ export function SymbolDetail() {
                     {d.action_taken === "acted" ? "✅ Acted" : d.action_taken === "passed" ? "⏭ Passed" : "🔁 Modified"}
                   </span>
                   {d.notes && (
-                    <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>{d.notes}</div>
+                    <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>{d.notes}</div>
                   )}
                 </div>
                 <div className="row-end">
-                  <span style={{ color: theme.textMuted, fontSize: 12 }}>
+                  <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
                     {d.timestamp ? timeAgo(d.timestamp) : "—"}
                   </span>
                 </div>
@@ -389,8 +389,8 @@ export function SymbolDetail() {
       )}
 
       {/* Identity */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Snapshot</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Snapshot</h2>
         <div className="list">
           <StatRow label="Sector" value={identity.sector ?? "—"} />
           <StatRow label="Price" value={fmtUsd(identity.price)} />
@@ -403,8 +403,8 @@ export function SymbolDetail() {
       </section>
 
       {/* Tactical ranges (pre-formatted strings, NOT tuples) */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Tactical ranges</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Tactical ranges</h2>
         <div className="list">
           <StatRow label="Buy" value={ranges.buy_range ?? "—"} />
           <StatRow label="Sell" value={ranges.sell_range ?? "—"} />
@@ -412,8 +412,8 @@ export function SymbolDetail() {
       </section>
 
       {/* Factors */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Factor exposure</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Factor exposure</h2>
         <div className="list">
           <StatRow label="Value (z)" value={fmtNum(factors.value_z, 2)} />
           <StatRow label="Quality (z)" value={fmtNum(factors.quality_z, 2)} />
@@ -430,7 +430,7 @@ export function SymbolDetail() {
           />
         </div>
         {hasComponents && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
             {Object.entries(sc!).map(([k, v]) => (
               <MetricBadge key={k} label={k} value={fmtNum(v, 2)} />
             ))}
@@ -439,8 +439,8 @@ export function SymbolDetail() {
       </section>
 
       {/* Risk */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Risk & regime</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Risk & regime</h2>
         <div className="list">
           <StatRow
             label="Regime"
@@ -468,12 +468,12 @@ export function SymbolDetail() {
       </section>
 
       {/* Rolling beta vs SPY — time-varying, distinct from the static point-in-time beta */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Rolling beta vs SPY</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Rolling beta vs SPY</h2>
         {rollingBeta.loading ? (
           <Loading lines={2} />
         ) : !rollingBeta.data || rollingBeta.data.series.length === 0 ? (
-          <div className="empty" style={{ padding: 18 }}>
+          <div className="empty" style={{ padding: "var(--s-4-5)" }}>
             {rollingBeta.data?.reason ?? "No cached price history yet."}
           </div>
         ) : (
@@ -483,7 +483,7 @@ export function SymbolDetail() {
               valueLabel="Beta"
               yTickDecimals={1}
             />
-            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 8 }}>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
               {rollingBeta.data.window}-day rolling beta — latest:{" "}
               <span className="num" style={{ fontWeight: 700, color: theme.textSecondary }}>
                 {fmtNum(
@@ -497,18 +497,18 @@ export function SymbolDetail() {
       </section>
 
       {/* Forecast reliability + model skill weights */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
         <div
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "baseline",
             flexWrap: "wrap",
-            gap: 8,
-            marginBottom: 4,
+            gap: "var(--s-2)",
+            marginBottom: "var(--s-1)",
           }}
         >
-          <h2 style={{ fontSize: 16, margin: 0 }}>Forecast skill</h2>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Forecast skill</h2>
           <div className="segmented" role="tablist" aria-label="Forecast horizon">
             {[10, 30, 60, 90].map((h) => (
               <button
@@ -526,7 +526,7 @@ export function SymbolDetail() {
         {forecast.loading ? (
           <Loading lines={1} />
         ) : !forecast.data || forecast.data.reason ? (
-          <div className="empty" style={{ padding: 18 }}>
+          <div className="empty" style={{ padding: "var(--s-4-5)" }}>
             {forecast.data?.reason ?? "No forecast history yet."}
           </div>
         ) : (
@@ -537,10 +537,10 @@ export function SymbolDetail() {
             </div>
             {Object.keys(forecast.data.skill_weights).length > 0 && (
               <>
-                <div style={{ color: theme.textMuted, fontSize: 12, margin: "12px 0 6px" }}>
+                <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-3) 0 var(--s-1-5)" }}>
                   Model skill weights (inverse-RMSE)
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)" }}>
                   {Object.entries(forecast.data.skill_weights).map(([m, w]) => (
                     <MetricBadge
                       key={m}
@@ -553,7 +553,7 @@ export function SymbolDetail() {
             )}
             <ForecastErrorChart rows={forecast.data.error_by_model} />
             {forecast.data.error_by_model.some((r) => r.model_name.startsWith("lstm_") || r.model_name === "bert_lla") && (
-              <p style={{ color: theme.textMuted, fontSize: 11, marginTop: 6, lineHeight: 1.5 }}>
+              <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-1-5)", lineHeight: 1.5 }}>
                 lstm_baseline / lstm_attention / bert_lla are three ablations
                 of one architecture (dual-layer LSTM, with and without
                 self-attention and sentiment) — a direct comparison, not
@@ -565,12 +565,12 @@ export function SymbolDetail() {
       </section>
 
       {/* Options premium directive (persisted matrix; advisory) */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Options premium</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Options premium</h2>
         {options.loading ? (
           <Loading lines={1} />
         ) : !options.data || !options.data.directive ? (
-          <div className="empty" style={{ padding: 18 }}>
+          <div className="empty" style={{ padding: "var(--s-4-5)" }}>
             {options.data?.reason ?? "No options directive for this symbol yet."}
           </div>
         ) : (
@@ -587,13 +587,13 @@ export function SymbolDetail() {
       <ResearchBriefCard symbol={data.symbol} />
 
       {/* Held by Pilots — the Stockpy reverse cross-link */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>
           Held by Pilots{" "}
           <span style={{ color: theme.textMuted }}>({held_by_pilots.length})</span>
         </h2>
         {held_by_pilots.length === 0 ? (
-          <div className="empty" style={{ padding: 20 }}>
+          <div className="empty" style={{ padding: "var(--s-5)" }}>
             No Pilots currently hold {data.symbol}.
           </div>
         ) : (
@@ -624,7 +624,7 @@ function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
   const theta = realizableTheta(d);
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-2)" }}>
         <div style={{ fontWeight: 700 }}>{d.Strategy ?? "—"}</div>
         <span className={`badge ${legOk ? "badge-good" : "badge-bad"}`}>
           {legOk ? "Integrity ✓" : "Integrity ✗"}
@@ -680,7 +680,7 @@ const RESEARCH_REASON_COPY: Record<NonNullable<AiResearchResponse["reason"]>, st
 /** Honest empty/disabled-state box — reused by all three AI cards. */
 function ReasonNotice({ text }: { text: string }) {
   return (
-    <div className="empty" style={{ padding: 18, marginTop: 12 }}>
+    <div className="empty" style={{ padding: "var(--s-4-5)", marginTop: "var(--s-3)" }}>
       {text}
     </div>
   );
@@ -693,13 +693,13 @@ function ReasonNotice({ text }: { text: string }) {
 function BulletList({ title, items }: { title: string; items: string[] }) {
   if (items.length === 0) return null;
   return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ color: theme.textMuted, fontSize: 12, marginBottom: 4 }}>{title}</div>
+    <div style={{ marginTop: "var(--s-2-5)" }}>
+      <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginBottom: "var(--s-1)" }}>{title}</div>
       <ul style={{ margin: 0, paddingLeft: 18 }}>
         {items.map((it, i) => (
           <li
             key={i}
-            style={{ fontSize: 13.5, lineHeight: 1.5, color: theme.textSecondary, marginBottom: 2 }}
+            style={{ fontSize: 13.5, lineHeight: 1.5, color: theme.textSecondary, marginBottom: "var(--s-0-5)" }}
           >
             {it}
           </li>
@@ -723,13 +723,13 @@ function AiCardHeader({
 }) {
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <h2 style={{ fontSize: 16, margin: 0 }}>{title}</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "var(--s-3)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>{title}</h2>
         <Button variant="neutral" pending={pending} onClick={onGenerate}>
           Generate
         </Button>
       </div>
-      <p style={{ color: theme.textMuted, fontSize: 12, margin: "4px 0 0" }}>{subtitle}</p>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1) 0 0" }}>{subtitle}</p>
     </>
   );
 }
@@ -740,7 +740,7 @@ function CommentaryCard({ symbol }: { symbol: string }) {
   const data = mutation.result;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
       <AiCardHeader
         title="Claude analyst note"
         subtitle={`On-demand Claude narrative for ${symbol} — not generated automatically.`}
@@ -748,7 +748,7 @@ function CommentaryCard({ symbol }: { symbol: string }) {
         onGenerate={() => mutation.run()}
       />
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
         </Notice>
       )}
@@ -762,13 +762,13 @@ function CommentaryCard({ symbol }: { symbol: string }) {
         />
       )}
       {data?.available && data.payload && (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>{data.payload.headline}</div>
-          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: 8 }}>
+          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: "var(--s-2)" }}>
             {data.payload.why_now}
           </p>
           <BulletList title="Key risks" items={data.payload.key_risks} />
-          <p style={{ color: theme.textMuted, fontSize: 12.5, marginTop: 10, lineHeight: 1.5 }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", marginTop: "var(--s-2-5)", lineHeight: 1.5 }}>
             <strong style={{ color: theme.textSecondary }}>Invalidation:</strong>{" "}
             {data.payload.invalidation}
           </p>
@@ -786,7 +786,7 @@ function ChartReadCard({ symbol }: { symbol: string }) {
   const data = mutation.result;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
       <AiCardHeader
         title="Gemini chart read"
         subtitle={`On-demand chart-pattern read for ${symbol} — not generated automatically.`}
@@ -794,7 +794,7 @@ function ChartReadCard({ symbol }: { symbol: string }) {
         onGenerate={() => mutation.run()}
       />
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
         </Notice>
       )}
@@ -802,11 +802,11 @@ function ChartReadCard({ symbol }: { symbol: string }) {
         <img
           src={`data:image/png;base64,${data.chart_png_base64}`}
           alt={`${symbol} price chart`}
-          style={{ width: "100%", borderRadius: "var(--r-md)", marginTop: 12, display: "block" }}
+          style={{ width: "100%", borderRadius: "var(--r-md)", marginTop: "var(--s-3)", display: "block" }}
         />
       )}
       {data?.available && data.payload && (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           <div className="list">
             <StatRow label="Pattern" value={data.payload.pattern_name} />
             <StatRow label="Trend" value={data.payload.trend_direction} />
@@ -814,7 +814,7 @@ function ChartReadCard({ symbol }: { symbol: string }) {
           </div>
           <BulletList title="Support" items={data.payload.support_levels} />
           <BulletList title="Resistance" items={data.payload.resistance_levels} />
-          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: 10 }}>
+          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: "var(--s-2-5)" }}>
             {data.payload.narrative}
           </p>
         </div>
@@ -839,7 +839,7 @@ function ResearchBriefCard({ symbol }: { symbol: string }) {
   const data = mutation.result;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: 16 }}>
+    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
       <AiCardHeader
         title="Opal research brief"
         subtitle={`On-demand grounded research brief for ${symbol} — not generated automatically.`}
@@ -847,7 +847,7 @@ function ResearchBriefCard({ symbol }: { symbol: string }) {
         onGenerate={() => mutation.run()}
       />
       {mutation.error && (
-        <Notice variant="warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
         </Notice>
       )}
@@ -861,14 +861,14 @@ function ResearchBriefCard({ symbol }: { symbol: string }) {
         />
       )}
       {data?.available && data.payload && (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5 }}>
             {data.payload.thesis_context}
           </p>
           <BulletList title="Catalysts" items={data.payload.catalysts} />
           <BulletList title="Risk factors" items={data.payload.risk_factors} />
           <BulletList title="Recent developments" items={data.payload.recent_developments} />
-          <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 10 }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2-5)" }}>
             {data.payload.sources_note}
           </p>
         </div>
@@ -887,9 +887,9 @@ function BackButton({ onClick }: { onClick: () => void }) {
         padding: 0,
         cursor: "pointer",
         color: theme.textSecondary,
-        fontSize: 14,
+        fontSize: "var(--t-callout)",
         display: "inline-block",
-        marginBottom: 8,
+        marginBottom: "var(--s-2)",
       }}
     >
       ← Back

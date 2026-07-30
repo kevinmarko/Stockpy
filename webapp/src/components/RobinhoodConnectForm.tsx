@@ -56,7 +56,7 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
 
   if (status === "connected") {
     return (
-      <Notice variant="success" style={{ marginTop: 4 }}>
+      <Notice variant="success" style={{ marginTop: "var(--s-1)" }}>
         <span aria-hidden>✅</span>
         <span>
           Connected — credentials verified with a read-only login and saved to
@@ -67,7 +67,7 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
   }
 
   return (
-    <div className="card card-pad" style={{ marginBottom: 10 }}>
+    <div className="card card-pad" style={{ marginBottom: "var(--s-2-5)" }}>
       <label className="tile-label" htmlFor="rh-username">
         Robinhood email
       </label>
@@ -79,7 +79,7 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
         value={username}
         onChange={(e) => setUsername(e.target.value)}
       />
-      <label className="tile-label" htmlFor="rh-password" style={{ marginTop: 10 }}>
+      <label className="tile-label" htmlFor="rh-password" style={{ marginTop: "var(--s-2-5)" }}>
         Password
       </label>
       <input
@@ -90,7 +90,7 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
         value={password}
         onChange={(e) => setPassword(e.target.value)}
       />
-      <label className="tile-label" htmlFor="rh-mfa-code" style={{ marginTop: 10 }}>
+      <label className="tile-label" htmlFor="rh-mfa-code" style={{ marginTop: "var(--s-2-5)" }}>
         Authenticator app code
       </label>
       <input
@@ -103,20 +103,20 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
         value={mfaCode}
         onChange={(e) => setMfaCode(e.target.value)}
       />
-      <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 6 }}>
+      <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>
         Open your authenticator app and enter the current 6-digit code. It's
         used once to verify the login — nothing beyond that is stored.
       </div>
 
       {status === "error" && error && (
-        <Notice variant="warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
           {error}
         </Notice>
       )}
 
       <button
         className="btn btn-primary btn-block"
-        style={{ marginTop: 12 }}
+        style={{ marginTop: "var(--s-3)" }}
         disabled={
           status === "connecting" ||
           !username.trim() ||

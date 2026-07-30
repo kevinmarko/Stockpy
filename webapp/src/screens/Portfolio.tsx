@@ -58,7 +58,7 @@ export function Portfolio() {
     <div className="screen">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h1 className="screen-title">Portfolio</h1>
-        <span style={{ fontSize: 12, color: theme.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted, display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
           {p.source} · {timeAgo(p.fetched_at)}
           {p.is_stale === true &&
             (p.age_hours != null ? (
@@ -73,7 +73,7 @@ export function Portfolio() {
 
       <TabGuide tabKey="portfolio" />
 
-      <div style={{ marginBottom: 4 }}>
+      <div style={{ marginBottom: "var(--s-1)" }}>
         <div className="tile-label">Total equity</div>
         <div
           className="num"
@@ -86,15 +86,15 @@ export function Portfolio() {
           style={{
             color: p.total_unrealized_pl >= 0 ? theme.growth : theme.decline,
             fontWeight: 700,
-            fontSize: 15,
-            marginTop: 2,
+            fontSize: "var(--t-subhead)",
+            marginTop: "var(--s-0-5)",
           }}
         >
           {fmtSignedUsd(p.total_unrealized_pl)} unrealized
         </div>
       </div>
 
-      <div className="tiles" style={{ margin: "16px 0" }}>
+      <div className="tiles" style={{ margin: "var(--s-4) 0" }}>
         <Tile label="Buying power" value={fmtUsd(p.buying_power)} />
         <Tile
           label="Unrealized P&L"
@@ -106,26 +106,26 @@ export function Portfolio() {
       </div>
 
       {/* Equity curve */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Account value</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Account value</h2>
         {equity.loading ? (
           <div className="skeleton" style={{ height: 200 }} />
         ) : equity.data?.curve && equity.data.curve.length > 1 ? (
           <PerfLine data={equity.data.curve} />
         ) : (
-          <div className="empty" style={{ padding: 30 }}>
+          <div className="empty" style={{ padding: "var(--s-7-5)" }}>
             Not enough account history yet.
           </div>
         )}
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: "var(--s-3)" }}>
           <RangeToggle value={range} onChange={setRange} />
         </div>
       </section>
 
       {/* Realized performance (broker order history, FIFO round-trips) */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Realized performance</h2>
-        <p style={{ color: theme.textMuted, fontSize: 11.5, margin: "0 0 12px" }}>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Realized performance</h2>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", margin: "0 0 var(--s-3)" }}>
           Reconstructed from your Robinhood filled-order history (closed round-trips).
         </p>
         {realized.loading ? (
@@ -153,7 +153,7 @@ export function Portfolio() {
               <Tile label="Trades" value={realized.data.summary.n_trades} />
             </div>
             {realized.data.trades.length > 0 && (
-              <div className="list" style={{ marginTop: 12 }}>
+              <div className="list" style={{ marginTop: "var(--s-3)" }}>
                 {realized.data.trades.slice(0, 8).map((t, i) => (
                   <Link className="row" key={`${t.symbol}-${i}`} to={`/symbol/${t.symbol}`}>
                     <div className="row-main">
@@ -186,14 +186,14 @@ export function Portfolio() {
       </section>
 
       {/* Active follows */}
-      <section className="card card-pad" style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Active follows</h2>
+      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Active follows</h2>
         {follows.loading ? (
           <Loading lines={2} />
         ) : (follows.data ?? []).length === 0 ? (
           <div className="empty" style={{ padding: 22 }}>
             You aren't following any Pilots yet.
-            <div style={{ marginTop: 10 }}>
+            <div style={{ marginTop: "var(--s-2-5)" }}>
               <Link to="/" className="btn" style={{ display: "inline-flex" }}>
                 Browse Pilots
               </Link>
@@ -225,7 +225,7 @@ export function Portfolio() {
             ))}
           </div>
         )}
-        <p style={{ color: theme.textMuted, fontSize: 11.5, marginTop: 12 }}>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-3)" }}>
           Follows build a gated, paper-first order queue. Confirm each queue in the
           robinhood-execution flow — nothing is placed automatically.
         </p>
@@ -233,7 +233,7 @@ export function Portfolio() {
 
       {/* Positions */}
       <section className="card card-pad">
-        <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Positions</h2>
+        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Positions</h2>
         <div className="list">
           {p.positions.map((pos) => (
             <Link className="row" key={pos.symbol} to={`/symbol/${pos.symbol}`}>

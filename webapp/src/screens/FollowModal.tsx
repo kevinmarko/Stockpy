@@ -97,16 +97,16 @@ export function FollowModal({
 
         {!result ? (
           <>
-            <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Follow {pilot.name}</h2>
-            <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+            <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Follow {pilot.name}</h2>
+            <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
               Allocate a dollar amount to build a proportional, gated order queue.
             </p>
 
             <label className="tile-label" htmlFor="follow-amount">
               Amount (USD)
             </label>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 22, fontWeight: 700, color: theme.textMuted }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+              <span style={{ fontSize: "var(--t-display)", fontWeight: 700, color: theme.textMuted }}>
                 $
               </span>
               <input
@@ -121,7 +121,7 @@ export function FollowModal({
               />
             </div>
 
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
               {[250, 500, 1000, 2500].map((a) => (
                 <button
                   key={a}
@@ -141,8 +141,8 @@ export function FollowModal({
             <p
               style={{
                 color: belowMin ? theme.caution : theme.textMuted,
-                fontSize: 12,
-                marginTop: 8,
+                fontSize: "var(--t-caption)",
+                marginTop: "var(--s-2)",
               }}
             >
               {belowMin
@@ -150,7 +150,7 @@ export function FollowModal({
                 : `Minimum allocation: ${fmtUsd(minAmount)}`}
             </p>
 
-            <Notice variant="warn" style={{ marginTop: 16 }}>
+            <Notice variant="warn" style={{ marginTop: "var(--s-4)" }}>
               <span>⚠️</span>
               <span>
                 This creates a <strong>gated, paper-first order queue you must
@@ -160,12 +160,12 @@ export function FollowModal({
             </Notice>
 
             {error && (
-              <Notice variant="warn" style={{ marginTop: 12 }}>
+              <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
                 {error}
               </Notice>
             )}
 
-            <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+            <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
               <button className="btn" style={{ flex: 1 }} onClick={onClose}>
                 Cancel
               </button>
@@ -181,8 +181,8 @@ export function FollowModal({
           </>
         ) : (
           <>
-            <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Queue preview</h2>
-            <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0 }}>
+            <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Queue preview</h2>
+            <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
               {fmtUsd(result.follow.amount)} allocated to {pilot.name} across{" "}
               {result.planned_intents.length} planned orders.
             </p>
@@ -191,8 +191,8 @@ export function FollowModal({
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 8,
-                margin: "8px 0 14px",
+                gap: "var(--s-2)",
+                margin: "var(--s-2) 0 var(--s-3-5)",
               }}
             >
               <span className="tile-label" style={{ margin: 0 }}>
@@ -202,7 +202,7 @@ export function FollowModal({
             </div>
 
             <div className="card card-pad" style={{ padding: 0 }}>
-              <div className="list" style={{ padding: "0 14px" }}>
+              <div className="list" style={{ padding: "0 var(--s-3-5)" }}>
                 {result.planned_intents.map((it) => (
                   <div className="row" key={it.symbol}>
                     <div className="row-main">
@@ -236,12 +236,12 @@ export function FollowModal({
               </div>
             </div>
 
-            <Notice variant="info" style={{ marginTop: 14 }}>
+            <Notice variant="info" style={{ marginTop: "var(--s-3-5)" }}>
               <span>ℹ️</span>
               <span>{result.notice}</span>
             </Notice>
 
-            <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 10 }}>
+            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2-5)" }}>
               Per-order notional cap{" "}
               {result.notional_cap > 0 ? fmtUsd(result.notional_cap) : "not configured"}.
               {result.queue_written
@@ -251,7 +251,7 @@ export function FollowModal({
 
             <button
               className="btn btn-primary btn-block"
-              style={{ marginTop: 14 }}
+              style={{ marginTop: "var(--s-3-5)" }}
               onClick={onClose}
             >
               Done

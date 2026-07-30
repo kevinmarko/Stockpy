@@ -17,10 +17,10 @@ function StatusRow({
   return (
     <div
       className="row"
-      style={{ padding: "10px 0", display: "flex", justifyContent: "space-between" }}
+      style={{ padding: "var(--s-2-5) 0", display: "flex", justifyContent: "space-between" }}
     >
       <span className="row-title">{label}</span>
-      <span style={{ color, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+      <span style={{ color, fontWeight: 600, display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
         <span aria-hidden>{dot}</span>
         {value}
       </span>
@@ -43,8 +43,8 @@ export function PwaStatusSection() {
 
   return (
     <div className="card card-pad">
-      <h2 style={{ margin: "0 0 2px", fontSize: "var(--t-title)" }}>App status</h2>
-      <p style={{ color: theme.textSecondary, fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>App status</h2>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Service worker &amp; offline-cache telemetry for this installed app.
       </p>
 
@@ -80,7 +80,7 @@ export function PwaStatusSection() {
 
       {pwa.needRefresh && (
         <>
-          <Notice variant="warn" style={{ marginTop: 14 }}>
+          <Notice variant="warn" style={{ marginTop: "var(--s-3-5)" }}>
             <span>⚠️</span>
             <span>
               A new version has been downloaded and is ready to install. Reload to
@@ -92,7 +92,7 @@ export function PwaStatusSection() {
             block
             onClick={pwa.update}
             data-testid="pwa-update-btn"
-            style={{ marginTop: 12 }}
+            style={{ marginTop: "var(--s-3)" }}
           >
             Reload to update
           </Button>

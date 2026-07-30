@@ -96,7 +96,7 @@ export function Marketplace() {
           </p>
         </div>
         {apiMeta.useMock && (
-          <InfoTip triggerClassName="chip" triggerStyle={{ marginTop: 10 }} content="Running on mock data">
+          <InfoTip triggerClassName="chip" triggerStyle={{ marginTop: "var(--s-2-5)" }} content="Running on mock data">
             demo
           </InfoTip>
         )}
@@ -125,7 +125,7 @@ export function Marketplace() {
             variant="popular"
           />
 
-          <div className="rail-head" style={{ marginTop: 24 }}>
+          <div className="rail-head" style={{ marginTop: "var(--s-6)" }}>
             <h2>Browse by category</h2>
           </div>
           {byCategory.map(([cat, ps]) => (
@@ -133,91 +133,91 @@ export function Marketplace() {
           ))}
 
           {/* Explore: research surfaces that aren't a single Pilot */}
-          <div className="rail-head" style={{ marginTop: 24 }}>
+          <div className="rail-head" style={{ marginTop: "var(--s-6)" }}>
             <h2>Explore</h2>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "var(--s-3)" }}>
             <Link to="/models" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🧠</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>The models</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧠</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>The models</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 CPCV-gated ML registry
               </div>
             </Link>
             <Link to="/pairs" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🔗</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Pairs radar</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🔗</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Pairs radar</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Cointegrated stat-arb candidates
               </div>
             </Link>
             <Link to="/options" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🎯</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Options premium</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🎯</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Options premium</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Per-symbol premium directives
               </div>
             </Link>
             <Link to="/attribution" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🧮</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Attribution</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧮</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Attribution</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Factor tilts & correlation clusters
               </div>
             </Link>
             <Link to="/observability" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🛰️</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Mission Control</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🛰️</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Mission Control</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Risk, equity curve, regime &amp; forecast skill
               </div>
             </Link>
             <Link to="/strategy-health" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🛡️</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Strategy health</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🛡️</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Strategy health</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Deployability gates, pilot by pilot
               </div>
             </Link>
             <Link to="/calibration" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🎚️</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Calibration</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🎚️</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Calibration</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Did our actual calls work?
               </div>
             </Link>
             <Link to="/data-explorer" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🗂️</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Data explorer</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🗂️</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Data explorer</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Raw bars, fundamentals &amp; macro
               </div>
             </Link>
             <Link to="/signals" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🧬</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Signal breakdown</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧬</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Signal breakdown</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Per-module contributions by symbol
               </div>
             </Link>
             <Link to="/forecast" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>📈</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Forecast viewer</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>📈</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Forecast viewer</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Multi-horizon price forecast &amp; MC band
               </div>
             </Link>
             <Link to="/commands" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>⌨️</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Commands</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>⌨️</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Commands</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 CLI autocomplete &amp; validation
               </div>
             </Link>
             <Link to="/sector-selection" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: 22 }} aria-hidden>🧩</div>
-              <div style={{ fontWeight: 700, marginTop: 6 }}>Sector selection</div>
-              <div style={{ color: theme.textMuted, fontSize: 12, marginTop: 2 }}>
+              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧩</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Sector selection</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Semantic related-sector ranking
               </div>
             </Link>
@@ -226,7 +226,7 @@ export function Marketplace() {
           <p
             style={{
               color: theme.textMuted,
-              fontSize: 11.5,
+              fontSize: "var(--t-footnote)",
               marginTop: 28,
               textAlign: "center",
               lineHeight: 1.5,

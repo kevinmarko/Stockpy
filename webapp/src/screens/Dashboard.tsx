@@ -174,12 +174,12 @@ export function Dashboard() {
 
   return (
     <div className="screen" data-testid="dashboard-screen">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-4)" }}>
         <h1 className="screen-title" data-testid="dashboard-title">Dashboard</h1>
         <button 
           className="btn" 
           onClick={() => setLayout(DEFAULT_LAYOUT)}
-          style={{ fontSize: 12, padding: "4px 8px" }}
+          style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
         >
           Reset Layout
         </button>
@@ -191,7 +191,7 @@ export function Dashboard() {
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 16,
+          gap: "var(--s-4)",
           alignItems: "start",
         }}
         onDragOver={handleDragOver}
@@ -221,11 +221,11 @@ export function Dashboard() {
               alignItems: "center",
               borderBottom: `1px solid ${theme.border}`,
               paddingBottom: 8,
-              marginBottom: 12,
+              marginBottom: "var(--s-3)",
               cursor: "move",
             }}>
               <span style={{ fontWeight: 700, color: theme.textPrimary }}>{w.title}</span>
-              <div style={{ display: "flex", gap: 4 }}>
+              <div style={{ display: "flex", gap: "var(--s-1)" }}>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -287,7 +287,7 @@ export function Dashboard() {
                     }}
                     style={{
                       fontSize: 10,
-                      padding: "2px 4px",
+                      padding: "var(--s-0-5) var(--s-1)",
                       background: w.size === sz ? theme.accent : theme.surface2,
                       color: w.size === sz ? theme.base : theme.textPrimary,
                       border: "none",
@@ -310,7 +310,7 @@ export function Dashboard() {
                     <Loading lines={2} />
                   ) : !shownPortfolio ? (
                     port.status === 404 ? (
-                      <div data-testid="portfolio-empty-state" style={{ padding: 8 }}>
+                      <div data-testid="portfolio-empty-state" style={{ padding: "var(--s-2)" }}>
                         <h3>Nothing here yet</h3>
                         <p>Run the Stockpy pipeline to produce data, then pull to refresh.</p>
                       </div>
@@ -322,7 +322,7 @@ export function Dashboard() {
                       {portfolioIsOffline && (
                         <Notice
                           variant="warn"
-                          style={{ marginBottom: 12, fontSize: 12 }}
+                          style={{ marginBottom: "var(--s-3)", fontSize: "var(--t-caption)" }}
                           data-testid="portfolio-offline-warning"
                         >
                           Offline: using cached data. <button onClick={port.reload} style={{ background: "none", border: "none", color: theme.accent, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Retry</button>
@@ -335,13 +335,13 @@ export function Dashboard() {
                         <button
                           className="btn"
                           onClick={port.reload}
-                          style={{ fontSize: 10, padding: "2px 6px" }}
+                          style={{ fontSize: 10, padding: "var(--s-0-5) var(--s-1-5)" }}
                           data-testid="portfolio-refresh-btn"
                         >
                           Refresh
                         </button>
                       </div>
-                      <div className="num" style={{ color: shownPortfolio.total_unrealized_pl >= 0 ? theme.growth : theme.decline, fontSize: 13, marginBottom: 12 }}>
+                      <div className="num" style={{ color: shownPortfolio.total_unrealized_pl >= 0 ? theme.growth : theme.decline, fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
                         {fmtSignedUsd(shownPortfolio.total_unrealized_pl)} unrealized
                       </div>
                       <div className="tiles">
@@ -366,18 +366,18 @@ export function Dashboard() {
                     <div
                       className="empty"
                       data-testid="equity-empty"
-                      style={{ padding: "32px 8px", background: "var(--surface-2)", borderRadius: 12 }}
+                      style={{ padding: "var(--s-8) var(--s-2)", background: "var(--surface-2)", borderRadius: "var(--r-md)" }}
                     >
                       <div style={{ fontWeight: 600, color: theme.textSecondary }}>
                         No account performance data yet
                       </div>
-                      <div style={{ marginTop: 6, fontSize: 13 }}>
+                      <div style={{ marginTop: "var(--s-1-5)", fontSize: "var(--t-body)" }}>
                         No curve data available. Run the Stockpy pipeline to accumulate an
                         account equity history.
                       </div>
                     </div>
                   )}
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: "var(--s-2)" }}>
                     <RangeToggle value={range} onChange={setRange} />
                   </div>
                 </div>
@@ -395,11 +395,11 @@ export function Dashboard() {
                     <ErrorState message={pilots.error ?? "No data"} status={pilots.status} onRetry={pilots.reload} />
                   ) : (
                     <div>
-                      <div className="list" style={{ marginBottom: 12 }}>
+                      <div className="list" style={{ marginBottom: "var(--s-3)" }}>
                         {pilots.data.slice(0, 5).map(p => {
                           const isChecked = selectedTopPilots.includes(p.id);
                           return (
-                            <div key={p.id} className="row" style={{ padding: "8px 0", display: "flex", alignItems: "center", gap: 8 }}>
+                            <div key={p.id} className="row" style={{ padding: "var(--s-2) 0", display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
                               <input
                                 type="checkbox"
                                 checked={isChecked}
@@ -409,7 +409,7 @@ export function Dashboard() {
                               />
                               <div className="row-main" style={{ flex: 1 }}>
                                 <span className="row-title">{p.name}</span>
-                                <span className="row-sub" style={{ fontSize: 11, color: theme.textSecondary }}>{p.category}</span>
+                                <span className="row-sub" style={{ fontSize: "var(--t-micro)", color: theme.textSecondary }}>{p.category}</span>
                               </div>
                               <div className="row-end">
                                 <div className="num" style={{ fontWeight: 700 }}>
@@ -425,7 +425,7 @@ export function Dashboard() {
                         onClick={handleCompareSelected}
                         disabled={selectedTopPilots.length === 0}
                         data-testid="compare-selected-btn"
-                        style={{ width: "100%", fontSize: 12 }}
+                        style={{ width: "100%", fontSize: "var(--t-caption)" }}
                       >
                         Compare Selected
                       </button>
