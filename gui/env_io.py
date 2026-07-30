@@ -200,6 +200,34 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RAG_INDEX_MAX_DOCUMENTS",            # int — FAISS index FIFO eviction cap
     "RAG_RETRIEVAL_TOP_K",                # int — nearest-neighbor count per query
     "RAG_INDEX_LOOKBACK_DAYS",            # int — indexing scan window (days)
+    # ETF volatility-transmission risk overlay (Ben-David, Franzoni & Moussawi
+    # 2018, Journal of Finance 73(6)) — holdings ingestion (data/etf_holdings.py),
+    # market-residualized measurement columns + portfolio covariance inflation
+    # (risk/etf_transmission.py), and the per-name sizing derate
+    # (sizing/position_sizer.py). All 19 keys below are non-secret: SEC N-PORT
+    # and the optional iShares CSV endpoint are both unauthenticated, so there
+    # is no credential material anywhere in this family. Every default
+    # reproduces today's exact no-op behavior (master switches default False;
+    # numeric knobs are only ever consulted once their master switch is True).
+    "ETF_HOLDINGS_ENABLED",
+    "ETF_HOLDINGS_TICKERS",
+    "ETF_HOLDINGS_REFRESH_DAYS",
+    "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
+    "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
+    "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
+    "ETF_TRANSMISSION_ENABLED",
+    "ETF_HOLDINGS_MARKET_PROXY",
+    "ETF_TRANSMISSION_WRAPPERS",
+    "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
+    "ETF_TRANSMISSION_WINDOW_DAYS",
+    "ETF_TRANSMISSION_MIN_OBS",
+    "ETF_TRANSMISSION_SIZING_ENABLED",
+    "ETF_TRANSMISSION_MAX_DERATE",
+    "ETF_TRANSMISSION_OWNERSHIP_REFERENCE",
+    "ETF_TRANSMISSION_MIN_MULTIPLIER",
+    "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
+    "ETF_TRANSMISSION_COV_INFLATION",
+    "ETF_TRANSMISSION_COV_WINDOW_DAYS",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -279,6 +307,10 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "SECTOR_FORECAST_CONFIGS",  # dict[str, dict] per-sector forecast overrides
         "CORS_ALLOWED_ORIGINS",  # list[str] of allowed browser origins
         "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}
+        # ETF volatility-transmission overlay: three ticker/symbol lists.
+        "ETF_HOLDINGS_TICKERS",
+        "ETF_TRANSMISSION_WRAPPERS",
+        "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
     }
 )
 

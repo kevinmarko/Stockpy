@@ -84,6 +84,32 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
     ("PILOTS_API_ENABLED", "bool"),
     ("CORS_ALLOWED_ORIGINS", "json"),
     ("DEFAULT_TICKERS", "tickers"),
+    # ETF volatility-transmission overlay (data/etf_holdings.py,
+    # risk/etf_transmission.py, sizing/position_sizer.py). All 19 settings
+    # default to today's exact no-op behavior; see gui/env_io.py's ALLOWED_KEYS
+    # block for the full family docstring. Deliberate departure from the
+    # SECTOR_HEAT_*/ATTENTION_* precedent (those stay .env-hand-edit-only,
+    # neither ALLOWED_KEYS nor _SETTINGS_LAYOUT) -- this feature family's
+    # tunables are exposed here intentionally.
+    ("ETF_HOLDINGS_ENABLED", "bool"),
+    ("ETF_HOLDINGS_ISSUER_CSV_ENABLED", "bool"),
+    ("ETF_TRANSMISSION_ENABLED", "bool"),
+    ("ETF_TRANSMISSION_SIZING_ENABLED", "bool"),
+    ("ETF_TRANSMISSION_PORTFOLIO_ENABLED", "bool"),
+    ("ETF_HOLDINGS_REFRESH_DAYS", "int"),
+    ("ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD", "int"),
+    ("ETF_TRANSMISSION_WINDOW_DAYS", "int"),
+    ("ETF_TRANSMISSION_MIN_OBS", "int"),
+    ("ETF_TRANSMISSION_COV_WINDOW_DAYS", "int"),
+    ("ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE", "number"),
+    ("ETF_TRANSMISSION_MAX_DERATE", "number"),
+    ("ETF_TRANSMISSION_OWNERSHIP_REFERENCE", "number"),
+    ("ETF_TRANSMISSION_MIN_MULTIPLIER", "number"),
+    ("ETF_TRANSMISSION_COV_INFLATION", "number"),
+    ("ETF_HOLDINGS_MARKET_PROXY", "text"),
+    ("ETF_HOLDINGS_TICKERS", "tickers"),
+    ("ETF_TRANSMISSION_WRAPPERS", "tickers"),
+    ("ETF_TRANSMISSION_EXCLUDED_SYMBOLS", "tickers"),
 ]
 
 
@@ -150,11 +176,28 @@ def render_settings_manager() -> None:
                         "(other settings will still be saved)."
                     )
             elif kind == "tickers":
-                default_list = (
-                    cur if isinstance(cur, list) else list(settings.DEFAULT_TICKERS)
-                )
+                # `cur` is either the live list (settings default / no .env
+                # entry yet) or a raw JSON-encoded string (already written to
+                # .env by a prior save) -- parse the latter case explicitly
+                # rather than falling back to a hardcoded, key-agnostic
+                # default (a fallback to settings.DEFAULT_TICKERS here would
+                # silently mis-render any OTHER ticker-list field, e.g.
+                # ETF_HOLDINGS_TICKERS, once .env has its own saved value).
+                if isinstance(cur, list):
+                    default_list = cur
+                else:
+                    parsed: Any = None
+                    if isinstance(cur, str) and cur != "":
+                        try:
+                            parsed = json.loads(cur)
+                        except Exception:
+                            parsed = None
+                    default_list = (
+                        parsed if isinstance(parsed, list)
+                        else list(getattr(settings, key, []))
+                    )
                 text = st.text_input(
-                    key, value=", ".join(default_list),
+                    key, value=", ".join(str(t) for t in default_list),
                     help="Comma-separated tickers; stored as a JSON array.",
                 )
                 updates[key] = [t.strip().upper() for t in text.split(",") if t.strip()]
