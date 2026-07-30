@@ -547,6 +547,17 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify({ symbol }),
     }),
+  // ---- Job Execution & Streaming ----
+  createJob: (job_type: string, params?: Record<string, unknown>) =>
+    http<JobRecord>("/jobs", {
+      method: "POST",
+      body: JSON.stringify({ job_type, params }),
+    }),
+  getJobStatus: (job_id: string) => http<JobRecord>(`/jobs/${job_id}`),
+  cancelJob: (job_id: string) =>
+    http<{ job_id: string; cancelled: boolean }>(`/jobs/${job_id}/cancel`, {
+      method: "POST",
+    }),
 };
 
 /**

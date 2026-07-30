@@ -31,6 +31,7 @@ import { SentimentDynamics } from "./screens/SentimentDynamics";
 import { ForecastViewer } from "./screens/ForecastViewer";
 import { SectorSelection } from "./screens/SectorSelection";
 import { Commands } from "./screens/Commands";
+import { Console } from "./screens/Console";
 import { AgenticTrading } from "./screens/AgenticTrading";
 import { ResearchHub } from "./screens/ResearchHub";
 import { TradingHub } from "./screens/TradingHub";
@@ -468,6 +469,7 @@ export default function App() {
           <Route path="/forecast" element={<ForecastViewer />} />
           <Route path="/sector-selection" element={<SectorSelection />} />
           <Route path="/commands" element={<Commands />} />
+          <Route path="/console" element={<Console />} />
           <Route path="/agentic" element={<AgenticTrading />} />
           <Route path="/research" element={<ResearchHub />} />
           <Route path="/trading" element={<TradingHub />} />

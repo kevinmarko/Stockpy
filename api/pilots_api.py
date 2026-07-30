@@ -3342,9 +3342,10 @@ def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
         "written": accepted,
         "rejected": rejected,
         "applies": "next_daemon_restart",
+        "restart_required": True,
+        "restart_endpoint": "POST /daemon/restart",
         "note": (
             "Accepted values written to .env. settings is not patched "
-            "in-process — this API and any already-launched pipeline still use "
-            "the previous values until restarted."
+            "in-process — restart the daemon via POST /daemon/restart to apply."
         ),
     }

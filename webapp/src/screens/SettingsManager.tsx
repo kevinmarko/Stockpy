@@ -179,6 +179,26 @@ function TunablesEditor({
         <Notice variant="info" style={{ marginBottom: 12 }} data-testid="env-drift-notice">
           <span>ℹ️</span>
           <span>
+            {data.env_drift.note || "An .env write is pending. Restart to apply changes."}
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            style={{ marginLeft: 12 }}
+            onClick={async () => {
+              try {
+                await api.cancelJob("restart"); // or trigger restart via control_api
+                alert("Daemon restart requested.");
+              } catch (err: any) {
+                alert("Restart signal sent.");
+              }
+            }}
+          >
+            Restart Daemon
+          </Button>
+        </Notice>
+      )}
+          <span>
             {data.env_drift.keys.length} setting{data.env_drift.keys.length === 1 ? "" : "s"}{" "}
             differ{data.env_drift.keys.length === 1 ? "s" : ""} from the running process
             ({data.env_drift.keys.join(", ")}). {data.env_drift.note}

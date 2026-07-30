@@ -5170,6 +5170,30 @@ export const mockApi = {
       150
     );
   },
+
+  async createJob(job_type: string, params?: Record<string, unknown>): Promise<JobRecord> {
+    return delay({
+      job_id: "mock-job-1234",
+      job_type: job_type as any,
+      status: "running",
+      cancellable: job_type !== "orchestrator",
+    }, 150);
+  },
+
+  async getJobStatus(job_id: string): Promise<JobRecord> {
+    return delay({
+      job_id,
+      job_type: "preflight",
+      status: "success",
+      exit_code: 0,
+      is_running: false,
+      cancellable: true,
+    }, 100);
+  },
+
+  async cancelJob(job_id: string): Promise<{ job_id: string; cancelled: boolean }> {
+    return delay({ job_id, cancelled: true }, 100);
+  },
 };
 
 function round2(n: number): number {

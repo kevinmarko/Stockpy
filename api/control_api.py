@@ -471,3 +471,133 @@ def set_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
 
     daemon.set_interval(body.interval_seconds)
     return {"interval_seconds": body.interval_seconds}
+
+
+@app.post("/daemon/restart", dependencies=[Depends(require_command_token)])
+def restart_daemon() -> Dict[str, Any]:
+    """Signal the daemon to initiate a clean shutdown so the process supervisor respawns it."""
+    import sys
+    daemon = get_daemon()
+    if daemon is not None and daemon.is_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot restart while an orchestrator run is currently active."
+        )
+
+    # Schedule exit on event loop to allow response to complete
+    import asyncio
+    asyncio.get_event_loop().call_later(0.5, lambda: sys.exit(0))
+    return {"restarting": True, "message": "Daemon restart signal initiated."}
+
+
+# ---------------------------------------------------------------------------
+# Background Job Execution & Log Streaming Endpoints (JOBS_API_ENABLED=True)
+# ---------------------------------------------------------------------------
+
+
+class JobCreateRequest(BaseModel):
+    job_type: str = Field(..., description="Job type to execute")
+    params: Optional[Dict[str, Any]] = Field(default=None, description="Optional job parameters")
+
+
+@app.post("/jobs", dependencies=[Depends(require_command_token)])
+def create_job(body: JobCreateRequest) -> Dict[str, Any]:
+    """Launch a background process job (preflight, pytest, validation, verify, gravity)."""
+    if not settings.JOBS_API_ENABLED:
+        raise HTTPException(status_code=403, detail="JOBS_API_ENABLED is False.")
+
+    from api._jobs import JobType, job_manager
+
+    try:
+        jtype = JobType(body.job_type)
+        rec = job_manager.start_job(jtype, body.params)
+        return {
+            "job_id": rec.job_id,
+            "job_type": rec.job_type.value,
+            "status": rec.handle.status.value,
+            "cancellable": rec.cancellable,
+        }
+    except ValueError as err:
+        if "already running" in str(err):
+            raise HTTPException(status_code=409, detail=str(err)) from err
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
+@app.get("/jobs/{job_id}", dependencies=[Depends(require_read_token)])
+def get_job_status(job_id: str) -> Dict[str, Any]:
+    """Inspect the status of a launched background job."""
+    if not settings.JOBS_API_ENABLED:
+        raise HTTPException(status_code=403, detail="JOBS_API_ENABLED is False.")
+
+    from api._jobs import job_manager
+
+    rec = job_manager.get_job(job_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}")
+
+    return {
+        "job_id": rec.job_id,
+        "job_type": rec.job_type.value,
+        "status": rec.handle.status.value,
+        "exit_code": rec.handle.exit_code(),
+        "is_running": rec.handle.is_running(),
+        "cancellable": rec.cancellable,
+    }
+
+
+@app.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_command_token)])
+def cancel_job(job_id: str) -> Dict[str, Any]:
+    """Cancel a running background job."""
+    if not settings.JOBS_API_ENABLED:
+        raise HTTPException(status_code=403, detail="JOBS_API_ENABLED is False.")
+
+    from api._jobs import job_manager
+
+    try:
+        success = job_manager.cancel_job(job_id)
+        if not success:
+            raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}")
+        return {"job_id": job_id, "cancelled": True}
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
+@app.get("/jobs/{job_id}/stream", dependencies=[Depends(require_read_token)])
+def stream_job_logs(job_id: str, offset: int = 0):
+    """Stream live logs for a job over Server-Sent Events (SSE)."""
+    import asyncio
+    from fastapi.responses import StreamingResponse
+    from api._jobs import job_manager
+    from api._redact import redact_line
+
+    if not settings.JOBS_API_ENABLED:
+        raise HTTPException(status_code=403, detail="JOBS_API_ENABLED is False.")
+
+    rec = job_manager.get_job(job_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}")
+
+    log_path = rec.handle.log_path
+
+    async def log_event_generator():
+        current_offset = max(0, offset)
+        while True:
+            if log_path.exists():
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(current_offset)
+                    lines = f.readlines()
+                    if lines:
+                        for line in lines:
+                            scrubbed = redact_line(line.rstrip("\n"))
+                            yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
+                        current_offset = f.tell()
+
+            if not rec.handle.is_running():
+                # Stream final lines if any and stop
+                yield f"event: end\ndata: Job completed with exit code {rec.handle.exit_code()}\n\n"
+                break
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(log_event_generator(), media_type="text/event-stream")
+
