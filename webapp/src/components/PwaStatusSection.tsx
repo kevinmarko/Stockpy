@@ -1,6 +1,6 @@
 import { usePwaStatus } from "../hooks/usePwaStatus";
 import { theme } from "../theme";
-import { Button } from "./ui";
+import { Button, Notice } from "./ui";
 
 function StatusRow({
   label,
@@ -80,13 +80,13 @@ export function PwaStatusSection() {
 
       {pwa.needRefresh && (
         <>
-          <div className="notice notice-warn" style={{ marginTop: 14 }}>
+          <Notice variant="warn" style={{ marginTop: 14 }}>
             <span>⚠️</span>
             <span>
               A new version has been downloaded and is ready to install. Reload to
               switch to it.
             </span>
-          </div>
+          </Notice>
           <Button
             variant="primary"
             block

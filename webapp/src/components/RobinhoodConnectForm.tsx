@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import { ApiError } from "../api/types";
 import { theme } from "../theme";
+import { Notice } from "./ui";
 
 type RobinhoodConnectStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -55,10 +56,13 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
 
   if (status === "connected") {
     return (
-      <p style={{ color: theme.growth, fontSize: 13, marginTop: 4 }}>
-        ✅ Connected — credentials verified with a read-only login and saved to
-        your local backend.
-      </p>
+      <Notice variant="success" style={{ marginTop: 4 }}>
+        <span aria-hidden>✅</span>
+        <span>
+          Connected — credentials verified with a read-only login and saved to
+          your local backend.
+        </span>
+      </Notice>
     );
   }
 
@@ -105,7 +109,9 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
       </div>
 
       {status === "error" && error && (
-        <p style={{ color: theme.decline, fontSize: 13, marginTop: 10 }}>{error}</p>
+        <Notice variant="warn" style={{ marginTop: 10 }}>
+          {error}
+        </Notice>
       )}
 
       <button

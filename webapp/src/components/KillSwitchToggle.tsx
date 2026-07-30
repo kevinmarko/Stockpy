@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import { useMutation } from "../hooks/useMutation";
-import { Button, Input } from "./ui";
+import { Button, Input, Notice } from "./ui";
 import { Modal } from "./Modal";
 import { Toggle } from "./Toggle";
 import { theme } from "../theme";
@@ -101,10 +101,10 @@ export function KillSwitchToggle({
         produce no recommendations (or submit no orders in live mode).
       </p>
       {(pauseMutation.error || resumeMutation.error) && (
-        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: 10 }}>
           <span>⚠️</span>
           <span>{pauseMutation.error ?? resumeMutation.error}</span>
-        </div>
+        </Notice>
       )}
 
       {confirmKind && (

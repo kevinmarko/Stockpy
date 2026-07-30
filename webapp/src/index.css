@@ -909,6 +909,11 @@ button:focus-visible {
   border: 1px solid rgba(56, 189, 248, 0.22);
   color: #bfe6fb;
 }
+.notice-success {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  color: #a7f3d0;
+}
 
 /* ---- States ---- */
 .empty {

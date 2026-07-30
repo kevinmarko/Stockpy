@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { SectorSelectionRow, SectorSelectionView } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Input, Loading, StaleDataNotice, Table } from "../components/ui";
+import { ErrorState, Input, Loading, Notice, StaleDataNotice, Table } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { fmtDate, fmtNum } from "../format";
@@ -193,12 +193,12 @@ export function SectorSelection() {
           </div>
 
           {anyReviewUnavailable && (
-            <div className="notice notice-warn" style={{ marginBottom: 12 }} data-testid="review-unavailable-banner">
+            <Notice variant="warn" style={{ marginBottom: 12 }} data-testid="review-unavailable-banner">
               <span>
                 Investor-forum comment volume is not being ingested, so the Review term is
                 unavailable. Sector Heat is computed from news volume only.
               </span>
-            </div>
+            </Notice>
           )}
 
           <section className="card card-pad" style={{ overflowX: "auto" }}>

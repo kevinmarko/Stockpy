@@ -21,6 +21,7 @@ import {
   Input,
   Loading,
   MetricBadge,
+  Notice,
 } from "../components/ui";
 import { KillSwitchToggle } from "../components/KillSwitchToggle";
 import { Modal } from "../components/Modal";
@@ -263,10 +264,10 @@ function BrokerageSection() {
               Disconnect
             </Button>
             {disconnect.error && (
-              <div className="notice notice-warn" style={{ marginTop: 10 }}>
+              <Notice variant="warn" style={{ marginTop: 10 }}>
                 <span>⚠️</span>
                 <span>{disconnect.error}</span>
-              </div>
+              </Notice>
             )}
             <p
               style={{
@@ -444,39 +445,39 @@ function RunNowButton({
         Run now
       </Button>
       {error && (
-        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: 10 }}>
           <span>⚠️</span>
           <span>{error}</span>
-        </div>
+        </Notice>
       )}
       {result && !result.ok && result.error === "already_running" && (
-        <div className="notice notice-info" style={{ marginTop: 10 }}>
+        <Notice variant="info" style={{ marginTop: 10 }}>
           <span>ℹ️</span>
           <span>
             A run is already in flight
             {result.existing_run_id ? ` (${result.existing_run_id})` : ""}.
           </span>
-        </div>
+        </Notice>
       )}
       {result && !result.ok && result.error === "kill_switch_active" && (
-        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: 10 }}>
           <span>⚠️</span>
           <span>
             Kill switch active{result.kill_switch_reason ? `: ${result.kill_switch_reason}` : ""}.
           </span>
-        </div>
+        </Notice>
       )}
       {result && !result.ok && result.error === "unavailable" && (
-        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: 10 }}>
           <span>⚠️</span>
           <span>Orchestrator daemon is not reachable.</span>
-        </div>
+        </Notice>
       )}
       {result?.ok && (
-        <div className="notice notice-info" style={{ marginTop: 10 }}>
+        <Notice variant="success" style={{ marginTop: 10 }}>
           <span>✅</span>
           <span>Run queued{result.run_id ? ` (${result.run_id})` : ""}.</span>
-        </div>
+        </Notice>
       )}
     </div>
   );
@@ -538,14 +539,14 @@ function PipelineStatusSection({
           </div>
 
           {status.last_run_source === "state_snapshot" && (
-            <div className="notice notice-info" style={{ marginTop: 10 }}>
+            <Notice variant="info" style={{ marginTop: 10 }}>
               <span>ℹ️</span>
               <span>
                 No run record — the daemon has never triggered a run this
                 process lifetime (or restarted since). Last pipeline output:{" "}
                 {fmtAge(status.pipeline.snapshot_age_seconds)}.
               </span>
-            </div>
+            </Notice>
           )}
 
           <div className="row">
@@ -561,12 +562,12 @@ function PipelineStatusSection({
           )}
 
           {status.kill_switch.active && (
-            <div className="notice notice-warn" style={{ marginTop: 10 }}>
+            <Notice variant="warn" style={{ marginTop: 10 }}>
               <span>⚠️</span>
               <span>
                 Kill switch active{status.kill_switch.reason ? `: ${status.kill_switch.reason}` : ""}.
               </span>
-            </div>
+            </Notice>
           )}
 
           <RunNowButton disabled={status.daemon.is_running === true} onTriggered={onRetry} />
@@ -672,7 +673,7 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
       <div className="row-sub" style={{ marginBottom: 4 }}>
         Errors ({errors.entry_count}) · as of {timeAgo(errors.generated_at)}
       </div>
-      <div className="notice notice-warn">
+      <Notice variant="warn">
         <span>⚠️</span>
         <span>
           {errors.entry_count} symbol{errors.entry_count === 1 ? "" : "s"} failed on
@@ -681,7 +682,7 @@ function ErrorsSubsection({ errors }: { errors: AutomationStatus["errors"] }) {
             : ""}
           .
         </span>
-      </div>
+      </Notice>
       <div className="list" style={{ marginTop: 4 }}>
         {errors.entries.map((entry, i) => (
           <div className="row" key={i} style={{ padding: "6px 0" }}>
@@ -751,10 +752,10 @@ function IntervalEditor({
         Save
       </Button>
       {error && (
-        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: 10 }}>
           <span>⚠️</span>
           <span>{error}</span>
-        </div>
+        </Notice>
       )}
     </div>
   );
@@ -792,14 +793,14 @@ function ScheduleSection({
             </div>
           </div>
           {schedule.interval.drift && (
-            <div className="notice notice-info" style={{ marginTop: 10 }}>
+            <Notice variant="info" style={{ marginTop: 10 }}>
               <span>ℹ️</span>
               <span>
                 Running: {schedule.interval.running_value}s · Configured:{" "}
                 {schedule.interval.configured_value}s. Restart the daemon to
                 apply the configured value.
               </span>
-            </div>
+            </Notice>
           )}
 
           <IntervalEditor schedule={schedule} onSaved={onRetry} />

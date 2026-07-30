@@ -13,7 +13,7 @@ import type {
 import { LOG_LEVELS } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading, Table, Tile } from "../components/ui";
+import { Button, ErrorState, Input, Loading, Notice, Table, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { RangeToggle } from "../components/RangeToggle";
 import { DrawdownArea, PerfLine } from "../components/charts";
@@ -140,10 +140,10 @@ function MacroGateControl({
         </p>
       )}
       {putMutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 8 }}>
+        <Notice variant="warn" style={{ marginTop: 8 }}>
           <span>⚠️</span>
           <span>{putMutation.error}</span>
-        </div>
+        </Notice>
       )}
 
       {confirmKind && (

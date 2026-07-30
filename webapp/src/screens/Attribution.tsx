@@ -10,7 +10,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Loading, StaleDataNotice, Table, Tile } from "../components/ui";
+import { Button, EmptyState, ErrorState, Loading, Notice, StaleDataNotice, Table, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -276,13 +276,13 @@ function BrinsonFachlerSection() {
         </Table>
 
         {clientWarnings.length > 0 && (
-          <div className="notice notice-warn" style={{ marginTop: 12 }}>
+          <Notice variant="warn" style={{ marginTop: 12 }}>
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {clientWarnings.map((w) => (
                 <li key={w}>{w}</li>
               ))}
             </ul>
-          </div>
+          </Notice>
         )}
 
         <div style={{ marginTop: 14 }}>
@@ -292,9 +292,9 @@ function BrinsonFachlerSection() {
         </div>
 
         {mutation.error && (
-          <div className="notice notice-warn" style={{ marginTop: 12 }} data-testid="brinson-error">
+          <Notice variant="warn" style={{ marginTop: 12 }} data-testid="brinson-error">
             <span>{mutation.error}</span>
-          </div>
+          </Notice>
         )}
       </section>
 
@@ -310,13 +310,13 @@ function BrinsonFachlerSection() {
           </div>
 
           {result.validation_warnings.length > 0 && (
-            <div className="notice notice-info" style={{ marginBottom: 12 }}>
+            <Notice variant="info" style={{ marginBottom: 12 }}>
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {result.validation_warnings.map((w) => (
                   <li key={w}>{w}</li>
                 ))}
               </ul>
-            </div>
+            </Notice>
           )}
 
           <section className="card card-pad" style={{ marginBottom: 16, overflowX: "auto" }}>
@@ -425,12 +425,12 @@ function AttributionBody({ data }: { data: PortfolioAttributionT }) {
       </p>
 
       {heavy.length > 0 && (
-        <div className="notice notice-warn" style={{ marginBottom: 12 }}>
+        <Notice variant="warn" style={{ marginBottom: 12 }}>
           <span>
             High concentration: {heavy.map((c) => c.symbols.join("+")).join(", ")} move together
             and make up a large share of your book. Consider diversifying.
           </span>
-        </div>
+        </Notice>
       )}
 
       {cc.clusters.length === 0 ? (

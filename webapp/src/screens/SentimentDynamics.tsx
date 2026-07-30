@@ -17,7 +17,7 @@ import type {
   SentimentHistory,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Tile } from "../components/ui";
+import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { fmtDate, fmtNum } from "../format";
@@ -34,7 +34,7 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
   return (
     <>
       {d.source === "unavailable" && (
-        <div className="notice notice-info" style={{ marginBottom: 16 }}>
+        <Notice variant="info" style={{ marginBottom: 16 }}>
           <span>
             🔌 <strong>Antigravity agent unavailable for this request</strong> — the
             agent isn't configured (SDK/API key) or the live call failed. Sentiment
@@ -43,7 +43,7 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
             independently from price history via a real GJR-GARCH fit, not the
             agent.
           </span>
-        </div>
+        </Notice>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
@@ -151,8 +151,8 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
       {!loading && !error && chartData.length > 0 && (
         <>
           {alignedDays < _MIN_ALIGNED_DAYS && (
-            <div
-              className="notice notice-info"
+            <Notice
+              variant="info"
               style={{ marginBottom: 12 }}
               data-testid="sentiment-vix-coverage-notice"
             >
@@ -161,7 +161,7 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
                 VIX history so far (the sentiment archive started 2026-07) — not enough for a
                 trend read yet, minimum {_MIN_ALIGNED_DAYS}. Showing what history exists below.
               </span>
-            </div>
+            </Notice>
           )}
 
           <div style={{ height: 110 }} data-testid="sentiment-vix-vix-panel">

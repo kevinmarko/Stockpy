@@ -3,7 +3,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Table } from "../components/ui";
+import { ErrorState, Loading, Notice, Table } from "../components/ui";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
 import { SymbolComparison } from "../components/SymbolComparison";
@@ -239,9 +239,9 @@ export function Comparison() {
 
       {/* Row Error Banner for fetch failures */}
       {Object.keys(fetchErrors).length > 0 && (
-        <div data-testid="row-error-banner" style={{ background: theme.decline, color: theme.base, padding: "10px 16px", borderRadius: 6, marginBottom: 16, fontSize: 13 }}>
+        <Notice variant="warn" style={{ marginBottom: 16 }} data-testid="row-error-banner">
           <strong>Notice:</strong> Failed to load performance curve data for some strategies.
-        </div>
+        </Notice>
       )}
 
       {/* Comparison Grid */}

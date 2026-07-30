@@ -18,7 +18,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading } from "../components/ui";
+import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, timeAgo } from "../format";
@@ -121,9 +121,9 @@ function PairAnalyzeSection() {
       </div>
 
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: 12 }}>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
 
       {result && !result.found && (
@@ -158,12 +158,12 @@ function PairAnalyzeSection() {
           </div>
 
           {result.half_life_tradeable === false && (
-            <div className="notice notice-warn" style={{ marginTop: 12 }}>
+            <Notice variant="warn" style={{ marginTop: 12 }}>
               <span>
                 Half-life is outside the tradeable 5–60 day band — treat this pair as not
                 currently actionable even though a signal is shown above.
               </span>
-            </div>
+            </Notice>
           )}
 
           {result.z_score_series.length > 1 && (
@@ -248,9 +248,9 @@ function PairScanSection() {
       </div>
 
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: 12 }}>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
 
       {result && (

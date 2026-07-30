@@ -4,7 +4,7 @@ import { api, apiMeta } from "../api/client";
 import type { PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { completeOnboarding } from "../onboarding";
-import { CategoryChip, DeployableBadge, Loading } from "../components/ui";
+import { CategoryChip, DeployableBadge, Loading, Notice } from "../components/ui";
 import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
@@ -231,13 +231,13 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             </div>
           </button>
 
-          <div className="notice notice-info" style={{ marginTop: 16 }}>
+          <Notice variant="info" style={{ marginTop: 16 }}>
             <span>ℹ️</span>
             <span>
               Execution mode is currently <strong>{apiMeta.mockMode ?? "review"}</strong>.
               The broker path stays quarantined until you explicitly confirm each queue.
             </span>
-          </div>
+          </Notice>
 
           <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
             <button className="btn" style={{ flex: 1 }} onClick={() => setStep(0)}>
