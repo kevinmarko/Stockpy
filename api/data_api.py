@@ -8,12 +8,17 @@ Run standalone::
 
     uvicorn api.data_api:app --port 8603
 
-Auth posture (copied from ``api/state_api.py``): a **fail-open** bearer token —
-when ``settings.STATE_API_TOKEN`` is set, every data endpoint requires
-``Authorization: Bearer <token>`` (constant-time compare, 401 on mismatch);
-when unset the endpoints are open for zero-config local use. ``/health`` is
-ALWAYS open so a load-balancer / watchdog can probe without a token. The token
-is NEVER logged (CONSTRAINT #3).
+Auth posture: every GET endpoint, plus the compute-only ``POST /data/pairs/*``
+/ ``POST /data/options/recompute`` endpoints (no side effects — they read
+market data and return a computed result, never persist anything), use
+``require_token`` (``api.auth.require_read_token``, copied from
+``api/state_api.py``) — a **fail-open** bearer token when
+``settings.STATE_API_TOKEN`` is set, and open for zero-config local use when
+unset. ``PUT /data/universe`` is the one endpoint here that actually mutates
+persisted config (writes ``DEFAULT_TICKERS`` to ``.env``), so it uses
+``require_write_token`` instead — always FAIL-CLOSED on ``STATE_API_TOKEN``.
+``/health`` is ALWAYS open so a load-balancer / watchdog can probe without a
+token. The token is NEVER logged (CONSTRAINT #3).
 
 Honesty (CONSTRAINT #4): a value that cannot be computed degrades to ``null``
 (``NaN``/``inf`` → ``null``) rather than a fabricated ``0.0``; dead-letter
@@ -26,17 +31,16 @@ data-facing service, not the kill-switch/daemon control plane.
 from __future__ import annotations
 
 import base64
-import hmac
 import logging
 import math
 from typing import Any, Dict, List, Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from settings import settings
+from api.auth import require_read_token as require_token, require_write_token
 from data.historical_store import HistoricalStore
 from data.market_data import MarketDataError, get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
@@ -73,24 +77,6 @@ app.add_middleware(
     allow_methods=["GET", "PUT", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-_bearer = HTTPBearer(auto_error=False)
-
-
-def require_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
-    """Fail-open bearer-token guard (mirrors ``api/state_api.py``).
-
-    When ``settings.STATE_API_TOKEN`` is unset/empty, this is a no-op (local
-    zero-config use). When set, a constant-time compare is enforced.
-    """
-    token = settings.STATE_API_TOKEN
-    if not token:
-        return
-    presented = credentials.credentials if credentials else ""
-    if not hmac.compare_digest(presented, token):
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
 
 
 def require_ai_capability_enabled(flag_name: str, capability_label: str):
@@ -344,7 +330,7 @@ def get_universe() -> Dict[str, Any]:
     return {"symbols": symbols, "count": len(symbols)}
 
 
-@app.put("/data/universe", dependencies=[Depends(require_token)])
+@app.put("/data/universe", dependencies=[Depends(require_write_token)])
 def update_universe(watchlist: List[str] = Body(...)) -> Dict[str, Any]:
     """Replace the configured universe.
 

@@ -37,6 +37,7 @@ import type {
   IntervalUpdateResult,
   ExecutionModeUpdateRequest,
   ExecutionModeUpdateResult,
+  JobRecord,
   KillSwitchActionResult,
   LlmSettingUpdateResult,
   LlmStatus,
@@ -78,6 +79,7 @@ import type {
   UniverseResponse,
   SyncReportResponse,
   RecommendationsResponse,
+  RestartDaemonResult,
   UniverseListResponse,
   Thresholds,
   SymbolOptions,
@@ -126,16 +128,32 @@ const TOKEN = import.meta.env.VITE_API_TOKEN ?? "";
 function baseFor(path: string): string {
   if (path.startsWith("/data/")) return DATA_BASE_URL;
   if (path.startsWith("/metrics/")) return METRICS_BASE_URL;
-  // Control API (:8601): daemon status + stage-scoped run triggers. Note
-  // "/automation/run" is a PILOTS endpoint and correctly does NOT match here.
+  // Control API (:8601): daemon status, stage-scoped run triggers, the
+  // background job runner, and daemon restart. Note "/automation/run" is a
+  // PILOTS endpoint and correctly does NOT match here.
   if (
     path === "/status" ||
     path.startsWith("/run") ||
-    path.startsWith("/pipeline/")
+    path.startsWith("/pipeline/") ||
+    path.startsWith("/jobs") ||
+    path.startsWith("/daemon/")
   ) {
     return CONTROL_BASE_URL;
   }
   return BASE_URL;
+}
+
+/**
+ * Full URL (including auth) for a job's SSE log stream. A dedicated helper
+ * rather than inlining `${CONTROL_BASE_URL}/jobs/...` at the call site,
+ * because the browser's native EventSource can't set an Authorization
+ * header — the token has to travel as a `?token=` query param instead, and
+ * this is the one place that needs to know that.
+ */
+export function jobStreamUrl(jobId: string, offset = 0): string {
+  const params = new URLSearchParams({ offset: String(offset) });
+  if (TOKEN) params.set("token", TOKEN);
+  return `${baseFor("/jobs")}/jobs/${encodeURIComponent(jobId)}/stream?${params.toString()}`;
 }
 
 // Default to MOCK unless explicitly told to go live. This means a fresh checkout
@@ -556,6 +574,10 @@ const liveApi = {
   getJobStatus: (job_id: string) => http<JobRecord>(`/jobs/${job_id}`),
   cancelJob: (job_id: string) =>
     http<{ job_id: string; cancelled: boolean }>(`/jobs/${job_id}/cancel`, {
+      method: "POST",
+    }),
+  restartDaemon: () =>
+    http<RestartDaemonResult>("/daemon/restart", {
       method: "POST",
     }),
 };

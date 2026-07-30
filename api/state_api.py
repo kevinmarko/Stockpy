@@ -43,7 +43,6 @@ a clear error body — it never returns a placeholder/synthetic snapshot.
 
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 from pathlib import Path
@@ -52,9 +51,9 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from settings import settings
+from api.auth import require_read_token as require_token
 from transactions_store import TransactionsStore
 
 logger = logging.getLogger(__name__)
@@ -77,24 +76,6 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-_bearer = HTTPBearer(auto_error=False)
-
-
-def require_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> None:
-    """Bearer-token guard. FAIL-OPEN when STATE_API_TOKEN is unset (zero-config
-    local use); when a token IS configured, require a matching bearer token.
-    Constant-time compare (never ==) so no timing leak. The token is NEVER logged
-    (CONSTRAINT #3)."""
-    token = settings.STATE_API_TOKEN
-    if not token:            # unset/empty -> auth disabled (open)
-        return
-    presented = credentials.credentials if credentials else ""
-    if not hmac.compare_digest(presented, token):
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
-
 
 if not settings.STATE_API_TOKEN:
     logger.warning(

@@ -1,8 +1,17 @@
 """
 api/auth.py
 ===========
-Centralized authentication and token verification middleware across Stockpy APIs.
-Enforces constant-time bearer token validation and fail-closed posture for non-loopback bindings.
+Shared bearer-token auth dependencies for every standalone service in
+``api/*.py``. Single source of truth for the ``hmac.compare_digest`` /
+fail-open / fail-closed logic that used to be hand-copied into
+``api/state_api.py``, ``api/data_api.py``, ``api/metrics_api.py``,
+``api/pilots_api.py``, and ``api/control_api.py`` independently.
+
+Each command-scoped guard is bound to exactly ONE settings field. A token
+minted for one write surface (e.g. ``FOLLOW_API_TOKEN`` for the Pilots API's
+follow endpoints) must never also unlock an unrelated one (e.g.
+``ORCHESTRATOR_DAEMON_TOKEN``'s daemon Control API) just because both went
+through this shared module — see :func:`make_command_token_guard`.
 """
 
 from __future__ import annotations
@@ -11,61 +20,105 @@ import hmac
 import logging
 from typing import Optional
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from settings import settings
 
 logger = logging.getLogger(__name__)
 
-_bearer = HTTPBearer(auto_error=False)
-
-
-def _is_loopback(request: Request) -> bool:
-    """Return True if the request client is on loopback (127.0.0.1 or ::1)."""
-    client_host = request.client.host if request.client else ""
-    return client_host in ("127.0.0.1", "::1", "localhost")
+# The single HTTPBearer scheme every api/*.py service depends on. Every guard
+# below binds `credentials` via Depends(bearer_scheme) — a bare `= None`
+# default (with no Depends/Security) is never populated by FastAPI at all,
+# which would make every check below reject a request no matter what
+# Authorization header it actually carried.
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def require_read_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = None,
-    request: Optional[Request] = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> None:
-    """Validate bearer token for read operations.
-
-    Fail-open for loopback requests when STATE_API_TOKEN is unset.
-    Fail-closed (503) for non-loopback requests when STATE_API_TOKEN is unset.
-    """
+    """Read-endpoint guard shared by every api/*.py service. FAIL-OPEN when
+    STATE_API_TOKEN is unset (zero-config local use); requires a matching
+    bearer token when one is configured. Constant-time compare (never ==) so
+    no timing leak; the token is never logged (CONSTRAINT #3)."""
     token = settings.STATE_API_TOKEN
-    is_loop = _is_loopback(request) if request else True
-
-    if not token or not token.strip():
-        if not is_loop:
-            raise HTTPException(
-                status_code=503,
-                detail="STATE_API_TOKEN is unset. Non-loopback requests require an explicit token."
-            )
-        return  # Fail-open for loopback local dev
-
-    if credentials is None or not credentials.credentials:
-        raise HTTPException(status_code=401, detail="Missing authorization header.")
-
-    if not hmac.compare_digest(credentials.credentials.strip(), token.strip()):
-        raise HTTPException(status_code=401, detail="Invalid token.")
+    if not token:  # unset/empty -> auth disabled (open)
+        return
+    presented = credentials.credentials if credentials else ""
+    if not hmac.compare_digest(presented, token):
+        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
 
 
-def require_command_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = None,
+def require_stream_token(
+    token: Optional[str] = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> None:
-    """Validate bearer token for command/write operations. Always FAIL-CLOSED."""
-    token = settings.ORCHESTRATOR_DAEMON_TOKEN or settings.FOLLOW_API_TOKEN
-    if not token or not token.strip():
+    """Like require_read_token, but also accepts the token as a ``?token=``
+    query parameter. The browser's native ``EventSource`` API (used for SSE
+    log streaming) cannot set an ``Authorization`` header at all — there is
+    no headers option in that API — so an SSE endpoint that only checked the
+    header would be unreachable from a real browser the moment a token is
+    configured."""
+    st_token = settings.STATE_API_TOKEN
+    if not st_token:
+        return
+    presented = (credentials.credentials if credentials else "") or (token or "")
+    if not hmac.compare_digest(presented, st_token):
+        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+
+
+def require_write_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> None:
+    """FAIL-CLOSED variant of the STATE_API_TOKEN check, for write/compute
+    endpoints that must never be reachable with no token configured at all —
+    unlike require_read_token, which fails OPEN on the same setting for
+    zero-config local reads. Use this for any api/*.py endpoint that mutates
+    state or triggers real compute, when the service has no dedicated
+    command-token setting of its own (contrast api/control_api.py's
+    ORCHESTRATOR_DAEMON_TOKEN / api/pilots_api.py's FOLLOW_API_TOKEN, which
+    use make_command_token_guard instead)."""
+    token = settings.STATE_API_TOKEN
+    if not token:
         raise HTTPException(
             status_code=403,
-            detail="Command token is unset. Endpoint is disabled."
+            detail="Write endpoint disabled: STATE_API_TOKEN not configured.",
         )
+    presented = credentials.credentials if credentials else ""
+    if not hmac.compare_digest(presented, token):
+        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
 
-    if credentials is None or not credentials.credentials:
-        raise HTTPException(status_code=401, detail="Missing authorization header.")
 
-    if not hmac.compare_digest(credentials.credentials.strip(), token.strip()):
-        raise HTTPException(status_code=401, detail="Invalid token.")
+def make_command_token_guard(token_setting_name: str, disabled_detail: str):
+    """Build a FAIL-CLOSED command-token dependency bound to one named
+    settings field (e.g. "ORCHESTRATOR_DAEMON_TOKEN", "FOLLOW_API_TOKEN").
+    Deliberately NOT a single generic "any command token will do" check —
+    each caller binds its own dedicated setting so scopes never bleed into
+    each other."""
+
+    def _guard(
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ) -> None:
+        token = getattr(settings, token_setting_name, None)
+        if not token:
+            raise HTTPException(status_code=403, detail=disabled_detail)
+        presented = credentials.credentials if credentials else ""
+        if not hmac.compare_digest(presented, token):
+            raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+
+    _guard.__name__ = f"require_{token_setting_name.lower()}_guard"
+    return _guard
+
+
+# api/control_api.py's command surface (POST /run, /daemon/restart, /jobs*).
+require_orchestrator_command_token = make_command_token_guard(
+    "ORCHESTRATOR_DAEMON_TOKEN",
+    "Command endpoint disabled: ORCHESTRATOR_DAEMON_TOKEN not configured.",
+)
+
+# api/pilots_api.py's follow write-path (a follow produces a gated order queue).
+require_follow_command_token = make_command_token_guard(
+    "FOLLOW_API_TOKEN",
+    "Follow endpoints disabled: FOLLOW_API_TOKEN not configured.",
+)

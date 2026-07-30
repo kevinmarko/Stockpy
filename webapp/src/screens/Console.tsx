@@ -1,11 +1,45 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import { JobRecord } from "../api/types";
+import type { JobRecord } from "../api/types";
 import { LogStream } from "../components/LogStream";
+
+const TERMINAL_STATUSES = new Set(["success", "failed", "cancelled", "unknown"]);
+const STATUS_POLL_MS = 1500;
 
 export const Console: React.FC = () => {
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
   const [loading, setLoading] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  // Poll GET /jobs/{id} while the job is in flight so the status badge
+  // actually reflects reality (the SSE `end` event only tells LogStream to
+  // stop reading — it doesn't tell this component anything).
+  useEffect(() => {
+    if (!activeJob || TERMINAL_STATUSES.has(activeJob.status)) {
+      stopPolling();
+      return;
+    }
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const latest = await api.getJobStatus(activeJob.job_id);
+        setActiveJob(latest);
+      } catch {
+        // A transient poll failure isn't fatal -- just try again next tick.
+      }
+    }, STATUS_POLL_MS);
+    return stopPolling;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJob?.job_id, activeJob?.status]);
+
+  useEffect(() => stopPolling, []);
 
   const handleLaunch = async (jobType: string) => {
     try {
@@ -22,8 +56,13 @@ export const Console: React.FC = () => {
   const handleCancel = async () => {
     if (!activeJob) return;
     try {
-      await api.cancelJob(activeJob.job_id);
-      setActiveJob((prev) => (prev ? { ...prev, status: "cancelled", is_running: false } : null));
+      const res = await api.cancelJob(activeJob.job_id);
+      if (res.cancelled) {
+        const latest = await api.getJobStatus(activeJob.job_id);
+        setActiveJob(latest);
+      } else {
+        alert("Cancel was requested but could not be confirmed — the job may still be running.");
+      }
     } catch (err: any) {
       alert(`Failed to cancel job: ${err.message || err}`);
     }

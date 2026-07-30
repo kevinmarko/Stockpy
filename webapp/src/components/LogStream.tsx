@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { jobStreamUrl, USE_MOCK } from "../api/client";
 
 interface LogStreamProps {
   jobId?: string;
@@ -9,11 +10,12 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!jobId || !isStreaming) return;
+    if (!jobId || !isStreaming || USE_MOCK) return;
 
-    const eventSource = new EventSource(`http://localhost:8601/jobs/${jobId}/stream`);
+    const eventSource = new EventSource(jobStreamUrl(jobId, 0));
 
     eventSource.onmessage = (event) => {
       if (event.data) {
@@ -22,17 +24,26 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
     };
 
     eventSource.addEventListener("end", () => {
+      // The job actually finished — no reason to let the browser reconnect.
       eventSource.close();
     });
 
-    eventSource.onerror = () => {
-      eventSource.close();
-    };
+    // Deliberately NOT closing here: EventSource reconnects automatically on
+    // a transient error (network blip, backgrounded tab) and resends the
+    // last `id:` it saw as a `Last-Event-ID` header, which the backend uses
+    // to resume from the right offset instead of replaying from the start.
+    eventSource.onerror = () => {};
 
     return () => {
       eventSource.close();
     };
   }, [jobId, isStreaming]);
+
+  useEffect(() => {
+    if (autoScroll) {
+      bottomRef.current?.scrollIntoView({ block: "end" });
+    }
+  }, [logs, autoScroll]);
 
   const filteredLogs = logs.filter((line) =>
     line.toLowerCase().includes(filter.toLowerCase())
@@ -43,6 +54,14 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
       <div className="flex justify-between items-center mb-2 pb-2 border-b border-zinc-800">
         <span className="font-semibold text-zinc-300">Live Console Output</span>
         <div className="flex items-center space-x-2">
+          <label className="flex items-center gap-1 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(e) => setAutoScroll(e.target.checked)}
+            />
+            Auto-scroll
+          </label>
           <input
             type="text"
             placeholder="Filter logs..."
@@ -59,14 +78,21 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto space-y-1">
-        {filteredLogs.length === 0 ? (
+        {USE_MOCK ? (
+          <div className="text-zinc-500 text-xs italic">
+            Log streaming is only available in live mode.
+          </div>
+        ) : filteredLogs.length === 0 ? (
           <div className="text-zinc-500 text-xs italic">No logs received yet...</div>
         ) : (
-          filteredLogs.map((line, idx) => (
-            <div key={idx} className="whitespace-pre-wrap break-all leading-snug">
-              {line}
-            </div>
-          ))
+          <>
+            {filteredLogs.map((line, idx) => (
+              <div key={idx} className="whitespace-pre-wrap break-all leading-snug">
+                {line}
+              </div>
+            ))}
+            <div ref={bottomRef} />
+          </>
         )}
       </div>
     </div>

@@ -7,11 +7,11 @@ leak sensitive credential material or tokens to the web UI or SSE streams.
 
 from __future__ import annotations
 
-import os
 import re
 from typing import List
 
-from gui.env_io import SECRET_KEYS, read_settings
+from gui.env_io import SECRET_KEYS
+from settings import settings
 
 # Generic patterns for API keys, Bearer tokens, secrets, and auth headers
 _GENERIC_PATTERNS = [
@@ -22,10 +22,20 @@ _GENERIC_PATTERNS = [
 
 
 def _get_active_secret_values() -> List[str]:
-    """Retrieve actual secret string values currently present in environment / .env."""
+    """Retrieve actual secret string values currently configured.
+
+    Reads through ``settings.<KEY>``, never ``os.environ`` directly.
+    pydantic-settings loads ``.env`` into the ``Settings`` singleton but does
+    NOT also copy it into the real process ``os.environ`` — the same gap this
+    codebase already hit once in ``signals/news_catalyst.py::build_finnhub_client``
+    (see CLAUDE.md). Reading ``os.environ`` here would leave every secret that
+    lives only in ``.env`` (the normal, documented setup) invisible to this
+    filter's direct-value match — exactly the case a log-redaction filter
+    exists to cover.
+    """
     secret_vals = []
     for k in SECRET_KEYS:
-        val = os.environ.get(k)
+        val = getattr(settings, k, None)
         if val and isinstance(val, str) and len(val.strip()) >= 4:
             secret_vals.append(val.strip())
     return secret_vals

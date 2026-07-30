@@ -24,6 +24,11 @@ export interface JobRecord {
   cancellable: boolean;
 }
 
+export interface RestartDaemonResult {
+  restarting: boolean;
+  message: string;
+}
+
 export type PilotCategory =
   | "Momentum"
   | "Mean Reversion"
