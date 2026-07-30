@@ -42,6 +42,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Dependency vulnerability audit (pip-audit)
+        run: |
+          # Audits the packages actually resolved from requirements.txt in
+          # THIS job's venv against the PyPA advisory DB -- not an ambient/
+          # unrelated Python install, which is what produced the misleading
+          # 36-"vulnerability" report documented in
+          # docs/known_issues/pip_audit_stale_ambient_env_false_positive.md
+          # (every flagged package was already safe here once pinned
+          # versions were actually installed). A real regression here means
+          # someone loosened a pin in requirements.txt to a genuinely
+          # vulnerable version, which is exactly what this step exists to
+          # catch.
+          pip install pip-audit
+          pip-audit --desc
+
       - name: Lint (ruff)
         run: |
           # Scoped to genuine-bug rules only (undefined names, syntax errors)
