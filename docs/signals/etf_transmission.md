@@ -352,11 +352,27 @@ check of its own — handed a non-PSD matrix, it would compute a nonsensical
 (possibly negative) `w' Σ w`, and its own degenerate-`portfolio_vol` branch
 would *saturate the leverage scalar at `max_leverage`*, levering the whole
 book up on a broken risk estimate. `risk.etf_transmission._nearest_psd`
-eigenvalue-clips every eigenvalue below `1e-10` and reconstructs — the
+eigenvalue-clips every eigenvalue up to a floor and reconstructs — the
 standard nearest-PSD-by-clipping repair (Higham (2002)'s
 alternating-projections algorithm finds the nearest correlation matrix more
 exactly; that precision buys nothing here since the input is already close
 to PSD by construction — only the off-diagonal was perturbed).
+
+The floor is **relative to the matrix's own eigenvalue scale**
+(`max(epsilon, _RELATIVE_PSD_FLOOR * max_eigenvalue)`, `_RELATIVE_PSD_FLOOR
+= 1e-6`), not a fixed absolute value. A fixed absolute floor (the original
+`1e-10` default, with no relative term) is disconnected from the matrix's
+own scale: measured on a realistic 40-symbol book at high inflation (enough
+to flip 30 of 40 eigenvalues negative) on an annualized scale, a fixed
+`1e-10` floor left a condition number of ~1e8 — a ~30,000x degradation
+versus the unadjusted matrix's ~1e3 — severe enough to trigger spurious
+BLAS-level `RuntimeWarning`s in the downstream `w' Σ w` computation, even
+though the final numeric result stayed technically finite. The relative
+floor keeps conditioning proportionate to the matrix's own magnitude
+(daily- vs. annualized-scale, high- vs. low-vol universe) instead of
+degrading by orders of magnitude whenever inflation is large — pinned at
+~1e6 on that same 40-symbol book after the fix. See
+`tests/test_etf_transmission_sensitivity_sweep.py`, which surfaced this.
 
 **Never a partially-covered matrix.** `portfolio_vol_target` explicitly
 **zeroes out** any symbol missing from `cov_matrix` — its own documented,
@@ -373,6 +389,78 @@ zero out the gapped names' entire positions.
 `target_vol` reuses the existing `settings.VOL_TARGET` (the same setting the
 per-name vol-target sizing fallback already uses) rather than introducing a
 second, redundant target-vol setting.
+
+**Annualization — a real bug this file's own sensitivity sweep caught.**
+`build_transmission_adjusted_cov` computes a covariance matrix on whatever
+scale its input returns are (its own docstring: "daily simple-return
+DataFrame"), with no annualization claim of its own. `_build_etf_
+transmission_cov_matrix` builds those returns from DAILY `Close` bars
+(`price_df.pct_change()`), but `VOL_TARGET` (and every other `target_vol`
+caller in this codebase, e.g. `sizing.vol_target.volatility_target_weight`'s
+own docstring: "Annualized ... volatility") is an ANNUALIZED figure. Feeding
+a daily-scale covariance matrix into an annualized-target comparison is a
+silent units mismatch: daily portfolio vol is essentially always far below
+a ~10% annualized target, so `portfolio_vol_target`'s scalar saturates at
+its ceiling regardless of the actual covariance structure —
+`ETF_TRANSMISSION_COV_INFLATION` would have been a complete no-op in
+production. The very first run of the sensitivity sweep below (before this
+fix) demonstrated exactly that: `final_gross` bit-for-bit identical across
+every `COV_INFLATION` value tested. Fixed by annualizing the covariance in
+`_build_etf_transmission_cov_matrix` (`* 252`, matching
+`processing_engine.py`'s own `daily_std * sqrt(252)` convention for
+`Realized_Vol_60D` — variance/covariance annualizes by `*252`, not
+`*sqrt(252)`).
+
+### Sensitivity sweep (`tests/test_etf_transmission_sensitivity_sweep.py`)
+
+The 2-D deterministic sweep this module's design calls for: a synthetic
+40-name book (4 groups of 10, each wrapped by its own dedicated ETF, groups
+heterogeneously tethered — ownership 0.25/0.15/0.10/0.05, comovement
+0.90/0.70/0.50/0.20) gridded over `ETF_TRANSMISSION_MAX_DERATE ×
+ETF_TRANSMISSION_COV_INFLATION` at `{0.0, 0.15, 0.30, 0.50} × {0.0, 0.25,
+0.50, 1.00}`, holding every other knob at its shipped default. Baseline
+per-name weight is a uniform 0.10 (40 × 0.10 = 4.0 gross), deliberately
+above `MAX_PORTFOLIO_GROSS`'s shipped default of 3.0 so the portfolio cap
+binds even with both features off.
+
+| max_derate ↓ / cov_inflation → | 0.00 | 0.25 | 0.50 | 1.00 |
+|---|---|---|---|---|
+| **0.00** | 0.4865 | 0.4698 | 0.4548 | 0.4285 |
+| **0.15** | 0.4866 | 0.4700 | 0.4549 | 0.4287 |
+| **0.30** | 0.4866 | 0.4699 | 0.4548 | 0.4284 |
+| **0.50** | 0.4860 | 0.4690 | 0.4537 | 0.4270 |
+
+(final gross exposure per cell, post-fix; `max_single_name_weight` and
+`effective_n` — inverse Herfindahl on gross-normalized weights — are
+reported alongside in the test's log output)
+
+**The double-count is real and measured, not hypothetical.** At the grid's
+extremes (`max_derate=0.50, cov_inflation=1.00`), the actual joint final
+gross (0.4270) is below what a naive INDEPENDENT combination of the two
+knobs' solo effects would predict (`baseline × (1 − reduction_derate_alone)
+× (1 − reduction_cov_alone)` ≈ 0.4281) — a double-count gap of ≈0.2% of
+baseline gross. Small in this book, but directionally confirmed and
+reproducible; `tests/test_etf_transmission_sensitivity_sweep.py::
+TestJointWorstCaseDoubleCount` pins it as a positive, non-negative gap
+rather than an exact value (the exact magnitude is sensitive to the
+synthetic book's RNG seed; the direction is the invariant).
+
+**A second, more subtle finding — not a bug.** `COV_INFLATION` is strictly
+monotonic (raising it, for a fixed weight vector, can only raise `w' Σ w`,
+which can only lower the vol-target scalar). `MAX_DERATE` is **not**
+always strictly monotonic in `final_gross`: shrinking a subset of weights
+lowers realized portfolio vol, and the REACTIVE vol-target scalar can
+respond by allowing slightly more leverage elsewhere, partially offsetting
+the direct weight reduction (visible above: `cov_inflation=0.00`, gross
+ticks up very slightly from 0.4865 at `max_derate=0.00` to 0.4866 at
+`max_derate=0.15/0.30`, a ≈0.03% reversal). This is vol-targeting doing
+exactly what it's designed to do, and does **not** violate
+`apply_portfolio_gross_cap`'s "Reduction-only guarantee" (that guarantee
+bounds a single call's scalar at ≤ 1.0 — still true in every cell here —
+not cross-call monotonicity as the input weight vector changes, which was
+never a promised invariant of either function). The sweep asserts this
+reversal stays small (< 2% relative) rather than asserting it can never
+happen.
 
 ### Settings (portfolio covariance)
 

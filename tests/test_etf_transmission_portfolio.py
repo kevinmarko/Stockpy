@@ -168,6 +168,58 @@ class TestNearestPsd:
         repaired = _nearest_psd(base)
         assert np.allclose(repaired, repaired.T)
 
+    def test_floor_scales_with_matrix_magnitude_not_a_fixed_absolute_value(self):
+        """Real bug this pins: a fixed absolute epsilon (the original
+        default, 1e-10) is disconnected from the matrix's own eigenvalue
+        scale. Measured on a realistic 40-symbol ETF-transmission covariance
+        matrix at high inflation (enough to flip 30 of 40 eigenvalues
+        negative), on an ANNUALIZED scale (max eigenvalue ~2, matching what
+        pipeline/production_steps.py::_build_etf_transmission_cov_matrix
+        actually feeds this function): a fixed ``epsilon=1e-10`` floor left
+        a condition number of ~1e8 -- a ~30,000x degradation versus the
+        unadjusted matrix's ~1e3, severe enough to trigger spurious
+        BLAS-level RuntimeWarnings downstream. For a large-scale matrix like
+        this, ``1e-10`` is a negligible fraction of the eigenvalue range, so
+        the RELATIVE floor (``_RELATIVE_PSD_FLOOR * max_eigenvalue``) must be
+        the one actually doing the work -- pinning the condition number near
+        ``1 / _RELATIVE_PSD_FLOOR`` (~1e6) rather than the ~1e8-1e10 a
+        fixed-epsilon-only design would leave for a matrix at this scale."""
+        base = np.array([
+            [1.0, -0.9, -0.9],
+            [-0.9, 1.0, -0.9],
+            [-0.9, -0.9, 1.0],
+        ])
+        annualized_scale = base * 2.0  # max eigenvalue ~2, matching a real annualized cov
+
+        cond = self._condition_number(_nearest_psd(annualized_scale))
+
+        # Should sit close to 1 / _RELATIVE_PSD_FLOOR (~1e6), not the
+        # ~1e8-1e10 a fixed-epsilon-only floor would leave for a matrix
+        # whose max eigenvalue (~2) makes 1e-10 a negligible fraction of it.
+        assert cond < 1e7, (
+            f"condition number {cond:.2e} is far worse than the relative "
+            f"floor should allow for a matrix at this scale -- the "
+            f"relative floor may not be engaging"
+        )
+        assert cond > 1e4, (
+            f"condition number {cond:.2e} is suspiciously good -- this "
+            f"test's matrix should genuinely need repair"
+        )
+
+    @staticmethod
+    def _condition_number(matrix: np.ndarray) -> float:
+        eigvals = np.linalg.eigvalsh(matrix)
+        return float(eigvals.max() / max(eigvals.min(), 1e-300))
+
+    def test_epsilon_kwarg_still_honored_as_a_lower_bound(self):
+        """Backward compatibility: an explicit ``epsilon`` larger than the
+        relative floor still wins, so an existing caller who deliberately
+        passes a large absolute epsilon is not silently overridden downward."""
+        base = np.array([[1.0, -0.9, -0.9], [-0.9, 1.0, -0.9], [-0.9, -0.9, 1.0]])
+        repaired = _nearest_psd(base, epsilon=0.5)
+        eigvals = np.linalg.eigvalsh(repaired)
+        assert eigvals.min() >= 0.5 - 1e-9
+
 
 # ── build_transmission_adjusted_cov ──────────────────────────────────────
 

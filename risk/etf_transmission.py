@@ -706,6 +706,12 @@ def _pairwise_etf_overlap(
         return pd.DataFrame(np.zeros((n, n)), index=list(symbols), columns=list(symbols))
 
 
+# Relative eigenvalue floor for _nearest_psd, applied ON TOP OF (never
+# instead of) the caller's absolute `epsilon` -- see that function's
+# docstring for why a fixed absolute floor alone is not enough.
+_RELATIVE_PSD_FLOOR = 1e-6
+
+
 def _nearest_psd(matrix: np.ndarray, epsilon: float = 1e-10) -> np.ndarray:
     """Eigenvalue-clip a symmetric matrix back to positive semi-definite.
 
@@ -714,13 +720,33 @@ def _nearest_psd(matrix: np.ndarray, epsilon: float = 1e-10) -> np.ndarray:
     genuine risk this module's own design notes call out --
     ``portfolio_vol_target`` has no PSD check of its own, and would compute
     a nonsensical, even negative, ``w' Sigma w`` from an indefinite matrix
-    without one). This clips every eigenvalue below ``epsilon`` up to
-    ``epsilon`` and reconstructs -- the standard nearest-PSD-by-eigenvalue-
-    clipping repair. (Higham (2002)'s alternating-projections algorithm finds
-    the nearest correlation matrix more exactly; that precision is not needed
-    here because the input is already close to PSD by construction -- only
-    the off-diagonal was multiplicatively perturbed, nothing was
-    reconstructed from an arbitrary starting matrix.)
+    without one). This clips every eigenvalue up to a floor and reconstructs
+    -- the standard nearest-PSD-by-eigenvalue-clipping repair. (Higham
+    (2002)'s alternating-projections algorithm finds the nearest correlation
+    matrix more exactly; that precision is not needed here because the input
+    is already close to PSD by construction -- only the off-diagonal was
+    multiplicatively perturbed, nothing was reconstructed from an arbitrary
+    starting matrix.)
+
+    ``epsilon`` is a floor, not THE floor: the value actually used is
+    ``max(epsilon, _RELATIVE_PSD_FLOOR * max_eigenvalue)``. A fixed absolute
+    epsilon disconnected from the matrix's own scale produces an extremely
+    ill-conditioned result whenever eigenvalue clipping does meaningful work
+    -- measured on a realistic 40-symbol ETF-transmission covariance matrix
+    at high inflation (enough to flip 30 of 40 eigenvalues negative): a
+    fixed ``epsilon=1e-10`` floor left a condition number of ~1e8, a
+    ~30,000x degradation versus the unadjusted matrix's ~1e3, and that
+    ill-conditioning was severe enough to trigger spurious BLAS-level
+    ``RuntimeWarning``s (divide-by-zero / overflow / invalid-value) in the
+    matrix multiplications both here and in
+    ``sizing.vol_target.portfolio_vol_target``'s ``w' Sigma w``, even though
+    the final numeric result stayed technically finite. Scaling the floor to
+    the matrix's own eigenvalue magnitude keeps conditioning proportionate
+    regardless of whether the input is a daily- or annualized-scale
+    covariance, or a high- or low-volatility universe, instead of silently
+    degrading by orders of magnitude whenever inflation is large. Verified
+    by ``tests/test_etf_transmission_sensitivity_sweep.py``, which is what
+    surfaced this in the first place.
 
     Symmetrizes the result once more before returning: ``eigh`` assumes (and
     ``build_transmission_adjusted_cov`` guarantees) a symmetric input, but the
@@ -729,7 +755,9 @@ def _nearest_psd(matrix: np.ndarray, epsilon: float = 1e-10) -> np.ndarray:
     matrix" being handed to ``portfolio_vol_target``.
     """
     eigvals, eigvecs = np.linalg.eigh(matrix)
-    clipped = np.clip(eigvals, epsilon, None)
+    max_eigval = float(np.max(eigvals)) if eigvals.size else 0.0
+    floor = max(epsilon, _RELATIVE_PSD_FLOOR * max(max_eigval, 0.0))
+    clipped = np.clip(eigvals, floor, None)
     repaired = eigvecs @ np.diag(clipped) @ eigvecs.T
     return (repaired + repaired.T) / 2.0
 
