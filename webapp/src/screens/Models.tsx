@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { ModelRow, Thresholds } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { DeployableBadge, ErrorState, Loading, MetricBadge } from "../components/ui";
+import { DeployableBadge, ErrorState, Loading, MetricBadge, InfoTip } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum } from "../format";
@@ -48,16 +48,16 @@ function ModelCard({ m, thresholds }: { m: ModelRow; thresholds: Thresholds | nu
         />
         <MetricBadge label="N" value={m.n_train == null ? "—" : String(m.n_train)} />
         {m.needs_retrain === true && (
-          <span
-            className="badge badge-warn"
-            title={
+          <InfoTip
+            triggerClassName="badge badge-warn"
+            content={
               thresholds == null
                 ? "Older than the retrain window."
                 : `Trained more than ${thresholds.retrain_window_days} days ago — flagged for the next retraining job.`
             }
           >
             ⏱ Needs retrain
-          </span>
+          </InfoTip>
         )}
       </div>
       {m.notes && (

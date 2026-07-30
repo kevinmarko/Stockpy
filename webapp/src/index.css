@@ -419,6 +419,29 @@ button {
   text-transform: capitalize;
 }
 
+/* ---- InfoTip (touch-accessible replacement for native title=) ----
+   Trigger is a real <button> styled by whatever className the call site
+   passes it (usually .badge/.chip) -- this block only covers the popover
+   bubble itself. `position: fixed`, coordinates set inline per-instance by
+   components/ui.tsx's InfoTip (measured off the trigger's own
+   getBoundingClientRect(), not a CSS-positioned wrapper), so it is never
+   clipped by an ancestor's overflow: auto/hidden -- see that component's
+   docstring for why plain `position: absolute` doesn't work here. */
+.tooltip-bubble {
+  position: fixed;
+  z-index: 55; /* above cards/nav (40), below the .sheet-backdrop modal (60) */
+  max-width: 240px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm, 8px);
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  font-size: var(--t-caption);
+  line-height: 1.4;
+  box-shadow: var(--shadow-card);
+  animation: fade 0.15s ease;
+}
+
 /* ---- Buttons ---- */
 .btn {
   min-height: var(--tap);

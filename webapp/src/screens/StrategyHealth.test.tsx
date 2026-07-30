@@ -175,8 +175,11 @@ describe("StrategyHealth screen (real mock API)", () => {
     });
     renderScreen();
     const chip = await screen.findByText("Stress ✗ failed");
-    expect(chip).toHaveAttribute(
-      "title",
+    // Native title= never fires on tap; the explanation is now a tap-to-open
+    // InfoTip (see components/ui.tsx) -- open it and read the rendered text.
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    await userEvent.click(chip);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < 44% drawdown"
     );
   });
@@ -185,8 +188,8 @@ describe("StrategyHealth screen (real mock API)", () => {
     vi.spyOn(api, "getThresholds").mockRejectedValue(new Error("offline"));
     renderScreen();
     const chip = await screen.findByText("Stress ✗ failed");
-    expect(chip).toHaveAttribute(
-      "title",
+    await userEvent.click(chip);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "Tail-scenario stress gate: survives OCT 2008 / FEB 2018 / MAR 2020 / AUG 2024 with < — drawdown"
     );
   });

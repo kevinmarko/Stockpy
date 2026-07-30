@@ -9,7 +9,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
+import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
@@ -100,12 +100,27 @@ function PremiumLabel({ d }: { d: OptionsDirective }) {
   );
 }
 
+/**
+ * Note: this card is a `role="button"` `div`, not a real `<button>` --
+ * the "stale" badge below needs its own tap-to-open InfoTip trigger, and
+ * nesting a focusable trigger inside a native `<button>` is invalid HTML
+ * (see components/ui.tsx's InfoTip docstring). `role="button"` + `tabIndex`
+ * + a matching `onKeyDown` reproduces the same click/Enter/Space affordance
+ * a real `<button>` gets for free, mirroring TradingHub.tsx's HubCardRow.
+ */
 function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void }) {
   return (
-    <button
-      type="button"
+    <div
       className="card card-pad"
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
       style={{
         display: "block",
         width: "100%",
@@ -119,9 +134,9 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontWeight: 700, fontSize: 16 }}>{d.Symbol}</span>
           {d.Stale === true && (
-            <span className="badge badge-warn" title="Quote is stale">
+            <InfoTip triggerClassName="badge badge-warn" content="Quote is stale">
               stale
-            </span>
+            </InfoTip>
           )}
         </div>
         <span className="num" style={{ color: theme.textSecondary }}>
@@ -159,7 +174,7 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
           </span>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 

@@ -13,7 +13,7 @@ import { useApi } from "../hooks/useApi";
 import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { TabGuide } from "../components/TabGuide";
-import { ErrorState, Loading, Tile } from "../components/ui";
+import { ErrorState, Loading, Tile, InfoTip } from "../components/ui";
 import { fmtNum, fmtPct, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -60,14 +60,14 @@ export function Portfolio() {
         <h1 className="screen-title">Portfolio</h1>
         <span style={{ fontSize: 12, color: theme.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
           {p.source} · {timeAgo(p.fetched_at)}
-          {p.is_stale === true && (
-            <span
-              className="badge badge-warn"
-              title={p.age_hours != null ? `${fmtNum(p.age_hours, 1)}h old` : undefined}
-            >
-              stale
-            </span>
-          )}
+          {p.is_stale === true &&
+            (p.age_hours != null ? (
+              <InfoTip triggerClassName="badge badge-warn" content={`${fmtNum(p.age_hours, 1)}h old`}>
+                stale
+              </InfoTip>
+            ) : (
+              <span className="badge badge-warn">stale</span>
+            ))}
         </span>
       </div>
 

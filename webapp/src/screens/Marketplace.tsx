@@ -4,7 +4,7 @@ import { api, apiMeta } from "../api/client";
 import type { PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { PilotCard, PopularCard } from "../components/PilotCard";
-import { ErrorState, Loading, StaleDataNotice } from "../components/ui";
+import { ErrorState, Loading, StaleDataNotice, InfoTip } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
 
@@ -96,9 +96,9 @@ export function Marketplace() {
           </p>
         </div>
         {apiMeta.useMock && (
-          <span className="chip" style={{ marginTop: 10 }} title="Running on mock data">
+          <InfoTip triggerClassName="chip" triggerStyle={{ marginTop: 10 }} content="Running on mock data">
             demo
-          </span>
+          </InfoTip>
         )}
       </div>
 

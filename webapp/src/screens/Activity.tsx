@@ -1,6 +1,7 @@
 import { apiMeta } from "../api/client";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { TabGuide } from "../components/TabGuide";
+import { InfoTip } from "../components/ui";
 import { theme } from "../theme";
 
 export function Activity() {
@@ -12,9 +13,9 @@ export function Activity() {
           <p className="screen-sub">Recent alerts from the Stockpy pipeline.</p>
         </div>
         {apiMeta.useMock && (
-          <span className="chip" style={{ marginTop: 10 }} title="Running on mock data">
+          <InfoTip triggerClassName="chip" triggerStyle={{ marginTop: 10 }} content="Running on mock data">
             demo
-          </span>
+          </InfoTip>
         )}
       </div>
 

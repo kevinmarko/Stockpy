@@ -17,6 +17,7 @@ import {
 import type { Bar, CurvePoint, EquityDrawdownPoint, ForecastAttention, SectorSlice } from "../api/types";
 import { sectorColor, theme } from "../theme";
 import { fmtDate, fmtPct } from "../format";
+import { InfoTip } from "./ui";
 
 /**
  * Shared chart chrome — the grid/axis/tooltip config every Recharts chart in
@@ -622,19 +623,27 @@ export function AttentionHeatmapStrip({ attention }: { attention: ForecastAttent
         {attention.model} attention ({attention.window_size}-day lookback)
       </div>
       <div style={{ display: "flex", gap: 2 }}>
-        {attention.weights.map((w) => (
-          <div
-            key={w.date}
-            title={`${w.date}: alpha ${w.alpha.toFixed(3)}`}
-            style={{
-              flex: 1,
-              height: 16,
-              borderRadius: 2,
-              background: theme.accent,
-              opacity: 0.15 + (w.alpha / maxAlpha) * 0.85,
-            }}
-          />
-        ))}
+        {attention.weights.map((w) => {
+          const label = `${w.date}: alpha ${w.alpha.toFixed(3)}`;
+          return (
+            <InfoTip
+              key={w.date}
+              content={label}
+              ariaLabel={label}
+              triggerStyle={{
+                flex: 1,
+                minWidth: 0,
+                height: 16,
+                borderRadius: 2,
+                background: theme.accent,
+                opacity: 0.15 + (w.alpha / maxAlpha) * 0.85,
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+              }}
+            />
+          );
+        })}
       </div>
     </div>
   );

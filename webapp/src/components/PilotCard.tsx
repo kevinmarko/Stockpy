@@ -74,7 +74,14 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
       </div>
 
       <div style={{ marginTop: 12 }}>
-        <DeployableBadge deployable={h.deployable} />
+        {/* interactive=false: this badge is nested inside the card's own
+            <Link>, and an InfoTip's own tap trigger would be a second
+            focusable/clickable element inside an <a> -- invalid HTML and
+            unreliable for keyboard/screen-reader users. The explanation is
+            one tap away anyway: tapping the card navigates to Pilot Detail,
+            which renders this same badge outside any link (via HonestyRow),
+            where it IS interactive. */}
+        <DeployableBadge deployable={h.deployable} interactive={false} />
       </div>
     </Link>
   );
