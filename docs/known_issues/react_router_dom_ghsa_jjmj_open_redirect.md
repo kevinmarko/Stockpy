@@ -25,8 +25,9 @@ subsequently completed anyway (React 18→19 + `react-router-dom`→`react-route
 plus the `recharts` 2→3 and `@testing-library/react` 14→16 bumps React 19
 required as peers) once the operator asked to close out the remaining
 alerts. Verified: `npm audit` now reports 0 findings for the entire
-react-router dependency chain (only the unrelated `vite-plugin-pwa`
-dev-tooling chain remains — see
+react-router dependency chain (the separate, unrelated `vite-plugin-pwa`
+dev-tooling chain was resolved too, via an `ejs` override rather than a
+version bump — see
 [`vite_plugin_pwa_workbox_dev_chain_unfixable.md`](vite_plugin_pwa_workbox_dev_chain_unfixable.md)),
 `tsc --noEmit`/`npm run build`/`vitest run` (66 files / 753 tests) all pass.
 v8's `react-router-dom` package is retired — all imports moved to
